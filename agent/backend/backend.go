@@ -9,7 +9,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/orb-community/orb/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 	"go.uber.org/zap"
 )
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/orb-community/orb/agent/otel"
+	"github.com/netboxlabs/orb-agent/agent/otel"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )

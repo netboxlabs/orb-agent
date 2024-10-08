@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/jmoiron/sqlx"
-	"github.com/orb-community/orb/agent/backend"
-	"github.com/orb-community/orb/agent/config"
-	"github.com/orb-community/orb/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/orb-community/orb/fleet"
 	"github.com/orb-community/orb/pkg/errors"
 	"go.uber.org/zap"

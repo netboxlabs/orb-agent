@@ -7,7 +7,7 @@ import (
 	"os"
 
 	"github.com/go-cmd/cmd"
-	"github.com/orb-community/orb/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 	"gopkg.in/yaml.v3"

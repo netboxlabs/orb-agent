@@ -11,8 +11,8 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/orb-community/orb/agent/backend"
-	"github.com/orb-community/orb/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
 )

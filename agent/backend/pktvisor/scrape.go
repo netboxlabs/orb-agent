@@ -8,13 +8,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go.opentelemetry.io/otel/trace/noop"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/orb-community/orb/agent/otel"
-	"github.com/orb-community/orb/agent/otel/otlpmqttexporter"
+	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/netboxlabs/orb-agent/agent/otel"
+	"github.com/netboxlabs/orb-agent/agent/otel/otlpmqttexporter"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/exporter"

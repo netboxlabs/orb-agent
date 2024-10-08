@@ -8,11 +8,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/orb-community/orb/agent/backend"
-	"github.com/orb-community/orb/agent/policies"
+	"time"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
-	"time"
 )
 
 // HeartbeatFreq how often to heartbeat

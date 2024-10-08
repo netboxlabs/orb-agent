@@ -7,15 +7,16 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/orb-community/orb/agent/backend/otel"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
-	"github.com/orb-community/orb/agent"
-	"github.com/orb-community/orb/agent/backend/pktvisor"
-	"github.com/orb-community/orb/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/backend/otel"
+
+	"github.com/netboxlabs/orb-agent/agent"
+	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/orb-community/orb/buildinfo"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"

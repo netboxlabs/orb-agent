@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/orb-community/orb/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 type AgentBridgeService interface {

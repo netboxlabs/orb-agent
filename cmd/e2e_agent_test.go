@@ -3,19 +3,20 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/orb-community/orb/agent"
-	"github.com/orb-community/orb/agent/backend/pktvisor"
-	"github.com/orb-community/orb/agent/config"
-	"github.com/pkg/profile"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"os"
 	"os/signal"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/netboxlabs/orb-agent/agent"
+	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/pkg/profile"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func Test_e2e_orbAgent_ConfigFile(t *testing.T) {

@@ -3,9 +3,10 @@ package otlpmqttexporter
 import (
 	"context"
 	"fmt"
+
 	"go.opentelemetry.io/otel/sdk/metric"
 
-	"github.com/orb-community/orb/agent/otel"
+	"github.com/netboxlabs/orb-agent/agent/otel"
 	"go.uber.org/zap"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
