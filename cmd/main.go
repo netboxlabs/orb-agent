@@ -149,7 +149,7 @@ func mergeOrError(path string) {
 	v.SetDefault("orb.cloud.mqtt.id", "")
 	v.SetDefault("orb.cloud.mqtt.key", "")
 	v.SetDefault("orb.cloud.mqtt.channel_id", "")
-	v.SetDefault("orb.db.file", "./orb-agent.db")
+	v.SetDefault("orb.db.file", "/opt/orb/orb-agent.db")
 	v.SetDefault("orb.tls.verify", true)
 	v.SetDefault("orb.otel.host", "localhost")
 	v.SetDefault("orb.otel.port", 0)
