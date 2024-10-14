@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/netboxlabs/orb-agent/agent/config"
-	"github.com/orb-community/orb/pkg/errors"
 	migrate "github.com/rubenv/sql-migrate"
 	"go.uber.org/zap"
 )

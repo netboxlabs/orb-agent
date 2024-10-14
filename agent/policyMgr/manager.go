@@ -5,6 +5,7 @@
 package manager
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/orb-community/orb/fleet"
-	"github.com/orb-community/orb/pkg/errors"
 	"go.uber.org/zap"
 )
 
