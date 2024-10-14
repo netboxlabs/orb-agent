@@ -20,7 +20,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/cloud_config"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
-	"github.com/orb-community/orb/buildinfo"
+	"github.com/netboxlabs/orb-agent/buildinfo"
 	"go.uber.org/zap"
 )
 

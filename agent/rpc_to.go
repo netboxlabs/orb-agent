@@ -8,10 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/orb-community/orb/buildinfo"
+	"time"
+
+	"github.com/netboxlabs/orb-agent/buildinfo"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
-	"time"
 )
 
 func (a *orbAgent) sendCapabilities() error {

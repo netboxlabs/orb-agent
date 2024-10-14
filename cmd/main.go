@@ -17,7 +17,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
-	"github.com/orb-community/orb/buildinfo"
+	"github.com/netboxlabs/orb-agent/buildinfo"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
