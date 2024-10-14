@@ -18,9 +18,6 @@ DOCKER_IMAGE_NAME_PREFIX ?= orb
 DOCKERHUB_REPO = netboxlabs
 ORB_DOCKERHUB_REPO = netboxlabs
 BUILD_DIR = build
-SERVICES = fleet policies sinks sinker migrate maestro
-DOCKERS = $(addprefix docker_,$(SERVICES))
-DOCKERS_DEV = $(addprefix docker_dev_,$(SERVICES))
 CGO_ENABLED ?= 0
 GOARCH ?= $(shell dpkg-architecture -q DEB_BUILD_ARCH)
 GOOS ?= $(shell dpkg-architecture -q DEB_TARGET_ARCH_OS)
@@ -29,16 +26,6 @@ COMMIT_HASH = $(shell git rev-parse --short HEAD)
 OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
 OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
 
-define compile_service
-    echo "ORB_VERSION: $(ORB_VERSION)"
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags "-extldflags "-static" -X 'github.com/orb-community/orb/buildinfo.version=$(ORB_VERSION)'" -o ${BUILD_DIR}/$(DOCKER_IMAGE_NAME_PREFIX)-$(1) cmd/$(1)/main.go
-endef
-
-define compile_service_linux
-	$(eval svc=$(subst docker_dev_,,$(1)))
-    echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags "-extldflags "-static" -X 'github.com/orb-community/orb/buildinfo.version=$(ORB_VERSION)-$(COMMIT_HASH)'" -o ${BUILD_DIR}/$(DOCKER_IMAGE_NAME_PREFIX)-$(svc) cmd/$(svc)/main.go
-endef
 
 define run_test
 	 go test -mod=mod -short -race -count 1 -tags test $(shell go list ./... | grep -v 'cmd' | grep '$(SERVICE)')
@@ -48,48 +35,9 @@ define run_test_coverage
 	 go test -mod=mod -short -race -count 1 -tags test -cover -coverprofile=coverage.out -covermode=atomic $(shell go list ./... | grep -v 'cmd' | grep '$(SERVICE)')
 endef
 
-define make_docker
-	$(eval SERVICE=$(shell [ -z "$(SERVICE)" ] && echo $(subst docker_,,$(1)) || echo $(SERVICE)))
-	docker build \
-		--no-cache \
-		--build-arg SVC=$(SERVICE) \
-		--build-arg GOARCH=$(GOARCH) \
-		--build-arg GOARM=$(GOARM) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(SERVICE):$(REF_TAG) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(SERVICE):$(ORB_VERSION) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(SERVICE):$(ORB_VERSION)-$(COMMIT_HASH) \
-		-f docker/Dockerfile .
-	$(eval SERVICE="")
-endef
-define make_docker_debug
-	$(eval SERVICE=$(shell [ -z "$(SERVICE)" ] && echo $(subst docker_,,$(1)) || echo $(SERVICE)))
-	docker build \
-		--no-cache \
-		--build-arg SVC=$(SERVICE) \
-		--build-arg GOARCH=$(GOARCH) \
-		--build-arg GOARM=$(GOARM) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(SERVICE):$(REF_TAG) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(SERVICE):$(ORB_VERSION) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(SERVICE):$(ORB_VERSION)-$(COMMIT_HASH) \
-		-f docker/Dockerfile.debug .
-	$(eval SERVICE="")
-endef
-
-define make_docker_dev
-	$(eval svc=$(shell [ -z "$(SERVICE)" ] && echo $(subst docker_dev_,,$(1)) || echo $(svc)))
-	docker build \
-		--no-cache \
-		--build-arg SVC=$(svc) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(svc):$(REF_TAG) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(svc):$(ORB_VERSION) \
-		--tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-$(svc):$(ORB_VERSION)-$(COMMIT_HASH) \
-		-f docker/Dockerfile.dev ./build
-	$(eval svc="")
-endef
-
 all: platform
 
-.PHONY: all $(SERVICES) dockers dockers_dev ui services agent agent_bin
+.PHONY: all agent agent_bin
 
 clean:
 	rm -rf ${BUILD_DIR}
@@ -117,36 +65,9 @@ test_service:
 test_service_cov:
 	$(call run_test_coverage,$(@))
 
-
-$(SERVICES):
-	$(call compile_service,$(@))
-
-$(DOCKERS):
-	$(call make_docker,$(@),$(GOARCH))
-
-$(DOCKERS_DEV):
-	$(call compile_service_linux,$(@))
-	$(call make_docker_dev,$(@))
-
-services: $(SERVICES)
-dockers: $(DOCKERS)
-dockers_dev: $(DOCKERS_DEV)
-
-build_docker:
-	$(call make_docker,$(@),$(GOARCH))
-
-build_docker_debug:
-	$(call make_docker_debug,$(@),$(GOARCH))
-
-
-run: prepare-helm kind-create-all
-
-stop: kind-delete-orb kind-delete-cluster
-
 agent_bin:
-    $(eval svc=$(subst docker_dev_,,$(1)))
-    echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags "-extldflags "-static" -X 'github.com/netboxlabs/orb-agent/buildinfo.version=$(ORB_VERSION)-$(COMMIT_HASH)'" -o ${BUILD_DIR}/$(DOCKER_IMAGE_NAME_PREFIX)-agent cmd/main.go
+	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags "-extldflags '-static' -X 'github.com/netboxlabs/orb-agent/buildinfo.version=$(ORB_VERSION)-$(COMMIT_HASH)'" -o ${BUILD_DIR}/$(DOCKER_IMAGE_NAME_PREFIX)-agent cmd/main.go
 
 agent:
 	docker build --no-cache \
