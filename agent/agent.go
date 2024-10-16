@@ -13,7 +13,6 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/cloud_config"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
 	"github.com/netboxlabs/orb-agent/buildinfo"
@@ -167,12 +166,12 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	if a.config.OrbAgent.Offline == nil || !*a.config.OrbAgent.Offline {
-		ccm, err := cloud_config.New(a.logger, a.config, a.db)
+		ccm, err := config.New(a.logger, a.config, a.db)
 		if err != nil {
 			return err
 		}
 
-		cloudConfig, err := ccm.GetCloudConfig()
+		cloudConfig, err := ccm.GetConfig()
 		if err != nil {
 			return err
 		}
@@ -277,11 +276,11 @@ func (a *orbAgent) restartComms(ctx context.Context) error {
 		a.unsubscribeGroupChannels()
 	}
 	if a.config.OrbAgent.Offline == nil || !*a.config.OrbAgent.Offline {
-		ccm, err := cloud_config.New(a.logger, a.config, a.db)
+		ccm, err := config.New(a.logger, a.config, a.db)
 		if err != nil {
 			return err
 		}
-		cloudConfig, err := ccm.GetCloudConfig()
+		cloudConfig, err := ccm.GetConfig()
 		if err != nil {
 			return err
 		}

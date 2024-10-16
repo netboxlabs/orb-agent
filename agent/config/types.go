@@ -26,9 +26,22 @@ type CloudConfig struct {
 }
 
 type Cloud struct {
+	Type   string      `mapstructure:"type"`
 	Config CloudConfig `mapstructure:"config"`
 	API    APIConfig   `mapstructure:"api"`
 	MQTT   MQTTConfig  `mapstructure:"mqtt"`
+}
+
+func (c *Cloud) GetType() string {
+	return "cloud"
+}
+
+type Offline struct {
+	Type string `mapstructure:"type"`
+}
+
+func (o *Offline) GetType() string {
+	return "offline"
 }
 
 type Opentelemetry struct {
@@ -40,11 +53,22 @@ type Debug struct {
 	Enable bool `mapstructure:"enable"`
 }
 
+type Mode interface {
+	GetType() string
+}
+
+type BaseMode struct {
+	Type string `mapstructure:"type"`
+}
+
+func (b *BaseMode) GetType() string {
+	return "b.Type"
+}
+
 type OrbAgent struct {
 	Backends map[string]map[string]string `mapstructure:"backends"`
 	Tags     map[string]string            `mapstructure:"tags"`
-	Cloud    Cloud                        `mapstructure:"cloud"`
-	Offline  *bool                        `mapstructure:"offline,omitempty"`
+	Mode     *Mode                        `mapstructure:"mode"`
 	TLS      TLS                          `mapstructure:"tls"`
 	DB       DBConfig                     `mapstructure:"db"`
 	Otel     Opentelemetry                `mapstructure:"otel"`
