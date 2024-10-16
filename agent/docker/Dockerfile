@@ -19,7 +19,8 @@ RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser &
 # Create necessary directories and set ownership to appuser
 RUN mkdir -p /opt/orb && chown appuser:appuser /opt/orb \
     && chown appuser:appuser /usr/local/bin \
-    && chown appuser:appuser /var/run
+    && chown appuser:appuser /var/run \ 
+    && chown appuser:appuser /geo-db
 
 COPY --from=builder /tmp/build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /go/src/github.com/netboxlabs/orb-agent/agent/docker/agent_default.yaml /opt/orb/agent_default.yaml

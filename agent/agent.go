@@ -166,19 +166,22 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		mqtt.DEBUG = &agentLoggerDebug{a: a}
 	}
 
-	ccm, err := cloud_config.New(a.logger, a.config, a.db)
-	if err != nil {
-		return err
-	}
-	cloudConfig, err := ccm.GetCloudConfig()
-	if err != nil {
-		return err
-	}
+	if a.config.OrbAgent.Offline == nil || !*a.config.OrbAgent.Offline {
+		ccm, err := cloud_config.New(a.logger, a.config, a.db)
+		if err != nil {
+			return err
+		}
 
-	commsCtx := context.WithValue(agentCtx, "routine", "comms")
-	if err := a.startComms(commsCtx, cloudConfig); err != nil {
-		a.logger.Error("could not start mqtt client")
-		return err
+		cloudConfig, err := ccm.GetCloudConfig()
+		if err != nil {
+			return err
+		}
+
+		commsCtx := context.WithValue(agentCtx, "routine", "comms")
+		if err := a.startComms(commsCtx, cloudConfig); err != nil {
+			a.logger.Error("could not start mqtt client")
+			return err
+		}
 	}
 
 	if err := a.startBackends(ctx); err != nil {
@@ -273,17 +276,19 @@ func (a *orbAgent) restartComms(ctx context.Context) error {
 	if a.client != nil && a.client.IsConnected() {
 		a.unsubscribeGroupChannels()
 	}
-	ccm, err := cloud_config.New(a.logger, a.config, a.db)
-	if err != nil {
-		return err
-	}
-	cloudConfig, err := ccm.GetCloudConfig()
-	if err != nil {
-		return err
-	}
-	if err := a.startComms(ctx, cloudConfig); err != nil {
-		a.logger.Error("could not restart mqtt client")
-		return err
+	if a.config.OrbAgent.Offline == nil || !*a.config.OrbAgent.Offline {
+		ccm, err := cloud_config.New(a.logger, a.config, a.db)
+		if err != nil {
+			return err
+		}
+		cloudConfig, err := ccm.GetCloudConfig()
+		if err != nil {
+			return err
+		}
+		if err := a.startComms(ctx, cloudConfig); err != nil {
+			a.logger.Error("could not restart mqtt client")
+			return err
+		}
 	}
 	return nil
 }

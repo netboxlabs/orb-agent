@@ -44,6 +44,7 @@ type OrbAgent struct {
 	Backends map[string]map[string]string `mapstructure:"backends"`
 	Tags     map[string]string            `mapstructure:"tags"`
 	Cloud    Cloud                        `mapstructure:"cloud"`
+	Offline  *bool                        `mapstructure:"offline,omitempty"`
 	TLS      TLS                          `mapstructure:"tls"`
 	DB       DBConfig                     `mapstructure:"db"`
 	Otel     Opentelemetry                `mapstructure:"otel"`
