@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
@@ -49,14 +48,7 @@ func (a *orbAgent) sendSingleHeartbeat(ctx context.Context, t time.Time, agentsS
 			besi.Error = a.backendState[name].LastError
 			if time.Now().Sub(be.GetStartTime()) >= RestartTimeMin {
 				a.logger.Info("attempting backend restart due to failed status during heartbeat")
-				if a.config.OrbAgent.Mode != nil {
-					cloud = a.config.OrbAgent.Mode.(*config.CloudConfig)
-				}
-				if a.config.OrbAgent.Cloud.MQTT.Id != "" {
-					ctx = context.WithValue(ctx, "agent_id", a.config.OrbAgent.Cloud.MQTT.Id)
-				} else {
-					ctx = context.WithValue(ctx, "agent_id", "auto-provisioning-without-id")
-				}
+				ctx = a.configManager.GetContext(ctx)
 				err := a.RestartBackend(ctx, name, "failed during heartbeat")
 				if err != nil {
 					a.logger.Error("failed to restart backend", zap.Error(err), zap.String("backend", name))

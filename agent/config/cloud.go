@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
@@ -24,10 +25,6 @@ type cloudConfigManager struct {
 	logger *zap.Logger
 	config Config
 	db     *sqlx.DB
-}
-
-func New(logger *zap.Logger, c Config, db *sqlx.DB) (ConfigManager, error) {
-	return &cloudConfigManager{logger: logger, config: c, db: db}, nil
 }
 
 func (cc *cloudConfigManager) migrateDB() error {
@@ -117,7 +114,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 		AgentTags map[string]string `json:"agent_tags"`
 	}
 
-	aname := cc.config.OrbAgent.Mode.Config.AgentName
+	aname := cc.config.OrbAgent.Cloud.Config.AgentName
 	if aname == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
@@ -216,4 +213,13 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 
 	return result, nil
 
+}
+
+func (cc *cloudConfigManager) GetContext(ctx context.Context) context.Context {
+	if cc.config.OrbAgent.Cloud.MQTT.Id != "" {
+		ctx = context.WithValue(ctx, "agent_id", cc.config.OrbAgent.Cloud.MQTT.Id)
+	} else {
+		ctx = context.WithValue(ctx, "agent_id", "auto-provisioning-without-id")
+	}
+	return ctx
 }

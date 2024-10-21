@@ -4,7 +4,7 @@ visor:
   taps:
 
 orb: 
-  offline: true
+  config_manager: offline
   backends: 
     pktvisor: 
       binary: /usr/local/sbin/pktvisord
