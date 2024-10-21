@@ -211,6 +211,7 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 		zap.String("address", mqtt.Address),
 		zap.String("id", result.Id))
 
+	result.Connect = true
 	return result, nil
 
 }

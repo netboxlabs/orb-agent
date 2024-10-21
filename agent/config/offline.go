@@ -16,7 +16,7 @@ type offlineConfigManager struct {
 }
 
 func (oc *offlineConfigManager) GetConfig() (MQTTConfig, error) {
-	return MQTTConfig{}, nil
+	return MQTTConfig{Connect: false}, nil
 }
 
 func (oc *offlineConfigManager) GetContext(ctx context.Context) context.Context {

@@ -14,6 +14,7 @@ type DBConfig struct {
 }
 
 type MQTTConfig struct {
+	Connect   bool   `mapstructure:"connect"`
 	Address   string `mapstructure:"address"`
 	Id        string `mapstructure:"id"`
 	Key       string `mapstructure:"key"`
