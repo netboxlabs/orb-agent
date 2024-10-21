@@ -32,7 +32,7 @@ type Cloud struct {
 	MQTT   MQTTConfig  `mapstructure:"mqtt"`
 }
 
-type Offline struct {
+type Local struct {
 	Config string `mapstructure:"config"`
 }
 
@@ -45,15 +45,16 @@ type Debug struct {
 	Enable bool `mapstructure:"enable"`
 }
 type OrbAgent struct {
-	Backends      map[string]map[string]string `mapstructure:"backends"`
-	Tags          map[string]string            `mapstructure:"tags"`
-	ConfigManager string                       `mapstructure:"config_manager"`
-	Cloud         Cloud                        `mapstructure:"orbcloud"`
-	Offline       Offline                      `mapstructure:"offline"`
-	TLS           TLS                          `mapstructure:"tls"`
-	DB            DBConfig                     `mapstructure:"db"`
-	Otel          Opentelemetry                `mapstructure:"otel"`
-	Debug         Debug                        `mapstructure:"debug"`
+	Backends      map[string]map[string]string      `mapstructure:"backends"`
+	Policies      map[string]map[string]interface{} `mapstructure:"policies"`
+	Tags          map[string]string                 `mapstructure:"tags"`
+	ConfigManager string                            `mapstructure:"config_manager"`
+	Cloud         Cloud                             `mapstructure:"orbcloud"`
+	Local         Local                             `mapstructure:"local"`
+	TLS           TLS                               `mapstructure:"tls"`
+	DB            DBConfig                          `mapstructure:"db"`
+	Otel          Opentelemetry                     `mapstructure:"otel"`
+	Debug         Debug                             `mapstructure:"debug"`
 }
 
 type Config struct {

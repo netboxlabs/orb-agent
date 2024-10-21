@@ -14,11 +14,11 @@ type ConfigManager interface {
 
 func New(t string, logger *zap.Logger, c Config, db *sqlx.DB) ConfigManager {
 	switch t {
-	case "offline":
-		return &offlineConfigManager{logger: logger, config: c, db: db}
+	case "local":
+		return &localConfigManager{logger: logger, config: c, db: db}
 	case "cloud":
 		return &cloudConfigManager{logger: logger, config: c, db: db}
 	default:
-		return &offlineConfigManager{logger: logger, config: c, db: db}
+		return &localConfigManager{logger: logger, config: c, db: db}
 	}
 }
