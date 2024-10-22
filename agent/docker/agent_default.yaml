@@ -4,6 +4,7 @@ visor:
   taps:
 
 orb: 
+  config_manager: local
   backends: 
     pktvisor: 
       binary: /usr/local/sbin/pktvisord

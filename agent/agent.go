@@ -13,7 +13,6 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/cloud_config"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
 	"github.com/netboxlabs/orb-agent/buildinfo"
@@ -66,6 +65,7 @@ type orbAgent struct {
 	groupsInfos map[string]GroupInfo
 
 	policyManager manager.PolicyManager
+	configManager config.ConfigManager
 }
 
 const retryRequestDuration = time.Second
@@ -96,7 +96,9 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 		logger.Error("policy manager failed to get repository", zap.Error(err))
 		return nil, err
 	}
-	return &orbAgent{logger: logger, config: c, policyManager: pm, db: db, groupsInfos: make(map[string]GroupInfo)}, nil
+	cm := config.New(c.OrbAgent.ConfigManager, logger, c, db)
+
+	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, db: db, groupsInfos: make(map[string]GroupInfo)}, nil
 }
 
 func (a *orbAgent) startBackends(agentCtx context.Context) error {
@@ -119,11 +121,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 			return err
 		}
 		backendCtx := context.WithValue(agentCtx, "routine", name)
-		if a.config.OrbAgent.Cloud.MQTT.Id != "" {
-			backendCtx = context.WithValue(backendCtx, "agent_id", a.config.OrbAgent.Cloud.MQTT.Id)
-		} else {
-			backendCtx = context.WithValue(backendCtx, "agent_id", "auto-provisioning-without-id")
-		}
+		backendCtx = a.configManager.GetContext(backendCtx)
 		a.backends[name] = be
 		initialState := be.GetInitialState()
 		a.backendState[name] = &backend.State{
@@ -166,17 +164,13 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		mqtt.DEBUG = &agentLoggerDebug{a: a}
 	}
 
-	ccm, err := cloud_config.New(a.logger, a.config, a.db)
-	if err != nil {
-		return err
-	}
-	cloudConfig, err := ccm.GetCloudConfig()
+	config, err := a.configManager.GetConfig()
 	if err != nil {
 		return err
 	}
 
 	commsCtx := context.WithValue(agentCtx, "routine", "comms")
-	if err := a.startComms(commsCtx, cloudConfig); err != nil {
+	if err := a.startComms(commsCtx, config); err != nil {
 		a.logger.Error("could not start mqtt client")
 		return err
 	}
@@ -273,15 +267,12 @@ func (a *orbAgent) restartComms(ctx context.Context) error {
 	if a.client != nil && a.client.IsConnected() {
 		a.unsubscribeGroupChannels()
 	}
-	ccm, err := cloud_config.New(a.logger, a.config, a.db)
+
+	config, err := a.configManager.GetConfig()
 	if err != nil {
 		return err
 	}
-	cloudConfig, err := ccm.GetCloudConfig()
-	if err != nil {
-		return err
-	}
-	if err := a.startComms(ctx, cloudConfig); err != nil {
+	if err := a.startComms(ctx, config); err != nil {
 		a.logger.Error("could not restart mqtt client")
 		return err
 	}
@@ -289,11 +280,7 @@ func (a *orbAgent) restartComms(ctx context.Context) error {
 }
 
 func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
-	if a.config.OrbAgent.Cloud.MQTT.Id != "" {
-		ctx = context.WithValue(ctx, "agent_id", a.config.OrbAgent.Cloud.MQTT.Id)
-	} else {
-		ctx = context.WithValue(ctx, "agent_id", "auto-provisioning-without-id")
-	}
+	ctx = a.configManager.GetContext(ctx)
 	a.logoffWithHeartbeat(ctx)
 	a.logger.Info("restarting comms", zap.String("reason", reason))
 	if err := a.restartComms(ctx); err != nil {

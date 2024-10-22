@@ -190,6 +190,10 @@ func (a *orbAgent) removeDatasetFromPolicy(datasetID string, policyID string) {
 }
 
 func (a *orbAgent) startComms(ctx context.Context, config config.MQTTConfig) error {
+	if config.Connect == false {
+		a.logger.Info("mqtt connection disabled")
+		return nil
+	}
 
 	var err error
 	a.logger.Debug("starting mqtt connection")
