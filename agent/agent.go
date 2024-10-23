@@ -16,6 +16,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
 	"github.com/netboxlabs/orb-agent/buildinfo"
+	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
 )
 
@@ -101,6 +102,27 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, db: db, groupsInfos: make(map[string]GroupInfo)}, nil
 }
 
+func (a *orbAgent) managePolicies() error {
+
+	if a.config.OrbAgent.Policies == nil {
+		return errors.New("no policies specified")
+	}
+
+	for beName, policy := range a.config.OrbAgent.Policies {
+		_, ok := a.backends[beName]
+		if !ok {
+			return errors.New("backend not found: " + beName)
+		}
+		for pName, data := range policy {
+			id := uuid.NewString()
+			payload := fleet.AgentPolicyRPCPayload{Action: "manage", Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
+			a.policyManager.ManagePolicy(payload)
+		}
+
+	}
+	return nil
+}
+
 func (a *orbAgent) startBackends(agentCtx context.Context) error {
 	a.logger.Info("registered backends", zap.Strings("values", backend.GetList()))
 	a.logger.Info("requested backends", zap.Any("values", a.config.OrbAgent.Backends))
@@ -176,6 +198,10 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	if err := a.startBackends(ctx); err != nil {
+		return err
+	}
+
+	if err := a.managePolicies(); err != nil {
 		return err
 	}
 
