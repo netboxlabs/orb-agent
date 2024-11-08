@@ -4,7 +4,7 @@
 
 import pytest
 
-from orb_discovery.translate import (
+from device_discovery.translate import (
     translate_data,
     translate_device,
     translate_interface,

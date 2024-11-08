@@ -9,8 +9,8 @@ import yaml
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from orb_discovery.policy.models import PolicyRequest
-from orb_discovery.server import app, manager
+from device_discovery.policy.models import PolicyRequest
+from device_discovery.server import app, manager
 
 client = TestClient(app)
 
@@ -125,7 +125,7 @@ def mock_supported_drivers():
     Mocks the supported drivers to control response in capabilities endpoint.
     """
     with patch(
-        "orb_discovery.server.supported_drivers", ["driver1", "driver2"]
+        "device_discovery.server.supported_drivers", ["driver1", "driver2"]
     ) as mock:
         yield mock
 
@@ -137,7 +137,7 @@ def mock_version_semver():
 
     Mocks the version_semver function to control version response in status endpoint.
     """
-    with patch("orb_discovery.server.version_semver", return_value="1.0.0") as mock:
+    with patch("device_discovery.server.version_semver", return_value="1.0.0") as mock:
         yield mock
 
 
@@ -148,7 +148,7 @@ def mock_manager():
 
     Mocks the PolicyManager to control policy behavior in tests.
     """
-    with patch("orb_discovery.server.manager") as mock:
+    with patch("device_discovery.server.manager") as mock:
         yield mock
 
 
@@ -200,7 +200,7 @@ def test_write_policy_valid_yaml(mock_valid_policy_request, valid_policy_yaml):
     """
     manager.runners = {}
     with patch(
-        "orb_discovery.server.manager.parse_policy",
+        "device_discovery.server.manager.parse_policy",
         return_value=mock_valid_policy_request,
     ):
         response = client.post(
@@ -215,7 +215,7 @@ def test_write_policy_valid_yaml(mock_valid_policy_request, valid_policy_yaml):
 def test_write_policy_invalid_yaml():
     """Test posting a invalid YAML policy."""
     with patch(
-        "orb_discovery.server.manager.parse_policy",
+        "device_discovery.server.manager.parse_policy",
         side_effect=yaml.YAMLError("invalid"),
     ):
         response = client.post(
@@ -249,7 +249,7 @@ def test_write_policy_validation_error(invalid_policy_yaml):
 def test_write_policy_unexpected_parser_error():
     """Test posting a invalid YAML policy."""
     with patch(
-        "orb_discovery.server.manager.parse_policy",
+        "device_discovery.server.manager.parse_policy",
         side_effect=Exception("unexpected error"),
     ):
         response = client.post(
@@ -294,7 +294,7 @@ def test_write_policy_multiple_policies(
     """
     manager.runners = {}
     with patch(
-        "orb_discovery.server.manager.parse_policy",
+        "device_discovery.server.manager.parse_policy",
         return_value=mock_multiple_policies_request,
     ):
         response = client.post(
@@ -316,7 +316,7 @@ def test_write_policy_no_policy_error():
 
     """
     with patch(
-        "orb_discovery.server.parse_yaml_body",
+        "device_discovery.server.parse_yaml_body",
         return_value=PolicyRequest(discovery={"policies": {}}),
     ):
         response = client.post(
@@ -339,10 +339,10 @@ def test_policy_start_error(mock_valid_policy_request, valid_policy_yaml):
 
     """
     with patch(
-        "orb_discovery.server.manager.parse_policy",
+        "device_discovery.server.manager.parse_policy",
         return_value=mock_valid_policy_request,
     ), patch(
-        "orb_discovery.server.manager.start_policy",
+        "device_discovery.server.manager.start_policy",
         side_effect=Exception("Policy exists"),
     ):
         response = client.post(

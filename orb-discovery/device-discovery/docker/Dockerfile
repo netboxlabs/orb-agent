@@ -4,12 +4,12 @@ RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser &
 
 WORKDIR /usr/src/app
 
-COPY orb-discovery/ ./orb-discovery
+COPY device-discovery/ ./device-discovery
 
-RUN pip install --no-cache-dir ./orb-discovery/
+RUN pip install --no-cache-dir ./device-discovery/
 
-RUN rm -rf ./orb-discovery
+RUN rm -rf ./device-discovery
 
 USER appuser
 
-CMD [ "orb-discovery" ]
+CMD [ "device-discovery" ]

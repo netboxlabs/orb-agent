@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orb_discovery.main import main
+from device_discovery.main import main
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def mock_parse_args():
 
     Mocks the parse_args method to control CLI arguments.
     """
-    with patch("orb_discovery.main.argparse.ArgumentParser.parse_args") as mock:
+    with patch("device_discovery.main.argparse.ArgumentParser.parse_args") as mock:
         yield mock
 
 
@@ -28,7 +28,7 @@ def mock_parse_config_file():
 
     Mocks the parse_config_file method to simulate loading a configuration file.
     """
-    with patch("orb_discovery.main.parse_config_file") as mock:
+    with patch("device_discovery.main.parse_config_file") as mock:
         yield mock
 
 
@@ -39,7 +39,7 @@ def mock_client():
 
     Mocks the Client class to control its behavior during tests.
     """
-    with patch("orb_discovery.main.Client") as mock:
+    with patch("device_discovery.main.Client") as mock:
         yield mock
 
 
@@ -50,7 +50,7 @@ def mock_uvicorn_run():
 
     Mocks the uvicorn.run function to prevent it from actually starting a server.
     """
-    with patch("orb_discovery.main.uvicorn.run") as mock:
+    with patch("device_discovery.main.uvicorn.run") as mock:
         yield mock
 
 

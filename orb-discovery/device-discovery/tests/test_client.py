@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orb_discovery.client import Client
-from orb_discovery.translate import translate_data
+from device_discovery.client import Client
+from device_discovery.translate import translate_data
 
 
 @pytest.fixture
@@ -42,14 +42,14 @@ def sample_data():
 @pytest.fixture
 def mock_version_semver():
     """Mock the version_semver function."""
-    with patch("orb_discovery.client.version_semver", return_value="0.0.0") as mock:
+    with patch("device_discovery.client.version_semver", return_value="0.0.0") as mock:
         yield mock
 
 
 @pytest.fixture
 def mock_diode_client_class():
     """Mock the DiodeClient class."""
-    with patch("orb_discovery.client.DiodeClient") as mock:
+    with patch("device_discovery.client.DiodeClient") as mock:
         yield mock
 
 
@@ -60,7 +60,7 @@ def test_init_client(mock_diode_client_class, mock_version_semver):
 
     mock_diode_client_class.assert_called_once_with(
         target="https://example.com",
-        app_name="orb-discovery",
+        app_name="device-discovery",
         app_version=mock_version_semver(),
         api_key="dummy_api_key",
     )
@@ -76,7 +76,7 @@ def test_ingest_success(mock_diode_client_class, sample_data):
     hostname = sample_data["device"]["hostname"]
 
     with patch(
-        "orb_discovery.client.translate_data", return_value=translate_data(sample_data)
+        "device_discovery.client.translate_data", return_value=translate_data(sample_data)
     ) as mock_translate_data:
         client.ingest(hostname, sample_data)
         mock_translate_data.assert_called_once_with(sample_data)
@@ -93,7 +93,7 @@ def test_ingest_failure(mock_diode_client_class, sample_data):
     hostname = sample_data["device"]["hostname"]
 
     with patch(
-        "orb_discovery.client.translate_data", return_value=translate_data(sample_data)
+        "device_discovery.client.translate_data", return_value=translate_data(sample_data)
     ) as mock_translate_data:
         client.ingest(hostname, sample_data)
         mock_translate_data.assert_called_once_with(sample_data)

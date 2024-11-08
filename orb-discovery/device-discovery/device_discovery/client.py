@@ -7,10 +7,10 @@ import threading
 
 from netboxlabs.diode.sdk import DiodeClient
 
-from orb_discovery.translate import translate_data
-from orb_discovery.version import version_semver
+from device_discovery.translate import translate_data
+from device_discovery.version import version_semver
 
-APP_NAME = "orb-discovery"
+APP_NAME = "device-discovery"
 APP_VERSION = version_semver()
 
 # Set up logging
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class Client:
     """
-    Singleton class for managing the Diode client for orb-discovery.
+    Singleton class for managing the Diode client for device-discovery.
 
     This class ensures only one instance of the Diode client is created and provides methods
     to initialize the client and ingest data.

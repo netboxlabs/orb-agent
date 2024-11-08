@@ -6,9 +6,9 @@ import logging
 
 import yaml
 
-from orb_discovery.parser import resolve_env_vars
-from orb_discovery.policy.models import Policy, PolicyRequest
-from orb_discovery.policy.runner import PolicyRunner
+from device_discovery.parser import resolve_env_vars
+from device_discovery.policy.models import Policy, PolicyRequest
+from device_discovery.policy.runner import PolicyRunner
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

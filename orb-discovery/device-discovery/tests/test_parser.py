@@ -8,7 +8,7 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
-from orb_discovery.parser import (
+from device_discovery.parser import (
     Base,
     ParseException,
     parse_config,
@@ -57,7 +57,7 @@ def test_parse_invalid_config(invalid_yaml):
 def test_parse_config_file(mock_file, valid_yaml):
     """Ensure we can parse a configuration file."""
     with patch(
-        "orb_discovery.parser.parse_config", return_value=parse_config(valid_yaml)
+        "device_discovery.parser.parse_config", return_value=parse_config(valid_yaml)
     ):
         config = parse_config_file(Path("fake_path.yaml"))
         assert config.config.target == "target_value"
@@ -68,7 +68,7 @@ def test_parse_config_file(mock_file, valid_yaml):
 def test_parse_config_file_parse_exception(mock_file):
     """Ensure a ParseException in parse_config is propagated."""
     with patch(
-        "orb_discovery.parser.parse_config",
+        "device_discovery.parser.parse_config",
         side_effect=ParseException("Test Parse Exception"),
     ):
         with pytest.raises(ParseException):

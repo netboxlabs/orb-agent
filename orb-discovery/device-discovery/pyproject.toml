@@ -1,5 +1,5 @@
 [project]
-name = "orb-discovery"
+name = "device-discovery"
 version = "0.0.1"  # Overwritten during the build process
 description = "NetBox Labs, Orb Discovery"
 readme = "README.md"
@@ -45,12 +45,12 @@ test = ["coverage", "pytest", "pytest-cov"]
 "Homepage" = "https://netboxlabs.com/"
 
 [project.scripts]
-orb-discovery = "orb_discovery.main:main"
+device-discovery = "device_discovery.main:main"
 
 [tool.setuptools]
 packages = [
-    "orb_discovery",
-    "orb_discovery.policy",
+    "device_discovery",
+    "device_discovery.policy",
 ]
 
 [build-system]

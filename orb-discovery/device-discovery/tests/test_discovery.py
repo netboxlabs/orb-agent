@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orb_discovery.discovery import (
+from device_discovery.discovery import (
     discover_device_driver,
     napalm_driver_list,
     set_napalm_logs_level,
@@ -19,21 +19,21 @@ from orb_discovery.discovery import (
 @pytest.fixture
 def mock_get_network_driver():
     """Mock the get_network_driver function from napalm."""
-    with patch("orb_discovery.discovery.get_network_driver") as mock:
+    with patch("device_discovery.discovery.get_network_driver") as mock:
         yield mock
 
 
 @pytest.fixture
 def mock_importlib_metadata_distributions():
     """Mock the importlib_metadata.distributions function."""
-    with patch("orb_discovery.discovery.importlib_metadata.distributions") as mock:
+    with patch("device_discovery.discovery.importlib_metadata.distributions") as mock:
         yield mock
 
 
 @pytest.fixture
 def mock_loggers():
     """Mock the logging.getLogger function for various loggers."""
-    with patch("orb_discovery.discovery.logging.getLogger") as mock:
+    with patch("device_discovery.discovery.logging.getLogger") as mock:
         yield mock
 
 

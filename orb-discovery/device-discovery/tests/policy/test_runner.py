@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from apscheduler.triggers.date import DateTrigger
 
-from orb_discovery.policy.models import Config, Napalm, Status
-from orb_discovery.policy.runner import PolicyRunner
+from device_discovery.policy.models import Config, Napalm, Status
+from device_discovery.policy.runner import PolicyRunner
 
 
 @pytest.fixture
@@ -69,7 +69,7 @@ def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes):
 def test_setup_with_unsupported_driver_raises_error(policy_runner, sample_scopes):
     """Test setup raises error if driver is unsupported."""
     sample_scopes[0].driver = "unsupported_driver"
-    with patch("orb_discovery.policy.runner.supported_drivers", ["ios"]), pytest.raises(
+    with patch("device_discovery.policy.runner.supported_drivers", ["ios"]), pytest.raises(
         Exception, match="specified driver 'unsupported_driver' was not found"
     ):
         policy_runner.setup("policy1", Config(), sample_scopes)
@@ -80,11 +80,11 @@ def test_run_device_with_discovered_driver(policy_runner, sample_scopes, sample_
     """Test running a device where the driver needs discovery."""
     sample_scopes[0].driver = None  # Force driver discovery
     with patch(
-        "orb_discovery.policy.runner.discover_device_driver", return_value="ios"
+        "device_discovery.policy.runner.discover_device_driver", return_value="ios"
     ) as mock_discover, patch(
-        "orb_discovery.policy.runner.get_network_driver"
+        "device_discovery.policy.runner.get_network_driver"
     ) as mock_get_driver, patch(
-        "orb_discovery.client.Client.ingest"
+        "device_discovery.client.Client.ingest"
     ) as mock_ingest:
 
         # Mock the network driver instance
@@ -113,9 +113,9 @@ def test_run_discovered_driver_error(policy_runner, sample_scopes, sample_config
     """Test running a device where the driver discovery fails."""
     sample_scopes[0].driver = None  # Force driver discovery
     with patch(
-        "orb_discovery.policy.runner.discover_device_driver", return_value=None
+        "device_discovery.policy.runner.discover_device_driver", return_value=None
     ) as mock_discover, patch(
-        "orb_discovery.policy.runner.logger.error"
+        "device_discovery.policy.runner.logger.error"
     ) as mock_logger_error:
 
         # Run the device with an error to check error handling
@@ -129,9 +129,9 @@ def test_run_discovered_driver_error(policy_runner, sample_scopes, sample_config
 def test_run_device_with_error_in_job(policy_runner, sample_scopes, sample_config):
     """Test run handles an error during device interaction gracefully."""
     with patch(
-        "orb_discovery.policy.runner.get_network_driver",
+        "device_discovery.policy.runner.get_network_driver",
         side_effect=Exception("Connection error"),
-    ), patch("orb_discovery.policy.runner.logger.error") as mock_logger_error:
+    ), patch("device_discovery.policy.runner.logger.error") as mock_logger_error:
 
         # Run the device with an error to check error handling
         policy_runner.run("test_id", sample_scopes[0], sample_config)

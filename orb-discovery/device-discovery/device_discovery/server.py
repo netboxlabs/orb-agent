@@ -10,10 +10,10 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
-from orb_discovery.discovery import supported_drivers
-from orb_discovery.policy.manager import PolicyManager
-from orb_discovery.policy.models import PolicyRequest
-from orb_discovery.version import version_semver
+from device_discovery.discovery import supported_drivers
+from device_discovery.policy.manager import PolicyManager
+from device_discovery.policy.models import PolicyRequest
+from device_discovery.version import version_semver
 
 manager = PolicyManager()
 start_time = datetime.now()

@@ -1,21 +1,21 @@
-name: orb-discovery - lint and tests
+name: device-discovery - lint and tests
 on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "orb-discovery/**"
+      - "device-discovery/**"
   push:
     branches:
       - "!release"
     paths:
-      - "orb-discovery/**"
+      - "device-discovery/**"
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
 env:
-  BE_DIR: orb-discovery
+  BE_DIR: device-discovery
 
 jobs:
   tests:
@@ -43,7 +43,7 @@ jobs:
     - name: Run tests with coverage
       run: |
         set -o pipefail
-        pytest --junitxml=pytest.xml --cov-report=term-missing:skip-covered --cov=orb_discovery/ | tee pytest-coverage.txt
+        pytest --junitxml=pytest.xml --cov-report=term-missing:skip-covered --cov=device_discovery/ | tee pytest-coverage.txt
 
     - name: Pytest coverage comment
       uses: MishaKav/pytest-coverage-comment@main
@@ -53,5 +53,5 @@ jobs:
 
     - name: Lint with Ruff
       run: |
-        ruff check --output-format=github orb_discovery/ tests/
+        ruff check --output-format=github device_discovery/ tests/
       continue-on-error: true

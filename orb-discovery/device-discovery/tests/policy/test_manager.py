@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from orb_discovery.policy.manager import PolicyManager
-from orb_discovery.policy.models import Policy, PolicyRequest
+from device_discovery.policy.manager import PolicyManager
+from device_discovery.policy.models import Policy, PolicyRequest
 
 
 @pytest.fixture
@@ -35,7 +35,7 @@ def sample_policy():
 
 def test_start_policy(policy_manager, sample_policy):
     """Test starting a policy."""
-    with patch("orb_discovery.policy.manager.PolicyRunner") as MockPolicyRunner:
+    with patch("device_discovery.policy.manager.PolicyRunner") as MockPolicyRunner:
         mock_runner = MockPolicyRunner.return_value
         policy_manager.start_policy("policy1", sample_policy)
 
@@ -71,7 +71,7 @@ def test_parse_policy(policy_manager):
               username: "admin"
               password: "password"
     """
-    with patch("orb_discovery.parser.resolve_env_vars", side_effect=lambda x: x):
+    with patch("device_discovery.parser.resolve_env_vars", side_effect=lambda x: x):
         policy_request = policy_manager.parse_policy(config_data)
 
         # Verify structure of the parsed PolicyRequest
@@ -96,7 +96,7 @@ def test_parse_policy_invalid_cron(policy_manager):
               username: "admin"
               password: "password"
     """
-    with patch("orb_discovery.parser.resolve_env_vars", side_effect=lambda x: x):
+    with patch("device_discovery.parser.resolve_env_vars", side_effect=lambda x: x):
         with pytest.raises(ValidationError) as exc_info:
             policy_manager.parse_policy(config_data)
 

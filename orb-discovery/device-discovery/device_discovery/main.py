@@ -9,10 +9,10 @@ from importlib.metadata import version
 import netboxlabs.diode.sdk.version as SdkVersion
 import uvicorn
 
-from orb_discovery.client import Client
-from orb_discovery.parser import parse_config_file
-from orb_discovery.server import app
-from orb_discovery.version import version_semver
+from device_discovery.client import Client
+from device_discovery.parser import parse_config_file
+from device_discovery.server import app
+from device_discovery.version import version_semver
 
 
 def main():

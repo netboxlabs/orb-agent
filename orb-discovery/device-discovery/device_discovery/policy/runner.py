@@ -11,9 +11,9 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from napalm import get_network_driver
 
-from orb_discovery.client import Client
-from orb_discovery.discovery import discover_device_driver, supported_drivers
-from orb_discovery.policy.models import Config, Napalm, Status
+from device_discovery.client import Client
+from device_discovery.discovery import discover_device_driver, supported_drivers
+from device_discovery.policy.models import Config, Napalm, Status
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
