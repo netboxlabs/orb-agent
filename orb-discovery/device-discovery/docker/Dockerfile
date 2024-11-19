@@ -1,14 +1,22 @@
-FROM python:3.12-bullseye
-
-RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+FROM python:3.12-slim-bullseye AS builder
 
 WORKDIR /usr/src/app
 
 COPY device-discovery/ ./device-discovery
 
-RUN pip install --no-cache-dir ./device-discovery/
+RUN python -m venv /opt/venv && \
+    . /opt/venv/bin/activate && \
+    pip install --no-cache-dir ./device-discovery && \
+    deactivate
 
-RUN rm -rf ./device-discovery
+FROM python:3.12-slim-bullseye
+
+RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+COPY --from=builder /opt/venv /opt/venv
+
+# Activate virtual environment for all users
+ENV PATH="/opt/venv/bin:$PATH"
 
 USER appuser
 
