@@ -170,10 +170,10 @@ jobs:
           path: ${{env.APP_NAME}}/dist/${{ env.OUTPUT_FILENAME }}
           retention-days: 30
           if-no-files-found: error
-      # - name: Publish release distributions to PyPI
-      #   uses: pypa/gh-action-pypi-publish@release/v1
-      #   with:
-      #     packages-dir: dist
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
 
   semantic-release:
     name: Semantic release
