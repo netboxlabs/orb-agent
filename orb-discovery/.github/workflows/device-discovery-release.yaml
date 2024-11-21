@@ -129,6 +129,9 @@ jobs:
     needs: [ get-python-package-name, get-next-version ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: ${{ env.APP_NAME  }}
     permissions:
       id-token: write
       contents: read
@@ -144,12 +147,12 @@ jobs:
           python-version: ${{ env.PYTHON_RUNTIME_VERSION }}
       - name: Insert version variables into Python
         run: |
-          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" device-discovery/device_discovery/version.py
-          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" device-discovery/device_discovery/version.py
-          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" device-discovery/device_discovery/version.py
+          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" device_discovery/version.py
+          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" device_discovery/version.py
+          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" device_discovery/version.py
       - name: Display contents of version.py
-        run: cat device-discovery/device_discovery/version.py
-      - name: Build sdist package
+        run: cat device_discovery/version.py
+      - name: Build sdist 
         run: |
           pip install toml-cli
           toml set --toml-path pyproject.toml project.version ${{ env.BUILD_VERSION }}
