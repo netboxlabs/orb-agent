@@ -167,7 +167,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.OUTPUT_FILENAME }}
-          path: dist/${{ env.OUTPUT_FILENAME }}
+          path: ${{env.APP_NAME}}/dist/${{ env.OUTPUT_FILENAME }}
           retention-days: 30
           if-no-files-found: error
       # - name: Publish release distributions to PyPI
