@@ -173,7 +173,7 @@ jobs:
       - name: Publish release distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist
+          packages-dir: ${{env.APP_NAME}}/dist
 
   semantic-release:
     name: Semantic release
