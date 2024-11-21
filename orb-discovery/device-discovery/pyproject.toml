@@ -1,10 +1,10 @@
 [project]
-name = "device-discovery"
+name = "netboxlabs-device-discovery"
 version = "0.0.1"  # Overwritten during the build process
-description = "NetBox Labs, Orb Discovery"
+description = "NetBox Labs, Device Discovery backend for Orb Agent, part of NetBox Discovery"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Apache" }
+license = { file = "LICENSE.txt" }
 authors = [
     {name = "NetBox Labs", email = "support@netboxlabs.com" }
 ]
@@ -52,6 +52,8 @@ packages = [
     "device_discovery",
     "device_discovery.policy",
 ]
+package-data = {"device_discovery" = ["**/*", "policy/**"]}
+exclude-package-data = {device_discovery = ["tests/*"]}
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]

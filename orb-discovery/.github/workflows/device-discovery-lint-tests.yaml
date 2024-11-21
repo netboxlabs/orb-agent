@@ -1,4 +1,4 @@
-name: device-discovery - lint and tests
+name: Device Discovery - lint and tests
 on:
   workflow_dispatch:
   pull_request:

@@ -1,0 +1,245 @@
+name: Device Discovery - release
+on:
+  workflow_dispatch:
+  push:
+    branches:
+        - "release"
+    paths:
+        - "device-discovery/**"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.ORB_CI_GH_TOKEN }}
+  SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
+  PYTHON_RUNTIME_VERSION: "3.11"
+  APP_NAME: device-discovery
+  PYTHON_PACKAGE_NAME: netboxlabs-device-discovery
+
+jobs:
+  get-python-package-name:
+    name: Get Python package name
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python package name
+        id: python-package-name
+        run: echo "python-package-name=${{ env.PYTHON_PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
+    outputs:
+        python-package-name: ${{ steps.python-package-name.outputs.python-package-name }}
+
+  get-next-version:
+    name: Semantic release get next version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+      - name: Write package.json
+        uses: DamianReeves/write-file-action@master
+        with:
+          path: ./package.json
+          write-mode: overwrite
+          contents: |
+            {
+              "name": "${{ env.APP_NAME }}",
+              "version": "1.0.0",
+              "devDependencies": {
+                "semantic-release-export-data": "^1.0.1",
+                "@semantic-release/changelog": "^6.0.3"
+              }
+            }
+      - name: Write .releaserc.json
+        uses: DamianReeves/write-file-action@master
+        with:
+          path: ./.releaserc.json
+          write-mode: overwrite
+          contents: |
+            {
+              "branches": "release",
+              "repositoryUrl": "https://github.com/netboxlabs/orb-discovery",
+              "debug": "true",
+              "tagFormat": "${{ env.APP_NAME }}/v${version}",
+              "plugins": [
+                ["semantic-release-export-data"],
+                ["@semantic-release/commit-analyzer", {
+                  "releaseRules": [
+                    { "message": "*", "release": "patch"},
+                    { "message": "fix*", "release": "patch" },
+                    { "message": "feat*", "release": "minor" },
+                    { "message": "perf*",  "release": "major" }
+                  ]
+                }],
+                "@semantic-release/release-notes-generator",
+                [
+                  "@semantic-release/changelog",
+                  {
+                    "changelogFile": "CHANGELOG.md",
+                    "changelogTitle": "# Semantic Versioning Changelog"
+                  }
+                ],
+                [
+                  "@semantic-release/github",
+                  {
+                    "assets": [
+                      {
+                        "path": "release/**"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+      - name: setup semantic-release
+        run: npm i
+      - name: release dry-run
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug --dry-run
+        id: get-next-version
+      - name: Set short sha output
+        id: short-sha
+        run: echo "::set-output name=short-sha::${GITHUB_SHA::7}"
+      - name: Set release version
+        id: release-version
+        run: |
+          echo "::set-output name=release-version::`echo ${{ steps.get-next-version.outputs.new-release-version }} | sed 's/v//g'`"
+    outputs:
+      new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
+      new-release-version: ${{ steps.release-version.outputs.release-version }}
+      short-sha: ${{ steps.short-sha.outputs.short-sha }}
+
+  confirm-version:
+    name: Next version ${{ needs.get-next-version.outputs.new-release-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
+
+  build:
+    name: Build
+    needs: [ get-python-package-name, get-next-version ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
+      BUILD_TRACK: release
+      BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
+      OUTPUT_FILENAME: ${{ needs.get-python-package-name.outputs.python-package-name }}-${{ needs.get-next-version.outputs.new-release-version }}.tar.gz
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_RUNTIME_VERSION }}
+      - name: Insert version variables into Python
+        run: |
+          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" device-discovery/device_discovery/version.py
+          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" device-discovery/device_discovery/version.py
+          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" device-discovery/device_discovery/version.py
+      - name: Display contents of version.py
+        run: cat device-discovery/device_discovery/version.py
+      - name: Build sdist package
+        run: |
+          pip install toml-cli
+          toml set --toml-path pyproject.toml project.version ${{ env.BUILD_VERSION }}
+          cat pyproject.toml | grep version
+          python3 -m pip install --upgrade build
+          python3 -m build --sdist --outdir dist/
+      - name: Replace underscores with hyphens in build filename
+        run: |
+          BUILD_FILENAME=$(ls dist/ | grep tar.gz)
+          mv dist/$BUILD_FILENAME dist/${{ env.OUTPUT_FILENAME }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUTPUT_FILENAME }}
+          path: dist/${{ env.OUTPUT_FILENAME }}
+          retention-days: 30
+          if-no-files-found: error
+      # - name: Publish release distributions to PyPI
+      #   uses: pypa/gh-action-pypi-publish@release/v1
+      #   with:
+      #     packages-dir: dist
+
+  semantic-release:
+    name: Semantic release
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+      - name: Write package.json
+        uses: DamianReeves/write-file-action@master
+        with:
+          path: ./package.json
+          write-mode: overwrite
+          contents: |
+            {
+              "name": "${{ env.APP_NAME }}",
+              "version": "1.0.0",
+              "devDependencies": {
+                "semantic-release-export-data": "^1.0.1",
+                "@semantic-release/changelog": "^6.0.3"
+              }
+            }
+      - name: Write .releaserc.json
+        uses: DamianReeves/write-file-action@master
+        with:
+          path: ./.releaserc.json
+          write-mode: overwrite
+          contents: |
+            {
+              "branches": "release",
+              "repositoryUrl": "https://github.com/netboxlabs/orb-discovery",
+              "debug": "true",
+              "tagFormat": "${{ env.APP_NAME }}/v${version}",
+              "plugins": [
+                ["semantic-release-export-data"],
+                ["@semantic-release/commit-analyzer", {
+                  "releaseRules": [
+                    { "message": "*", "release": "patch"},
+                    { "message": "fix*", "release": "patch" },
+                    { "message": "feat*", "release": "minor" },
+                    { "message": "perf*",  "release": "major" }
+                  ]
+                }],
+                "@semantic-release/release-notes-generator",
+                [
+                  "@semantic-release/changelog",
+                  {
+                    "changelogFile": "CHANGELOG.md",
+                    "changelogTitle": "# Semantic Versioning Changelog"
+                  }
+                ],
+                [
+                  "@semantic-release/github",
+                  {
+                    "assets": [
+                      {
+                        "path": "release/**"
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+      - name: setup semantic-release
+        run: npm i
+      - name: Release
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug
