@@ -16,7 +16,7 @@ env:
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
   PYTHON_RUNTIME_VERSION: "3.11"
   APP_NAME: device-discovery
-  PYTHON_PACKAGE_NAME: netboxlabs-device-discovery
+  PYTHON_PACKAGE_NAME: netboxlabs_device_discovery
 
 jobs:
   get-python-package-name:
@@ -159,10 +159,6 @@ jobs:
           cat pyproject.toml | grep version
           python3 -m pip install --upgrade build
           python3 -m build --sdist --outdir dist/
-      - name: Replace underscores with hyphens in build filename
-        run: |
-          BUILD_FILENAME=$(ls dist/ | grep tar.gz)
-          mv dist/$BUILD_FILENAME dist/${{ env.OUTPUT_FILENAME }}
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
