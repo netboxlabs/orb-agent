@@ -51,6 +51,11 @@ type Info struct {
 	UpTimeMin float64 `json:"up_time_min"`
 }
 
+func Register() bool {
+	backend.Register("device_discovery", &deviceDiscoveryBackend{})
+	return true
+}
+
 func (d *deviceDiscoveryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]string, otelConfig map[string]interface{}) error {
 	d.logger = logger
 	d.policyRepo = repo
@@ -129,7 +134,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	status := d.proc.Status()
 
 	if status.Error != nil {
-		d.logger.Error("pktvisor startup error", zap.Error(status.Error))
+		d.logger.Error("device-discovery startup error", zap.Error(status.Error))
 		return status.Error
 	}
 
@@ -138,7 +143,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		if err != nil {
 			d.logger.Error("proc.Stop error", zap.Error(err))
 		}
-		return errors.New("pktvisor startup error, check log")
+		return errors.New("device-discovery startup error, check log")
 	}
 
 	d.logger.Info("device-discovery process started", zap.Int("pid", status.PID))

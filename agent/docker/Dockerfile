@@ -12,22 +12,32 @@ RUN mkdir /tmp/build && CGO_ENABLED=1 make agent_bin && mv build/orb-agent /tmp/
 
 FROM otel/opentelemetry-collector-contrib:${OTEL_TAG} AS otelcol-contrib
 
-FROM orbcommunity/pktvisor:${PKTVISOR_TAG}
+FROM orbcommunity/pktvisor:${PKTVISOR_TAG} AS pktvisor
+
+FROM python:3.12-slim-bullseye
 
 RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # Create necessary directories and set ownership to appuser
 RUN mkdir -p /opt/orb && chown appuser:appuser /opt/orb \
     && chown appuser:appuser /usr/local/bin \
-    && chown appuser:appuser /var/run \ 
-    && chown appuser:appuser /geo-db
+    && chown appuser:appuser /var/run
 
 COPY --from=builder /tmp/build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /go/src/github.com/netboxlabs/orb-agent/agent/docker/agent_default.yaml /opt/orb/agent_default.yaml
 COPY --from=builder /go/src/github.com/netboxlabs/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
 COPY --from=builder /go/src/github.com/netboxlabs/orb-agent/agent/docker/run-agent.sh /run-agent.sh
 
+COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/sbin/pktvisord
+COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/sbin/crashpad_handler
+COPY --from=pktvisor /geo-db /geo-db
+COPY --from=pktvisor /iana /iana
+
+RUN  chown appuser:appuser /geo-db
+
 COPY --from=otelcol-contrib /otelcol-contrib /usr/local/bin/otelcol-contrib
+
+RUN pip3 install netboxlabs-device-discovery
 
 RUN chmod a+x /run-agent.sh
 

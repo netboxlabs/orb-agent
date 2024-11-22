@@ -65,7 +65,7 @@ func (d *deviceDiscoveryBackend) request(url string, payload interface{}, method
 	if (res.StatusCode < 200) || (res.StatusCode > 299) {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return errors.New(fmt.Sprintf("non 2xx HTTP error code from pktvisord, no or invalid body: %d", res.StatusCode))
+			return errors.New(fmt.Sprintf("non 2xx HTTP error code from device-discovery, no or invalid body: %d", res.StatusCode))
 		}
 		if len(body) == 0 {
 			return errors.New(fmt.Sprintf("%d empty body", res.StatusCode))

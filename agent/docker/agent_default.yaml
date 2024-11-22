@@ -12,3 +12,11 @@ orb:
     otel:
       binary: /usr/local/bin/otelcol-contrib
       config_file: /opt/orb/agent_default.yaml
+    device_discovery:
+      binary: device_discovery
+      config_file: /opt/orb/agent_default.yaml
+
+discovery:
+  config:
+    target: grpc://localhost:8080/diode
+    api_key: ${DIODE_API_KEY}

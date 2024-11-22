@@ -8,9 +8,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/netboxlabs/orb-agent/agent/backend/otel"
-
 	"github.com/netboxlabs/orb-agent/agent"
+	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/buildinfo"
@@ -32,6 +32,7 @@ var (
 func init() {
 	pktvisor.Register()
 	otel.Register()
+	devicediscovery.Register()
 }
 
 func Version(_ *cobra.Command, _ []string) {
@@ -172,6 +173,7 @@ func mergeOrError(path string) {
 	backendVarsFunction := make(map[string]func(*viper.Viper))
 	backendVarsFunction["pktvisor"] = pktvisor.RegisterBackendSpecificVariables
 	backendVarsFunction["otel"] = otel.RegisterBackendSpecificVariables
+	backendVarsFunction["device_discovery"] = devicediscovery.RegisterBackendSpecificVariables
 
 	// check if backends are configured
 	// if not then add pktvisor as default
@@ -217,8 +219,8 @@ func main() {
 
 	runCmd := &cobra.Command{
 		Use:   "run",
-		Short: "Run orb-agent and connect to Orb control plane",
-		Long:  `Run orb-agent and connect to Orb control plane`,
+		Short: "Run orb-agent",
+		Long:  `Run orb-agent`,
 		Run:   Run,
 	}
 
