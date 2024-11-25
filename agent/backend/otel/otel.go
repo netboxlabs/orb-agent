@@ -150,7 +150,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		o.logger.Error("error during getting current version", zap.Error(err))
 		return err
 	}
-	o.receiveOtlp()
+	//o.receiveOtlp()
 	o.logger.Info("starting open-telemetry backend using version", zap.String("version", currentVersion))
 	policiesData, err := o.policyRepo.GetAll()
 	if err != nil {

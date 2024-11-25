@@ -46,7 +46,7 @@ func (d *deviceDiscoveryBackend) request(url string, payload interface{}, method
 		return err
 	}
 
-	URL := "http" //fmt.Sprintf("%s://%s:%s/api/v1/%s", dp.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort, url)
+	URL := fmt.Sprintf("%s://%s:%s/api/v1/%s", d.apiProtocol, d.apiHost, d.apiPort, url)
 
 	req, err := http.NewRequest(method, URL, body)
 	if err != nil {

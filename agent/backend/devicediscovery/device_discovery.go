@@ -36,6 +36,10 @@ type deviceDiscoveryBackend struct {
 	exec       string
 	configFile string
 
+	apiHost     string
+	apiPort     string
+	apiProtocol string
+
 	startTime  time.Time
 	proc       *cmd.Cmd
 	statusChan <-chan cmd.Status
@@ -52,7 +56,11 @@ type Info struct {
 }
 
 func Register() bool {
-	backend.Register("device_discovery", &deviceDiscoveryBackend{})
+	backend.Register("device_discovery", &deviceDiscoveryBackend{
+		apiProtocol: "http",
+		apiHost:     "localhost",
+		apiPort:     "8072",
+	})
 	return true
 }
 
@@ -67,6 +75,7 @@ func (d *deviceDiscoveryBackend) Configure(logger *zap.Logger, repo policies.Pol
 	if d.configFile, prs = config["config_file"]; !prs {
 		d.configFile = DefaultConfigPath
 	}
+
 	return nil
 }
 
