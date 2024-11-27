@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/netboxlabs/orb-agent/agent/policies"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
+
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {

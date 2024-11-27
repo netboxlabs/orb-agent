@@ -8,13 +8,10 @@ orb:
   backends:
     pktvisor:
       binary: /usr/local/sbin/pktvisord
-      config_file: /opt/orb/agent_default.yaml
     otel:
       binary: /usr/local/bin/otelcol-contrib
-      config_file: /opt/orb/agent_default.yaml
     device_discovery:
       binary: device_discovery
-      config_file: /opt/orb/agent_default.yaml
 
 discovery:
   config:

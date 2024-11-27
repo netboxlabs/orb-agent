@@ -8,8 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/netboxlabs/orb-agent/agent/backend"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
 )
 
 func (d *deviceDiscoveryBackend) getProcRunningStatus() (backend.RunningStatus, string, error) {

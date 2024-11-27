@@ -8,20 +8,21 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/buildinfo"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
-	defaultConfig = "/opt/orb/agent.yaml"
+	defaultConfig = "/opt/orb/agent_default.yaml"
 )
 
 var (
@@ -84,9 +85,12 @@ func Run(_ *cobra.Command, _ []string) {
 		if _, ok := configData.OrbAgent.Backends["pktvisor"]["api_port"]; !ok {
 			configData.OrbAgent.Backends["pktvisor"]["api_port"] = "10853"
 		}
-		if len(cfgFiles) > 0 {
-			configData.OrbAgent.Backends["pktvisor"]["config_file"] = cfgFiles[0]
-		}
+	}
+
+	if len(cfgFiles) > 0 {
+		configData.OrbAgent.ConfigFile = cfgFiles[0]
+	} else {
+		configData.OrbAgent.ConfigFile = defaultConfig
 	}
 
 	// new agent

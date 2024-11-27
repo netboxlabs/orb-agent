@@ -10,8 +10,6 @@ import (
 
 	"go.opentelemetry.io/otel/trace/noop"
 
-	"github.com/netboxlabs/orb-agent/agent/otel"
-	"github.com/netboxlabs/orb-agent/agent/otel/otlpmqttexporter"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/config/confighttp"
 	"go.opentelemetry.io/collector/exporter"
@@ -19,6 +17,9 @@ import (
 	"go.opentelemetry.io/collector/receiver/otlpreceiver"
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/otel"
+	"github.com/netboxlabs/orb-agent/agent/otel/otlpmqttexporter"
 )
 
 func (p *pktvisorBackend) scrapeMetrics(period uint) (map[string]interface{}, error) {

@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/netboxlabs/orb-agent/buildinfo"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/buildinfo"
 )
 
 func (a *orbAgent) sendCapabilities() error {

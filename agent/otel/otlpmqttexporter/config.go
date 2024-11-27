@@ -4,9 +4,10 @@ import (
 	"fmt"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/netboxlabs/orb-agent/agent/otel"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+
+	"github.com/netboxlabs/orb-agent/agent/otel"
 )
 
 // Config defines configuration for OTLP/HTTP exporter.

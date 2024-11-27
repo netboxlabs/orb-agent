@@ -5,8 +5,9 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/netboxlabs/orb-agent/agent/policies"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 const (

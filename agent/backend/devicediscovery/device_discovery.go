@@ -11,10 +11,11 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
-	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/policies"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 var _ backend.Backend = (*deviceDiscoveryBackend)(nil)
@@ -233,8 +234,8 @@ func (d *deviceDiscoveryBackend) GetRunningStatus() (backend.RunningStatus, stri
 		return runningStatus, errMsg, err
 	}
 	// if it's running, check REST API availability too
-	_, aiErr := d.Version()
-	if aiErr != nil {
+
+	if _, aiErr := d.Version(); aiErr != nil {
 		// process is running, but REST API is not accessible
 		return backend.BackendError, "process running, REST API unavailable", aiErr
 	}

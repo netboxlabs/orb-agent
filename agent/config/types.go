@@ -55,6 +55,7 @@ type OrbAgent struct {
 	DB            DBConfig                          `mapstructure:"db"`
 	Otel          Opentelemetry                     `mapstructure:"otel"`
 	Debug         Debug                             `mapstructure:"debug"`
+	ConfigFile    string                            `mapstructure:"config_file"`
 }
 
 type Config struct {

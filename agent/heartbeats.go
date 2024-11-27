@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 // HeartbeatFreq how often to heartbeat
