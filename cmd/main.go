@@ -87,10 +87,9 @@ func Run(_ *cobra.Command, _ []string) {
 		}
 	}
 
+	configData.OrbAgent.ConfigFile = defaultConfig
 	if len(cfgFiles) > 0 {
 		configData.OrbAgent.ConfigFile = cfgFiles[0]
-	} else {
-		configData.OrbAgent.ConfigFile = defaultConfig
 	}
 
 	// new agent

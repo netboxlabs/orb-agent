@@ -234,7 +234,6 @@ func (d *deviceDiscoveryBackend) GetRunningStatus() (backend.RunningStatus, stri
 		return runningStatus, errMsg, err
 	}
 	// if it's running, check REST API availability too
-
 	if _, aiErr := d.Version(); aiErr != nil {
 		// process is running, but REST API is not accessible
 		return backend.BackendError, "process running, REST API unavailable", aiErr
