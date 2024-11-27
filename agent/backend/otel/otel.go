@@ -10,15 +10,16 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/exporter"
+	"go.opentelemetry.io/collector/receiver"
+	"go.uber.org/zap"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/otel"
 	"github.com/netboxlabs/orb-agent/agent/otel/otlpmqttexporter"
 	"github.com/netboxlabs/orb-agent/agent/policies"
-	"go.opentelemetry.io/collector/component"
-	"go.opentelemetry.io/collector/exporter"
-	"go.opentelemetry.io/collector/receiver"
-	"go.uber.org/zap"
 )
 
 var _ backend.Backend = (*openTelemetryBackend)(nil)
@@ -150,7 +151,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		o.logger.Error("error during getting current version", zap.Error(err))
 		return err
 	}
-	o.receiveOtlp()
+	//o.receiveOtlp()
 	o.logger.Info("starting open-telemetry backend using version", zap.String("version", currentVersion))
 	policiesData, err := o.policyRepo.GetAll()
 	if err != nil {

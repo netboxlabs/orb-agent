@@ -1,8 +1,9 @@
 package otel
 
 import (
-	"go.uber.org/zap"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestBuildDefaultPolicy(t *testing.T) {

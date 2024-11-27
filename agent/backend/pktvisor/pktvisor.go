@@ -13,12 +13,13 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
-	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/config"
-	"github.com/netboxlabs/orb-agent/agent/policies"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 var _ backend.Backend = (*pktvisorBackend)(nil)
@@ -232,7 +233,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	}
 
 	p.logger.Info("pktvisor process started", zap.Int("pid", status.PID))
-	p.receiveOtlp()
+	//p.receiveOtlp()
 
 	var readinessError error
 	for backoff := 0; backoff < ReadinessBackoff; backoff++ {

@@ -12,12 +12,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/orb-community/orb/fleet"
+	"go.uber.org/zap"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
 	"github.com/netboxlabs/orb-agent/buildinfo"
-	"github.com/orb-community/orb/fleet"
-	"go.uber.org/zap"
 )
 
 var (
@@ -138,6 +139,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 		be := backend.GetBackend(name)
 		configuration := structs.Map(a.config.OrbAgent.Otel)
 		configuration["agent_tags"] = a.config.OrbAgent.Tags
+		configurationEntry["config_file"] = a.config.OrbAgent.ConfigFile
 		if err := be.Configure(a.logger, a.policyManager.GetRepo(), configurationEntry, configuration); err != nil {
 			a.logger.Info("failed to configure backend", zap.String("backend", name), zap.Error(err))
 			return err

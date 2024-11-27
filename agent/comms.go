@@ -7,10 +7,11 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
 func (a *orbAgent) connect(ctx context.Context, config config.MQTTConfig) (mqtt.Client, error) {

@@ -2,8 +2,9 @@ package otel
 
 import (
 	"fmt"
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"strings"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 func (o *openTelemetryBackend) SetCommsClient(agentID string, client *mqtt.Client, baseTopic string) {

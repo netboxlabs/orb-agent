@@ -8,8 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/netboxlabs/orb-agent/agent/backend"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
 )
 
 // note this needs to be stateless because it is called for multiple go routines

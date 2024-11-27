@@ -1,9 +1,10 @@
 package otel
 
 import (
+	"strconv"
+
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
-	"strconv"
 )
 
 type ExporterBuilder interface {

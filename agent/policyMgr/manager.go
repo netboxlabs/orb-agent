@@ -6,11 +6,12 @@ import (
 	"strings"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/orb-community/orb/fleet"
+	"go.uber.org/zap"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
-	"github.com/orb-community/orb/fleet"
-	"go.uber.org/zap"
 )
 
 type PolicyManager interface {

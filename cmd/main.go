@@ -8,20 +8,21 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/netboxlabs/orb-agent/agent/backend/otel"
-
-	"github.com/netboxlabs/orb-agent/agent"
-	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
-	"github.com/netboxlabs/orb-agent/agent/config"
-	"github.com/netboxlabs/orb-agent/buildinfo"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/netboxlabs/orb-agent/agent"
+	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/otel"
+	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/buildinfo"
 )
 
 const (
-	defaultConfig = "/opt/orb/agent.yaml"
+	defaultConfig = "/opt/orb/agent_default.yaml"
 )
 
 var (
@@ -32,6 +33,7 @@ var (
 func init() {
 	pktvisor.Register()
 	otel.Register()
+	devicediscovery.Register()
 }
 
 func Version(_ *cobra.Command, _ []string) {
@@ -83,9 +85,11 @@ func Run(_ *cobra.Command, _ []string) {
 		if _, ok := configData.OrbAgent.Backends["pktvisor"]["api_port"]; !ok {
 			configData.OrbAgent.Backends["pktvisor"]["api_port"] = "10853"
 		}
-		if len(cfgFiles) > 0 {
-			configData.OrbAgent.Backends["pktvisor"]["config_file"] = cfgFiles[0]
-		}
+	}
+
+	configData.OrbAgent.ConfigFile = defaultConfig
+	if len(cfgFiles) > 0 {
+		configData.OrbAgent.ConfigFile = cfgFiles[0]
 	}
 
 	// new agent
@@ -172,6 +176,7 @@ func mergeOrError(path string) {
 	backendVarsFunction := make(map[string]func(*viper.Viper))
 	backendVarsFunction["pktvisor"] = pktvisor.RegisterBackendSpecificVariables
 	backendVarsFunction["otel"] = otel.RegisterBackendSpecificVariables
+	backendVarsFunction["device_discovery"] = devicediscovery.RegisterBackendSpecificVariables
 
 	// check if backends are configured
 	// if not then add pktvisor as default
@@ -217,8 +222,8 @@ func main() {
 
 	runCmd := &cobra.Command{
 		Use:   "run",
-		Short: "Run orb-agent and connect to Orb control plane",
-		Long:  `Run orb-agent and connect to Orb control plane`,
+		Short: "Run orb-agent",
+		Long:  `Run orb-agent`,
 		Run:   Run,
 	}
 

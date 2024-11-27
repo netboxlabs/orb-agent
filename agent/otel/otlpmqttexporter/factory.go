@@ -4,9 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"go.opentelemetry.io/otel/sdk/metric"
-
-	"github.com/netboxlabs/orb-agent/agent/otel"
 	"go.uber.org/zap"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -14,7 +11,10 @@ import (
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/netboxlabs/orb-agent/agent/otel"
 )
 
 const (

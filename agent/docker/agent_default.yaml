@@ -8,7 +8,12 @@ orb:
   backends:
     pktvisor:
       binary: /usr/local/sbin/pktvisord
-      config_file: /opt/orb/agent_default.yaml
     otel:
       binary: /usr/local/bin/otelcol-contrib
-      config_file: /opt/orb/agent_default.yaml
+    device_discovery:
+      binary: device_discovery
+
+discovery:
+  config:
+    target: grpc://localhost:8080/diode
+    api_key: ${DIODE_API_KEY}
