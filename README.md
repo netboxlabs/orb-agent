@@ -58,7 +58,23 @@ Run command:
 ```
 
 ##### Custom Drivers
-You can specify community or custom NAPALM drivers using env variable `INSTALL_DRIVERS_PATH`. Ensure that the required files are placed in the mounted volume.
+You can specify community or custom NAPALM drivers using env variable `INSTALL_DRIVERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
+
+mounted folder example:
+```sh
+/local/orb/
+├── agent.yaml
+├── drivers.txt
+├── napalm-mos/
+└── napalm-ros-0.3.2.tar.gz
+```
+
+`drivers.txt` sample:
+```txt
+napalm-sros==1.0.2 # try install from pypi
+napalm-ros-0.3.2.tar.gz # try install from a tar.gz
+./napalm-mos # try to install from a folder that contains project.toml
+```
 
 Run command:
 ```sh
@@ -68,11 +84,6 @@ Run command:
  -e INSTALL_DRIVERS_PATH=/opt/orb/drivers.txt \
  netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
 ```
-The relative path used by pip install is the folder that contains `.txt` file.
+The relative path used by `pip install` is the folder that contains `.txt` file.
 
-`drivers.txt` sample:
-```txt
-napalm-sros==1.0.2 # try install from pypi
-napalm-ros-0.3.2.tar.gz # try install from a tar.gz
-./napalm-mos # try to install from a folder that contains project.toml
-```
+

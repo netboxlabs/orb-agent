@@ -18,7 +18,7 @@ agentstop2 () {
 
 if [ "${INSTALL_DRIVERS_PATH}" != '' ]; then
   cd $(dirname "$(realpath "$INSTALL_DRIVERS_PATH")")
-  echo "Installing drivers"
+  echo "Installing additional drivers"
   pip3 install -r ${INSTALL_DRIVERS_PATH}
 fi
 
