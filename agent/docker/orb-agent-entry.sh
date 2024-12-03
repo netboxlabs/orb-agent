@@ -15,6 +15,13 @@ agentstop2 () {
   fi
 }
 
+
+if [ "${INSTALL_DRIVERS_PATH}" != '' ]; then
+  cd $(dirname "$(realpath "$INSTALL_DRIVERS_PATH")")
+  echo "Installing additional drivers"
+  pip3 install -r ${INSTALL_DRIVERS_PATH}
+fi
+
 # check geodb folder and extract db
 cd /geo-db/
 if [ -f "asn.mmdb.gz" ]; then
