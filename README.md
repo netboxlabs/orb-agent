@@ -87,3 +87,24 @@ Run command:
 The relative path used by `pip install` is the folder that contains `.txt` file.
 
 
+#### Network-discovery backend
+```yaml
+orb:
+  config_manager: local
+  backends:
+    network_discovery:
+      binary: /opt/usr/network_discovery
+  policies:
+    network_discovery:
+      discovery_1:
+        config:
+          schedule: "0 */2 * * *"
+        scope:
+          targets: [192.168.1.1/22, google.com]
+          timeout: 5
+
+network:
+  config:
+    target: grpc://192.168.31.114:8080/diode
+    api_key: ${DIODE_API_KEY}
+```

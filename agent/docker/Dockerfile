@@ -1,5 +1,6 @@
 ARG PKTVISOR_TAG=latest-develop
 ARG OTEL_TAG=0.111.0
+ARG NETWORK_DISCOVERY_TAG=latest
 
 FROM golang:1.23-alpine AS builder
 
@@ -12,9 +13,16 @@ RUN mkdir /tmp/build && CGO_ENABLED=1 make agent_bin && mv build/orb-agent /tmp/
 
 FROM otel/opentelemetry-collector-contrib:${OTEL_TAG} AS otelcol-contrib
 
+FROM netboxlabs/network-discovery:${NETWORK_DISCOVERY_TAG} AS network-discovery
+
 FROM orbcommunity/pktvisor:${PKTVISOR_TAG} AS pktvisor
 
 FROM python:3.12-slim-bullseye
+
+RUN \
+    apt update && \
+    apt install --yes --force-yes --no-install-recommends nmap && \
+    rm -rf /var/lib/apt
 
 RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
@@ -36,6 +44,8 @@ COPY --from=pktvisor /iana /iana
 RUN  chown appuser:appuser /geo-db
 
 COPY --from=otelcol-contrib /otelcol-contrib /usr/local/bin/otelcol-contrib
+
+COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
 
 RUN pip3 install netboxlabs-device-discovery
 
