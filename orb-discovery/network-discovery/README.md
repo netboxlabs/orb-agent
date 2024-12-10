@@ -43,7 +43,8 @@ build/network-discovery -c config.yaml
 ## Docker Image
 device-discovery can be build and run using docker:
 ```sh
-docker build --no-cache -t network-discovery:develop -f network-discovery/docker/Dockerfile .
+cd network-discovery/
+docker build --no-cache -t network-discovery:develop -f docker/Dockerfile .
 docker run -v /local/orb:/usr/local/orb/ --net=host device-discovery:develop network-discovery -c /usr/local/orb/config.yaml
 ```
 

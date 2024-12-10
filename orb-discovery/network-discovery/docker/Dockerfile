@@ -2,14 +2,11 @@ ARG GO_VERSION=1.23
 
 FROM golang:${GO_VERSION}-alpine AS builder
 
+RUN apk update && apk add --no-cache build-base make git
 
-WORKDIR /src
+WORKDIR /src/network-discovery
 
 COPY . .
-
-WORKDIR /src/network-discovery   
-
-RUN apk update && apk add --no-cache build-base make git
 
 RUN make build
 
