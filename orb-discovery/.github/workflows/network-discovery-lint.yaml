@@ -5,9 +5,11 @@ on:
       - "!release"
     paths:
       - "network-discovery/**"
+      - "!network-discovery/docker/**"
   pull_request:
     paths:
       - "network-discovery/**"
+      - "!network-discovery/docker/**"
 
 permissions:
   contents: read

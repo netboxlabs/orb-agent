@@ -11,7 +11,7 @@ WORKDIR /src/network-discovery
 
 RUN apk update && apk add --no-cache build-base make git
 
-RUN make bin
+RUN make build
 
 FROM alpine:3.20
 
