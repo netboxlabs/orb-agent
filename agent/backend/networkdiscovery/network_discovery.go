@@ -282,12 +282,10 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 func (d *networkDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	d.logger.Debug("network-discovery policy remove", zap.String("policy_id", data.ID))
 	var resp interface{}
-	var name string
+	name := data.Name
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
-	} else {
-		name = data.Name
 	}
 	err := d.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", RemovePolicyTimeout)
 	if err != nil {
