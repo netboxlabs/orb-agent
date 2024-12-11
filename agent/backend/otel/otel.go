@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"time"
 
@@ -74,6 +75,11 @@ func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.Polic
 		o.otelExecutablePath = path
 	} else {
 		o.otelExecutablePath = DefaultPath
+	}
+	_, err = exec.LookPath(o.otelExecutablePath)
+	if err != nil {
+		o.logger.Error("otelcol-contrib: binary not found", zap.Error(err))
+		return err
 	}
 	if err != nil {
 		o.logger.Error("failed to create temporary directory for policy configs", zap.Error(err))

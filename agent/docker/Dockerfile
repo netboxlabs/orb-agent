@@ -59,6 +59,6 @@ RUN pip3 install netboxlabs-device-discovery
 
 RUN chmod a+x /run-agent.sh
 
-#USER appuser
+USER appuser
 
 ENTRYPOINT [ "/usr/local/bin/orb-agent-entry.sh" ]
