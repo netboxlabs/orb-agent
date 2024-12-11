@@ -15,6 +15,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -34,6 +35,7 @@ func init() {
 	pktvisor.Register()
 	otel.Register()
 	devicediscovery.Register()
+	networkdiscovery.Register()
 }
 
 func Version(_ *cobra.Command, _ []string) {
@@ -177,6 +179,7 @@ func mergeOrError(path string) {
 	backendVarsFunction["pktvisor"] = pktvisor.RegisterBackendSpecificVariables
 	backendVarsFunction["otel"] = otel.RegisterBackendSpecificVariables
 	backendVarsFunction["device_discovery"] = devicediscovery.RegisterBackendSpecificVariables
+	backendVarsFunction["network_discovery"] = networkdiscovery.RegisterBackendSpecificVariables
 
 	// check if backends are configured
 	// if not then add pktvisor as default
