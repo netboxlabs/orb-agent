@@ -18,6 +18,10 @@ env:
   APP_NAME: device-discovery
   PYTHON_PACKAGE_NAME: netboxlabs_device_discovery
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   get-python-package-name:
     name: Get Python package name
