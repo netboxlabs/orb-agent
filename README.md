@@ -96,7 +96,7 @@ orb:
       binary: /opt/usr/network_discovery
   policies:
     network_discovery:
-      discovery_1:
+      policy_1:
         config:
           schedule: "0 */2 * * *"
         scope:
@@ -106,5 +106,11 @@ orb:
 network:
   config:
     target: grpc://192.168.31.114:8080/diode
-    api_key: ${DIODE_API_KEY}
+    api_key: your_api_key
+```
+
+Run command:
+```sh
+ docker run -v /local/orb:/opt/orb/ \
+ netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
 ```
