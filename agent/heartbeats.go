@@ -130,11 +130,6 @@ func (a *orbAgent) sendSingleHeartbeat(ctx context.Context, t time.Time, agentsS
 
 	if token := a.client.Publish(a.heartbeatsTopic, 1, false, body); token.Wait() && token.Error() != nil {
 		a.logger.Error("error sending heartbeat", zap.Error(token.Error()))
-		err = a.restartComms(ctx)
-		if err != nil {
-			a.logger.Error("error reconnecting with MQTT, stopping agent")
-			a.Stop(ctx)
-		}
 	}
 }
 

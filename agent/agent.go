@@ -18,7 +18,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
-	"github.com/netboxlabs/orb-agent/buildinfo"
+	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
 var (
@@ -179,24 +179,13 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	a.asyncContext = asyncCtx
 	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
-	a.logger.Info("agent started", zap.String("version", buildinfo.GetVersion()), zap.Any("routine", agentCtx.Value("routine")))
+	a.logger.Info("agent started", zap.String("version", version.GetBuildVersion()), zap.Any("routine", agentCtx.Value("routine")))
 	mqtt.CRITICAL = &agentLoggerCritical{a: a}
 	mqtt.ERROR = &agentLoggerError{a: a}
 
 	if a.config.OrbAgent.Debug.Enable {
 		a.logger.Info("debug logging enabled")
 		mqtt.DEBUG = &agentLoggerDebug{a: a}
-	}
-
-	config, err := a.configManager.GetConfig()
-	if err != nil {
-		return err
-	}
-
-	commsCtx := context.WithValue(agentCtx, "routine", "comms")
-	if err := a.startComms(commsCtx, config); err != nil {
-		a.logger.Error("could not start mqtt client")
-		return err
 	}
 
 	if err := a.startBackends(ctx); err != nil {
@@ -225,7 +214,6 @@ func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
 		a.heartbeatCancel()
 	}
 	if a.client != nil && a.client.IsConnected() {
-		a.unsubscribeGroupChannels()
 		if token := a.client.Unsubscribe(a.rpcFromCoreTopic); token.Wait() && token.Error() != nil {
 			a.logger.Warn("failed to unsubscribe to RPC channel", zap.Error(token.Error()))
 		}
@@ -285,25 +273,6 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	}
 	be.SetCommsClient(a.agent_id, &a.client, fmt.Sprintf("%s/?/%s", a.baseTopic, name))
 
-	if err := a.sendAgentPoliciesReq(); err != nil {
-		a.logger.Error("failed to send agent policies request", zap.Error(err))
-	}
-	return nil
-}
-
-func (a *orbAgent) restartComms(ctx context.Context) error {
-	if a.client != nil && a.client.IsConnected() {
-		a.unsubscribeGroupChannels()
-	}
-
-	config, err := a.configManager.GetConfig()
-	if err != nil {
-		return err
-	}
-	if err := a.startComms(ctx, config); err != nil {
-		a.logger.Error("could not restart mqtt client")
-		return err
-	}
 	return nil
 }
 
@@ -311,9 +280,6 @@ func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
 	ctx = a.configManager.GetContext(ctx)
 	a.logoffWithHeartbeat(ctx)
 	a.logger.Info("restarting comms", zap.String("reason", reason))
-	if err := a.restartComms(ctx); err != nil {
-		a.logger.Error("failed to restart comms", zap.Error(err))
-	}
 	for name := range a.backends {
 		a.logger.Info("restarting backend", zap.String("backend", name), zap.String("reason", reason))
 		err := a.RestartBackend(ctx, name, reason)

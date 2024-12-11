@@ -1,15 +1,23 @@
 ARG PKTVISOR_TAG=latest-develop
 ARG OTEL_TAG=0.111.0
 ARG NETWORK_DISCOVERY_TAG=latest
+ARG GO_VERSION=1.23
 
-FROM golang:1.23-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS builder
 
-WORKDIR /go/src/github.com/netboxlabs/orb-agent
-COPY go.mod .
-RUN go mod tidy
+RUN apt-get update && apt-get install --yes git make
+
+WORKDIR /src/orb-agent
+
 COPY . .
-RUN apk update && apk add --no-cache build-base git make
-RUN mkdir /tmp/build && CGO_ENABLED=1 make agent_bin && mv build/orb-agent /tmp/build/orb-agent
+
+ARG TARGETOS TARGETARCH
+
+RUN --mount=target=. \
+    --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/orb-agent ./cmd/main.go
+
 
 FROM otel/opentelemetry-collector-contrib:${OTEL_TAG} AS otelcol-contrib
 
@@ -31,10 +39,10 @@ RUN mkdir -p /opt/orb && chown appuser:appuser /opt/orb \
     && chown appuser:appuser /usr/local/bin \
     && chown appuser:appuser /var/run
 
-COPY --from=builder /tmp/build/orb-agent /usr/local/bin/orb-agent
-COPY --from=builder /go/src/github.com/netboxlabs/orb-agent/agent/docker/agent_default.yaml /opt/orb/agent_default.yaml
-COPY --from=builder /go/src/github.com/netboxlabs/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
-COPY --from=builder /go/src/github.com/netboxlabs/orb-agent/agent/docker/run-agent.sh /run-agent.sh
+COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
+COPY --from=builder /src/orb-agent/agent/docker/agent_default.yaml /opt/orb/agent_default.yaml
+COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
+COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
 
 COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/sbin/pktvisord
 COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/sbin/crashpad_handler
@@ -51,6 +59,6 @@ RUN pip3 install netboxlabs-device-discovery
 
 RUN chmod a+x /run-agent.sh
 
-USER appuser
+#USER appuser
 
 ENTRYPOINT [ "/usr/local/bin/orb-agent-entry.sh" ]

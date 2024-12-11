@@ -19,7 +19,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
-	"github.com/netboxlabs/orb-agent/buildinfo"
+	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
 const (
@@ -39,7 +39,7 @@ func init() {
 }
 
 func Version(_ *cobra.Command, _ []string) {
-	fmt.Printf("orb-agent %s\n", buildinfo.GetVersion())
+	fmt.Printf("orb-agent %s\n", version.GetBuildVersion())
 	os.Exit(0)
 }
 
