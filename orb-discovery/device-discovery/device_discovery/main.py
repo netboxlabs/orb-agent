@@ -41,13 +41,13 @@ def main():
     args = parser.parse_args()
 
     try:
-        cfg = parse_config_file(args.config)
+        device_cfg, diode_cfg = parse_config_file(args.config)
         client = Client()
-        client.init_client(target=cfg.config.target, api_key=cfg.config.api_key)
+        client.init_client(target=diode_cfg.target, api_key=diode_cfg.api_key)
         uvicorn.run(
             app,
-            host=cfg.config.host,
-            port=cfg.config.port,
+            host=device_cfg.host,
+            port=device_cfg.port,
         )
     except (KeyboardInterrupt, RuntimeError):
         pass

@@ -77,4 +77,4 @@ class Discovery(BaseModel):
 class PolicyRequest(BaseModel):
     """Model for a policy request."""
 
-    discovery: Discovery
+    device_discovery: Discovery

@@ -3,17 +3,19 @@ Orb device discovery backend
 
 ### Config RFC
 ```yaml
-discovery:
+diode:
   config:
     target: grpc://localhost:8080/diode
     api_key: ${DIODE_API_KEY}
+device_discovery:
+  config:
     host: 0.0.0.0
     port: 8072
 ```
 
 ### Policy RFC
 ```yaml
-discovery:
+device_discovery:
   policies:
     discovery_1:
       config:

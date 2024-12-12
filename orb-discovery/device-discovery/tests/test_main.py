@@ -79,7 +79,10 @@ def test_main_with_config(
 ):
     """Test running the CLI with a configuration file and no environment file."""
     mock_parse_args.return_value = MagicMock(config="config.yaml")
-    mock_parse_config_file.return_value = MagicMock()
+    mock_parse_config_file.return_value = (
+        MagicMock(metadata={"target": "grpc", "api_key": "abc"}),
+        MagicMock(metadata={"host": "0.0.0.0", "port": 1234}),
+    )
 
     with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
         try:
@@ -97,7 +100,10 @@ def test_main_start_server_failure(
 ):
     """Test CLI failure when starting the agent."""
     mock_parse_args.return_value = MagicMock(config="config.yaml")
-    mock_parse_config_file.return_value = MagicMock()
+    mock_parse_config_file.return_value = (
+        MagicMock(metadata={"target": "grpc", "api_key": "abc"}),
+        MagicMock(metadata={"host": "0.0.0.0", "port": 1234}),
+    )
     mock_uvicorn_run.side_effect = Exception("Test Start Server Failure")
 
     with patch.object(sys, "exit", side_effect=Exception("Test Exit")) as mock_exit:

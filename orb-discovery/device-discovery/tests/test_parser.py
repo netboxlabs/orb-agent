@@ -9,7 +9,8 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from device_discovery.parser import (
-    Base,
+    DiodeBase,
+    DiscoveryBase,
     ParseException,
     parse_config,
     parse_config_file,
@@ -21,10 +22,13 @@ from device_discovery.parser import (
 def valid_yaml():
     """Valid Yaml Generator."""
     return """
-    discovery:
+    diode:
       config:
         target: "target_value"
         api_key: "api_key_value"
+    device_discovery:
+      config:
+        port: 1234
     """
 
 
@@ -41,10 +45,12 @@ def invalid_yaml():
 
 def test_parse_valid_config(valid_yaml):
     """Ensure we can parse a valid configuration."""
-    config = parse_config(valid_yaml)
-    assert isinstance(config, Base)
-    assert config.discovery.config.target == "target_value"
-    assert config.discovery.config.host == "0.0.0.0"
+    device_cfg, diode_cfg = parse_config(valid_yaml)
+    assert isinstance(device_cfg, DiscoveryBase)
+    assert isinstance(diode_cfg, DiodeBase)
+    assert diode_cfg.diode.config.target == "target_value"
+    assert device_cfg.device_discovery.config.host == "0.0.0.0"
+    assert device_cfg.device_discovery.config.port == 1234
 
 
 def test_parse_invalid_config(invalid_yaml):
@@ -59,8 +65,9 @@ def test_parse_config_file(mock_file, valid_yaml):
     with patch(
         "device_discovery.parser.parse_config", return_value=parse_config(valid_yaml)
     ):
-        config = parse_config_file(Path("fake_path.yaml"))
-        assert config.config.target == "target_value"
+        device_cfg, diode_cfg = parse_config_file(Path("fake_path.yaml"))
+        assert device_cfg.host == "0.0.0.0"
+        assert diode_cfg.target == "target_value"
         mock_file.assert_called_once_with(Path("fake_path.yaml"))
 
 

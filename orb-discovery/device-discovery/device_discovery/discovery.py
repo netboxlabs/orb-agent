@@ -16,9 +16,8 @@ def napalm_driver_list() -> list[str]:
     """
     List the available NAPALM drivers.
 
-    This function scans the installed Python packages to identify NAPALM drivers,
-    appending their names (with the 'napalm-' prefix removed and hyphens replaced
-    with underscores) to a list of known drivers.
+    This function scans the installed Python modules to identify NAPALM drivers,
+    appending their names (with the 'napalm_' prefix removed) to a list of known drivers.
 
     Returns
     -------
@@ -28,11 +27,10 @@ def napalm_driver_list() -> list[str]:
 
     """
     napalm_packages = ["ios", "eos", "junos", "nxos"]
-    prefix = "napalm-"
-    for dist in importlib_metadata.distributions():
-        if dist.metadata["Name"].startswith(prefix):
-            package = dist.metadata["Name"][len(prefix) :].replace("-", "_")
-            napalm_packages.append(package)
+    prefix = "napalm_"
+    for dist in importlib_metadata.packages_distributions():
+        if dist.startswith(prefix):
+            napalm_packages.append(dist[len(prefix) :])
     return napalm_packages
 
 

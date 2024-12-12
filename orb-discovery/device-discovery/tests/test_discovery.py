@@ -22,11 +22,12 @@ def mock_get_network_driver():
     with patch("device_discovery.discovery.get_network_driver") as mock:
         yield mock
 
-
 @pytest.fixture
-def mock_importlib_metadata_distributions():
-    """Mock the importlib_metadata.distributions function."""
-    with patch("device_discovery.discovery.importlib_metadata.distributions") as mock:
+def mock_importlib_metadata_packages_distributions():
+    """Mock the importlib_metadata.packages_distributions function."""
+    with patch(
+        "device_discovery.discovery.importlib_metadata.packages_distributions"
+    ) as mock:
         yield mock
 
 
@@ -148,20 +149,21 @@ def test_discover_device_driver_mixed_results(mock_get_network_driver):
     assert driver == "nxos", "Expected the 'ios' driver to be found"
 
 
-def test_napalm_driver_list(mock_importlib_metadata_distributions):
+def test_napalm_driver_list(mock_importlib_metadata_packages_distributions):
     """
     Test the napalm_driver_list function to ensure it correctly lists available NAPALM drivers.
 
     Args:
     ----
-        mock_importlib_metadata_distributions: Mocked importlib_metadata.distributions function.
+        mock_importlib_metadata_packages_distributions: Mocked
+        importlib_metadata.packages_distributions function.
 
     """
     mock_distributions = [
-        MagicMock(metadata={"Name": "napalm-srl"}),
-        MagicMock(metadata={"Name": "napalm-fake-driver"}),
+        "napalm_srl",
+        "napalm_fake_driver",
     ]
-    mock_importlib_metadata_distributions.return_value = mock_distributions
+    mock_importlib_metadata_packages_distributions.return_value = mock_distributions
     expected_drivers = ["ios", "eos", "junos", "nxos", "srl", "fake_driver"]
     drivers = napalm_driver_list()
     assert drivers == expected_drivers, f"Expected {expected_drivers}, got {drivers}"

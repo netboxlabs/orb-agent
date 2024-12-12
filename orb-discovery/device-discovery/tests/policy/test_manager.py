@@ -58,7 +58,7 @@ def test_start_existing_policy_raises_error(policy_manager, sample_policy):
 def test_parse_policy(policy_manager):
     """Test parsing YAML configuration into a PolicyRequest object."""
     config_data = b"""
-    discovery:
+    device_discovery:
       policies:
         policy1:
           config:
@@ -76,14 +76,14 @@ def test_parse_policy(policy_manager):
 
         # Verify structure of the parsed PolicyRequest
         assert isinstance(policy_request, PolicyRequest)
-        assert "policy1" in policy_request.discovery.policies
+        assert "policy1" in policy_request.device_discovery.policies
 
 
 def test_parse_policy_invalid_cron(policy_manager):
     """Test parsing YAML configuration with an invalid cron string."""
     # Invalid cron string in schedule
     config_data = b"""
-    discovery:
+    device_discovery:
       policies:
         policy1:
           config:

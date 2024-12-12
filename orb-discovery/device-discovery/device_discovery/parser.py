@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 
 class ParseException(Exception):
@@ -14,13 +14,12 @@ class ParseException(Exception):
 
     pass
 
+
 class DiscoveryConfig(BaseModel):
     """Model for Diode configuration."""
 
     host: str = "0.0.0.0"
     port: int = 8072
-    target: str
-    api_key: str
 
 
 class Discovery(BaseModel):
@@ -29,10 +28,32 @@ class Discovery(BaseModel):
     config: DiscoveryConfig
 
 
-class Base(BaseModel):
+class DiscoveryBase(BaseModel):
     """Top-level model for the entire configuration."""
 
-    discovery: Discovery
+    device_discovery: Discovery | None = Field(
+        default=Discovery(config=DiscoveryConfig()),
+        description="Device discovery config, optional",
+    )
+
+
+class DiodeConfig(BaseModel):
+    """Model for Diode configuration."""
+
+    target: str
+    api_key: str
+
+
+class Diode(BaseModel):
+    """Model for Diode containing configuration."""
+
+    config: DiodeConfig
+
+
+class DiodeBase(BaseModel):
+    """Top-level model for the entire configuration."""
+
+    diode: Diode
 
 
 def resolve_env_vars(config):
@@ -58,7 +79,7 @@ def resolve_env_vars(config):
     return config
 
 
-def parse_config(config_data: str) -> Base:
+def parse_config(config_data: str) -> tuple[DiscoveryBase, DiodeBase]:
     """
     Parse the YAML configuration data into a Config object.
 
@@ -68,7 +89,7 @@ def parse_config(config_data: str) -> Base:
 
     Returns:
     -------
-        Config: The parsed configuration object.
+        Tuple[DiscoveryBase, DiodeBase]: The parsed configuration
 
     Raises:
     ------
@@ -81,17 +102,18 @@ def parse_config(config_data: str) -> Base:
         # Resolve environment variables
         resolved_config = resolve_env_vars(config_dict)
         # Parse the data into the Config model
-        config = Base(**resolved_config)
-        return config
+        discovery_config = DiscoveryBase(**resolved_config)
+        diode_config = DiodeBase(**resolved_config)
+        return discovery_config, diode_config
     except yaml.YAMLError as e:
         raise ParseException(f"YAML ERROR: {e}")
     except ValidationError as e:
         raise ParseException("Validation ERROR:", e)
 
 
-def parse_config_file(file_path: Path) -> Discovery:
+def parse_config_file(file_path: Path) -> tuple[DiscoveryConfig, DiodeConfig]:
     """
-    Parse the Discovery configuration file and return the Discovery configuration object.
+    Parse the Device Discovery configuration file and return the `Discovery` and `Diode` configuration.
 
     This function reads the content of the specified YAML configuration file,
     parses it into a `Config` object, and returns the `Discovery` part of the configuration.
@@ -102,7 +124,8 @@ def parse_config_file(file_path: Path) -> Discovery:
 
     Returns:
     -------
-        Discovery: The `Discovery` configuration object extracted from the parsed configuration.
+        DiscoveryConfig: The `Discovery` configuration object.
+        DiodeConfig: The `Diode` configuration object.
 
     Raises:
     ------
@@ -112,9 +135,9 @@ def parse_config_file(file_path: Path) -> Discovery:
     """
     try:
         with open(file_path) as f:
-            cfg = parse_config(f.read())
+            discovery, diode = parse_config(f.read())
     except ParseException:
         raise
     except Exception as e:
         raise Exception(f"Unable to open config file {file_path}: {e.args[1]}")
-    return cfg.discovery
+    return discovery.device_discovery.config, diode.diode.config
