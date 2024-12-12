@@ -2,28 +2,26 @@
 TBD
 
 ## Getting Started
-Start by cloning the orb-agent project in your local environment using the following command:
+1. Clone the orb-agent project to your local environment:
 
 ```sh
-https://github.com/netboxlabs/orb-agent.git
+git clone https://github.com/netboxlabs/orb-agent.git
 ```
 
-Then, build the orb-agent docker image using Make:
+2. Enter the orb-agent directory and build the orb-agent docker image:
 ```sh
 make agent
 ```
 
-Finally, run it passing your config file(s)
+3. Start the agent, passing your config file(s):
 ```sh
  docker run -v /local/orb:/opt/orb/ netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
 ```
 
-### Config file samples
-This contains diferent config file examples
+## Config file samples
 
-#### Device-discovery backend
+### Device-discovery backend
 
-Config file:
 ```yaml
 orb:
   config_manager: local
@@ -57,10 +55,10 @@ Run command:
  netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
 ```
 
-##### Custom Drivers
-You can specify community or custom NAPALM drivers using env variable `INSTALL_DRIVERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
+#### Custom Drivers
+You can specify community or custom NAPALM drivers using the env variable `INSTALL_DRIVERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
 
-mounted folder example:
+Mounted folder example:
 ```sh
 /local/orb/
 ├── agent.yaml
@@ -69,7 +67,7 @@ mounted folder example:
 └── napalm-ros-0.3.2.tar.gz
 ```
 
-`drivers.txt` sample:
+Example `drivers.txt`:
 ```txt
 napalm-sros==1.0.2 # try install from pypi
 napalm-ros-0.3.2.tar.gz # try install from a tar.gz
@@ -87,7 +85,7 @@ Run command:
 The relative path used by `pip install` is the folder that contains `.txt` file.
 
 
-#### Network-discovery backend
+### Network-discovery backend
 ```yaml
 orb:
   config_manager: local
