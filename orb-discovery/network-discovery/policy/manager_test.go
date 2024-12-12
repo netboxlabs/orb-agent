@@ -38,7 +38,7 @@ func TestManagerParsePolicies(t *testing.T) {
 
 	t.Run("Valid Policies", func(t *testing.T) {
 		yamlData := []byte(`
-        network:
+        network_discovery:
           policies:
             policy1:
               config:
@@ -67,7 +67,7 @@ func TestManagerPolicyLifecycle(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	manager := policy.NewManager(context.Background(), logger, nil)
 	yamlData := []byte(`
-        network:
+        network_discovery:
           policies:
             policy1:
               scope:

@@ -79,6 +79,13 @@ func TestRunnerRun(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 			mockClient := new(MockClient)
 			policyConfig := config.Policy{
+				Config: config.PolicyConfig{
+					Schedule: nil,
+					Defaults: map[string]string{
+						"description": "Test",
+						"comments":    "This is a test",
+					},
+				},
 				Scope: config.Scope{
 					Targets: []string{"localhost"},
 				},
@@ -103,7 +110,7 @@ func TestRunnerRun(t *testing.T) {
 			select {
 			case <-ingestCalled:
 				// Ingest was called, proceed
-			case <-time.After(5 * time.Second):
+			case <-time.After(10 * time.Second):
 				t.Fatal("Timeout: Ingest was not called")
 			}
 

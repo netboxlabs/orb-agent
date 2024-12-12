@@ -97,7 +97,7 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 	srv.Configure(logger, policyManager, "1.0.0", config.StartupConfig{})
 
 	body := []byte(`
-    network:
+    network_discovery:
       policies:
         test-policy:
           config:
@@ -120,7 +120,7 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 
 	// Try to create the same policy again
 	body = []byte(`
-    network:
+    network_discovery:
       policies:
         test-pol:
           scope:
@@ -183,7 +183,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			desc:        "no policies found",
 			contentType: "application/x-yaml",
 			body: []byte(`
-            network:
+            network_discovery:
               config: {}
             `),
 			returnCode:    http.StatusBadRequest,
@@ -193,7 +193,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			desc:        "no targets found",
 			contentType: "application/x-yaml",
 			body: []byte(`
-            network:
+            network_discovery:
               policies:
                 test-policy:
                   scope:

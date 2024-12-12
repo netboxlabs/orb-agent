@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/a8m/envsubst"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"gopkg.in/yaml.v3"
 
@@ -35,7 +36,7 @@ func main() {
 		fmt.Printf("configuration file '%s' does not exist", *configPath)
 		os.Exit(1)
 	}
-	fileData, err := os.ReadFile(*configPath)
+	fileData, err := envsubst.ReadFile(*configPath)
 	if err != nil {
 		fmt.Printf("error reading configuration file: %v", err)
 		os.Exit(1)
@@ -57,10 +58,10 @@ func main() {
 	}
 
 	client, err := diode.NewClient(
-		cfg.Network.Config.Target,
+		cfg.Diode.Config.Target,
 		AppName,
 		version.GetBuildVersion(),
-		diode.WithAPIKey(cfg.Network.Config.APIKey),
+		diode.WithAPIKey(cfg.Diode.Config.APIKey),
 	)
 	if err != nil {
 		fmt.Printf("error creating diode client: %v\n", err)

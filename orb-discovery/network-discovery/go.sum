@@ -1,5 +1,7 @@
 github.com/Ullaakut/nmap/v3 v3.0.4 h1:ZwRM4gbE0gtoXipC7uTHs2wvf3r4S8d9mtqfTabXE34=
 github.com/Ullaakut/nmap/v3 v3.0.4/go.mod h1:dd5K68P7LHc5nKrFwQx6EdTt61O9UN5x3zn1R4SLcco=
+github.com/a8m/envsubst v1.4.2 h1:4yWIHXOLEJHQEFd4UjrWDrYeYlV7ncFWJOCBRLOZHQg=
+github.com/a8m/envsubst v1.4.2/go.mod h1:MVUTQNGQ3tsjOOtKCNd+fl8RzhsXcDvvAEzkhGtlsbY=
 github.com/bytedance/sonic v1.11.6 h1:oUp34TzMlL+OY1OUWxHqsdkgC/Zfc85zGqw9siXjrc0=
 github.com/bytedance/sonic v1.11.6/go.mod h1:LysEHSvpvDySVdC2f87zGWf6CIKJcAvqab1ZaiQtds4=
 github.com/bytedance/sonic/loader v0.1.1 h1:c+e5Pt1k/cy5wMveRDyk2X4B9hF4g7an8N3zCYjJFNM=
