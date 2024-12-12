@@ -8,7 +8,7 @@ COMMIT_SHA := $(shell git rev-parse --short HEAD)
 
 .PHONY: build
 build:
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -o ${BUILD_DIR}/network-discovery cmd/main.go
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -o ${BUILD_DIR}/network-discovery cmd/main.go
 
 .PHONY: lint
 lint:

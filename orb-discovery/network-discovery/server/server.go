@@ -31,30 +31,37 @@ type Server struct {
 	manager *policy.Manager
 	stat    config.Status
 	logger  *slog.Logger
-	config  config.StartupConfig
+	host    string
+	port    int
 }
 
 func init() {
 	gin.SetMode(gin.ReleaseMode)
 }
 
-// Configure configures the network-discovery server
-func (s *Server) Configure(logger *slog.Logger, manager *policy.Manager, version string, config config.StartupConfig) {
-	s.stat.Version = version
-	s.stat.StartTime = time.Now()
-	s.manager = manager
-	s.logger = logger
-	s.config = config
-
-	s.router = gin.New()
-
-	v1 := s.router.Group("/api/v1")
-	{
-		v1.GET("/status", s.getStatus)
-		v1.GET("/capabilities", s.getCapabilities)
-		v1.POST("/policies", s.createPolicy)
-		v1.DELETE("/policies/:policy", s.deletePolicy)
+// NewServer returns a new network-discovery server
+func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manager, version string) *Server {
+	server := &Server{
+		router:  gin.New(),
+		manager: manager,
+		stat: config.Status{
+			Version:   version,
+			StartTime: time.Now(),
+		},
+		logger: logger,
+		host:   host,
+		port:   port,
 	}
+
+	v1 := server.router.Group("/api/v1")
+	{
+		v1.GET("/status", server.getStatus)
+		v1.GET("/capabilities", server.getCapabilities)
+		v1.POST("/policies", server.createPolicy)
+		v1.DELETE("/policies/:policy", server.deletePolicy)
+	}
+
+	return server
 }
 
 // Router returns the router
@@ -65,7 +72,7 @@ func (s *Server) Router() *gin.Engine {
 // Start starts the network-discovery server
 func (s *Server) Start() {
 	go func() {
-		serv := fmt.Sprintf("%s:%d", s.config.Host, s.config.Port)
+		serv := fmt.Sprintf("%s:%d", s.host, s.port)
 		s.logger.Info("starting network-discovery server at: " + serv)
 		if err := s.router.Run(serv); err != nil {
 			s.logger.Error("shutting down the server", "error", err)

@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/netboxlabs/orb-discovery/network-discovery/config"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/network-discovery/server"
 )
@@ -40,15 +39,7 @@ func TestServerConfigureAndStart(t *testing.T) {
 	client := new(MockClient)
 	policyManager := policy.NewManager(ctx, logger, client)
 
-	srv := &server.Server{}
-
-	config := config.StartupConfig{
-		Host: "localhost",
-		Port: 8080,
-	}
-	version := "1.0.0"
-
-	srv.Configure(logger, policyManager, version, config)
+	srv := server.NewServer("localhost", 8080, logger, policyManager, "1.0.0")
 	srv.Start()
 
 	// Check /status endpoint
@@ -72,8 +63,7 @@ func TestServerGetCapabilities(t *testing.T) {
 	client := new(MockClient)
 	policyManager := policy.NewManager(ctx, logger, client)
 
-	srv := &server.Server{}
-	srv.Configure(logger, policyManager, "1.0.0", config.StartupConfig{})
+	srv := server.NewServer("localhost", 8073, logger, policyManager, "1.0.0")
 
 	// Check /capabilities endpoint
 	w := httptest.NewRecorder()
@@ -93,19 +83,17 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 	client := new(MockClient)
 	policyManager := policy.NewManager(ctx, logger, client)
 
-	srv := &server.Server{}
-	srv.Configure(logger, policyManager, "1.0.0", config.StartupConfig{})
+	srv := server.NewServer("localhost", 8073, logger, policyManager, "1.0.0")
 
 	body := []byte(`
-    network_discovery:
-      policies:
-        test-policy:
-          config:
-            defaults:
-              site: New York NY
-          scope:
-            targets: 
-              - 192.168.31.1/24
+    policies:
+      test-policy:
+        config:
+          defaults:
+            site: New York NY
+        scope:
+          targets: 
+            - 192.168.31.1/24
     `)
 
 	w := httptest.NewRecorder()
@@ -120,16 +108,15 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 
 	// Try to create the same policy again
 	body = []byte(`
-    network_discovery:
-      policies:
-        test-pol:
-          scope:
-            targets: 
-              - 192.168.31.1/24
-        test-policy:
-          scope:
-            targets: 
-              - 192.168.31.1/24
+    policies:
+      test-pol:
+        scope:
+          targets: 
+            - 192.168.31.1/24
+      test-policy:
+        scope:
+          targets: 
+            - 192.168.31.1/24
     `)
 	w = httptest.NewRecorder()
 	request, _ = http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
@@ -183,8 +170,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			desc:        "no policies found",
 			contentType: "application/x-yaml",
 			body: []byte(`
-            network_discovery:
-              config: {}
+            policies: {}
             `),
 			returnCode:    http.StatusBadRequest,
 			returnMessage: `no policies found in the request`,
@@ -193,18 +179,17 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			desc:        "no targets found",
 			contentType: "application/x-yaml",
 			body: []byte(`
-            network_discovery:
-              policies:
-                test-policy:
-                  scope:
-                    targets: 
-                      - 192.168.31.1/24
-                test-policy-invalid:
-                  config:
-                    defaults:
-                      site: New York NY
-                  scope:
-                    ports: [80, 443]
+            policies:
+              test-policy:
+                scope:
+                  targets: 
+                    - 192.168.31.1/24
+              test-policy-invalid:
+                config:
+                  defaults:
+                    site: New York NY
+                scope:
+                  ports: [80, 443]
             `),
 			returnCode:    http.StatusBadRequest,
 			returnMessage: `test-policy-invalid : no targets found in the policy`,
@@ -217,8 +202,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			client := new(MockClient)
 			policyManager := policy.NewManager(ctx, logger, client)
 
-			srv := &server.Server{}
-			srv.Configure(logger, policyManager, "1.0.0", config.StartupConfig{})
+			srv := server.NewServer("localhost", 8073, logger, policyManager, "1.0.0")
 
 			// Create invalid policy request
 			w := httptest.NewRecorder()

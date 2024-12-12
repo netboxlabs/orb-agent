@@ -81,7 +81,7 @@ func (r *Runner) run() {
 		r.logger.Error("error creating scanner", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
 		return
 	}
-
+	r.logger.Info("running scanner", slog.Any("targets", r.scope.Targets), slog.Any("policy", r.ctx.Value(policyKey)))
 	result, warnings, err := scanner.Run()
 	if len(*warnings) > 0 {
 		r.logger.Warn("run finished with warnings", slog.String("warnings", fmt.Sprintf("%v", *warnings)))

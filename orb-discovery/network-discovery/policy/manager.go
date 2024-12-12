@@ -32,16 +32,16 @@ func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) *
 
 // ParsePolicies parses the policies from the request
 func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
-	var payload config.Config
+	var payload config.Policies
 	if err := yaml.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
 
-	if payload.Network.Policies == nil {
+	if len(payload.Policies) == 0 {
 		return nil, errors.New("no policies found in the request")
 	}
 
-	return payload.Network.Policies, nil
+	return payload.Policies, nil
 }
 
 // HasPolicy checks if the policy exists

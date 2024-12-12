@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
-	"github.com/a8m/envsubst"
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
@@ -21,47 +20,49 @@ import (
 // AppName is the application name
 const AppName = "network-discovery"
 
+func resolveEnv(value string) string {
+	// Check if the value starts with ${ and ends with }
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		// Extract the environment variable name
+		envVar := value[2 : len(value)-1]
+		// Get the value of the environment variable
+		envValue := os.Getenv(envVar)
+		if envValue != "" {
+			return envValue
+		}
+		fmt.Printf("error: environment variable %s is not set\n", envVar)
+		os.Exit(1)
+	}
+	// Return the original value if no substitution occurs
+	return value
+}
+
 func main() {
-	configPath := flag.String("config", "", "path to the configuration file (required)")
+	host := flag.String("host", "0.0.0.0", "server host")
+	port := flag.Int("port", 8073, "server port")
+	diodeTarget := flag.String("diode-target", "", "diode target (REQUIRED)")
+	diodeAPIKey := flag.String("diode-api-key", "", "diode api key (REQUIRED)."+
+		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})")
+	logLevel := flag.String("log-level", "INFO", "log level")
+	logFormat := flag.String("log-format", "TEXT", "log format")
+	help := flag.Bool("help", false, "show this help")
 
 	flag.Parse()
 
-	if *configPath == "" {
+	if *help || *diodeTarget == "" || *diodeAPIKey == "" {
 		fmt.Fprintf(os.Stderr, "Usage of network-discovery:\n")
 		flag.PrintDefaults()
-		os.Exit(1)
-
-	}
-	if _, err := os.Stat(*configPath); os.IsNotExist(err) {
-		fmt.Printf("configuration file '%s' does not exist", *configPath)
-		os.Exit(1)
-	}
-	fileData, err := envsubst.ReadFile(*configPath)
-	if err != nil {
-		fmt.Printf("error reading configuration file: %v", err)
-		os.Exit(1)
-	}
-
-	cfg := config.Config{
-		Network: config.Network{
-			Config: config.StartupConfig{
-				Host:      "0.0.0.0",
-				Port:      8073,
-				LogLevel:  "INFO",
-				LogFormat: "TEXT",
-			}},
-	}
-
-	if err = yaml.Unmarshal(fileData, &cfg); err != nil {
-		fmt.Printf("error parsing configuration file: %v\n", err)
+		if *help {
+			os.Exit(0)
+		}
 		os.Exit(1)
 	}
 
 	client, err := diode.NewClient(
-		cfg.Diode.Config.Target,
+		*diodeTarget,
 		AppName,
 		version.GetBuildVersion(),
-		diode.WithAPIKey(cfg.Diode.Config.APIKey),
+		diode.WithAPIKey(resolveEnv(*diodeAPIKey)),
 	)
 	if err != nil {
 		fmt.Printf("error creating diode client: %v\n", err)
@@ -69,11 +70,10 @@ func main() {
 	}
 
 	ctx := context.Background()
-	logger := config.NewLogger(cfg.Network.Config.LogLevel, cfg.Network.Config.LogFormat)
+	logger := config.NewLogger(*logLevel, *logFormat)
 
 	policyManager := policy.NewManager(ctx, logger, client)
-	server := server.Server{}
-	server.Configure(logger, policyManager, version.GetBuildVersion(), cfg.Network.Config)
+	server := server.NewServer(*host, *port, logger, policyManager, version.GetBuildVersion())
 
 	// handle signals
 	done := make(chan bool, 1)

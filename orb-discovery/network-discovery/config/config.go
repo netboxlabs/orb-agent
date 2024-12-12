@@ -27,33 +27,7 @@ type Policy struct {
 	Scope  Scope        `yaml:"scope"`
 }
 
-// StartupConfig represents the configuration of the network-discovery service
-type StartupConfig struct {
-	Host      string `yaml:"host"`
-	Port      int32  `yaml:"port"`
-	LogLevel  string `yaml:"log_level"`
-	LogFormat string `yaml:"log_format"`
-}
-
-// Network represents the network-discovery configuration
-type Network struct {
-	Config   StartupConfig     `yaml:"config"`
+// Policies represents a collection of network-discovery policies
+type Policies struct {
 	Policies map[string]Policy `mapstructure:"policies"`
-}
-
-// DiodeConfig represents the configuration of diode service
-type DiodeConfig struct {
-	Target string `yaml:"target"`
-	APIKey string `yaml:"api_key"`
-}
-
-// Diode represents the root configuration of diode service
-type Diode struct {
-	Config DiodeConfig `yaml:"config"`
-}
-
-// Config represents the root configuration of the network-discovery service
-type Config struct {
-	Diode   Diode   `yaml:"diode"`
-	Network Network `yaml:"network_discovery"`
 }

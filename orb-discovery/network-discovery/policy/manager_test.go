@@ -38,15 +38,14 @@ func TestManagerParsePolicies(t *testing.T) {
 
 	t.Run("Valid Policies", func(t *testing.T) {
 		yamlData := []byte(`
-        network_discovery:
-          policies:
-            policy1:
-              config:
-                defaults:
-                  site: New York NY
-              scope:
-                targets:
-                  - 192.168.1.1/24
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: New York NY
+            scope:
+              targets:
+                - 192.168.1.1/24
        `)
 
 		policies, err := manager.ParsePolicies(yamlData)
@@ -67,19 +66,18 @@ func TestManagerPolicyLifecycle(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	manager := policy.NewManager(context.Background(), logger, nil)
 	yamlData := []byte(`
-        network_discovery:
-          policies:
-            policy1:
-              scope:
-                targets:
-                  - 192.168.1.1/24
-            policy2:
-              scope:
-                targets:
-                  - 192.168.2.1/24
-            policy3:
-              scope:
-                targets: []
+        policies:
+          policy1:
+            scope:
+              targets:
+                - 192.168.1.1/24
+          policy2:
+            scope:
+              targets:
+                - 192.168.2.1/24
+          policy3:
+            scope:
+              targets: []
        `)
 
 	policies, err := manager.ParsePolicies(yamlData)
