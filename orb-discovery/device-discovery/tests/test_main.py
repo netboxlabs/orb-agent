@@ -22,17 +22,6 @@ def mock_parse_args():
 
 
 @pytest.fixture
-def mock_parse_config_file():
-    """
-    Fixture to mock the parse_config_file function.
-
-    Mocks the parse_config_file method to simulate loading a configuration file.
-    """
-    with patch("device_discovery.main.parse_config_file") as mock:
-        yield mock
-
-
-@pytest.fixture
 def mock_client():
     """
     Fixture to mock the Client class.
@@ -54,34 +43,10 @@ def mock_uvicorn_run():
         yield mock
 
 
-def test_main_keyboard_interrupt(mock_parse_args, mock_parse_config_file):
-    """
-    Test handling of KeyboardInterrupt in main.
-
-    Args:
-    ----
-        mock_parse_args: Mocked parse_args function.
-        mock_parse_config_file: Mocked parse_config_file function.
-
-    """
-    mock_parse_args.return_value = MagicMock(config="config.yaml")
-    mock_parse_config_file.side_effect = KeyboardInterrupt
-
-    with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
-        try:
-            main()
-        except Exception as e:
-            assert str(e) == "Test Exit"
-
-
-def test_main_with_config(
-    mock_parse_args, mock_parse_config_file, mock_client, mock_uvicorn_run
-):
-    """Test running the CLI with a configuration file and no environment file."""
-    mock_parse_args.return_value = MagicMock(config="config.yaml")
-    mock_parse_config_file.return_value = (
-        MagicMock(metadata={"target": "grpc", "api_key": "abc"}),
-        MagicMock(metadata={"host": "0.0.0.0", "port": 1234}),
+def test_main_keyboard_interrupt(mock_parse_args):
+    """Test handling of KeyboardInterrupt in main."""
+    mock_parse_args.return_value = MagicMock(
+        diode_target="grpc", diode_api_key="abc", host="0.0.0.0", port=1234
     )
 
     with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
@@ -90,19 +55,28 @@ def test_main_with_config(
         except Exception as e:
             assert str(e) == "Test Exit"
 
-    mock_parse_config_file.assert_called_once_with("config.yaml")
+
+def test_main_with_config(mock_parse_args, mock_client, mock_uvicorn_run):
+    """Test running the CLI with a configuration file and no environment file."""
+    mock_parse_args.return_value = MagicMock(
+        diode_target="grpc", diode_api_key="abc", host="0.0.0.0", port=1234
+    )
+
+    with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
+        try:
+            main()
+        except Exception as e:
+            assert str(e) == "Test Exit"
+
+    mock_parse_args.assert_called_once()
     mock_client.assert_called_once()
     mock_uvicorn_run.assert_called_once()
 
 
-def test_main_start_server_failure(
-    mock_parse_args, mock_parse_config_file, mock_client, mock_uvicorn_run
-):
+def test_main_start_server_failure(mock_parse_args, mock_client, mock_uvicorn_run):
     """Test CLI failure when starting the agent."""
-    mock_parse_args.return_value = MagicMock(config="config.yaml")
-    mock_parse_config_file.return_value = (
-        MagicMock(metadata={"target": "grpc", "api_key": "abc"}),
-        MagicMock(metadata={"host": "0.0.0.0", "port": 1234}),
+    mock_parse_args.return_value = MagicMock(
+        diode_target="grpc", diode_api_key="abc", host="0.0.0.0", port=1234
     )
     mock_uvicorn_run.side_effect = Exception("Test Start Server Failure")
 
@@ -112,7 +86,7 @@ def test_main_start_server_failure(
         except Exception as e:
             assert str(e) == "Test Exit"
 
-    mock_parse_config_file.assert_called_once_with("config.yaml")
+    mock_parse_args.assert_called_once()
     mock_client.assert_called_once()
     mock_uvicorn_run.assert_called_once()
     mock_exit.assert_called_once_with(
@@ -141,20 +115,13 @@ def test_main_no_config_file(mock_parse_args):
     mock_exit.assert_called_once()
 
 
-def test_main_missing_policy(mock_parse_args, mock_parse_config_file):
-    """
-    Test handling of missing policy in start_agent.
-
-    Args:
-    ----
-        mock_parse_args: Mocked parse_args function.
-        mock_parse_config_file: Mocked parse_config_file function.
-
-    """
-    mock_parse_args.return_value = MagicMock(config="config.yaml", env=None, workers=2)
+def test_main_missing_policy(mock_parse_args):
+    """Test handling of missing policy in start_agent."""
+    mock_parse_args.return_value = MagicMock(
+        diode_target="grpc", diode_api_key="abc", host="0.0.0.0", port=1234
+    )
     mock_cfg = MagicMock()
     mock_cfg.policies = {"policy1": None}  # Simulating a missing policy
-    mock_parse_config_file.return_value = mock_cfg
 
     with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
         try:

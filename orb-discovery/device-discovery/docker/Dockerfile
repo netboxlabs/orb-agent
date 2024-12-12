@@ -2,11 +2,11 @@ FROM python:3.12-slim-bullseye AS builder
 
 WORKDIR /usr/src/app
 
-COPY device-discovery/ ./device-discovery
+COPY . .
 
 RUN python -m venv /opt/venv && \
     . /opt/venv/bin/activate && \
-    pip install --no-cache-dir ./device-discovery && \
+    pip install --no-cache-dir . && \
     deactivate
 
 FROM python:3.12-slim-bullseye

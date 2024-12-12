@@ -58,50 +58,47 @@ def test_start_existing_policy_raises_error(policy_manager, sample_policy):
 def test_parse_policy(policy_manager):
     """Test parsing YAML configuration into a PolicyRequest object."""
     config_data = b"""
-    device_discovery:
-      policies:
-        policy1:
-          config:
-            schedule: "0 * * * *"
-            defaults:
-              site: "New York"
-          scope:
-            - driver: "ios"
-              hostname: "router1"
-              username: "admin"
-              password: "password"
+    policies:
+      policy1:
+        config:
+          schedule: "0 * * * *"
+          defaults:
+            site: "New York"
+        scope:
+          - driver: "ios"
+            hostname: "router1"
+            username: "admin"
+            password: "password"
     """
-    with patch("device_discovery.parser.resolve_env_vars", side_effect=lambda x: x):
-        policy_request = policy_manager.parse_policy(config_data)
+    policy_request = policy_manager.parse_policy(config_data)
 
         # Verify structure of the parsed PolicyRequest
-        assert isinstance(policy_request, PolicyRequest)
-        assert "policy1" in policy_request.device_discovery.policies
+    assert isinstance(policy_request, PolicyRequest)
+    assert "policy1" in policy_request.policies
 
 
 def test_parse_policy_invalid_cron(policy_manager):
     """Test parsing YAML configuration with an invalid cron string."""
     # Invalid cron string in schedule
     config_data = b"""
-    device_discovery:
-      policies:
-        policy1:
-          config:
-            schedule: "invalid cron string"
-            defaults:
-              site: "New York"
-          scope:
-            - driver: "ios"
-              hostname: "router1"
-              username: "admin"
-              password: "password"
+    policies:
+      policy1:
+        config:
+          schedule: "invalid cron string"
+          defaults:
+            site: "New York"
+        scope:
+          - driver: "ios"
+            hostname: "router1"
+            username: "admin"
+            password: "password"
     """
-    with patch("device_discovery.parser.resolve_env_vars", side_effect=lambda x: x):
-        with pytest.raises(ValidationError) as exc_info:
-            policy_manager.parse_policy(config_data)
 
-        # Validate that the error is related to the invalid cron string
-        assert exc_info.match("Invalid cron schedule format.")
+    with pytest.raises(ValidationError) as exc_info:
+        policy_manager.parse_policy(config_data)
+
+    # Validate that the error is related to the invalid cron string
+    assert exc_info.match("Invalid cron schedule format.")
 
 
 def test_policy_exists(policy_manager):

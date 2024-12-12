@@ -119,7 +119,7 @@ async def write_policy(request: PolicyRequest = Depends(parse_yaml_body)):
 
     """
     started_policies = []
-    policies = request.device_discovery.policies
+    policies = request.policies
     for name, policy in policies.items():
         try:
             manager.start_policy(name, policy)

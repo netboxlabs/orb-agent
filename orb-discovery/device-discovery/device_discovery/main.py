@@ -3,6 +3,7 @@
 """Orb Discovery entry point."""
 
 import argparse
+import os
 import sys
 from importlib.metadata import version
 
@@ -10,7 +11,6 @@ import netboxlabs.diode.sdk.version as SdkVersion
 import uvicorn
 
 from device_discovery.client import Client
-from device_discovery.parser import parse_config_file
 from device_discovery.server import app
 from device_discovery.version import version_semver
 
@@ -31,23 +31,50 @@ def main():
         help="Display Discovery, NAPALM and Diode SDK versions",
     )
     parser.add_argument(
-        "-c",
-        "--config",
-        metavar="config.yaml",
-        help="Yaml configuration file",
+        "-s",
+        "--host",
+        default="0.0.0.0",
+        help="Server host",
+        type=str,
+        required=False,
+    )
+    parser.add_argument(
+        "-p",
+        "--port",
+        default=8072,
+        help="Server port",
+        type=str,
+        required=False,
+    )
+    parser.add_argument(
+        "-t",
+        "--diode-target",
+        help="Diode target",
         type=str,
         required=True,
     )
-    args = parser.parse_args()
+
+    parser.add_argument(
+        "-k",
+        "--diode-api-key",
+        help="Diode API key. Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})",
+        type=str,
+        required=True,
+    )
 
     try:
-        device_cfg, diode_cfg = parse_config_file(args.config)
+        args = parser.parse_args()
+        api_key = args.diode_api_key
+        if api_key.startswith("${") and api_key.endswith("}"):
+            env_var = api_key[2:-1]
+            api_key = os.getenv(env_var, api_key)
+
         client = Client()
-        client.init_client(target=diode_cfg.target, api_key=diode_cfg.api_key)
+        client.init_client(target=args.diode_target, api_key=args.diode_api_key)
         uvicorn.run(
             app,
-            host=device_cfg.host,
-            port=device_cfg.port,
+            host=args.host,
+            port=args.port,
         )
     except (KeyboardInterrupt, RuntimeError):
         pass

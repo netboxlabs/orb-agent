@@ -1,42 +1,47 @@
 # device-discovery
 Orb device discovery backend
 
-### Config RFC
-```yaml
-diode:
-  config:
-    target: grpc://localhost:8080/diode
-    api_key: ${DIODE_API_KEY}
-device_discovery:
-  config:
-    host: 0.0.0.0
-    port: 8072
+### Usage
+```bash
+usage: device-discovery [-h] [-V] [-s HOST] [-p PORT] -t DIODE_TARGET -k DIODE_API_KEY
+
+Orb Discovery Backend
+
+options:
+  -h, --help            show this help message and exit
+  -V, --version         Display Discovery, NAPALM and Diode SDK versions
+  -s HOST, --host HOST  Server host
+  -p PORT, --port PORT  Server port
+  -t DIODE_TARGET, --diode-target DIODE_TARGET
+                        Diode target
+  -k DIODE_API_KEY, --diode-api-key DIODE_API_KEY
+                        Diode API key. Environment variables can be used by wrapping them in ${} (e.g.
+                        ${MY_API_KEY})
 ```
 
 ### Policy RFC
 ```yaml
-device_discovery:
-  policies:
-    discovery_1:
-      config:
-        schedule: "* * * * *" #Cron expression
-        defaults:
-          site: New York NY
-      scope:
-        - hostname: 192.168.0.32
-          username: ${USER}
-          password: admin
-        - driver: eos
-          hostname: 127.0.0.1
-          username: admin
-          password: ${ARISTA_PASSWORD}
-          optional_args:
-            enable_password: ${ARISTA_PASSWORD}
-    discover_once: # will run only once
-      scope:
-        - hostname: 192.168.0.34
-          username: ${USER}
-          password: ${PASSWORD}
+policies:
+  discovery_1:
+    config:
+      schedule: "* * * * *" #Cron expression
+      defaults:
+        site: New York NY
+    scope:
+      - hostname: 192.168.0.32
+        username: ${USER}
+        password: admin
+      - driver: eos
+        hostname: 127.0.0.1
+        username: admin
+        password: ${ARISTA_PASSWORD}
+        optional_args:
+          enable_password: ${ARISTA_PASSWORD}
+  discover_once: # will run only once
+    scope:
+      - hostname: 192.168.0.34
+        username: ${USER}
+        password: ${PASSWORD}
 ```
 ## Run device-discovery
 device-discovery can be run by installing it with pip
@@ -44,14 +49,16 @@ device-discovery can be run by installing it with pip
 git clone https://github.com/netboxlabs/orb-discovery.git
 cd orb-discovery/
 pip install --no-cache-dir ./device-discovery/
-device-discovery -c config.yaml
+device-discovery -t 'grpc://192.168.0.10:8080/diode' -k '${DIODE_API_KEY}'
 ```
 
 ## Docker Image
 device-discovery can be build and run using docker:
 ```sh
-docker build --no-cache -t device-discovery:develop -f device-discovery/docker/Dockerfile .
-docker run -v /local/orb:/usr/local/orb/ -p 8072:8072 device-discovery:develop device-discovery -c /usr/local/orb/config.yaml
+cd device-discovery
+docker build --no-cache -t device-discovery:develop -f docker/Dockerfile .
+docker run  -e DIODE_API_KEY={YOUR_API_KEY} -p 8072:8072 device-discovery:develop \
+ device-discovery -t 'grpc://192.168.0.10:8080/diode' -k '${DIODE_API_KEY}'
 ```
 
 ### Routes (v1)

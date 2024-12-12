@@ -68,13 +68,7 @@ class Policy(BaseModel):
     scope: list[Napalm]
 
 
-class Discovery(BaseModel):
-    """Model for Discovery containing configuration and policies."""
-
-    policies: dict[str, Policy]
-
-
 class PolicyRequest(BaseModel):
     """Model for a policy request."""
 
-    device_discovery: Discovery
+    policies: dict[str, Policy]

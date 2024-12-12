@@ -22,18 +22,17 @@ def valid_policy_yaml():
     Returns a YAML string that represents a valid PolicyRequest object.
     """
     return """
-    device_discovery:
-      policies:
-        policy1:
-          config:
-            schedule: "0 * * * *"
-            defaults:
-              site: "New York"
-          scope:
-            - driver: "ios"
-              hostname: "router1"
-              username: "admin"
-              password: "password"
+    policies:
+      policy1:
+        config:
+          schedule: "0 * * * *"
+          defaults:
+            site: "New York"
+        scope:
+          - driver: "ios"
+            hostname: "router1"
+            username: "admin"
+            password: "password"
     """
 
 
@@ -45,28 +44,27 @@ def multiple_policies_yaml():
     Returns a YAML string that represents a valid PolicyRequest object.
     """
     return """
-    device_discovery:
-      policies:
-        policy1:
-          config:
-            schedule: "0 * * * *"
-            defaults:
-              site: "New York"
-          scope:
-            - driver: "ios"
-              hostname: "router1"
-              username: "admin"
-              password: "password"
-        policy2:
-          config:
-            schedule: "0 * * * *"
-            defaults:
-              site: "New York"
-          scope:
-            - driver: "ios"
-              hostname: "router1"
-              username: "admin"
-              password: "password"
+    policies:
+      policy1:
+        config:
+          schedule: "0 * * * *"
+          defaults:
+            site: "New York"
+        scope:
+          - driver: "ios"
+            hostname: "router1"
+            username: "admin"
+            password: "password"
+      policy2:
+        config:
+          schedule: "0 * * * *"
+          defaults:
+            site: "New York"
+        scope:
+          - driver: "ios"
+            hostname: "router1"
+            username: "admin"
+            password: "password"
     """
 
 
@@ -78,17 +76,16 @@ def invalid_policy_yaml():
     Returns a YAML string that represents a valid PolicyRequest object.
     """
     return """
-    device_discovery:
-      policies:
-        policy1:
-          config:
-            schedule: "0 * * * *"
-            defaults:
-              site: "New York"
-          scope:
-              hostname: "router1"
-              username: "admin"
-              password: "password"
+    policies:
+      policy1:
+        config:
+          schedule: "0 * * * *"
+          defaults:
+            site: "New York"
+        scope:
+            hostname: "router1"
+            username: "admin"
+            password: "password"
     """
 
 
@@ -220,7 +217,7 @@ def test_write_policy_invalid_yaml():
         response = client.post(
             "/api/v1/policies",
             headers={"Content-Type": "application/x-yaml"},
-            json={"device_discovery": {"policies": {"policy1": {}}}},
+            json={"policies": {"policy1": {}}},
         )
         assert response.status_code == 400
         assert response.json() == {"detail": "Invalid YAML format"}
@@ -237,7 +234,7 @@ def test_write_policy_validation_error(invalid_policy_yaml):
     assert response.json() == {
         "detail": [
             {
-                "field": "device_discovery.policies.policy1.scope",
+                "field": "policies.policy1.scope",
                 "type": "list_type",
                 "error": "Input should be a valid list",
             }
@@ -254,7 +251,7 @@ def test_write_policy_unexpected_parser_error():
         response = client.post(
             "/api/v1/policies",
             headers={"Content-Type": "application/x-yaml"},
-            json={"device_discovery": {"policies": {"policy1": {}}}},
+            json={"policies": {"policy1": {}}},
         )
         assert response.status_code == 400
         assert response.json() == {"detail": "unexpected error"}
@@ -270,7 +267,7 @@ def test_write_policy_invalid_content_type():
     response = client.post(
         "/api/v1/policies",
         headers={"content-type": "application/json"},
-        json={"device_discovery": {"policies": {"policy1": {}}}},
+        json={"policies": {"policy1": {}}},
     )
     assert response.status_code == 400
     assert (
@@ -316,12 +313,12 @@ def test_write_policy_no_policy_error():
     """
     with patch(
         "device_discovery.server.parse_yaml_body",
-        return_value=PolicyRequest(device_discovery={"policies": {}}),
+        return_value=PolicyRequest(policies={}),
     ):
         response = client.post(
             "/api/v1/policies",
             headers={"Content-Type": "application/x-yaml"},
-            json={"device_discovery": {"policies": {}}},
+            json={"policies": {}},
         )
         assert response.status_code == 400
         assert response.json()["detail"] == "no policies found in request"

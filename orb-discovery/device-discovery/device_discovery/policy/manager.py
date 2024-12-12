@@ -3,10 +3,10 @@
 """Orb Discovery Policy Manager."""
 
 import logging
+import os
 
 import yaml
 
-from device_discovery.parser import resolve_env_vars
 from device_discovery.policy.models import Policy, PolicyRequest
 from device_discovery.policy.runner import PolicyRunner
 
@@ -14,6 +14,28 @@ from device_discovery.policy.runner import PolicyRunner
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def resolve_env_vars(config):
+    """
+    Recursively resolve environment variables in the configuration.
+
+    Args:
+    ----
+        config (dict): The configuration dictionary.
+
+    Returns:
+    -------
+        dict: The configuration dictionary with environment variables resolved.
+
+    """
+    if isinstance(config, dict):
+        return {k: resolve_env_vars(v) for k, v in config.items()}
+    if isinstance(config, list):
+        return [resolve_env_vars(i) for i in config]
+    if isinstance(config, str) and config.startswith("${") and config.endswith("}"):
+        env_var = config[2:-1]
+        return os.getenv(env_var, config)
+    return config
 
 class PolicyManager:
     """Policy Manager class."""
