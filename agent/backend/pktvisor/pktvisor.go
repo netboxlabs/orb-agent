@@ -25,7 +25,7 @@ import (
 var _ backend.Backend = (*pktvisorBackend)(nil)
 
 const (
-	DefaultBinary       = "/usr/local/sbin/pktvisord"
+	DefaultBinary       = "pktvisord"
 	ReadinessBackoff    = 10
 	ReadinessTimeout    = 10
 	ApplyPolicyTimeout  = 10
@@ -233,7 +233,6 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	}
 
 	p.logger.Info("pktvisor process started", zap.Int("pid", status.PID))
-	//p.receiveOtlp()
 
 	var readinessError error
 	for backoff := 0; backoff < ReadinessBackoff; backoff++ {

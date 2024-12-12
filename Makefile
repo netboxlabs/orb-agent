@@ -5,16 +5,15 @@ PRODUCTION_AGENT_REF_TAG ?= latest
 PRODUCTION_AGENT_DEBUG_REF_TAG ?= latest-debug
 REF_TAG ?= develop
 DEBUG_REF_TAG ?= develop-debug
-PKTVISOR_TAG ?= latest-develop
-PKTVISOR_DEBUG_TAG ?= latest-develop-debug
-DOCKER_IMAGE_NAME_PREFIX ?= orb
+PKTVISOR_TAG ?= develop
+PKTVISOR_DEBUG_TAG ?= develop-debug
 DOCKERHUB_REPO = netboxlabs
 ORB_DOCKERHUB_REPO = netboxlabs
 BUILD_DIR = build
 CGO_ENABLED ?= 0
-GOARCH ?= $(shell dpkg-architecture -q DEB_BUILD_ARCH)
-GOOS ?= $(shell dpkg-architecture -q DEB_TARGET_ARCH_OS)
-ORB_VERSION = $(shell cat VERSION)
+GOARCH ?= $(shell go env GOARCH)
+GOOS ?= $(shell go env GOOS)
+ORB_VERSION = $(shell cat agent/version/BUILD_VERSION.txt)
 COMMIT_HASH = $(shell git rev-parse --short HEAD)
 OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
 OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
@@ -42,7 +41,7 @@ cleandocker:
 
 ifdef pv
 	# Remove unused volumes
-	docker volume ls -f name=$(DOCKER_IMAGE_NAME_PREFIX) -f dangling=true -q | xargs -r docker volume rm
+	docker volume ls -f name=orb -f dangling=true -q | xargs -r docker volume rm
 endif
 
 test:
@@ -60,36 +59,36 @@ test_service_cov:
 
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags "-extldflags '-static' -X 'github.com/netboxlabs/orb-agent/buildinfo.version=$(ORB_VERSION)-$(COMMIT_HASH)'" -o ${BUILD_DIR}/$(DOCKER_IMAGE_NAME_PREFIX)-agent cmd/main.go
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -o ${BUILD_DIR}/orb-agent cmd/main.go
 
 agent:
 	docker build --no-cache \
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(REF_TAG) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  -f agent/docker/Dockerfile .
 
 agent_debug:
 	docker build \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_DEBUG_TAG) \
-	  --tag=$(DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(DEBUG_REF_TAG) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(DEBUG_REF_TAG) \
+	  --tag=$(DOCKERHUB_REPO)/orb-agent:$(DEBUG_REF_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(DEBUG_REF_TAG) \
 	  -f agent/docker/Dockerfile .
 
 agent_production:
 	docker build \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(PRODUCTION_AGENT_REF_TAG) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_REF_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  -f agent/docker/Dockerfile .
 
 agent_debug_production:
 	docker build \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_DEBUG_TAG) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/$(DOCKER_IMAGE_NAME_PREFIX)-agent:$(PRODUCTION_AGENT_DEBUG_REF_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_DEBUG_REF_TAG) \
 	  -f agent/docker/Dockerfile .
 
 pull-latest-otel-collector-contrib:
