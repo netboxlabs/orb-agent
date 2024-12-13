@@ -43,9 +43,9 @@ type deviceDiscoveryBackend struct {
 	apiPort     string
 	apiProtocol string
 
-	diodeTarget     string
-	diodeAPIKey     string
-	diodeNamePrefix string
+	diodeTarget        string
+	diodeAPIKey        string
+	diodeAppNamePrefix string
 
 	startTime  time.Time
 	proc       *cmd.Cmd
@@ -84,7 +84,7 @@ func (d *deviceDiscoveryBackend) Configure(logger *zap.Logger, repo policies.Pol
 
 	d.diodeTarget = common.Diode.Target
 	d.diodeAPIKey = common.Diode.APIKey
-	d.diodeNamePrefix = common.Diode.AgentName
+	d.diodeAppNamePrefix = common.Diode.AgentName
 
 	return nil
 }
@@ -113,7 +113,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
 		"--diode-api-key", d.diodeAPIKey,
-		"--diode-app-name-prefix", d.diodeNamePrefix,
+		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("device-discovery startup", zap.Strings("arguments", pvOptions))
