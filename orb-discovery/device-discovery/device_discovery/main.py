@@ -43,7 +43,7 @@ def main():
         "--port",
         default=8072,
         help="Server port",
-        type=str,
+        type=int,
         required=False,
     )
     parser.add_argument(
@@ -62,6 +62,14 @@ def main():
         required=True,
     )
 
+    parser.add_argument(
+        "-a",
+        "--diode-app-name-prefix",
+        help="Diode producer_app_name prefix",
+        type=str,
+        required=False,
+    )
+
     try:
         args = parser.parse_args()
         api_key = args.diode_api_key
@@ -70,7 +78,9 @@ def main():
             api_key = os.getenv(env_var, api_key)
 
         client = Client()
-        client.init_client(target=args.diode_target, api_key=args.diode_api_key)
+        client.init_client(
+            prefix=args.diode_app_name_prefix, target=args.diode_target, api_key=api_key
+        )
         uvicorn.run(
             app,
             host=args.host,

@@ -43,6 +43,7 @@ func main() {
 	diodeTarget := flag.String("diode-target", "", "diode target (REQUIRED)")
 	diodeAPIKey := flag.String("diode-api-key", "", "diode api key (REQUIRED)."+
 		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})")
+	diodeNamePrefix := flag.String("diode-app-name-prefix", "", "diode producer_app_name prefix")
 	logLevel := flag.String("log-level", "INFO", "log level")
 	logFormat := flag.String("log-format", "TEXT", "log format")
 	help := flag.Bool("help", false, "show this help")
@@ -58,9 +59,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	producerName := AppName
+	if *diodeNamePrefix != "" {
+		producerName = fmt.Sprintf("%s/%s", *diodeNamePrefix, AppName)
+	}
+
 	client, err := diode.NewClient(
 		*diodeTarget,
-		AppName,
+		producerName,
 		version.GetBuildVersion(),
 		diode.WithAPIKey(resolveEnv(*diodeAPIKey)),
 	)

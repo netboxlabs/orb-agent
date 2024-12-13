@@ -54,12 +54,13 @@ class Client:
         if not hasattr(self, "diode_client"):  # Prevent reinitialization
             self.diode_client = None
 
-    def init_client(self, target: str, api_key: str | None = None):
+    def init_client(self, prefix: str, target: str, api_key: str | None = None):
         """
         Initialize the Diode client with the specified target, API key, and TLS verification.
 
         Args:
         ----
+            prefix (str): The prefix for the producer app name.
             target (str): The target endpoint for the Diode client.
             api_key (Optional[str]): The API key for authentication (default is None).
 
@@ -67,7 +68,7 @@ class Client:
         with self._lock:
             self.diode_client = DiodeClient(
                 target=target,
-                app_name=APP_NAME,
+                app_name=f"{prefix}/{APP_NAME}" if prefix else APP_NAME,
                 app_version=APP_VERSION,
                 api_key=api_key,
             )
