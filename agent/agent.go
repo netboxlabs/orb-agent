@@ -8,10 +8,9 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/fatih/structs"
 	"github.com/google/uuid"
-	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/mitchellh/mapstructure"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
 
@@ -37,9 +36,9 @@ type orbAgent struct {
 	config            config.Config
 	client            mqtt.Client
 	agent_id          string
-	db                *sqlx.DB
 	backends          map[string]backend.Backend
 	backendState      map[string]*backend.State
+	backendsCommon    config.BackendCommons
 	cancelFunction    context.CancelFunc
 	rpcFromCancelFunc context.CancelFunc
 
@@ -83,13 +82,7 @@ type GroupInfo struct {
 var _ Agent = (*orbAgent)(nil)
 
 func New(logger *zap.Logger, c config.Config) (Agent, error) {
-	logger.Info("using local config db", zap.String("filename", c.OrbAgent.DB.File))
-	db, err := sqlx.Connect("sqlite3", c.OrbAgent.DB.File)
-	if err != nil {
-		return nil, err
-	}
-
-	pm, err := manager.New(logger, c, db)
+	pm, err := manager.New(logger, c)
 	if err != nil {
 		logger.Error("error during create policy manager, exiting", zap.Error(err))
 		return nil, err
@@ -98,9 +91,9 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 		logger.Error("policy manager failed to get repository", zap.Error(err))
 		return nil, err
 	}
-	cm := config.New(c.OrbAgent.ConfigManager, logger, c, db)
+	cm := config.New(logger, c.OrbAgent.ConfigManager)
 
-	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, db: db, groupsInfos: make(map[string]GroupInfo)}, nil
+	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, groupsInfos: make(map[string]GroupInfo)}, nil
 }
 
 func (a *orbAgent) managePolicies() error {
@@ -132,15 +125,25 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 	}
 	a.backends = make(map[string]backend.Backend, len(a.config.OrbAgent.Backends))
 	a.backendState = make(map[string]*backend.State)
+
+	var commonConfig config.BackendCommons
+	if v, prs := a.config.OrbAgent.Backends["common"]; prs {
+		if err := mapstructure.Decode(v, &commonConfig); err != nil {
+			return fmt.Errorf("failed to decode common backend config: %w", err)
+		}
+	}
+	commonConfig.Otel.AgentTags = a.config.OrbAgent.Tags
+	a.backendsCommon = commonConfig
+	delete(a.config.OrbAgent.Backends, "common")
+
 	for name, configurationEntry := range a.config.OrbAgent.Backends {
+
 		if !backend.HaveBackend(name) {
 			return errors.New("specified backend does not exist: " + name)
 		}
 		be := backend.GetBackend(name)
-		configuration := structs.Map(a.config.OrbAgent.Otel)
-		configuration["agent_tags"] = a.config.OrbAgent.Tags
-		configurationEntry["config_file"] = a.config.OrbAgent.ConfigFile
-		if err := be.Configure(a.logger, a.policyManager.GetRepo(), configurationEntry, configuration); err != nil {
+
+		if err := be.Configure(a.logger, a.policyManager.GetRepo(), configurationEntry, a.backendsCommon); err != nil {
 			a.logger.Info("failed to configure backend", zap.String("backend", name), zap.Error(err))
 			return err
 		}
@@ -260,9 +263,7 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	if err := a.policyManager.RemoveBackendPolicies(be, true); err != nil {
 		a.logger.Error("failed to remove policies", zap.String("backend", name), zap.Error(err))
 	}
-	configuration := structs.Map(a.config.OrbAgent.Otel)
-	configuration["agent_tags"] = a.config.OrbAgent.Tags
-	if err := be.Configure(a.logger, a.policyManager.GetRepo(), a.config.OrbAgent.Backends[name], configuration); err != nil {
+	if err := be.Configure(a.logger, a.policyManager.GetRepo(), a.config.OrbAgent.Backends[name], a.backendsCommon); err != nil {
 		return err
 	}
 	a.logger.Info("resetting backend", zap.String("backend", name))

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -64,14 +63,14 @@ type openTelemetryBackend struct {
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
-	config map[string]string, otelConfig map[string]interface{}) error {
+	config map[string]interface{}, common config.BackendCommons) error {
 	o.logger = logger
 	o.logger.Info("configuring OpenTelemetry backend")
 	o.policyRepo = repo
 	var err error
 	o.otelReceiverTaps = []string{"otelcol-contrib", "receivers", "processors", "extensions"}
 	o.policyConfigDirectory, err = os.MkdirTemp("", "otel-policies")
-	if path, ok := config["binary"]; ok {
+	if path, ok := config["binary"].(string); ok {
 		o.otelExecutablePath = path
 	} else {
 		o.otelExecutablePath = DefaultPath
@@ -85,19 +84,19 @@ func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.Polic
 		o.logger.Error("failed to create temporary directory for policy configs", zap.Error(err))
 		return err
 	}
-	if agentTags, ok := otelConfig["agent_tags"]; ok {
-		o.agentTags = agentTags.(map[string]string)
-	}
-	if otelPort, ok := config["otlp_port"]; ok {
-		o.otelReceiverPort, err = strconv.Atoi(otelPort)
-		if err != nil {
-			o.logger.Error("failed to parse otlp port using default", zap.Error(err))
-			o.otelReceiverPort = DefaultPort
-		}
-	} else {
-		o.otelReceiverPort = DefaultPort
-	}
-	if otelHost, ok := config["otlp_host"]; ok {
+	// if agentTags, ok := common.Otel["agent_tags"]; ok {
+	// 	o.agentTags = agentTags.(map[string]string)
+	// }
+	// if otelPort, ok := config["otlp_port"]; ok {
+	// 	o.otelReceiverPort, err = strconv.Atoi(otelPort)
+	// 	if err != nil {
+	// 		o.logger.Error("failed to parse otlp port using default", zap.Error(err))
+	// 		o.otelReceiverPort = DefaultPort
+	// 	}
+	// } else {
+	// 	o.otelReceiverPort = DefaultPort
+	// }
+	if otelHost, ok := config["otlp_host"].(string); ok {
 		o.otelReceiverHost = otelHost
 	} else {
 		o.otelReceiverHost = DefaultHost

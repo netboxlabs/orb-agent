@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 
-	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
 )
 
@@ -12,13 +11,13 @@ type ConfigManager interface {
 	GetContext(ctx context.Context) context.Context
 }
 
-func New(t string, logger *zap.Logger, c Config, db *sqlx.DB) ConfigManager {
-	switch t {
+func New(logger *zap.Logger, c ManagerConfig) ConfigManager {
+	switch c.Active {
 	case "local":
-		return &localConfigManager{logger: logger, config: c, db: db}
+		return &localConfigManager{logger: logger, config: c.Backends.Local}
 	case "cloud":
-		return &cloudConfigManager{logger: logger, config: c, db: db}
+		return &cloudConfigManager{logger: logger, config: c.Backends.Cloud}
 	default:
-		return &localConfigManager{logger: logger, config: c, db: db}
+		return &localConfigManager{logger: logger, config: c.Backends.Local}
 	}
 }

@@ -24,10 +24,14 @@ make agent
 
 ```yaml
 orb:
-  config_manager: local
+  config_manager: 
+    active: local
   backends:
     device_discovery:
-      binary: device_discovery
+    common:
+      diode:
+        target: grpc://192.168.31.114:8080/diode
+        api_key: ${DIODE_API_KEY}
   policies:
     device_discovery:
       discovery_1:
@@ -39,12 +43,6 @@ orb:
           - hostname: 10.90.0.50
             username: admin
             password: ${PASS}
-
-
-discovery:
-  config:
-    target: grpc://192.168.31.114:8080/diode
-    api_key: ${DIODE_API_KEY}
 ```
 
 Run command:
@@ -88,27 +86,27 @@ The relative path used by `pip install` is the folder that contains `.txt` file.
 ### Network-discovery backend
 ```yaml
 orb:
-  config_manager: local
+  config_manager:
+    active: local
   backends:
     network_discovery:
-      binary: /opt/usr/network_discovery
+    common:
+      diode:
+        target: grpc://192.168.31.114:8080/diode
+        api_key: ${DIODE_API_KEY}
   policies:
     network_discovery:
       policy_1:
         config:
           schedule: "0 */2 * * *"
+          timeout: 5
         scope:
           targets: [192.168.1.1/22, google.com]
-          timeout: 5
-
-network:
-  config:
-    target: grpc://192.168.31.114:8080/diode
-    api_key: your_api_key
 ```
 
 Run command:
 ```sh
  docker run -v /local/orb:/opt/orb/ \
+ -e DIODE_API_KEY={YOUR_API_KEY} \
  netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
 ```

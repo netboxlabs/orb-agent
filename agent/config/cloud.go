@@ -23,7 +23,7 @@ var _ ConfigManager = (*cloudConfigManager)(nil)
 
 type cloudConfigManager struct {
 	logger *zap.Logger
-	config Config
+	config Cloud
 	db     *sqlx.DB
 }
 
@@ -55,7 +55,7 @@ func (cc *cloudConfigManager) migrateDB() error {
 
 func (cc *cloudConfigManager) request(address string, token string, response interface{}, method string, body []byte) error {
 	tlsConfig := &tls.Config{InsecureSkipVerify: false}
-	if !cc.config.OrbAgent.TLS.Verify {
+	if !cc.config.TLS.Verify {
 		tlsConfig.InsecureSkipVerify = true
 	}
 	transport := &http.Transport{TLSClientConfig: tlsConfig}
@@ -114,7 +114,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 		AgentTags map[string]string `json:"agent_tags"`
 	}
 
-	aname := cc.config.OrbAgent.Cloud.Config.AgentName
+	aname := cc.config.Config.AgentName
 	if aname == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
@@ -123,7 +123,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 		aname = hostname
 	}
 
-	agentReq := AgentReq{Name: strings.Replace(aname, ".", "-", -1), AgentTags: cc.config.OrbAgent.Tags}
+	agentReq := AgentReq{Name: strings.Replace(aname, ".", "-", -1), AgentTags: cc.config.Tags}
 	body, err := json.Marshal(agentReq)
 	if err != nil {
 		return MQTTConfig{}, err
@@ -153,10 +153,16 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 }
 
 func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
+	cc.logger.Info("using local config db", zap.String("filename", cc.config.DB.File))
+	db, err := sqlx.Connect("sqlite3", cc.config.DB.File)
+	if err != nil {
+		return MQTTConfig{}, err
+	}
 
+	cc.db = db
 	// currently we require address to be specified, it cannot be auto provisioned.
 	// this may change in the future
-	mqtt := cc.config.OrbAgent.Cloud.MQTT
+	mqtt := cc.config.MQTT
 
 	if len(mqtt.Id) > 0 && len(mqtt.Key) > 0 && len(mqtt.ChannelID) > 0 {
 		cc.logger.Info("using explicitly specified cloud configuration",
@@ -171,11 +177,11 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 	}
 
 	// if full config is not available, possibly attempt auto provision configuration
-	if !cc.config.OrbAgent.Cloud.Config.AutoProvision {
+	if !cc.config.Config.AutoProvision {
 		return MQTTConfig{}, errors.New("valid cloud MQTT config was not specified, and auto_provision was disabled")
 	}
 
-	err := cc.migrateDB()
+	err = cc.migrateDB()
 	if err != nil {
 		return MQTTConfig{}, err
 	}
@@ -197,7 +203,7 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 	}
 
 	// attempt a live auto provision
-	apiConfig := cc.config.OrbAgent.Cloud.API
+	apiConfig := cc.config.API
 	if len(apiConfig.Token) == 0 {
 		return MQTTConfig{}, errors.New("wanted to auto provision, but no API token was available")
 	}
@@ -217,8 +223,8 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 }
 
 func (cc *cloudConfigManager) GetContext(ctx context.Context) context.Context {
-	if cc.config.OrbAgent.Cloud.MQTT.Id != "" {
-		ctx = context.WithValue(ctx, "agent_id", cc.config.OrbAgent.Cloud.MQTT.Id)
+	if cc.config.MQTT.Id != "" {
+		ctx = context.WithValue(ctx, "agent_id", cc.config.MQTT.Id)
 	} else {
 		ctx = context.WithValue(ctx, "agent_id", "auto-provisioning-without-id")
 	}
