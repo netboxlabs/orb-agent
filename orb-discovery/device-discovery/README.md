@@ -18,7 +18,7 @@ options:
                         Diode API key. Environment variables can be used by wrapping them in ${} (e.g.
                         ${MY_API_KEY})
   -a DIODE_PREFIX_NAME, --diode-prefix-name DIODE_PREFIX_NAME
-                        Diode prefix producer app name
+                        Diode producer_app_name prefix
 ```
 
 ### Policy RFC

@@ -65,7 +65,7 @@ def main():
     parser.add_argument(
         "-a",
         "--diode-prefix-name",
-        help="Diode prefix producer app name",
+        help="Diode producer_app_name prefix",
         type=str,
         required=False,
     )
