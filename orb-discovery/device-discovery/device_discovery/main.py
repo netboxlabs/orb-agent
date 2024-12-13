@@ -64,7 +64,7 @@ def main():
 
     parser.add_argument(
         "-a",
-        "--diode-prefix-name",
+        "--diode-app-name-prefix",
         help="Diode producer_app_name prefix",
         type=str,
         required=False,
@@ -79,7 +79,7 @@ def main():
 
         client = Client()
         client.init_client(
-            prefix=args.diode_prefix_name, target=args.diode_target, api_key=api_key
+            prefix=args.diode_app_name_prefix, target=args.diode_target, api_key=api_key
         )
         uvicorn.run(
             app,
