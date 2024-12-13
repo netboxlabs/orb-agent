@@ -42,8 +42,10 @@ type networkDiscoveryBackend struct {
 	apiHost     string
 	apiPort     string
 	apiProtocol string
-	diodeTarget string
-	diodeAPIKey string
+
+	diodeTarget     string
+	diodeAPIKey     string
+	diodeNamePrefix string
 
 	startTime  time.Time
 	proc       *cmd.Cmd
@@ -82,6 +84,7 @@ func (d *networkDiscoveryBackend) Configure(logger *zap.Logger, repo policies.Po
 
 	d.diodeTarget = common.Diode.Target
 	d.diodeAPIKey = common.Diode.APIKey
+	d.diodeNamePrefix = common.Diode.AgentName
 
 	return nil
 }
@@ -110,6 +113,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
 		"--diode-api-key", d.diodeAPIKey,
+		"--diode-app-name-prefix", d.diodeNamePrefix,
 	}
 
 	d.logger.Info("network-discovery startup", zap.Strings("arguments", pvOptions))

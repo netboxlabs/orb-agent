@@ -32,6 +32,7 @@ orb:
       diode:
         target: grpc://192.168.31.114:8080/diode
         api_key: ${DIODE_API_KEY}
+        agent_name: agent01
   policies:
     device_discovery:
       discovery_1:
@@ -94,6 +95,7 @@ orb:
       diode:
         target: grpc://192.168.31.114:8080/diode
         api_key: ${DIODE_API_KEY}
+        agent_name: agent02
   policies:
     network_discovery:
       policy_1:

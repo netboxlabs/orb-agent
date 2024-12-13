@@ -52,8 +52,9 @@ type BackendCommons struct {
 		AgentTags map[string]string `mapstructure:"agent_tags"`
 	} `mapstructure:"otel"`
 	Diode struct {
-		Target string `mapstructure:"target"`
-		APIKey string `mapstructure:"api_key"`
+		Target    string `mapstructure:"target"`
+		APIKey    string `mapstructure:"api_key"`
+		AgentName string `mapstructure:"agent_name"`
 	}
 }
 type OrbAgent struct {
