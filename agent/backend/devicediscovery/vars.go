@@ -5,6 +5,6 @@ import (
 )
 
 func RegisterBackendSpecificVariables(v *viper.Viper) {
-	v.SetDefault("orb.backends.device_discovery.host", "localhost")
-	v.SetDefault("orb.backends.device_discovery.port", "8072")
+	v.SetDefault("orb.backends.device_discovery.host", DefaultAPIHost)
+	v.SetDefault("orb.backends.device_discovery.port", DefaultAPIPort)
 }
