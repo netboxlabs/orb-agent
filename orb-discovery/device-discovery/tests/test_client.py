@@ -56,11 +56,13 @@ def mock_diode_client_class():
 def test_init_client(mock_diode_client_class, mock_version_semver):
     """Test the initialization of the Diode client."""
     client = Client()
-    client.init_client(target="https://example.com", api_key="dummy_api_key")
+    client.init_client(
+        prefix="prefix", target="https://example.com", api_key="dummy_api_key"
+    )
 
     mock_diode_client_class.assert_called_once_with(
         target="https://example.com",
-        app_name="device-discovery",
+        app_name="prefix/device-discovery",
         app_version=mock_version_semver(),
         api_key="dummy_api_key",
     )
@@ -69,14 +71,15 @@ def test_init_client(mock_diode_client_class, mock_version_semver):
 def test_ingest_success(mock_diode_client_class, sample_data):
     """Test successful data ingestion."""
     client = Client()
-    client.init_client(target="https://example.com", api_key="dummy_api_key")
+    client.init_client(prefix="", target="https://example.com", api_key="dummy_api_key")
 
     mock_diode_instance = mock_diode_client_class.return_value
     mock_diode_instance.ingest.return_value.errors = []
     hostname = sample_data["device"]["hostname"]
 
     with patch(
-        "device_discovery.client.translate_data", return_value=translate_data(sample_data)
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
     ) as mock_translate_data:
         client.ingest(hostname, sample_data)
         mock_translate_data.assert_called_once_with(sample_data)
@@ -86,14 +89,17 @@ def test_ingest_success(mock_diode_client_class, sample_data):
 def test_ingest_failure(mock_diode_client_class, sample_data):
     """Test data ingestion with errors."""
     client = Client()
-    client.init_client(target="https://example.com", api_key="dummy_api_key")
+    client.init_client(
+        prefix="prefix", target="https://example.com", api_key="dummy_api_key"
+    )
 
     mock_diode_instance = mock_diode_client_class.return_value
     mock_diode_instance.ingest.return_value.errors = ["Error1", "Error2"]
     hostname = sample_data["device"]["hostname"]
 
     with patch(
-        "device_discovery.client.translate_data", return_value=translate_data(sample_data)
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
     ) as mock_translate_data:
         client.ingest(hostname, sample_data)
         mock_translate_data.assert_called_once_with(sample_data)

@@ -6,6 +6,8 @@ Orb network discovery backend
 Usage of network-discovery:
   -diode-api-key string
     	diode api key (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})
+  -diode-prefix-name string
+    	diode producer_app_name prefix
   -diode-target string
     	diode target (REQUIRED)
   -help
