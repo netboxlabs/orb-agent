@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 
-	"github.com/jmoiron/sqlx"
 	"go.uber.org/zap"
 )
 
@@ -11,8 +10,7 @@ var _ ConfigManager = (*localConfigManager)(nil)
 
 type localConfigManager struct {
 	logger *zap.Logger
-	config Config
-	db     *sqlx.DB
+	config Local
 }
 
 func (oc *localConfigManager) GetConfig() (MQTTConfig, error) {

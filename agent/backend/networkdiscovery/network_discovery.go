@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -28,7 +29,8 @@ const (
 	ApplyPolicyTimeout  = 10
 	RemovePolicyTimeout = 20
 	DefaultExec         = "network-discovery"
-	DefaultConfigPath   = "/opt/orb/agent.yaml"
+	DefaultAPIHost      = "localhost"
+	DefaultAPIPort      = "8073"
 )
 
 type networkDiscoveryBackend struct {
@@ -40,6 +42,10 @@ type networkDiscoveryBackend struct {
 	apiHost     string
 	apiPort     string
 	apiProtocol string
+
+	diodeTarget        string
+	diodeAPIKey        string
+	diodeAppNamePrefix string
 
 	startTime  time.Time
 	proc       *cmd.Cmd
@@ -59,23 +65,26 @@ type Info struct {
 func Register() bool {
 	backend.Register("network_discovery", &networkDiscoveryBackend{
 		apiProtocol: "http",
-		apiHost:     "localhost",
-		apiPort:     "8073",
+		exec:        DefaultExec,
 	})
 	return true
 }
 
-func (d *networkDiscoveryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]string, otelConfig map[string]interface{}) error {
+func (d *networkDiscoveryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]interface{}, common config.BackendCommons) error {
 	d.logger = logger
 	d.policyRepo = repo
 
 	var prs bool
-	if d.exec, prs = config["exec"]; !prs {
-		d.exec = DefaultExec
+	if d.apiHost, prs = config["host"].(string); !prs {
+		d.apiHost = DefaultAPIHost
 	}
-	if d.configFile, prs = config["config_file"]; !prs {
-		d.configFile = DefaultConfigPath
+	if d.apiPort, prs = config["port"].(string); !prs {
+		d.apiPort = DefaultAPIPort
 	}
+
+	d.diodeTarget = common.Diode.Target
+	d.diodeAPIKey = common.Diode.APIKey
+	d.diodeAppNamePrefix = common.Diode.AgentName
 
 	return nil
 }
@@ -100,8 +109,11 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	d.ctx = ctx
 
 	pvOptions := []string{
-		"-config",
-		d.configFile,
+		"--host", d.apiHost,
+		"--port", d.apiPort,
+		"--diode-target", d.diodeTarget,
+		"--diode-api-key", d.diodeAPIKey,
+		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("network-discovery startup", zap.Strings("arguments", pvOptions))
@@ -256,10 +268,8 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 	d.logger.Debug("network-discovery policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
 
 	fullPolicy := map[string]interface{}{
-		"network": map[string]interface{}{
-			"policies": map[string]interface{}{
-				data.Name: data.Data,
-			},
+		"policies": map[string]interface{}{
+			data.Name: data.Data,
 		},
 	}
 

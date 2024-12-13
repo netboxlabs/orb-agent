@@ -4,11 +4,11 @@ go 1.23.2
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.4.3
-	github.com/fatih/structs v1.1.0
 	github.com/go-cmd/cmd v1.4.2
 	github.com/google/uuid v1.4.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/mattn/go-sqlite3 v1.14.22
+	github.com/mitchellh/mapstructure v1.5.1-0.20220423185008-bf980b35cac4
 	github.com/orb-community/orb v0.30.0
 	github.com/pkg/profile v1.7.0
 	github.com/rubenv/sql-migrate v1.7.0
@@ -47,7 +47,6 @@ require (
 	github.com/mainflux/mainflux v0.0.0-20220415135135-92d8fb99bf82 // indirect
 	github.com/mainflux/senml v1.5.0 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
-	github.com/mitchellh/mapstructure v1.5.1-0.20220423185008-bf980b35cac4 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect

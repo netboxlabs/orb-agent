@@ -1,16 +1,8 @@
 package config
 
-type TLS struct {
-	Verify bool `mapstructure:"verify"`
-}
-
 type APIConfig struct {
 	Address string `mapstructure:"address"`
 	Token   string `mapstructure:"token"`
-}
-
-type DBConfig struct {
-	File string `mapstructure:"file"`
 }
 
 type MQTTConfig struct {
@@ -30,32 +22,50 @@ type Cloud struct {
 	Config CloudConfig `mapstructure:"config"`
 	API    APIConfig   `mapstructure:"api"`
 	MQTT   MQTTConfig  `mapstructure:"mqtt"`
+	TLS    struct {
+		Verify bool `mapstructure:"verify"`
+	} `mapstructure:"tls"`
+	DB struct {
+		File string `mapstructure:"file"`
+	} `mapstructure:"db"`
+	Tags map[string]string `mapstructure:"tags"`
 }
 
 type Local struct {
 	Config string `mapstructure:"config"`
 }
 
-type Opentelemetry struct {
-	Host string `mapstructure:"host"`
-	Port int    `mapstructure:"port"`
+type ManagerBackends struct {
+	Cloud Cloud `mapstructure:"orbcloud"`
+	Local Local `mapstructure:"local"`
 }
 
-type Debug struct {
-	Enable bool `mapstructure:"enable"`
+type ManagerConfig struct {
+	Active   string          `mapstructure:"active"`
+	Backends ManagerBackends `mapstructure:"backends"`
+}
+
+type BackendCommons struct {
+	Otel struct {
+		Host      string            `mapstructure:"host"`
+		Port      int               `mapstructure:"port"`
+		AgentTags map[string]string `mapstructure:"agent_tags"`
+	} `mapstructure:"otel"`
+	Diode struct {
+		Target    string `mapstructure:"target"`
+		APIKey    string `mapstructure:"api_key"`
+		AgentName string `mapstructure:"agent_name"`
+	}
 }
 type OrbAgent struct {
-	Backends      map[string]map[string]string      `mapstructure:"backends"`
+	Backends      map[string]map[string]interface{} `mapstructure:"backends"`
 	Policies      map[string]map[string]interface{} `mapstructure:"policies"`
 	Tags          map[string]string                 `mapstructure:"tags"`
-	ConfigManager string                            `mapstructure:"config_manager"`
-	Cloud         Cloud                             `mapstructure:"orbcloud"`
-	Local         Local                             `mapstructure:"local"`
-	TLS           TLS                               `mapstructure:"tls"`
-	DB            DBConfig                          `mapstructure:"db"`
-	Otel          Opentelemetry                     `mapstructure:"otel"`
-	Debug         Debug                             `mapstructure:"debug"`
-	ConfigFile    string                            `mapstructure:"config_file"`
+	ConfigManager ManagerConfig                     `mapstructure:"config_manager"`
+	Debug         struct {
+		Enable bool `mapstructure:"enable"`
+	} `mapstructure:"debug"`
+	ConfigFile string `mapstructure:"config_file"`
 }
 
 type Config struct {

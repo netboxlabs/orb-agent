@@ -4,16 +4,12 @@ visor:
   taps:
 
 orb:
-  config_manager: local
+  config_manager: 
+   active: local
   backends:
-    pktvisor:
-      binary: /usr/local/sbin/pktvisord
-    otel:
-      binary: /usr/local/bin/otelcol-contrib
     device_discovery:
-      binary: device_discovery
-
-discovery:
-  config:
-    target: grpc://localhost:8080/diode
-    api_key: ${DIODE_API_KEY}
+    network_discovery:
+    common:
+      diode:
+        target: grpc://localhost:8080/diode
+        api_key: ${DIODE_API_KEY}

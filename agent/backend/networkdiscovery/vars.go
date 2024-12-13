@@ -5,5 +5,6 @@ import (
 )
 
 func RegisterBackendSpecificVariables(v *viper.Viper) {
-	v.SetDefault("orb.backends.network_discovery.config_file", "/opt/orb/agent.yaml")
+	v.SetDefault("orb.backends.network_discovery.host", DefaultAPIHost)
+	v.SetDefault("orb.backends.network_discovery.port", DefaultAPIPort)
 }

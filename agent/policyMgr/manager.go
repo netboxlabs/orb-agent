@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jmoiron/sqlx"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
 
@@ -41,7 +40,7 @@ func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
 	return a.repo.GetAll()
 }
 
-func New(logger *zap.Logger, c config.Config, db *sqlx.DB) (PolicyManager, error) {
+func New(logger *zap.Logger, c config.Config) (PolicyManager, error) {
 	repo, err := policies.NewMemRepo(logger)
 	if err != nil {
 		return nil, err
