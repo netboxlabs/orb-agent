@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -84,18 +85,17 @@ func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.Polic
 		o.logger.Error("failed to create temporary directory for policy configs", zap.Error(err))
 		return err
 	}
-	// if agentTags, ok := common.Otel["agent_tags"]; ok {
-	// 	o.agentTags = agentTags.(map[string]string)
-	// }
-	// if otelPort, ok := config["otlp_port"]; ok {
-	// 	o.otelReceiverPort, err = strconv.Atoi(otelPort)
-	// 	if err != nil {
-	// 		o.logger.Error("failed to parse otlp port using default", zap.Error(err))
-	// 		o.otelReceiverPort = DefaultPort
-	// 	}
-	// } else {
-	// 	o.otelReceiverPort = DefaultPort
-	// }
+	o.agentTags = common.Otel.AgentTags
+
+	if otelPort, ok := config["otlp_port"]; ok {
+		o.otelReceiverPort, err = strconv.Atoi(otelPort.(string))
+		if err != nil {
+			o.logger.Error("failed to parse otlp port using default", zap.Error(err))
+			o.otelReceiverPort = DefaultPort
+		}
+	} else {
+		o.otelReceiverPort = DefaultPort
+	}
 	if otelHost, ok := config["otlp_host"].(string); ok {
 		o.otelReceiverHost = otelHost
 	} else {

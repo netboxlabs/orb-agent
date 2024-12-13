@@ -7,8 +7,6 @@ orb:
   config_manager: 
    active: local
   backends:
-    pktvisor:
-    otel:
     device_discovery:
     network_discovery:
     common:

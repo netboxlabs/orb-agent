@@ -290,27 +290,18 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	if p.adminAPIPort, prs = config["api_port"].(string); !prs {
 		p.adminAPIPort = DefaultAPIPort
 	}
-	// if agentTags, ok := common.Otel.AgentTags; ok {
-	// 	p.agentTags = a
-	// }
+	p.agentTags = common.Otel.AgentTags
 
-	// for k, v := range otelConfig {
-	// 	switch k {
-	// 	case "Host":
-	// 		p.otelReceiverHost = v.(string)
-	// 	case "Port":
-	// 		if v.(int) == 0 {
-	// 			var err error
-	// 			p.otelReceiverPort, err = p.getFreePort()
-	// 			if err != nil {
-	// 				p.logger.Error("pktvisor otlp startup error", zap.Error(err))
-	// 				return err
-	// 			}
-	// 		} else {
-	// 			p.otelReceiverPort = v.(int)
-	// 		}
-	// 	}
-	// }
+	p.otelReceiverHost = common.Otel.Host
+	p.otelReceiverPort = common.Otel.Port
+	if p.otelReceiverPort == 0 {
+		var err error
+		if p.otelReceiverPort, err = p.getFreePort(); err != nil {
+			p.logger.Error("pktvisor otlp startup error", zap.Error(err))
+			return err
+		}
+	}
+
 	p.logger.Info("configured otel receiver host", zap.String("host", p.otelReceiverHost), zap.Int("port", p.otelReceiverPort))
 
 	return nil
