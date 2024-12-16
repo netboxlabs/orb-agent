@@ -5,7 +5,7 @@ ARG GO_VERSION=1.23
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS builder
 
-RUN apt-get update && apt-get install --yes git make
+RUN apt-get update && apt-get install --yes git make gcc-aarch64-linux-gnu
 
 WORKDIR /src/orb-agent
 
@@ -13,10 +13,12 @@ COPY . .
 
 ARG TARGETOS TARGETARCH
 
+
+
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/orb-agent ./cmd/main.go
+    CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/orb-agent ./cmd/main.go
 
 
 FROM otel/opentelemetry-collector-contrib:${OTEL_TAG} AS otelcol-contrib
