@@ -2,7 +2,7 @@
 Here is a collection of configuration samples supported by orb agent
 
 ## Device-discovery backend
-A sample config file to run device discovery backend. The backend will connect to the Cisco router on 192.168.0.5, retrieve its device, interface and ip information and send its data to diode server running on 192.168.0.100.
+This sample configuration file demonstrates the device discovery backend connecting to a Cisco router at 192.168.0.5. It retrieves device, interface, and IP information, then sends the data to a diode server running at 192.168.0.100.
 
 ```yaml
 orb:
@@ -38,7 +38,7 @@ Run command:
 ```
 
 ### Custom Drivers
-You can specify community or custom NAPALM drivers using the env variable `INSTALL_DRIVERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
+To specify community or custom NAPALM drivers, use the environment variable `INSTALL_DRIVERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
 
 Mounted folder example:
 ```sh
@@ -64,7 +64,7 @@ Run command:
  -e INSTALL_DRIVERS_PATH=/opt/orb/drivers.txt \
  netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
 ```
-The relative path used by `pip install` is the folder that contains `.txt` file.
+The relative path used by `pip install` should point to the directory containing the `.txt` file.
 
 
 ## Network-discovery backend

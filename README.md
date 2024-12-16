@@ -3,12 +3,10 @@ Orb network observability agent, part of the NetBox ecosystem and developed by N
 
 ## Project status
 
-The Orb Agent project is currently in the _Public Preview_ stage. Please
-see [NetBox Labs Product and Feature Lifecycle](https://docs.netboxlabs.com/product_feature_lifecycle/) for more
-details. We actively welcome feedback to help identify and prioritize bugs, new features and areas of improvement.
+The Orb agent project is currently in the Public Preview stage. For details, please see [NetBox Labs Product and Feature Lifecycle](https://docs.netboxlabs.com/product_feature_lifecycle/). We actively welcome feedback to help us identify and prioritize bugs, features, and improvements.
 
 ## Getting Started
-To be able to run `orb-agent` you just need to pull docker from [docker hub](https://hub.docker.com/r/netboxlabs/orb-agent) and
+To run `orb-agent`, first pull the Docker image from [Docker Hub](https://hub.docker.com/r/netboxlabs/orb-agent) and
 
 TBD
 
@@ -17,11 +15,11 @@ docker pull netboxlabs/orb-agent:latest
 ```
 
 ## Orb Agent Configuration
-The configuration of orb agent can be divided into three sections: `Config Manager`, `Backends` and `Policies`.
+The Orb agent's configuration consists of three main sections: `Config Manager`, `Backends`, and `Policies`.
 
 
 ### Config Manager
-The configuration manager is responsible for retrieving policies and passing for each backend.
+The configuration manager is responsible for retrieving policies and passing them to each backend.
 
 ```yaml
 orb:
@@ -30,10 +28,10 @@ orb:
   ...
 ```
 
-Currently, the only supported manager is the `local`. The policy will be retrieved from the same entry config file passed to the agent.
+Currently, only the `local` manager is supported, which retrieves policies from the same configuration file passed to the agent.
 
 ### Backends
-Each orb agent backend has its own capabilities and can be used in diferent ways to observe the network. 
+Each Orb agent backend has its own capabilities and can be used in different ways to monitor the network.
 
 ```yaml
 orb:
@@ -45,7 +43,7 @@ orb:
 ```
 
 ### Commons
-The common section is used to define configuration that will be passed to all backends. Currently, supports passing [diode](https://github.com/netboxlabs/diode) server configuration to every backend
+The common section defines configuration settings that apply to all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server configuration across every backend
 
 ```yaml
     common:
@@ -56,13 +54,12 @@ The common section is used to define configuration that will be passed to all ba
 ```
 
 #### Supported backends
-At the moment, orb agent support the following backends:
+Currently, the Orb agent supports the following backends:
 - [Device Discovery](./docs/backends/device_discovery.md) 
 - [Network Discovery](./docs/backends/network_discovery.md) 
 
 ### Policies
- Policies is the way that backends understand how they should act and collect information. Each backend support multiple policies at same time.
- They should be defined under orb `policies` and the backend for each should be specified as each backend has its own internal way to define and handle policies:
+Policies define how backends should collect and process information. Each backend can handle multiple policies simultaneously. These policies must be defined under the orb `policies` section, with specific backend configurations, since each backend handles policies in its own unique way:
 
  ```yaml
 orb:

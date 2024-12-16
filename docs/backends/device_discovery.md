@@ -1,5 +1,5 @@
 # Device Discovery
-Device discovery backend uses the power of NAPALM to connect to network devices and retrieve network information.
+The device discovery backend leverages NAPALM to connect to network devices and collect network information.
 
 
 ## Configuration
