@@ -126,7 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-    if: needs.get-next-version.outputs.new-release-published == 'true'
+    #if: needs.get-next-version.outputs.new-release-published == 'true'
     env:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
       BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
