@@ -46,7 +46,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | hostname | string | yes  | Device hostname |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
-| optional | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
+| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
 | driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
 
 
