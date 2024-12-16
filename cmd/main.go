@@ -15,10 +15,11 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
-	"github.com/netboxlabs/orb-agent/buildinfo"
+	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
 const (
@@ -34,10 +35,11 @@ func init() {
 	pktvisor.Register()
 	otel.Register()
 	devicediscovery.Register()
+	networkdiscovery.Register()
 }
 
 func Version(_ *cobra.Command, _ []string) {
-	fmt.Printf("orb-agent %s\n", buildinfo.GetVersion())
+	fmt.Printf("orb-agent %s\n", version.GetBuildVersion())
 	os.Exit(0)
 }
 
@@ -73,19 +75,8 @@ func Run(_ *cobra.Command, _ []string) {
 		_ = logger.Sync()
 	}(logger)
 
-	// include pktvisor backend by default if binary is at default location
 	_, err = os.Stat(pktvisor.DefaultBinary)
 	logger.Info("backends loaded", zap.Any("backends", configData.OrbAgent.Backends))
-	if err == nil && configData.OrbAgent.Backends == nil {
-		logger.Info("no backends loaded, adding pktvisor as default")
-		configData.OrbAgent.Backends = make(map[string]map[string]string)
-		configData.OrbAgent.Backends["pktvisor"] = make(map[string]string)
-		configData.OrbAgent.Backends["pktvisor"]["binary"] = pktvisor.DefaultBinary
-		configData.OrbAgent.Backends["pktvisor"]["api_host"] = "localhost"
-		if _, ok := configData.OrbAgent.Backends["pktvisor"]["api_port"]; !ok {
-			configData.OrbAgent.Backends["pktvisor"]["api_port"] = "10853"
-		}
-	}
 
 	configData.OrbAgent.ConfigFile = defaultConfig
 	if len(cfgFiles) > 0 {
@@ -140,21 +131,6 @@ func mergeOrError(path string) {
 	replacer := strings.NewReplacer(".", "_")
 	v.SetEnvKeyReplacer(replacer)
 
-	// note: viper seems to require a default (or a BindEnv) to be overridden by environment variables
-	v.SetDefault("orb.cloud.api.address", "https://orb.live")
-	v.SetDefault("orb.cloud.api.token", "")
-	v.SetDefault("orb.cloud.config.agent_name", "")
-	v.SetDefault("orb.cloud.config.auto_provision", true)
-	v.SetDefault("orb.cloud.mqtt.address", "tls://agents.orb.live:8883")
-	v.SetDefault("orb.cloud.mqtt.id", "")
-	v.SetDefault("orb.cloud.mqtt.key", "")
-	v.SetDefault("orb.cloud.mqtt.channel_id", "")
-	v.SetDefault("orb.db.file", "/opt/orb/orb-agent.db")
-	v.SetDefault("orb.tls.verify", true)
-	v.SetDefault("orb.otel.host", "localhost")
-	v.SetDefault("orb.otel.port", 0)
-	v.SetDefault("orb.debug.enable", Debug)
-
 	if len(path) > 0 {
 		cobra.CheckErr(v.ReadInConfig())
 	}
@@ -177,6 +153,7 @@ func mergeOrError(path string) {
 	backendVarsFunction["pktvisor"] = pktvisor.RegisterBackendSpecificVariables
 	backendVarsFunction["otel"] = otel.RegisterBackendSpecificVariables
 	backendVarsFunction["device_discovery"] = devicediscovery.RegisterBackendSpecificVariables
+	backendVarsFunction["network_discovery"] = networkdiscovery.RegisterBackendSpecificVariables
 
 	// check if backends are configured
 	// if not then add pktvisor as default
@@ -184,7 +161,7 @@ func mergeOrError(path string) {
 		pktvisor.RegisterBackendSpecificVariables(v)
 	} else {
 		for backendName := range v.GetStringMap("orb.backends") {
-			if backend := v.GetStringMap("orb.backends." + backendName); backend != nil {
+			if backend := v.GetStringMap("orb.backends." + backendName); backend != nil && backendName != "common" {
 				backendVarsFunction[backendName](v)
 			}
 		}

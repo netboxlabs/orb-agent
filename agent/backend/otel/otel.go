@@ -5,26 +5,24 @@ import (
 	_ "embed"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
-	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
-	"github.com/netboxlabs/orb-agent/agent/otel"
-	"github.com/netboxlabs/orb-agent/agent/otel/otlpmqttexporter"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 var _ backend.Backend = (*openTelemetryBackend)(nil)
 
-const DefaultPath = "/usr/local/bin/otelcol-contrib"
+const DefaultPath = "otelcol-contrib"
 const DefaultHost = "localhost"
 const DefaultPort = 4317
 
@@ -66,27 +64,31 @@ type openTelemetryBackend struct {
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
-	config map[string]string, otelConfig map[string]interface{}) error {
+	config map[string]interface{}, common config.BackendCommons) error {
 	o.logger = logger
 	o.logger.Info("configuring OpenTelemetry backend")
 	o.policyRepo = repo
 	var err error
 	o.otelReceiverTaps = []string{"otelcol-contrib", "receivers", "processors", "extensions"}
 	o.policyConfigDirectory, err = os.MkdirTemp("", "otel-policies")
-	if path, ok := config["binary"]; ok {
+	if path, ok := config["binary"].(string); ok {
 		o.otelExecutablePath = path
 	} else {
 		o.otelExecutablePath = DefaultPath
+	}
+	_, err = exec.LookPath(o.otelExecutablePath)
+	if err != nil {
+		o.logger.Error("otelcol-contrib: binary not found", zap.Error(err))
+		return err
 	}
 	if err != nil {
 		o.logger.Error("failed to create temporary directory for policy configs", zap.Error(err))
 		return err
 	}
-	if agentTags, ok := otelConfig["agent_tags"]; ok {
-		o.agentTags = agentTags.(map[string]string)
-	}
+	o.agentTags = common.Otel.AgentTags
+
 	if otelPort, ok := config["otlp_port"]; ok {
-		o.otelReceiverPort, err = strconv.Atoi(otelPort)
+		o.otelReceiverPort, err = strconv.Atoi(otelPort.(string))
 		if err != nil {
 			o.logger.Error("failed to parse otlp port using default", zap.Error(err))
 			o.otelReceiverPort = DefaultPort
@@ -94,7 +96,7 @@ func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.Polic
 	} else {
 		o.otelReceiverPort = DefaultPort
 	}
-	if otelHost, ok := config["otlp_host"]; ok {
+	if otelHost, ok := config["otlp_host"].(string); ok {
 		o.otelReceiverHost = otelHost
 	} else {
 		o.otelReceiverHost = DefaultHost
@@ -151,7 +153,6 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		o.logger.Error("error during getting current version", zap.Error(err))
 		return err
 	}
-	//o.receiveOtlp()
 	o.logger.Info("starting open-telemetry backend using version", zap.String("version", currentVersion))
 	policiesData, err := o.policyRepo.GetAll()
 	if err != nil {
@@ -213,70 +214,4 @@ func (o *openTelemetryBackend) GetRunningStatus() (backend.RunningStatus, string
 		return backend.Running, fmt.Sprintf("opentelemetry backend running with %d policies", amountCollectors), nil
 	}
 	return backend.Waiting, "opentelemetry backend is waiting for policy to come to start running", nil
-}
-
-func (o *openTelemetryBackend) createOtlpMetricMqttExporter(ctx context.Context, cancelFunc context.CancelCauseFunc) (exporter.Metrics, error) {
-	bridgeService := otel.NewBridgeService(ctx, cancelFunc, &o.policyRepo, o.agentTags)
-	var cfg component.Config
-	if o.mqttClient != nil {
-		cfg = otlpmqttexporter.CreateConfigClient(o.mqttClient, o.otlpMetricsTopic, "", bridgeService)
-	} else {
-		cfg = otlpmqttexporter.CreateConfig(o.mqttConfig.Address, o.mqttConfig.Id, o.mqttConfig.Key,
-			o.mqttConfig.ChannelID, "", o.otlpMetricsTopic, bridgeService)
-	}
-
-	set := otlpmqttexporter.CreateDefaultSettings(o.logger)
-	// Create the OTLP metrics exporter that'll receive and verify the metrics produced.
-	return otlpmqttexporter.CreateMetricsExporter(ctx, set, cfg)
-
-}
-
-func (o *openTelemetryBackend) createOtlpTraceMqttExporter(ctx context.Context, cancelFunc context.CancelCauseFunc) (exporter.Traces, error) {
-	bridgeService := otel.NewBridgeService(ctx, cancelFunc, &o.policyRepo, o.agentTags)
-	if o.mqttClient != nil {
-		cfg := otlpmqttexporter.CreateConfigClient(o.mqttClient, o.otlpTracesTopic, "", bridgeService)
-		set := otlpmqttexporter.CreateDefaultSettings(o.logger)
-		// Create the OTLP metrics metricsExporter that'll receive and verify the metrics produced.
-		tracerExporter, err := otlpmqttexporter.CreateTracesExporter(ctx, set, cfg)
-		if err != nil {
-			return nil, err
-		}
-		return tracerExporter, nil
-	} else {
-		cfg := otlpmqttexporter.CreateConfig(o.mqttConfig.Address, o.mqttConfig.Id, o.mqttConfig.Key,
-			o.mqttConfig.ChannelID, "", o.otlpTracesTopic, bridgeService)
-		set := otlpmqttexporter.CreateDefaultSettings(o.logger)
-		// Create the OTLP metrics exporter that'll receive and verify the metrics produced.
-		tracerExporter, err := otlpmqttexporter.CreateTracesExporter(ctx, set, cfg)
-		if err != nil {
-			return nil, err
-		}
-		return tracerExporter, nil
-	}
-
-}
-
-func (o *openTelemetryBackend) createOtlpLogsMqttExporter(ctx context.Context, cancelFunc context.CancelCauseFunc) (exporter.Logs, error) {
-	bridgeService := otel.NewBridgeService(ctx, cancelFunc, &o.policyRepo, o.agentTags)
-	if o.mqttClient != nil {
-		cfg := otlpmqttexporter.CreateConfigClient(o.mqttClient, o.otlpLogsTopic, "", bridgeService)
-		set := otlpmqttexporter.CreateDefaultSettings(o.logger)
-		// Create the OTLP metrics metricsExporter that'll receive and verify the metrics produced.
-		exporter, err := otlpmqttexporter.CreateLogsExporter(ctx, set, cfg)
-		if err != nil {
-			return nil, err
-		}
-		return exporter, nil
-	} else {
-		cfg := otlpmqttexporter.CreateConfig(o.mqttConfig.Address, o.mqttConfig.Id, o.mqttConfig.Key,
-			o.mqttConfig.ChannelID, "", o.otlpLogsTopic, bridgeService)
-		set := otlpmqttexporter.CreateDefaultSettings(o.logger)
-		// Create the OTLP metrics exporter that'll receive and verify the metrics produced.
-		exporter, err := otlpmqttexporter.CreateLogsExporter(ctx, set, cfg)
-		if err != nil {
-			return nil, err
-		}
-		return exporter, nil
-	}
-
 }

@@ -9,14 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/netboxlabs/orb-agent/agent"
-	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
-	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/pkg/profile"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"github.com/netboxlabs/orb-agent/agent"
+	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
 func Test_e2e_orbAgent_ConfigFile(t *testing.T) {
@@ -69,8 +70,8 @@ func Test_main(t *testing.T) {
 	// include pktvisor backend by default if binary is at default location
 	_, err = os.Stat(pktvisor.DefaultBinary)
 	if err == nil && cfg.OrbAgent.Backends == nil {
-		cfg.OrbAgent.Backends = make(map[string]map[string]string)
-		cfg.OrbAgent.Backends["pktvisor"] = make(map[string]string)
+		cfg.OrbAgent.Backends = make(map[string]map[string]interface{})
+		cfg.OrbAgent.Backends["pktvisor"] = make(map[string]interface{})
 		cfg.OrbAgent.Backends["pktvisor"]["binary"] = pktvisor.DefaultBinary
 		if len(cfgFiles) > 0 {
 			cfg.OrbAgent.Backends["pktvisor"]["config_file"] = "/home/lpegoraro/workspace/orb/localconfig/config.yaml"

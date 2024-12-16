@@ -25,7 +25,7 @@ import (
 var _ backend.Backend = (*pktvisorBackend)(nil)
 
 const (
-	DefaultBinary       = "/usr/local/sbin/pktvisord"
+	DefaultBinary       = "pktvisord"
 	ReadinessBackoff    = 10
 	ReadinessTimeout    = 10
 	ApplyPolicyTimeout  = 10
@@ -233,7 +233,6 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	}
 
 	p.logger.Info("pktvisor process started", zap.Int("pid", status.PID))
-	//p.receiveOtlp()
 
 	var readinessError error
 	for backoff := 0; backoff < ReadinessBackoff; backoff++ {
@@ -274,44 +273,35 @@ func (p *pktvisorBackend) Stop(ctx context.Context) error {
 }
 
 // Configure this will set configurations, but if not set, will use the following defaults
-func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]string, otelConfig map[string]interface{}) error {
+func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]interface{}, common config.BackendCommons) error {
 	p.logger = logger
 	p.policyRepo = repo
 
 	var prs bool
-	if p.binary, prs = config["binary"]; !prs {
+	if p.binary, prs = config["binary"].(string); !prs {
 		p.binary = DefaultBinary
 	}
-	if p.configFile, prs = config["config_file"]; !prs {
+	if p.configFile, prs = config["config_file"].(string); !prs {
 		p.configFile = DefaultConfigPath
 	}
-	if p.adminAPIHost, prs = config["api_host"]; !prs {
+	if p.adminAPIHost, prs = config["api_host"].(string); !prs {
 		p.adminAPIHost = DefaultAPIHost
 	}
-	if p.adminAPIPort, prs = config["api_port"]; !prs {
+	if p.adminAPIPort, prs = config["api_port"].(string); !prs {
 		p.adminAPIPort = DefaultAPIPort
 	}
-	if agentTags, ok := otelConfig["agent_tags"]; ok {
-		p.agentTags = agentTags.(map[string]string)
-	}
+	p.agentTags = common.Otel.AgentTags
 
-	for k, v := range otelConfig {
-		switch k {
-		case "Host":
-			p.otelReceiverHost = v.(string)
-		case "Port":
-			if v.(int) == 0 {
-				var err error
-				p.otelReceiverPort, err = p.getFreePort()
-				if err != nil {
-					p.logger.Error("pktvisor otlp startup error", zap.Error(err))
-					return err
-				}
-			} else {
-				p.otelReceiverPort = v.(int)
-			}
+	p.otelReceiverHost = common.Otel.Host
+	p.otelReceiverPort = common.Otel.Port
+	if p.otelReceiverPort == 0 {
+		var err error
+		if p.otelReceiverPort, err = p.getFreePort(); err != nil {
+			p.logger.Error("pktvisor otlp startup error", zap.Error(err))
+			return err
 		}
 	}
+
 	p.logger.Info("configured otel receiver host", zap.String("host", p.otelReceiverHost), zap.Int("port", p.otelReceiverPort))
 
 	return nil
