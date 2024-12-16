@@ -4,9 +4,9 @@ on:
   push:
     branches: [ release ]
     paths:
-        - "agent/**"
-        - "cmd/**"
-        - "!agent/docker/**"
+      - "agent/**"
+      - "cmd/**"
+      - "!agent/docker/**"
 
 concurrency:
   group: ${{ github.workflow }}
