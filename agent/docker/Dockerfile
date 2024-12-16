@@ -13,11 +13,10 @@ COPY . .
 
 ARG TARGETOS TARGETARCH
 
-
-
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
+    CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
     CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/orb-agent ./cmd/main.go
 
 
