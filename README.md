@@ -74,7 +74,7 @@ orb:
  ```
 
  ## Configuration samples
- [Here](./docs/config_samples.md) you can find a sample collections on how you can configure orb agent to collect network information.
+[Here](./docs/config_samples.md) you can find sample configurations showing how to configure the orb agent to collect network information.
 
 ## Required Notice
 
