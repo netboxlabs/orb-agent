@@ -18,15 +18,6 @@ COMMIT_HASH = $(shell git rev-parse --short HEAD)
 OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
 OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
 
-
-define run_test
-	 go test -mod=mod -short -race -count 1 -tags test $(shell go list ./... | grep -v 'cmd' | grep '$(SERVICE)')
-endef
-
-define run_test_coverage
-	 go test -mod=mod -short -race -count 1 -tags test -cover -coverprofile=coverage.out -covermode=atomic $(shell go list ./... | grep -v 'cmd' | grep '$(SERVICE)')
-endef
-
 all: platform
 
 .PHONY: all agent agent_bin
@@ -44,22 +35,17 @@ ifdef pv
 	docker volume ls -f name=orb -f dangling=true -q | xargs -r docker volume rm
 endif
 
-test:
-	go test -mod=mod -short -race -count 1 -tags test $(shell go list ./... | grep -v 'cmd')
-
-run_test_service: test_service $(2)
-
-run_test_service_cov: test_service_cov $(2)
-
-test_service:
-	$(call run_test,$(@))
-
-test_service_cov:
-	$(call run_test_coverage,$(@))
 
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -o ${BUILD_DIR}/orb-agent cmd/main.go
+
+.PHONY: test-coverage
+test-coverage:
+	@mkdir -p .coverage
+	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd" | tparse -format=markdown > .coverage/test-report.md
+	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
+	@go tool cover -func=.coverage/cover.out | grep total | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 
 agent:
 	docker build --no-cache \

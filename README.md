@@ -1,5 +1,5 @@
 # orb-agent
-TBD
+Orb network observability agent, part of the NetBox ecosystem and developed by NetBox Labs
 
 ## Getting Started
 1. Clone the orb-agent project to your local environment:
