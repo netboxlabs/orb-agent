@@ -3,9 +3,9 @@ ARG OTEL_TAG=0.111.0
 ARG NETWORK_DISCOVERY_TAG=latest
 ARG GO_VERSION=1.23
 
-FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS builder
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 
-RUN apt-get update && apt-get install --yes git make gcc-aarch64-linux-gnu
+RUN apk update && apk add --no-cache build-base make git
 
 WORKDIR /src/orb-agent
 
@@ -16,7 +16,6 @@ ARG TARGETOS TARGETARCH
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    #CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
     CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/orb-agent ./cmd/main.go
 
 
