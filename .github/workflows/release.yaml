@@ -162,7 +162,7 @@ jobs:
           cache-to: type=gha,mode=max
           tags: |
             netboxlabs/${{ env.APP_NAME }}:latest
-            netboxlabs/${{ env.APP_NAME }}:${{ env.BUILD_VERSION }}
+            netboxlabs/${{ env.APP_NAME }}:1.0.0
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
 
