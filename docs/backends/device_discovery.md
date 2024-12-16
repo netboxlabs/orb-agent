@@ -3,7 +3,7 @@ The device discovery backend leverages NAPALM to connect to network devices and 
 
 
 ## Configuration
-At backend startup time, you should configure the backend to point where it should sent data to.
+At startup, configure the backend to specify where it should send data.
 
 
 ```yaml
@@ -11,7 +11,7 @@ orb:
   backends:
     common:
       diode:
-        target: grpc://192.168.31.114:8080/diode
+        target: grpc://192.168.0.100:8080/diode
         api_key: ${DIODE_API_KEY}
         agent_name: agent01
     device_discovery:
@@ -21,4 +21,56 @@ orb:
 ```
 
 ## Policy
-Device discovery policy can be splited into config and scope. Config defines data for the whole scope and g
+Device discovery policy can be splited into config and scope. 
+
+### Config
+Config defines data for the whole scope and is optional overall.
+
+| Parameter | Type | Required | Description |
+|:---------:|:----:|:--------:|:-----------:|
+| schedule | cron format | no  |  If defined, it will execute scope following cron schedule time. If not defined, it will execute scope only once  |
+| defaults | map | no  |  key value pair that defines default values  |
+
+#### Defaults
+Current supported defaults:
+
+|  Key  |  Description  |
+|:-----:|:-------------:|
+| site  |  NetBox Site Name |
+
+### Scope
+The scope defines a list of devices that can be accessed and pulled data. 
+
+| Parameter | Type | Required | Description |
+|:---------:|:----:|:--------:|:-----------:|
+| hostname | string | yes  | Device hostname |
+| username | string | yes  | Device username  |
+| password | string | yes  | Device username's password |
+| optional | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
+| driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
+
+
+
+### Sample
+A policy sample with all parameters supported by device discovery backend.
+```yaml
+orb:
+  ...
+  policies:
+    device_discovery:
+      discovery_1:
+        config:
+          schedule: "* * * * *"
+          defaults:
+            site: New York NY
+        scope:
+          - driver: ios
+            hostname: 192.168.0.5
+            username: admin
+            password: ${PASS}
+            optional_args:
+               canonical_int: True
+          - hostname: myhost.com
+            username: remote
+            password: 12345
+```
