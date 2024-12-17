@@ -3,7 +3,7 @@ The device discovery backend leverages NAPALM to connect to network devices and 
 
 
 ## Configuration
-At startup, configure the backend to specify where it should send data.
+The `device_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
 
 
 ```yaml
