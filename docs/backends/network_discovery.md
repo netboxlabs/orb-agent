@@ -1,5 +1,5 @@
 # Network Discovery
-The network discovery backend leverages NMAP to scan network and discovers IP information.
+The network discovery backend leverages NMAP to scan networks and discover IP information.
 
 
 ## Configuration
@@ -43,7 +43,7 @@ Current supported defaults:
 | description  |  NetBox Description data to be added to discovered IP |
 
 ### Scope
-The scope defines a list of devices that can be accessed and pulled data. 
+The scope defines a list of targets to be scanned.
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
