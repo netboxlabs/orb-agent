@@ -1,114 +1,79 @@
-# orb-agent
-Orb network observability agent, part of the NetBox ecosystem and developed by NetBox Labs
+# Orb Agent - the NetBox Discovery agent
+Orb agent is a component of the NetBox Discovery solution. It provides network discovery and observability capabilities and is developed by NetBox Labs.
+
+## Project status
+
+The Orb agent project is currently in the Public Preview stage. For details, please see [NetBox Labs Product and Feature Lifecycle](https://docs.netboxlabs.com/product_feature_lifecycle/). We actively welcome feedback to help us identify and prioritize bugs, features, and improvements.
 
 ## Getting Started
-1. Clone the orb-agent project to your local environment:
+To run `orb-agent`, first pull the Docker image from [Docker Hub](https://hub.docker.com/r/netboxlabs/orb-agent):
+
 
 ```sh
-git clone https://github.com/netboxlabs/orb-agent.git
+docker pull netboxlabs/orb-agent:latest
 ```
 
-2. Enter the orb-agent directory and build the orb-agent docker image:
-```sh
-make agent
-```
-
-3. Start the agent, passing your config file(s):
-```sh
- docker run -v /local/orb:/opt/orb/ netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
-```
-
-## Config file samples
-
-### Device-discovery backend
-
-```yaml
-orb:
-  config_manager: 
-    active: local
-  backends:
-    device_discovery:
-    common:
-      diode:
-        target: grpc://192.168.31.114:8080/diode
-        api_key: ${DIODE_API_KEY}
-        agent_name: agent01
-  policies:
-    device_discovery:
-      discovery_1:
-        config:
-          schedule: "0 */2 * * *"
-          defaults:
-            site: New York NY
-        scope:
-          - hostname: 10.90.0.50
-            username: admin
-            password: ${PASS}
-```
-
-Run command:
-```sh
- docker run -v /local/orb:/opt/orb/ \
- -e DIODE_API_KEY={YOUR_API_KEY} \
- -e PASS={DEVICE_PASSWORD} \
- netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
-```
-
-#### Custom Drivers
-You can specify community or custom NAPALM drivers using the env variable `INSTALL_DRIVERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
-
-Mounted folder example:
-```sh
-/local/orb/
-├── agent.yaml
-├── drivers.txt
-├── napalm-mos/
-└── napalm-ros-0.3.2.tar.gz
-```
-
-Example `drivers.txt`:
-```txt
-napalm-sros==1.0.2 # try install from pypi
-napalm-ros-0.3.2.tar.gz # try install from a tar.gz
-./napalm-mos # try to install from a folder that contains project.toml
-```
-
-Run command:
-```sh
- docker run -v /local/orb:/opt/orb/ \
- -e DIODE_API_KEY={YOUR_API_KEY} \
- -e PASS={DEVICE_PASSWORD} \
- -e INSTALL_DRIVERS_PATH=/opt/orb/drivers.txt \
- netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
-```
-The relative path used by `pip install` is the folder that contains `.txt` file.
+## Orb Agent Configuration
+To run, the Orb agent requires a configuration file. This configuration file consists of three main sections: `Config Manager`, `Backends`, and `Policies`.
 
 
-### Network-discovery backend
+### Config Manager
+The `Config Manager` section specifies how Orb agent should retrieve it's configuration information. The configuration manager is responsible for processing the configuration to retrieve policies and pass them to the appropriate backend.
+
 ```yaml
 orb:
   config_manager:
     active: local
-  backends:
-    network_discovery:
-    common:
-      diode:
-        target: grpc://192.168.31.114:8080/diode
-        api_key: ${DIODE_API_KEY}
-        agent_name: agent02
-  policies:
-    network_discovery:
-      policy_1:
-        config:
-          schedule: "0 */2 * * *"
-          timeout: 5
-        scope:
-          targets: [192.168.1.1/22, google.com]
+  ...
 ```
 
-Run command:
-```sh
- docker run -v /local/orb:/opt/orb/ \
- -e DIODE_API_KEY={YOUR_API_KEY} \
- netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
+Currently, only the `local` manager is supported, which retrieves policies from the local configuration file passed to the agent.
+
+### Backends
+The `Backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
+
+```yaml
+orb:
+  ...
+  backends:
+    network_discovery:
+    ...
 ```
+Only the `network_discovery` and `device_discovery` backends are currently supported. They do not require any special configuration.
+- [Device Discovery](./docs/backends/device_discovery.md) 
+- [Network Discovery](./docs/backends/network_discovery.md)
+### Commons
+A special `common` subsection under `Backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings to all backends.
+
+```yaml
+  backends:
+      ...
+      common:
+      diode:
+        target: grpc://192.168.0.22:8080/diode
+        api_key: ${DIODE_API_KEY}
+        agent_name: agent01
+```
+
+
+### Policies
+The `Policies` section specifies what discovery policies should be passed to each backend. Policies define specific settings for discovery (such as scheduling and default properties) and the scope (targets). Backends can run multiple policies simultaneously, but for each backend all policies must have a unique name. These policies are defined in the `policies` section and are grouped under a subsection for each backend:
+
+ ```yaml
+orb:
+  ...
+  policies:
+    device_discovery:
+      device_policy_1:
+        # see device_discovery section
+    network_discovery:
+      network_policy_1:
+       # see network_discovery section
+ ```
+
+ ## Configuration samples
+You can find sample configurations [here](./docs/config_samples.md) of how to configure Orb agent to run network and device discoveries.
+
+## Required Notice
+
+Copyright NetBox Labs, Inc.

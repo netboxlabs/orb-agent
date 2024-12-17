@@ -197,7 +197,7 @@ jobs:
               "branches": "release",
               "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
               "debug": "true",
-              "tagFormat": "/v${version}",
+              "tagFormat": "v${version}",
               "plugins": [
                 ["semantic-release-export-data"],
                 ["@semantic-release/commit-analyzer", {
