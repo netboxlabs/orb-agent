@@ -49,10 +49,10 @@ A special `common` subsection under `Backends` defines configuration settings th
   backends:
       ...
       common:
-      diode:
-        target: grpc://192.168.0.22:8080/diode
-        api_key: ${DIODE_API_KEY}
-        agent_name: agent01
+        diode:
+          target: grpc://192.168.0.22:8080/diode
+          api_key: ${DIODE_API_KEY}
+          agent_name: agent01
 ```
 
 
@@ -65,10 +65,10 @@ orb:
   policies:
     device_discovery:
       device_policy_1:
-        # see device_discovery section
+        # see docs/backends/device_discovery.md
     network_discovery:
       network_policy_1:
-       # see network_discovery section
+       # see docs/backends/network_discovery.md
  ```
 
  ## Configuration samples
