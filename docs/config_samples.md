@@ -2,7 +2,7 @@
 Here is a collection of configuration samples supported by orb agent
 
 ## Device-discovery backend
-This sample configuration file demonstrates the device discovery backend connecting to a Cisco router at 192.168.0.5. It retrieves device, interface, and IP information, then sends the data to a diode server running at 192.168.0.100.
+This sample configuration file demonstrates the device discovery backend connecting to a Cisco router at 192.168.0.5. It retrieves device, interface, and IP information, then sends the data to a [diode](https://github.com/netboxlabs/diode) server running at 192.168.0.100.
 
 ```yaml
 orb:
@@ -34,7 +34,7 @@ Run command:
  docker run -v /local/orb:/opt/orb/ \
  -e DIODE_API_KEY={YOUR_API_KEY} \
  -e PASS={DEVICE_PASSWORD} \
- netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
+ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
 ### Custom Drivers
@@ -62,7 +62,7 @@ Run command:
  -e DIODE_API_KEY={YOUR_API_KEY} \
  -e PASS={DEVICE_PASSWORD} \
  -e INSTALL_DRIVERS_PATH=/opt/orb/drivers.txt \
- netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
+ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 The relative path used by `pip install` should point to the directory containing the `.txt` file.
 
@@ -93,5 +93,5 @@ Run command:
 ```sh
  docker run -v /local/orb:/opt/orb/ \
  -e DIODE_API_KEY={YOUR_API_KEY} \
- netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml
+ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
