@@ -14,7 +14,7 @@ docker pull netboxlabs/orb-agent:latest
 ```
 
 ## Orb Agent Configuration
-The Orb agent's configuration consists of three main sections: `Config Manager`, `Backends`, and `Policies`.
+To run, the Orb agent requires a configuration file. This configuration file consists of three main sections: `Config Manager`, `Backends`, and `Policies`.
 
 
 ### Config Manager
@@ -27,7 +27,7 @@ orb:
   ...
 ```
 
-Currently, only the `local` manager is supported, which retrieves policies from the same configuration file passed to the agent.
+Currently, only the `local` manager is supported, which retrieves policies from the local configuration file passed to the agent.
 
 ### Backends
 The `Backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
@@ -67,7 +67,7 @@ orb:
   ...
   policies:
     device_discovery:
-      policy_1:
+      device_policy_1:
         # see device_discovery section
     network_discovery:
       network_policy_1:
