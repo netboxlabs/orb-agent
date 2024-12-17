@@ -47,7 +47,9 @@ Only the `network_discovery` and `device_discovery` backends are currently suppo
 A special `common` subsection under `Backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings to all backends.
 
 ```yaml
-    common:
+  backends:
+      ...
+      common:
       diode:
         target: grpc://192.168.0.22:8080/diode
         api_key: ${DIODE_API_KEY}
