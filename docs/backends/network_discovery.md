@@ -3,7 +3,7 @@ The network discovery backend leverages NMAP to scan network and discovers IP in
 
 
 ## Configuration
-At startup, configure the backend to specify where it should send data.
+The `network_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
 
 
 ```yaml
@@ -23,7 +23,7 @@ orb:
 ```
 
 ## Policy
-Network discovery policy can be splited into config and scope. 
+Network discovery policies are broken down into two subsections: `config` and `scope`.
 
 ### Config
 Config defines data for the whole scope and is optional overall.
@@ -47,13 +47,13 @@ The scope defines a list of devices that can be accessed and pulled data.
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| targets | list | yes  | The host targets that NMAP will run over. |
+| targets | list | yes  | The targets that NMAP will scan. These can be specified as IP addresses (192.168.1.1), IP ranges (192.168.1.10-20), IP subnets with mask (192.168.1.0/24) or resolvable domain names. |
 
 
 
 
 ### Sample
-A policy sample with all parameters supported by network discovery backend.
+A sample policy including all parameters supported by the network discovery backend.
 ```yaml
 orb:
   ...
@@ -69,6 +69,8 @@ orb:
         scope:
           targets: 
             - 192.168.7.32
+            - 192.168.7.30-40 # IP range
+            - 192.168.7.0/24 # IP subnet
             - google.com #dns lookup
 
 ```

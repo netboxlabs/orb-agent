@@ -21,7 +21,7 @@ orb:
 ```
 
 ## Policy
-Device discovery policy can be splited into config and scope. 
+Device discovery policies are broken down into two subsections: `config` and `scope`. 
 
 ### Config
 Config defines data for the whole scope and is optional overall.
@@ -52,7 +52,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 
 
 ### Sample
-A policy sample with all parameters supported by device discovery backend.
+A sample policy including all parameters supported by the device discovery backend.
 ```yaml
 orb:
   ...
