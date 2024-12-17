@@ -36,7 +36,6 @@ The `Backends` section specifies what Orb agent backends should be enabled. Each
 orb:
   ...
   backends:
-    common:
     network_discovery:
     ...
 ```
