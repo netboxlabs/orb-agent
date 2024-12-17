@@ -56,10 +56,6 @@ A special `common` subsection under `Backends` defines configuration settings th
         agent_name: agent01
 ```
 
-#### Supported backends
-Currently, the Orb agent supports the following backends:
-- [Device Discovery](./docs/backends/device_discovery.md) 
-- [Network Discovery](./docs/backends/network_discovery.md) 
 
 ### Policies
 The `Policies` section specifies what discovery policies should be passed to each backend. Policies define specific settings for discovery (such as scheduling and default properties) and the scope (targets). Backends can run multiple policies simultaneously, but for each backend all policies must have a unique name. These policies are defined in the `policies` section and are grouped under a subsection for each backend:
