@@ -77,21 +77,27 @@ func (cc *cloudConfigManager) request(address string, token string, response int
 	if getErr != nil {
 		return getErr
 	}
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			cc.logger.Error("failed to close response body", zap.Error(err))
+		}
+	}()
+
 	if (res.StatusCode < 200) || (res.StatusCode > 299) {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return errors.New(fmt.Sprintf("expected 2xx status code, no or invalid body: %d", res.StatusCode))
+			return fmt.Errorf("expected 2xx status code, no or invalid body: %d", res.StatusCode)
 		}
 		if body[0] == '{' {
 			var jsonBody map[string]interface{}
 			err := json.Unmarshal(body, &jsonBody)
 			if err == nil {
 				if errMsg, ok := jsonBody["error"]; ok {
-					return errors.New(fmt.Sprintf("%d %s", res.StatusCode, errMsg))
+					return fmt.Errorf("%d %s", res.StatusCode, errMsg)
 				}
 			}
 		}
-		return errors.New(fmt.Sprintf("%d %s", res.StatusCode, body))
+		return fmt.Errorf("%d %s", res.StatusCode, body)
 	}
 
 	err = json.NewDecoder(res.Body).Decode(&response)

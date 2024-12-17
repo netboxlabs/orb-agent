@@ -1,0 +1,37 @@
+zrun:
+  timeout: 5m
+  modules-download-mode: readonly
+
+output:
+  formats: colored-line-number
+
+linters:
+  enable:
+    - revive
+    - errcheck
+    - unused
+    - staticcheck
+    - ineffassign
+    - govet
+    - gosimple
+    - bodyclose
+    - gci
+
+issues:
+  exclude-use-default: false
+  exclude-rules:
+    - path: /*.go
+      text: "package-comments: should have a package comment"
+      linters:
+        - revive
+
+severity:
+  default-severity: error
+
+linters-settings:
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/netboxlabs/orb-agent)
+    custom-order: true

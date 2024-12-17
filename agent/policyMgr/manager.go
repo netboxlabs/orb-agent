@@ -13,6 +13,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
+// PolicyManager is the interface for managing policies
 type PolicyManager interface {
 	ManagePolicy(payload fleet.AgentPolicyRPCPayload)
 	RemovePolicyDataset(policyID string, datasetID string, be backend.Backend)
@@ -32,20 +33,21 @@ type policyManager struct {
 	repo policies.PolicyRepo
 }
 
-func (a *policyManager) GetRepo() policies.PolicyRepo {
-	return a.repo
-}
-
-func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
-	return a.repo.GetAll()
-}
-
+// New creates a new instance of PolicyManager
 func New(logger *zap.Logger, c config.Config) (PolicyManager, error) {
 	repo, err := policies.NewMemRepo(logger)
 	if err != nil {
 		return nil, err
 	}
 	return &policyManager{logger: logger, config: c, repo: repo}, nil
+}
+
+func (a *policyManager) GetRepo() policies.PolicyRepo {
+	return a.repo
+}
+
+func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
+	return a.repo.GetAll()
 }
 
 func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
@@ -96,14 +98,13 @@ func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
 			if currentPolicy.Backend == pd.Backend && currentPolicy.Version >= pd.Version && currentPolicy.State == policies.Running {
 				a.logger.Info("a better version of this policy has already been applied, skipping", zap.String("policy_id", pd.ID), zap.String("policy_name", pd.Name), zap.String("attempted_version", fmt.Sprint(pd.Version)), zap.String("current_version", fmt.Sprint(currentPolicy.Version)))
 				return
-			} else {
-				updatePolicy = true
 			}
+			updatePolicy = true
 			if currentPolicy.Name != pd.Name {
 				pd.PreviousPolicyData = &policies.PolicyData{Name: currentPolicy.Name}
 			}
 			pd.Datasets = currentPolicy.Datasets
-			pd.GroupIds = currentPolicy.GroupIds
+			pd.GroupIDs = currentPolicy.GroupIDs
 		} else {
 			// new policy we have not seen before, associate with this dataset
 			// on first time we see policy, we *require* dataset
@@ -114,7 +115,7 @@ func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
 			pd.Datasets = map[string]bool{payload.DatasetID: true}
 
 			if payload.AgentGroupID != "" {
-				pd.GroupIds = map[string]bool{payload.AgentGroupID: true}
+				pd.GroupIDs = map[string]bool{payload.AgentGroupID: true}
 			}
 
 		}
@@ -139,7 +140,7 @@ func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
 		if err != nil {
 			a.logger.Error("policy failed to be removed", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name), zap.Error(err))
 		}
-		break
+		return
 	default:
 		a.logger.Error("unknown policy action, ignored", zap.String("action", payload.Action))
 	}
