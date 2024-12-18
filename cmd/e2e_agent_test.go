@@ -16,7 +16,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/netboxlabs/orb-agent/agent"
-	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
@@ -35,7 +34,7 @@ func Test_e2e_orbAgent_ConfigFile(t *testing.T) {
 	}
 
 	runCmd.Flags().StringSliceVarP(&cfgFiles, "config", "c", []string{}, "Path to config files (may be specified multiple times)")
-	runCmd.PersistentFlags().BoolVarP(&Debug, "debug", "d", false, "Enable verbose (debug level) output")
+	runCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "Enable verbose (debug level) output")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.SetArgs([]string{"run", "-d", "-c", "/home/lpegoraro/workspace/orb/localconfig/config.yaml"})
@@ -45,11 +44,8 @@ func Test_e2e_orbAgent_ConfigFile(t *testing.T) {
 		t.Fail()
 	}
 
-	select {
-	case <-ctx.Done():
-		cancelF()
-		return
-	}
+	<-ctx.Done()
+	cancelF()
 }
 
 func Test_main(t *testing.T) {
@@ -67,21 +63,10 @@ func Test_main(t *testing.T) {
 
 	cfg.OrbAgent.Debug.Enable = true
 
-	// include pktvisor backend by default if binary is at default location
-	_, err = os.Stat(pktvisor.DefaultBinary)
-	if err == nil && cfg.OrbAgent.Backends == nil {
-		cfg.OrbAgent.Backends = make(map[string]map[string]interface{})
-		cfg.OrbAgent.Backends["pktvisor"] = make(map[string]interface{})
-		cfg.OrbAgent.Backends["pktvisor"]["binary"] = pktvisor.DefaultBinary
-		if len(cfgFiles) > 0 {
-			cfg.OrbAgent.Backends["pktvisor"]["config_file"] = "/home/lpegoraro/workspace/orb/localconfig/config.yaml"
-		}
-	}
-
 	// logger
 	var logger *zap.Logger
 	atomicLevel := zap.NewAtomicLevel()
-	if Debug {
+	if debug {
 		atomicLevel.SetLevel(zap.DebugLevel)
 	} else {
 		atomicLevel.SetLevel(zap.InfoLevel)
@@ -107,7 +92,7 @@ func Test_main(t *testing.T) {
 
 	// handle signals
 	done := make(chan bool, 1)
-	rootCtx, cancelFunc := context.WithTimeout(context.WithValue(context.Background(), "routine", "mainRoutine"), 15*time.Minute)
+	rootCtx, cancelFunc := context.WithTimeout(context.WithValue(context.Background(), routineKey, "mainRoutine"), 15*time.Minute)
 
 	go func() {
 		sigs := make(chan os.Signal, 1)

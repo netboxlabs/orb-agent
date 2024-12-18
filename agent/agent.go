@@ -9,7 +9,6 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/mitchellh/mapstructure"
 	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
@@ -20,8 +19,9 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
-var ErrMqttConnection = errors.New("failed to connect to a broker")
+const routineKey config.ContextKey = "routine"
 
+// Agent is the interface that all agents must implement
 type Agent interface {
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
 	Stop(ctx context.Context)
@@ -33,7 +33,7 @@ type orbAgent struct {
 	logger            *zap.Logger
 	config            config.Config
 	client            mqtt.Client
-	agent_id          string
+	agentID           string
 	backends          map[string]backend.Backend
 	backendState      map[string]*backend.State
 	backendsCommon    config.BackendCommons
@@ -47,40 +47,29 @@ type orbAgent struct {
 	heartbeatCancel context.CancelFunc
 
 	// Agent RPC channel, configured from command line
-	baseTopic         string
-	rpcToCoreTopic    string
-	rpcFromCoreTopic  string
-	capabilitiesTopic string
-	heartbeatsTopic   string
-	logTopic          string
+	baseTopic        string
+	rpcFromCoreTopic string
+	heartbeatsTopic  string
 
 	// Retry Mechanism to ensure the Request is received
-	groupRequestTicker     *time.Ticker
 	groupRequestSucceeded  context.CancelFunc
-	policyRequestTicker    *time.Ticker
 	policyRequestSucceeded context.CancelFunc
 
 	// AgentGroup channels sent from core
-	groupsInfos map[string]GroupInfo
+	groupsInfos map[string]groupInfo
 
 	policyManager manager.PolicyManager
-	configManager config.ConfigManager
+	configManager config.Manager
 }
 
-const (
-	retryRequestDuration         = time.Second
-	retryRequestFixedTime        = 15
-	retryDurationIncrPerAttempts = 10
-	retryMaxAttempts             = 4
-)
-
-type GroupInfo struct {
+type groupInfo struct {
 	Name      string
 	ChannelID string
 }
 
 var _ Agent = (*orbAgent)(nil)
 
+// New creates a new agent
 func New(logger *zap.Logger, c config.Config) (Agent, error) {
 	pm, err := manager.New(logger, c)
 	if err != nil {
@@ -93,7 +82,7 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 	}
 	cm := config.New(logger, c.OrbAgent.ConfigManager)
 
-	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, groupsInfos: make(map[string]GroupInfo)}, nil
+	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, groupsInfos: make(map[string]groupInfo)}, nil
 }
 
 func (a *orbAgent) managePolicies() error {
@@ -146,7 +135,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 			a.logger.Info("failed to configure backend", zap.String("backend", name), zap.Error(err))
 			return err
 		}
-		backendCtx := context.WithValue(agentCtx, "routine", name)
+		backendCtx := context.WithValue(agentCtx, routineKey, name)
 		backendCtx = a.configManager.GetContext(backendCtx)
 		a.backends[name] = be
 		initialState := be.GetInitialState()
@@ -176,12 +165,12 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	defer func(t time.Time) {
 		a.logger.Debug("Startup of agent execution duration", zap.String("Start() execution duration", time.Since(t).String()))
 	}(startTime)
-	agentCtx := context.WithValue(ctx, "routine", "agentRoutine")
-	asyncCtx, cancelAllAsync := context.WithCancel(context.WithValue(ctx, "routine", "asyncParent"))
+	agentCtx := context.WithValue(ctx, routineKey, "agentRoutine")
+	asyncCtx, cancelAllAsync := context.WithCancel(context.WithValue(ctx, routineKey, "asyncParent"))
 	a.asyncContext = asyncCtx
 	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
-	a.logger.Info("agent started", zap.String("version", version.GetBuildVersion()), zap.Any("routine", agentCtx.Value("routine")))
+	a.logger.Info("agent started", zap.String("version", version.GetBuildVersion()), zap.Any("routine", agentCtx.Value(routineKey)))
 	mqtt.CRITICAL = &agentLoggerCritical{a: a}
 	mqtt.ERROR = &agentLoggerError{a: a}
 
@@ -211,7 +200,7 @@ func (a *orbAgent) logonWithHeartbeat() {
 }
 
 func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
-	a.logger.Debug("stopping heartbeat, going offline status", zap.Any("routine", ctx.Value("routine")))
+	a.logger.Debug("stopping heartbeat, going offline status", zap.Any("routine", ctx.Value(routineKey)))
 	if a.heartbeatCtx != nil {
 		a.heartbeatCancel()
 	}
@@ -223,7 +212,7 @@ func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
 }
 
 func (a *orbAgent) Stop(ctx context.Context) {
-	a.logger.Info("routine call for stop agent", zap.Any("routine", ctx.Value("routine")))
+	a.logger.Info("routine call for stop agent", zap.Any("routine", ctx.Value(routineKey)))
 	if a.rpcFromCancelFunc != nil {
 		a.rpcFromCancelFunc()
 	}
@@ -256,7 +245,7 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 
 	be := a.backends[name]
 	a.logger.Info("restarting backend", zap.String("backend", name), zap.String("reason", reason))
-	a.backendState[name].RestartCount += 1
+	a.backendState[name].RestartCount++
 	a.backendState[name].LastRestartTS = time.Now()
 	a.backendState[name].LastRestartReason = reason
 	a.logger.Info("removing policies", zap.String("backend", name))
@@ -272,7 +261,7 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 		a.backendState[name].LastError = fmt.Sprintf("failed to reset backend: %v", err)
 		a.logger.Error("failed to reset backend", zap.String("backend", name), zap.Error(err))
 	}
-	be.SetCommsClient(a.agent_id, &a.client, fmt.Sprintf("%s/?/%s", a.baseTopic, name))
+	be.SetCommsClient(a.agentID, &a.client, fmt.Sprintf("%s/?/%s", a.baseTopic, name))
 
 	return nil
 }
@@ -294,7 +283,7 @@ func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
 }
 
 func (a *orbAgent) extendContext(routine string) (context.Context, context.CancelFunc) {
-	uuidTraceId := uuid.NewString()
-	a.logger.Debug("creating context for receiving message", zap.String("routine", routine), zap.String("trace-id", uuidTraceId))
-	return context.WithCancel(context.WithValue(context.WithValue(a.asyncContext, "routine", routine), "trace-id", uuidTraceId))
+	uuidTraceID := uuid.NewString()
+	a.logger.Debug("creating context for receiving message", zap.String("routine", routine), zap.String("trace-id", uuidTraceID))
+	return context.WithCancel(context.WithValue(context.WithValue(a.asyncContext, routineKey, routine), config.ContextKey("trace-id"), uuidTraceID))
 }

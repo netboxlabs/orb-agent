@@ -29,7 +29,7 @@ func (a *agentLoggerWarn) Println(v ...interface{}) {
 	a.a.logger.Warn("WARN mqtt log", zap.Any("payload", v))
 }
 
-func (a *agentLoggerWarn) Printf(format string, v ...interface{}) {
+func (a *agentLoggerWarn) Printf(_ string, v ...interface{}) {
 	a.a.logger.Warn("WARN mqtt log", zap.Any("payload", v))
 }
 
@@ -37,7 +37,7 @@ func (a *agentLoggerDebug) Println(v ...interface{}) {
 	a.a.logger.Debug("DEBUG mqtt log", zap.Any("payload", v))
 }
 
-func (a *agentLoggerDebug) Printf(format string, v ...interface{}) {
+func (a *agentLoggerDebug) Printf(_ string, v ...interface{}) {
 	a.a.logger.Debug("DEBUG mqtt log", zap.Any("payload", v))
 }
 
@@ -45,7 +45,7 @@ func (a *agentLoggerCritical) Println(v ...interface{}) {
 	a.a.logger.Error("CRITICAL mqtt log", zap.Any("payload", v))
 }
 
-func (a *agentLoggerCritical) Printf(format string, v ...interface{}) {
+func (a *agentLoggerCritical) Printf(_ string, v ...interface{}) {
 	a.a.logger.Error("CRITICAL mqtt log", zap.Any("payload", v))
 }
 
@@ -53,6 +53,6 @@ func (a *agentLoggerError) Println(v ...interface{}) {
 	a.a.logger.Error("ERROR mqtt log", zap.Any("payload", v))
 }
 
-func (a *agentLoggerError) Printf(format string, v ...interface{}) {
+func (a *agentLoggerError) Printf(_ string, v ...interface{}) {
 	a.a.logger.Error("ERROR mqtt log", zap.Any("payload", v))
 }

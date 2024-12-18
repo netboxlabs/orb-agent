@@ -11,18 +11,18 @@ import (
 	"golang.org/x/exp/slices"
 	"gopkg.in/yaml.v3"
 
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 const tempFileNamePattern = "otel-%s-config.yml"
 
 type runningPolicy struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	policyId      string
-	telemetryPort int
-	policyData    policies.PolicyData
-	statusChan    *cmd.Status
+	ctx        context.Context
+	cancel     context.CancelFunc
+	policyID   string
+	policyData policies.PolicyData
+	statusChan *cmd.Status
 }
 
 func (o *openTelemetryBackend) ApplyPolicy(newPolicyData policies.PolicyData, updatePolicy bool) error {
@@ -95,13 +95,13 @@ func (o *openTelemetryBackend) ApplyPolicy(newPolicyData policies.PolicyData, up
 }
 
 func (o *openTelemetryBackend) addRunner(policyData policies.PolicyData, policyFilePath string) error {
-	policyContext, policyCancel := context.WithCancel(context.WithValue(o.mainContext, "policy_id", policyData.ID))
+	policyContext, policyCancel := context.WithCancel(context.WithValue(o.mainContext, config.ContextKey("policy_id"), policyData.ID))
 	command := cmd.NewCmdOptions(cmd.Options{Buffered: false, Streaming: true}, o.otelExecutablePath, "--config", policyFilePath)
 	go func(ctx context.Context, logger *zap.Logger) {
 		status := command.Start()
 		o.logger.Info("starting otel policy", zap.String("policy_id", policyData.ID),
 			zap.Any("status", command.Status()), zap.Int("process id", command.Status().PID))
-		for command.Status().Complete == false {
+		for !command.Status().Complete {
 			select {
 			case v := <-ctx.Done():
 				err := command.Stop()
@@ -127,7 +127,7 @@ func (o *openTelemetryBackend) addRunner(policyData policies.PolicyData, policyF
 	policyEntry := runningPolicy{
 		ctx:        policyContext,
 		cancel:     policyCancel,
-		policyId:   policyData.ID,
+		policyID:   policyData.ID,
 		policyData: policyData,
 		statusChan: &status,
 	}

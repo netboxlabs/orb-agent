@@ -13,8 +13,6 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
-	"go.opentelemetry.io/collector/exporter"
-	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -25,17 +23,17 @@ import (
 var _ backend.Backend = (*pktvisorBackend)(nil)
 
 const (
-	DefaultBinary       = "pktvisord"
-	ReadinessBackoff    = 10
-	ReadinessTimeout    = 10
-	ApplyPolicyTimeout  = 10
-	RemovePolicyTimeout = 20
-	VersionTimeout      = 2
-	ScrapeTimeout       = 5
-	TapsTimeout         = 5
-	DefaultConfigPath   = "/opt/orb/agent.yaml"
-	DefaultAPIHost      = "localhost"
-	DefaultAPIPort      = "10853"
+	defaultBinary       = "pktvisord"
+	readinessBackoff    = 10
+	readinessTimeout    = 10
+	applyPolicyTimeout  = 10
+	removePolicyTimeout = 20
+	versionTimeout      = 2
+	scrapeTimeout       = 5
+	tapsTimeout         = 5
+	defaultConfigPath   = "/opt/orb/agent.yaml"
+	defaultAPIHost      = "localhost"
+	defaultAPIPort      = "10853"
 )
 
 // AppInfo represents server application information
@@ -57,9 +55,6 @@ type pktvisorBackend struct {
 	cancelFunc      context.CancelFunc
 	ctx             context.Context
 
-	// MQTT Config for OTEL MQTT Exporter
-	mqttConfig config.MQTTConfig
-
 	mqttClient       *mqtt.Client
 	metricsTopic     string
 	otlpMetricsTopic string
@@ -75,8 +70,6 @@ type pktvisorBackend struct {
 	// OpenTelemetry management
 	otelReceiverHost string
 	otelReceiverPort int
-	receiver         receiver.Metrics
-	exporter         exporter.Metrics
 }
 
 func (p *pktvisorBackend) getFreePort() (int, error) {
@@ -88,7 +81,11 @@ func (p *pktvisorBackend) getFreePort() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer l.Close()
+	defer func() {
+		if err := l.Close(); err != nil {
+			p.logger.Error("failed to close socket", zap.Error(err))
+		}
+	}()
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
@@ -234,9 +231,9 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	p.logger.Info("pktvisor process started", zap.Int("pid", status.PID))
 
 	var readinessError error
-	for backoff := 0; backoff < ReadinessBackoff; backoff++ {
+	for backoff := 0; backoff < readinessBackoff; backoff++ {
 		var appMetrics AppInfo
-		readinessError = p.request("metrics/app", &appMetrics, http.MethodGet, http.NoBody, "application/json", ReadinessTimeout)
+		readinessError = p.request("metrics/app", &appMetrics, http.MethodGet, http.NoBody, "application/json", readinessTimeout)
 		if readinessError == nil {
 			p.logger.Info("pktvisor readiness ok, got version ", zap.String("pktvisor_version", appMetrics.App.Version))
 			break
@@ -259,7 +256,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 }
 
 func (p *pktvisorBackend) Stop(ctx context.Context) error {
-	p.logger.Info("routine call to stop pktvisor", zap.Any("routine", ctx.Value("routine")))
+	p.logger.Info("routine call to stop pktvisor", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer p.cancelFunc()
 	err := p.proc.Stop()
 	finalStatus := <-p.statusChan
@@ -278,16 +275,16 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 
 	var prs bool
 	if p.binary, prs = config["binary"].(string); !prs {
-		p.binary = DefaultBinary
+		p.binary = defaultBinary
 	}
 	if p.configFile, prs = config["config_file"].(string); !prs {
-		p.configFile = DefaultConfigPath
+		p.configFile = defaultConfigPath
 	}
 	if p.adminAPIHost, prs = config["api_host"].(string); !prs {
-		p.adminAPIHost = DefaultAPIHost
+		p.adminAPIHost = defaultAPIHost
 	}
 	if p.adminAPIPort, prs = config["api_port"].(string); !prs {
-		p.adminAPIPort = DefaultAPIPort
+		p.adminAPIPort = defaultAPIPort
 	}
 	p.agentTags = common.Otel.AgentTags
 
@@ -308,7 +305,7 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 
 func (p *pktvisorBackend) GetCapabilities() (map[string]interface{}, error) {
 	var taps interface{}
-	err := p.request("taps", &taps, http.MethodGet, http.NoBody, "application/json", TapsTimeout)
+	err := p.request("taps", &taps, http.MethodGet, http.NoBody, "application/json", tapsTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +324,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 	}
 
 	// for each policy, restart the scraper
-	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, "routine", "pktvisor"))
+	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "pktvisor"))
 
 	// start it
 	if err := p.Start(backendCtx, cancelFunc); err != nil {
@@ -338,6 +335,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 	return nil
 }
 
+// Register registers pktvisor backend
 func Register() bool {
 	backend.Register("pktvisor", &pktvisorBackend{
 		adminAPIProtocol: "http",

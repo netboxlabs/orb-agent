@@ -22,22 +22,21 @@ import (
 var _ backend.Backend = (*networkDiscoveryBackend)(nil)
 
 const (
-	VersionTimeout      = 2
-	CapabilitiesTimeout = 5
-	ReadinessBackoff    = 10
-	ReadinessTimeout    = 10
-	ApplyPolicyTimeout  = 10
-	RemovePolicyTimeout = 20
-	DefaultExec         = "network-discovery"
-	DefaultAPIHost      = "localhost"
-	DefaultAPIPort      = "8073"
+	versionTimeout      = 2
+	capabilitiesTimeout = 5
+	readinessBackoff    = 10
+	readinessTimeout    = 10
+	applyPolicyTimeout  = 10
+	removePolicyTimeout = 20
+	defaultExec         = "network-discovery"
+	defaultAPIHost      = "localhost"
+	defaultAPIPort      = "8073"
 )
 
 type networkDiscoveryBackend struct {
 	logger     *zap.Logger
 	policyRepo policies.PolicyRepo
 	exec       string
-	configFile string
 
 	apiHost     string
 	apiPort     string
@@ -57,15 +56,16 @@ type networkDiscoveryBackend struct {
 	otlpMetricsTopic string
 }
 
-type Info struct {
+type info struct {
 	Version   string  `json:"version"`
 	UpTimeMin float64 `json:"up_time_seconds"`
 }
 
+// Register registers the network discovery backend
 func Register() bool {
 	backend.Register("network_discovery", &networkDiscoveryBackend{
 		apiProtocol: "http",
-		exec:        DefaultExec,
+		exec:        defaultExec,
 	})
 	return true
 }
@@ -76,10 +76,10 @@ func (d *networkDiscoveryBackend) Configure(logger *zap.Logger, repo policies.Po
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
-		d.apiHost = DefaultAPIHost
+		d.apiHost = defaultAPIHost
 	}
 	if d.apiPort, prs = config["port"].(string); !prs {
-		d.apiPort = DefaultAPIPort
+		d.apiPort = defaultAPIPort
 	}
 
 	d.diodeTarget = common.Diode.Target
@@ -96,8 +96,8 @@ func (d *networkDiscoveryBackend) SetCommsClient(agentID string, client *mqtt.Cl
 }
 
 func (d *networkDiscoveryBackend) Version() (string, error) {
-	var info Info
-	err := d.request("status", &info, http.MethodGet, http.NoBody, "application/json", VersionTimeout)
+	var info info
+	err := d.request("status", &info, http.MethodGet, http.NoBody, "application/json", versionTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -172,7 +172,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	d.logger.Info("network-discovery process started", zap.Int("pid", status.PID))
 
 	var readinessErr error
-	for backoff := 0; backoff < ReadinessBackoff; backoff++ {
+	for backoff := 0; backoff < readinessBackoff; backoff++ {
 		version, readinessErr := d.Version()
 		if readinessErr == nil {
 			d.logger.Info("network-discovery readiness ok, got version ", zap.String("network_discovery_version", version))
@@ -196,7 +196,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 }
 
 func (d *networkDiscoveryBackend) Stop(ctx context.Context) error {
-	d.logger.Info("routine call to stop network-discovery", zap.Any("routine", ctx.Value("routine")))
+	d.logger.Info("routine call to stop network-discovery", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer d.cancelFunc()
 	err := d.proc.Stop()
 	finalStatus := <-d.statusChan
@@ -216,7 +216,7 @@ func (d *networkDiscoveryBackend) FullReset(ctx context.Context) error {
 		}
 	}
 	// for each policy, restart the scraper
-	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, "routine", "network-discovery"))
+	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "network-discovery"))
 	// start it
 	if err := d.Start(backendCtx, cancelFunc); err != nil {
 		d.logger.Error("failed to start backend on restart procedure", zap.Error(err))
@@ -231,7 +231,7 @@ func (d *networkDiscoveryBackend) GetStartTime() time.Time {
 
 func (d *networkDiscoveryBackend) GetCapabilities() (map[string]interface{}, error) {
 	caps := make(map[string]interface{})
-	err := d.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", CapabilitiesTimeout)
+	err := d.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", capabilitiesTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +280,7 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 	}
 
 	var resp map[string]interface{}
-	err = d.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", ApplyPolicyTimeout)
+	err = d.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout)
 	if err != nil {
 		d.logger.Warn("yaml policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
 		return err
@@ -297,7 +297,7 @@ func (d *networkDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
 	}
-	err := d.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", RemovePolicyTimeout)
+	err := d.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", removePolicyTimeout)
 	if err != nil {
 		return err
 	}

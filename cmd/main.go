@@ -23,12 +23,13 @@ import (
 )
 
 const (
-	defaultConfig = "/opt/orb/agent_default.yaml"
+	defaultConfig                   = "/opt/orb/agent_default.yaml"
+	routineKey    config.ContextKey = "routine"
 )
 
 var (
 	cfgFiles []string
-	Debug    bool
+	debug    bool
 )
 
 func init() {
@@ -38,11 +39,13 @@ func init() {
 	networkdiscovery.Register()
 }
 
+// Version prints the version of the agent
 func Version(_ *cobra.Command, _ []string) {
 	fmt.Printf("orb-agent %s\n", version.GetBuildVersion())
 	os.Exit(0)
 }
 
+// Run starts the agent
 func Run(_ *cobra.Command, _ []string) {
 	initConfig()
 
@@ -57,7 +60,7 @@ func Run(_ *cobra.Command, _ []string) {
 	// logger
 	var logger *zap.Logger
 	atomicLevel := zap.NewAtomicLevel()
-	if Debug {
+	if debug {
 		atomicLevel.SetLevel(zap.DebugLevel)
 	} else {
 		atomicLevel.SetLevel(zap.InfoLevel)
@@ -74,7 +77,6 @@ func Run(_ *cobra.Command, _ []string) {
 		_ = logger.Sync()
 	}(logger)
 
-	_, err = os.Stat(pktvisor.DefaultBinary)
 	logger.Info("backends loaded", zap.Any("backends", configData.OrbAgent.Backends))
 
 	configData.OrbAgent.ConfigFile = defaultConfig
@@ -91,11 +93,11 @@ func Run(_ *cobra.Command, _ []string) {
 
 	// handle signals
 	done := make(chan bool, 1)
-	rootCtx, cancelFunc := context.WithCancel(context.WithValue(context.Background(), "routine", "mainRoutine"))
+	rootCtx, cancelFunc := context.WithCancel(context.WithValue(context.Background(), routineKey, "mainRoutine"))
 
 	go func() {
 		sigs := make(chan os.Signal, 1)
-		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		select {
 		case <-sigs:
 			logger.Warn("stop signal received stopping agent")
@@ -202,7 +204,7 @@ func main() {
 	}
 
 	runCmd.Flags().StringSliceVarP(&cfgFiles, "config", "c", []string{}, "Path to config files (may be specified multiple times)")
-	runCmd.PersistentFlags().BoolVarP(&Debug, "debug", "d", false, "Enable verbose (debug level) output")
+	runCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "Enable verbose (debug level) output")
 
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(versionCmd)

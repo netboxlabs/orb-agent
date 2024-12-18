@@ -7,6 +7,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ExporterBuilder is an interface that defines the methods to build an exporter
 type ExporterBuilder interface {
 	GetStructFromYaml(yamlString string) (openTelemetryConfig, error)
 	MergeDefaultValueWithPolicy(config openTelemetryConfig, policyName string) (openTelemetryConfig, error)
@@ -22,7 +23,7 @@ type openTelemetryConfig struct {
 
 type defaultOtlpExporter struct {
 	Endpoint string `yaml:"endpoint"`
-	Tls      *tls   `yaml:"tls"`
+	TLS      *tls   `yaml:"tls"`
 }
 
 type tls struct {
@@ -84,11 +85,11 @@ func (e *exporterBuilder) GetStructFromYaml(yamlString string) (openTelemetryCon
 	return config, nil
 }
 
-func (e *exporterBuilder) MergeDefaultValueWithPolicy(config openTelemetryConfig, policyId string, policyName string) (openTelemetryConfig, error) {
+func (e *exporterBuilder) MergeDefaultValueWithPolicy(config openTelemetryConfig, policyID string, policyName string) (openTelemetryConfig, error) {
 	endpoint := e.host + ":" + strconv.Itoa(e.port)
 	defaultOtlpExporter := defaultOtlpExporter{
 		Endpoint: endpoint,
-		Tls: &tls{
+		TLS: &tls{
 			Insecure: true,
 		},
 	}
@@ -104,7 +105,7 @@ func (e *exporterBuilder) MergeDefaultValueWithPolicy(config openTelemetryConfig
 		"metric_statements": map[string]interface{}{
 			"context": "scope",
 			"statements": []string{
-				`set(attributes["policy_id"], "` + policyId + `")`,
+				`set(attributes["policy_id"], "` + policyID + `")`,
 				`set(attributes["policy_name"], "` + policyName + `")`,
 			},
 		},
@@ -130,26 +131,4 @@ func (e *exporterBuilder) MergeDefaultValueWithPolicy(config openTelemetryConfig
 		config.Service.Pipelines.Logs.Processors = append(config.Service.Pipelines.Logs.Processors, "transform/policy_data")
 	}
 	return config, nil
-}
-
-func (o *openTelemetryBackend) buildDefaultExporterAndProcessor(policyYaml string, policyId string, policyName string, telemetryPort int) (openTelemetryConfig, error) {
-	defaultPolicyYaml, err := yaml.Marshal(policyYaml)
-	if err != nil {
-		o.logger.Warn("yaml policy marshal failure", zap.String("policy_id", policyId))
-		return openTelemetryConfig{}, err
-	}
-	defaultPolicyString := string(defaultPolicyYaml)
-	builder := getExporterBuilder(o.logger, o.otelReceiverHost, o.otelReceiverPort)
-	defaultPolicyStruct, err := builder.GetStructFromYaml(defaultPolicyString)
-	if err != nil {
-		return openTelemetryConfig{}, err
-	}
-	defaultPolicyStruct, err = builder.MergeDefaultValueWithPolicy(
-		defaultPolicyStruct,
-		policyId,
-		policyName)
-	if err != nil {
-		return openTelemetryConfig{}, err
-	}
-	return defaultPolicyStruct, nil
 }
