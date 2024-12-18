@@ -51,7 +51,6 @@ func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
 }
 
 func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
-
 	a.logger.Info("managing agent policy from core",
 		zap.String("action", payload.Action),
 		zap.String("name", payload.Name),
@@ -62,7 +61,7 @@ func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
 
 	switch payload.Action {
 	case "manage":
-		var pd = policies.PolicyData{
+		pd := policies.PolicyData{
 			ID:      payload.ID,
 			Name:    payload.Name,
 			Backend: payload.Backend,
@@ -147,7 +146,7 @@ func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
 }
 
 func (a *policyManager) RemovePolicy(policyID string, policyName string, beName string) error {
-	var pd = policies.PolicyData{
+	pd := policies.PolicyData{
 		ID:   policyID,
 		Name: policyName,
 	}

@@ -47,6 +47,14 @@ test-coverage:
 	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep total | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 
+.PHONY: lint
+lint:
+	@golangci-lint run ./... --config ../.github/golangci.yaml
+
+.PHONY: fix-lint
+fix-lint:
+	@golangci-lint run ./... --config ../.github/golangci.yaml --fix
+
 agent:
 	docker build --no-cache \
 	  --build-arg GOARCH=$(GOARCH) \

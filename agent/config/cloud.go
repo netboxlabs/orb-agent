@@ -108,7 +108,6 @@ func (cc *cloudConfigManager) request(address string, token string, response int
 }
 
 func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQTTConfig, error) {
-
 	type AgentRes struct {
 		ID        string `json:"id"`
 		Key       string `json:"key"`
@@ -155,7 +154,6 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 		Key:       result.Key,
 		ChannelID: result.ChannelID,
 	}, nil
-
 }
 
 func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
@@ -225,7 +223,6 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 
 	result.Connect = true
 	return result, nil
-
 }
 
 func (cc *cloudConfigManager) GetContext(ctx context.Context) context.Context {
