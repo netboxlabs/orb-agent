@@ -1,10 +1,12 @@
 package config
 
+// APIConfig represents the configuration for the API connection
 type APIConfig struct {
 	Address string `mapstructure:"address"`
 	Token   string `mapstructure:"token"`
 }
 
+// MQTTConfig represents the configuration for the MQTT connection
 type MQTTConfig struct {
 	Connect   bool   `mapstructure:"connect"`
 	Address   string `mapstructure:"address"`
@@ -13,11 +15,13 @@ type MQTTConfig struct {
 	ChannelID string `mapstructure:"channel_id"`
 }
 
+// CloudConfig represents the configuration for the cloud agent
 type CloudConfig struct {
 	AgentName     string `mapstructure:"agent_name"`
 	AutoProvision bool   `mapstructure:"auto_provision"`
 }
 
+// Cloud represents the cloud  ConfigManager configuration
 type Cloud struct {
 	Config CloudConfig `mapstructure:"config"`
 	API    APIConfig   `mapstructure:"api"`
@@ -31,20 +35,24 @@ type Cloud struct {
 	Tags map[string]string `mapstructure:"tags"`
 }
 
+// Local represents the local ConfigManager configuration.
 type Local struct {
 	Config string `mapstructure:"config"`
 }
 
+// ManagerBackends represents the configuration for manager backends, including cloud and local.
 type ManagerBackends struct {
 	Cloud Cloud `mapstructure:"orbcloud"`
 	Local Local `mapstructure:"local"`
 }
 
+// ManagerConfig represents the configuration for the Config Manager
 type ManagerConfig struct {
 	Active   string          `mapstructure:"active"`
 	Backends ManagerBackends `mapstructure:"backends"`
 }
 
+// BackendCommons represents common configuration for backends
 type BackendCommons struct {
 	Otel struct {
 		Host      string            `mapstructure:"host"`
@@ -57,6 +65,8 @@ type BackendCommons struct {
 		AgentName string `mapstructure:"agent_name"`
 	}
 }
+
+// OrbAgent represents the configuration for the Orb agent
 type OrbAgent struct {
 	Backends      map[string]map[string]interface{} `mapstructure:"backends"`
 	Policies      map[string]map[string]interface{} `mapstructure:"policies"`
@@ -68,6 +78,7 @@ type OrbAgent struct {
 	ConfigFile string `mapstructure:"config_file"`
 }
 
+// Config represents the overall configuration
 type Config struct {
 	Version  float64  `mapstructure:"version"`
 	OrbAgent OrbAgent `mapstructure:"orb"`

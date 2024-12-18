@@ -44,7 +44,6 @@ func Version(_ *cobra.Command, _ []string) {
 }
 
 func Run(_ *cobra.Command, _ []string) {
-
 	initConfig()
 
 	// configuration
@@ -120,7 +119,6 @@ func Run(_ *cobra.Command, _ []string) {
 }
 
 func mergeOrError(path string) {
-
 	v := viper.New()
 	if len(path) > 0 {
 		v.SetConfigFile(path)
@@ -186,7 +184,6 @@ func initConfig() {
 }
 
 func main() {
-
 	rootCmd := &cobra.Command{
 		Use: "orb-agent",
 	}

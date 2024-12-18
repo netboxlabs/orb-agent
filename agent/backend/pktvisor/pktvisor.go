@@ -134,7 +134,6 @@ func (p *pktvisorBackend) Version() (string, error) {
 }
 
 func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
-
 	// this should record the start time whether it's successful or not
 	// because it is used by the automatic restart system for last attempt
 	p.startTime = time.Now()
@@ -319,7 +318,6 @@ func (p *pktvisorBackend) GetCapabilities() (map[string]interface{}, error) {
 }
 
 func (p *pktvisorBackend) FullReset(ctx context.Context) error {
-
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := p.getProcRunningStatus(); state == backend.Running {
 		if err := p.Stop(ctx); err != nil {

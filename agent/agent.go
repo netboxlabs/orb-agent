@@ -20,9 +20,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
-var (
-	ErrMqttConnection = errors.New("failed to connect to a broker")
-)
+var ErrMqttConnection = errors.New("failed to connect to a broker")
 
 type Agent interface {
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
@@ -69,10 +67,12 @@ type orbAgent struct {
 	configManager config.ConfigManager
 }
 
-const retryRequestDuration = time.Second
-const retryRequestFixedTime = 15
-const retryDurationIncrPerAttempts = 10
-const retryMaxAttempts = 4
+const (
+	retryRequestDuration         = time.Second
+	retryRequestFixedTime        = 15
+	retryDurationIncrPerAttempts = 10
+	retryMaxAttempts             = 4
+)
 
 type GroupInfo struct {
 	Name      string
@@ -97,7 +97,6 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 }
 
 func (a *orbAgent) managePolicies() error {
-
 	if a.config.OrbAgent.Policies == nil {
 		return errors.New("no policies specified")
 	}
@@ -222,6 +221,7 @@ func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
 		}
 	}
 }
+
 func (a *orbAgent) Stop(ctx context.Context) {
 	a.logger.Info("routine call for stop agent", zap.Any("routine", ctx.Value("routine")))
 	if a.rpcFromCancelFunc != nil {

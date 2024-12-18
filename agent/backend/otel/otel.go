@@ -22,15 +22,17 @@ import (
 
 var _ backend.Backend = (*openTelemetryBackend)(nil)
 
-const DefaultPath = "otelcol-contrib"
-const DefaultHost = "localhost"
-const DefaultPort = 4317
+const (
+	DefaultPath = "otelcol-contrib"
+	DefaultHost = "localhost"
+	DefaultPort = 4317
+)
 
 type openTelemetryBackend struct {
 	logger    *zap.Logger
 	startTime time.Time
 
-	//policies
+	// policies
 	policyRepo            policies.PolicyRepo
 	policyConfigDirectory string
 	agentTags             map[string]string
@@ -64,7 +66,8 @@ type openTelemetryBackend struct {
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
-	config map[string]interface{}, common config.BackendCommons) error {
+	config map[string]interface{}, common config.BackendCommons,
+) error {
 	o.logger = logger
 	o.logger.Info("configuring OpenTelemetry backend")
 	o.policyRepo = repo
@@ -135,7 +138,6 @@ func (o *openTelemetryBackend) Version() (string, error) {
 	o.logger.Info("running opentelemetry-contrib version", zap.String("version", versionOutput))
 
 	return versionOutput, nil
-
 }
 
 func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) (err error) {

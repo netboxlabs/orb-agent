@@ -7,10 +7,11 @@ import (
 	"os"
 
 	"github.com/go-cmd/cmd"
-	"github.com/netboxlabs/orb-agent/agent/policies"
 	"go.uber.org/zap"
 	"golang.org/x/exp/slices"
 	"gopkg.in/yaml.v3"
+
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 const tempFileNamePattern = "otel-%s-config.yml"

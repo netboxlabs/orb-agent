@@ -93,8 +93,8 @@ func (d *networkDiscoveryBackend) SetCommsClient(agentID string, client *mqtt.Cl
 	d.mqttClient = client
 	otelBaseTopic := strings.Replace(baseTopic, "?", "otlp", 1)
 	d.otlpMetricsTopic = fmt.Sprintf("%s/m/%c", otelBaseTopic, agentID[0])
-
 }
+
 func (d *networkDiscoveryBackend) Version() (string, error) {
 	var info Info
 	err := d.request("status", &info, http.MethodGet, http.NoBody, "application/json", VersionTimeout)
@@ -103,6 +103,7 @@ func (d *networkDiscoveryBackend) Version() (string, error) {
 	}
 	return info.Version, nil
 }
+
 func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
 	d.startTime = time.Now()
 	d.cancelFunc = cancelFunc
@@ -192,7 +193,6 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	}
 
 	return nil
-
 }
 
 func (d *networkDiscoveryBackend) Stop(ctx context.Context) error {
