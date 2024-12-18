@@ -12,7 +12,6 @@ import (
 )
 
 func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
-
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := p.RemovePolicy(data); err != nil {

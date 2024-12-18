@@ -20,7 +20,6 @@ const HeartbeatFreq = 50 * time.Second
 const RestartTimeMin = 5 * time.Minute
 
 func (a *orbAgent) sendSingleHeartbeat(ctx context.Context, t time.Time, agentsState fleet.State) {
-
 	if a.heartbeatsTopic == "" {
 		a.logger.Debug("heartbeat topic not yet set, skipping")
 		return

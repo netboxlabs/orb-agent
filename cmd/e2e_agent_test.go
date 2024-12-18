@@ -111,7 +111,7 @@ func Test_main(t *testing.T) {
 
 	go func() {
 		sigs := make(chan os.Signal, 1)
-		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		select {
 		case <-sigs:
 			logger.Warn("stop signal received stopping agent")

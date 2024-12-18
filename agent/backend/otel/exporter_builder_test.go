@@ -63,7 +63,6 @@ service:
 			if _, ok := expectedStruct.Processors["transform/policy_data"]; !ok {
 				t.Error("missing required attributes/policy_data processor", err)
 			}
-
 		})
 	}
 }
