@@ -51,7 +51,6 @@ func TestNewRunner(t *testing.T) {
 }
 
 func TestRunnerRun(t *testing.T) {
-
 	tests := []*struct {
 		desc         string
 		mockResponse diodepb.IngestResponse
@@ -75,7 +74,6 @@ func TestRunnerRun(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
-
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 			mockClient := new(MockClient)
 			policyConfig := config.Policy{
