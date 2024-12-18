@@ -2,7 +2,6 @@ package pktvisor
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,19 +40,25 @@ func (p *pktvisorBackend) request(url string, payload interface{}, method string
 		return getErr
 	}
 
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			p.logger.Error("failed to close response body", zap.Error(err))
+		}
+	}()
+
 	if (res.StatusCode < 200) || (res.StatusCode > 299) {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return errors.New(fmt.Sprintf("non 2xx HTTP error code from pktvisord, no or invalid body: %d", res.StatusCode))
+			return fmt.Errorf("non 2xx HTTP error code from pktvisord, no or invalid body: %d", res.StatusCode)
 		}
 		if len(body) == 0 {
-			return errors.New(fmt.Sprintf("%d empty body", res.StatusCode))
+			return fmt.Errorf("%d empty body", res.StatusCode)
 		} else if body[0] == '{' {
 			var jsonBody map[string]interface{}
 			err := json.Unmarshal(body, &jsonBody)
 			if err == nil {
 				if errMsg, ok := jsonBody["error"]; ok {
-					return errors.New(fmt.Sprintf("%d %s", res.StatusCode, errMsg))
+					return fmt.Errorf("%d %s", res.StatusCode, errMsg)
 				}
 			}
 		}
@@ -93,6 +98,6 @@ func (p *pktvisorBackend) getProcRunningStatus() (backend.RunningStatus, string,
 // also used for HTTP REST API readiness check
 func (p *pktvisorBackend) getAppInfo() (AppInfo, error) {
 	var appInfo AppInfo
-	err := p.request("metrics/app", &appInfo, http.MethodGet, http.NoBody, "application/json", VersionTimeout)
+	err := p.request("metrics/app", &appInfo, http.MethodGet, http.NoBody, "application/json", versionTimeout)
 	return appInfo, err
 }

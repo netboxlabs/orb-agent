@@ -16,8 +16,8 @@ import (
 // HeartbeatFreq how often to heartbeat
 const HeartbeatFreq = 50 * time.Second
 
-// RestartTimeMin minimum time to wait between restarts
-const RestartTimeMin = 5 * time.Minute
+// RestartTime minimum time to wait between restarts
+const RestartTime = 5 * time.Minute
 
 func (a *orbAgent) sendSingleHeartbeat(ctx context.Context, t time.Time, agentsState fleet.State) {
 	if a.heartbeatsTopic == "" {
@@ -46,7 +46,7 @@ func (a *orbAgent) sendSingleHeartbeat(ctx context.Context, t time.Time, agentsS
 			}
 			// status is not running so we have a current error
 			besi.Error = a.backendState[name].LastError
-			if time.Now().Sub(be.GetStartTime()) >= RestartTimeMin {
+			if time.Since(be.GetStartTime()) >= RestartTime {
 				a.logger.Info("attempting backend restart due to failed status during heartbeat")
 				ctx = a.configManager.GetContext(ctx)
 				err := a.RestartBackend(ctx, name, "failed during heartbeat")
@@ -54,7 +54,7 @@ func (a *orbAgent) sendSingleHeartbeat(ctx context.Context, t time.Time, agentsS
 					a.logger.Error("failed to restart backend", zap.Error(err), zap.String("backend", name))
 				}
 			} else {
-				a.logger.Info("waiting to attempt backend restart due to failed status", zap.Duration("remaining_secs", RestartTimeMin-(time.Now().Sub(be.GetStartTime()))))
+				a.logger.Info("waiting to attempt backend restart due to failed status", zap.Duration("remaining_secs", RestartTime-(time.Since(be.GetStartTime()))))
 			}
 		} else {
 			// status is Running so no current error
@@ -133,7 +133,7 @@ func (a *orbAgent) sendSingleHeartbeat(ctx context.Context, t time.Time, agentsS
 }
 
 func (a *orbAgent) sendHeartbeats(ctx context.Context, cancelFunc context.CancelFunc) {
-	a.logger.Debug("start heartbeats routine", zap.Any("routine", ctx.Value("routine")))
+	a.logger.Debug("start heartbeats routine", zap.Any("routine", ctx.Value(routineKey)))
 	a.sendSingleHeartbeat(ctx, time.Now(), fleet.Online)
 	defer func() {
 		cancelFunc()

@@ -19,7 +19,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ ConfigManager = (*cloudConfigManager)(nil)
+var _ Manager = (*cloudConfigManager)(nil)
 
 type cloudConfigManager struct {
 	logger *zap.Logger
@@ -150,7 +150,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 	}
 
 	return MQTTConfig{
-		Id:        result.ID,
+		ID:        result.ID,
 		Key:       result.Key,
 		ChannelID: result.ChannelID,
 	}, nil
@@ -168,13 +168,13 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 	// this may change in the future
 	mqtt := cc.config.MQTT
 
-	if len(mqtt.Id) > 0 && len(mqtt.Key) > 0 && len(mqtt.ChannelID) > 0 {
+	if len(mqtt.ID) > 0 && len(mqtt.Key) > 0 && len(mqtt.ChannelID) > 0 {
 		cc.logger.Info("using explicitly specified cloud configuration",
 			zap.String("address", mqtt.Address),
-			zap.String("id", mqtt.Id))
+			zap.String("id", mqtt.ID))
 		return MQTTConfig{
 			Address:   mqtt.Address,
-			Id:        mqtt.Id,
+			ID:        mqtt.ID,
 			Key:       mqtt.Key,
 			ChannelID: mqtt.ChannelID,
 		}, nil
@@ -193,7 +193,7 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 	// see if we have an existing auto provisioned configuration saved locally
 	q := `SELECT id, key, channel FROM cloud_config ORDER BY ts_created DESC LIMIT 1`
 	dba := MQTTConfig{}
-	if err := cc.db.QueryRowx(q).Scan(&dba.Id, &dba.Key, &dba.ChannelID); err != nil {
+	if err := cc.db.QueryRowx(q).Scan(&dba.ID, &dba.Key, &dba.ChannelID); err != nil {
 		if err != sql.ErrNoRows {
 			return MQTTConfig{}, err
 		}
@@ -202,7 +202,7 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 		dba.Address = mqtt.Address
 		cc.logger.Info("using previous auto provisioned cloud configuration loaded from local storage",
 			zap.String("address", mqtt.Address),
-			zap.String("id", dba.Id))
+			zap.String("id", dba.ID))
 		return dba, nil
 	}
 
@@ -219,17 +219,17 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 	result.Address = mqtt.Address
 	cc.logger.Info("using auto provisioned cloud configuration",
 		zap.String("address", mqtt.Address),
-		zap.String("id", result.Id))
+		zap.String("id", result.ID))
 
 	result.Connect = true
 	return result, nil
 }
 
 func (cc *cloudConfigManager) GetContext(ctx context.Context) context.Context {
-	if cc.config.MQTT.Id != "" {
-		ctx = context.WithValue(ctx, "agent_id", cc.config.MQTT.Id)
+	if cc.config.MQTT.ID != "" {
+		ctx = context.WithValue(ctx, ContextKey("agent_id"), cc.config.MQTT.ID)
 	} else {
-		ctx = context.WithValue(ctx, "agent_id", "auto-provisioning-without-id")
+		ctx = context.WithValue(ctx, ContextKey("agent_id"), "auto-provisioning-without-id")
 	}
 	return ctx
 }

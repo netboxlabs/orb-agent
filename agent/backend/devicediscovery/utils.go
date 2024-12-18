@@ -2,7 +2,6 @@ package devicediscovery
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,19 +62,25 @@ func (d *deviceDiscoveryBackend) request(url string, payload interface{}, method
 		return getErr
 	}
 
+	defer func() {
+		if err := res.Body.Close(); err != nil {
+			d.logger.Error("failed to close response body", zap.Error(err))
+		}
+	}()
+
 	if (res.StatusCode < 200) || (res.StatusCode > 299) {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return errors.New(fmt.Sprintf("non 2xx HTTP error code from device-discovery, no or invalid body: %d", res.StatusCode))
+			return fmt.Errorf("non 2xx HTTP error code from device-discovery, no or invalid body: %d", res.StatusCode)
 		}
 		if len(body) == 0 {
-			return errors.New(fmt.Sprintf("%d empty body", res.StatusCode))
+			return fmt.Errorf("%d empty body", res.StatusCode)
 		} else if body[0] == '{' {
 			var jsonBody map[string]interface{}
 			err := json.Unmarshal(body, &jsonBody)
 			if err == nil {
 				if errMsg, ok := jsonBody["error"]; ok {
-					return errors.New(fmt.Sprintf("%d %s", res.StatusCode, errMsg))
+					return fmt.Errorf("%d %s", res.StatusCode, errMsg)
 				}
 			}
 		}

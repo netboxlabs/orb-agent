@@ -1,5 +1,8 @@
 package config
 
+// ContextKey represents the key for the context
+type ContextKey string
+
 // APIConfig represents the configuration for the API connection
 type APIConfig struct {
 	Address string `mapstructure:"address"`
@@ -10,7 +13,7 @@ type APIConfig struct {
 type MQTTConfig struct {
 	Connect   bool   `mapstructure:"connect"`
 	Address   string `mapstructure:"address"`
-	Id        string `mapstructure:"id"`
+	ID        string `mapstructure:"id"`
 	Key       string `mapstructure:"key"`
 	ChannelID string `mapstructure:"channel_id"`
 }

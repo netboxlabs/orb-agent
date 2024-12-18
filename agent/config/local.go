@@ -6,7 +6,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ ConfigManager = (*localConfigManager)(nil)
+var _ Manager = (*localConfigManager)(nil)
 
 type localConfigManager struct {
 	logger *zap.Logger

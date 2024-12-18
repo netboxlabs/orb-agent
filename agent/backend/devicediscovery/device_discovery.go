@@ -22,22 +22,21 @@ import (
 var _ backend.Backend = (*deviceDiscoveryBackend)(nil)
 
 const (
-	VersionTimeout      = 2
-	CapabilitiesTimeout = 5
-	ReadinessBackoff    = 10
-	ReadinessTimeout    = 10
-	ApplyPolicyTimeout  = 10
-	RemovePolicyTimeout = 20
-	DefaultExec         = "device-discovery"
-	DefaultAPIHost      = "localhost"
-	DefaultAPIPort      = "8072"
+	versionTimeout      = 2
+	capabilitiesTimeout = 5
+	readinessBackoff    = 10
+	readinessTimeout    = 10
+	applyPolicyTimeout  = 10
+	removePolicyTimeout = 20
+	defaultExec         = "device-discovery"
+	defaultAPIHost      = "localhost"
+	defaultAPIPort      = "8072"
 )
 
 type deviceDiscoveryBackend struct {
 	logger     *zap.Logger
 	policyRepo policies.PolicyRepo
 	exec       string
-	configFile string
 
 	apiHost     string
 	apiPort     string
@@ -57,15 +56,16 @@ type deviceDiscoveryBackend struct {
 	otlpMetricsTopic string
 }
 
-type Info struct {
+type info struct {
 	Version   string  `json:"version"`
 	UpTimeMin float64 `json:"up_time_min"`
 }
 
+// Register registers the backend
 func Register() bool {
 	backend.Register("device_discovery", &deviceDiscoveryBackend{
 		apiProtocol: "http",
-		exec:        DefaultExec,
+		exec:        defaultExec,
 	})
 	return true
 }
@@ -76,10 +76,10 @@ func (d *deviceDiscoveryBackend) Configure(logger *zap.Logger, repo policies.Pol
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
-		d.apiHost = DefaultAPIHost
+		d.apiHost = defaultAPIHost
 	}
 	if d.apiPort, prs = config["port"].(string); !prs {
-		d.apiPort = DefaultAPIPort
+		d.apiPort = defaultAPIPort
 	}
 
 	d.diodeTarget = common.Diode.Target
@@ -96,8 +96,8 @@ func (d *deviceDiscoveryBackend) SetCommsClient(agentID string, client *mqtt.Cli
 }
 
 func (d *deviceDiscoveryBackend) Version() (string, error) {
-	var info Info
-	err := d.request("status", &info, http.MethodGet, http.NoBody, "application/json", VersionTimeout)
+	var info info
+	err := d.request("status", &info, http.MethodGet, http.NoBody, "application/json", versionTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -172,7 +172,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	d.logger.Info("device-discovery process started", zap.Int("pid", status.PID))
 
 	var readinessErr error
-	for backoff := 0; backoff < ReadinessBackoff; backoff++ {
+	for backoff := 0; backoff < readinessBackoff; backoff++ {
 		version, readinessErr := d.Version()
 		if readinessErr == nil {
 			d.logger.Info("device-discovery readiness ok, got version ", zap.String("device_discovery_version", version))
@@ -196,7 +196,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 }
 
 func (d *deviceDiscoveryBackend) Stop(ctx context.Context) error {
-	d.logger.Info("routine call to stop device-discovery", zap.Any("routine", ctx.Value("routine")))
+	d.logger.Info("routine call to stop device-discovery", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer d.cancelFunc()
 	err := d.proc.Stop()
 	finalStatus := <-d.statusChan
@@ -216,7 +216,7 @@ func (d *deviceDiscoveryBackend) FullReset(ctx context.Context) error {
 		}
 	}
 	// for each policy, restart the scraper
-	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, "routine", "device-discovery"))
+	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "device-discovery"))
 	// start it
 	if err := d.Start(backendCtx, cancelFunc); err != nil {
 		d.logger.Error("failed to start backend on restart procedure", zap.Error(err))
@@ -231,7 +231,7 @@ func (d *deviceDiscoveryBackend) GetStartTime() time.Time {
 
 func (d *deviceDiscoveryBackend) GetCapabilities() (map[string]interface{}, error) {
 	caps := make(map[string]interface{})
-	err := d.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", CapabilitiesTimeout)
+	err := d.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", capabilitiesTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +280,7 @@ func (d *deviceDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePol
 	}
 
 	var resp map[string]interface{}
-	err = d.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", ApplyPolicyTimeout)
+	err = d.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout)
 	if err != nil {
 		d.logger.Warn("yaml policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
 		return err
@@ -299,7 +299,7 @@ func (d *deviceDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	err := d.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", RemovePolicyTimeout)
+	err := d.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", removePolicyTimeout)
 	if err != nil {
 		return err
 	}
