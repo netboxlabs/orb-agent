@@ -89,11 +89,11 @@ def translate_interface(
 
     # Convert napalm interface speed from Mbps to Netbox Kbps
     speed = int(interface_info.get("speed")) * 1000
-    if not int32_overflows(speed):
+    if speed > 0 and not int32_overflows(speed):
         interface.speed = speed
 
     mtu = interface_info.get("mtu")
-    if not int32_overflows(mtu):
+    if mtu > 0 and not int32_overflows(mtu):
         interface.mtu = mtu
 
     return interface
