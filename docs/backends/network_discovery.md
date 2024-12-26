@@ -1,5 +1,5 @@
 # Network Discovery
-The network discovery backend leverages NMAP to scan networks and discover IP information.
+The network discovery backend leverages [NMAP](https://nmap.org/) to scan networks and discover IP information.
 
 
 ## Configuration
@@ -15,10 +15,10 @@ orb:
         api_key: ${DIODE_API_KEY}
         agent_name: agent01
     network_discovery:
-      host: 192.168.5.11 #default 0.0.0.0
+      host: 192.168.5.11 # default 0.0.0.0
       port: 8863 # default 8072
-      log_level: ERROR #default INFO
-      log_format: JSON #default TEXT
+      log_level: ERROR # default INFO
+      log_format: JSON # default TEXT
 
 ```
 
@@ -71,6 +71,6 @@ orb:
             - 192.168.7.32
             - 192.168.7.30-40 # IP range
             - 192.168.7.0/24 # IP subnet
-            - google.com #dns lookup
+            - google.com # dns lookup
 
 ```

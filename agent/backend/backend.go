@@ -11,6 +11,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
+// Running Status types
 const (
 	Unknown RunningStatus = iota
 	Running
@@ -20,6 +21,7 @@ const (
 	Waiting
 )
 
+// RunningStatus is the status of the backend
 type RunningStatus int
 
 var runningStatusMap = [...]string{
@@ -31,15 +33,7 @@ var runningStatusMap = [...]string{
 	"waiting",
 }
 
-var runningStatusRevMap = map[string]RunningStatus{
-	"unknown":       Unknown,
-	"running":       Running,
-	"backend_error": BackendError,
-	"agent_error":   AgentError,
-	"offline":       Offline,
-	"waiting":       Waiting,
-}
-
+// State represents the state of the backend
 type State struct {
 	Status            RunningStatus
 	RestartCount      int64
@@ -52,6 +46,7 @@ func (s RunningStatus) String() string {
 	return runningStatusMap[s]
 }
 
+// Backend is the interface that all backends must implement
 type Backend interface {
 	Configure(*zap.Logger, policies.PolicyRepo, map[string]interface{}, config.BackendCommons) error
 	SetCommsClient(string, *mqtt.Client, string)
@@ -71,10 +66,12 @@ type Backend interface {
 
 var registry = make(map[string]Backend)
 
+// Register registers backend
 func Register(name string, b Backend) {
 	registry[name] = b
 }
 
+// GetList returns list of registered backends
 func GetList() []string {
 	keys := make([]string, 0, len(registry))
 	for k := range registry {
@@ -83,11 +80,13 @@ func GetList() []string {
 	return keys
 }
 
+// HaveBackend checks if backend is registered
 func HaveBackend(name string) bool {
 	_, prs := registry[name]
 	return prs
 }
 
+// GetBackend returns a registered backend
 func GetBackend(name string) Backend {
 	return registry[name]
 }

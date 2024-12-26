@@ -3,14 +3,13 @@ package policies
 import (
 	"database/sql/driver"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
+// PolicyData represents a policy
 type PolicyData struct {
 	ID                 string
 	Datasets           map[string]bool
-	GroupIds           map[string]bool
+	GroupIDs           map[string]bool
 	Name               string
 	Backend            string
 	Version            int32
@@ -22,6 +21,7 @@ type PolicyData struct {
 	PreviousPolicyData *PolicyData
 }
 
+// GetDatasetIDs returns the dataset IDs
 func (d *PolicyData) GetDatasetIDs() []string {
 	keys := make([]string, len(d.Datasets))
 
@@ -33,6 +33,7 @@ func (d *PolicyData) GetDatasetIDs() []string {
 	return keys
 }
 
+// Policy state types
 const (
 	Unknown PolicyState = iota
 	Running
@@ -41,6 +42,7 @@ const (
 	NoTapMatch
 )
 
+// PolicyState represents the state of a policy
 type PolicyState int
 
 var policyStateMap = [...]string{
@@ -63,8 +65,11 @@ func (s PolicyState) String() string {
 	return policyStateMap[s]
 }
 
+// Scan scans the value into the PolicyState
 func (s *PolicyState) Scan(value interface{}) error {
 	*s = policyStateRevMap[string(value.([]byte))]
 	return nil
 }
+
+// Value returns the value of the PolicyState
 func (s PolicyState) Value() (driver.Value, error) { return s.String(), nil }

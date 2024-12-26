@@ -10,7 +10,7 @@ func TestBuildDefaultPolicy(t *testing.T) {
 	testCases := []struct {
 		caseName        string
 		inputString     string
-		policyId        string
+		policyID        string
 		policyName      string
 		expectedStruct  openTelemetryConfig
 		processedString string
@@ -44,7 +44,7 @@ service:
       receivers: 
         - httpcheck
 `,
-			policyId:   "test-policy-id",
+			policyID:   "test-policy-id",
 			policyName: "test-policy",
 		},
 	}
@@ -56,14 +56,13 @@ service:
 			if err != nil {
 				t.Errorf("failed to merge default value with policy: %v", err)
 			}
-			expectedStruct, err := exporterBuilder.MergeDefaultValueWithPolicy(gotOtelConfig, testCase.policyId, testCase.policyName)
+			expectedStruct, err := exporterBuilder.MergeDefaultValueWithPolicy(gotOtelConfig, testCase.policyID, testCase.policyName)
 			if err != nil {
 				t.Errorf("failed to merge default value with policy: %v", err)
 			}
 			if _, ok := expectedStruct.Processors["transform/policy_data"]; !ok {
 				t.Error("missing required attributes/policy_data processor", err)
 			}
-
 		})
 	}
 }

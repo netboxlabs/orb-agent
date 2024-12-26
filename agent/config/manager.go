@@ -6,12 +6,14 @@ import (
 	"go.uber.org/zap"
 )
 
-type ConfigManager interface {
+// Manager is the interface for configuration manager
+type Manager interface {
 	GetConfig() (MQTTConfig, error)
 	GetContext(ctx context.Context) context.Context
 }
 
-func New(logger *zap.Logger, c ManagerConfig) ConfigManager {
+// New creates a new instance of ConfigManager based on the configuration
+func New(logger *zap.Logger, c ManagerConfig) Manager {
 	switch c.Active {
 	case "local":
 		return &localConfigManager{logger: logger, config: c.Backends.Local}

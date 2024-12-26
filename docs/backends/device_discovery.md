@@ -1,5 +1,5 @@
 # Device Discovery
-The device discovery backend leverages NAPALM to connect to network devices and collect network information.
+The device discovery backend leverages [NAPALM](https://napalm.readthedocs.io/en/latest/index.html) to connect to network devices and collect network information.
 
 
 ## Configuration
@@ -15,7 +15,7 @@ orb:
         api_key: ${DIODE_API_KEY}
         agent_name: agent01
     device_discovery:
-      host: 192.168.5.11 #default 0.0.0.0
+      host: 192.168.5.11 # default 0.0.0.0
       port: 8857 # default 8072
 
 ```

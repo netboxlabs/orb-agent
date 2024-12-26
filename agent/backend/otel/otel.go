@@ -2,7 +2,6 @@ package otel
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,8 +10,6 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
-	"go.opentelemetry.io/collector/exporter"
-	"go.opentelemetry.io/collector/receiver"
 	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -22,15 +19,17 @@ import (
 
 var _ backend.Backend = (*openTelemetryBackend)(nil)
 
-const DefaultPath = "otelcol-contrib"
-const DefaultHost = "localhost"
-const DefaultPort = 4317
+const (
+	defaultPath = "otelcol-contrib"
+	defaultHost = "localhost"
+	defaultPort = 4317
+)
 
 type openTelemetryBackend struct {
 	logger    *zap.Logger
 	startTime time.Time
 
-	//policies
+	// policies
 	policyRepo            policies.PolicyRepo
 	policyConfigDirectory string
 	agentTags             map[string]string
@@ -40,8 +39,6 @@ type openTelemetryBackend struct {
 	runningCollectors  map[string]runningPolicy
 	mainCancelFunction context.CancelFunc
 
-	// MQTT Config for OTEL MQTT Exporter
-	mqttConfig config.MQTTConfig
 	mqttClient *mqtt.Client
 
 	otlpMetricsTopic string
@@ -53,28 +50,26 @@ type openTelemetryBackend struct {
 	otelReceiverHost   string
 	otelReceiverPort   int
 	otelExecutablePath string
-
-	metricsReceiver receiver.Metrics
-	metricsExporter exporter.Metrics
-	tracesReceiver  receiver.Traces
-	tracesExporter  exporter.Traces
-	logsReceiver    receiver.Logs
-	logsExporter    exporter.Logs
 }
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
-	config map[string]interface{}, common config.BackendCommons) error {
+	config map[string]interface{}, common config.BackendCommons,
+) error {
 	o.logger = logger
 	o.logger.Info("configuring OpenTelemetry backend")
 	o.policyRepo = repo
 	var err error
 	o.otelReceiverTaps = []string{"otelcol-contrib", "receivers", "processors", "extensions"}
 	o.policyConfigDirectory, err = os.MkdirTemp("", "otel-policies")
+	if err != nil {
+		o.logger.Error("failed to create temporary directory for policy configs", zap.Error(err))
+		return err
+	}
 	if path, ok := config["binary"].(string); ok {
 		o.otelExecutablePath = path
 	} else {
-		o.otelExecutablePath = DefaultPath
+		o.otelExecutablePath = defaultPath
 	}
 	_, err = exec.LookPath(o.otelExecutablePath)
 	if err != nil {
@@ -91,15 +86,15 @@ func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.Polic
 		o.otelReceiverPort, err = strconv.Atoi(otelPort.(string))
 		if err != nil {
 			o.logger.Error("failed to parse otlp port using default", zap.Error(err))
-			o.otelReceiverPort = DefaultPort
+			o.otelReceiverPort = defaultPort
 		}
 	} else {
-		o.otelReceiverPort = DefaultPort
+		o.otelReceiverPort = defaultPort
 	}
 	if otelHost, ok := config["otlp_host"].(string); ok {
 		o.otelReceiverHost = otelHost
 	} else {
-		o.otelReceiverHost = DefaultHost
+		o.otelReceiverHost = defaultHost
 	}
 
 	return nil
@@ -121,6 +116,7 @@ func (o *openTelemetryBackend) Version() (string, error) {
 	case finalStatus := <-status:
 		if finalStatus.Error != nil {
 			o.logger.Error("error during call of otelcol-contrib version", zap.Error(finalStatus.Error))
+			cancel()
 			return "", finalStatus.Error
 		} else {
 			output := finalStatus.Stdout
@@ -135,7 +131,6 @@ func (o *openTelemetryBackend) Version() (string, error) {
 	o.logger.Info("running opentelemetry-contrib version", zap.String("version", versionOutput))
 
 	return versionOutput, nil
-
 }
 
 func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) (err error) {
@@ -184,13 +179,14 @@ func (o *openTelemetryBackend) Stop(_ context.Context) error {
 
 func (o *openTelemetryBackend) FullReset(ctx context.Context) error {
 	o.logger.Info("restarting otel backend", zap.Int("running policies", len(o.runningCollectors)))
-	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, "routine", "otel"))
+	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "otel"))
 	if err := o.Start(backendCtx, cancelFunc); err != nil {
 		return err
 	}
 	return nil
 }
 
+// Register registers otel backend
 func Register() bool {
 	backend.Register("otel", &openTelemetryBackend{})
 	return true

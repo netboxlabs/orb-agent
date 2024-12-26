@@ -6,6 +6,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// PolicyRepo is the interface for policy repositories
 type PolicyRepo interface {
 	Exists(policyID string) bool
 	Get(policyID string) (PolicyData, error)
@@ -30,11 +31,11 @@ var _ PolicyRepo = (*policyMemRepo)(nil)
 func (p policyMemRepo) GetByName(policyName string) (PolicyData, error) {
 	if id, ok := p.nameMap[policyName]; ok {
 		return p.Get(id)
-	} else {
-		return PolicyData{}, errors.New("policy name not found")
 	}
+	return PolicyData{}, errors.New("policy name not found")
 }
 
+// NewMemRepo creates a new in-memory policy repository
 func NewMemRepo(logger *zap.Logger) (PolicyRepo, error) {
 	r := &policyMemRepo{
 		logger:  logger,
@@ -65,9 +66,8 @@ func (p policyMemRepo) RemoveDataset(policyID string, datasetID string) (bool, e
 	// we can remove the policy from the agent
 	if len(policy.Datasets) > 0 {
 		return false, nil
-	} else {
-		return true, nil
 	}
+	return true, nil
 }
 
 func (p policyMemRepo) Exists(policyID string) bool {
@@ -120,7 +120,7 @@ func (p policyMemRepo) EnsureGroupID(policyID string, agentGroupID string) error
 	if !ok {
 		return errors.New("unknown policy ID")
 	}
-	policy.GroupIds[agentGroupID] = true
+	policy.GroupIDs[agentGroupID] = true
 	return nil
 }
 

@@ -6,7 +6,6 @@ import (
 )
 
 func Test_orbAgent_startBackends(t *testing.T) {
-
 	type args struct {
 		agentCtx context.Context
 	}
