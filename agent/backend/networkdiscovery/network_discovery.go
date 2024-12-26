@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -52,8 +51,7 @@ type networkDiscoveryBackend struct {
 	cancelFunc context.CancelFunc
 	ctx        context.Context
 
-	mqttClient       *mqtt.Client
-	otlpMetricsTopic string
+	mqttClient *mqtt.Client
 }
 
 type info struct {
@@ -89,10 +87,8 @@ func (d *networkDiscoveryBackend) Configure(logger *zap.Logger, repo policies.Po
 	return nil
 }
 
-func (d *networkDiscoveryBackend) SetCommsClient(agentID string, client *mqtt.Client, baseTopic string) {
+func (d *networkDiscoveryBackend) SetCommsClient(_ string, client *mqtt.Client, _ string) {
 	d.mqttClient = client
-	otelBaseTopic := strings.Replace(baseTopic, "?", "otlp", 1)
-	d.otlpMetricsTopic = fmt.Sprintf("%s/m/%c", otelBaseTopic, agentID[0])
 }
 
 func (d *networkDiscoveryBackend) Version() (string, error) {
