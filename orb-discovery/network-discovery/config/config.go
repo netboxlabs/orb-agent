@@ -14,11 +14,18 @@ type Scope struct {
 	Targets []string `yaml:"targets"`
 }
 
+// Defaults represents the supported default values for a policy
+type Defaults struct {
+	Description string   `yaml:"description,omitempty"`
+	Comments    string   `yaml:"comments,omitempty"`
+	Tags        []string `yaml:"tags,omitempty"`
+}
+
 // PolicyConfig represents the configuration of a policy
 type PolicyConfig struct {
-	Schedule *string           `yaml:"schedule"`
-	Defaults map[string]string `yaml:"defaults"`
-	Timeout  int               `yaml:"timeout"`
+	Schedule *string  `yaml:"schedule,omitempty"`
+	Defaults Defaults `yaml:"defaults"`
+	Timeout  int      `yaml:"timeout"`
 }
 
 // Policy represents a network-discovery policy

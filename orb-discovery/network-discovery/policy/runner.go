@@ -97,11 +97,18 @@ func (r *Runner) run() {
 		ip := &diode.IPAddress{
 			Address: diode.String(host.Addresses[0].Addr + "/32"),
 		}
-		if r.config.Defaults["description"] != "" {
-			ip.Description = diode.String(r.config.Defaults["description"])
+		if r.config.Defaults.Description != "" {
+			ip.Description = diode.String(r.config.Defaults.Description)
 		}
-		if r.config.Defaults["comments"] != "" {
-			ip.Comments = diode.String(r.config.Defaults["comments"])
+		if r.config.Defaults.Comments != "" {
+			ip.Comments = diode.String(r.config.Defaults.Comments)
+		}
+		if len(r.config.Defaults.Tags) > 0 {
+			var tags []*diode.Tag
+			for _, tag := range r.config.Defaults.Tags {
+				tags = append(tags, &diode.Tag{Name: diode.String(tag)})
+			}
+			ip.Tags = tags
 		}
 		entities = append(entities, ip)
 	}

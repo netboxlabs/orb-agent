@@ -13,7 +13,7 @@ from napalm import get_network_driver
 
 from device_discovery.client import Client
 from device_discovery.discovery import discover_device_driver, supported_drivers
-from device_discovery.policy.models import Config, Napalm, Status
+from device_discovery.policy.models import Config, Defaults, Napalm, Status
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -125,10 +125,10 @@ class PolicyRunner:
             ) as device:
                 data = {
                     "driver": scope.driver,
-                    "site": config.defaults.get("site", None),
                     "device": device.get_facts(),
                     "interface": device.get_interfaces(),
                     "interface_ip": device.get_interfaces_ip(),
+                    "defaults": config.defaults,
                 }
                 Client().ingest(scope.hostname, data)
         except Exception as e:

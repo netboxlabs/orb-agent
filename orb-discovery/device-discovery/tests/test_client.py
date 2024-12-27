@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Client Unit Tests."""
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -35,7 +36,7 @@ def sample_data():
             "GigabitEthernet0/0": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
         },
         "driver": "ios",
-        "site": "New York",
+        "defaults": SimpleNamespace(site="New York", role=None, tags = None, device = None),
     }
 
 

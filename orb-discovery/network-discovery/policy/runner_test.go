@@ -79,9 +79,10 @@ func TestRunnerRun(t *testing.T) {
 			policyConfig := config.Policy{
 				Config: config.PolicyConfig{
 					Schedule: nil,
-					Defaults: map[string]string{
-						"description": "Test",
-						"comments":    "This is a test",
+					Defaults: config.Defaults{
+						Description: "Test",
+						Comments:    "This is a test",
+						Tags:        []string{"test", "ip"},
 					},
 				},
 				Scope: config.Scope{

@@ -42,7 +42,7 @@ func TestManagerParsePolicies(t *testing.T) {
           policy1:
             config:
               defaults:
-                site: New York NY
+                comments: test
             scope:
               targets:
                 - 192.168.1.1/24
@@ -51,7 +51,7 @@ func TestManagerParsePolicies(t *testing.T) {
 		policies, err := manager.ParsePolicies(yamlData)
 		assert.NoError(t, err)
 		assert.Contains(t, policies, "policy1")
-		assert.Equal(t, "New York NY", policies["policy1"].Config.Defaults["site"])
+		assert.Equal(t, "test", policies["policy1"].Config.Defaults.Comments)
 	})
 
 	t.Run("No Policies", func(t *testing.T) {

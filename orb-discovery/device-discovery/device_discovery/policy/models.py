@@ -30,14 +30,29 @@ class Napalm(BaseModel):
         default=None, description="Optional arguments"
     )
 
+class ObjectParameters(BaseModel):
+    """Model for object parameters."""
+
+    comments: str | None = Field(default=None, description="Comments, optional")
+    description: str | None = Field(default=None, description="Description, optional")
+    tags: list[str] | None = Field(default=None, description="Tags, optional")
+
+class Defaults(BaseModel):
+    """Model for default configuration."""
+
+    site: str | None = Field(default=None, description="Site name, optional")
+    role: str | None = Field(default=None, description="Device Role name, optional")
+    tags: list[str] | None = Field(default=None, description="Tags, optional")
+    device: ObjectParameters | None = Field(default=None, description="Device parameters, optional")
+    interface: ObjectParameters | None = Field(default=None, description="Interface parameters, optional")
+    ipaddress: ObjectParameters | None = Field(default=None, description="IP Address parameters, optional")
+    prefix: ObjectParameters | None = Field(default=None, description="Prefix parameters, optional")
 
 class Config(BaseModel):
     """Model for discovery configuration."""
 
     schedule: str | None = Field(default=None, description="cron interval, optional")
-    defaults: dict[str, str] | None = Field(
-        default=None, description="NetBox configuration"
-    )
+    defaults: Defaults | None = Field(default=None, description="Default configuration, optional")
 
     @field_validator("schedule")
     @classmethod

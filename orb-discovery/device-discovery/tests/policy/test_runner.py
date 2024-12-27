@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from apscheduler.triggers.date import DateTrigger
 
-from device_discovery.policy.models import Config, Napalm, Status
+from device_discovery.policy.models import Config, Defaults, Napalm, Status
 from device_discovery.policy.runner import PolicyRunner
 
 
@@ -20,7 +20,7 @@ def policy_runner():
 @pytest.fixture
 def sample_config():
     """Fixture for a sample Config object."""
-    return Config(schedule="0 * * * *", defaults={"site": "New York"})
+    return Config(schedule="0 * * * *", defaults=Defaults(site="New York"))
 
 
 @pytest.fixture
