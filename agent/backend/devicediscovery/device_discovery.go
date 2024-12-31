@@ -109,11 +109,13 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		"--host", d.apiHost,
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
-		"--diode-api-key", d.diodeAPIKey,
+		"--diode-api-key", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("device-discovery startup", zap.Strings("arguments", pvOptions))
+
+	pvOptions[7] = d.diodeAPIKey
 
 	d.proc = cmd.NewCmdOptions(cmd.Options{
 		Buffered:  false,
