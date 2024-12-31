@@ -46,7 +46,7 @@ jobs:
         with:
           node-version: "lts/*"
       - name: Write package.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
         with:
           path: ./package.json
           write-mode: overwrite
@@ -60,7 +60,7 @@ jobs:
               }
             }
       - name: Write .releaserc.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
         with:
           path: ./.releaserc.json
           write-mode: overwrite
@@ -172,7 +172,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
       - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@67339c736fd9354cd4f8cb0b744f2b82a74b5c70 #v1.12.3
         with:
           packages-dir: ${{env.APP_NAME}}/dist
 
@@ -187,7 +187,7 @@ jobs:
         with:
           node-version: "lts/*"
       - name: Write package.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
         with:
           path: ./package.json
           write-mode: overwrite
@@ -201,7 +201,7 @@ jobs:
               }
             }
       - name: Write .releaserc.json
-        uses: DamianReeves/write-file-action@master
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
         with:
           path: ./.releaserc.json
           write-mode: overwrite

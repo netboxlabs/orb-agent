@@ -42,7 +42,7 @@ class PolicyRunner:
             scopes: scope data for the devices.
 
         """
-        self.name = name
+        self.name = name.replace('\r\n', '').replace('\n', '')
         self.config = config
 
         if self.config is None:
@@ -52,21 +52,22 @@ class PolicyRunner:
 
         self.scheduler.start()
         for scope in scopes:
+            sanitized_hostname = scope.hostname.replace('\r\n', '').replace('\n', '')
             if scope.driver and scope.driver not in supported_drivers:
                 self.scheduler.shutdown()
                 raise Exception(
-                    f"Policy {self.name}, Hostname {scope.hostname}: specified driver '{scope.driver}' "
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: specified driver '{scope.driver}' "
                     f"was not found in the current installed drivers list: {supported_drivers}."
                 )
 
             if self.config.schedule is not None:
                 logger.info(
-                    f"Policy {self.name}, Hostname {scope.hostname}: Scheduled to run with '{self.config.schedule}'"
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: Scheduled to run with '{self.config.schedule}'"
                 )
                 trigger = CronTrigger.from_crontab(self.config.schedule)
             else:
                 logger.info(
-                    f"Policy {self.name}, Hostname {scope.hostname}: One-time run"
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: One-time run"
                 )
                 trigger = DateTrigger(run_date=datetime.now() + timedelta(seconds=1))
 
@@ -89,32 +90,33 @@ class PolicyRunner:
             config: Configuration data containing site information.
 
         """
+        sanitized_hostname = scope.hostname.replace('\r\n', '').replace('\n', '')
         if scope.driver is None:
             logger.info(
-                f"Policy {self.name}, Hostname {scope.hostname}: Driver not informed, discovering it"
+                f"Policy {self.name}, Hostname {sanitized_hostname}: Driver not informed, discovering it"
             )
             scope.driver = discover_device_driver(scope)
             if scope.driver is None:
                 self.status = Status.FAILED
                 logger.error(
-                    f"Policy {self.name}, Hostname {scope.hostname}: Not able to discover device driver"
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: Not able to discover device driver"
                 )
                 try:
                     self.scheduler.remove_job(id)
                 except Exception as e:
                     logger.error(
-                        f"Policy {self.name}, Hostname {scope.hostname}: Error removing job: {e}"
+                        f"Policy {self.name}, Hostname {sanitized_hostname}: Error removing job: {e}"
                     )
                 return
 
         logger.info(
-            f"Policy {self.name}, Hostname {scope.hostname}: Get driver '{scope.driver}'"
+            f"Policy {self.name}, Hostname {sanitized_hostname}: Get driver '{scope.driver}'"
         )
 
         try:
             np_driver = get_network_driver(scope.driver)
             logger.info(
-                f"Policy {self.name}, Hostname {scope.hostname}: Getting information"
+                f"Policy {self.name}, Hostname {sanitized_hostname}: Getting information"
             )
             with np_driver(
                 scope.hostname,
@@ -132,7 +134,7 @@ class PolicyRunner:
                 }
                 Client().ingest(scope.hostname, data)
         except Exception as e:
-            logger.error(f"Policy {self.name}, Hostname {scope.hostname}: {e}")
+            logger.error(f"Policy {self.name}, Hostname {sanitized_hostname}: {e}")
 
     def stop(self):
         """Stop the policy runner."""
