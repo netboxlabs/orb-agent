@@ -70,7 +70,6 @@ func (cc *cloudConfigManager) request(address string, token string, response int
 		return err
 	}
 	req.Header.Add("Content-Type", "application/json")
-	cc.logger.Debug("cloud api request", zap.String("url", req.URL.String()), zap.ByteString("body", body))
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", token))
 
 	res, getErr := client.Do(req)

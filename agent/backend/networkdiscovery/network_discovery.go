@@ -109,11 +109,13 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		"--host", d.apiHost,
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
-		"--diode-api-key", d.diodeAPIKey,
+		"--diode-api-key", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("network-discovery startup", zap.Strings("arguments", pvOptions))
+
+	pvOptions[7] = d.diodeAPIKey
 
 	d.proc = cmd.NewCmdOptions(cmd.Options{
 		Buffered:  false,
