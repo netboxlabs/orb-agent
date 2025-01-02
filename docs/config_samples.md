@@ -27,6 +27,8 @@ orb:
             hostname: 192.168.0.5
             username: admin
             password: ${PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-napalm.conf
 ```
 
 Run command:
