@@ -1,5 +1,5 @@
 # Network Discovery
-The network discovery backend leverages [NMAP](https://nmap.org/) to scan networks and discover IP information.
+The network discovery backend leverages [NMAP](https://nmap.org/) to scan networks with icmp echo requests and discover IP information.
 
 
 ## Configuration
