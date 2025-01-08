@@ -16,7 +16,7 @@ orb:
         agent_name: agent01
     network_discovery:
       host: 192.168.5.11 # default 0.0.0.0
-      port: 8863 # default 8072
+      port: 8863 # default 8073
       log_level: ERROR # default INFO
       log_format: JSON # default TEXT
 
