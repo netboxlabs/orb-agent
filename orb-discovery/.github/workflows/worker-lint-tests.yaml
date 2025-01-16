@@ -1,0 +1,61 @@
+name: Worker - lint and tests
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "worker/**"
+  push:
+    branches:
+      - "!release"
+    paths:
+      - "worker/**"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  BE_DIR: worker
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        python: [ "3.10", "3.11", "3.12" ]
+    defaults:
+      run:
+        working-directory: ${{ env.BE_DIR }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install .
+        pip install .[dev]
+        pip install .[test]
+
+    - name: Run tests with coverage
+      run: |
+        set -o pipefail
+        pytest --junitxml=pytest.xml --cov-report=term-missing:skip-covered --cov=worker/ | tee pytest-coverage.txt
+
+    - name: Pytest coverage comment
+      uses: MishaKav/pytest-coverage-comment@81882822c5b22af01f91bd3eacb1cefb6ad73dc2 #v1.1.53
+      with:
+        pytest-coverage-path: ${{ env.BE_DIR }}/pytest-coverage.txt
+        junitxml-path: ${{ env.BE_DIR }}/pytest.xml
+
+    - name: Lint with Ruff
+      run: |
+        ruff check --output-format=github worker/ tests/
+      continue-on-error: true
