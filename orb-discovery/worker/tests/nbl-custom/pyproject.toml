@@ -25,7 +25,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "netboxlabs-worker~=0.0.1",
+    "netboxlabs-orb-worker~=0.1",
 ]
 
 [project.optional-dependencies]
