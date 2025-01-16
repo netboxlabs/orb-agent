@@ -55,7 +55,7 @@ COPY --from=otelcol-contrib /otelcol-contrib /usr/local/bin/otelcol-contrib
 
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
 
-RUN pip3 install netboxlabs-device-discovery
+RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 
 RUN chmod a+x /run-agent.sh
 

@@ -36,9 +36,10 @@ orb:
     network_discovery:
     ...
 ```
-Only the `network_discovery` and `device_discovery` backends are currently supported. They do not require any special configuration.
+Only the `network_discovery`, `device_discovery` and `worker` backends are currently supported. They do not require any special configuration.
 - [Device Discovery](./docs/backends/device_discovery.md) 
 - [Network Discovery](./docs/backends/network_discovery.md)
+- [Worker](./docs/backends/worker.md)
 
 #### Common
 A special `common` subsection under `backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings to all backends.
@@ -66,6 +67,9 @@ orb:
     network_discovery:
       network_policy_1:
        # see docs/backends/network_discovery.md
+    worker:
+      worker_policy_1:
+       # see docs/backends/worker.md
  ```
 
 ## Running the agent
