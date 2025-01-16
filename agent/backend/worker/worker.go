@@ -27,7 +27,7 @@ const (
 	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
-	defaultExec         = "worker"
+	defaultExec         = "orb-worker"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8071"
 )
