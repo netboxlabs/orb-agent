@@ -25,9 +25,9 @@ def main():
         "-V",
         "--version",
         action="version",
-        version=f"Worker version: {version_semver()},  "
+        version=f"Orb Worker version: {version_semver()},  "
         f"Diode SDK version: {SdkVersion.version_semver()}",
-        help="Display Version",
+        help="Display Orb Worker and Diode SDK versions",
     )
     parser.add_argument(
         "-s",

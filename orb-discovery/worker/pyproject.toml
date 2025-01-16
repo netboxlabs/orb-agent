@@ -43,7 +43,7 @@ test = ["coverage", "pytest", "pytest-cov"]
 "Homepage" = "https://netboxlabs.com/"
 
 [project.scripts]
-worker = "worker.main:main"
+orb-worker = "worker.main:main"
 
 [tool.setuptools]
 packages = [
