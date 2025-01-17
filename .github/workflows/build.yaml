@@ -2,6 +2,7 @@ name: Orb Agent - build
 on:
   push:
     branches:
+      - "!release"
       - "develop"
     paths:
       - "agent/**"
@@ -77,7 +78,7 @@ jobs:
   build-and-push:
     needs: go-test
     runs-on: ubuntu-latest
-    #if: success() && github.ref == 'refs/heads/develop'
+    if: success() && github.ref == 'refs/heads/develop'
     strategy:
       fail-fast: false
     steps:
