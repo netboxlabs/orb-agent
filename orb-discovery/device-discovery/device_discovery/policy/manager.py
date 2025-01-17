@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
-"""Orb Discovery Policy Manager."""
+"""Device Discovery Policy Manager."""
 
 import logging
 import os

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
-"""Orb Discovery Policy Runner."""
+"""Device Discovery Policy Runner."""
 
 import logging
 import uuid

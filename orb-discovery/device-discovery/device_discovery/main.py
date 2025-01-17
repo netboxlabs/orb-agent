@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
-"""Orb Discovery entry point."""
+"""Device Discovery entry point."""
 
 import argparse
 import os
@@ -21,14 +21,14 @@ def main():
 
     Parses command-line arguments and starts the backend.
     """
-    parser = argparse.ArgumentParser(description="Orb Discovery Backend")
+    parser = argparse.ArgumentParser(description="Orb Device Discovery Backend")
     parser.add_argument(
         "-V",
         "--version",
         action="version",
-        version=f"Discovery version: {version_semver()}, NAPALM version: {version('napalm')}, "
+        version=f"Device Discovery version: {version_semver()}, NAPALM version: {version('napalm')}, "
         f"Diode SDK version: {SdkVersion.version_semver()}",
-        help="Display Discovery, NAPALM and Diode SDK versions",
+        help="Display Device Discovery, NAPALM and Diode SDK versions",
     )
     parser.add_argument(
         "-s",

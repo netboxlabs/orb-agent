@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # Copyright 2024 NetBox Labs Inc
-"""Orb Discovery Policy Models."""
+"""Device Discovery Policy Models."""
 
 from enum import Enum
 from typing import Any

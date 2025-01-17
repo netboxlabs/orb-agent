@@ -166,7 +166,7 @@ def translate_interface_ips(
     ip_entities = []
 
     for if_ip_name, ip_info in interfaces_ip.items():
-        if interface.name in if_ip_name:
+        if interface.name == if_ip_name:
             for ip_version, default_prefix in (("ipv4", 32), ("ipv6", 128)):
                 for ip, details in ip_info.get(ip_version, {}).items():
                     ip_address = f"{ip}/{details.get('prefix_length', default_prefix)}"
