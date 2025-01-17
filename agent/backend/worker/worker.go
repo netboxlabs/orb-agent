@@ -173,7 +173,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	for backoff := 0; backoff < readinessBackoff; backoff++ {
 		version, readinessErr := d.Version()
 		if readinessErr == nil {
-			d.logger.Info("worker readiness ok, got version ", zap.String("device_discovery_version", version))
+			d.logger.Info("worker readiness ok, got version ", zap.String("worker_version", version))
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
