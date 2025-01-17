@@ -24,7 +24,7 @@ def sample_device_info():
         "serial_number": "123456789",
         "site": "New York",
         "driver": "ios",
-        "interface_list": ["GigabitEthernet0/0"],
+        "interface_list": ["GigabitEthernet0/0", "GigabitEthernet0/0/1"],
     }
 
 
@@ -37,6 +37,13 @@ def sample_interface_info():
             "mtu": 1500,
             "mac_address": "00:1C:58:29:4A:71",
             "speed": 1000,
+            "description": "Uplink Interface",
+        },
+        "GigabitEthernet0/0/1": {
+            "is_enabled": True,
+            "mtu": 1500,
+            "mac_address": "00:1C:58:29:4A:72",
+            "speed": 10000,
             "description": "Uplink Interface",
         }
     }
@@ -59,7 +66,7 @@ def sample_interface_overflows_info():
 @pytest.fixture
 def sample_interfaces_ip():
     """Sample interface IPs for testing."""
-    return {"GigabitEthernet0/0": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    return {"GigabitEthernet0/0/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
 
 
 @pytest.fixture
@@ -144,6 +151,19 @@ def test_translate_interface_ips(
     ip_entities = list(
         translate_interface_ips(interface, sample_interfaces_ip, sample_defaults)
     )
+
+    assert len(ip_entities) == 0
+
+    interface = translate_interface(
+        device,
+        "GigabitEthernet0/0/1",
+        sample_interface_info["GigabitEthernet0/0/1"],
+        sample_defaults,
+    )
+    ip_entities = list(
+        translate_interface_ips(interface, sample_interfaces_ip, sample_defaults)
+    )
+
     assert len(ip_entities) == 2
     assert ip_entities[0].prefix.prefix == "192.0.2.0/24"
     assert ip_entities[1].ip_address.address == "192.0.2.1/24"
@@ -164,8 +184,9 @@ def test_translate_data(
         "driver": "ios",
     }
     entities = list(translate_data(data))
-    assert len(entities) == 4
+    assert len(entities) == 5
     assert entities[0].device.name == "router1"
     assert entities[1].interface.name == "GigabitEthernet0/0"
-    assert entities[2].prefix.prefix == "192.0.2.0/24"
-    assert entities[3].ip_address.address == "192.0.2.1/24"
+    assert entities[2].interface.name == "GigabitEthernet0/0/1"
+    assert entities[3].prefix.prefix == "192.0.2.0/24"
+    assert entities[4].ip_address.address == "192.0.2.1/24"

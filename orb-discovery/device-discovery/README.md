@@ -5,11 +5,11 @@ Orb device discovery backend
 ```bash
 usage: device-discovery [-h] [-V] [-s HOST] [-p PORT] -t DIODE_TARGET -k DIODE_API_KEY
 
-Orb Discovery Backend
+Orb Device Discovery Backend
 
 options:
   -h, --help            show this help message and exit
-  -V, --version         Display Discovery, NAPALM and Diode SDK versions
+  -V, --version         Display Device Discovery, NAPALM and Diode SDK versions
   -s HOST, --host HOST  Server host
   -p PORT, --port PORT  Server port
   -t DIODE_TARGET, --diode-target DIODE_TARGET
