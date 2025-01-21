@@ -8,6 +8,9 @@ on:
       - "cmd/**"
       - "!agent/docker/**"
 
+permissions:
+  contents: write
+
 env:
   GO_VERSION: '1.23'
 
