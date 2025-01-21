@@ -79,7 +79,7 @@ func (d *networkDiscoveryBackend) request(url string, payload interface{}, metho
 			var jsonBody map[string]interface{}
 			err := json.Unmarshal(body, &jsonBody)
 			if err == nil {
-				if errMsg, ok := jsonBody["error"]; ok {
+				if errMsg, ok := jsonBody["detail"]; ok {
 					return fmt.Errorf("%d %s", res.StatusCode, errMsg)
 				}
 			}
