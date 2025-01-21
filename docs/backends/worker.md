@@ -50,3 +50,23 @@ orb:
           custom_config: custom
         scope:
           custom: any
+```
+
+### Custom Workers
+To specify required custom workers packages, use the environment variable `INSTALL_WORKERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
+
+Mounted folder example:
+```sh
+/local/orb/
+├── agent.yaml
+├── workers.txt
+├── my-worker/
+└── nbl-custom-worker-1.0.2.tar.gz
+```
+
+Example `workers.txt`:
+```txt
+my-custom-wkr==0.1.2 # try install from pypi
+nbl-custom-worker-1.0.2.tar.gz # try install from a tar.gz
+./my-worker # try to install from a folder that contains project.toml
+```
