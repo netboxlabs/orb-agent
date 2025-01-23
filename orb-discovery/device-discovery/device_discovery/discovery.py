@@ -2,14 +2,53 @@
 # Copyright 2024 NetBox Labs Inc
 """Discover the correct NAPALM Driver."""
 
+import inspect
 import logging
+from importlib import import_module
+from importlib.metadata import packages_distributions
+from pkgutil import walk_packages
+from typing import Any
 
-import importlib_metadata
 from napalm import get_network_driver
+from napalm.base.base import NetworkDriver
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def walk_napalm_packages(module: Any, prefix: str, packages: list[str]) -> list[str]:
+    """
+    Walks a directory tree looking for napalm network driver classes.
+
+    This function walks the directory tree rooted at the given module's path,
+    looking for submodules that contain napalm network driver classes.
+
+    Args:
+    ----
+        module (Any): The module to start walking from.
+        prefix (str): The prefix to prepend to package names.
+        packages (list[str]): A list to store the found package names.
+
+    Returns:
+    -------
+        list[str]: A list of package names that contain napalm network driver classes.
+
+    """
+    for package in walk_packages(module.__path__, module.__name__ + "."):
+        try:
+            submodule = import_module(package.name)
+            for _, obj in inspect.getmembers(submodule):
+                if (
+                    inspect.isclass(obj)
+                    and issubclass(obj, NetworkDriver)
+                    and obj is not NetworkDriver
+                ):
+                    packages.append(package.name[len(prefix) :])
+                    break
+        except Exception as e:
+            logger.error(f"Error importing module {package.name}: {str(e)}")
+    return packages
 
 
 def napalm_driver_list() -> list[str]:
@@ -28,9 +67,21 @@ def napalm_driver_list() -> list[str]:
     """
     napalm_packages = ["ios", "eos", "junos", "nxos"]
     prefix = "napalm_"
-    for dist in importlib_metadata.packages_distributions():
+    for dist in packages_distributions():
         if dist.startswith(prefix):
-            napalm_packages.append(dist[len(prefix) :])
+            package_found = False
+            try:
+                module = import_module(dist)
+                for _, obj in inspect.getmembers(module):
+                    if inspect.isclass(obj) and issubclass(obj, NetworkDriver):
+                        napalm_packages.append(dist[len(prefix) :])
+                        package_found = True
+                        break
+                if package_found:
+                    continue
+                napalm_packages = walk_napalm_packages(module, prefix, napalm_packages)
+            except Exception as e:
+                logger.error(f"Error importing module {dist}: {str(e)}")
     return napalm_packages
 
 
