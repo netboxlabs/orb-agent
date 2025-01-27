@@ -36,9 +36,10 @@ orb:
     network_discovery:
     ...
 ```
-Only the `network_discovery` and `device_discovery` backends are currently supported. They do not require any special configuration.
+Only the `network_discovery`, `device_discovery` and `worker` backends are currently supported. They do not require any special configuration.
 - [Device Discovery](./docs/backends/device_discovery.md) 
 - [Network Discovery](./docs/backends/network_discovery.md)
+- [Worker](./docs/backends/worker.md)
 
 #### Common
 A special `common` subsection under `backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings to all backends.
@@ -66,6 +67,9 @@ orb:
     network_discovery:
       network_policy_1:
        # see docs/backends/network_discovery.md
+    worker:
+      worker_policy_1:
+       # see docs/backends/worker.md
  ```
 
 ## Running the agent
@@ -73,7 +77,12 @@ orb:
 To run `orb-agent`, use the following command from the directory where your created your `agent.yaml` file:
 
 ```sh
- docker run -v $(PWD):/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+ docker run --net=host -v $(PWD):/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+The container needs sufficient permissions, to send `icmp` and `tcp` packets. This can either be achieved by setting the network-mode to `host` or by changing the container user to `root`: 
+
+```sh
+ docker run -u root -v $(PWD):/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
 ### Configuration samples

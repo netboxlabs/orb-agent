@@ -27,6 +27,8 @@ orb:
             hostname: 192.168.0.5
             username: admin
             password: ${PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-napalm.conf
 ```
 
 Run command:
@@ -95,3 +97,54 @@ Run command:
  -e DIODE_API_KEY={YOUR_API_KEY} \
  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
+
+## Worker backend
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    worker:
+    common:
+      diode:
+        target: grpc://192.168.31.114:8080/diode
+        api_key: ${DIODE_API_KEY}
+        agent_name: agent02
+  policies:
+    worker:
+      policy_1:
+        config:
+          package: my_worker #Required
+          schedule: "0 */2 * * *"
+          custom_config: config
+        scope:
+          custom_val: value
+```
+
+### Custom Workers
+To specify required custom workers packages, use the environment variable `INSTALL_WORKERS_PATH`. Ensure that the required files are placed in the mounted volume (`/opt/orb`).
+
+Mounted folder example:
+```sh
+/local/orb/
+├── agent.yaml
+├── workers.txt
+├── my-worker/
+└── nbl-custom-worker-1.0.2.tar.gz
+```
+
+Example `workers.txt`:
+```txt
+my-custom-wkr==0.1.2 # try install from pypi
+nbl-custom-worker-1.0.2.tar.gz # try install from a tar.gz
+./my-worker # try to install from a folder that contains project.toml
+```
+
+Run command:
+```sh
+ docker run -v /local/orb:/opt/orb/ \
+ -e DIODE_API_KEY={YOUR_API_KEY} \
+ -e INSTALL_WORKERS_PATH=/opt/orb/workers.txt \
+ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+The relative path used by `pip install` should point to the directory containing the `.txt` file.

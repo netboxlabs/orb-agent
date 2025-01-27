@@ -22,6 +22,12 @@ if [ "${INSTALL_DRIVERS_PATH}" != '' ]; then
   pip3 install -r ${INSTALL_DRIVERS_PATH}
 fi
 
+if [ "${INSTALL_WORKERS_PATH}" != '' ]; then
+  cd $(dirname "$(realpath "$INSTALL_WORKERS_PATH")")
+  echo "Installing custom orb workers"
+  pip3 install -r ${INSTALL_WORKERS_PATH}
+fi
+
 # check geodb folder and extract db
 cd /geo-db/
 if [ -f "asn.mmdb.gz" ]; then

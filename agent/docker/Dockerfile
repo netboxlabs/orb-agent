@@ -29,7 +29,7 @@ FROM python:3.12-slim-bullseye
 
 RUN \
     apt update && \
-    apt install --yes --force-yes --no-install-recommends nmap && \
+    apt install --yes --force-yes --no-install-recommends nmap openssh-client && \
     rm -rf /var/lib/apt
 
 RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
@@ -55,7 +55,7 @@ COPY --from=otelcol-contrib /otelcol-contrib /usr/local/bin/otelcol-contrib
 
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
 
-RUN pip3 install netboxlabs-device-discovery
+RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 
 RUN chmod a+x /run-agent.sh
 

@@ -70,6 +70,7 @@ orb:
             password: ${PASS}
             optional_args:
                canonical_int: True
+               ssh_config_file: /opt/orb/ssh-napalm.conf
           - hostname: myhost.com
             username: remote
             password: 12345

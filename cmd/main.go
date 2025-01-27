@@ -18,6 +18,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/backend/worker"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
@@ -37,6 +38,7 @@ func init() {
 	otel.Register()
 	devicediscovery.Register()
 	networkdiscovery.Register()
+	worker.Register()
 }
 
 // Version prints the version of the agent
@@ -154,6 +156,7 @@ func mergeOrError(path string) {
 	backendVarsFunction["otel"] = otel.RegisterBackendSpecificVariables
 	backendVarsFunction["device_discovery"] = devicediscovery.RegisterBackendSpecificVariables
 	backendVarsFunction["network_discovery"] = networkdiscovery.RegisterBackendSpecificVariables
+	backendVarsFunction["worker"] = worker.RegisterBackendSpecificVariables
 
 	// check if backends are configured
 	// if not then add pktvisor as default
