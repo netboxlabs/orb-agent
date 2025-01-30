@@ -65,7 +65,7 @@ def napalm_driver_list() -> list[str]:
                    discovered driver names from the installed packages.
 
     """
-    napalm_packages = ["ios", "eos", "junos", "nxos"]
+    napalm_packages = ["eos", "ios", "iosxr_netconf", "junos", "nxos", "nxos_ssh"]
     prefix = "napalm_"
     for dist in packages_distributions():
         if dist.startswith(prefix):

@@ -188,7 +188,16 @@ def test_napalm_driver_list(mock_packages_distributions, mock_import_module):
 
     mock_packages_distributions.return_value = mock_distributions
 
-    expected_drivers = ["ios", "eos", "junos", "nxos", "srl", "fake_driver"]
+    expected_drivers = [
+        "eos",
+        "ios",
+        "iosxr_netconf",
+        "junos",
+        "nxos",
+        "nxos_ssh",
+        "srl",
+        "fake_driver",
+    ]
     drivers = napalm_driver_list()
     assert drivers == expected_drivers, f"Expected {expected_drivers}, got {drivers}"
 
@@ -209,7 +218,7 @@ def test_napalm_driver_list_error(mock_packages_distributions, mock_import_modul
 
     mock_import_module.side_effect = Exception("Import failed")
     mock_packages_distributions.return_value = mock_distributions
-    expected_drivers = ["ios", "eos", "junos", "nxos"]
+    expected_drivers = ["eos", "ios", "iosxr_netconf", "junos", "nxos", "nxos_ssh"]
 
     with patch("device_discovery.discovery.logger") as mock_logger:
         drivers = napalm_driver_list()
