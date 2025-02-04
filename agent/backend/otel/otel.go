@@ -68,7 +68,8 @@ func Register() bool {
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
-	config map[string]interface{}, common config.BackendCommons) error {
+	config map[string]interface{}, common config.BackendCommons,
+) error {
 	o.logger = logger
 	o.policyRepo = repo
 
@@ -104,8 +105,9 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	o.ctx = ctx
 
 	pvOptions := []string{
-		"--host", o.apiHost,
-		"--port", o.apiPort,
+		"run",
+		"--server_host", o.apiHost,
+		"--server_port", o.apiPort,
 	}
 
 	o.logger.Info("opentelemetry infinity startup", zap.Strings("arguments", pvOptions))
@@ -261,9 +263,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	o.logger.Debug("opentelemetry infinity policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
 
 	fullPolicy := map[string]interface{}{
-		"policies": map[string]interface{}{
-			data.Name: data.Data,
-		},
+		data.Name: data.Data,
 	}
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
