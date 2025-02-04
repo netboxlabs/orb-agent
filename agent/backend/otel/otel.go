@@ -1,16 +1,17 @@
 package otel
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"strconv"
+	"net/http"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -20,176 +21,199 @@ import (
 var _ backend.Backend = (*openTelemetryBackend)(nil)
 
 const (
-	defaultPath = "otelcol-contrib"
-	defaultHost = "localhost"
-	defaultPort = 4317
+	defaultExec         = "otlpinf"
+	defaultAPIHost      = "localhost"
+	defaultAPIPort      = "10222"
+	versionTimeout      = 5
+	capabilitiesTimeout = 5
+	readinessBackoff    = 10
+	readinessTimeout    = 10
+	applyPolicyTimeout  = 10
+	removePolicyTimeout = 20
 )
 
 type openTelemetryBackend struct {
-	logger    *zap.Logger
-	startTime time.Time
+	logger     *zap.Logger
+	policyRepo policies.PolicyRepo
+	exec       string
 
-	// policies
-	policyRepo            policies.PolicyRepo
-	policyConfigDirectory string
-	agentTags             map[string]string
+	apiHost     string
+	apiPort     string
+	apiProtocol string
 
-	// Context for controlling the context cancellation
-	mainContext        context.Context
-	runningCollectors  map[string]runningPolicy
-	mainCancelFunction context.CancelFunc
+	startTime  time.Time
+	proc       *cmd.Cmd
+	agentTags  map[string]string
+	statusChan <-chan cmd.Status
+	cancelFunc context.CancelFunc
+	ctx        context.Context
 
 	mqttClient *mqtt.Client
+}
 
-	otlpMetricsTopic string
-	otlpTracesTopic  string
-	otlpLogsTopic    string
-	otelReceiverTaps []string
-	otelCurrVersion  string
+type info struct {
+	StartTime string  `json:"start_time"`
+	Version   string  `json:"version"`
+	UpTime    float64 `json:"up_time"`
+}
 
-	otelReceiverHost   string
-	otelReceiverPort   int
-	otelExecutablePath string
+// Register registers otel backend
+func Register() bool {
+	backend.Register("otel", &openTelemetryBackend{
+		apiProtocol: "http",
+		exec:        defaultExec,
+	})
+	return true
 }
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
-	config map[string]interface{}, common config.BackendCommons,
-) error {
+	config map[string]interface{}, common config.BackendCommons) error {
 	o.logger = logger
-	o.logger.Info("configuring OpenTelemetry backend")
 	o.policyRepo = repo
-	var err error
-	o.otelReceiverTaps = []string{"otelcol-contrib", "receivers", "processors", "extensions"}
-	o.policyConfigDirectory, err = os.MkdirTemp("", "otel-policies")
-	if err != nil {
-		o.logger.Error("failed to create temporary directory for policy configs", zap.Error(err))
-		return err
-	}
-	if path, ok := config["binary"].(string); ok {
-		o.otelExecutablePath = path
-	} else {
-		o.otelExecutablePath = defaultPath
-	}
-	_, err = exec.LookPath(o.otelExecutablePath)
-	if err != nil {
-		o.logger.Error("otelcol-contrib: binary not found", zap.Error(err))
-		return err
-	}
-	if err != nil {
-		o.logger.Error("failed to create temporary directory for policy configs", zap.Error(err))
-		return err
-	}
-	o.agentTags = common.Otel.AgentTags
 
-	if otelPort, ok := config["otlp_port"]; ok {
-		o.otelReceiverPort, err = strconv.Atoi(otelPort.(string))
-		if err != nil {
-			o.logger.Error("failed to parse otlp port using default", zap.Error(err))
-			o.otelReceiverPort = defaultPort
-		}
-	} else {
-		o.otelReceiverPort = defaultPort
+	var prs bool
+	if o.apiHost, prs = config["host"].(string); !prs {
+		o.apiHost = defaultAPIHost
 	}
-	if otelHost, ok := config["otlp_host"].(string); ok {
-		o.otelReceiverHost = otelHost
-	} else {
-		o.otelReceiverHost = defaultHost
+	if o.apiPort, prs = config["port"].(string); !prs {
+		o.apiPort = defaultAPIPort
 	}
+
+	o.agentTags = common.Otel.AgentTags
 
 	return nil
 }
 
 func (o *openTelemetryBackend) GetInitialState() backend.RunningStatus {
-	return backend.Waiting
+	return backend.Unknown
 }
 
 func (o *openTelemetryBackend) Version() (string, error) {
-	if o.otelCurrVersion != "" {
-		return o.otelCurrVersion, nil
+	var info info
+	err := o.request("status", &info, http.MethodGet, http.NoBody, "application/json", versionTimeout)
+	if err != nil {
+		return "", err
 	}
-	ctx, cancel := context.WithTimeout(o.mainContext, 60*time.Second)
-	var versionOutput string
-	command := cmd.NewCmd(o.otelExecutablePath, "--version")
-	status := command.Start()
-	select {
-	case finalStatus := <-status:
-		if finalStatus.Error != nil {
-			o.logger.Error("error during call of otelcol-contrib version", zap.Error(finalStatus.Error))
-			cancel()
-			return "", finalStatus.Error
-		} else {
-			output := finalStatus.Stdout
-			o.otelCurrVersion = output[0]
-			versionOutput = output[0]
-		}
-	case <-ctx.Done():
-		o.logger.Error("timeout during getting version", zap.Error(ctx.Err()))
-	}
-
-	cancel()
-	o.logger.Info("running opentelemetry-contrib version", zap.String("version", versionOutput))
-
-	return versionOutput, nil
+	return info.Version, nil
 }
 
 func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) (err error) {
-	o.runningCollectors = make(map[string]runningPolicy)
-	o.mainCancelFunction = cancelFunc
-	o.mainContext = ctx
 	o.startTime = time.Now()
-	currentWd, err := os.Getwd()
-	if err != nil {
-		o.otelExecutablePath = currentWd + "/otelcol-contrib"
+	o.cancelFunc = cancelFunc
+	o.ctx = ctx
+
+	pvOptions := []string{
+		"--host", o.apiHost,
+		"--port", o.apiPort,
 	}
-	currentVersion, err := o.Version()
-	if err != nil {
-		cancelFunc()
-		o.logger.Error("error during getting current version", zap.Error(err))
-		return err
-	}
-	o.logger.Info("starting open-telemetry backend using version", zap.String("version", currentVersion))
-	policiesData, err := o.policyRepo.GetAll()
-	if err != nil {
-		cancelFunc()
-		o.logger.Error("failed to start otel backend, policies are absent")
-		return err
-	}
-	for _, policyData := range policiesData {
-		if err := o.ApplyPolicy(policyData, true); err != nil {
-			o.logger.Error("failed to start otel backend, failed to apply policy", zap.Error(err))
-			cancelFunc()
-			return err
+
+	o.logger.Info("opentelemetry infinity startup", zap.Strings("arguments", pvOptions))
+
+	o.proc = cmd.NewCmdOptions(cmd.Options{
+		Buffered:  false,
+		Streaming: true,
+	}, o.exec, pvOptions...)
+	o.statusChan = o.proc.Start()
+
+	// log STDOUT and STDERR lines streaming from Cmd
+	doneChan := make(chan struct{})
+	go func() {
+		defer func() {
+			if doneChan != nil {
+				close(doneChan)
+			}
+		}()
+		for o.proc.Stdout != nil || o.proc.Stderr != nil {
+			select {
+			case line, open := <-o.proc.Stdout:
+				if !open {
+					o.proc.Stdout = nil
+					continue
+				}
+				o.logger.Info("opentelemetry infinity stdout", zap.String("log", line))
+			case line, open := <-o.proc.Stderr:
+				if !open {
+					o.proc.Stderr = nil
+					continue
+				}
+				o.logger.Info("opentelemetry infinity stderr", zap.String("log", line))
+			}
 		}
-		o.logger.Info("policy applied successfully", zap.String("policy_id", policyData.ID))
+	}()
+
+	// wait for simple startup errors
+	time.Sleep(time.Second)
+
+	status := o.proc.Status()
+
+	if status.Error != nil {
+		o.logger.Error("opentelemetry infinity startup error", zap.Error(status.Error))
+		return status.Error
+	}
+
+	if status.Complete {
+		err := o.proc.Stop()
+		if err != nil {
+			o.logger.Error("proc.Stop error", zap.Error(err))
+		}
+		return errors.New("opentelemetry infinity startup error, check log")
+	}
+
+	o.logger.Info("opentelemetry infinity process started", zap.Int("pid", status.PID))
+
+	var readinessErr error
+	for backoff := 0; backoff < readinessBackoff; backoff++ {
+		version, readinessErr := o.Version()
+		if readinessErr == nil {
+			o.logger.Info("opentelemetry infinity readiness ok, got version ", zap.String("device_discovery_version", version))
+			break
+		}
+		backoffDuration := time.Duration(backoff) * time.Second
+		o.logger.Info("opentelemetry infinity is not ready, trying again with backoff", zap.String("backoff backoffDuration", backoffDuration.String()))
+		time.Sleep(backoffDuration)
+	}
+
+	if readinessErr != nil {
+		o.logger.Error("opentelemetry infinity error on readiness", zap.Error(readinessErr))
+		err := o.proc.Stop()
+		if err != nil {
+			o.logger.Error("proc.Stop error", zap.Error(err))
+		}
+		return readinessErr
 	}
 
 	return nil
 }
 
-func (o *openTelemetryBackend) Stop(_ context.Context) error {
-	o.logger.Info("stopping all running policies")
-	o.mainCancelFunction()
-	for policyID, policyEntry := range o.runningCollectors {
-		o.logger.Debug("stopping policy context", zap.String("policy_id", policyID))
-		policyEntry.ctx.Done()
+func (o *openTelemetryBackend) Stop(ctx context.Context) error {
+	o.logger.Info("routine call to stop opentelemetry infinity", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	defer o.cancelFunc()
+	err := o.proc.Stop()
+	finalStatus := <-o.statusChan
+	if err != nil {
+		o.logger.Error("opentelemetry infinity shutdown error", zap.Error(err))
 	}
+	o.logger.Info("opentelemetry infinity process stopped", zap.Int("pid", finalStatus.PID), zap.Int("exit_code", finalStatus.Exit))
 	return nil
 }
 
 func (o *openTelemetryBackend) FullReset(ctx context.Context) error {
-	o.logger.Info("restarting otel backend", zap.Int("running policies", len(o.runningCollectors)))
-	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "otel"))
+	// force a stop, which stops scrape as well. if proc is dead, it no ops.
+	if state, _, _ := o.getProcRunningStatus(); state == backend.Running {
+		if err := o.Stop(ctx); err != nil {
+			o.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
+			return err
+		}
+	}
+	// for each policy, restart the scraper
+	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "opentelemetry"))
+	// start it
 	if err := o.Start(backendCtx, cancelFunc); err != nil {
+		o.logger.Error("failed to start backend on restart procedure", zap.Error(err))
 		return err
 	}
 	return nil
-}
-
-// Register registers otel backend
-func Register() bool {
-	backend.Register("otel", &openTelemetryBackend{})
-	return true
 }
 
 func (o *openTelemetryBackend) GetStartTime() time.Time {
@@ -197,17 +221,80 @@ func (o *openTelemetryBackend) GetStartTime() time.Time {
 }
 
 // GetCapabilities this will only print a default backend config
-func (o *openTelemetryBackend) GetCapabilities() (capabilities map[string]interface{}, err error) {
-	capabilities = make(map[string]interface{})
-	capabilities["taps"] = o.otelReceiverTaps
-	return
+func (o *openTelemetryBackend) GetCapabilities() (map[string]interface{}, error) {
+	caps := make(map[string]interface{})
+	err := o.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", capabilitiesTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return caps, nil
 }
 
 // GetRunningStatus returns cross-reference the Processes using the os, with the policies and contexts
 func (o *openTelemetryBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
-	amountCollectors := len(o.runningCollectors)
-	if amountCollectors > 0 {
-		return backend.Running, fmt.Sprintf("opentelemetry backend running with %d policies", amountCollectors), nil
+	// first check process status
+	runningStatus, errMsg, err := o.getProcRunningStatus()
+	// if it's not running, we're done
+	if runningStatus != backend.Running {
+		return runningStatus, errMsg, err
 	}
-	return backend.Waiting, "opentelemetry backend is waiting for policy to come to start running", nil
+	// if it's running, check REST API availability too
+	if _, aiErr := o.Version(); aiErr != nil {
+		// process is running, but REST API is not accessible
+		return backend.BackendError, "process running, REST API unavailable", aiErr
+	}
+	return runningStatus, "", nil
+}
+
+func (o *openTelemetryBackend) SetCommsClient(_ string, client *mqtt.Client, _ string) {
+	o.mqttClient = client
+}
+
+func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
+	if updatePolicy {
+		// To update a policy it's necessary first remove it and then apply a new version
+		if err := o.RemovePolicy(data); err != nil {
+			o.logger.Warn("policy failed to remove", zap.String("policy_id", data.ID), zap.String("policy_name", data.Name), zap.Error(err))
+		}
+	}
+
+	o.logger.Debug("opentelemetry infinity policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
+
+	fullPolicy := map[string]interface{}{
+		"policies": map[string]interface{}{
+			data.Name: data.Data,
+		},
+	}
+
+	policyYaml, err := yaml.Marshal(fullPolicy)
+	if err != nil {
+		o.logger.Warn("policy yaml marshal failure", zap.String("policy_id", data.ID), zap.Any("policy", fullPolicy))
+		return err
+	}
+
+	var resp map[string]interface{}
+	err = o.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout)
+	if err != nil {
+		o.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
+		return err
+	}
+
+	return nil
+}
+
+func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
+	o.logger.Debug("opentelemetry policy remove", zap.String("policy_id", data.ID))
+	var resp interface{}
+	var name string
+	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
+	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
+		name = data.PreviousPolicyData.Name
+	} else {
+		name = data.Name
+	}
+	err := o.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", removePolicyTimeout)
+	if err != nil {
+		return err
+	}
+	return nil
 }

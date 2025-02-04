@@ -1,5 +1,5 @@
 ARG PKTVISOR_TAG=develop
-ARG OTEL_TAG=0.111.0
+ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
 ARG GO_VERSION=1.23
 
@@ -19,7 +19,7 @@ RUN --mount=target=. \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/orb-agent ./cmd/main.go
 
 
-FROM otel/opentelemetry-collector-contrib:${OTEL_TAG} AS otelcol-contrib
+FROM netboxlabs/opentelemetry-infinity:${OTEL_TAG} AS otlpinf
 
 FROM netboxlabs/network-discovery:${NETWORK_DISCOVERY_TAG} AS network-discovery
 
@@ -51,7 +51,7 @@ COPY --from=pktvisor /iana /iana
 
 RUN  chown appuser:appuser /geo-db
 
-COPY --from=otelcol-contrib /otelcol-contrib /usr/local/bin/otelcol-contrib
+COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
 
