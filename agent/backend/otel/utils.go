@@ -19,17 +19,17 @@ func (d *openTelemetryBackend) getProcRunningStatus() (backend.RunningStatus, st
 	status := d.proc.Status()
 
 	if status.Error != nil {
-		errMsg := fmt.Sprintf("device-discovery process error: %v", status.Error)
+		errMsg := fmt.Sprintf("opentelemetry infinity process error: %v", status.Error)
 		return backend.BackendError, errMsg, status.Error
 	}
 
 	if status.Complete {
 		err := d.proc.Stop()
-		return backend.Offline, "device-discovery process ended", err
+		return backend.Offline, "opentelemetry infinity process ended", err
 	}
 
 	if status.StopTs > 0 {
-		return backend.Offline, "device-discovery process ended", nil
+		return backend.Offline, "opentelemetry infinity process ended", nil
 	}
 	return backend.Running, "", nil
 }
@@ -42,7 +42,7 @@ func (d *openTelemetryBackend) request(url string, payload interface{}, method s
 
 	status, _, err := d.getProcRunningStatus()
 	if status != backend.Running {
-		d.logger.Warn("skipping device discovery REST API request because process is not running or is unresponsive", zap.String("url", url), zap.String("method", method), zap.Error(err))
+		d.logger.Warn("skipping opentelemetry infinity REST API request because process is not running or is unresponsive", zap.String("url", url), zap.String("method", method), zap.Error(err))
 		return err
 	}
 
@@ -71,7 +71,7 @@ func (d *openTelemetryBackend) request(url string, payload interface{}, method s
 	if (res.StatusCode < 200) || (res.StatusCode > 299) {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return fmt.Errorf("non 2xx HTTP error code from device-discovery, no or invalid body: %d", res.StatusCode)
+			return fmt.Errorf("non 2xx HTTP error code from opentelemetry infinity, no or invalid body: %d", res.StatusCode)
 		}
 		if len(body) == 0 {
 			return fmt.Errorf("%d empty body", res.StatusCode)
