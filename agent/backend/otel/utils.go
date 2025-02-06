@@ -77,12 +77,15 @@ func (d *openTelemetryBackend) request(url string, payload interface{}, method s
 			return fmt.Errorf("%d empty body", res.StatusCode)
 		} else if body[0] == '{' {
 			var jsonBody map[string]interface{}
-			err := json.Unmarshal(body, &jsonBody)
-			if err == nil {
+			if err := json.Unmarshal(body, &jsonBody); err == nil {
 				if errMsg, ok := jsonBody["message"]; ok {
 					return fmt.Errorf("%d %s", res.StatusCode, errMsg)
 				}
+			} else {
+				return fmt.Errorf("%d %s", res.StatusCode, body)
 			}
+		} else {
+			return fmt.Errorf("%d %s", res.StatusCode, body)
 		}
 	}
 
