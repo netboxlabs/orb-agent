@@ -41,14 +41,12 @@ type orbAgent struct {
 
 	asyncContext context.Context
 
-	hbTicker        *time.Ticker
 	heartbeatCtx    context.Context
 	heartbeatCancel context.CancelFunc
 
 	// Agent RPC channel, configured from command line
 	baseTopic        string
 	rpcFromCoreTopic string
-	heartbeatsTopic  string
 
 	// Retry Mechanism to ensure the Request is received
 	groupRequestSucceeded  context.CancelFunc
