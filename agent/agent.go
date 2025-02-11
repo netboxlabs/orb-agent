@@ -10,7 +10,6 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
-	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -97,7 +96,7 @@ func (a *orbAgent) managePolicies() error {
 		}
 		for pName, data := range policy {
 			id := uuid.NewString()
-			payload := fleet.AgentPolicyRPCPayload{Action: "manage", Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
+			payload := config.PolicyPayload{Action: "manage", Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
 			a.policyManager.ManagePolicy(payload)
 		}
 
@@ -193,9 +192,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 }
 
 func (a *orbAgent) logonWithHeartbeat() {
-	a.hbTicker = time.NewTicker(HeartbeatFreq)
 	a.heartbeatCtx, a.heartbeatCancel = a.extendContext("heartbeat")
-	go a.sendHeartbeats(a.heartbeatCtx, a.heartbeatCancel)
 	a.logger.Info("heartbeat routine started")
 }
 

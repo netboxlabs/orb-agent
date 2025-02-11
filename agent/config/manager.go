@@ -19,6 +19,8 @@ func New(logger *zap.Logger, c ManagerConfig) Manager {
 		return &localConfigManager{logger: logger, config: c.Backends.Local}
 	case "cloud":
 		return &cloudConfigManager{logger: logger, config: c.Backends.Cloud}
+	case "git":
+		return &gitConfigManager{logger: logger, config: c.Backends.Git}
 	default:
 		return &localConfigManager{logger: logger, config: c.Backends.Local}
 	}

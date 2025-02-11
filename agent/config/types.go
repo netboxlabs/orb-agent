@@ -3,6 +3,19 @@ package config
 // ContextKey represents the key for the context
 type ContextKey string
 
+// PolicyPayload represents the payload for the agent policy
+type PolicyPayload struct {
+	Action       string      `json:"action"`
+	ID           string      `json:"id"`
+	DatasetID    string      `json:"dataset_id"`
+	AgentGroupID string      `json:"agent_group_id"`
+	Name         string      `json:"name"`
+	Backend      string      `json:"backend"`
+	Format       string      `json:"format"`
+	Version      int32       `json:"version"`
+	Data         interface{} `json:"data"`
+}
+
 // APIConfig represents the configuration for the API connection
 type APIConfig struct {
 	Address string `mapstructure:"address"`
@@ -43,10 +56,16 @@ type Local struct {
 	Config string `mapstructure:"config"`
 }
 
+// Git represents the Git ConfigManager configuration.
+type Git struct {
+	Repo string `mapstructure:"repo"`
+}
+
 // ManagerBackends represents the configuration for manager backends, including cloud and local.
 type ManagerBackends struct {
 	Cloud Cloud `mapstructure:"orbcloud"`
 	Local Local `mapstructure:"local"`
+	Git   Git   `mapstructure:"git"`
 }
 
 // ManagerConfig represents the configuration for the Config Manager

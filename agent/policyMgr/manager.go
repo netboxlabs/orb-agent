@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -15,7 +14,7 @@ import (
 
 // PolicyManager is the interface for managing policies
 type PolicyManager interface {
-	ManagePolicy(payload fleet.AgentPolicyRPCPayload)
+	ManagePolicy(payload config.PolicyPayload)
 	RemovePolicyDataset(policyID string, datasetID string, be backend.Backend)
 	GetPolicyState() ([]policies.PolicyData, error)
 	GetRepo() policies.PolicyRepo
@@ -50,7 +49,7 @@ func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
 	return a.repo.GetAll()
 }
 
-func (a *policyManager) ManagePolicy(payload fleet.AgentPolicyRPCPayload) {
+func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 	a.logger.Info("managing agent policy from core",
 		zap.String("action", payload.Action),
 		zap.String("name", payload.Name),
@@ -191,7 +190,7 @@ func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, b
 	}
 }
 
-func (a *policyManager) applyPolicy(payload fleet.AgentPolicyRPCPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) {
+func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) {
 	err := be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
 		a.logger.Warn("policy failed to apply", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name), zap.Error(err))
