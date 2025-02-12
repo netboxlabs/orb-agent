@@ -1,4 +1,4 @@
-package config
+package configmgr
 
 import (
 	"bytes"
@@ -17,13 +17,18 @@ import (
 	"github.com/jmoiron/sqlx"
 	migrate "github.com/rubenv/sql-migrate"
 	"go.uber.org/zap"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 var _ Manager = (*cloudConfigManager)(nil)
 
 type cloudConfigManager struct {
 	logger *zap.Logger
-	config Cloud
+	pMgr   policymgr.PolicyManager
+	config config.Cloud
 	db     *sqlx.DB
 }
 
@@ -106,7 +111,7 @@ func (cc *cloudConfigManager) request(address string, token string, response int
 	return nil
 }
 
-func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQTTConfig, error) {
+func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (config.MQTTConfig, error) {
 	type AgentRes struct {
 		ID        string `json:"id"`
 		Key       string `json:"key"`
@@ -122,7 +127,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 	if aname == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
-			return MQTTConfig{}, err
+			return config.MQTTConfig{}, err
 		}
 		aname = hostname
 	}
@@ -130,7 +135,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 	agentReq := AgentReq{Name: strings.Replace(aname, ".", "-", -1), AgentTags: cc.config.Tags}
 	body, err := json.Marshal(agentReq)
 	if err != nil {
-		return MQTTConfig{}, err
+		return config.MQTTConfig{}, err
 	}
 
 	cc.logger.Info("attempting auto provision", zap.String("address", apiAddress))
@@ -138,28 +143,28 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (MQ
 	var result AgentRes
 	err = cc.request(apiAddress, token, &result, http.MethodPost, body)
 	if err != nil {
-		return MQTTConfig{}, err
+		return config.MQTTConfig{}, err
 	}
 
 	// save to local config
 	address := ""
 	_, err = cc.db.Exec(`INSERT INTO cloud_config VALUES ($1, $2, $3, $4, datetime('now'))`, address, result.ID, result.Key, result.ChannelID)
 	if err != nil {
-		return MQTTConfig{}, err
+		return config.MQTTConfig{}, err
 	}
 
-	return MQTTConfig{
+	return config.MQTTConfig{
 		ID:        result.ID,
 		Key:       result.Key,
 		ChannelID: result.ChannelID,
 	}, nil
 }
 
-func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
+func (cc *cloudConfigManager) Start(_ config.Config, _ map[string]backend.Backend) error {
 	cc.logger.Info("using local config db", zap.String("filename", cc.config.DB.File))
 	db, err := sqlx.Connect("sqlite3", cc.config.DB.File)
 	if err != nil {
-		return MQTTConfig{}, err
+		return err
 	}
 
 	cc.db = db
@@ -171,30 +176,25 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 		cc.logger.Info("using explicitly specified cloud configuration",
 			zap.String("address", mqtt.Address),
 			zap.String("id", mqtt.ID))
-		return MQTTConfig{
-			Address:   mqtt.Address,
-			ID:        mqtt.ID,
-			Key:       mqtt.Key,
-			ChannelID: mqtt.ChannelID,
-		}, nil
+		return nil
 	}
 
 	// if full config is not available, possibly attempt auto provision configuration
 	if !cc.config.Config.AutoProvision {
-		return MQTTConfig{}, errors.New("valid cloud MQTT config was not specified, and auto_provision was disabled")
+		return errors.New("valid cloud MQTT config was not specified, and auto_provision was disabled")
 	}
 
 	err = cc.migrateDB()
 	if err != nil {
-		return MQTTConfig{}, err
+		return err
 	}
 
 	// see if we have an existing auto provisioned configuration saved locally
 	q := `SELECT id, key, channel FROM cloud_config ORDER BY ts_created DESC LIMIT 1`
-	dba := MQTTConfig{}
+	dba := config.MQTTConfig{}
 	if err := cc.db.QueryRowx(q).Scan(&dba.ID, &dba.Key, &dba.ChannelID); err != nil {
 		if err != sql.ErrNoRows {
-			return MQTTConfig{}, err
+			return err
 		}
 	} else {
 		// successfully loaded previous auto provision
@@ -202,18 +202,18 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 		cc.logger.Info("using previous auto provisioned cloud configuration loaded from local storage",
 			zap.String("address", mqtt.Address),
 			zap.String("id", dba.ID))
-		return dba, nil
+		return nil
 	}
 
 	// attempt a live auto provision
 	apiConfig := cc.config.API
 	if len(apiConfig.Token) == 0 {
-		return MQTTConfig{}, errors.New("wanted to auto provision, but no API token was available")
+		return errors.New("wanted to auto provision, but no API token was available")
 	}
 
 	result, err := cc.autoProvision(apiConfig.Address, apiConfig.Token)
 	if err != nil {
-		return MQTTConfig{}, err
+		return err
 	}
 	result.Address = mqtt.Address
 	cc.logger.Info("using auto provisioned cloud configuration",
@@ -221,14 +221,14 @@ func (cc *cloudConfigManager) GetConfig() (MQTTConfig, error) {
 		zap.String("id", result.ID))
 
 	result.Connect = true
-	return result, nil
+	return nil
 }
 
 func (cc *cloudConfigManager) GetContext(ctx context.Context) context.Context {
 	if cc.config.MQTT.ID != "" {
-		ctx = context.WithValue(ctx, ContextKey("agent_id"), cc.config.MQTT.ID)
+		ctx = context.WithValue(ctx, config.ContextKey("agent_id"), cc.config.MQTT.ID)
 	} else {
-		ctx = context.WithValue(ctx, ContextKey("agent_id"), "auto-provisioning-without-id")
+		ctx = context.WithValue(ctx, config.ContextKey("agent_id"), "auto-provisioning-without-id")
 	}
 	return ctx
 }

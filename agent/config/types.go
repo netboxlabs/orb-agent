@@ -58,7 +58,7 @@ type Local struct {
 
 // Git represents the Git ConfigManager configuration.
 type Git struct {
-	Repo string `mapstructure:"repo"`
+	Url string `mapstructure:"url"`
 }
 
 // ManagerBackends represents the configuration for manager backends, including cloud and local.

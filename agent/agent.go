@@ -14,7 +14,8 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
-	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
+	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
@@ -55,8 +56,8 @@ type orbAgent struct {
 	// AgentGroup channels sent from core
 	groupsInfos map[string]groupInfo
 
-	policyManager manager.PolicyManager
-	configManager config.Manager
+	policyManager policymgr.PolicyManager
+	configManager configmgr.Manager
 }
 
 type groupInfo struct {
@@ -68,7 +69,7 @@ var _ Agent = (*orbAgent)(nil)
 
 // New creates a new agent
 func New(logger *zap.Logger, c config.Config) (Agent, error) {
-	pm, err := manager.New(logger, c)
+	pm, err := policymgr.New(logger, c)
 	if err != nil {
 		logger.Error("error during create policy manager, exiting", zap.Error(err))
 		return nil, err
@@ -77,29 +78,9 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 		logger.Error("policy manager failed to get repository", zap.Error(err))
 		return nil, err
 	}
-	cm := config.New(logger, c.OrbAgent.ConfigManager)
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager)
 
 	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, groupsInfos: make(map[string]groupInfo)}, nil
-}
-
-func (a *orbAgent) managePolicies() error {
-	if a.config.OrbAgent.Policies == nil {
-		return errors.New("no policies specified")
-	}
-
-	for beName, policy := range a.config.OrbAgent.Policies {
-		_, ok := a.backends[beName]
-		if !ok {
-			return errors.New("backend not found: " + beName)
-		}
-		for pName, data := range policy {
-			id := uuid.NewString()
-			payload := config.PolicyPayload{Action: "manage", Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
-			a.policyManager.ManagePolicy(payload)
-		}
-
-	}
-	return nil
 }
 
 func (a *orbAgent) startBackends(agentCtx context.Context) error {
@@ -180,7 +161,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
-	if err := a.managePolicies(); err != nil {
+	if err := a.configManager.Start(a.config, a.backends); err != nil {
 		return err
 	}
 
