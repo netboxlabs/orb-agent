@@ -47,7 +47,7 @@ func (gc *gitConfigManager) applyPolicy(file *object.File, backends map[string]b
 		return err
 	}
 
-	var policies map[string]map[string]interface{}
+	var policies map[string]map[string]any
 	err = yaml.Unmarshal(data, &policies)
 	if err != nil {
 		return err
@@ -87,7 +87,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 		return false, err
 	}
 
-	var metadata map[string]interface{}
+	var metadata map[string]any
 	err = yaml.Unmarshal(data, &metadata)
 	if err != nil {
 		return false, err
@@ -95,7 +95,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 
 	// Example: Check if selector.yaml has a specific key-value pair
 	if values, exists := metadata["tags"]; exists {
-		mValues, ok := values.(map[string]interface{})
+		mValues, ok := values.(map[string]any)
 		if !ok {
 			return false, nil
 		}
