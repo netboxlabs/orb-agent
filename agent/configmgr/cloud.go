@@ -28,7 +28,7 @@ var _ Manager = (*cloudConfigManager)(nil)
 type cloudConfigManager struct {
 	logger *zap.Logger
 	pMgr   policymgr.PolicyManager
-	config config.Cloud
+	config config.CloudManager
 	db     *sqlx.DB
 }
 

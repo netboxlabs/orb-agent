@@ -17,10 +17,10 @@ var _ Manager = (*localConfigManager)(nil)
 type localConfigManager struct {
 	logger *zap.Logger
 	pMgr   policymgr.PolicyManager
-	config config.Local
+	config config.LocalManager
 }
 
-func (oc *localConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
+func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	if cfg.OrbAgent.Policies == nil {
 		return errors.New("no policies specified")
 	}
@@ -33,13 +33,13 @@ func (oc *localConfigManager) Start(cfg config.Config, backends map[string]backe
 		for pName, data := range policy {
 			id := uuid.NewString()
 			payload := config.PolicyPayload{Action: "manage", Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
-			oc.pMgr.ManagePolicy(payload)
+			lc.pMgr.ManagePolicy(payload)
 		}
 
 	}
 	return nil
 }
 
-func (oc *localConfigManager) GetContext(ctx context.Context) context.Context {
+func (lc *localConfigManager) GetContext(ctx context.Context) context.Context {
 	return ctx
 }

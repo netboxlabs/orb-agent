@@ -31,18 +31,15 @@ type MQTTConfig struct {
 	ChannelID string `mapstructure:"channel_id"`
 }
 
-// CloudConfig represents the configuration for the cloud agent
-type CloudConfig struct {
-	AgentName     string `mapstructure:"agent_name"`
-	AutoProvision bool   `mapstructure:"auto_provision"`
-}
-
-// Cloud represents the cloud  ConfigManager configuration
-type Cloud struct {
-	Config CloudConfig `mapstructure:"config"`
-	API    APIConfig   `mapstructure:"api"`
-	MQTT   MQTTConfig  `mapstructure:"mqtt"`
-	TLS    struct {
+// CloudManager represents the cloud  ConfigManager configuration
+type CloudManager struct {
+	Config struct {
+		AgentName     string `mapstructure:"agent_name"`
+		AutoProvision bool   `mapstructure:"auto_provision"`
+	} `mapstructure:"config"`
+	API  APIConfig  `mapstructure:"api"`
+	MQTT MQTTConfig `mapstructure:"mqtt"`
+	TLS  struct {
 		Verify bool `mapstructure:"verify"`
 	} `mapstructure:"tls"`
 	DB struct {
@@ -51,21 +48,25 @@ type Cloud struct {
 	Tags map[string]string `mapstructure:"tags"`
 }
 
-// Local represents the local ConfigManager configuration.
-type Local struct {
+// LocalManager represents the local ConfigManager configuration.
+type LocalManager struct {
 	Config string `mapstructure:"config"`
 }
 
-// Git represents the Git ConfigManager configuration.
-type Git struct {
-	Url string `mapstructure:"url"`
+// GitManager represents the Git ConfigManager configuration.
+type GitManager struct {
+	URL        string `mapstructure:"url"`
+	Auth       string `mapstructure:"auth"`
+	Username   string `mapstructure:"username"`
+	Password   string `mapstructure:"password"`
+	PrivateKey string `mapstructure:"private_key"`
 }
 
 // ManagerBackends represents the configuration for manager backends, including cloud and local.
 type ManagerBackends struct {
-	Cloud Cloud `mapstructure:"orbcloud"`
-	Local Local `mapstructure:"local"`
-	Git   Git   `mapstructure:"git"`
+	Cloud CloudManager `mapstructure:"orbcloud"`
+	Local LocalManager `mapstructure:"local"`
+	Git   GitManager   `mapstructure:"git"`
 }
 
 // ManagerConfig represents the configuration for the Config Manager
