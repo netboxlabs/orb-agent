@@ -119,8 +119,8 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (co
 	}
 
 	type AgentReq struct {
-		Name      string            `json:"name"`
-		AgentTags map[string]string `json:"agent_tags"`
+		Name        string            `json:"name"`
+		AgentLabels map[string]string `json:"agent_tags"`
 	}
 
 	aname := cc.config.Config.AgentName
@@ -132,7 +132,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (co
 		aname = hostname
 	}
 
-	agentReq := AgentReq{Name: strings.Replace(aname, ".", "-", -1), AgentTags: cc.config.Tags}
+	agentReq := AgentReq{Name: strings.Replace(aname, ".", "-", -1), AgentLabels: cc.config.Labels}
 	body, err := json.Marshal(agentReq)
 	if err != nil {
 		return config.MQTTConfig{}, err

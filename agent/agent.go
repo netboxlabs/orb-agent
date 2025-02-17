@@ -98,7 +98,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 			return fmt.Errorf("failed to decode common backend config: %w", err)
 		}
 	}
-	commonConfig.Otel.AgentTags = a.config.OrbAgent.Tags
+	commonConfig.Otel.AgentLabels = a.config.OrbAgent.Labels
 	a.backendsCommon = commonConfig
 	delete(a.config.OrbAgent.Backends, "common")
 
