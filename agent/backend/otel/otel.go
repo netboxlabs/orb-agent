@@ -81,10 +81,7 @@ func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.Polic
 		o.apiPort = defaultAPIPort
 	}
 
-	o.agentLabels = make(map[string]string)
-	for key, value := range common.Otel.AgentLabels {
-		o.agentLabels[key] = fmt.Sprintf("%v", value)
-	}
+	o.agentLabels = common.Otel.AgentLabels
 
 	return nil
 }

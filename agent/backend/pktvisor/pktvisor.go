@@ -286,10 +286,7 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	if p.adminAPIPort, prs = config["api_port"].(string); !prs {
 		p.adminAPIPort = defaultAPIPort
 	}
-	p.agentLabels = make(map[string]string)
-	for key, value := range common.Otel.AgentLabels {
-		p.agentLabels[key] = fmt.Sprintf("%v", value)
-	}
+	p.agentLabels = common.Otel.AgentLabels
 
 	p.otelReceiverHost = common.Otel.Host
 	p.otelReceiverPort = common.Otel.Port

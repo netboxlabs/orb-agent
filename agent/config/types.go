@@ -79,9 +79,9 @@ type ManagerConfig struct {
 // BackendCommons represents common configuration for backends
 type BackendCommons struct {
 	Otel struct {
-		Host        string                 `mapstructure:"host"`
-		Port        int                    `mapstructure:"port"`
-		AgentLabels map[string]interface{} `mapstructure:"agent_labels"`
+		Host        string            `mapstructure:"host"`
+		Port        int               `mapstructure:"port"`
+		AgentLabels map[string]string `mapstructure:"agent_labels"`
 	} `mapstructure:"otel"`
 	Diode struct {
 		Target    string `mapstructure:"target"`
@@ -94,7 +94,7 @@ type BackendCommons struct {
 type OrbAgent struct {
 	Backends      map[string]map[string]interface{} `mapstructure:"backends"`
 	Policies      map[string]map[string]interface{} `mapstructure:"policies"`
-	Labels        map[string]interface{}            `mapstructure:"labels"`
+	Labels        map[string]string                 `mapstructure:"labels"`
 	ConfigManager ManagerConfig                     `mapstructure:"config_manager"`
 	Debug         struct {
 		Enable bool `mapstructure:"enable"`

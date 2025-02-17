@@ -6,6 +6,7 @@ import (
 	"io"
 
 	gitv5 "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -75,7 +76,7 @@ func (gc *gitConfigManager) applyPolicy(file *object.File, backends map[string]b
 }
 
 // processSelector reads and matches the root selector.yaml against the agent's metadata
-func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config) (map[string][]string, error) {
+func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config) ([]string, error) {
 	reader, err := file.Reader()
 	if err != nil {
 		return nil, err
@@ -94,7 +95,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 	var selectors map[string]struct {
 		Selector map[string]string `yaml:"selector"`
 		Policies map[string]struct {
-			Enabled bool   `yaml:"enabled"`
+			Enabled *bool  `yaml:"enabled"`
 			Path    string `yaml:"path"`
 		} `yaml:"policies"`
 	}
@@ -115,11 +116,12 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 
 		if matches {
 			gc.logger.Info("Selector matched", zap.String("selector", selectorName))
-			policyPaths := make(map[string][]string)
-			for policyName, policy := range entry.Policies {
-				if policy.Enabled {
-					policyPaths[policyName] = append(policyPaths[policyName], policy.Path)
+			policyPaths := make([]string, 0)
+			for _, policy := range entry.Policies {
+				if policy.Enabled != nil && !*policy.Enabled {
+					continue
 				}
+				policyPaths = append(policyPaths, policy.Path)
 			}
 			return policyPaths, nil
 		}
@@ -149,12 +151,60 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 
-	// Define branch, default to HEAD
-	branchName := gc.config.Branch
-	if branchName == "" {
-		branchName = "HEAD"
+	// Open an in-memory repository
+	repo, err := gitv5.Init(memory.NewStorage(), nil)
+	if err != nil {
+		return err
 	}
 
+	// Add the remote
+	_, err = repo.CreateRemote(&gitconfig.RemoteConfig{
+		Name: "origin",
+		URLs: []string{gc.config.URL},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Fetch all branches and references
+	err = repo.Fetch(&gitv5.FetchOptions{
+		RemoteName: "origin",
+		Auth:       authMethod,
+	})
+	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
+		return err
+	}
+
+	// Get the remote reference list
+	remote, err := repo.Remote("origin")
+	if err != nil {
+		return err
+	}
+
+	refs, err := remote.List(&gitv5.ListOptions{Auth: authMethod})
+	if err != nil {
+		return err
+	}
+
+	// Find the default branch
+	branchName := gc.config.Branch
+	if branchName == "" {
+		for _, ref := range refs {
+			if ref.Name().IsBranch() {
+				branchName = ref.Name().Short()
+				gc.logger.Info("detected default branch", zap.String("branch", branchName))
+				break
+			}
+		}
+
+		if branchName == "" {
+			return errors.New("failed to detect default branch, repository might be empty")
+		}
+	}
+
+	gc.logger.Info("cloning repository", zap.String("url", gc.config.URL), zap.String("branch", branchName))
+
+	// Now clone the repository with the determined branch
 	r, err := gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
 		Auth:          authMethod,
 		URL:           gc.config.URL,
@@ -205,22 +255,22 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 	if matchingPolicies == nil {
-		gc.logger.Info("No matching selector found. No policies applied.")
+		gc.logger.Info("No matching selector found. No will be policies applied.")
 		return nil
 	}
 
 	// Apply the matched policies
-	for _, policyPaths := range matchingPolicies {
-		for _, policyPath := range policyPaths {
-			err := tree.Files().ForEach(func(f *object.File) error {
-				if f.Name == policyPath {
-					return gc.applyPolicy(f, backends)
-				}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
+	for _, policyPath := range matchingPolicies {
+		// Try to get the exact file from the tree
+		f, err := tree.File(policyPath)
+		if err != nil {
+			return errors.New("policy file not found: " + policyPath)
+		}
+
+		// Apply the policy if the file exists
+		err = gc.applyPolicy(f, backends)
+		if err != nil {
+			return err
 		}
 	}
 
