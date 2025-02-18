@@ -55,12 +55,13 @@ type LocalManager struct {
 
 // GitManager represents the Git ConfigManager configuration.
 type GitManager struct {
-	URL        string `mapstructure:"url"`
-	Branch     string `mapstructure:"branch"`
-	Auth       string `mapstructure:"auth"`
-	Username   string `mapstructure:"username"`
-	Password   string `mapstructure:"password"`
-	PrivateKey string `mapstructure:"private_key"`
+	URL        string  `mapstructure:"url"`
+	Branch     string  `mapstructure:"branch"`
+	Auth       string  `mapstructure:"auth"`
+	Schedule   *string `mapstructure:"schedule, omitempty"`
+	Username   string  `mapstructure:"username"`
+	Password   string  `mapstructure:"password"`
+	PrivateKey string  `mapstructure:"private_key"`
 }
 
 // ManagerBackends represents the configuration for manager backends, including cloud and local.

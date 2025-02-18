@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 
+	"github.com/go-co-op/gocron/v2"
 	gitv5 "github.com/go-git/go-git/v5"
 	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -25,39 +27,72 @@ import (
 var _ Manager = (*gitConfigManager)(nil)
 
 type gitConfigManager struct {
-	logger *zap.Logger
-	pMgr   policymgr.PolicyManager
-	config config.GitManager
+	logger           *zap.Logger
+	pMgr             policymgr.PolicyManager
+	config           config.GitManager
+	scheduler        gocron.Scheduler
+	repo             *gitv5.Repository
+	lastRef          plumbing.Hash
+	authMethod       transport.AuthMethod
+	version          int32
+	matchPolicyPaths []string
 }
 
-// applyPolicy reads and applies a specific policy file
-func (gc *gitConfigManager) applyPolicy(file *object.File, backends map[string]backend.Backend) error {
-	reader, err := file.Reader()
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := reader.Close(); err != nil {
-			gc.logger.Error("failed to close file", zap.Error(err))
+type policyPath string
+type policyData map[string]map[string]any
+
+func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []string) (map[policyPath]policyData, error) {
+	match := make(map[policyPath]policyData)
+	var allPolicies = make(map[string]map[string]any)
+	for _, path := range matchingPolicies {
+		// Try to get the exact file from the tree
+		file, err := tree.File(path)
+		if err != nil {
+			return nil, errors.New("policy file not found: " + path)
 		}
-	}()
 
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return err
+		reader, err := file.Reader()
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := reader.Close(); err != nil {
+				gc.logger.Error("failed to close file", zap.Error(err))
+			}
+		}()
+
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
+		}
+
+		var policies map[string]map[string]any
+		err = yaml.Unmarshal(data, &policies)
+		if err != nil {
+			return nil, err
+		}
+
+		for beName, policy := range policies {
+			if _, ok := allPolicies[beName]; !ok {
+				allPolicies[beName] = make(map[string]any)
+			}
+			for pName, data := range policy {
+				if _, ok := allPolicies[beName][pName]; ok {
+					return nil, errors.New("policy already exists for backend: " + pName)
+				}
+				allPolicies[beName][pName] = data
+			}
+		}
+		match[policyPath(path)] = policies
 	}
+	return match, nil
+}
 
-	var policies map[string]map[string]any
-	err = yaml.Unmarshal(data, &policies)
-	if err != nil {
-		return err
-	}
-
+func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[string]backend.Backend) error {
 	for beName, policy := range policies {
 		if _, ok := backends[beName]; !ok {
 			return errors.New("backend not found: " + beName)
 		}
-		gc.logger.Info("Applying policy", zap.String("file", file.Name))
 		for pName, data := range policy {
 			id := uuid.NewString()
 			payload := config.PolicyPayload{
@@ -65,7 +100,7 @@ func (gc *gitConfigManager) applyPolicy(file *object.File, backends map[string]b
 				Name:      pName,
 				DatasetID: id,
 				Backend:   beName,
-				Version:   1,
+				Version:   gc.version,
 				Data:      data,
 			}
 			gc.pMgr.ManagePolicy(payload)
@@ -130,20 +165,163 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 	return nil, nil // No match found
 }
 
+func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]backend.Backend) {
+	// Fetch latest updates from remote
+	err := gc.repo.Fetch(&gitv5.FetchOptions{
+		RemoteName: "origin",
+		Auth:       gc.authMethod,
+		RefSpecs:   []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
+	})
+	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
+		gc.logger.Error("Failed to fetch latest changes", zap.Error(err))
+		return
+	}
+
+	// Get the latest reference (HEAD)
+	ref, err := gc.repo.Reference(plumbing.ReferenceName("refs/heads/"+gc.config.Branch), true)
+	if err != nil {
+		gc.logger.Error("Failed to get latest branch reference", zap.Error(err))
+		return
+	}
+
+	// Check if HEAD has changed
+	if gc.lastRef == ref.Hash() {
+		gc.logger.Debug("No changes detected in remote repository")
+		return
+	}
+
+	// Get the latest commit
+	commit, err := gc.repo.CommitObject(ref.Hash())
+	if err != nil {
+		gc.logger.Error("Failed to get commit object", zap.Error(err))
+		return
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		gc.logger.Error("Failed to get commit tree", zap.Error(err))
+		return
+	}
+
+	selectorFile, err := tree.File("selector.yaml")
+	if err != nil {
+		gc.logger.Error("selector.yaml not found in repository root")
+		gc.lastRef = ref.Hash()
+		return
+	}
+
+	// Get the last commit's tree
+	oldCommit, err := gc.repo.CommitObject(gc.lastRef)
+	if err != nil {
+		gc.logger.Error("Failed to get old commit object", zap.Error(err))
+		return
+	}
+
+	oldTree, err := oldCommit.Tree()
+	if err != nil {
+		gc.logger.Error("Failed to get old commit tree", zap.Error(err))
+		return
+	}
+
+	// Check for file changes
+	changes, err := oldTree.Diff(tree)
+	if err != nil {
+		gc.logger.Error("Failed to get diff", zap.Error(err))
+		return
+	}
+
+	// Update last seen commit hash
+	gc.lastRef = ref.Hash()
+
+	matchingPolicies, err := gc.processSelector(selectorFile, cfg)
+	if err != nil {
+		gc.logger.Error("Failed to process selector", zap.Error(err))
+		return
+	}
+
+	// Check if selector.yaml or policies has changed
+	changed := false
+	for _, change := range changes {
+		if change.To.Name == "selector.yaml" || slices.Contains(matchingPolicies, change.To.Name) {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		gc.logger.Info("No changes in selector.yaml or policies")
+		return
+	}
+
+	match, err := gc.readPolicies(tree, matchingPolicies)
+	if err != nil {
+		gc.logger.Error("Failed to read policies", zap.Error(err))
+		return
+	}
+
+	appliedPolicies, err := gc.pMgr.GetRepo().GetAll()
+	if err != nil {
+		gc.logger.Error("failed to get applied policies", zap.Error(err))
+		return
+	}
+
+	// Remove policies that are not in the matching policies
+	for _, policy := range appliedPolicies {
+		for _, policies := range match {
+			for beName, newPolicy := range policies {
+				if policy.Backend == beName {
+					if _, ok := newPolicy[policy.Name]; !ok {
+						err = gc.pMgr.RemovePolicy(policy.ID, policy.Name, policy.Backend)
+						if err != nil {
+							gc.logger.Error("failed to remove policy", zap.Error(err))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Apply new policies
+	for _, policy := range matchingPolicies {
+		if slices.Contains(gc.matchPolicyPaths, policy) {
+			continue
+		}
+		policies := match[policyPath(policy)]
+		err = gc.applyPolicies(policies, backends)
+		if err != nil {
+			gc.logger.Error("failed to apply policies", zap.Error(err))
+		}
+	}
+
+	gc.matchPolicyPaths = matchingPolicies
+
+	// Apply only changed policies
+	gc.version++
+	for _, change := range changes {
+		for path, policies := range match {
+			if change.To.Name == string(path) {
+				err = gc.applyPolicies(policies, backends)
+				if err != nil {
+					gc.logger.Error("Failed to apply policies", zap.Error(err))
+				}
+			}
+		}
+	}
+}
+
 func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
-	var authMethod transport.AuthMethod
 	var err error
+	gc.version = 1
 
 	if gc.config.Auth == "basic" {
-		authMethod = &http.BasicAuth{
+		gc.authMethod = &http.BasicAuth{
 			Username: gc.config.Username,
 			Password: gc.config.Password,
 		}
 	} else if gc.config.Auth == "ssh" {
 		if gc.config.PrivateKey != "" {
-			authMethod, err = ssh.NewPublicKeysFromFile("git", gc.config.PrivateKey, gc.config.Password)
+			gc.authMethod, err = ssh.NewPublicKeysFromFile("git", gc.config.PrivateKey, gc.config.Password)
 		} else {
-			authMethod, err = ssh.NewSSHAgentAuth("git")
+			gc.authMethod, err = ssh.NewSSHAgentAuth("git")
 		}
 	}
 
@@ -169,7 +347,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	// Fetch all branches and references
 	err = repo.Fetch(&gitv5.FetchOptions{
 		RemoteName: "origin",
-		Auth:       authMethod,
+		Auth:       gc.authMethod,
 	})
 	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
 		return err
@@ -181,7 +359,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 
-	refs, err := remote.List(&gitv5.ListOptions{Auth: authMethod})
+	refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod})
 	if err != nil {
 		return err
 	}
@@ -205,8 +383,8 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	gc.logger.Info("cloning repository", zap.String("url", gc.config.URL), zap.String("branch", branchName))
 
 	// Now clone the repository with the determined branch
-	r, err := gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
-		Auth:          authMethod,
+	gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
+		Auth:          gc.authMethod,
 		URL:           gc.config.URL,
 		ReferenceName: plumbing.NewBranchReferenceName(branchName),
 		SingleBranch:  true,
@@ -215,13 +393,16 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 
-	ref, err := r.Head()
+	gc.config.Branch = branchName
+
+	ref, err := gc.repo.Head()
 	if err != nil {
 		return err
 	}
 
 	// Get the latest commit
-	commit, err := r.CommitObject(ref.Hash())
+	gc.lastRef = ref.Hash()
+	commit, err := gc.repo.CommitObject(gc.lastRef)
 	if err != nil {
 		return err
 	}
@@ -233,19 +414,8 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	}
 
 	// Locate the selector.yaml file in the root directory
-	var selectorFile *object.File
-	err = tree.Files().ForEach(func(f *object.File) error {
-		if f.Name == "selector.yaml" {
-			selectorFile = f
-			return nil
-		}
-		return nil
-	})
+	selectorFile, err := tree.File("selector.yaml")
 	if err != nil {
-		return err
-	}
-
-	if selectorFile == nil {
 		return errors.New("selector.yaml not found in repository root")
 	}
 
@@ -255,23 +425,40 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 	if matchingPolicies == nil {
-		gc.logger.Info("No matching selector found. No will be policies applied.")
+		gc.logger.Info("No matching selector found. No policies will be applied.")
 		return nil
 	}
 
-	// Apply the matched policies
-	for _, policyPath := range matchingPolicies {
-		// Try to get the exact file from the tree
-		f, err := tree.File(policyPath)
-		if err != nil {
-			return errors.New("policy file not found: " + policyPath)
-		}
+	// Read all policies
+	match, err := gc.readPolicies(tree, matchingPolicies)
+	if err != nil {
+		return err
+	}
 
-		// Apply the policy if the file exists
-		err = gc.applyPolicy(f, backends)
+	// Apply the matched policies
+	for path, policies := range match {
+		gc.logger.Info("Applying policies from " + string(path))
+		err = gc.applyPolicies(policies, backends)
 		if err != nil {
 			return err
 		}
+	}
+
+	gc.matchPolicyPaths = matchingPolicies
+
+	//start scheduler
+	if gc.config.Schedule != nil {
+		s, err := gocron.NewScheduler()
+		if err != nil {
+			return err
+		}
+		gc.scheduler = s
+		task := gocron.NewTask(gc.schedule, cfg, backends)
+		_, err = gc.scheduler.NewJob(gocron.CronJob(*gc.config.Schedule, false), task, gocron.WithSingletonMode(gocron.LimitModeReschedule))
+		if err != nil {
+			return err
+		}
+		gc.scheduler.Start()
 	}
 
 	return nil

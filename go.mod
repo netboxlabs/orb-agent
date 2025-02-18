@@ -5,6 +5,7 @@ go 1.23.2
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/go-cmd/cmd v1.4.3
+	github.com/go-co-op/gocron/v2 v2.15.0
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/mitchellh/mapstructure v1.5.1-0.20220423185008-bf980b35cac4
@@ -15,6 +16,11 @@ require (
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/zap v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
+)
+
+require (
+	github.com/jonboulle/clockwork v0.4.0 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 )
 
 require (
