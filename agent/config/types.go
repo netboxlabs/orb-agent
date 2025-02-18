@@ -45,7 +45,7 @@ type CloudManager struct {
 	DB struct {
 		File string `mapstructure:"file"`
 	} `mapstructure:"db"`
-	Labels map[string]string `mapstructure:"tags"`
+	Labels map[string]string `mapstructure:"labels"`
 }
 
 // LocalManager represents the local ConfigManager configuration.

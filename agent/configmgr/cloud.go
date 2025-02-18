@@ -120,7 +120,7 @@ func (cc *cloudConfigManager) autoProvision(apiAddress string, token string) (co
 
 	type AgentReq struct {
 		Name        string            `json:"name"`
-		AgentLabels map[string]string `json:"agent_tags"`
+		AgentLabels map[string]string `json:"agent_labels"`
 	}
 
 	aname := cc.config.Config.AgentName
