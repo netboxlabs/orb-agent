@@ -36,14 +36,21 @@ type gitConfigManager struct {
 	authMethod       transport.AuthMethod
 	version          int32
 	matchPolicyPaths []string
+	namespace        uuid.UUID
 }
 
-type policyPath string
-type policyData map[string]map[string]any
+type (
+	policyPath string
+	policyData map[string]map[string]any
+	policyKey  struct {
+		Backend string
+		Name    string
+	}
+)
 
 func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []string) (map[policyPath]policyData, error) {
-	match := make(map[policyPath]policyData)
-	var allPolicies = make(map[string]map[string]any)
+	policiesByPath := make(map[policyPath]policyData)
+	allPolicies := make(map[string]map[string]any)
 	for _, path := range matchingPolicies {
 		// Try to get the exact file from the tree
 		file, err := tree.File(path)
@@ -67,8 +74,7 @@ func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []s
 		}
 
 		var policies map[string]map[string]any
-		err = yaml.Unmarshal(data, &policies)
-		if err != nil {
+		if err = yaml.Unmarshal(data, &policies); err != nil {
 			return nil, err
 		}
 
@@ -83,9 +89,9 @@ func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []s
 				allPolicies[beName][pName] = data
 			}
 		}
-		match[policyPath(path)] = policies
+		policiesByPath[policyPath(path)] = policies
 	}
-	return match, nil
+	return policiesByPath, nil
 }
 
 func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[string]backend.Backend) error {
@@ -94,11 +100,12 @@ func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[stri
 			return errors.New("backend not found: " + beName)
 		}
 		for pName, data := range policy {
-			id := uuid.NewString()
+			policyID := uuid.NewSHA1(gc.namespace, []byte(pName+beName)).String()
 			payload := config.PolicyPayload{
+				ID:        policyID,
 				Action:    "manage",
 				Name:      pName,
-				DatasetID: id,
+				DatasetID: uuid.NewString(),
 				Backend:   beName,
 				Version:   gc.version,
 				Data:      data,
@@ -134,8 +141,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 			Path    string `yaml:"path"`
 		} `yaml:"policies"`
 	}
-	err = yaml.Unmarshal(data, &selectors)
-	if err != nil {
+	if err = yaml.Unmarshal(data, &selectors); err != nil {
 		return nil, err
 	}
 
@@ -162,7 +168,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 		}
 	}
 
-	return nil, nil // No match found
+	return nil, nil // No policiesByPathfound
 }
 
 func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]backend.Backend) {
@@ -252,10 +258,21 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 		return
 	}
 
-	match, err := gc.readPolicies(tree, matchingPolicies)
+	policiesByPath, err := gc.readPolicies(tree, matchingPolicies)
 	if err != nil {
 		gc.logger.Error("Failed to read policies", zap.Error(err))
 		return
+	}
+
+	// Build a lookup map from policiesByPath
+	definedPolicies := make(map[policyKey]struct{})
+	for _, policies := range policiesByPath {
+		for beName, newPolicy := range policies {
+			for pName := range newPolicy {
+				key := policyKey{Backend: beName, Name: pName}
+				definedPolicies[key] = struct{}{}
+			}
+		}
 	}
 
 	appliedPolicies, err := gc.pMgr.GetRepo().GetAll()
@@ -266,16 +283,10 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 
 	// Remove policies that are not in the matching policies
 	for _, policy := range appliedPolicies {
-		for _, policies := range match {
-			for beName, newPolicy := range policies {
-				if policy.Backend == beName {
-					if _, ok := newPolicy[policy.Name]; !ok {
-						err = gc.pMgr.RemovePolicy(policy.ID, policy.Name, policy.Backend)
-						if err != nil {
-							gc.logger.Error("failed to remove policy", zap.Error(err))
-						}
-					}
-				}
+		key := policyKey{Backend: policy.Backend, Name: policy.Name}
+		if _, exists := definedPolicies[key]; !exists {
+			if err := gc.pMgr.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
+				gc.logger.Error("failed to remove policy", zap.Error(err))
 			}
 		}
 	}
@@ -285,9 +296,8 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 		if slices.Contains(gc.matchPolicyPaths, policy) {
 			continue
 		}
-		policies := match[policyPath(policy)]
-		err = gc.applyPolicies(policies, backends)
-		if err != nil {
+		policies := policiesByPath[policyPath(policy)]
+		if err = gc.applyPolicies(policies, backends); err != nil {
 			gc.logger.Error("failed to apply policies", zap.Error(err))
 		}
 	}
@@ -297,10 +307,9 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	// Apply only changed policies
 	gc.version++
 	for _, change := range changes {
-		for path, policies := range match {
+		for path, policies := range policiesByPath {
 			if change.To.Name == string(path) {
-				err = gc.applyPolicies(policies, backends)
-				if err != nil {
+				if err = gc.applyPolicies(policies, backends); err != nil {
 					gc.logger.Error("Failed to apply policies", zap.Error(err))
 				}
 			}
@@ -336,20 +345,18 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	}
 
 	// Add the remote
-	_, err = repo.CreateRemote(&gitconfig.RemoteConfig{
+	if _, err = repo.CreateRemote(&gitconfig.RemoteConfig{
 		Name: "origin",
 		URLs: []string{gc.config.URL},
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
 	// Fetch all branches and references
-	err = repo.Fetch(&gitv5.FetchOptions{
+	if err = repo.Fetch(&gitv5.FetchOptions{
 		RemoteName: "origin",
 		Auth:       gc.authMethod,
-	})
-	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
+	}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
 		return err
 	}
 
@@ -394,6 +401,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	}
 
 	gc.config.Branch = branchName
+	gc.namespace = uuid.NewSHA1(uuid.Nil, []byte(gc.config.URL))
 
 	ref, err := gc.repo.Head()
 	if err != nil {
@@ -430,23 +438,22 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	}
 
 	// Read all policies
-	match, err := gc.readPolicies(tree, matchingPolicies)
+	policiesByPath, err := gc.readPolicies(tree, matchingPolicies)
 	if err != nil {
 		return err
 	}
 
 	// Apply the matched policies
-	for path, policies := range match {
+	for path, policies := range policiesByPath {
 		gc.logger.Info("Applying policies from " + string(path))
-		err = gc.applyPolicies(policies, backends)
-		if err != nil {
+		if err = gc.applyPolicies(policies, backends); err != nil {
 			return err
 		}
 	}
 
 	gc.matchPolicyPaths = matchingPolicies
 
-	//start scheduler
+	// start scheduler
 	if gc.config.Schedule != nil {
 		s, err := gocron.NewScheduler()
 		if err != nil {

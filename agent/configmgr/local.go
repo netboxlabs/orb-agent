@@ -31,8 +31,10 @@ func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backe
 			return errors.New("backend not found: " + beName)
 		}
 		for pName, data := range policy {
+			policyID := uuid.NewSHA1(uuid.Nil, []byte(pName+beName)).String()
 			id := uuid.NewString()
-			payload := config.PolicyPayload{Action: "manage", Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
+			payload := config.PolicyPayload{ID: policyID, Action: "manage",
+				Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
 			lc.pMgr.ManagePolicy(payload)
 		}
 
