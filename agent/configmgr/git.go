@@ -94,6 +94,35 @@ func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []s
 	return policiesByPath, nil
 }
 
+func (gc *gitConfigManager) removePolicies(policiesByPath map[policyPath]policyData) {
+	// Build a lookup map from policiesByPath
+	definedPolicies := make(map[policyKey]struct{})
+	for _, policies := range policiesByPath {
+		for beName, newPolicy := range policies {
+			for pName := range newPolicy {
+				key := policyKey{Backend: beName, Name: pName}
+				definedPolicies[key] = struct{}{}
+			}
+		}
+	}
+
+	appliedPolicies, err := gc.pMgr.GetRepo().GetAll()
+	if err != nil {
+		gc.logger.Error("failed to get applied policies", zap.Error(err))
+		return
+	}
+
+	// Remove policies that are not in the matching policies
+	for _, policy := range appliedPolicies {
+		key := policyKey{Backend: policy.Backend, Name: policy.Name}
+		if _, exists := definedPolicies[key]; !exists {
+			if err := gc.pMgr.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
+				gc.logger.Error("failed to remove policy", zap.Error(err))
+			}
+		}
+	}
+}
+
 func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[string]backend.Backend) error {
 	for beName, policy := range policies {
 		if _, ok := backends[beName]; !ok {
@@ -168,7 +197,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 		}
 	}
 
-	return nil, nil // No policiesByPathfound
+	return nil, nil
 }
 
 func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]backend.Backend) {
@@ -211,7 +240,9 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 
 	selectorFile, err := tree.File("selector.yaml")
 	if err != nil {
-		gc.logger.Error("selector.yaml not found in repository root")
+		gc.logger.Warn("selector.yaml not found in latest commit, removing policies")
+		gc.removePolicies(make(map[policyPath]policyData))
+		gc.matchPolicyPaths = make([]string, 0)
 		gc.lastRef = ref.Hash()
 		return
 	}
@@ -264,32 +295,8 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 		return
 	}
 
-	// Build a lookup map from policiesByPath
-	definedPolicies := make(map[policyKey]struct{})
-	for _, policies := range policiesByPath {
-		for beName, newPolicy := range policies {
-			for pName := range newPolicy {
-				key := policyKey{Backend: beName, Name: pName}
-				definedPolicies[key] = struct{}{}
-			}
-		}
-	}
-
-	appliedPolicies, err := gc.pMgr.GetRepo().GetAll()
-	if err != nil {
-		gc.logger.Error("failed to get applied policies", zap.Error(err))
-		return
-	}
-
 	// Remove policies that are not in the matching policies
-	for _, policy := range appliedPolicies {
-		key := policyKey{Backend: policy.Backend, Name: policy.Name}
-		if _, exists := definedPolicies[key]; !exists {
-			if err := gc.pMgr.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
-				gc.logger.Error("failed to remove policy", zap.Error(err))
-			}
-		}
-	}
+	gc.removePolicies(policiesByPath)
 
 	// Apply new policies
 	for _, policy := range matchingPolicies {
