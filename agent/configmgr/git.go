@@ -240,7 +240,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 
 	selectorFile, err := tree.File("selector.yaml")
 	if err != nil {
-		gc.logger.Warn("selector.yaml not found in latest commit, removing policies")
+		gc.logger.Warn("selector.yaml not found in latest commit")
 		gc.removePolicies(make(map[policyPath]policyData))
 		gc.matchPolicyPaths = make([]string, 0)
 		gc.lastRef = ref.Hash()
