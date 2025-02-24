@@ -65,7 +65,7 @@ type pktvisorBackend struct {
 	adminAPIProtocol string
 
 	// added for Strings
-	agentTags map[string]string
+	agentLabels map[string]string
 
 	// OpenTelemetry management
 	otelReceiverHost string
@@ -286,7 +286,7 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	if p.adminAPIPort, prs = config["api_port"].(string); !prs {
 		p.adminAPIPort = defaultAPIPort
 	}
-	p.agentTags = common.Otel.AgentTags
+	p.agentLabels = common.Otel.AgentLabels
 
 	p.otelReceiverHost = common.Otel.Host
 	p.otelReceiverPort = common.Otel.Port

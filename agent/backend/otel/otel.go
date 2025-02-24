@@ -41,12 +41,12 @@ type openTelemetryBackend struct {
 	apiPort     string
 	apiProtocol string
 
-	startTime  time.Time
-	proc       *cmd.Cmd
-	agentTags  map[string]string
-	statusChan <-chan cmd.Status
-	cancelFunc context.CancelFunc
-	ctx        context.Context
+	startTime   time.Time
+	proc        *cmd.Cmd
+	agentLabels map[string]string
+	statusChan  <-chan cmd.Status
+	cancelFunc  context.CancelFunc
+	ctx         context.Context
 
 	mqttClient *mqtt.Client
 }
@@ -81,7 +81,7 @@ func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.Polic
 		o.apiPort = defaultAPIPort
 	}
 
-	o.agentTags = common.Otel.AgentTags
+	o.agentLabels = common.Otel.AgentLabels
 
 	return nil
 }
