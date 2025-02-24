@@ -24,7 +24,9 @@ orb:
   ...
 ```
 
-Currently, only the `local` manager is supported, which retrieves policies from the local configuration file passed to the agent.
+Currently, only the `local` and `git` backends are supported for config manager.
+- [Local](./docs/configs/local.md)
+- [Git](./docs/configs/git.md)
 
 ### Backends
 The `backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
