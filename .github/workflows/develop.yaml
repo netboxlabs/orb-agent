@@ -1,8 +1,6 @@
 name: Orb Agent - develop
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [ develop ]
   push:
     branches: [ develop ]
     paths:
