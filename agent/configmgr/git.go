@@ -468,8 +468,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		}
 		gc.scheduler = s
 		task := gocron.NewTask(gc.schedule, cfg, backends)
-		_, err = gc.scheduler.NewJob(gocron.CronJob(*gc.config.Schedule, false), task, gocron.WithSingletonMode(gocron.LimitModeReschedule))
-		if err != nil {
+		if _, err = gc.scheduler.NewJob(gocron.CronJob(*gc.config.Schedule, false), task, gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
 			return err
 		}
 		gc.scheduler.Start()
