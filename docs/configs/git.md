@@ -34,8 +34,8 @@ orb:
 ## Git Repository Structure
 
 The Orb Agent requires the Git repository containing its policies to have the following structure:
-- A `selector.yaml` file in the root folder of the repository.
-- Policy files that define agent policies.
+- A `selector.yaml` file in the root folder of the repository
+- Policy files that define agent policies
 
 ### Sample Structure
 ```
