@@ -10,7 +10,7 @@ orb:
     pop: ams02
   config_manager:
     active: git
-    backends:
+    sources:
       git:
         url: "https://github.com/myorg/policyrepo"
         schedule: "* * * * *"
