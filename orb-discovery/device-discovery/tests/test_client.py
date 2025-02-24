@@ -36,7 +36,15 @@ def sample_data():
             "GigabitEthernet0/0": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
         },
         "driver": "ios",
-        "defaults": SimpleNamespace(site="New York", role=None, tags = None, device = None),
+        "defaults": SimpleNamespace(
+            site="New York",
+            role=None,
+            tags=None,
+            device=None,
+            interface=None,
+            ipaddress=None,
+            prefix=None,
+        ),
     }
 
 

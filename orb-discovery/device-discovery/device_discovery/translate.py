@@ -222,15 +222,9 @@ def translate_data(data: dict) -> Iterable[Entity]:
         device = translate_device(device_info, defaults)
         entities.append(Entity(device=device))
 
-        interface_list = device_info.get("interface_list", [])
         for if_name, interface_info in interfaces.items():
-            if if_name in interface_list:
-                interface = translate_interface(
-                    device, if_name, interface_info, defaults
-                )
-                entities.append(Entity(interface=interface))
-                entities.extend(
-                    translate_interface_ips(interface, interfaces_ip, defaults)
-                )
+            interface = translate_interface(device, if_name, interface_info, defaults)
+            entities.append(Entity(interface=interface))
+            entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
 
     return entities
