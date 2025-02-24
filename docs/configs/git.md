@@ -52,8 +52,8 @@ The Orb Agent requires the Git repository containing its policies to have the fo
 
 ### selector.yaml 
 The `selector.yaml` file must include the `selector` and `policies` sections:
- - `selector`: Defines key-value pairs (agent labels) used to identify agents.
- - `policies`: Specifies policy file paths and their enabled or disabled state. If the `enabled` field is not provided, the policy is enabled by default.
+ - `selector`: Defines key-value pairs (agent labels) used to identify agents
+ - `policies`: Specifies policy file paths and their enabled or disabled state. If the `enabled` field is not provided, the policy is enabled by default
 
 
 ```yaml
