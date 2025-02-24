@@ -17,7 +17,7 @@ orb:
         branch: develop
         auth: "basic"
         username: "username"
-        password: <password/token>
+        password: ${PASSWORD|TOKEN}
         private_key: path/to/certificate.pem
 ```
 
@@ -31,28 +31,31 @@ orb:
 | password | string | no | the password used for authentication. If the auth method is 'basic' it should cointains the password or auth token. If the method is 'ssh' it should contains the password for the ssh certificate file |
 | private_key | string | no | the path for the ssh certificate file |
 
-## Git Repository structure
-Agent requires that the git repository that contains its policies to have the following:
- - a `selector.yaml` in the git root folder
- - policy files that defines 
+## Git Repository Structure
 
-- Agent runs lookup recursively in the git repo.
-- Agent looks for a `selector.yaml` file in a directory, if it exists and metadata matches. It applies every policy that exists in the same level as  `selector.yaml`
+The Orb Agent requires the Git repository containing its policies to have the following structure:
+- A `selector.yaml` file in the root folder of the repository.
+- Policy files that define agent policies.
 
+### Sample Structure
 ```
 .
 ├── .git
-├── seletor.yaml
+├── selector.yaml
 ├── dir2
 │   ├── newpolicy.yaml
-|   └── dir3
-│        └── newpolicy2.yaml
+│   └── dir3
+│       └── newpolicy2.yaml
 └── folder1
     └── policy1.yaml
 ```
 
 ### selector.yaml 
-The selector.yaml must contain the `selector` section that should match the agent labels and the `policies` section that determines the policies path and if that policy is enabled or disabled. If not specified the default state is enabled.
+The `selector.yaml` file must include the `selector` and `policies` sections:
+ - `selector`: Defines key-value pairs (agent labels) used to identify agents.
+ - `policies`: Specifies policy file paths and their enabled or disabled state. If the `enabled` field is not provided, the policy is enabled by default.
+
+
 ```yaml
 agent_selector_1:
   selector:

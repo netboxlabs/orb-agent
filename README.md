@@ -24,7 +24,7 @@ orb:
   ...
 ```
 
-Currently, only the `local` and `git` backends are supported for config manager.
+Currently, only the `local` and `git` sources are supported for config manager.
 - [Local](./docs/configs/local.md)
 - [Git](./docs/configs/git.md)
 
