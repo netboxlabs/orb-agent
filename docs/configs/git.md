@@ -42,12 +42,13 @@ The Orb Agent requires the Git repository containing its policies to have the fo
 .
 ├── .git
 ├── selector.yaml
-├── dir2
-│   ├── newpolicy.yaml
-│   └── dir3
-│       └── newpolicy2.yaml
-└── folder1
-    └── policy1.yaml
+├── policy1.yaml
+├── folder2
+│   ├── policy2.yaml
+│   └── folder3
+│       └── policy3.yaml
+└── folder4
+    └── policy4.yaml
 ```
 
 ### selector.yaml 
@@ -64,8 +65,8 @@ agent_selector_1:
   policies:
     policy1:
       path: policy1.yaml
-	policy2:
-	  enabled: false
+    policy2:
+      enabled: false
       path: folder2/policy2.yaml
 agent_selector_2:
   selector:
@@ -73,8 +74,8 @@ agent_selector_2:
     pop: nyc02
   policies:
     policy1:
-	  enabled: true
-	  path: policy1.yaml
-	policy3:
-      path: folder3/policy3.yaml 
+      enabled: true
+      path: policy1.yaml
+    policy3:
+      path: folder2/folder3/policy3.yaml
 ```
