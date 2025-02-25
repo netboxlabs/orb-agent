@@ -64,8 +64,8 @@ type GitManager struct {
 	PrivateKey string  `mapstructure:"private_key"`
 }
 
-// ManagerBackends represents the configuration for manager backends, including cloud and local.
-type ManagerBackends struct {
+// ManagerSources represents the configuration for manager sources, including cloud, local and git.
+type ManagerSources struct {
 	Cloud CloudManager `mapstructure:"orbcloud"`
 	Local LocalManager `mapstructure:"local"`
 	Git   GitManager   `mapstructure:"git"`
@@ -73,8 +73,8 @@ type ManagerBackends struct {
 
 // ManagerConfig represents the configuration for the Config Manager
 type ManagerConfig struct {
-	Active   string          `mapstructure:"active"`
-	Backends ManagerBackends `mapstructure:"backends"`
+	Active  string         `mapstructure:"active"`
+	Sources ManagerSources `mapstructure:"sources"`
 }
 
 // BackendCommons represents common configuration for backends
