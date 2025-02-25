@@ -198,20 +198,22 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 	// Iterate through all selectors and collect all matching ones
 	for selectorName, entry := range selectors {
 		matches := true
-		for key, value := range entry.Selector {
-			if cfgValue, exists := cfg.OrbAgent.Labels[key]; !exists || cfgValue != value {
-				matches = false
-				break
+		// If selector is empty, it matches everything
+		if len(entry.Selector) > 0 {
+			for key, value := range entry.Selector {
+				if cfgValue, exists := cfg.OrbAgent.Labels[key]; !exists || cfgValue != value {
+					matches = false
+					break
+				}
 			}
 		}
-
 		if matches {
 			gc.logger.Info("Selector matched", zap.String("selector", selectorName))
 			for _, policy := range entry.Policies {
 				if policy.Enabled != nil && !*policy.Enabled {
 					continue
 				}
-				policyPathsSet[policy.Path] = struct{}{} // Add path to set (ensures uniqueness)
+				policyPathsSet[policy.Path] = struct{}{}
 			}
 		}
 	}
