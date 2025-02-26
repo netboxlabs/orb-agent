@@ -206,9 +206,13 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 		}
 		if matches {
 			gc.logger.Info("Selector matched", zap.String("selector", selectorName))
-			for _, policy := range entry.Policies {
+			for pName, policy := range entry.Policies {
 				if policy.Enabled != nil && !*policy.Enabled {
 					continue
+				}
+				if _, exists := policyPathsSet[policy.Path]; exists {
+					gc.logger.Warn("Policy path already exists", zap.String("selector", selectorName),
+						zap.String("policy", pName), zap.String("path", policy.Path))
 				}
 				policyPathsSet[policy.Path] = struct{}{}
 			}
