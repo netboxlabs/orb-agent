@@ -29,7 +29,7 @@ FROM python:3.12-slim-bullseye
 
 RUN \
     apt update && \
-    apt install --yes --force-yes --no-install-recommends nmap openssh-client && \
+    apt install --yes --force-yes --no-install-recommends libcap2-bin nmap openssh-client && \
     rm -rf /var/lib/apt
 
 RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
@@ -44,12 +44,14 @@ COPY --from=builder /src/orb-agent/agent/docker/agent_default.yaml /opt/orb/agen
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
 COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
 
-COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/sbin/pktvisord
-COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/sbin/crashpad_handler
+COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/bin/pktvisord
+COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/bin/crashpad_handler
 COPY --from=pktvisor /geo-db /geo-db
 COPY --from=pktvisor /iana /iana
 
-RUN  chown appuser:appuser /geo-db
+RUN setcap cap_net_raw,cap_net_admin+eip /usr/local/bin/pktvisord
+RUN chown appuser:appuser /usr/local/bin/pktvisord
+RUN chown appuser:appuser /geo-db
 
 COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 
