@@ -192,7 +192,10 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 		return nil, err
 	}
 
-	// Check for matching selector
+	// Use a set (map) to store unique policy paths
+	policyPathsSet := make(map[string]struct{})
+
+	// Iterate through all selectors and collect all matching ones
 	for selectorName, entry := range selectors {
 		matches := true
 		for key, value := range entry.Selector {
@@ -201,21 +204,28 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 				break
 			}
 		}
-
 		if matches {
 			gc.logger.Info("Selector matched", zap.String("selector", selectorName))
-			policyPaths := make([]string, 0)
-			for _, policy := range entry.Policies {
+			for pName, policy := range entry.Policies {
 				if policy.Enabled != nil && !*policy.Enabled {
 					continue
 				}
-				policyPaths = append(policyPaths, policy.Path)
+				if _, exists := policyPathsSet[policy.Path]; exists {
+					gc.logger.Warn("Policy path already exists", zap.String("selector", selectorName),
+						zap.String("policy", pName), zap.String("path", policy.Path))
+				}
+				policyPathsSet[policy.Path] = struct{}{}
 			}
-			return policyPaths, nil
 		}
 	}
 
-	return nil, nil
+	// Convert map keys to a slice
+	var policyPaths []string
+	for path := range policyPathsSet {
+		policyPaths = append(policyPaths, path)
+	}
+
+	return policyPaths, nil
 }
 
 func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]backend.Backend) {

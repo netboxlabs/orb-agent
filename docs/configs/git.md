@@ -42,17 +42,18 @@ The Orb Agent requires the Git repository containing its policies to have the fo
 .
 ├── .git
 ├── selector.yaml
-├── dir2
-│   ├── newpolicy.yaml
-│   └── dir3
-│       └── newpolicy2.yaml
-└── folder1
-    └── policy1.yaml
+├── policy1.yaml
+├── folder2
+│   ├── policy2.yaml
+│   └── folder3
+│       └── policy3.yaml
+└── folder4
+    └── policy4.yaml
 ```
 
 ### selector.yaml 
 The `selector.yaml` file must include the `selector` and `policies` sections:
- - `selector`: Defines key-value pairs (agent labels) used to identify agents
+ - `selector`: Defines key-value pairs that identify agents based on their labels. If the selector is empty, it matches all agents.
  - `policies`: Specifies policy file paths and their enabled or disabled state. If the `enabled` field is not provided, the policy is enabled by default
 
 
@@ -64,8 +65,8 @@ agent_selector_1:
   policies:
     policy1:
       path: policy1.yaml
-	policy2:
-	  enabled: false
+    policy2:
+      enabled: false
       path: folder2/policy2.yaml
 agent_selector_2:
   selector:
@@ -73,8 +74,12 @@ agent_selector_2:
     pop: nyc02
   policies:
     policy1:
-	  enabled: true
-	  path: policy1.yaml
-	policy3:
-      path: folder3/policy3.yaml 
+      enabled: true
+      path: policy1.yaml
+    policy3:
+      path: folder2/folder3/policy3.yaml
+agent_selector_matches_all:
+  selector:
+  policies:
+    path: folder4/policy4.yaml
 ```
