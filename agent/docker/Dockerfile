@@ -32,24 +32,17 @@ RUN \
     apt install --yes --force-yes --no-install-recommends nmap openssh-client && \
     rm -rf /var/lib/apt
 
-RUN addgroup --system netdev && useradd -m --shell /bin/bash -G netdev appuser && echo "appuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
-
-# Create necessary directories and set ownership to appuser
-RUN mkdir -p /opt/orb && chown appuser:appuser /opt/orb \
-    && chown appuser:appuser /usr/local/bin \
-    && chown appuser:appuser /var/run
+RUN mkdir -p /opt/orb
 
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /src/orb-agent/agent/docker/agent_default.yaml /opt/orb/agent_default.yaml
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
 COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
 
-COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/sbin/pktvisord
-COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/sbin/crashpad_handler
+COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/bin/pktvisord
+COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/bin/crashpad_handler
 COPY --from=pktvisor /geo-db /geo-db
 COPY --from=pktvisor /iana /iana
-
-RUN  chown appuser:appuser /geo-db
 
 COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 
@@ -58,7 +51,5 @@ COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/ne
 RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 
 RUN chmod a+x /run-agent.sh
-
-USER appuser
 
 ENTRYPOINT [ "/usr/local/bin/orb-agent-entry.sh" ]

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 )
@@ -89,11 +90,20 @@ func (d *openTelemetryBackend) request(url string, payload interface{}, method s
 		}
 	}
 
+	// Read and decode response body
 	if res.Body != nil {
-		err = json.NewDecoder(res.Body).Decode(&payload)
+		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to read response body: %w", err)
 		}
+		if err = json.Unmarshal(body, &payload); err == nil {
+			return nil
+		}
+		var yamlErr error
+		if yamlErr = yaml.Unmarshal(body, &payload); yamlErr == nil {
+			return nil
+		}
+		return fmt.Errorf("failed to decode response as JSON: %w and YAML: %w", err, yamlErr)
 	}
 	return nil
 }
