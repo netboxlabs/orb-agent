@@ -103,7 +103,7 @@ func (d *openTelemetryBackend) request(url string, payload interface{}, method s
 		if yamlErr = yaml.Unmarshal(body, &payload); yamlErr == nil {
 			return nil
 		}
-		return fmt.Errorf("failed to decode response as JSON: %w. And YAML: %w", err, yamlErr)
+		return fmt.Errorf("failed to decode response as JSON: %w and YAML: %w", err, yamlErr)
 	}
 	return nil
 }
