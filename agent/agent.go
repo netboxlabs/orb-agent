@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
 	"go.uber.org/zap"
@@ -32,8 +31,6 @@ type Agent interface {
 type orbAgent struct {
 	logger            *zap.Logger
 	config            config.Config
-	client            mqtt.Client
-	agentID           string
 	backends          map[string]backend.Backend
 	backendState      map[string]*backend.State
 	backendsCommon    config.BackendCommons
@@ -44,10 +41,6 @@ type orbAgent struct {
 
 	heartbeatCtx    context.Context
 	heartbeatCancel context.CancelFunc
-
-	// Agent RPC channel, configured from command line
-	baseTopic        string
-	rpcFromCoreTopic string
 
 	// Retry Mechanism to ensure the Request is received
 	groupRequestSucceeded  context.CancelFunc
@@ -149,13 +142,6 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
 	a.logger.Info("agent started", zap.String("version", version.GetBuildVersion()), zap.Any("routine", agentCtx.Value(routineKey)))
-	mqtt.CRITICAL = &agentLoggerCritical{a: a}
-	mqtt.ERROR = &agentLoggerError{a: a}
-
-	if a.config.OrbAgent.Debug.Enable {
-		a.logger.Info("debug logging enabled")
-		mqtt.DEBUG = &agentLoggerDebug{a: a}
-	}
 
 	if err := a.startBackends(ctx); err != nil {
 		return err
@@ -180,11 +166,6 @@ func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
 	if a.heartbeatCtx != nil {
 		a.heartbeatCancel()
 	}
-	if a.client != nil && a.client.IsConnected() {
-		if token := a.client.Unsubscribe(a.rpcFromCoreTopic); token.Wait() && token.Error() != nil {
-			a.logger.Warn("failed to unsubscribe to RPC channel", zap.Error(token.Error()))
-		}
-	}
 }
 
 func (a *orbAgent) Stop(ctx context.Context) {
@@ -201,9 +182,6 @@ func (a *orbAgent) Stop(ctx context.Context) {
 		}
 	}
 	a.logoffWithHeartbeat(ctx)
-	if a.client != nil && a.client.IsConnected() {
-		a.client.Disconnect(0)
-	}
 	a.logger.Debug("stopping agent with number of go routines and go calls", zap.Int("goroutines", runtime.NumGoroutine()), zap.Int64("gocalls", runtime.NumCgoCall()))
 	if a.policyRequestSucceeded != nil {
 		a.policyRequestSucceeded()
@@ -237,7 +215,6 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 		a.backendState[name].LastError = fmt.Sprintf("failed to reset backend: %v", err)
 		a.logger.Error("failed to reset backend", zap.String("backend", name), zap.Error(err))
 	}
-	be.SetCommsClient(a.agentID, &a.client, fmt.Sprintf("%s/?/%s", a.baseTopic, name))
 
 	return nil
 }

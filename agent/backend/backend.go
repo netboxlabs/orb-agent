@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -49,7 +48,6 @@ func (s RunningStatus) String() string {
 // Backend is the interface that all backends must implement
 type Backend interface {
 	Configure(*zap.Logger, policies.PolicyRepo, map[string]interface{}, config.BackendCommons) error
-	SetCommsClient(string, *mqtt.Client, string)
 	Version() (string, error)
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
 	Stop(ctx context.Context) error

@@ -3,14 +3,11 @@ package pktvisor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
 	"go.uber.org/zap"
 
@@ -53,11 +50,7 @@ type pktvisorBackend struct {
 	startTime       time.Time
 	cancelFunc      context.CancelFunc
 	ctx             context.Context
-
-	mqttClient       *mqtt.Client
-	metricsTopic     string
-	otlpMetricsTopic string
-	policyRepo       policies.PolicyRepo
+	policyRepo      policies.PolicyRepo
 
 	adminAPIHost     string
 	adminAPIPort     string
@@ -77,14 +70,6 @@ func (p *pktvisorBackend) GetStartTime() time.Time {
 
 func (p *pktvisorBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
-}
-
-func (p *pktvisorBackend) SetCommsClient(agentID string, client *mqtt.Client, baseTopic string) {
-	p.mqttClient = client
-	metricsTopic := strings.Replace(baseTopic, "?", "be", 1)
-	otelMetricsTopic := strings.Replace(baseTopic, "?", "otlp", 1)
-	p.metricsTopic = fmt.Sprintf("%s/m/%c", metricsTopic, agentID[0])
-	p.otlpMetricsTopic = fmt.Sprintf("%s/m/%c", otelMetricsTopic, agentID[0])
 }
 
 func (p *pktvisorBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
