@@ -267,17 +267,14 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 		}
 	}
 
-	// Only add config section if it's not empty
 	if len(configSection) > 0 {
 		visorConfig["config"] = configSection
 	}
 
-	// Create the full config structure
 	fullConfig := map[string]any{
 		"visor": visorConfig,
 	}
 
-	// Convert config to YAML
 	yamlData, err := yaml.Marshal(fullConfig)
 	if err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
@@ -285,8 +282,6 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 		}
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-
-	// Write config to temp file
 	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
 			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
@@ -294,7 +289,6 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
-	// Update config file path to use the temp file
 	p.configFile = tmpFile.Name()
 
 	if common.Otel.Host != "" && common.Otel.Port != 0 {
