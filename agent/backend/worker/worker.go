@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -50,8 +49,6 @@ type workerBackend struct {
 	statusChan <-chan cmd.Status
 	cancelFunc context.CancelFunc
 	ctx        context.Context
-
-	mqttClient *mqtt.Client
 }
 
 type info struct {
@@ -85,10 +82,6 @@ func (d *workerBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, 
 	d.diodeAppNamePrefix = common.Diode.AgentName
 
 	return nil
-}
-
-func (d *workerBackend) SetCommsClient(_ string, client *mqtt.Client, _ string) {
-	d.mqttClient = client
 }
 
 func (d *workerBackend) Version() (string, error) {

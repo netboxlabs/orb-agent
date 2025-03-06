@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -47,8 +46,6 @@ type openTelemetryBackend struct {
 	statusChan  <-chan cmd.Status
 	cancelFunc  context.CancelFunc
 	ctx         context.Context
-
-	mqttClient *mqtt.Client
 }
 
 type info struct {
@@ -246,10 +243,6 @@ func (o *openTelemetryBackend) GetRunningStatus() (backend.RunningStatus, string
 		return backend.BackendError, "process running, REST API unavailable", aiErr
 	}
 	return runningStatus, "", nil
-}
-
-func (o *openTelemetryBackend) SetCommsClient(_ string, client *mqtt.Client, _ string) {
-	o.mqttClient = client
 }
 
 func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
