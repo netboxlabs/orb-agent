@@ -287,7 +287,7 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	}
 
 	// Write config to temp file
-	if err := os.WriteFile(tmpFile.Name(), yamlData, 0644); err != nil {
+	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
 			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
 		}
