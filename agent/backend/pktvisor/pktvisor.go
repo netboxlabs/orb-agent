@@ -3,13 +3,16 @@ package pktvisor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"time"
 
 	"github.com/go-cmd/cmd"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -27,7 +30,6 @@ const (
 	versionTimeout      = 2
 	scrapeTimeout       = 5
 	tapsTimeout         = 5
-	defaultConfigPath   = "/opt/orb/agent.yaml"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "10853"
 )
@@ -110,13 +112,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		return err
 	}
 
-	pvOptions := []string{
-		"--admin-api",
-		"-l",
-		p.adminAPIHost,
-		"-p",
-		p.adminAPIPort,
-	}
+	pvOptions := []string{"--admin-api"}
 	if len(p.configFile) > 0 {
 		pvOptions = append(pvOptions, "--config", p.configFile)
 	}
@@ -235,20 +231,65 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	p.logger = logger
 	p.policyRepo = repo
 
-	var prs bool
-	if p.binary, prs = config["binary"].(string); !prs {
-		p.binary = defaultBinary
-	}
-	if p.configFile, prs = config["config_file"].(string); !prs {
-		p.configFile = defaultConfigPath
-	}
-	if p.adminAPIHost, prs = config["api_host"].(string); !prs {
-		p.adminAPIHost = defaultAPIHost
-	}
-	if p.adminAPIPort, prs = config["api_port"].(string); !prs {
-		p.adminAPIPort = defaultAPIPort
-	}
+	p.binary = defaultBinary
+	p.adminAPIHost = defaultAPIHost
+	p.adminAPIPort = defaultAPIPort
 	p.agentLabels = common.Otel.AgentLabels
+
+	// Create temp config file
+	tmpDir := os.TempDir()
+	tmpFile, err := os.CreateTemp(tmpDir, "pktvisor-*.yaml")
+	if err != nil {
+		return fmt.Errorf("failed to create pktvisor temp config file: %w", err)
+	}
+
+	// Prepare the visor configuration structure
+	visorConfig := make(map[string]interface{})
+	configSection := make(map[string]interface{})
+
+	// Process all config entries
+	for key, value := range config {
+		switch key {
+		case "host":
+			if v, ok := value.(string); ok {
+				p.adminAPIHost = v
+			}
+			configSection[key] = value
+		case "port":
+			if v, ok := value.(string); ok {
+				p.adminAPIPort = v
+			}
+			configSection[key] = value
+		case "taps":
+			visorConfig["taps"] = value
+		default:
+			configSection[key] = value
+		}
+	}
+
+	if len(configSection) > 0 {
+		visorConfig["config"] = configSection
+	}
+
+	fullConfig := map[string]any{
+		"visor": visorConfig,
+	}
+
+	yamlData, err := yaml.Marshal(fullConfig)
+	if err != nil {
+		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
+			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
+		}
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
+		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
+			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
+		}
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	p.configFile = tmpFile.Name()
 
 	if common.Otel.Host != "" && common.Otel.Port != 0 {
 		p.otelReceiverHost = common.Otel.Host
