@@ -12,8 +12,8 @@ visor:
 # this section is used orb-agent
 # most sections and keys are optional
 orb:
-  # these are arbitrary key value pairs used for dynamically define a group of agents by matching against agent group tags
-  tags:
+  # these are arbitrary key value pairs used for dynamically define a group of agents by matching against agent group labels
+  labels:
     region: EU
     pop: ams02
     node_type: dns

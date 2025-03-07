@@ -1,6 +1,5 @@
 # Worker
-The worker backend TBD.
-
+The worker backend allows to run custom implementation as part of Orb Agent.
 
 ## Configuration
 The `worker` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.

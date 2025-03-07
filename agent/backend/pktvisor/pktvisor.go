@@ -4,16 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/go-cmd/cmd"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -31,7 +30,6 @@ const (
 	versionTimeout      = 2
 	scrapeTimeout       = 5
 	tapsTimeout         = 5
-	defaultConfigPath   = "/opt/orb/agent.yaml"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "10853"
 )
@@ -54,39 +52,18 @@ type pktvisorBackend struct {
 	startTime       time.Time
 	cancelFunc      context.CancelFunc
 	ctx             context.Context
-
-	mqttClient       *mqtt.Client
-	metricsTopic     string
-	otlpMetricsTopic string
-	policyRepo       policies.PolicyRepo
+	policyRepo      policies.PolicyRepo
 
 	adminAPIHost     string
 	adminAPIPort     string
 	adminAPIProtocol string
 
 	// added for Strings
-	agentTags map[string]string
+	agentLabels map[string]string
 
 	// OpenTelemetry management
 	otelReceiverHost string
 	otelReceiverPort int
-}
-
-func (p *pktvisorBackend) getFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
-	}
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
-	}
-	defer func() {
-		if err := l.Close(); err != nil {
-			p.logger.Error("failed to close socket", zap.Error(err))
-		}
-	}()
-	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
 func (p *pktvisorBackend) GetStartTime() time.Time {
@@ -95,14 +72,6 @@ func (p *pktvisorBackend) GetStartTime() time.Time {
 
 func (p *pktvisorBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
-}
-
-func (p *pktvisorBackend) SetCommsClient(agentID string, client *mqtt.Client, baseTopic string) {
-	p.mqttClient = client
-	metricsTopic := strings.Replace(baseTopic, "?", "be", 1)
-	otelMetricsTopic := strings.Replace(baseTopic, "?", "otlp", 1)
-	p.metricsTopic = fmt.Sprintf("%s/m/%c", metricsTopic, agentID[0])
-	p.otlpMetricsTopic = fmt.Sprintf("%s/m/%c", otelMetricsTopic, agentID[0])
 }
 
 func (p *pktvisorBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
@@ -143,27 +112,16 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		return err
 	}
 
-	pvOptions := []string{
-		"--admin-api",
-		"-l",
-		p.adminAPIHost,
-		"-p",
-		p.adminAPIPort,
-	}
+	pvOptions := []string{"--admin-api"}
 	if len(p.configFile) > 0 {
 		pvOptions = append(pvOptions, "--config", p.configFile)
 	}
 
-	pvOptions = append(pvOptions, "--otel")
-	pvOptions = append(pvOptions, "--otel-host", p.otelReceiverHost)
-	if p.otelReceiverPort == 0 {
-		p.otelReceiverPort, err = p.getFreePort()
-		if err != nil {
-			p.logger.Error("pktvisor otlp startup error", zap.Error(err))
-			return err
-		}
+	if p.otelReceiverHost != "" && p.otelReceiverPort != 0 {
+		pvOptions = append(pvOptions, "--otel")
+		pvOptions = append(pvOptions, "--otel-host", p.otelReceiverHost)
+		pvOptions = append(pvOptions, "--otel-port", strconv.Itoa(p.otelReceiverPort))
 	}
-	pvOptions = append(pvOptions, "--otel-port", strconv.Itoa(p.otelReceiverPort))
 
 	// the macros should be properly configured to enable crashpad
 	// pvOptions = append(pvOptions, "--cp-token", PKTVISOR_CP_TOKEN)
@@ -273,32 +231,71 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	p.logger = logger
 	p.policyRepo = repo
 
-	var prs bool
-	if p.binary, prs = config["binary"].(string); !prs {
-		p.binary = defaultBinary
-	}
-	if p.configFile, prs = config["config_file"].(string); !prs {
-		p.configFile = defaultConfigPath
-	}
-	if p.adminAPIHost, prs = config["api_host"].(string); !prs {
-		p.adminAPIHost = defaultAPIHost
-	}
-	if p.adminAPIPort, prs = config["api_port"].(string); !prs {
-		p.adminAPIPort = defaultAPIPort
-	}
-	p.agentTags = common.Otel.AgentTags
+	p.binary = defaultBinary
+	p.adminAPIHost = defaultAPIHost
+	p.adminAPIPort = defaultAPIPort
+	p.agentLabels = common.Otel.AgentLabels
 
-	p.otelReceiverHost = common.Otel.Host
-	p.otelReceiverPort = common.Otel.Port
-	if p.otelReceiverPort == 0 {
-		var err error
-		if p.otelReceiverPort, err = p.getFreePort(); err != nil {
-			p.logger.Error("pktvisor otlp startup error", zap.Error(err))
-			return err
+	// Create temp config file
+	tmpDir := os.TempDir()
+	tmpFile, err := os.CreateTemp(tmpDir, "pktvisor-*.yaml")
+	if err != nil {
+		return fmt.Errorf("failed to create pktvisor temp config file: %w", err)
+	}
+
+	// Prepare the visor configuration structure
+	visorConfig := make(map[string]interface{})
+	configSection := make(map[string]interface{})
+
+	// Process all config entries
+	for key, value := range config {
+		switch key {
+		case "host":
+			if v, ok := value.(string); ok {
+				p.adminAPIHost = v
+			}
+			configSection[key] = value
+		case "port":
+			if v, ok := value.(string); ok {
+				p.adminAPIPort = v
+			}
+			configSection[key] = value
+		case "taps":
+			visorConfig["taps"] = value
+		default:
+			configSection[key] = value
 		}
 	}
 
-	p.logger.Info("configured otel receiver host", zap.String("host", p.otelReceiverHost), zap.Int("port", p.otelReceiverPort))
+	if len(configSection) > 0 {
+		visorConfig["config"] = configSection
+	}
+
+	fullConfig := map[string]any{
+		"visor": visorConfig,
+	}
+
+	yamlData, err := yaml.Marshal(fullConfig)
+	if err != nil {
+		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
+			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
+		}
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
+		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
+			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
+		}
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	p.configFile = tmpFile.Name()
+
+	if common.Otel.Host != "" && common.Otel.Port != 0 {
+		p.otelReceiverHost = common.Otel.Host
+		p.otelReceiverPort = common.Otel.Port
+		p.logger.Info("configured otel receiver host", zap.String("host", p.otelReceiverHost), zap.Int("port", p.otelReceiverPort))
+	}
 
 	return nil
 }

@@ -7,15 +7,14 @@ import (
 	"runtime"
 	"time"
 
-	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
 	"github.com/mitchellh/mapstructure"
-	"github.com/orb-community/orb/fleet"
 	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
-	manager "github.com/netboxlabs/orb-agent/agent/policyMgr"
+	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
@@ -32,8 +31,6 @@ type Agent interface {
 type orbAgent struct {
 	logger            *zap.Logger
 	config            config.Config
-	client            mqtt.Client
-	agentID           string
 	backends          map[string]backend.Backend
 	backendState      map[string]*backend.State
 	backendsCommon    config.BackendCommons
@@ -42,14 +39,8 @@ type orbAgent struct {
 
 	asyncContext context.Context
 
-	hbTicker        *time.Ticker
 	heartbeatCtx    context.Context
 	heartbeatCancel context.CancelFunc
-
-	// Agent RPC channel, configured from command line
-	baseTopic        string
-	rpcFromCoreTopic string
-	heartbeatsTopic  string
 
 	// Retry Mechanism to ensure the Request is received
 	groupRequestSucceeded  context.CancelFunc
@@ -58,8 +49,8 @@ type orbAgent struct {
 	// AgentGroup channels sent from core
 	groupsInfos map[string]groupInfo
 
-	policyManager manager.PolicyManager
-	configManager config.Manager
+	policyManager policymgr.PolicyManager
+	configManager configmgr.Manager
 }
 
 type groupInfo struct {
@@ -71,7 +62,7 @@ var _ Agent = (*orbAgent)(nil)
 
 // New creates a new agent
 func New(logger *zap.Logger, c config.Config) (Agent, error) {
-	pm, err := manager.New(logger, c)
+	pm, err := policymgr.New(logger, c)
 	if err != nil {
 		logger.Error("error during create policy manager, exiting", zap.Error(err))
 		return nil, err
@@ -80,29 +71,9 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 		logger.Error("policy manager failed to get repository", zap.Error(err))
 		return nil, err
 	}
-	cm := config.New(logger, c.OrbAgent.ConfigManager)
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager)
 
 	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, groupsInfos: make(map[string]groupInfo)}, nil
-}
-
-func (a *orbAgent) managePolicies() error {
-	if a.config.OrbAgent.Policies == nil {
-		return errors.New("no policies specified")
-	}
-
-	for beName, policy := range a.config.OrbAgent.Policies {
-		_, ok := a.backends[beName]
-		if !ok {
-			return errors.New("backend not found: " + beName)
-		}
-		for pName, data := range policy {
-			id := uuid.NewString()
-			payload := fleet.AgentPolicyRPCPayload{Action: "manage", Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data}
-			a.policyManager.ManagePolicy(payload)
-		}
-
-	}
-	return nil
 }
 
 func (a *orbAgent) startBackends(agentCtx context.Context) error {
@@ -120,7 +91,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 			return fmt.Errorf("failed to decode common backend config: %w", err)
 		}
 	}
-	commonConfig.Otel.AgentTags = a.config.OrbAgent.Tags
+	commonConfig.Otel.AgentLabels = a.config.OrbAgent.Labels
 	a.backendsCommon = commonConfig
 	delete(a.config.OrbAgent.Backends, "common")
 
@@ -171,19 +142,12 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
 	a.logger.Info("agent started", zap.String("version", version.GetBuildVersion()), zap.Any("routine", agentCtx.Value(routineKey)))
-	mqtt.CRITICAL = &agentLoggerCritical{a: a}
-	mqtt.ERROR = &agentLoggerError{a: a}
-
-	if a.config.OrbAgent.Debug.Enable {
-		a.logger.Info("debug logging enabled")
-		mqtt.DEBUG = &agentLoggerDebug{a: a}
-	}
 
 	if err := a.startBackends(ctx); err != nil {
 		return err
 	}
 
-	if err := a.managePolicies(); err != nil {
+	if err := a.configManager.Start(a.config, a.backends); err != nil {
 		return err
 	}
 
@@ -193,9 +157,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 }
 
 func (a *orbAgent) logonWithHeartbeat() {
-	a.hbTicker = time.NewTicker(HeartbeatFreq)
 	a.heartbeatCtx, a.heartbeatCancel = a.extendContext("heartbeat")
-	go a.sendHeartbeats(a.heartbeatCtx, a.heartbeatCancel)
 	a.logger.Info("heartbeat routine started")
 }
 
@@ -203,11 +165,6 @@ func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
 	a.logger.Debug("stopping heartbeat, going offline status", zap.Any("routine", ctx.Value(routineKey)))
 	if a.heartbeatCtx != nil {
 		a.heartbeatCancel()
-	}
-	if a.client != nil && a.client.IsConnected() {
-		if token := a.client.Unsubscribe(a.rpcFromCoreTopic); token.Wait() && token.Error() != nil {
-			a.logger.Warn("failed to unsubscribe to RPC channel", zap.Error(token.Error()))
-		}
 	}
 }
 
@@ -225,9 +182,6 @@ func (a *orbAgent) Stop(ctx context.Context) {
 		}
 	}
 	a.logoffWithHeartbeat(ctx)
-	if a.client != nil && a.client.IsConnected() {
-		a.client.Disconnect(0)
-	}
 	a.logger.Debug("stopping agent with number of go routines and go calls", zap.Int("goroutines", runtime.NumGoroutine()), zap.Int64("gocalls", runtime.NumCgoCall()))
 	if a.policyRequestSucceeded != nil {
 		a.policyRequestSucceeded()
@@ -261,7 +215,6 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 		a.backendState[name].LastError = fmt.Sprintf("failed to reset backend: %v", err)
 		a.logger.Error("failed to reset backend", zap.String("backend", name), zap.Error(err))
 	}
-	be.SetCommsClient(a.agentID, &a.client, fmt.Sprintf("%s/?/%s", a.baseTopic, name))
 
 	return nil
 }

@@ -6,8 +6,7 @@ import (
 
 // RegisterBackendSpecificVariables registers the backend specific variables for the pktvisor backend
 func RegisterBackendSpecificVariables(v *viper.Viper) {
-	v.SetDefault("orb.backends.pktvisor.binary", "/usr/local/sbin/pktvisord")
-	v.SetDefault("orb.backends.pktvisor.config_file", "/opt/orb/agent.yaml")
-	v.SetDefault("orb.backends.pktvisor.api_host", "localhost")
-	v.SetDefault("orb.backends.pktvisor.api_port", "10853")
+	v.SetDefault("orb.backends.pktvisor.binary", "/usr/local/bin/pktvisord")
+	v.SetDefault("orb.backends.pktvisor.host", "localhost")
+	v.SetDefault("orb.backends.pktvisor.port", "10853")
 }
