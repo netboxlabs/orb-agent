@@ -94,7 +94,12 @@ func (r *Runner) run() {
 		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
 	}
 
-	if len(options) == 0 || (r.scope.PingScan != nil && *r.scope.PingScan) {
+	if r.scope.PingScan != nil && *r.scope.PingScan {
+		options = append(options, nmap.WithPingScan())
+	}
+
+	if len(options) == 0 {
+		r.logger.Info("no custom options set, using ping scan (icmp)", slog.Any("policy", r.ctx.Value(policyKey)))
 		options = append(options, nmap.WithPingScan())
 	}
 	options = append(options, nmap.WithNonInteractive())
