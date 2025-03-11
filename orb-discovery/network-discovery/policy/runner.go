@@ -71,12 +71,36 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
-	scanner, err := nmap.NewScanner(
-		ctx,
-		nmap.WithTargets(r.scope.Targets...),
-		nmap.WithPingScan(),
-		nmap.WithNonInteractive(),
-	)
+
+	var options []nmap.Option
+
+	if len(r.scope.Ports) > 0 {
+		nmap.WithPorts(r.scope.Ports...)
+	}
+
+	if len(r.scope.ExcludePorts) > 0 {
+		nmap.WithPortExclusions(r.scope.ExcludePorts...)
+	}
+
+	if r.scope.FastMode != nil && *r.scope.FastMode {
+		options = append(options, nmap.WithFastMode())
+	}
+
+	if r.scope.Timing != nil {
+		options = append(options, nmap.WithTimingTemplate(nmap.Timing(*r.scope.Timing)))
+	}
+
+	if r.scope.TopPorts != nil {
+		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
+	}
+
+	if len(options) == 0 || (r.scope.PingScan != nil && *r.scope.PingScan) {
+		options = append(options, nmap.WithPingScan())
+	}
+	options = append(options, nmap.WithNonInteractive())
+	options = append(options, nmap.WithTargets(r.scope.Targets...))
+
+	scanner, err := nmap.NewScanner(ctx, options...)
 	if err != nil {
 		r.logger.Error("error creating scanner", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
 		return

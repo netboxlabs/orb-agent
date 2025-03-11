@@ -119,3 +119,87 @@ func TestRunnerRun(t *testing.T) {
 		})
 	}
 }
+
+func TestRunnerWithOptions(t *testing.T) {
+	tests := []struct {
+		name     string
+		policy   config.Policy
+		expected []string
+	}{
+		{
+			name: "with ports and exclude ports",
+			policy: config.Policy{
+				Config: config.PolicyConfig{},
+				Scope: config.Scope{
+					Targets:      []string{"localhost"},
+					Ports:        []string{"80", "443"},
+					ExcludePorts: []string{"22"},
+				},
+			},
+		},
+		{
+			name: "with fast mode and timing",
+			policy: config.Policy{
+				Config: config.PolicyConfig{},
+				Scope: config.Scope{
+					Targets:  []string{"localhost"},
+					FastMode: boolPtr(true),
+					Timing:   intPtr(3),
+				},
+			},
+		},
+		{
+			name: "with top ports and ping scan",
+			policy: config.Policy{
+				Config: config.PolicyConfig{},
+				Scope: config.Scope{
+					Targets:  []string{"localhost"},
+					TopPorts: intPtr(100),
+					PingScan: boolPtr(true),
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			mockClient := new(MockClient)
+			ctx := context.Background()
+
+			// Create runner
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", tt.policy, mockClient)
+			assert.NoError(t, err)
+
+			// Use a channel to signal that Ingest was called
+			ingestCalled := make(chan bool, 1)
+
+			mockClient.On("Ingest", mock.Anything, mock.Anything).Run(func(_ mock.Arguments) {
+				ingestCalled <- true
+			}).Return(&diodepb.IngestResponse{}, nil)
+
+			// Start the process
+			runner.Start()
+
+			// Wait for Ingest to be called or timeout
+			select {
+			case <-ingestCalled:
+				// Success
+			case <-time.After(10 * time.Second):
+				t.Fatal("Timeout: Ingest was not called")
+			}
+
+			// Stop the process
+			err = runner.Stop()
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func intPtr(i int) *int {
+	return &i
+}

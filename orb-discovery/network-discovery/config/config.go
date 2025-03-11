@@ -11,7 +11,14 @@ type Status struct {
 
 // Scope represents the scope of a policy
 type Scope struct {
-	Targets []string `yaml:"targets"`
+	Targets      []string `yaml:"targets"`
+	Ports        []string `yaml:"ports,omitempty"`
+	ExcludePorts []string `yaml:"exclude_ports,omitempty"`
+	Timing       *int     `yaml:"timing,omitempty"`
+	FastMode     *bool    `yaml:"fast_mode,omitempty"`
+	PingScan     *bool    `yaml:"ping_scan,omitempty"`
+	TopPorts     *int     `yaml:"top_ports,omitempty"`
+	L4Mode       *string  `yaml:"l4_mode,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy
