@@ -19,6 +19,7 @@ type Scope struct {
 	PingScan     *bool    `yaml:"ping_scan,omitempty"`
 	TopPorts     *int     `yaml:"top_ports,omitempty"`
 	ScanTypes    []string `yaml:"scan_types,omitempty"`
+	MaxRetries   *int     `yaml:"max_retries,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy

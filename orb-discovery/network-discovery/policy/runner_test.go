@@ -160,12 +160,13 @@ func TestRunnerWithOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "with scan types",
+			name: "with scan types and max retries",
 			policy: config.Policy{
 				Config: config.PolicyConfig{},
 				Scope: config.Scope{
-					Targets:   []string{"localhost"},
-					ScanTypes: []string{"connect", "udp", "fin", "xmas"},
+					Targets:    []string{"localhost"},
+					ScanTypes:  []string{"connect", "udp", "fin", "xmas"},
+					MaxRetries: intPtr(0),
 				},
 			},
 		},

@@ -38,6 +38,7 @@ policies:
       scan_types: [connect, udp, fin ] # -sT -sU -sF
       top_ports: 10 # --top-ports
       ping_scan: False # default True if no options provided
+      max_retries: 1 # --max-retries
   discover_once: # will run only once
     scope:
        targets: 

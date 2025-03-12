@@ -142,6 +142,10 @@ func (r *Runner) run() {
 
 	}
 
+	if r.scope.MaxRetries != nil {
+		options = append(options, nmap.WithMaxRetries(*r.scope.MaxRetries))
+	}
+
 	if r.scope.PingScan != nil && *r.scope.PingScan {
 		options = append(options, nmap.WithPingScan())
 	}
