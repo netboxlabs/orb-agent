@@ -126,7 +126,6 @@ func (r *Runner) run() {
 				} else {
 					r.logger.Warn("Skipping additional TCP scan due to conflict", "skipped_scan", scanType,
 						"selected_scan", selectedTCPScan, slog.Any("policy", r.ctx.Value(policyKey)))
-
 				}
 			} else if fn, exists := privilegedScans[scanType]; exists {
 				options = append(options, fn())
