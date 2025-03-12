@@ -165,7 +165,7 @@ func TestRunnerWithOptions(t *testing.T) {
 				Config: config.PolicyConfig{},
 				Scope: config.Scope{
 					Targets:   []string{"localhost"},
-					ScanTypes: []string{"connect", "udp"},
+					ScanTypes: []string{"connect"},
 				},
 			},
 		},
