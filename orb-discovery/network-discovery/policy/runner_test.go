@@ -159,6 +159,16 @@ func TestRunnerWithOptions(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "with scan types",
+			policy: config.Policy{
+				Config: config.PolicyConfig{},
+				Scope: config.Scope{
+					Targets:   []string{"localhost"},
+					ScanTypes: []string{"connect", "udp"},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {

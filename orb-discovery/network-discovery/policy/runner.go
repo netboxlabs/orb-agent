@@ -94,6 +94,37 @@ func (r *Runner) run() {
 		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
 	}
 
+	if len(r.scope.ScanTypes) > 0 {
+		for _, scanType := range r.scope.ScanTypes {
+			switch scanType {
+			case "connect":
+				options = append(options, nmap.WithConnectScan())
+			case "udp":
+				options = append(options, nmap.WithUDPScan())
+			case "syn":
+				options = append(options, nmap.WithSYNScan())
+			case "ack":
+				options = append(options, nmap.WithACKScan())
+			case "window":
+				options = append(options, nmap.WithWindowScan())
+			case "null":
+				options = append(options, nmap.WithTCPNullScan())
+			case "fin":
+				options = append(options, nmap.WithTCPFINScan())
+			case "xmas":
+				options = append(options, nmap.WithTCPXmasScan())
+			case "maimon":
+				options = append(options, nmap.WithMaimonScan())
+			case "sctp_init":
+				options = append(options, nmap.WithSCTPInitScan())
+			case "sctp_cookie_echo":
+				options = append(options, nmap.WithSCTPCookieEchoScan())
+			case "ip_protocol":
+				options = append(options, nmap.WithIPProtocolScan())
+			}
+		}
+	}
+
 	if r.scope.PingScan != nil && *r.scope.PingScan {
 		options = append(options, nmap.WithPingScan())
 	}

@@ -18,7 +18,7 @@ type Scope struct {
 	FastMode     *bool    `yaml:"fast_mode,omitempty"`
 	PingScan     *bool    `yaml:"ping_scan,omitempty"`
 	TopPorts     *int     `yaml:"top_ports,omitempty"`
-	L4Mode       *string  `yaml:"l4_mode,omitempty"`
+	ScanTypes    []string `yaml:"scan_types,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy

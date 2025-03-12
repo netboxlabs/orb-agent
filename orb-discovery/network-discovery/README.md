@@ -30,7 +30,12 @@ policies:
       schedule: "* * * * *" #Cron expression
       timeout: 5 #default 2 minutes
     scope:
-      targets: [192.168.1.0/24]
+      targets: [192.168.1.0/24] # only REQUIRED param
+      fast_mode: True # -F 
+      timing: 2 # -T [0-5]
+      ports: [22,161,162,443,500-600,8080] # -p
+      exclude_ports: [23, 9000-12000] # --exclude-ports 
+      scan_types: [connect, udp, fin ] # -sT -sU -sF
   discover_once: # will run only once
     scope:
        targets: 
