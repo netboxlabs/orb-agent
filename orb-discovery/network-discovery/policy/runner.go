@@ -94,6 +94,8 @@ func (r *Runner) run() {
 		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
 	}
 
+	hasOtherScans := false
+	selectedTCPScan := ""
 	if len(r.scope.ScanTypes) > 0 {
 		privilegedScans := map[string]func() nmap.Option{
 			"udp":              nmap.WithUDPScan,
@@ -113,9 +115,6 @@ func (r *Runner) run() {
 			"maimon":  nmap.WithMaimonScan,
 		}
 
-		hasOtherScans := false
-		selectedTCPScan := ""
-
 		for _, scanType := range r.scope.ScanTypes {
 			if fn, exists := tcpScans[scanType]; exists {
 				if selectedTCPScan == "" { // Pick only one TCP scan
@@ -125,10 +124,9 @@ func (r *Runner) run() {
 						hasOtherScans = true
 					}
 				} else {
-					r.logger.Warn("Skipping additional TCP scan due to conflict",
-						"skipped_scan", scanType,
-						"selected_scan", selectedTCPScan,
-					)
+					r.logger.Warn("Skipping additional TCP scan due to conflict", "skipped_scan", scanType,
+						"selected_scan", selectedTCPScan, slog.Any("policy", r.ctx.Value(policyKey)))
+
 				}
 			} else if fn, exists := privilegedScans[scanType]; exists {
 				options = append(options, fn())
@@ -139,7 +137,6 @@ func (r *Runner) run() {
 		if hasOtherScans {
 			options = append(options, nmap.WithPrivileged())
 		}
-
 	}
 
 	if r.scope.MaxRetries != nil {
@@ -147,7 +144,12 @@ func (r *Runner) run() {
 	}
 
 	if r.scope.PingScan != nil && *r.scope.PingScan {
-		options = append(options, nmap.WithPingScan())
+		if hasOtherScans || selectedTCPScan != "" {
+			r.logger.Warn("Skipping ping scan because it is not valid with any other scan types",
+				slog.Any("policy", r.ctx.Value(policyKey)))
+		} else {
+			options = append(options, nmap.WithPingScan())
+		}
 	}
 
 	if len(options) == 0 {

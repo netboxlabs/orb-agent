@@ -166,6 +166,7 @@ func TestRunnerWithOptions(t *testing.T) {
 				Scope: config.Scope{
 					Targets:    []string{"localhost"},
 					ScanTypes:  []string{"connect", "udp", "fin", "xmas"},
+					PingScan:   boolPtr(true),
 					MaxRetries: intPtr(0),
 				},
 			},
