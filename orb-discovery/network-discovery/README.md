@@ -37,7 +37,7 @@ policies:
       exclude_ports: [23, 9000-12000] # --exclude-ports 
       scan_types: [connect, udp, fin ] # -sT -sU -sF
       top_ports: 10 # --top-ports
-      ping_scan: False # default True if no options provided
+      ping_scan: True # -sn
       max_retries: 1 # --max-retries
   discover_once: # will run only once
     scope:

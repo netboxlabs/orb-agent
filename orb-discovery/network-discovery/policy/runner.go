@@ -151,10 +151,6 @@ func (r *Runner) run() {
 		}
 	}
 
-	if len(options) == 0 {
-		r.logger.Info("no custom options set, using ping scan (icmp)", slog.Any("policy", r.ctx.Value(policyKey)))
-		options = append(options, nmap.WithPingScan())
-	}
 	options = append(options, nmap.WithNonInteractive())
 	options = append(options, nmap.WithTargets(r.scope.Targets...))
 
