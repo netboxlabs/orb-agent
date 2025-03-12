@@ -95,34 +95,51 @@ func (r *Runner) run() {
 	}
 
 	if len(r.scope.ScanTypes) > 0 {
+		privilegedScans := map[string]func() nmap.Option{
+			"udp":              nmap.WithUDPScan,
+			"sctp_init":        nmap.WithSCTPInitScan,
+			"sctp_cookie_echo": nmap.WithSCTPCookieEchoScan,
+			"ip_protocol":      nmap.WithIPProtocolScan,
+		}
+
+		tcpScans := map[string]func() nmap.Option{
+			"connect": nmap.WithConnectScan,
+			"syn":     nmap.WithSYNScan,
+			"ack":     nmap.WithACKScan,
+			"window":  nmap.WithWindowScan,
+			"null":    nmap.WithTCPNullScan,
+			"fin":     nmap.WithTCPFINScan,
+			"xmas":    nmap.WithTCPXmasScan,
+			"maimon":  nmap.WithMaimonScan,
+		}
+
+		hasOtherScans := false
+		selectedTCPScan := ""
+
 		for _, scanType := range r.scope.ScanTypes {
-			switch scanType {
-			case "connect":
-				options = append(options, nmap.WithConnectScan())
-			case "udp":
-				options = append(options, nmap.WithUDPScan())
-			case "syn":
-				options = append(options, nmap.WithSYNScan())
-			case "ack":
-				options = append(options, nmap.WithACKScan())
-			case "window":
-				options = append(options, nmap.WithWindowScan())
-			case "null":
-				options = append(options, nmap.WithTCPNullScan())
-			case "fin":
-				options = append(options, nmap.WithTCPFINScan())
-			case "xmas":
-				options = append(options, nmap.WithTCPXmasScan())
-			case "maimon":
-				options = append(options, nmap.WithMaimonScan())
-			case "sctp_init":
-				options = append(options, nmap.WithSCTPInitScan())
-			case "sctp_cookie_echo":
-				options = append(options, nmap.WithSCTPCookieEchoScan())
-			case "ip_protocol":
-				options = append(options, nmap.WithIPProtocolScan())
+			if fn, exists := tcpScans[scanType]; exists {
+				if selectedTCPScan == "" { // Pick only one TCP scan
+					options = append(options, fn())
+					selectedTCPScan = scanType
+					if scanType != "connect" {
+						hasOtherScans = true
+					}
+				} else {
+					r.logger.Warn("Skipping additional TCP scan due to conflict",
+						"skipped_scan", scanType,
+						"selected_scan", selectedTCPScan,
+					)
+				}
+			} else if fn, exists := privilegedScans[scanType]; exists {
+				options = append(options, fn())
+				hasOtherScans = true
 			}
 		}
+
+		if hasOtherScans {
+			options = append(options, nmap.WithPrivileged())
+		}
+
 	}
 
 	if r.scope.PingScan != nil && *r.scope.PingScan {
