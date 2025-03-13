@@ -29,8 +29,9 @@ FROM python:3.12-slim-bullseye
 
 RUN \
     apt update && \
-    apt install --yes --force-yes --no-install-recommends nmap openssh-client && \
-    rm -rf /var/lib/apt
+    apt install --yes --no-install-recommends nmap libcap2-bin openssh-client && \
+    rm -rf /var/lib/apt && \
+    setcap cap_net_raw,cap_net_admin=eip $(which nmap)
 
 RUN mkdir -p /opt/orb
 
