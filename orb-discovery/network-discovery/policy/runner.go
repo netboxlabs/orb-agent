@@ -71,12 +71,90 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
-	scanner, err := nmap.NewScanner(
-		ctx,
-		nmap.WithTargets(r.scope.Targets...),
-		nmap.WithPingScan(),
-		nmap.WithNonInteractive(),
-	)
+
+	var options []nmap.Option
+
+	if len(r.scope.Ports) > 0 {
+		nmap.WithPorts(r.scope.Ports...)
+	}
+
+	if len(r.scope.ExcludePorts) > 0 {
+		nmap.WithPortExclusions(r.scope.ExcludePorts...)
+	}
+
+	if r.scope.FastMode != nil && *r.scope.FastMode {
+		options = append(options, nmap.WithFastMode())
+	}
+
+	if r.scope.Timing != nil {
+		options = append(options, nmap.WithTimingTemplate(nmap.Timing(*r.scope.Timing)))
+	}
+
+	if r.scope.TopPorts != nil {
+		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
+	}
+
+	hasOtherScans := false
+	selectedTCPScan := ""
+	if len(r.scope.ScanTypes) > 0 {
+		privilegedScans := map[string]func() nmap.Option{
+			"udp":              nmap.WithUDPScan,
+			"sctp_init":        nmap.WithSCTPInitScan,
+			"sctp_cookie_echo": nmap.WithSCTPCookieEchoScan,
+			"ip_protocol":      nmap.WithIPProtocolScan,
+		}
+
+		tcpScans := map[string]func() nmap.Option{
+			"connect": nmap.WithConnectScan,
+			"syn":     nmap.WithSYNScan,
+			"ack":     nmap.WithACKScan,
+			"window":  nmap.WithWindowScan,
+			"null":    nmap.WithTCPNullScan,
+			"fin":     nmap.WithTCPFINScan,
+			"xmas":    nmap.WithTCPXmasScan,
+			"maimon":  nmap.WithMaimonScan,
+		}
+
+		for _, scanType := range r.scope.ScanTypes {
+			if fn, exists := tcpScans[scanType]; exists {
+				if selectedTCPScan == "" { // Pick only one TCP scan
+					options = append(options, fn())
+					selectedTCPScan = scanType
+					if scanType != "connect" {
+						hasOtherScans = true
+					}
+				} else {
+					r.logger.Warn("Skipping additional TCP scan due to conflict", "skipped_scan", scanType,
+						"selected_scan", selectedTCPScan, slog.Any("policy", r.ctx.Value(policyKey)))
+				}
+			} else if fn, exists := privilegedScans[scanType]; exists {
+				options = append(options, fn())
+				hasOtherScans = true
+			}
+		}
+
+		if hasOtherScans {
+			options = append(options, nmap.WithPrivileged())
+		}
+	}
+
+	if r.scope.MaxRetries != nil {
+		options = append(options, nmap.WithMaxRetries(*r.scope.MaxRetries))
+	}
+
+	if r.scope.PingScan != nil && *r.scope.PingScan {
+		if hasOtherScans || selectedTCPScan != "" {
+			r.logger.Warn("Skipping ping scan because it is not valid with any other scan types",
+				slog.Any("policy", r.ctx.Value(policyKey)))
+		} else {
+			options = append(options, nmap.WithPingScan())
+		}
+	}
+
+	options = append(options, nmap.WithNonInteractive())
+	options = append(options, nmap.WithTargets(r.scope.Targets...))
+
+	scanner, err := nmap.NewScanner(ctx, options...)
 	if err != nil {
 		r.logger.Error("error creating scanner", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
 		return

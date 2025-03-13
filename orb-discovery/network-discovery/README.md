@@ -1,5 +1,13 @@
 # network-discovery
-Orb network discovery backend
+Orb network discovery backend, which is a wrapper over [NMAP](https://nmap.org/) scanner.
+
+### Requirements
+network discovery requires [NMAP](https://nmap.org/) to be installed on the machine. To enable full feature support, `nmap` must have the necessary capabilities to perform raw socket operations. However, for default usage, this is not required.
+
+On UNIX systems, users can enable raw socket operations for nmap by running the following command:
+```sh
+sudo setcap cap_net_raw,cap_net_admin=eip $(which nmap)
+```
 
 ### Usage
 ```sh
@@ -30,7 +38,15 @@ policies:
       schedule: "* * * * *" #Cron expression
       timeout: 5 #default 2 minutes
     scope:
-      targets: [192.168.1.0/24]
+      targets: [192.168.1.0/24] # REQUIRED param
+      fast_mode: True # -F 
+      timing: 2 # -T [0-5]
+      ports: [22,161,162,443,500-600,8080] # -p
+      exclude_ports: [23, 9000-12000] # --exclude-ports 
+      scan_types: [connect, udp, fin ] # -sT -sU -sF
+      top_ports: 10 # --top-ports
+      ping_scan: True # -sn
+      max_retries: 1 # --max-retries
   discover_once: # will run only once
     scope:
        targets: 
@@ -46,7 +62,15 @@ make bin
 build/network-discovery --diode-target grpc://192.168.31.114:8080/diode  --diode-api-key '${DIODE_API_KEY}'
 ```
 
-## Docker Image
+### ⚠️ Warning
+Be **AWARE** that executing a policy with only targets defined is equivalent to running `nmap <targets>`, which in turn is the same as executing `nmap -sS -p1-1000 --open -T3 <target>`:
+
+- `-sS` → SYN scan (stealth scan, requires root privileges)
+- `-p1-1000` → Scans the top 1000 most common ports
+- `--open` → Only shows open ports
+- `-T3` → Uses the default timing template (T3 is the standard speed)
+
+### Docker Image
 device-discovery can be build and run using docker:
 ```sh
 cd network-discovery/
