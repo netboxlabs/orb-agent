@@ -1,5 +1,13 @@
 # network-discovery
-Orb network discovery backend
+Orb network discovery backend, which is a wrapper over [NMAP](https://nmap.org/) scanner.
+
+### Requirements
+network discovery requires [NMAP](https://nmap.org/) to be installed on the machine. To enable full feature support, `nmap` must have the necessary capabilities to perform raw socket operations. However, for default usage, this is not required.
+
+On UNIX systems, users can enable raw socket operations for nmap by running the following command:
+```sh
+sudo setcap cap_net_raw,cap_net_admin=eip $(which nmap)
+```
 
 ### Usage
 ```sh
