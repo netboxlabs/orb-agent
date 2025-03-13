@@ -1,9 +1,11 @@
 # Worker
 The worker backend allows to run custom implementation as part of Orb Agent.
 
+## Diode Entities
+The worker backend can ingest any [supported entity](https://github.com/netboxlabs/diode-sdk-python?tab=readme-ov-file#supported-entities-object-types) of Diode Python SDK.
+
 ## Configuration
 The `worker` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
-
 
 ```yaml
 orb:
@@ -32,8 +34,7 @@ Config defines data for the whole scope and is optional overall.
 
 
 ### Scope
-The scope can be defined
-
+The scope can be defined as either a `list` or a `map`, allowing the user to parse it according to their preference.
 
 ### Sample
 A sample policy including all parameters supported by the device discovery backend.
