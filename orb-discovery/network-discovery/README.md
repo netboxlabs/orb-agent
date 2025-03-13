@@ -62,7 +62,15 @@ make bin
 build/network-discovery --diode-target grpc://192.168.31.114:8080/diode  --diode-api-key '${DIODE_API_KEY}'
 ```
 
-## Docker Image
+### ⚠️ Warning
+Be **AWARE** that executing a policy with only targets defined is equivalent to running `nmap <targets>`, which in turn is the same as executing `nmap -sS -p1-1000 --open -T3 <target>`:
+
+- `-sS` → SYN scan (stealth scan, requires root privileges)
+- `-p1-1000` → Scans the top 1000 most common ports
+- `--open` → Only shows open ports
+- `-T3` → Uses the default timing template (T3 is the standard speed)
+
+### Docker Image
 device-discovery can be build and run using docker:
 ```sh
 cd network-discovery/
