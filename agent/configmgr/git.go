@@ -24,6 +24,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
 var _ Manager = (*gitConfigManager)(nil)
@@ -31,6 +32,7 @@ var _ Manager = (*gitConfigManager)(nil)
 type gitConfigManager struct {
 	logger           *zap.Logger
 	pMgr             policymgr.PolicyManager
+	sMgr             secretsmgr.Manager
 	config           config.GitManager
 	scheduler        gocron.Scheduler
 	repo             *gitv5.Repository
@@ -156,6 +158,11 @@ func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[stri
 				Backend:   beName,
 				Version:   gc.version,
 				Data:      data,
+			}
+			var err error
+			payload, err = gc.sMgr.SolveSecrets(payload)
+			if err != nil {
+				return err
 			}
 			gc.pMgr.ManagePolicy(payload)
 		}

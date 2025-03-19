@@ -64,8 +64,8 @@ type GitManager struct {
 	PrivateKey string  `mapstructure:"private_key"`
 }
 
-// ManagerSources represents the configuration for manager sources, including cloud, local and git.
-type ManagerSources struct {
+// Sources represents the configuration for manager sources, including cloud, local and git.
+type Sources struct {
 	Cloud CloudManager `mapstructure:"orbcloud"`
 	Local LocalManager `mapstructure:"local"`
 	Git   GitManager   `mapstructure:"git"`
@@ -73,8 +73,28 @@ type ManagerSources struct {
 
 // ManagerConfig represents the configuration for the Config Manager
 type ManagerConfig struct {
+	Active  string  `mapstructure:"active"`
+	Sources Sources `mapstructure:"sources"`
+}
+
+// VaultManager represents the configuration for the Vault manager
+type VaultManager struct {
+	Auth      string `yaml:"auth"`
+	Address   string `yaml:"address"`
+	Namespace string `yaml:"namespace"`
+	Token     string `yaml:"token"`
+	Timeout   *int   `yaml:"timeout,omitempty"`
+}
+
+// SecretsSources represents the configuration for manager sources, including vault.
+type SecretsSources struct {
+	Vault VaultManager `mapstructure:"vault"`
+}
+
+// ManagerSecrets represents the configuration for the Secrets Manager
+type ManagerSecrets struct {
 	Active  string         `mapstructure:"active"`
-	Sources ManagerSources `mapstructure:"sources"`
+	Sources SecretsSources `mapstructure:"sources"`
 }
 
 // BackendCommons represents common configuration for backends
@@ -97,6 +117,7 @@ type OrbAgent struct {
 	Policies      map[string]map[string]interface{} `mapstructure:"policies"`
 	Labels        map[string]string                 `mapstructure:"labels"`
 	ConfigManager ManagerConfig                     `mapstructure:"config_manager"`
+	SecretsManger ManagerSecrets                    `mapstructure:"secrets_manager"`
 	Debug         struct {
 		Enable bool `mapstructure:"enable"`
 	} `mapstructure:"debug"`

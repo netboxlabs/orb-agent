@@ -10,6 +10,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
 var _ Manager = (*localConfigManager)(nil)
@@ -17,6 +18,7 @@ var _ Manager = (*localConfigManager)(nil)
 type localConfigManager struct {
 	logger *zap.Logger
 	pMgr   policymgr.PolicyManager
+	sMgr   secretsmgr.Manager
 	config config.LocalManager
 }
 
@@ -36,6 +38,11 @@ func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backe
 			payload := config.PolicyPayload{
 				ID: policyID, Action: "manage",
 				Name: pName, DatasetID: id, Backend: beName, Version: 1, Data: data,
+			}
+			var err error
+			payload, err = lc.sMgr.SolveSecrets(payload)
+			if err != nil {
+				return err
 			}
 			lc.pMgr.ManagePolicy(payload)
 		}

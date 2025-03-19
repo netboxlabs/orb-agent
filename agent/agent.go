@@ -15,6 +15,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
@@ -49,8 +50,9 @@ type orbAgent struct {
 	// AgentGroup channels sent from core
 	groupsInfos map[string]groupInfo
 
-	policyManager policymgr.PolicyManager
-	configManager configmgr.Manager
+	policyManager  policymgr.PolicyManager
+	configManager  configmgr.Manager
+	secretsManager secretsmgr.Manager
 }
 
 type groupInfo struct {
@@ -71,9 +73,15 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 		logger.Error("policy manager failed to get repository", zap.Error(err))
 		return nil, err
 	}
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager)
 
-	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, groupsInfos: make(map[string]groupInfo)}, nil
+	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManger)
+
+	cm := configmgr.New(logger, pm, sm, c.OrbAgent.ConfigManager)
+
+	return &orbAgent{
+		logger: logger, config: c, policyManager: pm, configManager: cm,
+		secretsManager: sm, groupsInfos: make(map[string]groupInfo),
+	}, nil
 }
 
 func (a *orbAgent) startBackends(agentCtx context.Context) error {
@@ -142,6 +150,11 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
 	a.logger.Info("agent started", zap.String("version", version.GetBuildVersion()), zap.Any("routine", agentCtx.Value(routineKey)))
+
+	if err := a.secretsManager.Start(ctx); err != nil {
+		a.logger.Error("error during start secrets manager", zap.Error(err))
+		return err
+	}
 
 	if err := a.startBackends(ctx); err != nil {
 		return err
