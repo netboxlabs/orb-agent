@@ -22,8 +22,6 @@ func New(logger *zap.Logger, pMgr policymgr.PolicyManager, sMgr secretsmgr.Manag
 	switch c.Active {
 	case "local":
 		return &localConfigManager{logger: logger, pMgr: pMgr, sMgr: sMgr, config: c.Sources.Local}
-	case "cloud":
-		return &cloudConfigManager{logger: logger, pMgr: pMgr, config: c.Sources.Cloud}
 	case "git":
 		return &gitConfigManager{logger: logger, pMgr: pMgr, sMgr: sMgr, config: c.Sources.Git}
 	default:

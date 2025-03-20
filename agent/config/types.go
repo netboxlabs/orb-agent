@@ -5,47 +5,15 @@ type ContextKey string
 
 // PolicyPayload represents the payload for the agent policy
 type PolicyPayload struct {
-	Action       string      `json:"action"`
-	ID           string      `json:"id"`
-	DatasetID    string      `json:"dataset_id"`
-	AgentGroupID string      `json:"agent_group_id"`
-	Name         string      `json:"name"`
-	Backend      string      `json:"backend"`
-	Format       string      `json:"format"`
-	Version      int32       `json:"version"`
-	Data         interface{} `json:"data"`
-}
-
-// APIConfig represents the configuration for the API connection
-type APIConfig struct {
-	Address string `mapstructure:"address"`
-	Token   string `mapstructure:"token"`
-}
-
-// MQTTConfig represents the configuration for the MQTT connection
-type MQTTConfig struct {
-	Connect   bool   `mapstructure:"connect"`
-	Address   string `mapstructure:"address"`
-	ID        string `mapstructure:"id"`
-	Key       string `mapstructure:"key"`
-	ChannelID string `mapstructure:"channel_id"`
-}
-
-// CloudManager represents the cloud  ConfigManager configuration
-type CloudManager struct {
-	Config struct {
-		AgentName     string `mapstructure:"agent_name"`
-		AutoProvision bool   `mapstructure:"auto_provision"`
-	} `mapstructure:"config"`
-	API  APIConfig  `mapstructure:"api"`
-	MQTT MQTTConfig `mapstructure:"mqtt"`
-	TLS  struct {
-		Verify bool `mapstructure:"verify"`
-	} `mapstructure:"tls"`
-	DB struct {
-		File string `mapstructure:"file"`
-	} `mapstructure:"db"`
-	Labels map[string]string `mapstructure:"labels"`
+	Action       string `json:"action"`
+	ID           string `json:"id"`
+	DatasetID    string `json:"dataset_id"`
+	AgentGroupID string `json:"agent_group_id"`
+	Name         string `json:"name"`
+	Backend      string `json:"backend"`
+	Format       string `json:"format"`
+	Version      int32  `json:"version"`
+	Data         any    `json:"data"`
 }
 
 // LocalManager represents the local ConfigManager configuration.
@@ -66,7 +34,6 @@ type GitManager struct {
 
 // Sources represents the configuration for manager sources, including cloud, local and git.
 type Sources struct {
-	Cloud CloudManager `mapstructure:"orbcloud"`
 	Local LocalManager `mapstructure:"local"`
 	Git   GitManager   `mapstructure:"git"`
 }
@@ -117,7 +84,6 @@ type OrbAgent struct {
 	Policies      map[string]map[string]interface{} `mapstructure:"policies"`
 	Labels        map[string]string                 `mapstructure:"labels"`
 	ConfigManager ManagerConfig                     `mapstructure:"config_manager"`
-	SecretsManger ManagerSecrets                    `mapstructure:"secrets_manager"`
 	Debug         struct {
 		Enable bool `mapstructure:"enable"`
 	} `mapstructure:"debug"`
