@@ -11,6 +11,7 @@ import (
 // Manager is an interface for managing secrets
 type Manager interface {
 	Start(ctx context.Context) error
+	RegisterUpdateCallback(callback func([]string))
 	SolveSecrets(payload config.PolicyPayload) (config.PolicyPayload, error)
 }
 
@@ -30,6 +31,9 @@ type dummyManager struct{}
 
 func (v *dummyManager) Start(_ context.Context) error {
 	return nil
+}
+
+func (v *dummyManager) RegisterUpdateCallback(_ func([]string)) {
 }
 
 func (v *dummyManager) SolveSecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {

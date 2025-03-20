@@ -21,6 +21,7 @@ type vaultManager struct {
 	ctx      context.Context
 	client   *vault.Client
 	usedVars map[string]cachedSecret
+	callback func([]string)
 }
 
 type cachedSecret struct {
@@ -51,15 +52,17 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		v.client.SetNamespace(v.config.Namespace)
 	}
 
-	// Authenticate
-	v.client.SetToken(v.config.Token)
+	switch v.config.Auth {
+	case "token":
 
-	// Validate token by calling LookupSelf
-	_, err = v.client.Auth().Token().LookupSelf()
-	if err != nil {
-		return err
 	}
+
 	return nil
+}
+
+// RegisterUpdateCallback registers a callback function to be called when secrets are updated
+func (v *vaultManager) RegisterUpdateCallback(callback func([]string)) {
+	v.callback = callback
 }
 
 // SolveSecrets processes a policy payload and replaces vault references with environment variables
