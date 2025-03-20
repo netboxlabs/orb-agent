@@ -80,10 +80,11 @@ type BackendCommons struct {
 
 // OrbAgent represents the configuration for the Orb agent
 type OrbAgent struct {
-	Backends      map[string]map[string]interface{} `mapstructure:"backends"`
-	Policies      map[string]map[string]interface{} `mapstructure:"policies"`
-	Labels        map[string]string                 `mapstructure:"labels"`
-	ConfigManager ManagerConfig                     `mapstructure:"config_manager"`
+	Backends      map[string]map[string]any `mapstructure:"backends"`
+	Policies      map[string]map[string]any `mapstructure:"policies"`
+	Labels        map[string]string         `mapstructure:"labels"`
+	ConfigManager ManagerConfig             `mapstructure:"config_manager"`
+	SecretsManger ManagerSecrets            `mapstructure:"secrets_manager"`
 	Debug         struct {
 		Enable bool `mapstructure:"enable"`
 	} `mapstructure:"debug"`
