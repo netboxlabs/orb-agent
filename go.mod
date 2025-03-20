@@ -43,6 +43,10 @@ require (
 	github.com/hashicorp/go-secure-stdlib/strutil v0.1.2 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.2 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
+	github.com/hashicorp/vault/api/auth/approle v0.9.0
+	github.com/hashicorp/vault/api/auth/kubernetes v0.9.0
+	github.com/hashicorp/vault/api/auth/ldap v0.9.0
+	github.com/hashicorp/vault/api/auth/userpass v0.9.0
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/jonboulle/clockwork v0.4.0 // indirect

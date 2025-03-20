@@ -47,12 +47,11 @@ type ManagerConfig struct {
 // VaultManager represents the configuration for the Vault manager
 type VaultManager struct {
 	Auth      string         `yaml:"auth"`
+	AuthArgs  map[string]any `mapstructure:"auth_args"`
 	Address   string         `yaml:"address"`
 	Namespace string         `yaml:"namespace"`
-	Token     string         `yaml:"token"`
 	Timeout   *int           `yaml:"timeout,omitempty"`
-	Schedule  *string        `yaml:"schedule, omitempty"`
-	AuthArgs  map[string]any `yaml:"auth_args"`
+	Schedule  *string        `yaml:"schedule,omitempty"`
 }
 
 // SecretsSources represents the configuration for manager sources, including vault.

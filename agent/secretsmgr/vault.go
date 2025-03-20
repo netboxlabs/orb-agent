@@ -22,6 +22,7 @@ type vaultManager struct {
 	client   *vault.Client
 	usedVars map[string]cachedSecret
 	callback func([]string)
+	auth     authMethod
 }
 
 type cachedSecret struct {
@@ -42,6 +43,10 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		config.Timeout = time.Duration(*v.config.Timeout) * time.Second
 	}
 
+	if v.config.Auth == "" {
+		return fmt.Errorf("no auth method specified")
+	}
+
 	var err error
 	v.client, err = vault.NewClient(config)
 	if err != nil {
@@ -52,9 +57,14 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		v.client.SetNamespace(v.config.Namespace)
 	}
 
-	switch v.config.Auth {
-	case "token":
+	v.auth, err = newAuthentication(v.config.Auth, v.config.AuthArgs)
+	if err != nil {
+		return err
+	}
 
+	err = v.auth.vaultAuthenticate(ctx, v.client)
+	if err != nil {
+		return err
 	}
 
 	return nil
