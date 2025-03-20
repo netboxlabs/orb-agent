@@ -2,13 +2,9 @@ package secretsmgr
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	vault "github.com/hashicorp/vault/api"
@@ -23,19 +19,19 @@ type vaultManager struct {
 	logger   *zap.Logger
 	config   config.VaultManager
 	ctx      context.Context
-	mu       sync.RWMutex
 	client   *vault.Client
 	usedVars map[string]cachedSecret
 }
 
 type cachedSecret struct {
-	Value       string    // The actual secret value
-	EnvVar      string    // Environment variable name
-	LastFetched time.Time // When the secret was last fetched
+	Value     string         // The actual secret value
+	policyIDs map[string]any // The IDs of policies that have used this secret
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
 	v.ctx = ctx
+	v.usedVars = make(map[string]cachedSecret)
+
 	config := vault.DefaultConfig()
 
 	config.Address = v.config.Address
@@ -71,11 +67,8 @@ func (v *vaultManager) SolveSecrets(payload config.PolicyPayload) (config.Policy
 	// Create a copy of the payload
 	newPayload := payload
 
-	// Create a map to track vault paths to environment variables
-	envVarMap := make(map[string]string)
-
 	// Process the Data field
-	processedData, err := v.processValue(payload.Data, envVarMap)
+	processedData, err := v.processValue(payload.Data, payload.ID)
 	if err != nil {
 		return payload, err
 	}
@@ -84,124 +77,76 @@ func (v *vaultManager) SolveSecrets(payload config.PolicyPayload) (config.Policy
 	return newPayload, nil
 }
 
-func (v *vaultManager) processValue(value any, envVarMap map[string]string) (any, error) {
+func (v *vaultManager) processValue(value any, id string) (any, error) {
 	switch val := value.(type) {
 	case string:
-		return v.processString(val, envVarMap)
+		return v.processString(val, id)
 	case map[string]any:
-		return v.processMap(val, envVarMap)
+		return v.processMap(val, id)
 	case []any:
-		return v.processSlice(val, envVarMap)
+		return v.processSlice(val, id)
 	default:
 		return val, nil
 	}
 }
 
 // processString processes a string and replaces vault references
-func (v *vaultManager) processString(s string, envVarMap map[string]string) (string, error) {
-	// Define a regular expression to match vault references
-	// This pattern matches ${vault://vault/item/field} format
+func (v *vaultManager) processString(s string, id string) (string, error) {
 	re := regexp.MustCompile(`\${vault://([^}]+)}`)
-
-	// Check if the string contains a vault reference
 	if !re.MatchString(s) {
 		return s, nil
 	}
 
-	// Replace all vault references in the string
-	result := re.ReplaceAllStringFunc(s, func(match string) string {
-		// Extract the vault path
-		vaultPath := re.FindStringSubmatch(match)[1]
+	match := re.FindStringSubmatchIndex(s)
+	if match == nil || len(match) < 4 {
+		return "", fmt.Errorf("failed to find vault reference in string: %s", s)
+	}
 
-		// Check if we've already processed this vault path
-		if envVar, exists := envVarMap[vaultPath]; exists {
-			return "${" + envVar + "}"
-		}
+	vaultPath := s[match[2]:match[3]]
 
-		// Retrieve the secret from the vault
-		secret, err := v.getSecret(vaultPath)
-		if err != nil {
-			// Log the error and return the original match
-			fmt.Printf("Error retrieving secret for %s: %v\n", vaultPath, err)
-			return match
-		}
+	if secrets, exists := v.usedVars[vaultPath]; exists {
+		secrets.policyIDs[id] = true
+		v.usedVars[vaultPath] = secrets
+		return secrets.Value, nil
+	}
 
-		// Generate a unique environment variable name
-		envVar := v.generateEnvVarName()
+	secret, err := v.getSecret(vaultPath)
+	if err != nil {
+		return "", err
+	}
 
-		// Set the environment variable
-		if err != os.Setenv(envVar, secret) {
-			fmt.Printf("Error setting environment variable %s: %v\n", envVar, err)
-			return match
-		}
+	v.usedVars[vaultPath] = cachedSecret{
+		Value:     secret,
+		policyIDs: map[string]any{id: true},
+	}
 
-		// Store the mapping for future reference
-		envVarMap[vaultPath] = envVar
-		v.logger.Error("Set environment variable: " + envVar + " for secret: " + secret)
-		// Return the reference to the environment variable
-		// return "${" + envVar + "}"
-		return secret
-	})
-
-	return result, nil
+	return secret, nil
 }
 
 // processMap processes a map recursively and replaces vault references in its values
-func (v *vaultManager) processMap(m map[string]any, envVarMap map[string]string) (map[string]any, error) {
+func (v *vaultManager) processMap(m map[string]any, id string) (map[string]any, error) {
 	result := make(map[string]any)
-
 	for key, val := range m {
-		processedVal, err := v.processValue(val, envVarMap)
+		processedVal, err := v.processValue(val, id)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process value for key %s: %w", key, err)
 		}
 		result[key] = processedVal
 	}
-
 	return result, nil
 }
 
 // processSlice processes a slice recursively and replaces vault references in its elements
-func (v *vaultManager) processSlice(s []any, envVarMap map[string]string) ([]any, error) {
+func (v *vaultManager) processSlice(s []any, id string) ([]any, error) {
 	result := make([]any, len(s))
-
 	for i, val := range s {
-		processedVal, err := v.processValue(val, envVarMap)
+		processedVal, err := v.processValue(val, id)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process value at index %d: %w", i, err)
 		}
 		result[i] = processedVal
 	}
-
 	return result, nil
-}
-
-// generateEnvVarName generates a unique environment variable name using timestamp, random bytes and a retry mechanism
-func (v *vaultManager) generateEnvVarName() string {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-
-	// Initialize the usedVars map if not already done
-	if v.usedVars == nil {
-		v.usedVars = make(map[string]cachedSecret)
-	}
-
-	// Generate a unique name with retries to avoid collisions
-	for attempts := 0; attempts < 10; attempts++ {
-		// Get current timestamp
-		timestamp := time.Now().UnixNano()
-
-		// Generate 4 random bytes
-		randomBytes := make([]byte, 4)
-		if _, err := rand.Read(randomBytes); err != nil {
-			continue
-		}
-
-		return fmt.Sprintf("TMP_%d_%s", timestamp, hex.EncodeToString(randomBytes))
-	}
-
-	// Ultimate fallback - extremely unlikely to reach this point
-	return fmt.Sprintf("TMP_%d_%d", time.Now().UnixNano(), time.Now().Add(time.Nanosecond).UnixNano())
 }
 
 // getSecret retrieves a secret from the vault
@@ -211,12 +156,10 @@ func (v *vaultManager) getSecret(path string) (string, error) {
 	if len(parts) < 3 {
 		return "", fmt.Errorf("invalid vault path format: %s", path)
 	}
-
 	secret, err := v.client.KVv2(parts[0]).Get(v.ctx, strings.Join(parts[1:len(parts)-1], "/"))
 	if err != nil {
-		return "", fmt.Errorf("failed to get secret %s: %w", path, err)
+		return "", fmt.Errorf("failed to get secret path %s: %w", path, err)
 	}
-	// Check if the secret is nil
 	if secret == nil || secret.Data == nil {
 		return "", fmt.Errorf("secret not found: %s", path)
 	}
