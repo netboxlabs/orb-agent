@@ -13,7 +13,7 @@ import (
 )
 
 type authMethod interface {
-	vaultAuthenticate(context.Context, *vault.Client) error
+	vaultAuthenticate(context.Context, *vault.Client) (*vault.Secret, error)
 }
 
 func newAuthentication(auth string, authArgs map[string]any) (authMethod, error) {
@@ -69,13 +69,13 @@ func (a *AuthToken) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func (a *AuthToken) vaultAuthenticate(_ context.Context, cli *vault.Client) error {
+func (a *AuthToken) vaultAuthenticate(_ context.Context, cli *vault.Client) (*vault.Secret, error) {
 	cli.SetToken(a.Token)
 	_, err := cli.Auth().Token().LookupSelf()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return nil, nil
 }
 
 // AuthAppRole authenticates against Vault with AppRole.
@@ -103,7 +103,7 @@ func (a *AuthAppRole) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func (a *AuthAppRole) vaultAuthenticate(ctx context.Context, cli *vault.Client) error {
+func (a *AuthAppRole) vaultAuthenticate(ctx context.Context, cli *vault.Client) (*vault.Secret, error) {
 	secret := &approle.SecretID{FromString: string(a.SecretID)}
 
 	var opts []approle.LoginOption
@@ -116,13 +116,13 @@ func (a *AuthAppRole) vaultAuthenticate(ctx context.Context, cli *vault.Client) 
 
 	auth, err := approle.NewAppRoleAuth(a.RoleID, secret, opts...)
 	if err != nil {
-		return fmt.Errorf("auth.approle: %w", err)
+		return nil, fmt.Errorf("auth.approle: %w", err)
 	}
-	_, err = cli.Auth().Login(ctx, auth)
+	s, err := cli.Auth().Login(ctx, auth)
 	if err != nil {
-		return fmt.Errorf("auth.approle: %w", err)
+		return nil, fmt.Errorf("auth.approle: %w", err)
 	}
-	return nil
+	return s, nil
 }
 
 // AuthUserPass authenticates against Vault with Userpass.
@@ -149,7 +149,7 @@ func (a *AuthUserPass) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func (a *AuthUserPass) vaultAuthenticate(ctx context.Context, cli *vault.Client) error {
+func (a *AuthUserPass) vaultAuthenticate(ctx context.Context, cli *vault.Client) (*vault.Secret, error) {
 	secret := &userpass.Password{FromString: string(a.Password)}
 
 	var opts []userpass.LoginOption
@@ -160,13 +160,13 @@ func (a *AuthUserPass) vaultAuthenticate(ctx context.Context, cli *vault.Client)
 
 	auth, err := userpass.NewUserpassAuth(a.Username, secret, opts...)
 	if err != nil {
-		return fmt.Errorf("auth.userpass: %w", err)
+		return nil, fmt.Errorf("auth.userpass: %w", err)
 	}
-	_, err = cli.Auth().Login(ctx, auth)
+	s, err := cli.Auth().Login(ctx, auth)
 	if err != nil {
-		return fmt.Errorf("auth.userpass: %w", err)
+		return nil, fmt.Errorf("auth.userpass: %w", err)
 	}
-	return nil
+	return s, nil
 }
 
 // AuthKubernetes authenticates against Vault with Kubernetes.
@@ -190,7 +190,7 @@ func (a *AuthKubernetes) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func (a *AuthKubernetes) vaultAuthenticate(ctx context.Context, cli *vault.Client) error {
+func (a *AuthKubernetes) vaultAuthenticate(ctx context.Context, cli *vault.Client) (*vault.Secret, error) {
 	var opts []kubernetes.LoginOption
 
 	if a.ServiceAccountTokenFile != "" {
@@ -202,13 +202,13 @@ func (a *AuthKubernetes) vaultAuthenticate(ctx context.Context, cli *vault.Clien
 
 	auth, err := kubernetes.NewKubernetesAuth(a.Role, opts...)
 	if err != nil {
-		return fmt.Errorf("auth.kubernetes: %w", err)
+		return nil, fmt.Errorf("auth.kubernetes: %w", err)
 	}
-	_, err = cli.Auth().Login(ctx, auth)
+	s, err := cli.Auth().Login(ctx, auth)
 	if err != nil {
-		return fmt.Errorf("auth.kubernetes: %w", err)
+		return nil, fmt.Errorf("auth.kubernetes: %w", err)
 	}
-	return nil
+	return s, nil
 }
 
 // AuthLDAP authenticates against Vault with LDAP.
@@ -235,7 +235,7 @@ func (a *AuthLDAP) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-func (a *AuthLDAP) vaultAuthenticate(ctx context.Context, cli *vault.Client) error {
+func (a *AuthLDAP) vaultAuthenticate(ctx context.Context, cli *vault.Client) (*vault.Secret, error) {
 	secret := &ldap.Password{FromString: string(a.Password)}
 
 	var opts []ldap.LoginOption
@@ -246,11 +246,11 @@ func (a *AuthLDAP) vaultAuthenticate(ctx context.Context, cli *vault.Client) err
 
 	auth, err := ldap.NewLDAPAuth(a.Username, secret, opts...)
 	if err != nil {
-		return fmt.Errorf("auth.ldap: %w", err)
+		return nil, fmt.Errorf("auth.ldap: %w", err)
 	}
-	_, err = cli.Auth().Login(ctx, auth)
+	s, err := cli.Auth().Login(ctx, auth)
 	if err != nil {
-		return fmt.Errorf("auth.ldap: %w", err)
+		return nil, fmt.Errorf("auth.ldap: %w", err)
 	}
-	return nil
+	return s, nil
 }

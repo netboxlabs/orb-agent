@@ -23,6 +23,7 @@ type vaultManager struct {
 	usedVars map[string]cachedSecret
 	callback func([]string)
 	auth     authMethod
+	token    *vault.Secret
 }
 
 type cachedSecret struct {
@@ -62,7 +63,7 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		return err
 	}
 
-	err = v.auth.vaultAuthenticate(ctx, v.client)
+	v.token, err = v.auth.vaultAuthenticate(ctx, v.client)
 	if err != nil {
 		return err
 	}
