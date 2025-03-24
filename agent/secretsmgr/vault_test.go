@@ -19,7 +19,11 @@ import (
 func TestVaultManager_getSecret(t *testing.T) {
 	// Create test vault server
 	ln, client := createTestVault(t)
-	defer ln.Close()
+	defer func() {
+		if err := ln.Close(); err != nil {
+			assert.NoError(t, err, "Failed to close test vault listener")
+		}
+	}()
 
 	// Create the vault manager with the test client
 	logger, _ := zap.NewDevelopment()
