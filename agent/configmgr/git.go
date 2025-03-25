@@ -359,9 +359,38 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	}
 }
 
+func (gc *gitConfigManager) policiesChanged(policiesIDs map[string]bool) {
+	gc.version++
+	for id, valid := range policiesIDs {
+		policy, err := gc.pMgr.GetRepo().Get(id)
+		if err != nil {
+			gc.logger.Error("failed to get policy", zap.Error(err))
+			continue
+		}
+		if !valid {
+			if err := gc.pMgr.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
+				gc.logger.Error("failed to remove policy", zap.Error(err))
+			}
+			continue
+		}
+		payload := config.PolicyPayload{
+			ID: policy.ID, Action: "manage",
+			Name: policy.Name, DatasetID: uuid.NewString(), Backend: policy.Backend,
+			Version: gc.version, Data: policy.Data,
+		}
+		payload, err = gc.sMgr.SolveSecrets(payload)
+		if err != nil {
+			gc.logger.Error("failed to solve secrets", zap.Error(err))
+			continue
+		}
+		gc.pMgr.ManagePolicy(payload)
+	}
+}
+
 func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	gc.version = 1
+	gc.sMgr.RegisterUpdateCallback(gc.policiesChanged)
 
 	if gc.config.URL == "" {
 		return errors.New("URL is required for Git Config Manager")
@@ -513,7 +542,8 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		}
 		gc.scheduler = s
 		task := gocron.NewTask(gc.schedule, cfg, backends)
-		if _, err = gc.scheduler.NewJob(gocron.CronJob(*gc.config.Schedule, false), task, gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
+		if _, err = gc.scheduler.NewJob(gocron.CronJob(*gc.config.Schedule, false), task,
+			gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
 			return err
 		}
 		gc.scheduler.Start()
