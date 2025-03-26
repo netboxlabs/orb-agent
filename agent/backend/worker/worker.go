@@ -65,7 +65,7 @@ func Register() bool {
 	return true
 }
 
-func (d *workerBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]interface{}, common config.BackendCommons) error {
+func (d *workerBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]any, common config.BackendCommons) error {
 	d.logger = logger
 	d.policyRepo = repo
 
@@ -86,7 +86,9 @@ func (d *workerBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, 
 
 func (d *workerBackend) Version() (string, error) {
 	var info info
-	err := d.request("status", &info, http.MethodGet, http.NoBody, "application/json", versionTimeout)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	err := backend.CommonRequest("worker", d.proc, d.logger, url, &info, http.MethodGet,
+		http.NoBody, "detail", "application/json", versionTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -200,7 +202,7 @@ func (d *workerBackend) Stop(ctx context.Context) error {
 
 func (d *workerBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
-	if state, _, _ := d.getProcRunningStatus(); state == backend.Running {
+	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
 			d.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
 			return err
@@ -220,9 +222,11 @@ func (d *workerBackend) GetStartTime() time.Time {
 	return d.startTime
 }
 
-func (d *workerBackend) GetCapabilities() (map[string]interface{}, error) {
-	caps := make(map[string]interface{})
-	err := d.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", capabilitiesTimeout)
+func (d *workerBackend) GetCapabilities() (map[string]any, error) {
+	caps := make(map[string]any)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort)
+	err := backend.CommonRequest("worker", d.proc, d.logger, url, &caps, http.MethodGet,
+		http.NoBody, "detail", "application/json", capabilitiesTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +235,7 @@ func (d *workerBackend) GetCapabilities() (map[string]interface{}, error) {
 
 func (d *workerBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
-	runningStatus, errMsg, err := d.getProcRunningStatus()
+	runningStatus, errMsg, err := backend.GetRunningStatus(d.proc)
 	// if it's not running, we're done
 	if runningStatus != backend.Running {
 		return runningStatus, errMsg, err
@@ -258,8 +262,8 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 
 	d.logger.Debug("worker policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
 
-	fullPolicy := map[string]interface{}{
-		"policies": map[string]interface{}{
+	fullPolicy := map[string]any{
+		"policies": map[string]any{
 			data.Name: data.Data,
 		},
 	}
@@ -270,8 +274,10 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 		return err
 	}
 
-	var resp map[string]interface{}
-	err = d.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout)
+	var resp map[string]any
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", d.apiProtocol, d.apiHost, d.apiPort)
+	err = backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodPost,
+		bytes.NewBuffer(policyYaml), "detail", "application/x-yaml", applyPolicyTimeout)
 	if err != nil {
 		d.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
 		return err
@@ -282,7 +288,7 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 
 func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
 	d.logger.Debug("worker policy remove", zap.String("policy_id", data.ID))
-	var resp interface{}
+	var resp any
 	var name string
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
@@ -290,7 +296,9 @@ func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	err := d.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", removePolicyTimeout)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, name)
+	err := backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodDelete,
+		http.NoBody, "detail", "application/json", removePolicyTimeout)
 	if err != nil {
 		return err
 	}

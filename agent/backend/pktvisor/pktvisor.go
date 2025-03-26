@@ -1,6 +1,7 @@
 package pktvisor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -76,7 +77,7 @@ func (p *pktvisorBackend) GetInitialState() backend.RunningStatus {
 
 func (p *pktvisorBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
-	runningStatus, errMsg, err := p.getProcRunningStatus()
+	runningStatus, errMsg, err := backend.GetRunningStatus(p.proc)
 	// if it's not running, we're done
 	if runningStatus != backend.Running {
 		return runningStatus, errMsg, err
@@ -191,7 +192,9 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	var readinessError error
 	for backoff := 0; backoff < readinessBackoff; backoff++ {
 		var appMetrics AppInfo
-		readinessError = p.request("metrics/app", &appMetrics, http.MethodGet, http.NoBody, "application/json", readinessTimeout)
+		url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
+		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
+			http.NoBody, "error", "application/json", readinessTimeout)
 		if readinessError == nil {
 			p.logger.Info("pktvisor readiness ok, got version ", zap.String("pktvisor_version", appMetrics.App.Version))
 			break
@@ -227,7 +230,7 @@ func (p *pktvisorBackend) Stop(ctx context.Context) error {
 }
 
 // Configure this will set configurations, but if not set, will use the following defaults
-func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]interface{}, common config.BackendCommons) error {
+func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]any, common config.BackendCommons) error {
 	p.logger = logger
 	p.policyRepo = repo
 
@@ -244,8 +247,8 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	}
 
 	// Prepare the visor configuration structure
-	visorConfig := make(map[string]interface{})
-	configSection := make(map[string]interface{})
+	visorConfig := make(map[string]any)
+	configSection := make(map[string]any)
 
 	// Process all config entries
 	for key, value := range config {
@@ -300,20 +303,22 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	return nil
 }
 
-func (p *pktvisorBackend) GetCapabilities() (map[string]interface{}, error) {
-	var taps interface{}
-	err := p.request("taps", &taps, http.MethodGet, http.NoBody, "application/json", tapsTimeout)
+func (p *pktvisorBackend) GetCapabilities() (map[string]any, error) {
+	var taps any
+	url := fmt.Sprintf("%s://%s:%s/api/v1/taps", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
+	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &taps, http.MethodGet,
+		http.NoBody, "error", "application/json", tapsTimeout)
 	if err != nil {
 		return nil, err
 	}
-	jsonBody := make(map[string]interface{})
+	jsonBody := make(map[string]any)
 	jsonBody["taps"] = taps
 	return jsonBody, nil
 }
 
 func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
-	if state, _, _ := p.getProcRunningStatus(); state == backend.Running {
+	if state, _, _ := backend.GetRunningStatus(p.proc); state == backend.Running {
 		if err := p.Stop(ctx); err != nil {
 			p.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
 			return err
@@ -338,4 +343,68 @@ func Register() bool {
 		adminAPIProtocol: "http",
 	})
 	return true
+}
+
+func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
+	if updatePolicy {
+		// To update a policy it's necessary first remove it and then apply a new version
+		if err := p.RemovePolicy(data); err != nil {
+			p.logger.Warn("policy failed to remove", zap.String("policy_id", data.ID), zap.String("policy_name", data.Name), zap.Error(err))
+		}
+	}
+
+	p.logger.Debug("pktvisor policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
+
+	fullPolicy := map[string]any{
+		"version": "1.0",
+		"visor": map[string]any{
+			"policies": map[string]any{
+				data.Name: data.Data,
+			},
+		},
+	}
+
+	policyYaml, err := yaml.Marshal(fullPolicy)
+	if err != nil {
+		p.logger.Warn("yaml policy marshal failure", zap.String("policy_id", data.ID), zap.Any("policy", fullPolicy))
+		return err
+	}
+
+	var resp map[string]any
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
+	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodPost,
+		bytes.NewBuffer(policyYaml), "error", "application/x-yaml", applyPolicyTimeout)
+	if err != nil {
+		p.logger.Warn("yaml policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
+		return err
+	}
+
+	return nil
+}
+
+func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
+	p.logger.Debug("pktvisor policy remove", zap.String("policy_id", data.ID))
+	var resp any
+	var name string
+	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
+	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
+		name = data.PreviousPolicyData.Name
+	} else {
+		name = data.Name
+	}
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost, name)
+	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
+		http.NoBody, "error", "application/json", removePolicyTimeout)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *pktvisorBackend) getAppInfo() (AppInfo, error) {
+	var appInfo AppInfo
+	url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
+	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appInfo, http.MethodGet,
+		http.NoBody, "error", "application/json", versionTimeout)
+	return appInfo, err
 }
