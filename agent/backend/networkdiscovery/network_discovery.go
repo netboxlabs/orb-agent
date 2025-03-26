@@ -88,7 +88,7 @@ func (d *networkDiscoveryBackend) Version() (string, error) {
 	var info info
 	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
 	err := backend.CommonRequest("network-discovery", d.proc, d.logger, url, &info, http.MethodGet,
-		http.NoBody, "detail", "application/json", versionTimeout)
+		http.NoBody, "application/json", versionTimeout, "detail")
 	if err != nil {
 		return "", err
 	}
@@ -226,7 +226,7 @@ func (d *networkDiscoveryBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
 	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort)
 	err := backend.CommonRequest("network-discovery", d.proc, d.logger, url, &caps, http.MethodGet,
-		http.NoBody, "detail", "application/json", capabilitiesTimeout)
+		http.NoBody, "application/json", capabilitiesTimeout, "detail")
 	if err != nil {
 		return nil, err
 	}
@@ -277,7 +277,7 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 	var resp map[string]any
 	url := fmt.Sprintf("%s://%s:%s/api/v1/%s", d.apiProtocol, d.apiHost, d.apiPort, "policies")
 	err = backend.CommonRequest("network-discovery", d.proc, d.logger, url, &resp, http.MethodPost,
-		bytes.NewBuffer(policyYaml), "detail", "application/x-yaml", applyPolicyTimeout)
+		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
 		d.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
 		return err
@@ -296,7 +296,7 @@ func (d *networkDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	}
 	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, name)
 	err := backend.CommonRequest("network-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
-		http.NoBody, "detail", "application/json", removePolicyTimeout)
+		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
 		return err
 	}

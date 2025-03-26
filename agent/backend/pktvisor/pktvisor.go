@@ -194,7 +194,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		var appMetrics AppInfo
 		url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
 		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
-			http.NoBody, "error", "application/json", readinessTimeout)
+			http.NoBody, "application/json", readinessTimeout, "error")
 		if readinessError == nil {
 			p.logger.Info("pktvisor readiness ok, got version ", zap.String("pktvisor_version", appMetrics.App.Version))
 			break
@@ -307,7 +307,7 @@ func (p *pktvisorBackend) GetCapabilities() (map[string]any, error) {
 	var taps any
 	url := fmt.Sprintf("%s://%s:%s/api/v1/taps", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &taps, http.MethodGet,
-		http.NoBody, "error", "application/json", tapsTimeout)
+		http.NoBody, "application/json", tapsTimeout, "error")
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +373,7 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	var resp map[string]any
 	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
 	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodPost,
-		bytes.NewBuffer(policyYaml), "error", "application/x-yaml", applyPolicyTimeout)
+		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "error")
 	if err != nil {
 		p.logger.Warn("yaml policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
 		return err
@@ -394,7 +394,7 @@ func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
 	}
 	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost, name)
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
-		http.NoBody, "error", "application/json", removePolicyTimeout)
+		http.NoBody, "application/json", removePolicyTimeout, "error")
 	if err != nil {
 		return err
 	}
@@ -405,6 +405,6 @@ func (p *pktvisorBackend) getAppInfo() (AppInfo, error) {
 	var appInfo AppInfo
 	url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appInfo, http.MethodGet,
-		http.NoBody, "error", "application/json", versionTimeout)
+		http.NoBody, "application/json", versionTimeout, "error")
 	return appInfo, err
 }

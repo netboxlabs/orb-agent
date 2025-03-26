@@ -37,7 +37,7 @@ func GetRunningStatus(proc *cmd.Cmd) (RunningStatus, string, error) {
 
 // CommonRequest is a generic function to make HTTP requests to the backend
 func CommonRequest(backendName string, proc *cmd.Cmd, logger *zap.Logger, url string, payload any,
-	method string, body io.Reader, contentType string, errorMsg string, timeout int32,
+	method string, body io.Reader, contentType string, timeout int32, errorMsg string,
 ) error {
 	client := http.Client{
 		Timeout: time.Second * time.Duration(timeout),

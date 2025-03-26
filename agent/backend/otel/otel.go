@@ -91,7 +91,7 @@ func (o *openTelemetryBackend) Version() (string, error) {
 	var info info
 	url := fmt.Sprintf("%s://%s:%s/api/v1/status", o.apiProtocol, o.apiHost, o.apiPort)
 	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &info, http.MethodGet,
-		http.NoBody, "message", "application/json", versionTimeout)
+		http.NoBody, "application/json", versionTimeout, "message")
 	if err != nil {
 		return "", err
 	}
@@ -226,7 +226,7 @@ func (o *openTelemetryBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
 	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", o.apiProtocol, o.apiHost, o.apiPort)
 	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &caps, http.MethodGet,
-		http.NoBody, "message", "application/json", capabilitiesTimeout)
+		http.NoBody, "application/json", capabilitiesTimeout, "message")
 	if err != nil {
 		return nil, err
 	}
@@ -272,7 +272,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	var resp map[string]any
 	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", o.apiProtocol, o.apiHost, o.apiPort)
 	err = backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodPost,
-		bytes.NewBuffer(policyYaml), "message", "application/x-yaml", applyPolicyTimeout)
+		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "message")
 	if err != nil {
 		o.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
 		return err
@@ -293,7 +293,7 @@ func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 	}
 	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", o.apiProtocol, o.apiHost, o.apiPort, name)
 	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodDelete,
-		http.NoBody, "message", "application/json", removePolicyTimeout)
+		http.NoBody, "application/json", removePolicyTimeout, "message")
 	if err != nil {
 		return err
 	}
