@@ -151,10 +151,8 @@ func (v *vaultManager) pollSecrets() {
 }
 
 func (v *vaultManager) addTokenLifecycleWatcher() error {
-	if v.token == nil {
-		return nil
-	}
-	if !v.token.Auth.Renewable || v.token.Auth.LeaseDuration == 0 {
+	if v.token == nil || v.token.Auth == nil ||
+		!v.token.Auth.Renewable || v.token.Auth.LeaseDuration == 0 {
 		return nil
 	}
 

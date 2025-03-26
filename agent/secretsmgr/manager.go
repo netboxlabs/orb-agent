@@ -21,6 +21,7 @@ func New(logger *zap.Logger, c config.ManagerSecrets) Manager {
 	case "vault":
 		return &vaultManager{logger: logger, config: c.Sources.Vault}
 	default:
+		logger.Info("no secrets manager specified or invalid type, skipping")
 		return &dummyManager{}
 	}
 }
