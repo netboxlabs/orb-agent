@@ -112,7 +112,7 @@ func (v *vaultManager) processString(s string, id string) (string, error) {
 	}
 
 	match := re.FindStringSubmatchIndex(s)
-	if match == nil || len(match) < 4 {
+	if len(match) < 4 {
 		return "", fmt.Errorf("failed to find vault reference in string: %s", s)
 	}
 

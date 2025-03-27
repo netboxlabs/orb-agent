@@ -65,7 +65,7 @@ func Register() bool {
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
-	config map[string]interface{}, common config.BackendCommons,
+	config map[string]any, common config.BackendCommons,
 ) error {
 	o.logger = logger
 	o.policyRepo = repo
@@ -89,7 +89,9 @@ func (o *openTelemetryBackend) GetInitialState() backend.RunningStatus {
 
 func (o *openTelemetryBackend) Version() (string, error) {
 	var info info
-	err := o.request("status", &info, http.MethodGet, http.NoBody, "application/json", versionTimeout)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", o.apiProtocol, o.apiHost, o.apiPort)
+	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &info, http.MethodGet,
+		http.NoBody, "application/json", versionTimeout, "message")
 	if err != nil {
 		return "", err
 	}
@@ -199,7 +201,7 @@ func (o *openTelemetryBackend) Stop(ctx context.Context) error {
 
 func (o *openTelemetryBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
-	if state, _, _ := o.getProcRunningStatus(); state == backend.Running {
+	if state, _, _ := backend.GetRunningStatus(o.proc); state == backend.Running {
 		if err := o.Stop(ctx); err != nil {
 			o.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
 			return err
@@ -220,9 +222,11 @@ func (o *openTelemetryBackend) GetStartTime() time.Time {
 }
 
 // GetCapabilities this will only print a default backend config
-func (o *openTelemetryBackend) GetCapabilities() (map[string]interface{}, error) {
-	caps := make(map[string]interface{})
-	err := o.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", capabilitiesTimeout)
+func (o *openTelemetryBackend) GetCapabilities() (map[string]any, error) {
+	caps := make(map[string]any)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", o.apiProtocol, o.apiHost, o.apiPort)
+	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &caps, http.MethodGet,
+		http.NoBody, "application/json", capabilitiesTimeout, "message")
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +236,7 @@ func (o *openTelemetryBackend) GetCapabilities() (map[string]interface{}, error)
 // GetRunningStatus returns cross-reference the Processes using the os, with the policies and contexts
 func (o *openTelemetryBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
-	runningStatus, errMsg, err := o.getProcRunningStatus()
+	runningStatus, errMsg, err := backend.GetRunningStatus(o.proc)
 	// if it's not running, we're done
 	if runningStatus != backend.Running {
 		return runningStatus, errMsg, err
@@ -255,7 +259,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 
 	o.logger.Debug("opentelemetry infinity policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
 
-	fullPolicy := map[string]interface{}{
+	fullPolicy := map[string]any{
 		data.Name: data.Data,
 	}
 
@@ -265,8 +269,10 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 		return err
 	}
 
-	var resp map[string]interface{}
-	err = o.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout)
+	var resp map[string]any
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", o.apiProtocol, o.apiHost, o.apiPort)
+	err = backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodPost,
+		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "message")
 	if err != nil {
 		o.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
 		return err
@@ -277,7 +283,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 
 func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 	o.logger.Debug("opentelemetry policy remove", zap.String("policy_id", data.ID))
-	var resp interface{}
+	var resp any
 	var name string
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
@@ -285,7 +291,9 @@ func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	err := o.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", removePolicyTimeout)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", o.apiProtocol, o.apiHost, o.apiPort, name)
+	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodDelete,
+		http.NoBody, "application/json", removePolicyTimeout, "message")
 	if err != nil {
 		return err
 	}
