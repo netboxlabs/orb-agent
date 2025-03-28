@@ -64,7 +64,8 @@ var _ Agent = (*orbAgent)(nil)
 
 // New creates a new agent
 func New(logger *zap.Logger, c config.Config) (Agent, error) {
-	pm, err := policymgr.New(logger, c)
+	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManger)
+	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {
 		logger.Error("error during create policy manager, exiting", zap.Error(err))
 		return nil, err
@@ -74,9 +75,7 @@ func New(logger *zap.Logger, c config.Config) (Agent, error) {
 		return nil, err
 	}
 
-	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManger)
-
-	cm := configmgr.New(logger, pm, sm, c.OrbAgent.ConfigManager)
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager)
 
 	return &orbAgent{
 		logger: logger, config: c, policyManager: pm, configManager: cm,
