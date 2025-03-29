@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-co-op/gocron/v2"
 	vault "github.com/hashicorp/vault/api"
 	"go.uber.org/zap"
 
@@ -16,19 +17,20 @@ import (
 var _ Manager = (*vaultManager)(nil)
 
 type vaultManager struct {
-	logger   *zap.Logger
-	config   config.VaultManager
-	ctx      context.Context
-	client   *vault.Client
-	usedVars map[string]cachedSecret
-	callback func([]string)
-	auth     authMethod
-	token    *vault.Secret
+	logger    *zap.Logger
+	config    config.VaultManager
+	ctx       context.Context
+	client    *vault.Client
+	usedVars  map[string]cachedSecret
+	callback  func(map[string]bool)
+	auth      authMethod
+	token     *vault.Secret
+	scheduler gocron.Scheduler
 }
 
 type cachedSecret struct {
-	Value     string         // The actual secret value
-	policyIDs map[string]any // The IDs of policies that have used this secret
+	Value     string          // The actual secret value
+	policyIDs map[string]bool // The IDs of policies that have used this secret
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
@@ -68,11 +70,33 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		return err
 	}
 
+	if v.config.Schedule != nil {
+		s, err := gocron.NewScheduler()
+		if err != nil {
+			return fmt.Errorf("failed to create scheduler: %w", err)
+		}
+
+		v.scheduler = s
+		task := gocron.NewTask(v.pollSecrets)
+
+		if _, err = v.scheduler.NewJob(gocron.CronJob(*v.config.Schedule, false), task,
+			gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
+			return fmt.Errorf("failed to create polling job: %w", err)
+		}
+
+		v.logger.Info("Starting vault secret polling", zap.String("cron interval", *v.config.Schedule))
+		v.scheduler.Start()
+	}
+
+	if err = v.addTokenLifecycleWatcher(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // RegisterUpdateCallback registers a callback function to be called when secrets are updated
-func (v *vaultManager) RegisterUpdateCallback(callback func([]string)) {
+func (v *vaultManager) RegisterUpdateCallback(callback func(map[string]bool)) {
 	v.callback = callback
 }
 
@@ -89,6 +113,77 @@ func (v *vaultManager) SolveSecrets(payload config.PolicyPayload) (config.Policy
 
 	newPayload.Data = processedData
 	return newPayload, nil
+}
+
+func (v *vaultManager) pollSecrets() {
+	if len(v.usedVars) == 0 || v.callback == nil {
+		return
+	}
+
+	v.logger.Debug("Polling vault secrets for changes", zap.Int("secretCount", len(v.usedVars)))
+	changedPolicyIDs := make(map[string]bool)
+
+	// Check each cached secret
+	for path, cachedSecret := range v.usedVars {
+		currentValue, err := v.getSecret(path)
+		if err != nil {
+			v.logger.Error("Failed to retrieve secret during polling", zap.String("path", path), zap.Error(err))
+			for id := range cachedSecret.policyIDs {
+				changedPolicyIDs[id] = false
+			}
+			continue
+		}
+
+		if currentValue != cachedSecret.Value {
+			v.logger.Info("Detected changed secret", zap.String("path", path))
+			cachedSecret.Value = currentValue
+			v.usedVars[path] = cachedSecret
+			for id := range cachedSecret.policyIDs {
+				changedPolicyIDs[id] = true
+			}
+		}
+	}
+
+	if len(changedPolicyIDs) > 0 {
+		v.logger.Info("Calling update callback for changed secrets", zap.Int("policyCount", len(changedPolicyIDs)))
+		v.callback(changedPolicyIDs)
+	}
+}
+
+func (v *vaultManager) addTokenLifecycleWatcher() error {
+	if v.token == nil || v.token.Auth == nil ||
+		!v.token.Auth.Renewable || v.token.Auth.LeaseDuration == 0 {
+		return nil
+	}
+
+	lw, err := v.client.NewLifetimeWatcher(&vault.LifetimeWatcherInput{
+		Secret:        v.token,
+		RenewBehavior: vault.RenewBehaviorIgnoreErrors,
+	})
+	if err != nil {
+		return err
+	}
+
+	go lw.Start()
+
+	go func() {
+		for {
+			select {
+			case <-v.ctx.Done():
+				lw.Stop()
+				return
+
+			case err := <-lw.DoneCh():
+				if err != nil {
+					v.logger.Error("Token renewal failed", zap.Error(err))
+				}
+			case output := <-lw.RenewCh():
+				v.logger.Info("Token renewed", zap.Time("renewedAt", output.RenewedAt))
+			}
+		}
+	}()
+
+	return nil
 }
 
 func (v *vaultManager) processValue(value any, id string) (any, error) {
@@ -131,7 +226,7 @@ func (v *vaultManager) processString(s string, id string) (string, error) {
 
 	v.usedVars[vaultPath] = cachedSecret{
 		Value:     secret,
-		policyIDs: map[string]any{id: true},
+		policyIDs: map[string]bool{id: true},
 	}
 
 	return secret, nil

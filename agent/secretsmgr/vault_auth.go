@@ -71,11 +71,11 @@ func (a *AuthToken) UnmarshalYAML(value *yaml.Node) error {
 
 func (a *AuthToken) vaultAuthenticate(_ context.Context, cli *vault.Client) (*vault.Secret, error) {
 	cli.SetToken(a.Token)
-	_, err := cli.Auth().Token().LookupSelf()
+	secret, err := cli.Auth().Token().LookupSelf()
 	if err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return secret, nil
 }
 
 // AuthAppRole authenticates against Vault with AppRole.

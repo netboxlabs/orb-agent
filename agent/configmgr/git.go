@@ -24,7 +24,6 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
-	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
 var _ Manager = (*gitConfigManager)(nil)
@@ -32,7 +31,6 @@ var _ Manager = (*gitConfigManager)(nil)
 type gitConfigManager struct {
 	logger           *zap.Logger
 	pMgr             policymgr.PolicyManager
-	sMgr             secretsmgr.Manager
 	config           config.GitManager
 	scheduler        gocron.Scheduler
 	repo             *gitv5.Repository
@@ -158,11 +156,6 @@ func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[stri
 				Backend:   beName,
 				Version:   gc.version,
 				Data:      data,
-			}
-			var err error
-			payload, err = gc.sMgr.SolveSecrets(payload)
-			if err != nil {
-				return err
 			}
 			gc.pMgr.ManagePolicy(payload)
 		}
@@ -513,7 +506,8 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		}
 		gc.scheduler = s
 		task := gocron.NewTask(gc.schedule, cfg, backends)
-		if _, err = gc.scheduler.NewJob(gocron.CronJob(*gc.config.Schedule, false), task, gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
+		if _, err = gc.scheduler.NewJob(gocron.CronJob(*gc.config.Schedule, false), task,
+			gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
 			return err
 		}
 		gc.scheduler.Start()

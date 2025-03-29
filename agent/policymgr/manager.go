@@ -10,6 +10,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
 // PolicyManager is the interface for managing policies
@@ -29,16 +30,19 @@ type policyManager struct {
 	logger *zap.Logger
 	config config.Config
 
-	repo policies.PolicyRepo
+	repo    policies.PolicyRepo
+	secrets secretsmgr.Manager
 }
 
 // New creates a new instance of PolicyManager
-func New(logger *zap.Logger, c config.Config) (PolicyManager, error) {
+func New(logger *zap.Logger, secrets secretsmgr.Manager, c config.Config) (PolicyManager, error) {
 	repo, err := policies.NewMemRepo(logger)
 	if err != nil {
 		return nil, err
 	}
-	return &policyManager{logger: logger, config: c, repo: repo}, nil
+	policyManager := &policyManager{logger: logger, config: c, repo: repo, secrets: secrets}
+	policyManager.secrets.RegisterUpdateCallback(policyManager.policiesChanged)
+	return policyManager, nil
 }
 
 func (a *policyManager) GetRepo() policies.PolicyRepo {
@@ -124,7 +128,14 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 		} else {
 			// attempt to apply the policy to the backend. status of policy application (running/failed) is maintained there.
 			be := backend.GetBackend(payload.Backend)
+			newPayload, err := a.secrets.SolveSecrets(payload)
+			if err != nil {
+				a.logger.Error("failed to solve secrets", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name), zap.Error(err))
+				return
+			}
+			pd.Data = newPayload.Data
 			a.applyPolicy(payload, be, &pd, updatePolicy)
+			pd.Data = payload.Data
 		}
 		// save policy (with latest status) to local policy db
 		err := a.repo.Update(pd)
@@ -261,4 +272,44 @@ func (a *policyManager) ApplyBackendPolicies(be backend.Backend) error {
 		}
 	}
 	return nil
+}
+
+func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
+	for id, valid := range policiesIDs {
+		policy, err := a.repo.Get(id)
+		if err != nil {
+			a.logger.Error("failed to get policy", zap.Error(err))
+			continue
+		}
+		if !valid {
+			if err := a.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
+				a.logger.Error("failed to remove policy", zap.Error(err))
+			}
+			continue
+		}
+		if !backend.HaveBackend(policy.Backend) {
+			a.logger.Warn("policy failed to apply because backend is not available", zap.String("policy_id", policy.ID), zap.String("policy_name", policy.Name))
+			policy.State = policies.FailedToApply
+			policy.BackendErr = "backend not available"
+		} else {
+			payload := config.PolicyPayload{
+				ID:   policy.ID,
+				Name: policy.Name,
+				Data: policy.Data,
+			}
+			newPayload, err := a.secrets.SolveSecrets(payload)
+			if err != nil {
+				a.logger.Error("failed to solve secrets", zap.String("policy_id", policy.ID), zap.String("policy_name", policy.Name), zap.Error(err))
+				continue
+			}
+			policy.Data = newPayload.Data
+			be := backend.GetBackend(policy.Backend)
+			a.applyPolicy(payload, be, &policy, true)
+			policy.Data = payload.Data
+		}
+
+		if err = a.repo.Update(policy); err != nil {
+			a.logger.Error("got error in update last status", zap.Error(err))
+		}
+	}
 }
