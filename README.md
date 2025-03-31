@@ -47,8 +47,8 @@ orb:
   ...
 ```
 
-Currently, only HashiCorp Vault is supported as a secrets manager.
-- [Vault](./docs/secretsmgr/vault.md)
+Supported secrets managers:
+- [HashiCorp Vault](./docs/secretsmgr/vault.md)
 
 ### Backends
 The `backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
