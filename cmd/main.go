@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -10,8 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
@@ -60,26 +59,16 @@ func Run(_ *cobra.Command, _ []string) {
 	}
 
 	// logger
-	var logger *zap.Logger
-	atomicLevel := zap.NewAtomicLevel()
+	var l slog.Level
 	if debug {
-		atomicLevel.SetLevel(zap.DebugLevel)
+		l = slog.LevelDebug
 	} else {
-		atomicLevel.SetLevel(zap.InfoLevel)
+		l = slog.LevelInfo
 	}
-	encoderCfg := zap.NewProductionEncoderConfig()
-	encoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
-	core := zapcore.NewCore(
-		zapcore.NewJSONEncoder(encoderCfg),
-		os.Stdout,
-		atomicLevel,
-	)
-	logger = zap.New(core, zap.AddCaller())
-	defer func(logger *zap.Logger) {
-		_ = logger.Sync()
-	}(logger)
+	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l, AddSource: false})
+	logger := slog.New(h)
 
-	logger.Info("backends loaded", zap.Any("backends", configData.OrbAgent.Backends))
+	logger.Info("backends loaded", slog.Any("backends", configData.OrbAgent.Backends))
 
 	configData.OrbAgent.ConfigFile = defaultConfig
 	if len(cfgFiles) > 0 {
@@ -89,7 +78,7 @@ func Run(_ *cobra.Command, _ []string) {
 	// new agent
 	a, err := agent.New(logger, configData)
 	if err != nil {
-		logger.Error("agent start up error", zap.Error(err))
+		logger.Error("agent start up error", slog.Any("error", err))
 		os.Exit(1)
 	}
 
@@ -115,7 +104,7 @@ func Run(_ *cobra.Command, _ []string) {
 	// start agent
 	err = a.Start(rootCtx, cancelFunc)
 	if err != nil {
-		logger.Error("agent startup error", zap.Error(err))
+		logger.Error("agent startup error", slog.Any("error", err))
 		os.Exit(1)
 	}
 

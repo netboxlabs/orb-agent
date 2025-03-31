@@ -3,9 +3,9 @@ package configmgr
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -15,7 +15,7 @@ import (
 var _ Manager = (*localConfigManager)(nil)
 
 type localConfigManager struct {
-	logger *zap.Logger
+	logger *slog.Logger
 	pMgr   policymgr.PolicyManager
 	config config.LocalManager
 }

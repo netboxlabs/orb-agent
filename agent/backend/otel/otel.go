@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-cmd/cmd"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -32,7 +32,7 @@ const (
 )
 
 type openTelemetryBackend struct {
-	logger     *zap.Logger
+	logger     *slog.Logger
 	policyRepo policies.PolicyRepo
 	exec       string
 
@@ -64,7 +64,7 @@ func Register() bool {
 }
 
 // Configure initializes the backend with the given configuration
-func (o *openTelemetryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo,
+func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
 	o.logger = logger
@@ -109,7 +109,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		"--server_port", o.apiPort,
 	}
 
-	o.logger.Info("opentelemetry infinity startup", zap.Strings("arguments", pvOptions))
+	o.logger.Info("opentelemetry infinity startup", slog.Any("arguments", pvOptions))
 
 	o.proc = cmd.NewCmdOptions(cmd.Options{
 		Buffered:  false,
@@ -132,13 +132,13 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 					o.proc.Stdout = nil
 					continue
 				}
-				o.logger.Info("opentelemetry infinity stdout", zap.String("log", line))
+				o.logger.Info("opentelemetry infinity stdout", slog.String("log", line))
 			case line, open := <-o.proc.Stderr:
 				if !open {
 					o.proc.Stderr = nil
 					continue
 				}
-				o.logger.Info("opentelemetry infinity stderr", zap.String("log", line))
+				o.logger.Info("opentelemetry infinity stderr", slog.String("log", line))
 			}
 		}
 	}()
@@ -149,37 +149,39 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	status := o.proc.Status()
 
 	if status.Error != nil {
-		o.logger.Error("opentelemetry infinity startup error", zap.Error(status.Error))
+		o.logger.Error("opentelemetry infinity startup error", slog.Any("error", status.Error))
 		return status.Error
 	}
 
 	if status.Complete {
 		err := o.proc.Stop()
 		if err != nil {
-			o.logger.Error("proc.Stop error", zap.Error(err))
+			o.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return errors.New("opentelemetry infinity startup error, check log")
 	}
 
-	o.logger.Info("opentelemetry infinity process started", zap.Int("pid", status.PID))
+	o.logger.Info("opentelemetry infinity process started", slog.Int("pid", status.PID))
 
 	var readinessErr error
 	for backoff := 0; backoff < readinessBackoff; backoff++ {
 		version, readinessErr := o.Version()
 		if readinessErr == nil {
-			o.logger.Info("opentelemetry infinity readiness ok, got version ", zap.String("device_discovery_version", version))
+			o.logger.Info("opentelemetry infinity readiness ok, got version ",
+				slog.String("device_discovery_version", version))
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
-		o.logger.Info("opentelemetry infinity is not ready, trying again with backoff", zap.String("backoff backoffDuration", backoffDuration.String()))
+		o.logger.Info("opentelemetry infinity is not ready, trying again with backoff",
+			slog.String("backoff backoffDuration", backoffDuration.String()))
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessErr != nil {
-		o.logger.Error("opentelemetry infinity error on readiness", zap.Error(readinessErr))
+		o.logger.Error("opentelemetry infinity error on readiness", slog.Any("error", readinessErr))
 		err := o.proc.Stop()
 		if err != nil {
-			o.logger.Error("proc.Stop error", zap.Error(err))
+			o.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return readinessErr
 	}
@@ -188,14 +190,16 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 }
 
 func (o *openTelemetryBackend) Stop(ctx context.Context) error {
-	o.logger.Info("routine call to stop opentelemetry infinity", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	o.logger.Info("routine call to stop opentelemetry infinity",
+		slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer o.cancelFunc()
 	err := o.proc.Stop()
 	finalStatus := <-o.statusChan
 	if err != nil {
-		o.logger.Error("opentelemetry infinity shutdown error", zap.Error(err))
+		o.logger.Error("opentelemetry infinity shutdown error", slog.Any("error", err))
 	}
-	o.logger.Info("opentelemetry infinity process stopped", zap.Int("pid", finalStatus.PID), zap.Int("exit_code", finalStatus.Exit))
+	o.logger.Info("opentelemetry infinity process stopped", slog.Int("pid", finalStatus.PID),
+		slog.Int("exit_code", finalStatus.Exit))
 	return nil
 }
 
@@ -203,7 +207,7 @@ func (o *openTelemetryBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(o.proc); state == backend.Running {
 		if err := o.Stop(ctx); err != nil {
-			o.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
+			o.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
 			return err
 		}
 	}
@@ -211,7 +215,7 @@ func (o *openTelemetryBackend) FullReset(ctx context.Context) error {
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "opentelemetry"))
 	// start it
 	if err := o.Start(backendCtx, cancelFunc); err != nil {
-		o.logger.Error("failed to start backend on restart procedure", zap.Error(err))
+		o.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
 		return err
 	}
 	return nil
@@ -253,11 +257,12 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := o.RemovePolicy(data); err != nil {
-			o.logger.Warn("policy failed to remove", zap.String("policy_id", data.ID), zap.String("policy_name", data.Name), zap.Error(err))
+			o.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
+				slog.String("policy_name", data.Name), slog.Any("error", err))
 		}
 	}
 
-	o.logger.Debug("opentelemetry infinity policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
+	o.logger.Debug("opentelemetry infinity policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
 
 	fullPolicy := map[string]any{
 		data.Name: data.Data,
@@ -265,7 +270,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
-		o.logger.Warn("policy yaml marshal failure", zap.String("policy_id", data.ID), zap.Any("policy", fullPolicy))
+		o.logger.Warn("policy yaml marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
 		return err
 	}
 
@@ -274,7 +279,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	err = backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "message")
 	if err != nil {
-		o.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
+		o.logger.Warn("policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
 		return err
 	}
 
@@ -282,7 +287,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 }
 
 func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
-	o.logger.Debug("opentelemetry policy remove", zap.String("policy_id", data.ID))
+	o.logger.Debug("opentelemetry policy remove", slog.String("policy_id", data.ID))
 	var resp any
 	var name string
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy

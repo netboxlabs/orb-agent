@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-cmd/cmd"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -32,7 +32,7 @@ const (
 )
 
 type deviceDiscoveryBackend struct {
-	logger     *zap.Logger
+	logger     *slog.Logger
 	policyRepo policies.PolicyRepo
 	exec       string
 
@@ -65,7 +65,9 @@ func Register() bool {
 	return true
 }
 
-func (d *deviceDiscoveryBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]any, common config.BackendCommons) error {
+func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
+	config map[string]any, common config.BackendCommons,
+) error {
 	d.logger = logger
 	d.policyRepo = repo
 
@@ -108,7 +110,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
-	d.logger.Info("device-discovery startup", zap.Strings("arguments", pvOptions))
+	d.logger.Info("device-discovery startup", slog.Any("arguments", pvOptions))
 
 	pvOptions[7] = d.diodeAPIKey
 
@@ -133,13 +135,13 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 					d.proc.Stdout = nil
 					continue
 				}
-				d.logger.Info("device-discovery stdout", zap.String("log", line))
+				d.logger.Info("device-discovery stdout", slog.String("log", line))
 			case line, open := <-d.proc.Stderr:
 				if !open {
 					d.proc.Stderr = nil
 					continue
 				}
-				d.logger.Info("device-discovery stderr", zap.String("log", line))
+				d.logger.Info("device-discovery stderr", slog.String("log", line))
 			}
 		}
 	}()
@@ -150,37 +152,39 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	status := d.proc.Status()
 
 	if status.Error != nil {
-		d.logger.Error("device-discovery startup error", zap.Error(status.Error))
+		d.logger.Error("device-discovery startup error", slog.Any("error", status.Error))
 		return status.Error
 	}
 
 	if status.Complete {
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", zap.Error(err))
+			d.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return errors.New("device-discovery startup error, check log")
 	}
 
-	d.logger.Info("device-discovery process started", zap.Int("pid", status.PID))
+	d.logger.Info("device-discovery process started", slog.Int("pid", status.PID))
 
 	var readinessErr error
 	for backoff := 0; backoff < readinessBackoff; backoff++ {
 		version, readinessErr := d.Version()
 		if readinessErr == nil {
-			d.logger.Info("device-discovery readiness ok, got version ", zap.String("device_discovery_version", version))
+			d.logger.Info("device-discovery readiness ok, got version ",
+				slog.String("device_discovery_version", version))
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
-		d.logger.Info("device-discovery is not ready, trying again with backoff", zap.String("backoff backoffDuration", backoffDuration.String()))
+		d.logger.Info("device-discovery is not ready, trying again with backoff",
+			slog.String("backoff backoffDuration", backoffDuration.String()))
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessErr != nil {
-		d.logger.Error("device-discovery error on readiness", zap.Error(readinessErr))
+		d.logger.Error("device-discovery error on readiness", slog.Any("error", readinessErr))
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", zap.Error(err))
+			d.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return readinessErr
 	}
@@ -189,14 +193,14 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 }
 
 func (d *deviceDiscoveryBackend) Stop(ctx context.Context) error {
-	d.logger.Info("routine call to stop device-discovery", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	d.logger.Info("routine call to stop device-discovery", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer d.cancelFunc()
 	err := d.proc.Stop()
 	finalStatus := <-d.statusChan
 	if err != nil {
-		d.logger.Error("device-discovery shutdown error", zap.Error(err))
+		d.logger.Error("device-discovery shutdown error", slog.Any("error", err))
 	}
-	d.logger.Info("device-discovery process stopped", zap.Int("pid", finalStatus.PID), zap.Int("exit_code", finalStatus.Exit))
+	d.logger.Info("device-discovery process stopped", slog.Int("pid", finalStatus.PID), slog.Int("exit_code", finalStatus.Exit))
 	return nil
 }
 
@@ -204,7 +208,7 @@ func (d *deviceDiscoveryBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
-			d.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
+			d.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
 			return err
 		}
 	}
@@ -212,7 +216,7 @@ func (d *deviceDiscoveryBackend) FullReset(ctx context.Context) error {
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "device-discovery"))
 	// start it
 	if err := d.Start(backendCtx, cancelFunc); err != nil {
-		d.logger.Error("failed to start backend on restart procedure", zap.Error(err))
+		d.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
 		return err
 	}
 	return nil
@@ -256,11 +260,12 @@ func (d *deviceDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePol
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := d.RemovePolicy(data); err != nil {
-			d.logger.Warn("policy failed to remove", zap.String("policy_id", data.ID), zap.String("policy_name", data.Name), zap.Error(err))
+			d.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
+				slog.String("policy_name", data.Name), slog.Any("error", err))
 		}
 	}
 
-	d.logger.Debug("device-discovery policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
+	d.logger.Debug("device-discovery policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
 
 	fullPolicy := map[string]any{
 		"policies": map[string]any{
@@ -270,7 +275,7 @@ func (d *deviceDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePol
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
-		d.logger.Warn("policy yaml marshal failure", zap.String("policy_id", data.ID), zap.Any("policy", fullPolicy))
+		d.logger.Warn("policy yaml marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
 		return err
 	}
 
@@ -279,7 +284,7 @@ func (d *deviceDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePol
 	err = backend.CommonRequest("device-discovery", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
-		d.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
+		d.logger.Warn("policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
 		return err
 	}
 
@@ -287,7 +292,7 @@ func (d *deviceDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePol
 }
 
 func (d *deviceDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
-	d.logger.Debug("device-discovery policy remove", zap.String("policy_id", data.ID))
+	d.logger.Debug("device-discovery policy remove", slog.String("policy_id", data.ID))
 	var resp any
 	var name string
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy

@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-cmd/cmd"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,7 +36,7 @@ func GetRunningStatus(proc *cmd.Cmd) (RunningStatus, string, error) {
 }
 
 // CommonRequest is a generic function to make HTTP requests to the backend
-func CommonRequest(backendName string, proc *cmd.Cmd, logger *zap.Logger, url string, payload any,
+func CommonRequest(backendName string, proc *cmd.Cmd, logger *slog.Logger, url string, payload any,
 	method string, body io.Reader, contentType string, timeout int32, errorMsg string,
 ) error {
 	client := http.Client{
@@ -46,25 +46,25 @@ func CommonRequest(backendName string, proc *cmd.Cmd, logger *zap.Logger, url st
 	status, _, err := GetRunningStatus(proc)
 	if status != Running {
 		logger.Warn("skipping REST API request because process is not running or is unresponsive",
-			zap.String("backend", backendName), zap.String("url", url), zap.String("method", method), zap.Error(err))
+			slog.String("backend", backendName), slog.String("url", url), slog.String("method", method), slog.Any("error", err))
 		return err
 	}
 
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
-		return fmt.Errorf("received error from payload %v", zap.Error(err))
+		return fmt.Errorf("received error from payload %v", slog.Any("error", err))
 	}
 
 	req.Header.Add("Content-Type", contentType)
 	res, getErr := client.Do(req)
 
 	if getErr != nil {
-		return fmt.Errorf("received error from payload %v", zap.Error(err))
+		return fmt.Errorf("received error from payload %v", slog.Any("error", err))
 	}
 
 	defer func() {
 		if err := res.Body.Close(); err != nil {
-			logger.Error("failed to close response body", zap.Error(err))
+			logger.Error("failed to close response body", slog.Any("error", err))
 		}
 	}()
 

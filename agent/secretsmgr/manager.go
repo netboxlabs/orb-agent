@@ -2,8 +2,7 @@ package secretsmgr
 
 import (
 	"context"
-
-	"go.uber.org/zap"
+	"log/slog"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -16,7 +15,7 @@ type Manager interface {
 }
 
 // New creates a new instance of ConfigManager based on the configuration
-func New(logger *zap.Logger, c config.ManagerSecrets) Manager {
+func New(logger *slog.Logger, c config.ManagerSecrets) Manager {
 	switch c.Active {
 	case "vault":
 		return &vaultManager{logger: logger, config: c.Sources.Vault}

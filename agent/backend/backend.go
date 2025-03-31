@@ -2,9 +2,8 @@ package backend
 
 import (
 	"context"
+	"log/slog"
 	"time"
-
-	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
@@ -47,7 +46,7 @@ func (s RunningStatus) String() string {
 
 // Backend is the interface that all backends must implement
 type Backend interface {
-	Configure(*zap.Logger, policies.PolicyRepo, map[string]interface{}, config.BackendCommons) error
+	Configure(*slog.Logger, policies.PolicyRepo, map[string]interface{}, config.BackendCommons) error
 	Version() (string, error)
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
 	Stop(ctx context.Context) error
