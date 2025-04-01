@@ -2,7 +2,9 @@ package secretsmgr
 
 import (
 	"context"
+	"log/slog"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -11,7 +13,6 @@ import (
 	vaultsrv "github.com/hashicorp/vault/vault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -26,7 +27,7 @@ func TestVaultManager_getSecret(t *testing.T) {
 	}()
 
 	// Create the vault manager with the test client
-	logger, _ := zap.NewDevelopment()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	vm := &vaultManager{

@@ -3,13 +3,13 @@ package secretsmgr
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
 	vault "github.com/hashicorp/vault/api"
-	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -17,7 +17,7 @@ import (
 var _ Manager = (*vaultManager)(nil)
 
 type vaultManager struct {
-	logger    *zap.Logger
+	logger    *slog.Logger
 	config    config.VaultManager
 	ctx       context.Context
 	client    *vault.Client
@@ -84,7 +84,7 @@ func (v *vaultManager) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to create polling job: %w", err)
 		}
 
-		v.logger.Info("Starting vault secret polling", zap.String("cron interval", *v.config.Schedule))
+		v.logger.Info("Starting vault secret polling", slog.String("cron interval", *v.config.Schedule))
 		v.scheduler.Start()
 	}
 
@@ -120,14 +120,14 @@ func (v *vaultManager) pollSecrets() {
 		return
 	}
 
-	v.logger.Debug("Polling vault secrets for changes", zap.Int("secretCount", len(v.usedVars)))
+	v.logger.Debug("Polling vault secrets for changes", slog.Int("secretCount", len(v.usedVars)))
 	changedPolicyIDs := make(map[string]bool)
 
 	// Check each cached secret
 	for path, cachedSecret := range v.usedVars {
 		currentValue, err := v.getSecret(path)
 		if err != nil {
-			v.logger.Error("Failed to retrieve secret during polling", zap.String("path", path), zap.Error(err))
+			v.logger.Error("Failed to retrieve secret during polling", slog.String("path", path), slog.Any("error", err))
 			for id := range cachedSecret.policyIDs {
 				changedPolicyIDs[id] = false
 			}
@@ -135,7 +135,7 @@ func (v *vaultManager) pollSecrets() {
 		}
 
 		if currentValue != cachedSecret.Value {
-			v.logger.Info("Detected changed secret", zap.String("path", path))
+			v.logger.Info("Detected changed secret", slog.String("path", path))
 			cachedSecret.Value = currentValue
 			v.usedVars[path] = cachedSecret
 			for id := range cachedSecret.policyIDs {
@@ -145,7 +145,7 @@ func (v *vaultManager) pollSecrets() {
 	}
 
 	if len(changedPolicyIDs) > 0 {
-		v.logger.Info("Calling update callback for changed secrets", zap.Int("policyCount", len(changedPolicyIDs)))
+		v.logger.Info("Calling update callback for changed secrets", slog.Int("policyCount", len(changedPolicyIDs)))
 		v.callback(changedPolicyIDs)
 	}
 }
@@ -175,10 +175,10 @@ func (v *vaultManager) addTokenLifecycleWatcher() error {
 
 			case err := <-lw.DoneCh():
 				if err != nil {
-					v.logger.Error("Token renewal failed", zap.Error(err))
+					v.logger.Error("Token renewal failed", slog.Any("error", err))
 				}
 			case output := <-lw.RenewCh():
-				v.logger.Info("Token renewed", zap.Time("renewedAt", output.RenewedAt))
+				v.logger.Info("Token renewed", slog.Time("renewedAt", output.RenewedAt))
 			}
 		}
 	}()
