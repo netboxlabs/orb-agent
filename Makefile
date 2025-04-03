@@ -35,6 +35,10 @@ ifdef pv
 	docker volume ls -f name=orb -f dangling=true -q | xargs -r docker volume rm
 endif
 
+.PHONY: install-dev-tools
+install-dev-tools:
+	@go install github.com/mfridman/tparse@latest
+
 
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
