@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-cmd/cmd"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -48,8 +47,8 @@ type pktvisorBackend struct {
 	binary          string
 	configFile      string
 	pktvisorVersion string
-	proc            *cmd.Cmd
-	statusChan      <-chan cmd.Status
+	proc            backend.CmdInterface
+	statusChan      <-chan backend.CmdStatus
 	startTime       time.Time
 	cancelFunc      context.CancelFunc
 	ctx             context.Context
@@ -137,7 +136,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	p.logger.Info("pktvisor startup", slog.Any("arguments", pvOptions))
 
-	p.proc = cmd.NewCmdOptions(cmd.Options{
+	p.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
 	}, p.binary, pvOptions...)
@@ -151,17 +150,19 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 				close(doneChan)
 			}
 		}()
-		for p.proc.Stdout != nil || p.proc.Stderr != nil {
+		stdout := p.proc.GetStdout()
+		stderr := p.proc.GetStderr()
+		for stdout != nil || stderr != nil {
 			select {
-			case line, open := <-p.proc.Stdout:
+			case line, open := <-stdout:
 				if !open {
-					p.proc.Stdout = nil
+					stdout = nil
 					continue
 				}
 				p.logger.Info("pktvisor stdout", slog.String("log", line))
-			case line, open := <-p.proc.Stderr:
+			case line, open := <-stderr:
 				if !open {
-					p.proc.Stderr = nil
+					stderr = nil
 					continue
 				}
 				p.logger.Info("pktvisor stderr", slog.String("log", line))
@@ -190,7 +191,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	p.logger.Info("pktvisor process started", slog.Int("pid", status.PID))
 
 	var readinessError error
-	for backoff := 0; backoff < readinessBackoff; backoff++ {
+	for backoff := range readinessBackoff {
 		var appMetrics AppInfo
 		url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIHost)
 		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
