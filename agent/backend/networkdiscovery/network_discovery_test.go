@@ -137,6 +137,11 @@ func TestNetworkDiscoveryBackendStart(t *testing.T) {
 	// Assert successful start
 	assert.NoError(t, err)
 
+	// Get Running status
+	status, _, err := be.GetRunningStatus()
+	assert.NoError(t, err)
+	assert.Equal(t, backend.Running, status, "Expected backend to be running")
+
 	// Get capabilities
 	capabilities, err := be.GetCapabilities()
 	assert.NoError(t, err)
@@ -155,10 +160,43 @@ func TestNetworkDiscoveryBackendStart(t *testing.T) {
 	err = be.ApplyPolicy(data, true)
 	assert.NoError(t, err)
 
-	// Assert that the command was started
-	err = be.Stop(ctx)
+	// Assert restart
+	err = be.FullReset(ctx)
 	assert.NoError(t, err)
 
 	// Verify expectations
 	mockCmd.AssertExpectations(t)
+}
+
+func TestNetworkDiscoveryBackendCompleted(t *testing.T) {
+	// Create a mock command that simulates a failure
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupCompletedProcess(mockCmd, 0, nil)
+	// Save original function and restore after test
+	originalNewCmdOptions := backend.NewCmdOptions
+	defer func() {
+		backend.NewCmdOptions = originalNewCmdOptions
+	}()
+
+	// Override NewCmdOptions to return our mock
+	backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, _ ...string) backend.Commander {
+		return mockCmd
+	}
+
+	assert.True(t, networkdiscovery.Register(), "Failed to register NetworkDiscovery backend")
+
+	assert.True(t, backend.HaveBackend("network_discovery"), "Failed to get NetworkDiscovery backend")
+
+	be := backend.GetBackend("network_discovery")
+
+	// Configure backend with invalid parameters
+	err := be.Configure(slog.Default(), nil, map[string]any{
+		"host": "invalid-host",
+	}, config.BackendCommons{})
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err = be.Start(ctx, cancel)
+
+	assert.Error(t, err)
 }
