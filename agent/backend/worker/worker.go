@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-cmd/cmd"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -45,8 +44,8 @@ type workerBackend struct {
 	diodeAppNamePrefix string
 
 	startTime  time.Time
-	proc       *cmd.Cmd
-	statusChan <-chan cmd.Status
+	proc       backend.Commander
+	statusChan <-chan backend.CmdStatus
 	cancelFunc context.CancelFunc
 	ctx        context.Context
 }
@@ -114,7 +113,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 
 	pvOptions[7] = d.diodeAPIKey
 
-	d.proc = cmd.NewCmdOptions(cmd.Options{
+	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
 	}, d.exec, pvOptions...)
@@ -128,17 +127,19 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 				close(doneChan)
 			}
 		}()
-		for d.proc.Stdout != nil || d.proc.Stderr != nil {
+		stdout := d.proc.GetStdout()
+		stderr := d.proc.GetStderr()
+		for stdout != nil || stderr != nil {
 			select {
-			case line, open := <-d.proc.Stdout:
+			case line, open := <-stderr:
 				if !open {
-					d.proc.Stdout = nil
+					stdout = nil
 					continue
 				}
 				d.logger.Info("worker stdout", slog.String("log", line))
-			case line, open := <-d.proc.Stderr:
+			case line, open := <-stderr:
 				if !open {
-					d.proc.Stderr = nil
+					stderr = nil
 					continue
 				}
 				d.logger.Info("worker stderr", slog.String("log", line))
@@ -166,9 +167,10 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 
 	d.logger.Info("worker process started", slog.Int("pid", status.PID))
 
+	var version string
 	var readinessErr error
-	for backoff := 0; backoff < readinessBackoff; backoff++ {
-		version, readinessErr := d.Version()
+	for backoff := range readinessBackoff {
+		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("worker readiness ok, got version ",
 				slog.String("worker_version", version))

@@ -8,12 +8,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-cmd/cmd"
 	"gopkg.in/yaml.v3"
 )
 
 // GetRunningStatus checks the status of the backend process
-func GetRunningStatus(proc *cmd.Cmd) (RunningStatus, string, error) {
+func GetRunningStatus(proc Commander) (RunningStatus, string, error) {
 	if proc == nil {
 		return Unknown, "backend not started yet", nil
 	}
@@ -36,7 +35,7 @@ func GetRunningStatus(proc *cmd.Cmd) (RunningStatus, string, error) {
 }
 
 // CommonRequest is a generic function to make HTTP requests to the backend
-func CommonRequest(backendName string, proc *cmd.Cmd, logger *slog.Logger, url string, payload any,
+func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url string, payload any,
 	method string, body io.Reader, contentType string, timeout int32, errorMsg string,
 ) error {
 	client := http.Client{

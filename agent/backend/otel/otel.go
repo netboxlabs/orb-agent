@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-cmd/cmd"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -41,9 +40,9 @@ type openTelemetryBackend struct {
 	apiProtocol string
 
 	startTime   time.Time
-	proc        *cmd.Cmd
+	proc        backend.Commander
 	agentLabels map[string]string
-	statusChan  <-chan cmd.Status
+	statusChan  <-chan backend.CmdStatus
 	cancelFunc  context.CancelFunc
 	ctx         context.Context
 }
@@ -111,7 +110,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	o.logger.Info("opentelemetry infinity startup", slog.Any("arguments", pvOptions))
 
-	o.proc = cmd.NewCmdOptions(cmd.Options{
+	o.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
 	}, o.exec, pvOptions...)
@@ -125,17 +124,19 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 				close(doneChan)
 			}
 		}()
-		for o.proc.Stdout != nil || o.proc.Stderr != nil {
+		stdout := o.proc.GetStdout()
+		stderr := o.proc.GetStderr()
+		for stdout != nil || stderr != nil {
 			select {
-			case line, open := <-o.proc.Stdout:
+			case line, open := <-stdout:
 				if !open {
-					o.proc.Stdout = nil
+					stdout = nil
 					continue
 				}
 				o.logger.Info("opentelemetry infinity stdout", slog.String("log", line))
-			case line, open := <-o.proc.Stderr:
+			case line, open := <-stderr:
 				if !open {
-					o.proc.Stderr = nil
+					stderr = nil
 					continue
 				}
 				o.logger.Info("opentelemetry infinity stderr", slog.String("log", line))
@@ -163,9 +164,10 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	o.logger.Info("opentelemetry infinity process started", slog.Int("pid", status.PID))
 
+	var version string
 	var readinessErr error
-	for backoff := 0; backoff < readinessBackoff; backoff++ {
-		version, readinessErr := o.Version()
+	for backoff := range readinessBackoff {
+		version, readinessErr = o.Version()
 		if readinessErr == nil {
 			o.logger.Info("opentelemetry infinity readiness ok, got version ",
 				slog.String("device_discovery_version", version))
