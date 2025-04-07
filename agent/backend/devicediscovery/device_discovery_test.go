@@ -1,5 +1,4 @@
-// otel_test.go
-package otel_test
+package devicediscovery_test
 
 import (
 	"context"
@@ -15,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
-	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -27,7 +26,7 @@ type StatusResponse struct {
 	UpTime    float64 `json:"up_time"`
 }
 
-func TestOpenTelemetryBackendStart(t *testing.T) {
+func TestDeviceDiscoveryBackendStart(t *testing.T) {
 	// Create server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -108,19 +107,21 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 	// Override NewCmdOptions to return our mock
 	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
 		// Assert that the correct parameters were passed
-		assert.Equal(t, "otlpinf", name, "Expected command name to be otlpinf")
-		assert.Contains(t, args, "run", "Expected args to contain 'run'")
-		assert.Contains(t, args, "--server_host", "Expected args to contain server host")
+		assert.Equal(t, "device-discovery", name, "Expected command name to be device-discovery")
+		assert.Contains(t, args, "--port", "Expected args to contain port")
+		assert.Contains(t, args, "--host", "Expected args to contain host")
 		assert.False(t, options.Buffered, "Expected buffered to be false")
 		assert.True(t, options.Streaming, "Expected streaming to be true")
 		return mockCmd
 	}
 
-	assert.True(t, otel.Register(), "Failed to register OpenTelemetry backend")
+	assert.True(t, devicediscovery.Register(), "Failed to register DeviceDiscovery backend")
 
-	assert.True(t, backend.HaveBackend("otel"), "Failed to get OpenTelemetry backend")
+	assert.True(t, backend.HaveBackend("device_discovery"), "Failed to get DeviceDiscovery backend")
 
-	be := backend.GetBackend("otel")
+	be := backend.GetBackend("device_discovery")
+
+	assert.Equal(t, backend.Unknown, be.GetInitialState())
 
 	// Configure backend
 	err = be.Configure(logger, repo, map[string]any{

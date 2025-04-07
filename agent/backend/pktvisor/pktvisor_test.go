@@ -1,5 +1,4 @@
-// otel_test.go
-package otel_test
+package pktvisor_test
 
 import (
 	"context"
@@ -9,14 +8,16 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
-	"github.com/netboxlabs/orb-agent/agent/backend/otel"
+	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -27,26 +28,24 @@ type StatusResponse struct {
 	UpTime    float64 `json:"up_time"`
 }
 
-func TestOpenTelemetryBackendStart(t *testing.T) {
+func TestPktvisorBackendStart(t *testing.T) {
 	// Create server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if r.URL.Path == "/api/v1/status" {
-			response := StatusResponse{
-				Version:   "1.3.4",
-				StartTime: "2023-10-01T12:00:00Z",
-				UpTime:    123.456,
-			}
+		if r.URL.Path == "/api/v1/metrics/app" {
+			var response pktvisor.AppInfo
+			response.App.Version = "1.2.3"
+			response.App.UpTimeMin = 42.5
 			w.WriteHeader(http.StatusOK)
 			err := json.NewEncoder(w).Encode(response)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-		} else if r.URL.Path == "/api/v1/capabilities" {
+		} else if r.URL.Path == "/api/v1/taps" {
 			capabilities := map[string]any{
-				"capability": true,
+				"iface": "eth0",
 			}
 			w.WriteHeader(http.StatusOK)
 			err := json.NewEncoder(w).Encode(capabilities)
@@ -84,6 +83,22 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 	}))
 	defer server.Close()
 
+	// Create a temporary directory and file for the test
+	tempDir := t.TempDir()
+	binaryPath := path.Join(tempDir, "pktvisord")
+	dummyBinary, err := os.Create(binaryPath)
+	require.NoError(t, err)
+	err = dummyBinary.Close()
+	require.NoError(t, err)
+
+	// Make the binary executable
+	err = os.Chmod(binaryPath, 0o755)
+	require.NoError(t, err)
+
+	// Add our temp directory to the PATH
+	err = os.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	require.NoError(t, err)
+
 	// Parse server URL
 	serverURL, err := url.Parse(server.URL)
 	assert.NoError(t, err)
@@ -108,19 +123,20 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 	// Override NewCmdOptions to return our mock
 	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
 		// Assert that the correct parameters were passed
-		assert.Equal(t, "otlpinf", name, "Expected command name to be otlpinf")
-		assert.Contains(t, args, "run", "Expected args to contain 'run'")
-		assert.Contains(t, args, "--server_host", "Expected args to contain server host")
+		assert.Equal(t, "pktvisord", name, "Expected command name to be pktvisord")
+		assert.Contains(t, args, "--admin-api", "Expected args to contain admin-api")
 		assert.False(t, options.Buffered, "Expected buffered to be false")
 		assert.True(t, options.Streaming, "Expected streaming to be true")
 		return mockCmd
 	}
 
-	assert.True(t, otel.Register(), "Failed to register OpenTelemetry backend")
+	assert.True(t, pktvisor.Register(), "Failed to register Pktvisor backend")
 
-	assert.True(t, backend.HaveBackend("otel"), "Failed to get OpenTelemetry backend")
+	assert.True(t, backend.HaveBackend("pktvisor"), "Failed to get Pktvisor backend")
 
-	be := backend.GetBackend("otel")
+	be := backend.GetBackend("pktvisor")
+
+	assert.Equal(t, backend.Unknown, be.GetInitialState())
 
 	// Configure backend
 	err = be.Configure(logger, repo, map[string]any{
@@ -139,7 +155,7 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 	// Get capabilities
 	capabilities, err := be.GetCapabilities()
 	assert.NoError(t, err)
-	assert.Equal(t, capabilities["capability"], true, "Expected capability to be true")
+	assert.Equal(t, map[string]any{"iface": "eth0"}, capabilities["taps"], "Expected taps")
 
 	data := policies.PolicyData{
 		ID:   "dummy-policy-id",

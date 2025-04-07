@@ -78,6 +78,9 @@ func SetupSuccessfulProcess(mockCmd *MockCmd, pid int) (<-chan string, <-chan st
 		// Delay before sending to simulate process startup
 		time.Sleep(10 * time.Millisecond)
 		statusCh <- status
+		// Simulate some output
+		stdoutCh <- "success"
+		stderrCh <- "error"
 	}()
 
 	return readOnlyStdoutCh, readOnlyStderrCh
