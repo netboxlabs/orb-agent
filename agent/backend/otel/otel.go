@@ -40,7 +40,7 @@ type openTelemetryBackend struct {
 	apiProtocol string
 
 	startTime   time.Time
-	proc        backend.CmdInterface
+	proc        backend.Commander
 	agentLabels map[string]string
 	statusChan  <-chan backend.CmdStatus
 	cancelFunc  context.CancelFunc

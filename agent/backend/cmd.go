@@ -4,8 +4,8 @@ import (
 	"github.com/go-cmd/cmd"
 )
 
-// CmdInterface abstracts the functionality from go-cmd/cmd package
-type CmdInterface interface {
+// Commander abstracts the functionality from go-cmd/cmd package
+type Commander interface {
 	Start() <-chan CmdStatus
 	Stop() error
 	Status() CmdStatus
@@ -31,7 +31,7 @@ type CmdOptions struct {
 }
 
 // NewCmdOptions creates a new command with specific options
-var NewCmdOptions = func(options CmdOptions, name string, args ...string) CmdInterface {
+var NewCmdOptions = func(options CmdOptions, name string, args ...string) Commander {
 	cmdOptions := cmd.Options{
 		Buffered:  options.Buffered,
 		Streaming: options.Streaming,

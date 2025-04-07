@@ -71,7 +71,7 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 	}()
 
 	// Override NewCmdOptions to return our mock
-	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.CmdInterface {
+	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
 		// Assert that the correct parameters were passed
 		assert.Equal(t, "otlpinf", name, "Expected command name to be otlpinf")
 		assert.Contains(t, args, "run", "Expected args to contain 'run'")

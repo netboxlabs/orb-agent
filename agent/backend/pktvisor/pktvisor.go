@@ -47,7 +47,7 @@ type pktvisorBackend struct {
 	binary          string
 	configFile      string
 	pktvisorVersion string
-	proc            backend.CmdInterface
+	proc            backend.Commander
 	statusChan      <-chan backend.CmdStatus
 	startTime       time.Time
 	cancelFunc      context.CancelFunc

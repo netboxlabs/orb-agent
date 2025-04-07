@@ -44,7 +44,7 @@ type deviceDiscoveryBackend struct {
 	diodeAppNamePrefix string
 
 	startTime  time.Time
-	proc       backend.CmdInterface
+	proc       backend.Commander
 	statusChan <-chan backend.CmdStatus
 	cancelFunc context.CancelFunc
 	ctx        context.Context
