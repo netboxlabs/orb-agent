@@ -1,11 +1,11 @@
-name: Network Discovery - release
+name: SNMP Discovery - release
 on:
   workflow_dispatch:
   push:
     branches: [ release ]
     paths:
-      - "network-discovery/**"
-      - "!network-discovery/docker/**"
+      - "snmp-discovery/**"
+      - "!snmp-discovery/docker/**"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -15,7 +15,7 @@ env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
   GO_VERSION: '1.23'
-  APP_NAME: network-discovery
+  APP_NAME: snmp-discovery
 
 permissions:
   contents: write
@@ -144,21 +144,21 @@ jobs:
 
       - name: Set build info
         run: |
-          echo $BUILD_COMMIT > ./network-discovery/version/BUILD_COMMIT.txt
-          echo $BUILD_VERSION > ./network-discovery/version/BUILD_VERSION.txt
+          echo $BUILD_COMMIT > ./snmp-discovery/version/BUILD_COMMIT.txt
+          echo $BUILD_VERSION > ./snmp-discovery/version/BUILD_VERSION.txt
 
       - name: Build image and push
         uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 #v6.10.0
         with:
-          context: network-discovery
-          file: network-discovery/docker/Dockerfile
+          context: snmp-discovery
+          file: snmp-discovery/docker/Dockerfile
           platforms: linux/amd64, linux/arm64
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            netboxlabs/network-discovery:latest
-            netboxlabs/network-discovery:${{ env.BUILD_VERSION }}
+            netboxlabs/snmp-discovery:latest
+            netboxlabs/snmp-discovery:${{ env.BUILD_VERSION }}
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
 
