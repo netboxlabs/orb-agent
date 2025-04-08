@@ -23,6 +23,8 @@ FROM netboxlabs/opentelemetry-infinity:${OTEL_TAG} AS otlpinf
 
 FROM netboxlabs/network-discovery:${NETWORK_DISCOVERY_TAG} AS network-discovery
 
+FROM netboxlabs/snmp-discovery:${SNMP_DISCOVERY_TAG} AS snmp-discovery
+
 FROM orbcommunity/pktvisor:${PKTVISOR_TAG} AS pktvisor
 
 FROM python:3.12-slim-bullseye
@@ -47,6 +49,7 @@ COPY --from=pktvisor /iana /iana
 COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
+COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-discovery
 
 RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 
