@@ -171,8 +171,9 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	var err error
-	a.config.OrbAgent.Backends, a.config.OrbAgent.ConfigManager, err = a.secretsManager.SolveConfigSecrets(a.config.OrbAgent.Backends, a.config.OrbAgent.ConfigManager)
-	if err != nil {
+	if a.config.OrbAgent.Backends,
+		a.config.OrbAgent.ConfigManager,
+		err = a.secretsManager.SolveConfigSecrets(a.config.OrbAgent.Backends, a.config.OrbAgent.ConfigManager); err != nil {
 		return err
 	}
 
