@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 	vault "github.com/hashicorp/vault/api"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -95,13 +96,13 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// RegisterUpdateCallback registers a callback function to be called when secrets are updated
-func (v *vaultManager) RegisterUpdateCallback(callback func(map[string]bool)) {
+// RegisterUpdatePoliciesCallback registers a callback function to be called when secrets are updated
+func (v *vaultManager) RegisterUpdatePoliciesCallback(callback func(map[string]bool)) {
 	v.callback = callback
 }
 
-// SolveSecrets processes a policy payload and replaces vault references with environment variables
-func (v *vaultManager) SolveSecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
+// SolvePolicySecrets processes a policy payload and replaces vault references with environment variables
+func (v *vaultManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
 	// Create a copy of the payload
 	newPayload := payload
 
@@ -148,6 +149,67 @@ func (v *vaultManager) pollSecrets() {
 		v.logger.Info("Calling update callback for changed secrets", slog.Int("policyCount", len(changedPolicyIDs)))
 		v.callback(changedPolicyIDs)
 	}
+}
+
+// SolveConfigSecrets processes the configuration secrets and replaces vault references with environment variables
+func (v *vaultManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
+	// Create a copy of the backends
+	newBackends := backends
+	processedBackends, err := v.processValue(newBackends, "_backends")
+	if err != nil {
+		return backends, configManager, fmt.Errorf("failed to process backends: %w", err)
+	}
+	newBackends, ok := processedBackends.(map[string]any)
+	if !ok {
+		return backends, configManager, fmt.Errorf("failed to cast processed backends to map[string]any")
+	}
+
+	// Convert configManager to map[string]any
+	configManagerMap, err := structToMap(configManager)
+	if err != nil {
+		return backends, configManager, fmt.Errorf("failed to convert config manager to map: %w", err)
+	}
+	// Process the config manager map
+	processedConfigManagerMap, err := v.processValue(configManagerMap, "_config_manager")
+	if err != nil {
+		return backends, configManager, fmt.Errorf("failed to process config manager: %w", err)
+	}
+	newConfigManager, err := mapToStruct[config.ManagerConfig](processedConfigManagerMap)
+	if err != nil {
+		return backends, configManager, fmt.Errorf("failed to convert processed map to config manager: %w", err)
+	}
+
+	// Do not track updates on config vars for now
+	v.usedVars = make(map[string]cachedSecret)
+
+	// Process the backends and config manager
+	return newBackends, newConfigManager, nil
+}
+
+// structToMap converts a struct to a map[string]any
+func structToMap(input any) (map[string]any, error) {
+	data, err := yaml.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// mapToStruct converts a map[string]any to a struct of type T
+func mapToStruct[T any](input any) (T, error) {
+	data, err := yaml.Marshal(input)
+	if err != nil {
+		return *new(T), err
+	}
+	var result T
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		return *new(T), err
+	}
+	return result, nil
 }
 
 func (v *vaultManager) addTokenLifecycleWatcher() error {

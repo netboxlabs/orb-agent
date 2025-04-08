@@ -417,7 +417,7 @@ func TestVaultManager_processSlice(t *testing.T) {
 	}
 }
 
-func TestVaultManager_SolveSecrets(t *testing.T) {
+func TestVaultManager_SolvePolicySecrets(t *testing.T) {
 	// Create test vault server
 	ln, client := createTestVault(t)
 	defer func() {
@@ -506,7 +506,7 @@ func TestVaultManager_SolveSecrets(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := vm.SolveSecrets(tt.payload)
+			result, err := vm.SolvePolicySecrets(tt.payload)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -518,7 +518,7 @@ func TestVaultManager_SolveSecrets(t *testing.T) {
 	}
 }
 
-func TestVaultManager_RegisterUpdateCallback(t *testing.T) {
+func TestVaultManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 	// Create the vault manager
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	vm := &vaultManager{
@@ -532,7 +532,7 @@ func TestVaultManager_RegisterUpdateCallback(t *testing.T) {
 		called = true
 	}
 
-	vm.RegisterUpdateCallback(callback)
+	vm.RegisterUpdatePoliciesCallback(callback)
 	assert.NotNil(t, vm.callback)
 
 	// Manually call the callback to verify it works

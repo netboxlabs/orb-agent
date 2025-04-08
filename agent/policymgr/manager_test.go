@@ -90,12 +90,17 @@ type mockSecretsManager struct {
 	callbacks []func(map[string]bool)
 }
 
-func (m *mockSecretsManager) SolveSecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
+func (m *mockSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
 	args := m.Called(payload)
 	return args.Get(0).(config.PolicyPayload), args.Error(1)
 }
 
-func (m *mockSecretsManager) RegisterUpdateCallback(callback func(map[string]bool)) {
+func (m *mockSecretsManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
+	args := m.Called(backends, configManager)
+	return args.Get(0).(map[string]any), args.Get(1).(config.ManagerConfig), args.Error(2)
+}
+
+func (m *mockSecretsManager) RegisterUpdatePoliciesCallback(callback func(map[string]bool)) {
 	m.callbacks = append(m.callbacks, callback)
 }
 
@@ -150,7 +155,7 @@ func TestManagePolicy_ManageAction_NewPolicy(t *testing.T) {
 	}
 
 	solvedPayload := payload
-	secretsMgr.On("SolveSecrets", payload).Return(solvedPayload, nil)
+	secretsMgr.On("SolvePolicySecrets", payload).Return(solvedPayload, nil)
 
 	expectedPolicy := policies.PolicyData{
 		ID:       "policy1",
@@ -208,7 +213,7 @@ func TestManagePolicy_ManageAction_UpdatePolicy(t *testing.T) {
 		DatasetID: "dataset1",
 	}
 
-	secretsMgr.On("SolveSecrets", initialPayload).Return(initialPayload, nil)
+	secretsMgr.On("SolvePolicySecrets", initialPayload).Return(initialPayload, nil)
 	mockBe.On("ApplyPolicy", mock.Anything, false).Return(nil)
 
 	// Initial setup
@@ -225,7 +230,7 @@ func TestManagePolicy_ManageAction_UpdatePolicy(t *testing.T) {
 		DatasetID: "dataset2", // Additional dataset
 	}
 
-	secretsMgr.On("SolveSecrets", updatePayload).Return(updatePayload, nil)
+	secretsMgr.On("SolvePolicySecrets", updatePayload).Return(updatePayload, nil)
 	mockBe.On("ApplyPolicy", mock.Anything, true).Return(nil)
 
 	// Execute the update
@@ -305,7 +310,7 @@ func TestManagePolicy_RemoveAction(t *testing.T) {
 		DatasetID: "dataset1",
 	}
 
-	secretsMgr.On("SolveSecrets", initialPayload).Return(initialPayload, nil)
+	secretsMgr.On("SolvePolicySecrets", initialPayload).Return(initialPayload, nil)
 	mockBe.On("ApplyPolicy", mock.Anything, false).Return(nil)
 
 	// Initial setup
@@ -353,7 +358,7 @@ func TestRemovePolicy(t *testing.T) {
 		Data:      map[string]any{},
 		DatasetID: "dataset1",
 	}
-	secretsMgr.On("SolveSecrets", addPayload).Return(addPayload, nil)
+	secretsMgr.On("SolvePolicySecrets", addPayload).Return(addPayload, nil)
 	mockBe.On("ApplyPolicy", mock.Anything, false).Return(nil)
 	mgr.ManagePolicy(addPayload)
 
@@ -394,7 +399,7 @@ func TestRemoveBackendPolicies(t *testing.T) {
 			Data:      map[string]any{},
 			DatasetID: fmt.Sprintf("dataset%d", i),
 		}
-		secretsMgr.On("SolveSecrets", payload).Return(payload, nil)
+		secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
 		mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
 			return pd.ID == payload.ID
 		}), false).Return(nil)
@@ -543,7 +548,7 @@ func TestPoliciesChanged(t *testing.T) {
 			Data:      map[string]any{"original": "data"},
 			DatasetID: fmt.Sprintf("dataset%d", i),
 		}
-		secretsMgr.On("SolveSecrets", mock.MatchedBy(func(pd config.PolicyPayload) bool {
+		secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(pd config.PolicyPayload) bool {
 			return pd.ID == payload.ID
 		})).Return(payload, nil)
 		mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
@@ -568,7 +573,7 @@ func TestPoliciesChanged(t *testing.T) {
 		Name: "Test Policy 2",
 		Data: map[string]any{"updated": "data"},
 	}
-	secretsMgr.On("SolveSecrets", mock.MatchedBy(func(payload config.PolicyPayload) bool {
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(payload config.PolicyPayload) bool {
 		return payload.ID == "policy2"
 	})).Return(solvedPayload, nil)
 
@@ -626,7 +631,7 @@ func TestRemovePolicyDataset(t *testing.T) {
 		Data:      map[string]any{},
 		DatasetID: "dataset1",
 	}
-	secretsMgr.On("SolveSecrets", payload).Return(payload, nil)
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
 	mockBe.On("ApplyPolicy", mock.Anything, false).Return(nil)
 	mgr.ManagePolicy(payload)
 
@@ -640,7 +645,7 @@ func TestRemovePolicyDataset(t *testing.T) {
 		Data:      map[string]any{},
 		DatasetID: "dataset2", // Different dataset
 	}
-	secretsMgr.On("SolveSecrets", payload2).Return(payload2, nil)
+	secretsMgr.On("SolvePolicySecrets", payload2).Return(payload2, nil)
 	mockBe.On("ApplyPolicy", mock.Anything, true).Return(nil)
 	mgr.ManagePolicy(payload2)
 
