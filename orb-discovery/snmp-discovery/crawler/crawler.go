@@ -1,12 +1,11 @@
 package crawler
 
 import (
+	"context"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
-
-	"context"
 
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -20,6 +19,7 @@ const (
 	policyKey contextKey = "policy"
 )
 
+// Crawler handles network discovery by scanning SNMP-enabled devices
 type Crawler struct {
 	logger     *slog.Logger
 	wg         sync.WaitGroup
@@ -33,6 +33,7 @@ type Crawler struct {
 	client     diode.Client
 }
 
+// NewCrawler creates a new Crawler instance with the provided context, logger, client, and target IPs.
 func NewCrawler(ctx context.Context, logger *slog.Logger, client diode.Client, targets []string) *Crawler {
 	return &Crawler{
 		ctx:        ctx,
@@ -48,6 +49,8 @@ func NewCrawler(ctx context.Context, logger *slog.Logger, client diode.Client, t
 	}
 }
 
+// CrawlTargets initiates the network crawl process on the specified targets
+// and returns the discovered entities.
 func (c *Crawler) CrawlTargets() ([]diode.Entity, error) {
 	c.logger.Info("Starting crawler for targets:", "targets", c.targets)
 
@@ -67,16 +70,11 @@ func (c *Crawler) CrawlTargets() ([]diode.Entity, error) {
 	return c.entities, nil
 }
 
+// Stop waits for all crawling operations to complete and then stops the crawler.
 func (c *Crawler) Stop() {
 	c.wg.Wait()
 	close(c.queue)
 	c.logger.Info("Network crawl complete.")
-}
-
-type Device struct {
-	IP         string
-	SysName    string
-	Interfaces map[string]string
 }
 
 func (c *Crawler) crawlHost(ip string, queue chan string) {
@@ -98,14 +96,18 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 		Community: community,
 		Version:   gosnmp.Version2c,
 		Timeout:   time.Duration(2) * time.Second,
-		Retries:   1,
 	}
+	defer func() {
+		if err := params.Conn.Close(); err != nil {
+			c.logger.Warn("Error closing SNMP connection", "ip", ip, "error", err)
+		}
+	}()
+
 	err := params.Connect()
 	if err != nil {
 		c.logger.Warn("Could not connect to host", "ip", ip, "error", err)
 		return
 	}
-	defer params.Conn.Close()
 
 	ipEntity := &diode.IPAddress{
 		Address: diode.String(ip + "/32"),
@@ -115,24 +117,6 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 	c.entityMux.Lock()
 	c.entities = append(c.entities, ipEntity)
 	c.entityMux.Unlock()
-
-	// Get system name
-	// sysNameOID := ".1.3.6.1.2.1.1.5.0"
-	// sysName, err := params.Get([]string{sysNameOID})
-	// if err == nil && len(sysName.Variables) > 0 {
-	// 	if name, ok := sysName.Variables[0].Value.(string); ok {
-	// 		device.SysName = name
-	// 	}
-	// }
-	// c.logger.Info("%s - %s\n", ip, device.SysName)
-
-	// Get interfaces
-	// ifaces, _ := params.WalkAll(".1.3.6.1.2.1.2.2.1.2")
-	// for _, v := range ifaces {
-	// 	ifIndex := v.Name[strings.LastIndex(v.Name, ".")+1:]
-	// 	ifName := fmt.Sprintf("%v", v.Value)
-	// 	device.Interfaces[ifIndex] = ifName
-	// }
 
 	// Get ARP table
 	arpEntries, _ := params.WalkAll(".1.3.6.1.2.1.4.22.1.2")

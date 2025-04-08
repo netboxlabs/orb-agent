@@ -9,8 +9,8 @@ COMMIT_SHA := $(shell git rev-parse --short HEAD)
 .PHONY: install-dev-tools
 install-dev-tools:
 	@go install github.com/mfridman/tparse@latest
-
-
+	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	
 .PHONY: build
 clean:
 	@rm -rf ${BUILD_DIR}/*

@@ -73,6 +73,10 @@ func (r *Runner) run() {
 
 	crawler := crawler.NewCrawler(ctx, r.logger, r.client, r.scope.Targets)
 	entities, err := crawler.CrawlTargets()
+	if err != nil {
+		r.logger.Error("error crawling targets", slog.Any("error", err), "targets", r.scope.Targets)
+		return
+	}
 
 	resp, err := r.client.Ingest(ctx, entities)
 	if err != nil {
