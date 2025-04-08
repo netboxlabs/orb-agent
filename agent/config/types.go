@@ -18,36 +18,36 @@ type PolicyPayload struct {
 
 // LocalManager represents the local ConfigManager configuration.
 type LocalManager struct {
-	Config string `mapstructure:"config"`
+	Config string `yaml:"config"`
 }
 
 // GitManager represents the Git ConfigManager configuration.
 type GitManager struct {
-	URL        string  `mapstructure:"url"`
-	Branch     string  `mapstructure:"branch"`
-	Auth       string  `mapstructure:"auth"`
-	Schedule   *string `mapstructure:"schedule, omitempty"`
-	Username   string  `mapstructure:"username"`
-	Password   string  `mapstructure:"password"`
-	PrivateKey string  `mapstructure:"private_key"`
+	URL        string  `yaml:"url"`
+	Branch     string  `yaml:"branch"`
+	Auth       string  `yaml:"auth"`
+	Schedule   *string `yaml:"schedule,omitempty"`
+	Username   string  `yaml:"username"`
+	Password   string  `yaml:"password"`
+	PrivateKey string  `yaml:"private_key"`
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.
 type Sources struct {
-	Local LocalManager `mapstructure:"local"`
-	Git   GitManager   `mapstructure:"git"`
+	Local LocalManager `yaml:"local"`
+	Git   GitManager   `yaml:"git"`
 }
 
 // ManagerConfig represents the configuration for the Config Manager
 type ManagerConfig struct {
-	Active  string  `mapstructure:"active"`
-	Sources Sources `mapstructure:"sources"`
+	Active  string  `yaml:"active"`
+	Sources Sources `yaml:"sources"`
 }
 
 // VaultManager represents the configuration for the Vault manager
 type VaultManager struct {
 	Auth      string         `yaml:"auth"`
-	AuthArgs  map[string]any `mapstructure:"auth_args"`
+	AuthArgs  map[string]any `yaml:"auth_args"`
 	Address   string         `yaml:"address"`
 	Namespace string         `yaml:"namespace"`
 	Timeout   *int           `yaml:"timeout,omitempty"`
@@ -56,44 +56,44 @@ type VaultManager struct {
 
 // SecretsSources represents the configuration for manager sources, including vault.
 type SecretsSources struct {
-	Vault VaultManager `mapstructure:"vault"`
+	Vault VaultManager `yaml:"vault"`
 }
 
 // ManagerSecrets represents the configuration for the Secrets Manager
 type ManagerSecrets struct {
-	Active  string         `mapstructure:"active"`
-	Sources SecretsSources `mapstructure:"sources"`
+	Active  string         `yaml:"active"`
+	Sources SecretsSources `yaml:"sources"`
 }
 
 // BackendCommons represents common configuration for backends
 type BackendCommons struct {
 	Otel struct {
-		Host        string            `mapstructure:"host"`
-		Port        int               `mapstructure:"port"`
-		AgentLabels map[string]string `mapstructure:"agent_labels"`
-	} `mapstructure:"otel"`
+		Host        string            `yaml:"host"`
+		Port        int               `yaml:"port"`
+		AgentLabels map[string]string `yaml:"agent_labels"`
+	} `yaml:"otel"`
 	Diode struct {
-		Target    string `mapstructure:"target"`
-		APIKey    string `mapstructure:"api_key"`
-		AgentName string `mapstructure:"agent_name"`
+		Target    string `yaml:"target"`
+		APIKey    string `yaml:"api_key"`
+		AgentName string `yaml:"agent_name"`
 	}
 }
 
 // OrbAgent represents the configuration for the Orb agent
 type OrbAgent struct {
-	Backends      map[string]map[string]any `mapstructure:"backends"`
-	Policies      map[string]map[string]any `mapstructure:"policies"`
-	Labels        map[string]string         `mapstructure:"labels"`
-	ConfigManager ManagerConfig             `mapstructure:"config_manager"`
-	SecretsManger ManagerSecrets            `mapstructure:"secrets_manager"`
+	Backends      map[string]any    `yaml:"backends"`
+	Policies      map[string]any    `yaml:"policies"`
+	Labels        map[string]string `yaml:"labels"`
+	ConfigManager ManagerConfig     `yaml:"config_manager"`
+	SecretsManger ManagerSecrets    `yaml:"secrets_manager"`
 	Debug         struct {
-		Enable bool `mapstructure:"enable"`
-	} `mapstructure:"debug"`
-	ConfigFile string `mapstructure:"config_file"`
+		Enable bool `yaml:"enable"`
+	} `yaml:"debug"`
+	ConfigFile string `yaml:"config_file"`
 }
 
 // Config represents the overall configuration
 type Config struct {
-	Version  float64  `mapstructure:"version"`
-	OrbAgent OrbAgent `mapstructure:"orb"`
+	Version  float64  `yaml:"version"`
+	OrbAgent OrbAgent `yaml:"orb"`
 }

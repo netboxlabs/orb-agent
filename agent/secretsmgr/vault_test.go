@@ -134,7 +134,7 @@ func createTestVault(t *testing.T) (net.Listener, *vault.Client) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Setup various test secrets
-	secrets := map[string]map[string]interface{}{
+	secrets := map[string]map[string]any{
 		"app/credentials": {
 			"password": "secretvalue",
 			"numeric":  12345,
@@ -584,7 +584,7 @@ func TestVaultManager_pollSecrets(t *testing.T) {
 	assert.False(t, callbackCalled)
 
 	// Update the secret in vault
-	_, err := client.KVv2("testsecret").Put(ctx, "app/credentials", map[string]interface{}{
+	_, err := client.KVv2("testsecret").Put(ctx, "app/credentials", map[string]any{
 		"password": "newsecretvalue",
 		"numeric":  12345,
 		"empty":    "",
