@@ -40,6 +40,11 @@ install-dev-tools:
 	@go install github.com/mfridman/tparse@latest
 
 
+.PHONY: deps
+deps:
+	@go mod tidy
+
+
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -o ${BUILD_DIR}/orb-agent cmd/main.go
