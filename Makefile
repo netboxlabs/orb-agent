@@ -39,11 +39,9 @@ endif
 install-dev-tools:
 	@go install github.com/mfridman/tparse@latest
 
-
 .PHONY: deps
 deps:
 	@go mod tidy
-
 
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
