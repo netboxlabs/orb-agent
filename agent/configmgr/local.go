@@ -29,7 +29,11 @@ func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backe
 		if !ok {
 			return errors.New("backend not found: " + beName)
 		}
-		for pName, data := range policy {
+		newPolicy, ok := policy.(map[string]any)
+		if !ok {
+			return errors.New("invalid policy format for backend: " + beName)
+		}
+		for pName, data := range newPolicy {
 			policyID := uuid.NewSHA1(uuid.Nil, []byte(pName+beName)).String()
 			id := uuid.NewString()
 			payload := config.PolicyPayload{

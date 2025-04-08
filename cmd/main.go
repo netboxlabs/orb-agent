@@ -6,11 +6,10 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
@@ -46,17 +45,48 @@ func Version(_ *cobra.Command, _ []string) {
 	os.Exit(0)
 }
 
+func loadConfig(path string, configData *config.Config) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("failed to open config file: %w", err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			cobra.CheckErr(fmt.Errorf("failed to close config file: %w", err))
+		}
+	}()
+
+	decoder := yaml.NewDecoder(file)
+	if err := decoder.Decode(configData); err != nil {
+		return fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	return nil
+}
+
+func initConfig() config.Config {
+	var configData config.Config
+
+	// Load default config
+	if _, err := os.Stat(defaultConfig); err == nil {
+		if err := loadConfig(defaultConfig, &configData); err != nil {
+			cobra.CheckErr(fmt.Errorf("error loading default config: %w", err))
+		}
+	}
+
+	// Override with user-provided config files
+	for _, conf := range cfgFiles {
+		if err := loadConfig(conf, &configData); err != nil {
+			cobra.CheckErr(fmt.Errorf("error loading config file %s: %w", conf, err))
+		}
+	}
+
+	return configData
+}
+
 // Run starts the agent
 func Run(_ *cobra.Command, _ []string) {
-	initConfig()
-
-	// configuration
-	var configData config.Config
-	err := viper.Unmarshal(&configData)
-	if err != nil {
-		cobra.CheckErr(fmt.Errorf("agent start up error (configData): %w", err))
-		os.Exit(1)
-	}
+	configData := initConfig()
 
 	// logger
 	var l slog.Level
@@ -109,72 +139,6 @@ func Run(_ *cobra.Command, _ []string) {
 	}
 
 	<-done
-}
-
-func mergeOrError(path string) {
-	v := viper.New()
-	if len(path) > 0 {
-		v.SetConfigFile(path)
-		v.SetConfigType("yaml")
-	}
-
-	v.AutomaticEnv()
-	replacer := strings.NewReplacer(".", "_")
-	v.SetEnvKeyReplacer(replacer)
-
-	if len(path) > 0 {
-		cobra.CheckErr(v.ReadInConfig())
-	}
-
-	var fZero float64
-
-	// check that version of config files are all matched up
-	if versionNumber1 := viper.GetFloat64("version"); versionNumber1 != fZero {
-		versionNumber2 := v.GetFloat64("version")
-		if versionNumber2 == fZero {
-			cobra.CheckErr("Failed to parse config version in: " + path)
-		}
-		if versionNumber2 != versionNumber1 {
-			cobra.CheckErr("Config file version mismatch in: " + path)
-		}
-	}
-
-	// load backend static functions for setting up default values
-	backendVarsFunction := make(map[string]func(*viper.Viper))
-	backendVarsFunction["pktvisor"] = pktvisor.RegisterBackendSpecificVariables
-	backendVarsFunction["otel"] = otel.RegisterBackendSpecificVariables
-	backendVarsFunction["device_discovery"] = devicediscovery.RegisterBackendSpecificVariables
-	backendVarsFunction["network_discovery"] = networkdiscovery.RegisterBackendSpecificVariables
-	backendVarsFunction["worker"] = worker.RegisterBackendSpecificVariables
-
-	// check if backends are configured
-	// if not then add pktvisor as default
-	if len(path) > 0 && len(v.GetStringMap("orb.backends")) == 0 {
-		pktvisor.RegisterBackendSpecificVariables(v)
-	} else {
-		for backendName := range v.GetStringMap("orb.backends") {
-			if backend := v.GetStringMap("orb.backends." + backendName); backend != nil && backendName != "common" {
-				backendVarsFunction[backendName](v)
-			}
-		}
-	}
-
-	cobra.CheckErr(viper.MergeConfigMap(v.AllSettings()))
-}
-
-// initConfig reads in config file and ENV variables if set.
-func initConfig() {
-	// set defaults first
-	mergeOrError("")
-	if len(cfgFiles) == 0 {
-		if _, err := os.Stat(defaultConfig); !os.IsNotExist(err) {
-			mergeOrError(defaultConfig)
-		}
-	} else {
-		for _, conf := range cfgFiles {
-			mergeOrError(conf)
-		}
-	}
 }
 
 func main() {

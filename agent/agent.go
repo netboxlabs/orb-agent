@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mitchellh/mapstructure"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -94,22 +94,37 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 
 	var commonConfig config.BackendCommons
 	if v, prs := a.config.OrbAgent.Backends["common"]; prs {
-		if err := mapstructure.Decode(v, &commonConfig); err != nil {
-			return fmt.Errorf("failed to decode common backend config: %w", err)
+		bytes, err := yaml.Marshal(v)
+		if err != nil {
+			return err
 		}
+		err = yaml.Unmarshal(bytes, &commonConfig)
+		if err != nil {
+			a.logger.Info("failed to marshal common backend config", slog.Any("error", err))
+			return err
+		}
+	} else {
+		commonConfig = config.BackendCommons{}
 	}
 	commonConfig.Otel.AgentLabels = a.config.OrbAgent.Labels
 	a.backendsCommon = commonConfig
 	delete(a.config.OrbAgent.Backends, "common")
 
 	for name, configurationEntry := range a.config.OrbAgent.Backends {
-
+		var cEntity map[string]any
+		if configurationEntry != nil {
+			var ok bool
+			cEntity, ok = configurationEntry.(map[string]any)
+			if !ok {
+				return errors.New("invalid backend configuration format for backend: " + name)
+			}
+		}
 		if !backend.HaveBackend(name) {
 			return errors.New("specified backend does not exist: " + name)
 		}
 		be := backend.GetBackend(name)
 
-		if err := be.Configure(a.logger, a.policyManager.GetRepo(), configurationEntry, a.backendsCommon); err != nil {
+		if err := be.Configure(a.logger, a.policyManager.GetRepo(), cEntity, a.backendsCommon); err != nil {
 			a.logger.Info("failed to configure backend", slog.String("backend", name), slog.Any("error", err))
 			return err
 		}
@@ -218,7 +233,11 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	if err := a.policyManager.RemoveBackendPolicies(be, true); err != nil {
 		a.logger.Error("failed to remove policies", slog.String("backend", name), slog.Any("error", err))
 	}
-	if err := be.Configure(a.logger, a.policyManager.GetRepo(), a.config.OrbAgent.Backends[name], a.backendsCommon); err != nil {
+	beConfig, ok := a.config.OrbAgent.Backends[name].(map[string]any)
+	if !ok {
+		return errors.New("backend not found: " + name)
+	}
+	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon); err != nil {
 		return err
 	}
 	a.logger.Info("resetting backend", slog.String("backend", name))

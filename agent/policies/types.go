@@ -13,7 +13,7 @@ type PolicyData struct {
 	Name               string
 	Backend            string
 	Version            int32
-	Data               interface{}
+	Data               any
 	State              PolicyState
 	BackendErr         string
 	LastScrapeBytes    int64
@@ -66,7 +66,7 @@ func (s PolicyState) String() string {
 }
 
 // Scan scans the value into the PolicyState
-func (s *PolicyState) Scan(value interface{}) error {
+func (s *PolicyState) Scan(value any) error {
 	*s = policyStateRevMap[string(value.([]byte))]
 	return nil
 }

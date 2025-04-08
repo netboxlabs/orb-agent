@@ -26,8 +26,8 @@ func TestLocalConfigManager(t *testing.T) {
 		// Create test configuration with policies
 		testConfig := config.Config{
 			OrbAgent: config.OrbAgent{
-				Policies: map[string]map[string]any{
-					"testbackend": {
+				Policies: map[string]any{
+					"testbackend": map[string]any{
 						"testpolicy": map[string]string{
 							"key": "value",
 						},
@@ -85,8 +85,8 @@ func TestLocalConfigManager(t *testing.T) {
 		// Create test configuration with policies for non-existent backend
 		testConfig := config.Config{
 			OrbAgent: config.OrbAgent{
-				Policies: map[string]map[string]any{
-					"nonexistentbackend": {
+				Policies: map[string]any{
+					"nonexistentbackend": map[string]any{
 						"testpolicy": map[string]string{
 							"key": "value",
 						},
