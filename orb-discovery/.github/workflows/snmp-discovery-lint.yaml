@@ -1,0 +1,33 @@
+name: SNMP Discovery - lint
+on:
+  push:
+    branches:
+      - "!release"
+    paths:
+      - "snmp-discovery/**"
+      - "!snmp-discovery/docker/**"
+  pull_request:
+    paths:
+      - "snmp-discovery/**"
+      - "!snmp-discovery/docker/**"
+
+permissions:
+  contents: read
+
+jobs:
+  golangci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          check-latest: true
+      - name: Lint
+        uses: golangci/golangci-lint-action@971e284b6050e8a5849b72094c50ab08da042db8 #v6.1.1
+        with:
+          version: v1.62
+          working-directory: snmp-discovery
+          args: --config ../.github/golangci.yaml
