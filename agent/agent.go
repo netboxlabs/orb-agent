@@ -233,9 +233,13 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	if err := a.policyManager.RemoveBackendPolicies(be, true); err != nil {
 		a.logger.Error("failed to remove policies", slog.String("backend", name), slog.Any("error", err))
 	}
-	beConfig, ok := a.config.OrbAgent.Backends[name].(map[string]any)
-	if !ok {
-		return errors.New("backend not found: " + name)
+	var beConfig map[string]any
+	if a.config.OrbAgent.Backends[name] != nil {
+		var ok bool
+		beConfig, ok = a.config.OrbAgent.Backends[name].(map[string]any)
+		if !ok {
+			return errors.New("backend not found: " + name)
+		}
 	}
 	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon); err != nil {
 		return err
