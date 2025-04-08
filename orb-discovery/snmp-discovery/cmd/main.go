@@ -39,7 +39,7 @@ func resolveEnv(value string) string {
 
 func main() {
 	host := flag.String("host", "0.0.0.0", "server host")
-	port := flag.Int("port", 8074, "server port")
+	port := flag.Int("port", 8070, "server port")
 	diodeTarget := flag.String("diode-target", "", "diode target (REQUIRED)")
 	diodeAPIKey := flag.String("diode-api-key", "", "diode api key (REQUIRED)."+
 		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})")
