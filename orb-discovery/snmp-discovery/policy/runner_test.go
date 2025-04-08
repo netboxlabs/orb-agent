@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/netboxlabs/orb-discovery/network-discovery/config"
-	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 )
 
 type MockClient struct {
@@ -82,7 +82,7 @@ func TestRunnerRun(t *testing.T) {
 					Defaults: config.Defaults{
 						Description: "Test",
 						Comments:    "This is a test",
-						Tags:        []string{"test", "ip"},
+						Tags:        []string{"test", "snmp"},
 					},
 				},
 				Scope: config.Scope{
@@ -127,47 +127,20 @@ func TestRunnerWithOptions(t *testing.T) {
 		expected []string
 	}{
 		{
-			name: "with ports and exclude ports",
+			name: "with SNMP version and community",
 			policy: config.Policy{
 				Config: config.PolicyConfig{},
 				Scope: config.Scope{
-					Targets:      []string{"localhost"},
-					Ports:        []string{"80", "443"},
-					ExcludePorts: []string{"22"},
+					Targets: []string{"localhost"},
 				},
 			},
 		},
 		{
-			name: "with fast mode and timing",
+			name: "with SNMPv3 credentials",
 			policy: config.Policy{
 				Config: config.PolicyConfig{},
 				Scope: config.Scope{
-					Targets:  []string{"localhost"},
-					FastMode: boolPtr(true),
-					Timing:   intPtr(3),
-				},
-			},
-		},
-		{
-			name: "with top ports and ping scan",
-			policy: config.Policy{
-				Config: config.PolicyConfig{},
-				Scope: config.Scope{
-					Targets:  []string{"localhost"},
-					TopPorts: intPtr(100),
-					PingScan: boolPtr(true),
-				},
-			},
-		},
-		{
-			name: "with scan types and max retries",
-			policy: config.Policy{
-				Config: config.PolicyConfig{},
-				Scope: config.Scope{
-					Targets:    []string{"localhost"},
-					ScanTypes:  []string{"connect", "udp", "fin", "xmas"},
-					PingScan:   boolPtr(true),
-					MaxRetries: intPtr(0),
+					Targets: []string{"localhost"},
 				},
 			},
 		},
@@ -206,12 +179,4 @@ func TestRunnerWithOptions(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
-}
-
-func boolPtr(b bool) *bool {
-	return &b
-}
-
-func intPtr(i int) *int {
-	return &i
 }

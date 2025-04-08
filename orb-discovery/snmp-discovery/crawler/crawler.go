@@ -116,6 +116,24 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 	c.entities = append(c.entities, ipEntity)
 	c.entityMux.Unlock()
 
+	// Get system name
+	// sysNameOID := ".1.3.6.1.2.1.1.5.0"
+	// sysName, err := params.Get([]string{sysNameOID})
+	// if err == nil && len(sysName.Variables) > 0 {
+	// 	if name, ok := sysName.Variables[0].Value.(string); ok {
+	// 		device.SysName = name
+	// 	}
+	// }
+	// c.logger.Info("%s - %s\n", ip, device.SysName)
+
+	// Get interfaces
+	// ifaces, _ := params.WalkAll(".1.3.6.1.2.1.2.2.1.2")
+	// for _, v := range ifaces {
+	// 	ifIndex := v.Name[strings.LastIndex(v.Name, ".")+1:]
+	// 	ifName := fmt.Sprintf("%v", v.Value)
+	// 	device.Interfaces[ifIndex] = ifName
+	// }
+
 	// Get ARP table
 	arpEntries, _ := params.WalkAll(".1.3.6.1.2.1.4.22.1.2")
 	for _, v := range arpEntries {

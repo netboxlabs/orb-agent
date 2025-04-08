@@ -91,5 +91,5 @@ func (m *Manager) Stop() error {
 
 // GetCapabilities returns the capabilities of network-discovery
 func (m *Manager) GetCapabilities() []string {
-	return []string{"targets, ports, exclude_ports, timing, fast_mode, ping_scan, top_ports, scan_types, max_retries"}
+	return []string{"targets"}
 }

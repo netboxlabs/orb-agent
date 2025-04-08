@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/netboxlabs/orb-discovery/network-discovery/config"
-	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 )
 
 // MockRunner mocks the Runner
@@ -45,7 +45,7 @@ func TestManagerParsePolicies(t *testing.T) {
                 comments: test
             scope:
               targets:
-                - 192.168.1.1/24
+                - 192.168.1.1
        `)
 
 		policies, err := manager.ParsePolicies(yamlData)
@@ -70,11 +70,11 @@ func TestManagerPolicyLifecycle(t *testing.T) {
           policy1:
             scope:
               targets:
-                - 192.168.1.1/24
+                - 192.168.1.1
           policy2:
             scope:
               targets:
-                - 192.168.2.1/24
+                - 192.168.2.1
           policy3:
             scope:
               targets: []
@@ -121,5 +121,5 @@ func TestManagerGetCapabilities(t *testing.T) {
 	manager := &policy.Manager{}
 
 	capabilities := manager.GetCapabilities()
-	assert.Equal(t, []string{"targets, ports, exclude_ports, timing, fast_mode, ping_scan, top_ports, scan_types, max_retries"}, capabilities)
+	assert.Equal(t, []string{"targets"}, capabilities)
 }

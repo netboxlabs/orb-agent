@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/netboxlabs/orb-discovery/network-discovery/version"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/version"
 )
 
 func TestVersion(t *testing.T) {
