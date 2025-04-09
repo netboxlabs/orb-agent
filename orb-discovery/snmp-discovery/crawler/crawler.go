@@ -21,31 +21,33 @@ const (
 
 // Crawler handles network discovery by scanning SNMP-enabled devices
 type Crawler struct {
-	logger     *slog.Logger
-	wg         sync.WaitGroup
-	scanned    map[string]bool
-	scannedMux *sync.Mutex
-	queue      chan string
-	entities   []diode.Entity
-	entityMux  *sync.Mutex
-	targets    []string
-	ctx        context.Context
-	client     diode.Client
+	logger            *slog.Logger
+	wg                sync.WaitGroup
+	scanned           map[string]bool
+	scannedMux        *sync.Mutex
+	queue             chan string
+	entities          []diode.Entity
+	entityMux         *sync.Mutex
+	targets           []string
+	ctx               context.Context
+	client            diode.Client
+	snmpClientFactory func(host string) SNMPWalker
 }
 
 // NewCrawler creates a new Crawler instance with the provided context, logger, client, and target IPs.
-func NewCrawler(ctx context.Context, logger *slog.Logger, client diode.Client, targets []string) *Crawler {
+func NewCrawler(ctx context.Context, logger *slog.Logger, client diode.Client, targets []string, snmpClientFactory func(host string) SNMPWalker) *Crawler {
 	return &Crawler{
-		ctx:        ctx,
-		logger:     logger,
-		client:     client,
-		targets:    targets,
-		wg:         sync.WaitGroup{},
-		scanned:    make(map[string]bool),
-		scannedMux: &sync.Mutex{},
-		queue:      make(chan string, queueSize),
-		entities:   make([]diode.Entity, 0),
-		entityMux:  &sync.Mutex{},
+		ctx:               ctx,
+		logger:            logger,
+		client:            client,
+		targets:           targets,
+		wg:                sync.WaitGroup{},
+		scanned:           make(map[string]bool),
+		scannedMux:        &sync.Mutex{},
+		queue:             make(chan string, queueSize),
+		entities:          make([]diode.Entity, 0),
+		entityMux:         &sync.Mutex{},
+		snmpClientFactory: snmpClientFactory,
 	}
 }
 
@@ -83,16 +85,9 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 
 	c.logger.Info("Scanning", "ip", ip)
 
-	// TODO - add a wrapper around this so we can test the snmp integration
-	snmp := &gosnmp.GoSNMP{
-		Target:    ip,
-		Port:      161,
-		Community: community,
-		Version:   gosnmp.Version2c,
-		Timeout:   time.Duration(2) * time.Second,
-	}
+	snmp := c.snmpClientFactory(ip)
 	defer func() {
-		if err := snmp.Conn.Close(); err != nil {
+		if err := snmp.Close(); err != nil {
 			c.logger.Warn("Error closing SNMP connection", "ip", ip, "error", err)
 		}
 	}()
@@ -125,4 +120,33 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 			queue <- neighborIP
 		}
 	}
+}
+
+// SNMPClient wraps gosnmp.GoSNMP to implement the SNMPWalker interface
+type SNMPClient struct {
+	*gosnmp.GoSNMP
+}
+
+// Close implements the SNMPWalker interface by closing the SNMP connection
+func (c *SNMPClient) Close() error {
+	return c.Conn.Close()
+}
+
+// creates a new SNMPClient for the given target host
+func NewSNMPWalker(host string) SNMPWalker {
+	return &SNMPClient{
+		&gosnmp.GoSNMP{
+			Target:    host,
+			Port:      161,
+			Community: community,
+			Version:   gosnmp.Version2c,
+			Timeout:   time.Duration(2) * time.Second,
+		},
+	}
+}
+
+type SNMPWalker interface {
+	WalkAll(oid string) ([]gosnmp.SnmpPDU, error)
+	Connect() error
+	Close() error
 }

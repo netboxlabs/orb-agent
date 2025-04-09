@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,28 @@ func (m *MockClient) Ingest(context.Context, []diode.Entity) (*diodepb.IngestRes
 	panic("unimplemented")
 }
 
+// NullSNMPWalker is a no-op implementation of SNMPWalker
+type NullSNMPWalker struct{}
+
+// Connect implements SNMPWalker interface
+func (n *NullSNMPWalker) Connect() error {
+	return nil
+}
+
+// Close implements SNMPWalker interface
+func (n *NullSNMPWalker) Close() error {
+	return nil
+}
+
+// WalkAll implements SNMPWalker interface
+func (n *NullSNMPWalker) WalkAll(string) ([]gosnmp.SnmpPDU, error) {
+	return []gosnmp.SnmpPDU{}, nil
+}
+
+func NewNullSNMPWalker(host string) crawler.SNMPWalker {
+	return &NullSNMPWalker{}
+}
+
 func TestCrawlTargets(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockClient)
@@ -54,7 +77,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{"192.168.1.1"}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
 
 		// Execute
 		entities, err := c.CrawlTargets()
@@ -74,7 +97,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
 
 		// Execute
 		entities, err := c.CrawlTargets()
@@ -90,7 +113,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{"192.168.1.1", "192.168.1.2"}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
 
 		// Cancel context immediately
 		cancel()
@@ -109,7 +132,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{"192.168.1.1", "192.168.1.1"}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
 
 		// Execute
 		entities, err := c.CrawlTargets()
@@ -126,5 +149,69 @@ func TestCrawlTargets(t *testing.T) {
 		}
 
 		assert.Equal(t, 1, len(ipSet))
+	})
+}
+
+// MockSNMPClient mocks the SNMPClient
+type MockSNMPWalker struct {
+	mock.Mock
+}
+
+func (m *MockSNMPWalker) WalkAll(oid string) ([]gosnmp.SnmpPDU, error) {
+	args := m.Called(oid)
+	return args.Get(0).([]gosnmp.SnmpPDU), args.Error(1)
+}
+
+func (m *MockSNMPWalker) Connect() error {
+	return m.Called().Error(0)
+}
+
+func (m *MockSNMPWalker) Close() error {
+	return m.Called().Error(0)
+}
+
+func TestCrawlTargetsWithNeighbors(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mockClient := new(MockClient)
+	mockSNMP := new(MockSNMPWalker)
+
+	t.Run("Discovers neighbors from ARP table", func(t *testing.T) {
+		// Setup
+		ctx := context.Background()
+		targets := []string{"192.168.1.1"}
+
+		// Mock SNMP behavior
+		mockSNMP.On("Connect").Return(nil)
+		mockSNMP.On("Close").Return(nil)
+		mockSNMP.On("WalkAll", ".1.3.6.1.2.1.4.22.1.2").Return([]gosnmp.SnmpPDU{
+			{Name: ".1.3.6.1.2.1.4.22.1.2.192.168.1.2"},
+			{Name: ".1.3.6.1.2.1.4.22.1.2.192.168.1.3"},
+		}, nil)
+
+		// Create crawler with mock SNMP client factory
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, func(host string) crawler.SNMPWalker {
+			return mockSNMP
+		})
+
+		// Execute
+		entities, err := c.CrawlTargets()
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Len(t, entities, 3)
+
+		// Verify discovered IPs
+		ipSet := make(map[string]bool)
+		for _, entity := range entities {
+			if ipAddress, ok := entity.(*diode.IPAddress); ok {
+				ipSet[string(*ipAddress.Address)] = true
+			}
+		}
+
+		assert.Contains(t, ipSet, "192.168.1.1/32")
+		assert.Contains(t, ipSet, "192.168.1.2/32")
+		assert.Contains(t, ipSet, "192.168.1.3/32")
+
+		mockSNMP.AssertExpectations(t)
 	})
 }

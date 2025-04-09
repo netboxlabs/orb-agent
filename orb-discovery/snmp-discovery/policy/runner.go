@@ -71,7 +71,7 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	crawler := crawler.NewCrawler(ctx, r.logger, r.client, r.scope.Targets)
+	crawler := crawler.NewCrawler(ctx, r.logger, r.client, r.scope.Targets, crawler.NewSNMPWalker)
 	entities, err := crawler.CrawlTargets()
 	if err != nil {
 		r.logger.Error("error crawling targets", slog.Any("error", err), "targets", r.scope.Targets)
