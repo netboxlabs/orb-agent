@@ -132,7 +132,7 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -150,7 +150,7 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -163,7 +163,7 @@ func TestManagerNew(t *testing.T) {
 			Active: "unknown",
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		assert.NotNil(t, mgr)
 		// Check we got the local implementation
 		ctx := context.Background()

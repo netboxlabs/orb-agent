@@ -10,6 +10,8 @@ import (
 	"github.com/hashicorp/vault/api/auth/ldap"
 	"github.com/hashicorp/vault/api/auth/userpass"
 	"gopkg.in/yaml.v3"
+
+	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
 type authMethod interface {
@@ -34,6 +36,10 @@ func newAuthentication(auth string, authArgs map[string]any) (authMethod, error)
 		return nil, fmt.Errorf("auth method %s is not currently implemented", auth)
 	default:
 		return nil, fmt.Errorf("unsupported auth method: %s", auth)
+	}
+
+	if err := config.ResolveEnvInMap(authArgs); err != nil {
+		return nil, fmt.Errorf("failed to resolve env in auth_args: %w", err)
 	}
 
 	// Convert the map to YAML

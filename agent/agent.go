@@ -75,7 +75,7 @@ func New(logger *slog.Logger, c config.Config) (Agent, error) {
 		return nil, err
 	}
 
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager)
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active)
 
 	return &orbAgent{
 		logger: logger, config: c, policyManager: pm, configManager: cm,
@@ -83,17 +83,16 @@ func New(logger *slog.Logger, c config.Config) (Agent, error) {
 	}, nil
 }
 
-func (a *orbAgent) startBackends(agentCtx context.Context) error {
+func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[string]any, labels map[string]string) error {
 	a.logger.Info("registered backends", slog.Any("values", backend.GetList()))
-	a.logger.Info("requested backends", slog.Any("values", a.config.OrbAgent.Backends))
-	if len(a.config.OrbAgent.Backends) == 0 {
+	if len(cfgBackends) == 0 {
 		return errors.New("no backends specified")
 	}
-	a.backends = make(map[string]backend.Backend, len(a.config.OrbAgent.Backends))
+	a.backends = make(map[string]backend.Backend, len(cfgBackends))
 	a.backendState = make(map[string]*backend.State)
 
 	var commonConfig config.BackendCommons
-	if v, prs := a.config.OrbAgent.Backends["common"]; prs {
+	if v, prs := cfgBackends["common"]; prs {
 		bytes, err := yaml.Marshal(v)
 		if err != nil {
 			return err
@@ -106,11 +105,11 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 	} else {
 		commonConfig = config.BackendCommons{}
 	}
-	commonConfig.Otel.AgentLabels = a.config.OrbAgent.Labels
+	commonConfig.Otel.AgentLabels = labels
 	a.backendsCommon = commonConfig
-	delete(a.config.OrbAgent.Backends, "common")
+	delete(cfgBackends, "common")
 
-	for name, configurationEntry := range a.config.OrbAgent.Backends {
+	for name, configurationEntry := range cfgBackends {
 		var cEntity map[string]any
 		if configurationEntry != nil {
 			var ok bool
@@ -164,17 +163,25 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
 	a.logger.Info("agent started", slog.String("version", version.GetBuildVersion()), slog.Any("routine", agentCtx.Value(routineKey)))
+	a.logger.Info("requested backends", slog.Any("values", a.config.OrbAgent.Backends))
 
 	if err := a.secretsManager.Start(ctx); err != nil {
 		a.logger.Error("error during start secrets manager", slog.Any("error", err))
 		return err
 	}
 
-	if err := a.startBackends(ctx); err != nil {
+	var err error
+	if a.config.OrbAgent.Backends,
+		a.config.OrbAgent.ConfigManager,
+		err = a.secretsManager.SolveConfigSecrets(a.config.OrbAgent.Backends, a.config.OrbAgent.ConfigManager); err != nil {
 		return err
 	}
 
-	if err := a.configManager.Start(a.config, a.backends); err != nil {
+	if err = a.startBackends(ctx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
+		return err
+	}
+
+	if err = a.configManager.Start(a.config, a.backends); err != nil {
 		return err
 	}
 

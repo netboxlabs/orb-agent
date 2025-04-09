@@ -5,9 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"slices"
-	"strings"
 
 	"github.com/go-co-op/gocron/v2"
 	gitv5 "github.com/go-git/go-git/v5"
@@ -49,22 +47,6 @@ type (
 		Name    string
 	}
 )
-
-func resolveEnv(value string) (string, error) {
-	// Check if the value starts with ${ and ends with }
-	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
-		// Extract the environment variable name
-		envVar := value[2 : len(value)-1]
-		// Get the value of the environment variable
-		envValue := os.Getenv(envVar)
-		if envValue != "" {
-			return envValue, nil
-		}
-		return "", errors.New("a provided environment variable is not set")
-	}
-	// Return the original value if no substitution occurs
-	return value, nil
-}
 
 func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []string) (map[policyPath]policyData, error) {
 	policiesByPath := make(map[policyPath]policyData)
@@ -355,13 +337,14 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	gc.version = 1
+	gc.config = cfg.OrbAgent.ConfigManager.Sources.Git
 
 	if gc.config.URL == "" {
 		return errors.New("URL is required for Git Config Manager")
 	}
 
 	if gc.config.Auth == "basic" {
-		if gc.config.Password, err = resolveEnv(gc.config.Password); err != nil {
+		if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 			return err
 		}
 		gc.authMethod = &http.BasicAuth{
@@ -370,7 +353,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		}
 	} else if gc.config.Auth == "ssh" {
 		if gc.config.PrivateKey != "" {
-			if gc.config.Password, err = resolveEnv(gc.config.Password); err != nil {
+			if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 				return err
 			}
 			gc.authMethod, err = ssh.NewPublicKeysFromFile("git", gc.config.PrivateKey, gc.config.Password)

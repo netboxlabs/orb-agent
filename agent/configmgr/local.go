@@ -17,7 +17,6 @@ var _ Manager = (*localConfigManager)(nil)
 type localConfigManager struct {
 	logger *slog.Logger
 	pMgr   policymgr.PolicyManager
-	config config.LocalManager
 }
 
 func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {

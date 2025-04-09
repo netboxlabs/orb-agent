@@ -81,20 +81,20 @@ backend1:
 	pMgr := new(mockPolicyManager)
 
 	// Build a minimal config for testing.
+	schedule := "* * * * *"
 	cfg := config.Config{
 		OrbAgent: config.OrbAgent{
 			Labels: map[string]string{"env": "test"},
-		},
-	}
-	schedule := "* * * * *"
-	gitManagerConfig := config.ManagerConfig{
-		Active: "git",
-		Sources: config.Sources{
-			Git: config.GitManager{
-				URL:      repoURL,
-				Branch:   "",        // let it detect default branch
-				Auth:     "none",    // no auth for file:// protocol
-				Schedule: &schedule, // every minute
+			ConfigManager: config.ManagerConfig{
+				Active: "git",
+				Sources: config.Sources{
+					Git: config.GitManager{
+						URL:      repoURL,
+						Branch:   "",        // let it detect default branch
+						Auth:     "none",    // no auth for file:// protocol
+						Schedule: &schedule, // every minute
+					},
+				},
 			},
 		},
 	}
@@ -103,7 +103,7 @@ backend1:
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	// Instantiate the gitConfigManager.
-	gc := configmgr.New(logger, pMgr, gitManagerConfig)
+	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active)
 
 	// Call Start
 	backends := map[string]backend.Backend{
