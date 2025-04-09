@@ -70,13 +70,6 @@ func (c *Crawler) CrawlTargets() ([]diode.Entity, error) {
 	return c.entities, nil
 }
 
-// Stop waits for all crawling operations to complete and then stops the crawler.
-func (c *Crawler) Stop() {
-	c.wg.Wait()
-	close(c.queue)
-	c.logger.Info("Network crawl complete.")
-}
-
 func (c *Crawler) crawlHost(ip string, queue chan string) {
 	defer c.wg.Done()
 
@@ -90,7 +83,8 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 
 	c.logger.Info("Scanning", "ip", ip)
 
-	params := &gosnmp.GoSNMP{
+	// TODO - add a wrapper around this so we can test the snmp integration
+	snmp := &gosnmp.GoSNMP{
 		Target:    ip,
 		Port:      161,
 		Community: community,
@@ -98,12 +92,12 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 		Timeout:   time.Duration(2) * time.Second,
 	}
 	defer func() {
-		if err := params.Conn.Close(); err != nil {
+		if err := snmp.Conn.Close(); err != nil {
 			c.logger.Warn("Error closing SNMP connection", "ip", ip, "error", err)
 		}
 	}()
 
-	err := params.Connect()
+	err := snmp.Connect()
 	if err != nil {
 		c.logger.Warn("Could not connect to host", "ip", ip, "error", err)
 		return
@@ -119,7 +113,7 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 	c.entityMux.Unlock()
 
 	// Get ARP table
-	arpEntries, _ := params.WalkAll(".1.3.6.1.2.1.4.22.1.2")
+	arpEntries, _ := snmp.WalkAll(".1.3.6.1.2.1.4.22.1.2")
 	for _, v := range arpEntries {
 		oidParts := strings.Split(v.Name, ".")
 		if len(oidParts) >= 4 {
