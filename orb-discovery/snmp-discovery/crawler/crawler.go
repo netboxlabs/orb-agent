@@ -132,7 +132,7 @@ func (c *SNMPClient) Close() error {
 	return c.Conn.Close()
 }
 
-// creates a new SNMPClient for the given target host
+// NewSNMPWalker creates a new SNMPClient for the given target host
 func NewSNMPWalker(host string) SNMPWalker {
 	return &SNMPClient{
 		&gosnmp.GoSNMP{
@@ -145,6 +145,9 @@ func NewSNMPWalker(host string) SNMPWalker {
 	}
 }
 
+// SNMPWalker interface defines methods for walking SNMP trees
+// It allows for connecting to SNMP devices, traversing OID trees,
+// and properly closing connections when finished
 type SNMPWalker interface {
 	WalkAll(oid string) ([]gosnmp.SnmpPDU, error)
 	Connect() error

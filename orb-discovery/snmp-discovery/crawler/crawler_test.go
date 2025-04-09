@@ -63,7 +63,7 @@ func (n *NullSNMPWalker) WalkAll(string) ([]gosnmp.SnmpPDU, error) {
 	return []gosnmp.SnmpPDU{}, nil
 }
 
-func NewNullSNMPWalker(host string) crawler.SNMPWalker {
+func NewNullSNMPWalker(_ string) crawler.SNMPWalker {
 	return &NullSNMPWalker{}
 }
 
@@ -189,7 +189,7 @@ func TestCrawlTargetsWithNeighbors(t *testing.T) {
 		}, nil)
 
 		// Create crawler with mock SNMP client factory
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets, func(host string) crawler.SNMPWalker {
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, func(_ string) crawler.SNMPWalker {
 			return mockSNMP
 		})
 
