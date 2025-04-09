@@ -40,7 +40,7 @@ func New(logger *slog.Logger, secrets secretsmgr.Manager, c config.Config) (Poli
 		return nil, err
 	}
 	policyManager := &policyManager{logger: logger, config: c, repo: repo, secrets: secrets}
-	policyManager.secrets.RegisterUpdateCallback(policyManager.policiesChanged)
+	policyManager.secrets.RegisterUpdatePoliciesCallback(policyManager.policiesChanged)
 	return policyManager, nil
 }
 
@@ -130,7 +130,7 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 		} else {
 			// attempt to apply the policy to the backend. status of policy application (running/failed) is maintained there.
 			be := backend.GetBackend(payload.Backend)
-			newPayload, err := a.secrets.SolveSecrets(payload)
+			newPayload, err := a.secrets.SolvePolicySecrets(payload)
 			if err != nil {
 				a.logger.Error("failed to solve secrets", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name), slog.Any("error", err))
 				return
@@ -299,7 +299,7 @@ func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
 				Name: policy.Name,
 				Data: policy.Data,
 			}
-			newPayload, err := a.secrets.SolveSecrets(payload)
+			newPayload, err := a.secrets.SolvePolicySecrets(payload)
 			if err != nil {
 				a.logger.Error("failed to solve secrets", slog.String("policy_id", policy.ID), slog.String("policy_name", policy.Name), slog.Any("error", err))
 				continue

@@ -10,8 +10,9 @@ import (
 // Manager is an interface for managing secrets
 type Manager interface {
 	Start(ctx context.Context) error
-	RegisterUpdateCallback(callback func(map[string]bool))
-	SolveSecrets(payload config.PolicyPayload) (config.PolicyPayload, error)
+	RegisterUpdatePoliciesCallback(callback func(map[string]bool))
+	SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error)
+	SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error)
 }
 
 // New creates a new instance of ConfigManager based on the configuration
@@ -33,9 +34,13 @@ func (v *dummyManager) Start(_ context.Context) error {
 	return nil
 }
 
-func (v *dummyManager) RegisterUpdateCallback(_ func(map[string]bool)) {
+func (v *dummyManager) RegisterUpdatePoliciesCallback(_ func(map[string]bool)) {
 }
 
-func (v *dummyManager) SolveSecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
+func (v *dummyManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
 	return payload, nil
+}
+
+func (v *dummyManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
+	return backends, configManager, nil
 }

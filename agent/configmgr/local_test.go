@@ -50,7 +50,7 @@ func TestLocalConfigManager(t *testing.T) {
 		})).Return()
 
 		// Create and start the manager
-		mgr := configmgr.New(logger, pMgr, cfg)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		err := mgr.Start(testConfig, backends)
 
 		// Verify
@@ -69,7 +69,7 @@ func TestLocalConfigManager(t *testing.T) {
 		backends := map[string]backend.Backend{}
 
 		// Create the manager
-		mgr := configmgr.New(logger, pMgr, cfg)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		err := mgr.Start(testConfig, backends)
 
 		// Should return an error
@@ -98,7 +98,7 @@ func TestLocalConfigManager(t *testing.T) {
 		backends := map[string]backend.Backend{}
 
 		// Create the manager
-		mgr := configmgr.New(logger, pMgr, cfg)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		err := mgr.Start(testConfig, backends)
 
 		// Should return an error
