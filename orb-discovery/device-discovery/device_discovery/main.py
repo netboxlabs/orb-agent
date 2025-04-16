@@ -11,6 +11,7 @@ import netboxlabs.diode.sdk.version as SdkVersion
 import uvicorn
 
 from device_discovery.client import Client
+from device_discovery.metrics import setup_metrics_export
 from device_discovery.server import app
 from device_discovery.version import version_semver
 
@@ -70,6 +71,21 @@ def main():
         required=False,
     )
 
+    parser.add_argument(
+        "--otel-endpoint",
+        help="OpenTelemetry exporter endpoint",
+        type=str,
+        required=False,
+    )
+
+    parser.add_argument(
+        "--otel-export-period",
+        help="Period in seconds between OpenTelemetry exports (default: 60)",
+        type=int,
+        default=60,
+        required=False,
+    )
+
     try:
         args = parser.parse_args()
         api_key = args.diode_api_key
@@ -77,10 +93,14 @@ def main():
             env_var = api_key[2:-1]
             api_key = os.getenv(env_var, api_key)
 
+        if args.otel_endpoint:
+            setup_metrics_export(args.otel_endpoint, args.otel_export_period)
+
         client = Client()
         client.init_client(
             prefix=args.diode_app_name_prefix, target=args.diode_target, api_key=api_key
         )
+
         uvicorn.run(
             app,
             host=args.host,

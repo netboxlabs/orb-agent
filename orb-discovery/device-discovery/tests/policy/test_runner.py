@@ -46,7 +46,7 @@ def test_setup_policy_runner_with_cron(policy_runner, sample_config, sample_scop
 
         # Ensure scheduler starts and job is added
         mock_start.assert_called_once()
-        mock_add_job.assert_called_once()
+        mock_add_job.assert_called()
         assert policy_runner.status == Status.RUNNING
 
 
@@ -69,7 +69,9 @@ def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes):
 def test_setup_with_unsupported_driver_raises_error(policy_runner, sample_scopes):
     """Test setup raises error if driver is unsupported."""
     sample_scopes[0].driver = "unsupported_driver"
-    with patch("device_discovery.policy.runner.supported_drivers", ["ios"]), pytest.raises(
+    with patch(
+        "device_discovery.policy.runner.supported_drivers", ["ios"]
+    ), pytest.raises(
         Exception, match="specified driver 'unsupported_driver' was not found"
     ):
         policy_runner.setup("policy1", Config(), sample_scopes)
@@ -146,3 +148,116 @@ def test_stop_policy_runner(policy_runner):
         # Ensure scheduler shutdown is called and status is updated
         mock_shutdown.assert_called_once()
         assert policy_runner.status == Status.FINISHED
+
+
+def test_metrics_during_policy_lifecycle(policy_runner, sample_config, sample_scopes):
+    """Test that metrics are properly updated during the policy lifecycle."""
+    # Create mock metrics
+    mock_active_policies = MagicMock()
+    mock_policy_executions = MagicMock()
+    mock_discovery_attempts = MagicMock()
+    mock_discovery_success = MagicMock()
+    mock_discovery_failure = MagicMock()
+    mock_device_connection_latency = MagicMock()
+    mock_discovery_latency = MagicMock()
+
+    # Map of metric names to mock objects
+    mock_metrics = {
+        "active_policies": mock_active_policies,
+        "policy_executions": mock_policy_executions,
+        "discovery_attempts": mock_discovery_attempts,
+        "discovery_success": mock_discovery_success,
+        "discovery_failure": mock_discovery_failure,
+        "device_connection_latency": mock_device_connection_latency,
+        "discovery_latency": mock_discovery_latency,
+    }
+
+    # Setup mock for get_metric function
+    def mock_get_metric(name):
+        return mock_metrics.get(name)
+
+    with patch(
+        "device_discovery.policy.runner.get_metric", side_effect=mock_get_metric
+    ), patch.object(policy_runner.scheduler, "start"), patch.object(
+        policy_runner.scheduler, "add_job"
+    ), patch(
+        "device_discovery.policy.runner.get_network_driver"
+    ), patch(
+        "device_discovery.client.Client.ingest"
+    ):
+
+        # Test setup - should increment active_policies
+        policy_runner.setup("test_policy", sample_config, sample_scopes)
+        mock_active_policies.add.assert_called_once_with(1, {"policy": "test_policy"})
+
+        # Test telemetry job - should increment policy_executions
+        policy_runner.telemetry()
+        mock_policy_executions.add.assert_called_once_with(1, {"policy": "test_policy"})
+
+        # Test run - should record attempts, success, and latency
+        policy_runner.run("test_id", sample_scopes[0], sample_config)
+
+        mock_discovery_attempts.add.assert_called_once_with(
+            1, {"policy": "test_policy"}
+        )
+        mock_discovery_success.add.assert_called_once_with(1, {"policy": "test_policy"})
+        mock_device_connection_latency.record.assert_called_once()
+        mock_discovery_latency.record.assert_called_once()
+
+        # Verify connection latency recorded with correct values
+        latency_args = mock_device_connection_latency.record.call_args[0][0]
+        latency_kwargs = mock_device_connection_latency.record.call_args[0][1]
+        assert latency_args > 0.01  # 0.1 seconds in milliseconds
+        assert latency_kwargs["policy"] == "test_policy"
+        assert latency_kwargs["driver"] == "ios"
+
+        # Test stop - should decrement active_policies
+        with patch.object(policy_runner.scheduler, "shutdown") as mock_shutdown:
+            policy_runner.stop()
+            mock_shutdown.assert_called_once()
+            mock_active_policies.add.assert_called_with(-1, {"policy": "test_policy"})
+
+
+def test_metrics_during_failed_discovery(policy_runner, sample_config):
+    """Test that metrics are properly updated when discovery fails."""
+    # Create a scope with no driver to force discovery
+    scope = Napalm(
+        driver=None, hostname="router1", username="admin", password="password"
+    )
+
+    mock_discovery_attempts = MagicMock()
+    mock_discovery_failure = MagicMock()
+    mock_discovery_latency = MagicMock()
+
+    mock_metrics = {
+        "discovery_attempts": mock_discovery_attempts,
+        "discovery_failure": mock_discovery_failure,
+        "discovery_latency": mock_discovery_latency,
+    }
+
+    def mock_get_metric(name):
+        return mock_metrics.get(name)
+
+    with patch(
+        "device_discovery.policy.runner.get_metric", side_effect=mock_get_metric
+    ), patch(
+        "device_discovery.policy.runner.discover_device_driver", return_value="ios"
+    ), patch(
+        "device_discovery.policy.runner.get_network_driver",
+        side_effect=Exception("Connection error"),
+    ), patch.object(
+        policy_runner.scheduler, "remove_job"
+    ):
+
+        # Run the device with discovery that will fail
+        policy_runner.run("test_id", scope, sample_config)
+
+        # Verify failure metric was called
+        mock_discovery_failure.add.assert_called_once_with(1, {"policy": ""})
+
+        # Verify discovery latency recorded with failure status
+        mock_discovery_latency.record.assert_called_once()
+        latency_args = mock_discovery_latency.record.call_args[0][0]
+        latency_kwargs = mock_discovery_latency.record.call_args[0][1]
+        assert latency_args > 0.01
+        assert latency_kwargs["status"] == "failed"
