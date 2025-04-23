@@ -40,7 +40,8 @@ type deviceDiscoveryBackend struct {
 	apiProtocol string
 
 	diodeTarget        string
-	diodeAPIKey        string
+	diodeClientID      string
+	diodeClientSecret  string
 	diodeAppNamePrefix string
 
 	startTime  time.Time
@@ -79,7 +80,8 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	}
 
 	d.diodeTarget = common.Diode.Target
-	d.diodeAPIKey = common.Diode.APIKey
+	d.diodeClientID = common.Diode.ClientID
+	d.diodeClientSecret = common.Diode.ClientSecret
 	d.diodeAppNamePrefix = common.Diode.AgentName
 
 	return nil
@@ -105,13 +107,14 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		"--host", d.apiHost,
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
-		"--diode-api-key", "********",
+		"--diode-client-id", d.diodeClientID,
+		"--diode-client-secret", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("device-discovery startup", slog.Any("arguments", pvOptions))
 
-	pvOptions[7] = d.diodeAPIKey
+	pvOptions[8] = d.diodeClientSecret
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
