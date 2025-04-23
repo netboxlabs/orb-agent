@@ -3,6 +3,7 @@
 """Orb Worker Server."""
 
 
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -10,6 +11,7 @@ import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import ValidationError
 
+from worker.metrics import get_metric
 from worker.models import PolicyRequest
 from worker.policy.manager import PolicyManager
 from worker.version import version_semver
@@ -35,6 +37,44 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+# Add middleware to track API requests and latency
+@app.middleware("http")
+async def add_metrics(request: Request, call_next):
+    """
+    Add middleware to track API requests and latency.
+
+    Args:
+    ----
+        request (Request): The request object.
+        call_next: The next middleware or route handler.
+
+    Returns:
+    -------
+        response: The response object.
+
+    """
+    api_requests = get_metric("api_requests")
+    api_response_latency = get_metric("api_response_latency")
+    if api_requests is None or api_response_latency is None:
+        return await call_next(request)
+    api_requests.add(1, {"path": request.url.path, "method": request.method})
+
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    duration = (time.perf_counter() - start_time) * 1000
+
+    api_response_latency.record(
+        duration,
+        {
+            "path": request.url.path,
+            "method": request.method,
+            "status_code": response.status_code,
+        },
+    )
+
+    return response
 
 
 async def parse_yaml_body(request: Request) -> PolicyRequest:

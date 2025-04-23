@@ -8,7 +8,7 @@ import pytest
 from apscheduler.triggers.date import DateTrigger
 
 from worker.backend import Backend
-from worker.models import Config, DiodeConfig, Policy, Status
+from worker.models import Config, DiodeConfig, Metadata, Policy, Status
 from worker.policy.runner import PolicyRunner
 
 
@@ -151,7 +151,8 @@ def test_run_ingestion_errors(
     mock_backend.run.assert_called_once_with(policy_runner.name, sample_policy)
     mock_diode_client.ingest.assert_called_once_with(mock_backend.run.return_value)
     assert (
-        "ERROR ingestion failed for test_policy : ['error1', 'error2']" in caplog.text
+        "Policy test_policy: Ingestion failed with errors: ['error1', 'error2']"
+        in caplog.text
     )
 
 
@@ -186,3 +187,108 @@ def test_stop_policy_runner(policy_runner):
         # Ensure scheduler shutdown is called and status is updated
         mock_shutdown.assert_called_once()
         assert policy_runner.status == Status.FINISHED
+
+
+def test_metrics_during_policy_lifecycle(
+    policy_runner, sample_policy, mock_diode_client, mock_backend
+):
+    """Test that metrics are properly updated during the policy lifecycle."""
+    # Create mock metrics
+    mock_active_policies = MagicMock()
+    mock_policy_executions = MagicMock()
+    mock_backend_execution_success = MagicMock()
+    mock_backend_execution_failure = MagicMock()
+    mock_backend_execution_latency = MagicMock()
+
+    # Map of metric names to mock objects
+    mock_metrics = {
+        "active_policies": mock_active_policies,
+        "policy_executions": mock_policy_executions,
+        "backend_execution_success": mock_backend_execution_success,
+        "backend_execution_failure": mock_backend_execution_failure,
+        "backend_execution_latency": mock_backend_execution_latency,
+    }
+
+    policy_runner.name = "test_policy"
+    policy_runner.metadata = Metadata(
+        name="my_backend",
+        app_name="test_app",
+        app_version="1.0",
+    )
+
+    # Setup mock for get_metric function
+    def mock_get_metric(name):
+        return mock_metrics.get(name)
+
+    with patch("worker.policy.runner.get_metric", side_effect=mock_get_metric):
+
+        mock_diode_client.ingest.return_value.errors = []
+
+        policy_runner.run(mock_diode_client, mock_backend, sample_policy)
+
+        mock_backend.run.assert_called_once_with(policy_runner.name, sample_policy)
+        mock_diode_client.ingest.assert_called_once_with(mock_backend.run.return_value)
+
+        mock_policy_executions.add.assert_called_once_with(1, {"policy": "test_policy"})
+        mock_backend_execution_success.add.assert_called_once_with(
+            1,
+            {
+                "policy": "test_policy",
+                "backend": "my_backend",
+                "app_name": "test_app",
+                "app_version": "1.0",
+            },
+        )
+
+        # Test stop - should decrement active_policies
+        with patch.object(policy_runner.scheduler, "shutdown") as mock_shutdown:
+            policy_runner.stop()
+            mock_shutdown.assert_called_once()
+            mock_active_policies.add.assert_called_with(-1, {"policy": "test_policy"})
+
+
+def test_metrics_during_failed_discovery(
+    policy_runner, sample_policy, mock_diode_client, mock_backend
+):
+    """Test that metrics are properly updated when discovery fails."""
+    mock_backend_execution_failure = MagicMock()
+    mock_backend_execution_latency = MagicMock()
+
+    mock_metrics = {
+        "backend_execution_failure": mock_backend_execution_failure,
+        "backend_execution_latency": mock_backend_execution_latency,
+    }
+
+    policy_runner.name = "test_policy"
+    policy_runner.metadata = Metadata(
+        name="my_backend",
+        app_name="test_app",
+        app_version="1.0",
+    )
+
+    def mock_get_metric(name):
+        return mock_metrics.get(name)
+
+    # Simulate backend throwing an exception
+    mock_backend.run.side_effect = Exception("Backend error")
+
+    with patch("worker.policy.runner.get_metric", side_effect=mock_get_metric):
+        mock_diode_client = MagicMock(name="MockDiodeClient")
+        policy_runner.run(mock_diode_client, sample_diode_config, sample_policy)
+        # Verify failure metric was called
+        mock_backend_execution_failure.add.assert_called_once_with(
+            1,
+            {
+                "policy": "test_policy",
+                "backend": "my_backend",
+                "app_name": "test_app",
+                "app_version": "1.0",
+            },
+        )
+
+        # Verify backend execution latency recorded with failure status
+        mock_backend_execution_latency.record.assert_called_once()
+        latency_args = mock_backend_execution_latency.record.call_args[0][0]
+        latency_kwargs = mock_backend_execution_latency.record.call_args[0][1]
+        assert latency_args > 0
+        assert latency_kwargs["backend"] == "my_backend"

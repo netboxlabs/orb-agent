@@ -2,7 +2,7 @@
 # Copyright 2025 NetBox Labs Inc
 """NetBox Labs - Server Unit Tests."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -139,11 +139,25 @@ def test_read_status(mock_version_semver):
         mock_version_semver: Mocked version_semver function.
 
     """
-    response = client.get("/api/v1/status")
-    mock_version_semver.assert_called_once()
-    assert response.status_code == 200
-    assert response.json()["version"] == "1.0.0"
-    assert "up_time_seconds" in response.json()
+    mock_api_requests = MagicMock()
+    mock_api_response_latency = MagicMock()
+
+    mock_metrics = {
+        "api_requests": mock_api_requests,
+        "api_response_latency": mock_api_response_latency,
+    }
+
+    def mock_get_metric(name):
+        return mock_metrics.get(name)
+
+    with patch("worker.server.get_metric", side_effect=mock_get_metric):
+        response = client.get("/api/v1/status")
+        mock_version_semver.assert_called_once()
+        assert response.status_code == 200
+        assert response.json()["version"] == "1.0.0"
+        assert "up_time_seconds" in response.json()
+        assert mock_api_requests.add.call_count == 1
+        assert mock_api_response_latency.record.call_count == 1
 
 
 def test_read_capabilities():

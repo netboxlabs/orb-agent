@@ -9,6 +9,7 @@ import sys
 import netboxlabs.diode.sdk.version as SdkVersion
 import uvicorn
 
+from worker.metrics import setup_metrics_export
 from worker.models import DiodeConfig
 from worker.server import app, manager
 from worker.version import version_semver
@@ -69,12 +70,30 @@ def main():
         required=False,
     )
 
+    parser.add_argument(
+        "--otel-endpoint",
+        help="OpenTelemetry exporter endpoint",
+        type=str,
+        required=False,
+    )
+
+    parser.add_argument(
+        "--otel-export-period",
+        help="Period in seconds between OpenTelemetry exports (default: 60)",
+        type=int,
+        default=60,
+        required=False,
+    )
+
     try:
         args = parser.parse_args()
         api_key = args.diode_api_key
         if api_key.startswith("${") and api_key.endswith("}"):
             env_var = api_key[2:-1]
             api_key = os.getenv(env_var, api_key)
+
+        if args.otel_endpoint:
+            setup_metrics_export(args.otel_endpoint, args.otel_export_period)
 
         config = DiodeConfig(
             target=args.diode_target, prefix=args.diode_app_name_prefix, api_key=api_key
