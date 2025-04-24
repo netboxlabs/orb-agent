@@ -3,6 +3,7 @@ package crawler
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -12,7 +13,6 @@ import (
 type contextKey string
 
 const (
-	queueSize            = 100
 	community            = "public"
 	policyKey contextKey = "policy"
 )
@@ -25,6 +25,7 @@ type Crawler struct {
 	ctx               context.Context
 	client            diode.Client
 	snmpClientFactory func(host string) SNMPWalker
+	mapper            *OIDMapper
 }
 
 // NewCrawler creates a new Crawler instance with the provided context, logger, client, and target IPs.
@@ -36,6 +37,11 @@ func NewCrawler(ctx context.Context, logger *slog.Logger, client diode.Client, t
 		targets:           targets,
 		entities:          make([]diode.Entity, 0),
 		snmpClientFactory: snmpClientFactory,
+		mapper: &OIDMapper{
+			mapping: OIDMapping{
+				"1.3.6.1.2.1.4.20.1.1": "ipAddress.address",
+			},
+		},
 	}
 }
 
@@ -45,35 +51,88 @@ func (c *Crawler) CrawlTargets() ([]diode.Entity, error) {
 	c.logger.Info("Starting crawler for targets:", "targets", c.targets)
 
 	for _, target := range c.targets {
-		c.crawlHost(target)
+		host := &SNMPHost{
+			address:           target,
+			objects:           make(map[string]string),
+			logger:            c.logger,
+			snmpClientFactory: c.snmpClientFactory,
+			oids:              c.mapper.OIDs(),
+		}
+		oids, err := host.Walk(target)
+		if err != nil {
+			c.logger.Warn("Error crawling host", "ip", target, "error", err)
+			continue
+		}
+		entities := c.mapper.MapOIDsToEntity(oids)
+		c.entities = append(c.entities, entities...)
 	}
-	c.logger.Info("Network crawl complete.")
+	c.logger.Info("SNMP crawl complete.")
 	return c.entities, nil
 }
 
-func (c *Crawler) crawlHost(ip string) {
+// OIDMapping is a map of OIDs to entity types
+type OIDMapping map[string]string
 
-	c.logger.Info("Scanning", "ip", ip)
+// OIDValueMap is a map of OIDs to their values
+type OIDValueMap map[string]string
 
-	snmp := c.snmpClientFactory(ip)
+// OIDMapper is a struct that maps OIDs to entities
+type OIDMapper struct {
+	mapping OIDMapping
+}
+
+// mapOIDsToEntity maps OIDs to entities
+// In future this will be dynamic based on the OIDMapping from the policy
+func (m *OIDMapper) MapOIDsToEntity(oids OIDValueMap) []diode.Entity {
+	ipEntity := &diode.IPAddress{
+		Address: diode.String(oids["1.3.6.1.2.1.4.20.1.1"] + "/32"),
+	}
+	return []diode.Entity{ipEntity}
+}
+
+func (m *OIDMapper) OIDs() []string {
+	objectIDs := make([]string, 0, len(m.mapping))
+	for oid := range m.mapping {
+		objectIDs = append(objectIDs, oid)
+	}
+	return objectIDs
+}
+
+type SNMPHost struct {
+	address           string
+	objects           map[string]string
+	logger            *slog.Logger
+	snmpClientFactory func(host string) SNMPWalker
+	oids              []string
+}
+
+func (s *SNMPHost) Walk(host string) (OIDValueMap, error) {
+	s.logger.Info("Scanning", "host", host)
+
+	snmp := s.snmpClientFactory(host)
 	defer func() {
 		if err := snmp.Close(); err != nil {
-			c.logger.Warn("Error closing SNMP connection", "ip", ip, "error", err)
+			s.logger.Warn("Error closing SNMP connection", "host", host, "error", err)
 		}
 	}()
 
 	err := snmp.Connect()
 	if err != nil {
-		c.logger.Warn("Could not connect to host", "ip", ip, "error", err)
-		return
+		s.logger.Warn("Could not connect to host", "host", host, "error", err)
+		return nil, err
 	}
 
-	ipEntity := &diode.IPAddress{
-		Address: diode.String(ip + "/32"),
+	output := make(OIDValueMap)
+	for _, oid := range s.oids {
+		pdu, err := snmp.Walk(oid)
+		if err != nil {
+			s.logger.Warn("Error walking OID", "oid", oid, "error", err)
+			continue
+		}
+		maps.Copy(output, pdu)
 	}
-	c.logger.Info("Found IP address", "ip", ip, "entity", ipEntity)
 
-	c.entities = append(c.entities, ipEntity)
+	return output, nil
 }
 
 // SNMPClient wraps gosnmp.GoSNMP to implement the SNMPWalker interface
@@ -84,6 +143,18 @@ type SNMPClient struct {
 // Close implements the SNMPWalker interface by closing the SNMP connection
 func (c *SNMPClient) Close() error {
 	return c.Conn.Close()
+}
+
+func (c *SNMPClient) Walk(oid string) (OIDValueMap, error) {
+	pdu, err := c.WalkAll(oid)
+	if err != nil {
+		return nil, err
+	}
+	output := make(OIDValueMap)
+	for _, pdu := range pdu {
+		output[pdu.Name] = pdu.Value.(string)
+	}
+	return output, nil
 }
 
 // NewSNMPWalker creates a new SNMPClient for the given target host
@@ -103,7 +174,7 @@ func NewSNMPWalker(host string) SNMPWalker {
 // It allows for connecting to SNMP devices, traversing OID trees,
 // and properly closing connections when finished
 type SNMPWalker interface {
-	WalkAll(oid string) ([]gosnmp.SnmpPDU, error)
+	Walk(oid string) (OIDValueMap, error)
 	Connect() error
 	Close() error
 }

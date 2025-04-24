@@ -6,7 +6,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
@@ -45,26 +44,31 @@ func (m *MockClient) Ingest(context.Context, []diode.Entity) (*diodepb.IngestRes
 	panic("unimplemented")
 }
 
-// NullSNMPWalker is a no-op implementation of SNMPWalker
-type NullSNMPWalker struct{}
+// FakeSNMPWalker is a no-op implementation of SNMPWalker
+type FakeSNMPWalker struct{}
 
 // Connect implements SNMPWalker interface
-func (n *NullSNMPWalker) Connect() error {
+func (n *FakeSNMPWalker) Connect() error {
 	return nil
 }
 
 // Close implements SNMPWalker interface
-func (n *NullSNMPWalker) Close() error {
+func (n *FakeSNMPWalker) Close() error {
 	return nil
 }
 
-// WalkAll implements SNMPWalker interface
-func (n *NullSNMPWalker) WalkAll(string) ([]gosnmp.SnmpPDU, error) {
-	return []gosnmp.SnmpPDU{}, nil
+// Walk implements SNMPWalker interface
+func (n *FakeSNMPWalker) Walk(oid string) (crawler.OIDValueMap, error) {
+	if oid == "1.3.6.1.2.1.4.20.1.1" {
+		return crawler.OIDValueMap{
+			"1.3.6.1.2.1.4.20.1.1": "192.168.1.1",
+		}, nil
+	}
+	return make(crawler.OIDValueMap), nil
 }
 
-func NewNullSNMPWalker(_ string) crawler.SNMPWalker {
-	return &NullSNMPWalker{}
+func NewFakeSNMPWalker(_ string) crawler.SNMPWalker {
+	return &FakeSNMPWalker{}
 }
 
 func TestCrawlTargets(t *testing.T) {
@@ -77,7 +81,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{"192.168.1.1"}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewFakeSNMPWalker)
 
 		// Execute
 		entities, err := c.CrawlTargets()
@@ -97,7 +101,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewFakeSNMPWalker)
 
 		// Execute
 		entities, err := c.CrawlTargets()
@@ -113,7 +117,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{"192.168.1.1", "192.168.1.2"}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewFakeSNMPWalker)
 
 		// Cancel context immediately
 		cancel()
@@ -132,7 +136,7 @@ func TestCrawlTargets(t *testing.T) {
 		targets := []string{"192.168.1.1", "192.168.1.1"}
 
 		// Create crawler with mock client
-		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewNullSNMPWalker)
+		c := crawler.NewCrawler(ctx, logger, mockClient, targets, NewFakeSNMPWalker)
 
 		// Execute
 		entities, err := c.CrawlTargets()
