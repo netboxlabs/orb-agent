@@ -13,7 +13,8 @@ orb:
     common:
       diode:
         target: grpc://192.168.0.100:8080/diode
-        api_key: ${DIODE_API_KEY}
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     worker:
       host: 192.168.5.11 # default 0.0.0.0

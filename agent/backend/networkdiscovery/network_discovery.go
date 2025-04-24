@@ -40,7 +40,8 @@ type networkDiscoveryBackend struct {
 	apiProtocol string
 
 	diodeTarget        string
-	diodeAPIKey        string
+	diodeClientID      string
+	diodeClientSecret  string
 	diodeAppNamePrefix string
 
 	startTime  time.Time
@@ -79,7 +80,8 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 	}
 
 	d.diodeTarget = common.Diode.Target
-	d.diodeAPIKey = common.Diode.APIKey
+	d.diodeClientID = common.Diode.ClientID
+	d.diodeClientSecret = common.Diode.ClientSecret
 	d.diodeAppNamePrefix = common.Diode.AgentName
 
 	return nil
@@ -105,13 +107,14 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		"--host", d.apiHost,
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
-		"--diode-api-key", "********",
+		"--diode-client-id", d.diodeClientID,
+		"--diode-client-secret", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("network-discovery startup", slog.Any("arguments", pvOptions))
 
-	pvOptions[7] = d.diodeAPIKey
+	pvOptions[9] = d.diodeClientSecret
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
