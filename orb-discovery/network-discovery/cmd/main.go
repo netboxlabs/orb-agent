@@ -41,8 +41,10 @@ func main() {
 	host := flag.String("host", "0.0.0.0", "server host")
 	port := flag.Int("port", 8073, "server port")
 	diodeTarget := flag.String("diode-target", "", "diode target (REQUIRED)")
-	diodeAPIKey := flag.String("diode-api-key", "", "diode api key (REQUIRED)."+
-		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})")
+	diodeClientID := flag.String("diode-client-id", "", "diode client ID (REQUIRED)."+
+		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_ID})")
+	diodeClientSecret := flag.String("diode-client-secret", "", "diode client secret (REQUIRED)."+
+		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_SECRET})")
 	diodeAppNamePrefix := flag.String("diode-app-name-prefix", "", "diode producer_app_name prefix")
 	logLevel := flag.String("log-level", "INFO", "log level")
 	logFormat := flag.String("log-format", "TEXT", "log format")
@@ -50,7 +52,7 @@ func main() {
 
 	flag.Parse()
 
-	if *help || *diodeTarget == "" || *diodeAPIKey == "" {
+	if *help || *diodeTarget == "" || *diodeClientID == "" || *diodeClientSecret == "" {
 		fmt.Fprintf(os.Stderr, "Usage of network-discovery:\n")
 		flag.PrintDefaults()
 		if *help {
@@ -68,7 +70,8 @@ func main() {
 		*diodeTarget,
 		producerName,
 		version.GetBuildVersion(),
-		diode.WithAPIKey(resolveEnv(*diodeAPIKey)),
+		diode.WithClientID(resolveEnv(*diodeClientID)),
+		diode.WithClientSecret(resolveEnv(*diodeClientSecret)),
 	)
 	if err != nil {
 		fmt.Printf("error creating diode client: %v\n", err)

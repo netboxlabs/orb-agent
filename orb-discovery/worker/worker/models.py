@@ -23,7 +23,8 @@ class DiodeConfig(BaseModel):
 
     target: str
     prefix: str | None = None
-    api_key: str | None = None
+    client_id: str | None = None
+    client_secret: str | None = None
 
 
 class Metadata(BaseModel):

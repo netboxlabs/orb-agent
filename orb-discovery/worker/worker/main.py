@@ -8,6 +8,7 @@ import sys
 
 import netboxlabs.diode.sdk.version as SdkVersion
 import uvicorn
+from netboxlabs.diode.sdk import DiodeClient
 
 from worker.metrics import setup_metrics_export
 from worker.models import DiodeConfig
@@ -55,9 +56,17 @@ def main():
     )
 
     parser.add_argument(
+        "-c",
+        "--diode-client-id",
+        help="Diode Client ID. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_ID})",
+        type=str,
+        required=True,
+    )
+
+    parser.add_argument(
         "-k",
-        "--diode-api-key",
-        help="Diode API key. Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})",
+        "--diode-client-secret",
+        help="Diode Client Secret. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_SECRET})",
         type=str,
         required=True,
     )
@@ -87,17 +96,36 @@ def main():
 
     try:
         args = parser.parse_args()
-        api_key = args.diode_api_key
-        if api_key.startswith("${") and api_key.endswith("}"):
-            env_var = api_key[2:-1]
-            api_key = os.getenv(env_var, api_key)
+        client_id = args.diode_client_id
+        if client_id.startswith("${") and client_id.endswith("}"):
+            env_var = client_id[2:-1]
+            client_id = os.getenv(env_var, client_id)
+        client_secret = args.diode_client_secret
+        if client_secret.startswith("${") and client_secret.endswith("}"):
+            env_var = client_secret[2:-1]
+            client_secret = os.getenv(env_var, client_secret)
 
         if args.otel_endpoint:
             setup_metrics_export(args.otel_endpoint, args.otel_export_period)
 
         config = DiodeConfig(
-            target=args.diode_target, prefix=args.diode_app_name_prefix, api_key=api_key
+            target=args.diode_target,
+            prefix=args.diode_app_name_prefix,
+            client_id=client_id,
+            client_secret=client_secret,
         )
+
+        try:
+            DiodeClient(
+                target=config.target,
+                app_name="validate",
+                app_version="0.0.0",
+                client_id=client_id,
+                client_secret=client_secret,
+            )
+        except Exception as e:
+            sys.exit(f"ERROR: Unable to connect to Diode Server: {e}")
+
         manager.setup(config)
         uvicorn.run(
             app,

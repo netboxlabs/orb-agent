@@ -125,7 +125,9 @@ class PolicyRunner:
                 return False
         return True
 
-    def _collect_device_data(self, scope: Napalm, sanitized_hostname: str, config: Config):
+    def _collect_device_data(
+        self, scope: Napalm, sanitized_hostname: str, config: Config
+    ):
         """
         Connect to device and collect data.
 
@@ -150,9 +152,7 @@ class PolicyRunner:
             scope.timeout,
             scope.optional_args,
         ) as device:
-            connection_duration = (
-                time.perf_counter() - connection_start_time
-            ) * 1000
+            connection_duration = (time.perf_counter() - connection_start_time) * 1000
             device_connection_latency = get_metric("device_connection_latency")
             if device_connection_latency:
                 device_connection_latency.record(
@@ -171,6 +171,12 @@ class PolicyRunner:
                 "interface_ip": device.get_interfaces_ip(),
                 "defaults": config.defaults,
             }
+            try:
+                data["vlan"] = device.get_vlans()
+            except Exception as e:
+                logger.error(
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}"
+                )
             Client().ingest(scope.hostname, data)
             discovery_success = get_metric("discovery_success")
             if discovery_success:

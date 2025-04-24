@@ -65,8 +65,8 @@ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd h1:TRLaZ9cD/w
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/reflect2 v1.0.2 h1:xBagoLtFs94CBntxluKeaWgTMpvLxC4ur3nMaC9Gz0M=
 github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
-github.com/netboxlabs/diode-sdk-go v0.2.0 h1:tgOxM2EflQM7fMHFLJBlKNPUuFgwCMwNDTdjEAzHBTU=
-github.com/netboxlabs/diode-sdk-go v0.2.0/go.mod h1:RLXp5jHpUrFmz27/DlrZRQ26O/UNnBaJ/7Joh+FeN6c=
+github.com/netboxlabs/diode-sdk-go v1.0.0 h1:xHMOp5SFnkJkwqSziWfF5u6h1VWWa1FTnmKCEe7CVvc=
+github.com/netboxlabs/diode-sdk-go v1.0.0/go.mod h1:UNUmF3TJrvPVUutjKqMPpcRPm29myBjgc5c3CjHduis=
 github.com/pelletier/go-toml/v2 v2.2.3 h1:YmeHyLY8mFWbdkNWwpr+qIL2bEqT0o95WSdkNHvL12M=
 github.com/pelletier/go-toml/v2 v2.2.3/go.mod h1:MfCQTFTvCcUyyvvwm1+G6H/jORL20Xlb6rzQu9GuUkc=
 github.com/pkg/diff v0.0.0-20210226163009-20ebb0f2a09e/go.mod h1:pJLUxLENpZxwdsKMEsNbx1VGcRFpLqf3715MtcvvzbA=

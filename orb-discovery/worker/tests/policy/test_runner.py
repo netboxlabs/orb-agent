@@ -29,7 +29,12 @@ def sample_policy():
 @pytest.fixture
 def sample_diode_config():
     """Fixture for a sample DiodeConfig object."""
-    return DiodeConfig(target="http://localhost:8080", prefix="test")
+    return DiodeConfig(
+        target="http://localhost:8080",
+        client_id="abc",
+        client_secret="def",
+        prefix="test",
+    )
 
 
 @pytest.fixture

@@ -1,12 +1,14 @@
 module github.com/netboxlabs/orb-discovery/network-discovery
 
-go 1.23.3
+go 1.23.4
+
+toolchain go1.23.8
 
 require (
 	github.com/Ullaakut/nmap/v3 v3.0.4
 	github.com/gin-gonic/gin v1.10.0
 	github.com/go-co-op/gocron/v2 v2.14.0
-	github.com/netboxlabs/diode-sdk-go v0.2.0
+	github.com/netboxlabs/diode-sdk-go v1.0.0
 	github.com/stretchr/testify v1.10.0
 	gopkg.in/yaml.v3 v3.0.1
 )

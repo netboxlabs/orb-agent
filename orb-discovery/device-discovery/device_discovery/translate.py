@@ -6,6 +6,7 @@ import ipaddress
 from collections.abc import Iterable
 
 from netboxlabs.diode.sdk.ingester import (
+    VLAN,
     Device,
     DeviceType,
     Entity,
@@ -104,14 +105,16 @@ def translate_interface(
         description = defaults.interface.description
 
     description = interface_info.get("description", description)
+    mac_address = interface_info.get("mac_address") if interface_info.get("mac_address") != "" else None
 
     interface = Interface(
         device=device,
         name=if_name,
         enabled=interface_info.get("is_enabled"),
-        mac_address=interface_info.get("mac_address"),
+        primary_mac_address=mac_address,
         description=description,
         tags=tags,
+        type=defaults.if_type,
     )
 
     # Convert napalm interface speed from Mbps to Netbox Kbps
@@ -148,20 +151,32 @@ def translate_interface_ips(
     ip_tags = list(tags)
     ip_comments = None
     ip_description = None
+    ip_role = None
+    ip_tenant = None
+    ip_vrf = None
 
     prefix_tags = list(tags)
     prefix_comments = None
     prefix_description = None
+    prefix_role = None
+    prefix_tenant = None
+    prefix_vrf = None
 
     if defaults.ipaddress:
         ip_tags.extend(defaults.ipaddress.tags)
         ip_comments = defaults.ipaddress.comments
         ip_description = defaults.ipaddress.description
+        ip_role = defaults.ipaddress.role
+        ip_tenant = defaults.ipaddress.tenant
+        ip_vrf = defaults.ipaddress.vrf
 
     if defaults.prefix:
         prefix_tags.extend(defaults.prefix.tags)
         prefix_comments = defaults.prefix.comments
         prefix_description = defaults.prefix.description
+        prefix_role = defaults.prefix.role
+        prefix_tenant = defaults.prefix.tenant
+        prefix_vrf = defaults.prefix.vrf
 
     ip_entities = []
 
@@ -175,7 +190,10 @@ def translate_interface_ips(
                         Entity(
                             prefix=Prefix(
                                 prefix=str(network),
-                                site=interface.device.site,
+                                scope_site=defaults.site,
+                                vrf=prefix_vrf,
+                                role=prefix_role,
+                                tenant=prefix_tenant,
                                 tags=prefix_tags,
                                 comments=prefix_comments,
                                 description=prefix_description,
@@ -186,7 +204,10 @@ def translate_interface_ips(
                         Entity(
                             ip_address=IPAddress(
                                 address=ip_address,
-                                interface=interface,
+                                assigned_object_interface=interface,
+                                role=ip_role,
+                                tenant=ip_tenant,
+                                vrf=ip_vrf,
                                 tags=ip_tags,
                                 comments=ip_comments,
                                 description=ip_description,
@@ -195,6 +216,46 @@ def translate_interface_ips(
                     )
 
     return ip_entities
+
+
+def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
+    """
+    Translate VLAN information for a given VLAN ID.
+
+    Args:
+    ----
+        vid (str): VLAN ID.
+        vlan_name (str): VLAN name.
+        defaults (Defaults): Default configuration.
+
+    """
+    tags = defaults.tags if defaults.tags else []
+    comments = None
+    description = None
+    group = None
+    tenant = None
+    role = None
+
+    if defaults.vlan:
+        tags.extend(defaults.vlan.tags)
+        comments = defaults.vlan.comments
+        description = defaults.vlan.description
+        group = defaults.vlan.group
+        tenant = defaults.vlan.tenant
+        role = defaults.vlan.role
+
+    vlan = VLAN(
+        vid=int(vid),
+        name=vlan_name,
+        group=group,
+        tenant=tenant,
+        role=role,
+        tags=tags,
+        comments=comments,
+        description=description,
+    )
+
+    return vlan
 
 
 def translate_data(data: dict) -> Iterable[Entity]:
@@ -226,5 +287,10 @@ def translate_data(data: dict) -> Iterable[Entity]:
             interface = translate_interface(device, if_name, interface_info, defaults)
             entities.append(Entity(interface=interface))
             entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
+
+    if data.get("vlan"):
+        for vid, vlan_info in data.get("vlan").items():
+            vlan = translate_vlan(vid, vlan_info.get("name"), defaults)
+            entities.append(Entity(vlan=vlan))
 
     return entities
