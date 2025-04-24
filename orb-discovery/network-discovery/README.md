@@ -12,10 +12,12 @@ sudo setcap cap_net_raw,cap_net_admin=eip $(which nmap)
 ### Usage
 ```sh
 Usage of network-discovery:
-  -diode-api-key string
-    	diode api key (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_API_KEY})
-  -diode-app-name-prefix string
+ -diode-app-name-prefix string
     	diode producer_app_name prefix
+  -diode-client-id string
+    	diode client ID (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_ID})
+  -diode-client-secret string
+    	diode client secret (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_SECRET})
   -diode-target string
     	diode target (REQUIRED)
   -help

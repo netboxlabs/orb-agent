@@ -4,6 +4,7 @@ Orb worker backend - allow running custom Backend implementations
 ### Usage
 ```bash
 usage: orb-worker [-h] [-V] [-s HOST] [-p PORT] -t DIODE_TARGET -c DIODE_CLIENT_ID -k DIODE_CLIENT_SECRET [-a DIODE_APP_NAME_PREFIX]
+               [--otel-endpoint OTEL_ENDPOINT] [--otel-export-period OTEL_EXPORT_PERIOD]
 
 Orb Worker Backend
 
@@ -20,6 +21,10 @@ options:
                         Diode Client Secret. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_SECRET})
   -a DIODE_APP_NAME_PREFIX, --diode-app-name-prefix DIODE_APP_NAME_PREFIX
                         Diode producer_app_name prefix
+  --otel-endpoint OTEL_ENDPOINT
+                        OpenTelemetry exporter endpoint
+  --otel-export-period OTEL_EXPORT_PERIOD
+                        Period in seconds between OpenTelemetry exports (default: 60)
 ```
 
 ### Policy RFC

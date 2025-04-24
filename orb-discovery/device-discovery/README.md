@@ -34,6 +34,7 @@ policies:
       schedule: "* * * * *" #Cron expression
       defaults:
         site: New York NY
+        role: Router
     scope:
       - hostname: 192.168.0.32
         username: ${USER}
