@@ -3,8 +3,6 @@ package crawler
 import (
 	"context"
 	"log/slog"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -22,12 +20,7 @@ const (
 // Crawler handles network discovery by scanning SNMP-enabled devices
 type Crawler struct {
 	logger            *slog.Logger
-	wg                sync.WaitGroup
-	scanned           map[string]bool
-	scannedMux        *sync.Mutex
-	queue             chan string
 	entities          []diode.Entity
-	entityMux         *sync.Mutex
 	targets           []string
 	ctx               context.Context
 	client            diode.Client
@@ -41,12 +34,7 @@ func NewCrawler(ctx context.Context, logger *slog.Logger, client diode.Client, t
 		logger:            logger,
 		client:            client,
 		targets:           targets,
-		wg:                sync.WaitGroup{},
-		scanned:           make(map[string]bool),
-		scannedMux:        &sync.Mutex{},
-		queue:             make(chan string, queueSize),
 		entities:          make([]diode.Entity, 0),
-		entityMux:         &sync.Mutex{},
 		snmpClientFactory: snmpClientFactory,
 	}
 }
@@ -56,32 +44,14 @@ func NewCrawler(ctx context.Context, logger *slog.Logger, client diode.Client, t
 func (c *Crawler) CrawlTargets() ([]diode.Entity, error) {
 	c.logger.Info("Starting crawler for targets:", "targets", c.targets)
 
-	go func() {
-		for ip := range c.queue {
-			go c.crawlHost(ip, c.queue)
-		}
-	}()
-
 	for _, target := range c.targets {
-		c.wg.Add(1)
-		c.queue <- target
+		c.crawlHost(target)
 	}
-	c.wg.Wait()
-	close(c.queue)
 	c.logger.Info("Network crawl complete.")
 	return c.entities, nil
 }
 
-func (c *Crawler) crawlHost(ip string, queue chan string) {
-	defer c.wg.Done()
-
-	c.scannedMux.Lock()
-	if c.scanned[ip] {
-		c.scannedMux.Unlock()
-		return
-	}
-	c.scanned[ip] = true
-	c.scannedMux.Unlock()
+func (c *Crawler) crawlHost(ip string) {
 
 	c.logger.Info("Scanning", "ip", ip)
 
@@ -103,23 +73,7 @@ func (c *Crawler) crawlHost(ip string, queue chan string) {
 	}
 	c.logger.Info("Found IP address", "ip", ip, "entity", ipEntity)
 
-	c.entityMux.Lock()
 	c.entities = append(c.entities, ipEntity)
-	c.entityMux.Unlock()
-
-	// Get ARP table
-	arpEntries, _ := snmp.WalkAll(".1.3.6.1.2.1.4.22.1.2")
-	for _, v := range arpEntries {
-		oidParts := strings.Split(v.Name, ".")
-		if len(oidParts) >= 4 {
-			neighborIP := strings.Join(oidParts[len(oidParts)-4:], ".")
-			c.logger.Info("Found neighbor host", "ip", neighborIP)
-
-			// Enqueue for next crawl
-			c.wg.Add(1)
-			queue <- neighborIP
-		}
-	}
 }
 
 // SNMPClient wraps gosnmp.GoSNMP to implement the SNMPWalker interface
