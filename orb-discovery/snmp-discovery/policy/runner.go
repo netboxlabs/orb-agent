@@ -9,7 +9,7 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/crawler"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
 
 // Define a custom type for the context key
@@ -71,12 +71,20 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	crawler := crawler.NewCrawler(ctx, r.logger, r.client, r.scope.Targets, crawler.NewSNMPWalker)
-	entities, err := crawler.CrawlTargets()
-	if err != nil {
-		r.logger.Error("error crawling targets", slog.Any("error", err), "targets", r.scope.Targets)
-		return
+	mapper := snmp.NewOidMapper()
+	entities := make([]diode.Entity, 0)
+
+	for _, target := range r.scope.Targets {
+		host := snmp.NewSNMPHost(target, r.logger, snmp.NewSNMPWalker, mapper.ObjectIDs())
+		oids, err := host.Walk(target)
+		if err != nil {
+			r.logger.Warn("Error crawling host", "ip", target, "error", err)
+			continue
+		}
+		entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
+		entities = append(entities, entitiesForTarget...)
 	}
+	r.logger.Info("SNMP crawl complete.")
 
 	resp, err := r.client.Ingest(ctx, entities)
 	if err != nil {

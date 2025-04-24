@@ -17,23 +17,23 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 )
 
-type MockClient struct {
+type MockDiodeClient struct {
 	mock.Mock
 }
 
-func (m *MockClient) Ingest(ctx context.Context, entities []diode.Entity) (*diodepb.IngestResponse, error) {
+func (m *MockDiodeClient) Ingest(ctx context.Context, entities []diode.Entity) (*diodepb.IngestResponse, error) {
 	args := m.Called(ctx, entities)
 	return args.Get(0).(*diodepb.IngestResponse), args.Error(1)
 }
 
-func (m *MockClient) Close() error {
+func (m *MockDiodeClient) Close() error {
 	args := m.Called()
 	return args.Error(0)
 }
 
 func TestNewRunner(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
-	mockClient := new(MockClient)
+	mockClient := new(MockDiodeClient)
 	cron := "0 0 * * *"
 	policyConfig := config.Policy{
 		Config: config.PolicyConfig{
@@ -75,7 +75,7 @@ func TestRunnerRun(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
-			mockClient := new(MockClient)
+			mockClient := new(MockDiodeClient)
 			policyConfig := config.Policy{
 				Config: config.PolicyConfig{
 					Schedule: nil,
@@ -149,7 +149,7 @@ func TestRunnerWithOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			mockClient := new(MockClient)
+			mockClient := new(MockDiodeClient)
 			ctx := context.Background()
 
 			// Create runner
