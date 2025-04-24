@@ -74,7 +74,8 @@ A special `common` subsection under `backends` defines configuration settings th
       common:
         diode:
           target: grpc://192.168.0.22:8080/diode
-          api_key: ${DIODE_API_KEY}
+          client_id: ${DIODE_CLIENT_ID}
+          client_secret: ${DIODE_CLIENT_SECRET}
           agent_name: agent01
 ```
 
