@@ -2,7 +2,6 @@ package snmp
 
 import (
 	"log/slog"
-	"maps"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -70,14 +69,14 @@ func NewSNMPHost(host string, logger *slog.Logger, snmpClientFactory func(host s
 func (s *SNMPHost) Walk(host string) (ObjectIDValueMap, error) {
 	s.logger.Info("Scanning", "host", host)
 
-	snmp := s.snmpClientFactory(host)
+	snmpClient := s.snmpClientFactory(host)
 	defer func() {
-		if err := snmp.Close(); err != nil {
+		if err := snmpClient.Close(); err != nil {
 			s.logger.Warn("Error closing SNMP connection", "host", host, "error", err)
 		}
 	}()
 
-	err := snmp.Connect()
+	err := snmpClient.Connect()
 	if err != nil {
 		s.logger.Warn("Could not connect to host", "host", host, "error", err)
 		return nil, err
@@ -85,12 +84,18 @@ func (s *SNMPHost) Walk(host string) (ObjectIDValueMap, error) {
 
 	output := make(ObjectIDValueMap)
 	for _, objectID := range s.objectIDs {
-		pdu, err := snmp.Walk(objectID)
+		pdu, err := snmpClient.Walk(objectID)
 		if err != nil {
 			s.logger.Warn("Error walking ObjectID", "objectID", objectID, "error", err)
-			continue
+			return nil, err
 		}
-		maps.Copy(output, pdu)
+		for k, v := range pdu {
+			if _, ok := output[k]; ok {
+				s.logger.Warn("Duplicate ObjectID", "objectID", k)
+				continue
+			}
+			output[k] = v
+		}
 	}
 
 	return output, nil

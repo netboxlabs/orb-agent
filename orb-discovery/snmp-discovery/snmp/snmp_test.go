@@ -104,6 +104,23 @@ func TestSNMPHost(t *testing.T) {
 		assert.Nil(t, oids)
 		mockWalker.AssertExpectations(t)
 	})
+
+	t.Run("Handles SNMP walk error", func(t *testing.T) {
+		// Setup
+		mockWalker := &MockSNMP{}
+		mockWalker.On("Connect").Return(nil)
+		mockWalker.On("Close").Return(nil)
+		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
+		host := snmp.NewSNMPHost("192.168.1.1", logger, func(_ string) snmp.SNMPWalker { return mockWalker }, []string{ipAddressObjectId})
+
+		// Execute
+		oids, err := host.Walk("192.168.1.1")
+
+		// Assert
+		assert.Error(t, err)
+		assert.Nil(t, oids)
+		mockWalker.AssertExpectations(t)
+	})
 }
 
 // Connect implements SNMPWalker interface
@@ -121,5 +138,5 @@ func (m *MockSNMP) Close() error {
 // Walk implements SNMPWalker interface
 func (m *MockSNMP) Walk(oid string) (snmp.ObjectIDValueMap, error) {
 	args := m.Called(oid)
-	return args.Get(0).(snmp.ObjectIDValueMap), args.Error(1)
+	return nil, args.Error(1)
 }
