@@ -114,7 +114,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 
 	d.logger.Info("worker startup", slog.Any("arguments", pvOptions))
 
-	pvOptions[8] = d.diodeClientSecret
+	pvOptions[9] = d.diodeClientSecret
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
