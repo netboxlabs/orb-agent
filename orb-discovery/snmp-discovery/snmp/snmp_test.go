@@ -2,6 +2,7 @@ package snmp_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -95,6 +96,24 @@ func TestSNMPHost(t *testing.T) {
 		assert.Nil(t, oids)
 		mockWalker.AssertExpectations(t)
 	})
+
+	t.Run("Handles SNMP client creation error", func(t *testing.T) {
+		// Setup
+		mockWalker := &MockSNMP{}
+		mockWalker.On("Connect").Return(nil)
+		mockWalker.On("Close").Return(nil)
+		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
+		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) (snmp.Walker, error) {
+			return nil, fmt.Errorf("error creating client")
+		}, []string{ipAddressObjectID})
+
+		// Execute
+		oids, err := host.Walk()
+
+		// Assert
+		assert.Error(t, err)
+		assert.Nil(t, oids)
+	})
 }
 
 // Connect implements Walker interface
@@ -139,4 +158,28 @@ func TestObjectIDs(t *testing.T) {
 	objectIDs := mapper.ObjectIDs()
 
 	assert.ElementsMatch(t, expectedObjectIDs, objectIDs)
+}
+
+func TestNewClient(t *testing.T) {
+	t.Run("Creates SNMPv2c client successfully", func(t *testing.T) {
+		auth := &config.Authentication{
+			ProtocolVersion: snmp.ProtocolVersion2c,
+			Community:       "public",
+		}
+		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+	})
+
+	t.Run("Returns error for unsupported protocol version", func(t *testing.T) {
+		auth := &config.Authentication{
+			ProtocolVersion: "SNMPv1",
+		}
+		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+
+		assert.Error(t, err)
+		assert.Nil(t, client)
+		assert.Equal(t, "unsupported protocol version: SNMPv1. Currently only SNMPv2c is supported", err.Error())
+	})
 }
