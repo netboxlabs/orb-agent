@@ -2,8 +2,6 @@ package policies
 
 import (
 	"errors"
-
-	"go.uber.org/zap"
 )
 
 // PolicyRepo is the interface for policy repositories
@@ -20,8 +18,6 @@ type PolicyRepo interface {
 }
 
 type policyMemRepo struct {
-	logger *zap.Logger
-
 	db      map[string]PolicyData
 	nameMap map[string]string
 }
@@ -36,9 +32,8 @@ func (p policyMemRepo) GetByName(policyName string) (PolicyData, error) {
 }
 
 // NewMemRepo creates a new in-memory policy repository
-func NewMemRepo(logger *zap.Logger) (PolicyRepo, error) {
+func NewMemRepo() (PolicyRepo, error) {
 	r := &policyMemRepo{
-		logger:  logger,
 		db:      make(map[string]PolicyData),
 		nameMap: make(map[string]string),
 	}

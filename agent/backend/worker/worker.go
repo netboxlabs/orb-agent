@@ -5,11 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
-	"github.com/go-cmd/cmd"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -32,7 +31,7 @@ const (
 )
 
 type workerBackend struct {
-	logger     *zap.Logger
+	logger     *slog.Logger
 	policyRepo policies.PolicyRepo
 	exec       string
 
@@ -41,12 +40,13 @@ type workerBackend struct {
 	apiProtocol string
 
 	diodeTarget        string
-	diodeAPIKey        string
+	diodeClientID      string
+	diodeClientSecret  string
 	diodeAppNamePrefix string
 
 	startTime  time.Time
-	proc       *cmd.Cmd
-	statusChan <-chan cmd.Status
+	proc       backend.Commander
+	statusChan <-chan backend.CmdStatus
 	cancelFunc context.CancelFunc
 	ctx        context.Context
 }
@@ -65,7 +65,9 @@ func Register() bool {
 	return true
 }
 
-func (d *workerBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]interface{}, common config.BackendCommons) error {
+func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
+	config map[string]any, common config.BackendCommons,
+) error {
 	d.logger = logger
 	d.policyRepo = repo
 
@@ -78,7 +80,8 @@ func (d *workerBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, 
 	}
 
 	d.diodeTarget = common.Diode.Target
-	d.diodeAPIKey = common.Diode.APIKey
+	d.diodeClientID = common.Diode.ClientID
+	d.diodeClientSecret = common.Diode.ClientSecret
 	d.diodeAppNamePrefix = common.Diode.AgentName
 
 	return nil
@@ -86,7 +89,9 @@ func (d *workerBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, 
 
 func (d *workerBackend) Version() (string, error) {
 	var info info
-	err := d.request("status", &info, http.MethodGet, http.NoBody, "application/json", versionTimeout)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	err := backend.CommonRequest("worker", d.proc, d.logger, url, &info, http.MethodGet,
+		http.NoBody, "application/json", versionTimeout, "detail")
 	if err != nil {
 		return "", err
 	}
@@ -102,15 +107,16 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		"--host", d.apiHost,
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
-		"--diode-api-key", "********",
+		"--diode-client-id", d.diodeClientID,
+		"--diode-client-secret", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
-	d.logger.Info("worker startup", zap.Strings("arguments", pvOptions))
+	d.logger.Info("worker startup", slog.Any("arguments", pvOptions))
 
-	pvOptions[7] = d.diodeAPIKey
+	pvOptions[9] = d.diodeClientSecret
 
-	d.proc = cmd.NewCmdOptions(cmd.Options{
+	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
 	}, d.exec, pvOptions...)
@@ -124,20 +130,22 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 				close(doneChan)
 			}
 		}()
-		for d.proc.Stdout != nil || d.proc.Stderr != nil {
+		stdout := d.proc.GetStdout()
+		stderr := d.proc.GetStderr()
+		for stdout != nil || stderr != nil {
 			select {
-			case line, open := <-d.proc.Stdout:
+			case line, open := <-stderr:
 				if !open {
-					d.proc.Stdout = nil
+					stdout = nil
 					continue
 				}
-				d.logger.Info("worker stdout", zap.String("log", line))
-			case line, open := <-d.proc.Stderr:
+				d.logger.Info("worker stdout", slog.String("log", line))
+			case line, open := <-stderr:
 				if !open {
-					d.proc.Stderr = nil
+					stderr = nil
 					continue
 				}
-				d.logger.Info("worker stderr", zap.String("log", line))
+				d.logger.Info("worker stderr", slog.String("log", line))
 			}
 		}
 	}()
@@ -148,37 +156,40 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	status := d.proc.Status()
 
 	if status.Error != nil {
-		d.logger.Error("worker startup error", zap.Error(status.Error))
+		d.logger.Error("worker startup error", slog.Any("error", status.Error))
 		return status.Error
 	}
 
 	if status.Complete {
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", zap.Error(err))
+			d.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return errors.New("worker startup error, check log")
 	}
 
-	d.logger.Info("worker process started", zap.Int("pid", status.PID))
+	d.logger.Info("worker process started", slog.Int("pid", status.PID))
 
+	var version string
 	var readinessErr error
-	for backoff := 0; backoff < readinessBackoff; backoff++ {
-		version, readinessErr := d.Version()
+	for backoff := range readinessBackoff {
+		version, readinessErr = d.Version()
 		if readinessErr == nil {
-			d.logger.Info("worker readiness ok, got version ", zap.String("worker_version", version))
+			d.logger.Info("worker readiness ok, got version ",
+				slog.String("worker_version", version))
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
-		d.logger.Info("worker is not ready, trying again with backoff", zap.String("backoff backoffDuration", backoffDuration.String()))
+		d.logger.Info("worker is not ready, trying again with backoff",
+			slog.String("backoff backoffDuration", backoffDuration.String()))
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessErr != nil {
-		d.logger.Error("worker error on readiness", zap.Error(readinessErr))
+		d.logger.Error("worker error on readiness", slog.Any("error", readinessErr))
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", zap.Error(err))
+			d.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return readinessErr
 	}
@@ -187,22 +198,23 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 }
 
 func (d *workerBackend) Stop(ctx context.Context) error {
-	d.logger.Info("routine call to stop worker", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	d.logger.Info("routine call to stop worker", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer d.cancelFunc()
 	err := d.proc.Stop()
 	finalStatus := <-d.statusChan
 	if err != nil {
-		d.logger.Error("worker shutdown error", zap.Error(err))
+		d.logger.Error("worker shutdown error", slog.Any("error", err))
 	}
-	d.logger.Info("worker process stopped", zap.Int("pid", finalStatus.PID), zap.Int("exit_code", finalStatus.Exit))
+	d.logger.Info("worker process stopped", slog.Int("pid", finalStatus.PID),
+		slog.Int("exit_code", finalStatus.Exit))
 	return nil
 }
 
 func (d *workerBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
-	if state, _, _ := d.getProcRunningStatus(); state == backend.Running {
+	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
-			d.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
+			d.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
 			return err
 		}
 	}
@@ -210,7 +222,7 @@ func (d *workerBackend) FullReset(ctx context.Context) error {
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "worker"))
 	// start it
 	if err := d.Start(backendCtx, cancelFunc); err != nil {
-		d.logger.Error("failed to start backend on restart procedure", zap.Error(err))
+		d.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
 		return err
 	}
 	return nil
@@ -220,9 +232,11 @@ func (d *workerBackend) GetStartTime() time.Time {
 	return d.startTime
 }
 
-func (d *workerBackend) GetCapabilities() (map[string]interface{}, error) {
-	caps := make(map[string]interface{})
-	err := d.request("capabilities", &caps, http.MethodGet, http.NoBody, "application/json", capabilitiesTimeout)
+func (d *workerBackend) GetCapabilities() (map[string]any, error) {
+	caps := make(map[string]any)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort)
+	err := backend.CommonRequest("worker", d.proc, d.logger, url, &caps, http.MethodGet,
+		http.NoBody, "application/json", capabilitiesTimeout, "detail")
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +245,7 @@ func (d *workerBackend) GetCapabilities() (map[string]interface{}, error) {
 
 func (d *workerBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
-	runningStatus, errMsg, err := d.getProcRunningStatus()
+	runningStatus, errMsg, err := backend.GetRunningStatus(d.proc)
 	// if it's not running, we're done
 	if runningStatus != backend.Running {
 		return runningStatus, errMsg, err
@@ -252,28 +266,31 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := d.RemovePolicy(data); err != nil {
-			d.logger.Warn("policy failed to remove", zap.String("policy_id", data.ID), zap.String("policy_name", data.Name), zap.Error(err))
+			d.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
+				slog.String("policy_name", data.Name), slog.Any("error", err))
 		}
 	}
 
-	d.logger.Debug("worker policy apply", zap.String("policy_id", data.ID), zap.Any("data", data.Data))
+	d.logger.Debug("worker policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
 
-	fullPolicy := map[string]interface{}{
-		"policies": map[string]interface{}{
+	fullPolicy := map[string]any{
+		"policies": map[string]any{
 			data.Name: data.Data,
 		},
 	}
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
-		d.logger.Warn("policy yaml marshal failure", zap.String("policy_id", data.ID), zap.Any("policy", fullPolicy))
+		d.logger.Warn("policy yaml marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
 		return err
 	}
 
-	var resp map[string]interface{}
-	err = d.request("policies", &resp, http.MethodPost, bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout)
+	var resp map[string]any
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", d.apiProtocol, d.apiHost, d.apiPort)
+	err = backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodPost,
+		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
-		d.logger.Warn("policy application failure", zap.String("policy_id", data.ID), zap.ByteString("policy", policyYaml))
+		d.logger.Warn("policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
 		return err
 	}
 
@@ -281,8 +298,8 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 }
 
 func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
-	d.logger.Debug("worker policy remove", zap.String("policy_id", data.ID))
-	var resp interface{}
+	d.logger.Debug("worker policy remove", slog.String("policy_id", data.ID))
+	var resp any
 	var name string
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
@@ -290,7 +307,9 @@ func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	err := d.request(fmt.Sprintf("policies/%s", name), &resp, http.MethodDelete, http.NoBody, "application/json", removePolicyTimeout)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, name)
+	err := backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodDelete,
+		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
 		return err
 	}

@@ -1,6 +1,21 @@
 # Device Discovery
 The device discovery backend leverages [NAPALM](https://napalm.readthedocs.io/en/latest/index.html) to connect to network devices and collect network information.
 
+## Diode Entities
+The device discovery backend uses [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) to ingest the following entities:
+
+* [Device](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#device)
+* [Interface](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#interface)
+* [Device Type](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#device-type)
+* [Platform](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#platform)
+* [Manufacturer](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#manufacturer)
+* [Site](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#site)
+* [Role](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#role)
+* [IP Address](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#ip-address)
+* [Prefix](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#prefix)
+* [VLAN](https://github.com/netboxlabs/diode-sdk-python/blob/develop/README.md#supported-entities-object-types)
+
+Interfaces are attached to the device and ip addresses will be attached to the interfaces. Prefixes are added to the same interface site that it belongs to.
 
 ## Configuration
 The `device_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
@@ -12,7 +27,8 @@ orb:
     common:
       diode:
         target: grpc://192.168.0.100:8080/diode
-        api_key: ${DIODE_API_KEY}
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     device_discovery:
       host: 192.168.5.11 # default 0.0.0.0
@@ -34,9 +50,47 @@ Config defines data for the whole scope and is optional overall.
 #### Defaults
 Current supported defaults:
 
-|  Key  |  Description  |
-|:-----:|:-------------:|
-| site  |  NetBox Site Name |
+|  Key  | Type |  Description  |
+|:-----:|:----:|:-------------:|
+| site  | str | NetBox Site Name (defaults to 'undefined' if not specified) |
+| role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
+| if_type | str | Interface Type (defaults to 'other' if not specified) |
+| description | str  | General description   |
+| comments   | str  | General comments       |
+| tags       | list | List of tags           |
+
+##### Nested Defaults
+
+| Key          | Type  | Description                   |
+|-------------|------|---------------------------------|
+| device      | map  | Device-specific defaults        |
+| ├─ description | str  | Device description           |
+| ├─ comments   | str  | Device comments               |
+| ├─ tags       | list | Device tags                   |
+| interface    | map  | Interface-specific defaults    |
+| ├─ description | str  | Interface description        |
+| ├─ tags       | list | Interface tags               |
+| ipaddress    | map  | IP address-specific defaults  |
+| ├─ role   | str  | IP address role                  |
+| ├─ tenant   | str  | IP address tenant              |
+| ├─ vrf   | str  | IP address vrf                    |
+| ├─ description | str  | IP address description      |
+| ├─ comments   | str  | IP address comments          |
+| ├─ tags       | list | IP address tags              |
+| prefix       | map  | Prefix-specific defaults      |
+| ├─ role   | str  | Prefix role                    |
+| ├─ tenant   | str  | Prefix tenant                |
+| ├─ vrf   | str  | Prefix vrf                      |
+| ├─ description | str  | Prefix description        |
+| ├─ comments   | str  | Prefix comments            |
+| ├─ tags       | list | Prefix tags                |
+| vlan       | map  | VLAN-specific defaults        |
+| ├─ group   | str  | VLAN group                    |
+| ├─ tenant   | str  | VLAN tenant                  |
+| ├─ role   | str  | VLAN role                      |
+| ├─ description | str  | VLAN description          |
+| ├─ comments   | str  | VLAN comments              |
+| ├─ tags       | list | VLAN tags                  |
 
 ### Scope
 The scope defines a list of devices that can be accessed and pulled data. 
@@ -63,6 +117,27 @@ orb:
           schedule: "* * * * *"
           defaults:
             site: New York NY
+            role: switch
+            description: for all
+            comments: comment all
+            tags: [tag1, tag2]
+            device:
+              description: device description
+              comments: this device
+              tags: [tag3, tag4]
+            interface:
+              description: interface description
+              tags: [tag5]
+            ipaddress:
+              description: my ip
+              comments: my comment
+              tags: [tag6]
+            prefix:
+              description:
+              comments:
+              tags: [tag7]
+            vlan:
+              role: role
         scope:
           - driver: ios
             hostname: 192.168.0.5

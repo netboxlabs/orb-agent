@@ -4,17 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mitchellh/mapstructure"
-	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
@@ -29,7 +30,7 @@ type Agent interface {
 }
 
 type orbAgent struct {
-	logger            *zap.Logger
+	logger            *slog.Logger
 	config            config.Config
 	backends          map[string]backend.Backend
 	backendState      map[string]*backend.State
@@ -49,8 +50,9 @@ type orbAgent struct {
 	// AgentGroup channels sent from core
 	groupsInfos map[string]groupInfo
 
-	policyManager policymgr.PolicyManager
-	configManager configmgr.Manager
+	policyManager  policymgr.PolicyManager
+	configManager  configmgr.Manager
+	secretsManager secretsmgr.Manager
 }
 
 type groupInfo struct {
@@ -61,49 +63,68 @@ type groupInfo struct {
 var _ Agent = (*orbAgent)(nil)
 
 // New creates a new agent
-func New(logger *zap.Logger, c config.Config) (Agent, error) {
-	pm, err := policymgr.New(logger, c)
+func New(logger *slog.Logger, c config.Config) (Agent, error) {
+	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManger)
+	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {
-		logger.Error("error during create policy manager, exiting", zap.Error(err))
+		logger.Error("error during create policy manager, exiting", slog.Any("error", err))
 		return nil, err
 	}
 	if pm.GetRepo() == nil {
-		logger.Error("policy manager failed to get repository", zap.Error(err))
+		logger.Error("policy manager failed to get repository", slog.Any("error", err))
 		return nil, err
 	}
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager)
 
-	return &orbAgent{logger: logger, config: c, policyManager: pm, configManager: cm, groupsInfos: make(map[string]groupInfo)}, nil
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active)
+
+	return &orbAgent{
+		logger: logger, config: c, policyManager: pm, configManager: cm,
+		secretsManager: sm, groupsInfos: make(map[string]groupInfo),
+	}, nil
 }
 
-func (a *orbAgent) startBackends(agentCtx context.Context) error {
-	a.logger.Info("registered backends", zap.Strings("values", backend.GetList()))
-	a.logger.Info("requested backends", zap.Any("values", a.config.OrbAgent.Backends))
-	if len(a.config.OrbAgent.Backends) == 0 {
+func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[string]any, labels map[string]string) error {
+	a.logger.Info("registered backends", slog.Any("values", backend.GetList()))
+	if len(cfgBackends) == 0 {
 		return errors.New("no backends specified")
 	}
-	a.backends = make(map[string]backend.Backend, len(a.config.OrbAgent.Backends))
+	a.backends = make(map[string]backend.Backend, len(cfgBackends))
 	a.backendState = make(map[string]*backend.State)
 
 	var commonConfig config.BackendCommons
-	if v, prs := a.config.OrbAgent.Backends["common"]; prs {
-		if err := mapstructure.Decode(v, &commonConfig); err != nil {
-			return fmt.Errorf("failed to decode common backend config: %w", err)
+	if v, prs := cfgBackends["common"]; prs {
+		bytes, err := yaml.Marshal(v)
+		if err != nil {
+			return err
 		}
+		err = yaml.Unmarshal(bytes, &commonConfig)
+		if err != nil {
+			a.logger.Info("failed to marshal common backend config", slog.Any("error", err))
+			return err
+		}
+	} else {
+		commonConfig = config.BackendCommons{}
 	}
-	commonConfig.Otel.AgentLabels = a.config.OrbAgent.Labels
+	commonConfig.Otel.AgentLabels = labels
 	a.backendsCommon = commonConfig
-	delete(a.config.OrbAgent.Backends, "common")
+	delete(cfgBackends, "common")
 
-	for name, configurationEntry := range a.config.OrbAgent.Backends {
-
+	for name, configurationEntry := range cfgBackends {
+		var cEntity map[string]any
+		if configurationEntry != nil {
+			var ok bool
+			cEntity, ok = configurationEntry.(map[string]any)
+			if !ok {
+				return errors.New("invalid backend configuration format for backend: " + name)
+			}
+		}
 		if !backend.HaveBackend(name) {
 			return errors.New("specified backend does not exist: " + name)
 		}
 		be := backend.GetBackend(name)
 
-		if err := be.Configure(a.logger, a.policyManager.GetRepo(), configurationEntry, a.backendsCommon); err != nil {
-			a.logger.Info("failed to configure backend", zap.String("backend", name), zap.Error(err))
+		if err := be.Configure(a.logger, a.policyManager.GetRepo(), cEntity, a.backendsCommon); err != nil {
+			a.logger.Info("failed to configure backend", slog.String("backend", name), slog.Any("error", err))
 			return err
 		}
 		backendCtx := context.WithValue(agentCtx, routineKey, name)
@@ -115,7 +136,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 			LastRestartTS: time.Now(),
 		}
 		if err := be.Start(context.WithCancel(backendCtx)); err != nil {
-			a.logger.Info("failed to start backend", zap.String("backend", name), zap.Error(err))
+			a.logger.Info("failed to start backend", slog.String("backend", name), slog.Any("error", err))
 			var errMessage string
 			if initialState == backend.BackendError {
 				errMessage = err.Error()
@@ -134,20 +155,33 @@ func (a *orbAgent) startBackends(agentCtx context.Context) error {
 func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
 	startTime := time.Now()
 	defer func(t time.Time) {
-		a.logger.Debug("Startup of agent execution duration", zap.String("Start() execution duration", time.Since(t).String()))
+		a.logger.Debug("Startup of agent execution duration", slog.String("Start() execution duration", time.Since(t).String()))
 	}(startTime)
 	agentCtx := context.WithValue(ctx, routineKey, "agentRoutine")
 	asyncCtx, cancelAllAsync := context.WithCancel(context.WithValue(ctx, routineKey, "asyncParent"))
 	a.asyncContext = asyncCtx
 	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
-	a.logger.Info("agent started", zap.String("version", version.GetBuildVersion()), zap.Any("routine", agentCtx.Value(routineKey)))
+	a.logger.Info("agent started", slog.String("version", version.GetBuildVersion()), slog.Any("routine", agentCtx.Value(routineKey)))
+	a.logger.Info("requested backends", slog.Any("values", a.config.OrbAgent.Backends))
 
-	if err := a.startBackends(ctx); err != nil {
+	if err := a.secretsManager.Start(ctx); err != nil {
+		a.logger.Error("error during start secrets manager", slog.Any("error", err))
 		return err
 	}
 
-	if err := a.configManager.Start(a.config, a.backends); err != nil {
+	var err error
+	if a.config.OrbAgent.Backends,
+		a.config.OrbAgent.ConfigManager,
+		err = a.secretsManager.SolveConfigSecrets(a.config.OrbAgent.Backends, a.config.OrbAgent.ConfigManager); err != nil {
+		return err
+	}
+
+	if err = a.startBackends(ctx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
+		return err
+	}
+
+	if err = a.configManager.Start(a.config, a.backends); err != nil {
 		return err
 	}
 
@@ -162,27 +196,27 @@ func (a *orbAgent) logonWithHeartbeat() {
 }
 
 func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
-	a.logger.Debug("stopping heartbeat, going offline status", zap.Any("routine", ctx.Value(routineKey)))
+	a.logger.Debug("stopping heartbeat, going offline status", slog.Any("routine", ctx.Value(routineKey)))
 	if a.heartbeatCtx != nil {
 		a.heartbeatCancel()
 	}
 }
 
 func (a *orbAgent) Stop(ctx context.Context) {
-	a.logger.Info("routine call for stop agent", zap.Any("routine", ctx.Value(routineKey)))
+	a.logger.Info("routine call for stop agent", slog.Any("routine", ctx.Value(routineKey)))
 	if a.rpcFromCancelFunc != nil {
 		a.rpcFromCancelFunc()
 	}
 	for name, b := range a.backends {
 		if state, _, _ := b.GetRunningStatus(); state == backend.Running {
-			a.logger.Debug("stopping backend", zap.String("backend", name))
+			a.logger.Debug("stopping backend", slog.String("backend", name))
 			if err := b.Stop(ctx); err != nil {
-				a.logger.Error("error while stopping the backend", zap.String("backend", name))
+				a.logger.Error("error while stopping the backend", slog.String("backend", name))
 			}
 		}
 	}
 	a.logoffWithHeartbeat(ctx)
-	a.logger.Debug("stopping agent with number of go routines and go calls", zap.Int("goroutines", runtime.NumGoroutine()), zap.Int64("gocalls", runtime.NumCgoCall()))
+	a.logger.Debug("stopping agent with number of go routines and go calls", slog.Int("goroutines", runtime.NumGoroutine()), slog.Int64("gocalls", runtime.NumCgoCall()))
 	if a.policyRequestSucceeded != nil {
 		a.policyRequestSucceeded()
 	}
@@ -198,22 +232,30 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	}
 
 	be := a.backends[name]
-	a.logger.Info("restarting backend", zap.String("backend", name), zap.String("reason", reason))
+	a.logger.Info("restarting backend", slog.String("backend", name), slog.String("reason", reason))
 	a.backendState[name].RestartCount++
 	a.backendState[name].LastRestartTS = time.Now()
 	a.backendState[name].LastRestartReason = reason
-	a.logger.Info("removing policies", zap.String("backend", name))
+	a.logger.Info("removing policies", slog.String("backend", name))
 	if err := a.policyManager.RemoveBackendPolicies(be, true); err != nil {
-		a.logger.Error("failed to remove policies", zap.String("backend", name), zap.Error(err))
+		a.logger.Error("failed to remove policies", slog.String("backend", name), slog.Any("error", err))
 	}
-	if err := be.Configure(a.logger, a.policyManager.GetRepo(), a.config.OrbAgent.Backends[name], a.backendsCommon); err != nil {
+	var beConfig map[string]any
+	if a.config.OrbAgent.Backends[name] != nil {
+		var ok bool
+		beConfig, ok = a.config.OrbAgent.Backends[name].(map[string]any)
+		if !ok {
+			return errors.New("backend not found: " + name)
+		}
+	}
+	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon); err != nil {
 		return err
 	}
-	a.logger.Info("resetting backend", zap.String("backend", name))
+	a.logger.Info("resetting backend", slog.String("backend", name))
 
 	if err := be.FullReset(ctx); err != nil {
 		a.backendState[name].LastError = fmt.Sprintf("failed to reset backend: %v", err)
-		a.logger.Error("failed to reset backend", zap.String("backend", name), zap.Error(err))
+		a.logger.Error("failed to reset backend", slog.String("backend", name), slog.Any("error", err))
 	}
 
 	return nil
@@ -222,12 +264,12 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
 	ctx = a.configManager.GetContext(ctx)
 	a.logoffWithHeartbeat(ctx)
-	a.logger.Info("restarting comms", zap.String("reason", reason))
+	a.logger.Info("restarting comms", slog.String("reason", reason))
 	for name := range a.backends {
-		a.logger.Info("restarting backend", zap.String("backend", name), zap.String("reason", reason))
+		a.logger.Info("restarting backend", slog.String("backend", name), slog.String("reason", reason))
 		err := a.RestartBackend(ctx, name, reason)
 		if err != nil {
-			a.logger.Error("failed to restart backend", zap.Error(err))
+			a.logger.Error("failed to restart backend", slog.Any("error", err))
 		}
 	}
 	a.logger.Info("all backends and comms were restarted")
@@ -237,6 +279,6 @@ func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
 
 func (a *orbAgent) extendContext(routine string) (context.Context, context.CancelFunc) {
 	uuidTraceID := uuid.NewString()
-	a.logger.Debug("creating context for receiving message", zap.String("routine", routine), zap.String("trace-id", uuidTraceID))
+	a.logger.Debug("creating context for receiving message", slog.String("routine", routine), slog.String("trace-id", uuidTraceID))
 	return context.WithCancel(context.WithValue(context.WithValue(a.asyncContext, routineKey, routine), config.ContextKey("trace-id"), uuidTraceID))
 }

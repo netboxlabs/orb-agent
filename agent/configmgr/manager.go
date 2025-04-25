@@ -2,8 +2,7 @@ package configmgr
 
 import (
 	"context"
-
-	"go.uber.org/zap"
+	"log/slog"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -17,15 +16,13 @@ type Manager interface {
 }
 
 // New creates a new instance of ConfigManager based on the configuration
-func New(logger *zap.Logger, mgr policymgr.PolicyManager, c config.ManagerConfig) Manager {
-	switch c.Active {
+func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string) Manager {
+	switch active {
 	case "local":
-		return &localConfigManager{logger: logger, pMgr: mgr, config: c.Sources.Local}
-	case "cloud":
-		return &cloudConfigManager{logger: logger, pMgr: mgr, config: c.Sources.Cloud}
+		return &localConfigManager{logger: logger, pMgr: pMgr}
 	case "git":
-		return &gitConfigManager{logger: logger, pMgr: mgr, config: c.Sources.Git}
+		return &gitConfigManager{logger: logger, pMgr: pMgr}
 	default:
-		return &localConfigManager{logger: logger, pMgr: mgr, config: c.Sources.Local}
+		return &localConfigManager{logger: logger, pMgr: pMgr}
 	}
 }

@@ -3,9 +3,9 @@ package configmgr
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -15,22 +15,24 @@ import (
 var _ Manager = (*localConfigManager)(nil)
 
 type localConfigManager struct {
-	logger *zap.Logger
+	logger *slog.Logger
 	pMgr   policymgr.PolicyManager
-	config config.LocalManager
 }
 
 func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	if cfg.OrbAgent.Policies == nil {
 		return errors.New("no policies specified")
 	}
-
 	for beName, policy := range cfg.OrbAgent.Policies {
 		_, ok := backends[beName]
 		if !ok {
 			return errors.New("backend not found: " + beName)
 		}
-		for pName, data := range policy {
+		newPolicy, ok := policy.(map[string]any)
+		if !ok {
+			return errors.New("invalid policy format for backend: " + beName)
+		}
+		for pName, data := range newPolicy {
 			policyID := uuid.NewSHA1(uuid.Nil, []byte(pName+beName)).String()
 			id := uuid.NewString()
 			payload := config.PolicyPayload{

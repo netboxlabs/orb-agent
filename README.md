@@ -28,6 +28,28 @@ Currently, only the `local` and `git` sources are supported for config manager.
 - [Local](./docs/configs/local.md)
 - [Git](./docs/configs/git.md)
 
+### Secrets Manager
+The `secrets_manager` section specifies how Orb agent should retrieve and inject secrets into policies. The secrets manager can reference external secret stores like HashiCorp Vault to retrieve sensitive information such as credentials without hardcoding them in configuration files.
+
+```yaml
+orb:
+  secrets_manager:
+    active: vault
+    sources:
+      vault:
+        address: "https://vault.example.com:8200"
+        namespace: "my-namespace"
+        timeout: 60
+        auth: "token"
+        auth_args:
+          token: "${VAULT_TOKEN}"
+        schedule: "*/5 * * * *"
+  ...
+```
+
+Supported secrets managers:
+- [HashiCorp Vault](./docs/secretsmgr/vault.md)
+
 ### Backends
 The `backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
 
@@ -52,7 +74,8 @@ A special `common` subsection under `backends` defines configuration settings th
       common:
         diode:
           target: grpc://192.168.0.22:8080/diode
-          api_key: ${DIODE_API_KEY}
+          client_id: ${DIODE_CLIENT_ID}
+          client_secret: ${DIODE_CLIENT_SECRET}
           agent_name: agent01
 ```
 

@@ -3,13 +3,13 @@ package policymgr
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
-
-	"go.uber.org/zap"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
 // PolicyManager is the interface for managing policies
@@ -26,19 +26,22 @@ type PolicyManager interface {
 var _ PolicyManager = (*policyManager)(nil)
 
 type policyManager struct {
-	logger *zap.Logger
+	logger *slog.Logger
 	config config.Config
 
-	repo policies.PolicyRepo
+	repo    policies.PolicyRepo
+	secrets secretsmgr.Manager
 }
 
 // New creates a new instance of PolicyManager
-func New(logger *zap.Logger, c config.Config) (PolicyManager, error) {
-	repo, err := policies.NewMemRepo(logger)
+func New(logger *slog.Logger, secrets secretsmgr.Manager, c config.Config) (PolicyManager, error) {
+	repo, err := policies.NewMemRepo()
 	if err != nil {
 		return nil, err
 	}
-	return &policyManager{logger: logger, config: c, repo: repo}, nil
+	policyManager := &policyManager{logger: logger, config: c, repo: repo, secrets: secrets}
+	policyManager.secrets.RegisterUpdatePoliciesCallback(policyManager.policiesChanged)
+	return policyManager, nil
 }
 
 func (a *policyManager) GetRepo() policies.PolicyRepo {
@@ -51,12 +54,12 @@ func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
 
 func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 	a.logger.Info("managing agent policy from core",
-		zap.String("action", payload.Action),
-		zap.String("name", payload.Name),
-		zap.String("dataset", payload.DatasetID),
-		zap.String("backend", payload.Backend),
-		zap.String("id", payload.ID),
-		zap.Int32("version", payload.Version))
+		slog.String("action", payload.Action),
+		slog.String("name", payload.Name),
+		slog.String("dataset", payload.DatasetID),
+		slog.String("backend", payload.Backend),
+		slog.String("id", payload.ID),
+		slog.Int("version", int(payload.Version)))
 
 	switch payload.Action {
 	case "manage":
@@ -76,25 +79,28 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 			if payload.DatasetID != "" {
 				err := a.repo.EnsureDataset(payload.ID, payload.DatasetID)
 				if err != nil {
-					a.logger.Warn("policy failed to ensure dataset id", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name), zap.String("dataset_id", payload.DatasetID), zap.Error(err))
+					a.logger.Warn("policy failed to ensure dataset id", slog.String("policy_id", payload.ID),
+						slog.String("policy_name", payload.Name), slog.String("dataset_id", payload.DatasetID), slog.Any("error", err))
 				}
 			}
 
 			if payload.AgentGroupID != "" {
 				err := a.repo.EnsureGroupID(payload.ID, payload.AgentGroupID)
 				if err != nil {
-					a.logger.Warn("policy failed to ensure agent group id", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name), zap.String("agent_group_id", payload.AgentGroupID), zap.Error(err))
+					a.logger.Warn("policy failed to ensure agent group id", slog.String("policy_id", payload.ID),
+						slog.String("policy_name", payload.Name), slog.String("agent_group_id", payload.AgentGroupID), slog.Any("error", err))
 				}
 			}
 
 			// if policy already exist and has no version upgrade, has no need to apply it again
 			currentPolicy, err := a.repo.Get(payload.ID)
 			if err != nil {
-				a.logger.Error("failed to retrieve policy", zap.String("policy_id", payload.ID), zap.Error(err))
+				a.logger.Error("failed to retrieve policy", slog.String("policy_id", payload.ID), slog.Any("error", err))
 				return
 			}
 			if currentPolicy.Backend == pd.Backend && currentPolicy.Version >= pd.Version && currentPolicy.State == policies.Running {
-				a.logger.Info("a better version of this policy has already been applied, skipping", zap.String("policy_id", pd.ID), zap.String("policy_name", pd.Name), zap.String("attempted_version", fmt.Sprint(pd.Version)), zap.String("current_version", fmt.Sprint(currentPolicy.Version)))
+				a.logger.Info("a better version of this policy has already been applied, skipping", slog.String("policy_id", pd.ID), slog.String("policy_name", pd.Name),
+					slog.String("attempted_version", fmt.Sprint(pd.Version)), slog.String("current_version", fmt.Sprint(currentPolicy.Version)))
 				return
 			}
 			updatePolicy = true
@@ -107,7 +113,7 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 			// new policy we have not seen before, associate with this dataset
 			// on first time we see policy, we *require* dataset
 			if payload.DatasetID == "" {
-				a.logger.Error("policy RPC for unseen policy did not include dataset ID, skipping", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name))
+				a.logger.Error("policy RPC for unseen policy did not include dataset ID, skipping", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name))
 				return
 			}
 			pd.Datasets = map[string]bool{payload.DatasetID: true}
@@ -118,29 +124,36 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 
 		}
 		if !backend.HaveBackend(payload.Backend) {
-			a.logger.Warn("policy failed to apply because backend is not available", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name))
+			a.logger.Warn("policy failed to apply because backend is not available", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name))
 			pd.State = policies.FailedToApply
 			pd.BackendErr = "backend not available"
 		} else {
 			// attempt to apply the policy to the backend. status of policy application (running/failed) is maintained there.
 			be := backend.GetBackend(payload.Backend)
+			newPayload, err := a.secrets.SolvePolicySecrets(payload)
+			if err != nil {
+				a.logger.Error("failed to solve secrets", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name), slog.Any("error", err))
+				return
+			}
+			pd.Data = newPayload.Data
 			a.applyPolicy(payload, be, &pd, updatePolicy)
+			pd.Data = payload.Data
 		}
 		// save policy (with latest status) to local policy db
 		err := a.repo.Update(pd)
 		if err != nil {
-			a.logger.Error("got error in update last status", zap.Error(err))
+			a.logger.Error("got error in update last status", slog.Any("error", err))
 			return
 		}
 		return
 	case "remove":
 		err := a.RemovePolicy(payload.ID, payload.Name, payload.Backend)
 		if err != nil {
-			a.logger.Error("policy failed to be removed", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name), zap.Error(err))
+			a.logger.Error("policy failed to be removed", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name), slog.Any("error", err))
 		}
 		return
 	default:
-		a.logger.Error("unknown policy action, ignored", zap.String("action", payload.Action))
+		a.logger.Error("unknown policy action, ignored", slog.String("action", payload.Action))
 	}
 }
 
@@ -155,7 +168,7 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 	be := backend.GetBackend(beName)
 	err := be.RemovePolicy(pd)
 	if err != nil {
-		a.logger.Error("backend remove policy failed: will still remove from PolicyManager", zap.String("policy_id", policyID), zap.Error(err))
+		a.logger.Error("backend remove policy failed: will still remove from PolicyManager", slog.String("policy_id", policyID), slog.Any("error", err))
 	}
 	// Remove policy from orb-agent local repo
 	err = a.repo.Remove(pd.ID)
@@ -168,24 +181,24 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
 	policyData, err := a.repo.Get(policyID)
 	if err != nil {
-		a.logger.Warn("failed to retrieve policy data", zap.String("policy_id", policyID), zap.String("policy_name", policyData.Name), zap.Error(err))
+		a.logger.Warn("failed to retrieve policy data", slog.String("policy_id", policyID), slog.String("policy_name", policyData.Name), slog.Any("error", err))
 		return
 	}
 	removePolicy, err := a.repo.RemoveDataset(policyID, datasetID)
 	if err != nil {
-		a.logger.Warn("failed to remove policy dataset", zap.String("dataset_id", datasetID), zap.String("policy_name", policyData.Name), zap.Error(err))
+		a.logger.Warn("failed to remove policy dataset", slog.String("dataset_id", datasetID), slog.String("policy_name", policyData.Name), slog.Any("error", err))
 		return
 	}
 	if removePolicy {
 		// Remove policy via http request
 		err := be.RemovePolicy(policyData)
 		if err != nil {
-			a.logger.Warn("policy failed to remove", zap.String("policy_id", policyID), zap.String("policy_name", policyData.Name), zap.Error(err))
+			a.logger.Warn("policy failed to remove", slog.String("policy_id", policyID), slog.String("policy_name", policyData.Name), slog.Any("error", err))
 		}
 		// Remove policy from orb-agent local repo
 		err = a.repo.Remove(policyData.ID)
 		if err != nil {
-			a.logger.Warn("policy failed to remove local", zap.String("policy_id", policyData.ID), zap.String("policy_name", policyData.Name), zap.Error(err))
+			a.logger.Warn("policy failed to remove local", slog.String("policy_id", policyData.ID), slog.String("policy_name", policyData.Name), slog.Any("error", err))
 		}
 	}
 }
@@ -193,7 +206,7 @@ func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, b
 func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) {
 	err := be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
-		a.logger.Warn("policy failed to apply", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name), zap.Error(err))
+		a.logger.Warn("policy failed to apply", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name), slog.Any("error", err))
 		switch {
 		case strings.Contains(err.Error(), "422"):
 			pd.State = policies.NoTapMatch
@@ -202,7 +215,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		}
 		pd.BackendErr = err.Error()
 	} else {
-		a.logger.Info("policy applied successfully", zap.String("policy_id", payload.ID), zap.String("policy_name", payload.Name))
+		a.logger.Info("policy applied successfully", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name))
 		pd.State = policies.Running
 		pd.BackendErr = ""
 	}
@@ -211,14 +224,14 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 func (a *policyManager) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
 	plcies, err := a.repo.GetAll()
 	if err != nil {
-		a.logger.Error("failed to retrieve list of policies", zap.Error(err))
+		a.logger.Error("failed to retrieve list of policies", slog.Any("error", err))
 		return err
 	}
 
 	for _, plcy := range plcies {
 		err := be.RemovePolicy(plcy)
 		if err != nil {
-			a.logger.Error("failed to remove policy from backend", zap.String("policy_id", plcy.ID), zap.String("policy_name", plcy.Name), zap.Error(err))
+			a.logger.Error("failed to remove policy from backend", slog.String("policy_id", plcy.ID), slog.String("policy_name", plcy.Name), slog.Any("error", err))
 			// note we continue here: even if the backend failed to remove, we update our policy repo to remove it
 		}
 		if permanently {
@@ -240,18 +253,18 @@ func (a *policyManager) RemoveBackendPolicies(be backend.Backend, permanently bo
 func (a *policyManager) ApplyBackendPolicies(be backend.Backend) error {
 	plcies, err := a.repo.GetAll()
 	if err != nil {
-		a.logger.Error("failed to retrieve list of policies", zap.Error(err))
+		a.logger.Error("failed to retrieve list of policies", slog.Any("error", err))
 		return err
 	}
 
 	for _, policy := range plcies {
 		err := be.ApplyPolicy(policy, false)
 		if err != nil {
-			a.logger.Warn("policy failed to apply", zap.String("policy_id", policy.ID), zap.String("policy_name", policy.Name), zap.Error(err))
+			a.logger.Warn("policy failed to apply", slog.String("policy_id", policy.ID), slog.String("policy_name", policy.Name), slog.Any("error", err))
 			policy.State = policies.FailedToApply
 			policy.BackendErr = err.Error()
 		} else {
-			a.logger.Info("policy applied successfully", zap.String("policy_id", policy.ID), zap.String("policy_name", policy.Name))
+			a.logger.Info("policy applied successfully", slog.String("policy_id", policy.ID), slog.String("policy_name", policy.Name))
 			policy.State = policies.Running
 			policy.BackendErr = ""
 		}
@@ -261,4 +274,44 @@ func (a *policyManager) ApplyBackendPolicies(be backend.Backend) error {
 		}
 	}
 	return nil
+}
+
+func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
+	for id, valid := range policiesIDs {
+		policy, err := a.repo.Get(id)
+		if err != nil {
+			a.logger.Error("failed to get policy", slog.Any("error", err))
+			continue
+		}
+		if !valid {
+			if err := a.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
+				a.logger.Error("failed to remove policy", slog.Any("error", err))
+			}
+			continue
+		}
+		if !backend.HaveBackend(policy.Backend) {
+			a.logger.Warn("policy failed to apply because backend is not available", slog.String("policy_id", policy.ID), slog.String("policy_name", policy.Name))
+			policy.State = policies.FailedToApply
+			policy.BackendErr = "backend not available"
+		} else {
+			payload := config.PolicyPayload{
+				ID:   policy.ID,
+				Name: policy.Name,
+				Data: policy.Data,
+			}
+			newPayload, err := a.secrets.SolvePolicySecrets(payload)
+			if err != nil {
+				a.logger.Error("failed to solve secrets", slog.String("policy_id", policy.ID), slog.String("policy_name", policy.Name), slog.Any("error", err))
+				continue
+			}
+			policy.Data = newPayload.Data
+			be := backend.GetBackend(policy.Backend)
+			a.applyPolicy(payload, be, &policy, true)
+			policy.Data = payload.Data
+		}
+
+		if err = a.repo.Update(policy); err != nil {
+			a.logger.Error("got error in update last status", slog.Any("error", err))
+		}
+	}
 }

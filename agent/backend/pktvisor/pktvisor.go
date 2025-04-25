@@ -1,17 +1,17 @@
 package pktvisor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
 	"time"
 
-	"github.com/go-cmd/cmd"
-	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -43,12 +43,12 @@ type AppInfo struct {
 }
 
 type pktvisorBackend struct {
-	logger          *zap.Logger
+	logger          *slog.Logger
 	binary          string
 	configFile      string
 	pktvisorVersion string
-	proc            *cmd.Cmd
-	statusChan      <-chan cmd.Status
+	proc            backend.Commander
+	statusChan      <-chan backend.CmdStatus
 	startTime       time.Time
 	cancelFunc      context.CancelFunc
 	ctx             context.Context
@@ -76,7 +76,7 @@ func (p *pktvisorBackend) GetInitialState() backend.RunningStatus {
 
 func (p *pktvisorBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
-	runningStatus, errMsg, err := p.getProcRunningStatus()
+	runningStatus, errMsg, err := backend.GetRunningStatus(p.proc)
 	// if it's not running, we're done
 	if runningStatus != backend.Running {
 		return runningStatus, errMsg, err
@@ -108,7 +108,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	_, err := exec.LookPath(p.binary)
 	if err != nil {
-		p.logger.Error("pktvisor startup error: binary not found", zap.Error(err))
+		p.logger.Error("pktvisor startup error: binary not found", slog.Any("error", err))
 		return err
 	}
 
@@ -134,9 +134,9 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		pvOptions = append(pvOptions, "--cp-custom", ctx.Value("agent_id").(string))
 	}
 
-	p.logger.Info("pktvisor startup", zap.Strings("arguments", pvOptions))
+	p.logger.Info("pktvisor startup", slog.Any("arguments", pvOptions))
 
-	p.proc = cmd.NewCmdOptions(cmd.Options{
+	p.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
 	}, p.binary, pvOptions...)
@@ -150,20 +150,22 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 				close(doneChan)
 			}
 		}()
-		for p.proc.Stdout != nil || p.proc.Stderr != nil {
+		stdout := p.proc.GetStdout()
+		stderr := p.proc.GetStderr()
+		for stdout != nil || stderr != nil {
 			select {
-			case line, open := <-p.proc.Stdout:
+			case line, open := <-stdout:
 				if !open {
-					p.proc.Stdout = nil
+					stdout = nil
 					continue
 				}
-				p.logger.Info("pktvisor stdout", zap.String("log", line))
-			case line, open := <-p.proc.Stderr:
+				p.logger.Info("pktvisor stdout", slog.String("log", line))
+			case line, open := <-stderr:
 				if !open {
-					p.proc.Stderr = nil
+					stderr = nil
 					continue
 				}
-				p.logger.Info("pktvisor stderr", zap.String("log", line))
+				p.logger.Info("pktvisor stderr", slog.String("log", line))
 			}
 		}
 	}()
@@ -174,38 +176,42 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	status := p.proc.Status()
 
 	if status.Error != nil {
-		p.logger.Error("pktvisor startup error", zap.Error(status.Error))
+		p.logger.Error("pktvisor startup error", slog.Any("error", status.Error))
 		return status.Error
 	}
 
 	if status.Complete {
 		err = p.proc.Stop()
 		if err != nil {
-			p.logger.Error("proc.Stop error", zap.Error(err))
+			p.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return errors.New("pktvisor startup error, check log")
 	}
 
-	p.logger.Info("pktvisor process started", zap.Int("pid", status.PID))
+	p.logger.Info("pktvisor process started", slog.Int("pid", status.PID))
 
 	var readinessError error
-	for backoff := 0; backoff < readinessBackoff; backoff++ {
+	for backoff := range readinessBackoff {
 		var appMetrics AppInfo
-		readinessError = p.request("metrics/app", &appMetrics, http.MethodGet, http.NoBody, "application/json", readinessTimeout)
+		url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
+			http.NoBody, "application/json", readinessTimeout, "error")
 		if readinessError == nil {
-			p.logger.Info("pktvisor readiness ok, got version ", zap.String("pktvisor_version", appMetrics.App.Version))
+			p.logger.Info("pktvisor readiness ok, got version ",
+				slog.String("pktvisor_version", appMetrics.App.Version))
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
-		p.logger.Info("pktvisor is not ready, trying again with backoff", zap.String("backoff backoffDuration", backoffDuration.String()))
+		p.logger.Info("pktvisor is not ready, trying again with backoff",
+			slog.String("backoff backoffDuration", backoffDuration.String()))
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessError != nil {
-		p.logger.Error("pktvisor error on readiness", zap.Error(readinessError))
+		p.logger.Error("pktvisor error on readiness", slog.Any("error", readinessError))
 		err = p.proc.Stop()
 		if err != nil {
-			p.logger.Error("proc.Stop error", zap.Error(err))
+			p.logger.Error("proc.Stop error", slog.Any("error", err))
 		}
 		return readinessError
 	}
@@ -214,20 +220,23 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 }
 
 func (p *pktvisorBackend) Stop(ctx context.Context) error {
-	p.logger.Info("routine call to stop pktvisor", zap.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	p.logger.Info("routine call to stop pktvisor", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer p.cancelFunc()
 	err := p.proc.Stop()
 	finalStatus := <-p.statusChan
 	if err != nil {
-		p.logger.Error("pktvisor shutdown error", zap.Error(err))
+		p.logger.Error("pktvisor shutdown error", slog.Any("error", err))
 	}
 
-	p.logger.Info("pktvisor process stopped", zap.Int("pid", finalStatus.PID), zap.Int("exit_code", finalStatus.Exit))
+	p.logger.Info("pktvisor process stopped", slog.Int("pid", finalStatus.PID),
+		slog.Int("exit_code", finalStatus.Exit))
 	return nil
 }
 
 // Configure this will set configurations, but if not set, will use the following defaults
-func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo, config map[string]interface{}, common config.BackendCommons) error {
+func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
+	config map[string]any, common config.BackendCommons,
+) error {
 	p.logger = logger
 	p.policyRepo = repo
 
@@ -244,8 +253,8 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	}
 
 	// Prepare the visor configuration structure
-	visorConfig := make(map[string]interface{})
-	configSection := make(map[string]interface{})
+	visorConfig := make(map[string]any)
+	configSection := make(map[string]any)
 
 	// Process all config entries
 	for key, value := range config {
@@ -278,13 +287,15 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	yamlData, err := yaml.Marshal(fullConfig)
 	if err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
+			p.logger.Error("failed to remove temp config file", slog.String("file", tmpFile.Name()),
+				slog.Any("error", rerr))
 		}
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", zap.String("file", tmpFile.Name()), zap.Error(rerr))
+			p.logger.Error("failed to remove temp config file", slog.String("file", tmpFile.Name()),
+				slog.Any("error", rerr))
 		}
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
@@ -294,28 +305,31 @@ func (p *pktvisorBackend) Configure(logger *zap.Logger, repo policies.PolicyRepo
 	if common.Otel.Host != "" && common.Otel.Port != 0 {
 		p.otelReceiverHost = common.Otel.Host
 		p.otelReceiverPort = common.Otel.Port
-		p.logger.Info("configured otel receiver host", zap.String("host", p.otelReceiverHost), zap.Int("port", p.otelReceiverPort))
+		p.logger.Info("configured otel receiver host", slog.String("host", p.otelReceiverHost),
+			slog.Int("port", p.otelReceiverPort))
 	}
 
 	return nil
 }
 
-func (p *pktvisorBackend) GetCapabilities() (map[string]interface{}, error) {
-	var taps interface{}
-	err := p.request("taps", &taps, http.MethodGet, http.NoBody, "application/json", tapsTimeout)
+func (p *pktvisorBackend) GetCapabilities() (map[string]any, error) {
+	var taps any
+	url := fmt.Sprintf("%s://%s:%s/api/v1/taps", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &taps, http.MethodGet,
+		http.NoBody, "application/json", tapsTimeout, "error")
 	if err != nil {
 		return nil, err
 	}
-	jsonBody := make(map[string]interface{})
+	jsonBody := make(map[string]any)
 	jsonBody["taps"] = taps
 	return jsonBody, nil
 }
 
 func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
-	if state, _, _ := p.getProcRunningStatus(); state == backend.Running {
+	if state, _, _ := backend.GetRunningStatus(p.proc); state == backend.Running {
 		if err := p.Stop(ctx); err != nil {
-			p.logger.Error("failed to stop backend on restart procedure", zap.Error(err))
+			p.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
 			return err
 		}
 	}
@@ -325,7 +339,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 
 	// start it
 	if err := p.Start(backendCtx, cancelFunc); err != nil {
-		p.logger.Error("failed to start backend on restart procedure", zap.Error(err))
+		p.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
 		return err
 	}
 
@@ -338,4 +352,69 @@ func Register() bool {
 		adminAPIProtocol: "http",
 	})
 	return true
+}
+
+func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
+	if updatePolicy {
+		// To update a policy it's necessary first remove it and then apply a new version
+		if err := p.RemovePolicy(data); err != nil {
+			p.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
+				slog.String("policy_name", data.Name), slog.Any("error", err))
+		}
+	}
+
+	p.logger.Debug("pktvisor policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
+
+	fullPolicy := map[string]any{
+		"version": "1.0",
+		"visor": map[string]any{
+			"policies": map[string]any{
+				data.Name: data.Data,
+			},
+		},
+	}
+
+	policyYaml, err := yaml.Marshal(fullPolicy)
+	if err != nil {
+		p.logger.Warn("yaml policy marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		return err
+	}
+
+	var resp map[string]any
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodPost,
+		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "error")
+	if err != nil {
+		p.logger.Warn("yaml policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		return err
+	}
+
+	return nil
+}
+
+func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
+	p.logger.Debug("pktvisor policy remove", slog.String("policy_id", data.ID))
+	var resp any
+	var name string
+	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
+	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
+		name = data.PreviousPolicyData.Name
+	} else {
+		name = data.Name
+	}
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort, name)
+	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
+		http.NoBody, "application/json", removePolicyTimeout, "error")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *pktvisorBackend) getAppInfo() (AppInfo, error) {
+	var appInfo AppInfo
+	url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appInfo, http.MethodGet,
+		http.NoBody, "application/json", versionTimeout, "error")
+	return appInfo, err
 }
