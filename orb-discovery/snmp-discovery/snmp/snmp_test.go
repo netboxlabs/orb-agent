@@ -169,6 +169,17 @@ func TestObjectIDs(t *testing.T) {
 func TestNewClient(t *testing.T) {
 	t.Run("Creates SNMPv2c client successfully", func(t *testing.T) {
 		auth := &config.Authentication{
+			ProtocolVersion: snmp.ProtocolVersion1,
+			Community:       "public",
+		}
+		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+	})
+
+	t.Run("Creates SNMPv2c client successfully", func(t *testing.T) {
+		auth := &config.Authentication{
 			ProtocolVersion: snmp.ProtocolVersion2c,
 			Community:       "public",
 		}
@@ -178,14 +189,29 @@ func TestNewClient(t *testing.T) {
 		assert.NotNil(t, client)
 	})
 
+	t.Run("Creates SNMPv3 client successfully", func(t *testing.T) {
+		auth := &config.Authentication{
+			ProtocolVersion: snmp.ProtocolVersion3,
+			Username:        "testuser",
+			AuthProtocol:    "SHA",
+			AuthPassphrase:  "testpass",
+			PrivProtocol:    "AES",
+			PrivPassphrase:  "testpass",
+		}
+		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, client)
+	})
+
 	t.Run("Returns error for unsupported protocol version", func(t *testing.T) {
 		auth := &config.Authentication{
-			ProtocolVersion: "SNMPv1",
+			ProtocolVersion: "SNMPv4",
 		}
 		client, err := snmp.NewClient("192.168.1.1", 161, auth)
 
 		assert.Error(t, err)
 		assert.Nil(t, client)
-		assert.Equal(t, "unsupported protocol version: SNMPv1. Currently only SNMPv2c is supported", err.Error())
+		assert.Equal(t, "unsupported protocol version: SNMPv4", err.Error())
 	})
 }

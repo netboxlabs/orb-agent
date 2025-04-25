@@ -136,6 +136,8 @@ func (c *Client) Walk(objectID string) (ObjectIDValueMap, error) {
 }
 
 const (
+	// ProtocolVersion1 is the SNMPv1 protocol version
+	ProtocolVersion1 = "SNMPv1"
 	// ProtocolVersion2c is the SNMPv2c protocol version
 	ProtocolVersion2c = "SNMPv2c"
 	// ProtocolVersion3 is the SNMPv3 protocol version
@@ -147,7 +149,18 @@ type ClientFactory func(host string, port uint16, authentication *config.Authent
 
 // NewClient creates a new SNMPClient for the given target host
 func NewClient(host string, port uint16, authentication *config.Authentication) (Walker, error) {
-	if authentication.ProtocolVersion == ProtocolVersion2c {
+	switch authentication.ProtocolVersion {
+	case ProtocolVersion1:
+		return &Client{
+			&gosnmp.GoSNMP{
+				Target:    host,
+				Port:      port,
+				Community: authentication.Community,
+				Version:   gosnmp.Version1,
+				Timeout:   time.Duration(2) * time.Second,
+			},
+		}, nil
+	case ProtocolVersion2c:
 		return &Client{
 			&gosnmp.GoSNMP{
 				Target:    host,
@@ -157,8 +170,48 @@ func NewClient(host string, port uint16, authentication *config.Authentication) 
 				Timeout:   time.Duration(2) * time.Second,
 			},
 		}, nil
+	case ProtocolVersion3:
+		return &Client{
+			&gosnmp.GoSNMP{
+				Target:  host,
+				Port:    port,
+				Version: gosnmp.Version3,
+				Timeout: time.Duration(2) * time.Second,
+				SecurityParameters: &gosnmp.UsmSecurityParameters{
+					UserName:                 authentication.Username,
+					AuthenticationProtocol:   getAuthProtocol(authentication.AuthProtocol),
+					AuthenticationPassphrase: authentication.AuthPassphrase,
+					PrivacyProtocol:          getPrivProtocol(authentication.PrivProtocol),
+					PrivacyPassphrase:        authentication.PrivPassphrase,
+				},
+			},
+		}, nil
 	}
-	return nil, fmt.Errorf("unsupported protocol version: %s. Currently only SNMPv2c is supported", authentication.ProtocolVersion)
+	return nil, fmt.Errorf("unsupported protocol version: %s", authentication.ProtocolVersion)
+}
+
+func getAuthProtocol(authProtocol string) gosnmp.SnmpV3AuthProtocol {
+	switch authProtocol {
+	case "NoAuth":
+		return gosnmp.NoAuth
+	case "MD5":
+		return gosnmp.MD5
+	case "SHA":
+		return gosnmp.SHA
+	}
+	return gosnmp.NoAuth
+}
+
+func getPrivProtocol(privProtocol string) gosnmp.SnmpV3PrivProtocol {
+	switch privProtocol {
+	case "NoPriv":
+		return gosnmp.NoPriv
+	case "DES":
+		return gosnmp.DES
+	case "AES":
+		return gosnmp.AES
+	}
+	return gosnmp.AES
 }
 
 // Walker interface defines methods for walking SNMP trees
