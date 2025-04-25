@@ -118,7 +118,11 @@ func (c *SNMPClient) Walk(objectID string) (ObjectIDValueMap, error) {
 	}
 	output := make(ObjectIDValueMap)
 	for _, pdu := range pdu {
-		output[pdu.Name] = pdu.Value.(string)
+		if value, ok := pdu.Value.(string); ok {
+			output[pdu.Name] = value
+		} else {
+			slog.Warn("Unexpected type for pdu.Value", "name", pdu.Name, "type", fmt.Sprintf("%T", pdu.Value))
+		}
 	}
 	return output, nil
 }
