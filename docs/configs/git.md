@@ -1,6 +1,8 @@
 # Git
 The Git configuration manager outlines a policy management system where an agent fetches policies from a Git repository.
 
+**Important**: The `config_manager` and `backends` sections must still be passed directly to the agent via the config file at startup time. These components are not yet dynamically reconfigurable, so ensure the relevant settings are correctly defined before launching the agent.
+
 ### Config
 The following sample of a git configuration
 ```yaml
@@ -19,6 +21,9 @@ orb:
         username: "username"
         password: ${PASSWORD|TOKEN}
         private_key: path/to/certificate.pem
+  backends:
+    network_discovery:
+    device_discovery:
 ```
 
 | Parameter | Type | Required | Description |
@@ -82,4 +87,22 @@ agent_selector_matches_all:
   selector:
   policies:
     path: folder4/policy4.yaml
+```
+
+
+### policy.yaml
+Each policy file should explicitly declare the backend it applies to within the policy data itself. For example, a `policy.yaml` that targets the `device_discovery` backend might look like this:
+
+```yaml
+device_discovery:
+  discovery_1:
+    config:
+      schedule: "* * * * *"
+      defaults:
+        site: New York NY
+    scope:
+      - driver: ios
+        hostname: 192.168.0.5
+        username: admin
+        password: ${PASS}
 ```
