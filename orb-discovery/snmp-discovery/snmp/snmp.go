@@ -157,9 +157,9 @@ func NewClient(host string, port uint16, authentication *config.Authentication) 
 				Version:   gosnmp.Version2c,
 				Timeout:   time.Duration(2) * time.Second,
 			},
-		}
+		}, nil
 	}
-	panic("Unsupported protocol version. Currently only SNMPv2c is supported")
+	return nil, fmt.Errorf("unsupported protocol version: %s. Currently only SNMPv2c is supported", authentication.ProtocolVersion)
 }
 
 // Walker interface defines methods for walking SNMP trees
