@@ -60,6 +60,7 @@ func TestManagerParsePolicies(t *testing.T) {
 		assert.Equal(t, uint16(162), policies["policy1"].Scope.Targets[0].Port)
 		assert.Equal(t, snmp.ProtocolVersion2c, policies["policy1"].Scope.Authentication.ProtocolVersion)
 		assert.Equal(t, "public", policies["policy1"].Scope.Authentication.Community)
+		assert.Equal(t, 0, policies["policy1"].Scope.Retries)
 	})
 
 	t.Run("Invalid Policy", func(t *testing.T) {

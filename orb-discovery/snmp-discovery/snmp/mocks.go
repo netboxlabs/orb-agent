@@ -26,6 +26,6 @@ func (n *FakeSNMPWalker) Walk(oid string) (ObjectIDValueMap, error) {
 }
 
 // NewFakeSNMPWalker creates a new FakeSNMPWalker
-func NewFakeSNMPWalker(_ string, _ uint16, _ *config.Authentication) (Walker, error) {
+func NewFakeSNMPWalker(_ string, _ uint16, _ int, _ *config.Authentication) (Walker, error) {
 	return &FakeSNMPWalker{}, nil
 }

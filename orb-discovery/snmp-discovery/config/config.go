@@ -13,6 +13,7 @@ type Status struct {
 type Scope struct {
 	Targets        []Target       `yaml:"targets"`
 	Authentication Authentication `yaml:"authentication"`
+	Retries        int            `yaml:"retries"`
 }
 
 // Target represents a target host to crawl

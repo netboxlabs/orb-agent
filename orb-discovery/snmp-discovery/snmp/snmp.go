@@ -53,16 +53,18 @@ func (m *ObjectIDMapper) ObjectIDs() []string {
 type Host struct {
 	address        string
 	port           uint16
+	retries        int
 	authentication *config.Authentication
 	logger         *slog.Logger
 	ClientFactory  ClientFactory
 }
 
 // NewHost creates a new Host
-func NewHost(host string, port uint16, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory) *Host {
+func NewHost(host string, port uint16, retries int, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory) *Host {
 	return &Host{
 		address:        host,
 		port:           port,
+		retries:        retries,
 		authentication: authentication,
 		logger:         logger,
 		ClientFactory:  ClientFactory,
@@ -73,7 +75,7 @@ func NewHost(host string, port uint16, authentication *config.Authentication, lo
 func (s *Host) Walk(objectIDs []string) (ObjectIDValueMap, error) {
 	s.logger.Info("Scanning", "host", s.address)
 
-	snmpClient, err := s.ClientFactory(s.address, s.port, s.authentication)
+	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.authentication)
 	if err != nil {
 		return nil, err
 	}
@@ -145,10 +147,10 @@ const (
 )
 
 // ClientFactory is a function that creates a new SNMPClient
-type ClientFactory func(host string, port uint16, authentication *config.Authentication) (Walker, error)
+type ClientFactory func(host string, port uint16, retries int, authentication *config.Authentication) (Walker, error)
 
 // NewClient creates a new SNMPClient for the given target host
-func NewClient(host string, port uint16, authentication *config.Authentication) (Walker, error) {
+func NewClient(host string, port uint16, retries int, authentication *config.Authentication) (Walker, error) {
 	switch authentication.ProtocolVersion {
 	case ProtocolVersion1:
 		return &Client{
@@ -177,6 +179,7 @@ func NewClient(host string, port uint16, authentication *config.Authentication) 
 				Port:    port,
 				Version: gosnmp.Version3,
 				Timeout: time.Duration(2) * time.Second,
+				Retries: retries,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,
 					AuthenticationProtocol:   getAuthProtocol(authentication.AuthProtocol),

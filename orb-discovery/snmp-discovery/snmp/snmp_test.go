@@ -52,10 +52,11 @@ func TestSNMPHost(t *testing.T) {
 	t.Run("Successfully walks a host", func(t *testing.T) {
 		// Setup
 		objectIDsToQuery := []string{ipAddressObjectID}
-		fakeWalker, _ := snmp.NewFakeSNMPWalker("192.168.1.1", 161, nil)
-		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
+			fakeWalker, _ := snmp.NewFakeSNMPWalker("192.168.1.1", 161, 3, nil)
 			return fakeWalker, nil
-		})
+		}
+		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
 		// Execute
 		oids, err := host.Walk(objectIDsToQuery)
@@ -71,9 +72,10 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker := &MockSNMP{}
 		mockWalker.On("Connect").Return(assert.AnError)
 		mockWalker.On("Close").Return(nil)
-		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
 			return mockWalker, nil
-		})
+		}
+		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
 		// Execute
 		oids, err := host.Walk([]string{"1.3.6.1.2.1.4.20.1.1"})
@@ -90,9 +92,10 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
 		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
-		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
 			return mockWalker, nil
-		})
+		}
+		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
 		// Execute
 		oids, err := host.Walk([]string{ipAddressObjectID})
@@ -109,9 +112,10 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
 		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
-		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
 			return nil, fmt.Errorf("error creating client")
-		})
+		}
+		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
 		// Execute
 		oids, err := host.Walk([]string{ipAddressObjectID})
@@ -172,7 +176,7 @@ func TestNewClient(t *testing.T) {
 			ProtocolVersion: snmp.ProtocolVersion1,
 			Community:       "public",
 		}
-		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+		client, err := snmp.NewClient("192.168.1.1", 161, 3, auth)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, client)
@@ -183,7 +187,7 @@ func TestNewClient(t *testing.T) {
 			ProtocolVersion: snmp.ProtocolVersion2c,
 			Community:       "public",
 		}
-		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+		client, err := snmp.NewClient("192.168.1.1", 161, 3, auth)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, client)
@@ -198,7 +202,7 @@ func TestNewClient(t *testing.T) {
 			PrivProtocol:    "AES",
 			PrivPassphrase:  "testpass",
 		}
-		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+		client, err := snmp.NewClient("192.168.1.1", 161, 3, auth)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, client)
@@ -208,7 +212,7 @@ func TestNewClient(t *testing.T) {
 		auth := &config.Authentication{
 			ProtocolVersion: "SNMPv4",
 		}
-		client, err := snmp.NewClient("192.168.1.1", 161, auth)
+		client, err := snmp.NewClient("192.168.1.1", 161, 3, auth)
 
 		assert.Error(t, err)
 		assert.Nil(t, client)
