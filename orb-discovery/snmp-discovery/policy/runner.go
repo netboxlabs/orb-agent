@@ -81,7 +81,7 @@ func (r *Runner) run() {
 		host := snmp.NewHost(target.Host, target.Port, &r.scope.Authentication, r.logger, r.ClientFactory, mapper.ObjectIDs())
 		oids, err := host.Walk()
 		if err != nil {
-			r.logger.Warn("Error crawling host", "ip", target, "error", err)
+			r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
 			continue
 		}
 		entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
