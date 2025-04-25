@@ -57,11 +57,10 @@ type Host struct {
 	objects        map[string]string
 	logger         *slog.Logger
 	ClientFactory  ClientFactory
-	objectIDs      []string
 }
 
 // NewHost creates a new Host
-func NewHost(host string, port uint16, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory, objectIDs []string) *Host {
+func NewHost(host string, port uint16, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory) *Host {
 	return &Host{
 		address:        host,
 		port:           port,
@@ -69,12 +68,11 @@ func NewHost(host string, port uint16, authentication *config.Authentication, lo
 		objects:        make(map[string]string),
 		logger:         logger,
 		ClientFactory:  ClientFactory,
-		objectIDs:      objectIDs,
 	}
 }
 
 // Walk walks the SNMP host
-func (s *Host) Walk() (ObjectIDValueMap, error) {
+func (s *Host) Walk(objectIDs []string) (ObjectIDValueMap, error) {
 	s.logger.Info("Scanning", "host", s.address)
 
 	snmpClient, err := s.ClientFactory(s.address, s.port, s.authentication)
@@ -94,7 +92,7 @@ func (s *Host) Walk() (ObjectIDValueMap, error) {
 	}
 
 	output := make(ObjectIDValueMap)
-	for _, objectID := range s.objectIDs {
+	for _, objectID := range objectIDs {
 		pdu, err := snmpClient.Walk(objectID)
 		if err != nil {
 			s.logger.Warn("Error walking ObjectID", "objectID", objectID, "error", err)

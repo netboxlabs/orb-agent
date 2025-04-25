@@ -25,6 +25,12 @@ type Target struct {
 type Authentication struct {
 	ProtocolVersion string `yaml:"protocol_version"`
 	Community       string `yaml:"community"`
+	SecurityLevel   string `yaml:"security_level"`
+	Username        string `yaml:"username"`
+	AuthProtocol    string `yaml:"auth_protocol"`
+	AuthPassphrase  string `yaml:"auth_passphrase"`
+	PrivProtocol    string `yaml:"priv_protocol"`
+	PrivPassphrase  string `yaml:"priv_passphrase"`
 }
 
 // Defaults represents the supported default values for a policy
