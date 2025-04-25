@@ -23,7 +23,7 @@ type ObjectIDMapper struct {
 	mapping ObjectIDMapping
 }
 
-func NewOidMapper() *ObjectIDMapper {
+func NewObjectIDMapper() *ObjectIDMapper {
 	return &ObjectIDMapper{
 		mapping: ObjectIDMapping{
 			"1.3.6.1.2.1.4.20.1.1": "ipAddress.address",

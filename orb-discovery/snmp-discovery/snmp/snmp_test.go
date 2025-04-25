@@ -44,40 +44,13 @@ func (m *MockClient) Ingest(context.Context, []diode.Entity) (*diodepb.IngestRes
 	panic("unimplemented")
 }
 
-// FakeSNMPWalker is a no-op implementation of SNMPWalker
-type FakeSNMPWalker struct{}
-
-// Connect implements SNMPWalker interface
-func (n *FakeSNMPWalker) Connect() error {
-	return nil
-}
-
-// Close implements SNMPWalker interface
-func (n *FakeSNMPWalker) Close() error {
-	return nil
-}
-
-// Walk implements SNMPWalker interface
-func (n *FakeSNMPWalker) Walk(oid string) (snmp.ObjectIDValueMap, error) {
-	if oid == "1.3.6.1.2.1.4.20.1.1" {
-		return snmp.ObjectIDValueMap{
-			"1.3.6.1.2.1.4.20.1.1": "192.168.1.1",
-		}, nil
-	}
-	return make(snmp.ObjectIDValueMap), nil
-}
-
-func NewFakeSNMPWalker(_ string) snmp.SNMPWalker {
-	return &FakeSNMPWalker{}
-}
-
 func TestSNMPHost(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	const ipAddressObjectId = "1.3.6.1.2.1.4.20.1.1"
 	t.Run("Successfully walks a host", func(t *testing.T) {
 		// Setup
 		objectIdsToQuery := []string{ipAddressObjectId}
-		fakeWalker := NewFakeSNMPWalker("")
+		fakeWalker := snmp.NewFakeSNMPWalker("")
 		host := snmp.NewSNMPHost("192.168.1.1", logger, func(_ string) snmp.SNMPWalker { return fakeWalker }, objectIdsToQuery)
 
 		// Execute
@@ -139,4 +112,30 @@ func (m *MockSNMP) Close() error {
 func (m *MockSNMP) Walk(oid string) (snmp.ObjectIDValueMap, error) {
 	args := m.Called(oid)
 	return nil, args.Error(1)
+}
+
+func TestMapObjectIDsToEntity(t *testing.T) {
+	mapper := snmp.NewObjectIDMapper()
+	objectIDs := snmp.ObjectIDValueMap{
+		"1.3.6.1.2.1.4.20.1.1": "192.168.1.1",
+	}
+
+	entities := mapper.MapObjectIDsToEntity(objectIDs)
+
+	assert.Len(t, entities, 1)
+	ipEntity, ok := entities[0].(*diode.IPAddress)
+	assert.True(t, ok)
+	assert.Equal(t, "192.168.1.1/32", *ipEntity.Address)
+}
+
+func TestObjectIDs(t *testing.T) {
+	mapper := snmp.NewObjectIDMapper()
+
+	expectedObjectIDs := []string{
+		"1.3.6.1.2.1.4.20.1.1",
+	}
+
+	objectIDs := mapper.ObjectIDs()
+
+	assert.ElementsMatch(t, expectedObjectIDs, objectIDs)
 }

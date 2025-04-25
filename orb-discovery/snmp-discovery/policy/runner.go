@@ -23,27 +23,29 @@ const (
 
 // Runner represents the policy runner
 type Runner struct {
-	scheduler gocron.Scheduler
-	ctx       context.Context
-	task      gocron.Task
-	client    diode.Client
-	logger    *slog.Logger
-	timeout   time.Duration
-	scope     config.Scope
-	config    config.PolicyConfig
+	scheduler         gocron.Scheduler
+	ctx               context.Context
+	task              gocron.Task
+	client            diode.Client
+	logger            *slog.Logger
+	timeout           time.Duration
+	scope             config.Scope
+	config            config.PolicyConfig
+	snmpClientFactory func(host string) snmp.SNMPWalker
 }
 
 // NewRunner returns a new policy runner
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, snmpClientFactory func(host string) snmp.SNMPWalker) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
 	}
 
 	runner := &Runner{
-		scheduler: s,
-		client:    client,
-		logger:    logger,
+		scheduler:         s,
+		client:            client,
+		logger:            logger,
+		snmpClientFactory: snmpClientFactory,
 	}
 
 	runner.task = gocron.NewTask(runner.run)
@@ -71,11 +73,12 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	mapper := snmp.NewOidMapper()
+	r.logger.Info("Starting SNMP crawl...")
+	mapper := snmp.NewObjectIDMapper()
 	entities := make([]diode.Entity, 0)
 
 	for _, target := range r.scope.Targets {
-		host := snmp.NewSNMPHost(target, r.logger, snmp.NewSNMPWalker, mapper.ObjectIDs())
+		host := snmp.NewSNMPHost(target, r.logger, r.snmpClientFactory, mapper.ObjectIDs())
 		oids, err := host.Walk(target)
 		if err != nil {
 			r.logger.Warn("Error crawling host", "ip", target, "error", err)
@@ -98,6 +101,7 @@ func (r *Runner) run() {
 
 // Start starts the policy runner
 func (r *Runner) Start() {
+	r.logger.Info("Starting policy runner", slog.Any("policy", r.ctx.Value(policyKey)))
 	r.scheduler.Start()
 }
 

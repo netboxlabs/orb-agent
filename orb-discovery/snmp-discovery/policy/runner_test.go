@@ -15,6 +15,7 @@ import (
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
 
 type MockDiodeClient struct {
@@ -46,7 +47,7 @@ func TestNewRunner(t *testing.T) {
 	ctx := context.Background()
 
 	// Create new runner
-	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient)
+	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 }
 
@@ -92,7 +93,7 @@ func TestRunnerRun(t *testing.T) {
 			ctx := context.Background()
 
 			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient)
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker)
 			assert.NoError(t, err, "policy.NewRunner should not return an error")
 
 			// Use a channel to signal that Ingest was called
@@ -153,7 +154,7 @@ func TestRunnerWithOptions(t *testing.T) {
 			ctx := context.Background()
 
 			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", tt.policy, mockClient)
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", tt.policy, mockClient, snmp.NewFakeSNMPWalker)
 			assert.NoError(t, err)
 
 			// Use a channel to signal that Ingest was called
@@ -180,3 +181,40 @@ func TestRunnerWithOptions(t *testing.T) {
 		})
 	}
 }
+
+// func TestSNMPDataMappingAndIngestion(t *testing.T) {
+// 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+// 	mockClient := new(MockDiodeClient)
+// 	ctx := context.Background()
+
+// 	// Map SNMP data to entities
+// 	expectedEntities := []diode.Entity{
+// 		&diode.IPAddress{
+// 			Address: diode.String("192.168.1.1"),
+// 		},
+// 	}
+
+// 	// Setup mock client expectations
+// 	mockClient.On("Ingest", mock.Anything, mock.Anything).Return(&diodepb.IngestResponse{}, nil)
+
+// 	// Create runner
+// 	runner, err := policy.NewRunner(ctx, logger, "test-successful-ingestion-policy", config.Policy{
+// 		Config: config.PolicyConfig{},
+// 		Scope: config.Scope{
+// 			Targets: []string{"192.168.1.1"},
+// 		},
+// 	}, mockClient, snmp.NewFakeSNMPWalker)
+// 	assert.NoError(t, err)
+
+// 	// Start the process
+// 	runner.Start()
+
+// 	time.Sleep(3 * time.Second)
+
+// 	// Stop the process
+// 	err = runner.Stop()
+// 	assert.NoError(t, err)
+
+// 	// Verify that Ingest was called with the expected entities
+// 	mockClient.AssertCalled(t, "Ingest", mock.Anything, expectedEntities)
+// }

@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
 
 // Manager represents the policy manager
@@ -57,7 +58,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	}
 
 	if !m.HasPolicy(name) {
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewSNMPWalker)
 		if err != nil {
 			return err
 		}
