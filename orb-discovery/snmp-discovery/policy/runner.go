@@ -78,7 +78,7 @@ func (r *Runner) run() {
 	entities := make([]diode.Entity, 0)
 
 	for _, target := range r.scope.Targets {
-		host := snmp.NewHost(target.Host, target.Port, r.scope.Authentication, r.logger, r.ClientFactory, mapper.ObjectIDs())
+		host := snmp.NewHost(target.Host, target.Port, &r.scope.Authentication, r.logger, r.ClientFactory, mapper.ObjectIDs())
 		oids, err := host.Walk()
 		if err != nil {
 			r.logger.Warn("Error crawling host", "ip", target, "error", err)

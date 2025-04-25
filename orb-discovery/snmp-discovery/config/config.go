@@ -11,8 +11,8 @@ type Status struct {
 
 // Scope represents the scope of a policy
 type Scope struct {
-	Targets        []Target        `yaml:"targets"`
-	Authentication *Authentication `yaml:"authentication"`
+	Targets        []Target       `yaml:"targets"`
+	Authentication Authentication `yaml:"authentication"`
 }
 
 // Target represents a target host to crawl

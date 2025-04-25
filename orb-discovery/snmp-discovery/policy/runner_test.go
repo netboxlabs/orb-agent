@@ -98,6 +98,10 @@ func TestRunnerRun(t *testing.T) {
 							Port: 161,
 						},
 					},
+					Authentication: config.Authentication{
+						ProtocolVersion: snmp.ProtocolVersion2c,
+						Community:       "public",
+					},
 				},
 			}
 			ctx := context.Background()
@@ -147,6 +151,10 @@ func TestRunnerWithOptions(t *testing.T) {
 							Host: "localhost",
 							Port: 161,
 						},
+					},
+					Authentication: config.Authentication{
+						ProtocolVersion: snmp.ProtocolVersion2c,
+						Community:       "public",
 					},
 				},
 			},

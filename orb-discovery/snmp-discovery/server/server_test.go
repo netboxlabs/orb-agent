@@ -93,6 +93,9 @@ func TestServerCreateDeletePolicy(t *testing.T) {
         scope:
           targets: 
             - host: 192.168.31.1
+          authentication:
+            protocol_version: SNMPv2c
+            community: public
     `)
 
 	w := httptest.NewRecorder()

@@ -42,6 +42,12 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		return nil, errors.New("no policies found in the request")
 	}
 
+	for name, policy := range payload.Policies {
+		if policy.Scope.Authentication.ProtocolVersion == "" || policy.Scope.Authentication.Community == "" {
+			return nil, fmt.Errorf("policy '%s' is missing authentication details", name)
+		}
+	}
+
 	return payload.Policies, nil
 }
 
