@@ -1,6 +1,8 @@
 package snmp
 
-// FakeSNMPWalker is a no-op implementation of Walker
+import "github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+
+// FakeSNMPWalker is a no-op implementation of SNMPWalker
 type FakeSNMPWalker struct{}
 
 // Connect implements Walker interface
@@ -24,6 +26,6 @@ func (n *FakeSNMPWalker) Walk(oid string) (ObjectIDValueMap, error) {
 }
 
 // NewFakeSNMPWalker creates a new FakeSNMPWalker
-func NewFakeSNMPWalker(_ string) Walker {
+func NewFakeSNMPWalker(_ string, _ uint16, _ *config.Authentication) Walker {
 	return &FakeSNMPWalker{}
 }

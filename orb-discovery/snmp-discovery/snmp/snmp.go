@@ -7,10 +7,8 @@ import (
 
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
-)
 
-const (
-	community = "public"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 )
 
 // ObjectIDMapping is a map of ObjectIDs to entity types
@@ -53,44 +51,48 @@ func (m *ObjectIDMapper) ObjectIDs() []string {
 
 // Host is a struct that represents an SNMP host
 type Host struct {
-	address           string
-	objects           map[string]string
-	logger            *slog.Logger
-	snmpClientFactory func(host string) Walker
-	objectIDs         []string
+	address        string
+	port           uint16
+	authentication *config.Authentication
+	objects        map[string]string
+	logger         *slog.Logger
+	ClientFactory  ClientFactory
+	objectIDs      []string
 }
 
 // NewHost creates a new Host
-func NewHost(host string, logger *slog.Logger, snmpClientFactory func(host string) Walker, objectIDs []string) *Host {
+func NewHost(host string, port uint16, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory, objectIDs []string) *Host {
 	return &Host{
-		address:           host,
-		objects:           make(map[string]string),
-		logger:            logger,
-		snmpClientFactory: snmpClientFactory,
-		objectIDs:         objectIDs,
+		address:        host,
+		port:           port,
+		authentication: authentication,
+		objects:        make(map[string]string),
+		logger:         logger,
+		ClientFactory:  ClientFactory,
+		objectIDs:      objectIDs,
 	}
 }
 
 // Walk walks the SNMP host
-func (s *Host) Walk(host string) (ObjectIDValueMap, error) {
-	s.logger.Info("Scanning", "host", host)
+func (s *Host) Walk() (ObjectIDValueMap, error) {
+	s.logger.Info("Scanning", "host", s.address)
 
-	Client := s.snmpClientFactory(host)
+	snmpClient := s.ClientFactory(s.address, s.port, s.authentication)
 	defer func() {
-		if err := Client.Close(); err != nil {
-			s.logger.Warn("Error closing SNMP connection", "host", host, "error", err)
+		if err := snmpClient.Close(); err != nil {
+			s.logger.Warn("Error closing SNMP connection", "host", s.address, "error", err)
 		}
 	}()
 
-	err := Client.Connect()
+	err := snmpClient.Connect()
 	if err != nil {
-		s.logger.Warn("Could not connect to host", "host", host, "error", err)
+		s.logger.Warn("Could not connect to host", "host", s.address, "error", err)
 		return nil, err
 	}
 
 	output := make(ObjectIDValueMap)
 	for _, objectID := range s.objectIDs {
-		pdu, err := Client.Walk(objectID)
+		pdu, err := snmpClient.Walk(objectID)
 		if err != nil {
 			s.logger.Warn("Error walking ObjectID", "objectID", objectID, "error", err)
 			return nil, err
@@ -134,17 +136,30 @@ func (c *Client) Walk(objectID string) (ObjectIDValueMap, error) {
 	return output, nil
 }
 
-// NewClient creates a new Client for the given target host
-func NewClient(host string) Walker {
-	return &Client{
-		&gosnmp.GoSNMP{
-			Target:    host,
-			Port:      161,
-			Community: community,
-			Version:   gosnmp.Version2c,
-			Timeout:   time.Duration(2) * time.Second,
-		},
+const (
+	// ProtocolVersion2c is the SNMPv2c protocol version
+	ProtocolVersion2c = "SNMPv2c"
+	// ProtocolVersion3 is the SNMPv3 protocol version
+	ProtocolVersion3 = "SNMPv3"
+)
+
+// ClientFactory is a function that creates a new SNMPClient
+type ClientFactory func(host string, port uint16, authentication *config.Authentication) Walker
+
+// NewClient creates a new SNMPClient for the given target host
+func NewClient(host string, port uint16, authentication *config.Authentication) Walker {
+	if authentication.ProtocolVersion == ProtocolVersion2c {
+		return &Client{
+			&gosnmp.GoSNMP{
+				Target:    host,
+				Port:      port,
+				Community: authentication.Community,
+				Version:   gosnmp.Version2c,
+				Timeout:   time.Duration(2) * time.Second,
+			},
+		}
 	}
+	panic("Unsupported protocol version. Currently only SNMPv2c is supported")
 }
 
 // Walker interface defines methods for walking SNMP trees

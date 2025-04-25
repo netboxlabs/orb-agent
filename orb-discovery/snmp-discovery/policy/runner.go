@@ -23,29 +23,29 @@ const (
 
 // Runner represents the policy runner
 type Runner struct {
-	scheduler         gocron.Scheduler
-	ctx               context.Context
-	task              gocron.Task
-	client            diode.Client
-	logger            *slog.Logger
-	timeout           time.Duration
-	scope             config.Scope
-	config            config.PolicyConfig
-	snmpClientFactory func(host string) snmp.Walker
+	scheduler     gocron.Scheduler
+	ctx           context.Context
+	task          gocron.Task
+	client        diode.Client
+	logger        *slog.Logger
+	timeout       time.Duration
+	scope         config.Scope
+	config        config.PolicyConfig
+	ClientFactory snmp.ClientFactory
 }
 
 // NewRunner returns a new policy runner
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, snmpClientFactory func(host string) snmp.Walker) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
 	}
 
 	runner := &Runner{
-		scheduler:         s,
-		client:            client,
-		logger:            logger,
-		snmpClientFactory: snmpClientFactory,
+		scheduler:     s,
+		client:        client,
+		logger:        logger,
+		ClientFactory: ClientFactory,
 	}
 
 	runner.task = gocron.NewTask(runner.run)
@@ -78,8 +78,8 @@ func (r *Runner) run() {
 	entities := make([]diode.Entity, 0)
 
 	for _, target := range r.scope.Targets {
-		host := snmp.NewHost(target, r.logger, r.snmpClientFactory, mapper.ObjectIDs())
-		oids, err := host.Walk(target)
+		host := snmp.NewHost(target.Host, target.Port, r.scope.Authentication, r.logger, r.ClientFactory, mapper.ObjectIDs())
+		oids, err := host.Walk()
 		if err != nil {
 			r.logger.Warn("Error crawling host", "ip", target, "error", err)
 			continue

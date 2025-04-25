@@ -41,7 +41,12 @@ func TestNewRunner(t *testing.T) {
 			Schedule: &cron,
 		},
 		Scope: config.Scope{
-			Targets: []string{"localhost"},
+			Targets: []config.Target{
+				{
+					Host: "localhost",
+					Port: 161,
+				},
+			},
 		},
 	}
 	ctx := context.Background()
@@ -87,7 +92,12 @@ func TestRunnerRun(t *testing.T) {
 					},
 				},
 				Scope: config.Scope{
-					Targets: []string{"localhost"},
+					Targets: []config.Target{
+						{
+							Host: "localhost",
+							Port: 161,
+						},
+					},
 				},
 			}
 			ctx := context.Background()
@@ -132,16 +142,12 @@ func TestRunnerWithOptions(t *testing.T) {
 			policy: config.Policy{
 				Config: config.PolicyConfig{},
 				Scope: config.Scope{
-					Targets: []string{"localhost"},
-				},
-			},
-		},
-		{
-			name: "with SNMPv3 credentials",
-			policy: config.Policy{
-				Config: config.PolicyConfig{},
-				Scope: config.Scope{
-					Targets: []string{"localhost"},
+					Targets: []config.Target{
+						{
+							Host: "localhost",
+							Port: 161,
+						},
+					},
 				},
 			},
 		},
@@ -190,7 +196,11 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	policyConfig := config.Policy{
 		Config: config.PolicyConfig{},
 		Scope: config.Scope{
-			Targets: []string{"192.168.1.1"},
+			Targets: []config.Target{
+				{
+					Host: "192.168.1.1",
+				},
+			},
 		},
 	}
 

@@ -2,7 +2,7 @@ package config
 
 import "time"
 
-// Status represents the status of the network-discovery service
+// Status represents the status of the snmp-discovery service
 type Status struct {
 	StartTime     time.Time `json:"start_time"`
 	UpTimeSeconds int64     `json:"up_time_seconds"`
@@ -11,7 +11,20 @@ type Status struct {
 
 // Scope represents the scope of a policy
 type Scope struct {
-	Targets []string `yaml:"targets"`
+	Targets        []Target        `yaml:"targets"`
+	Authentication *Authentication `yaml:"authentication"`
+}
+
+// Target represents a target host to crawl
+type Target struct {
+	Host string `yaml:"host"`
+	Port uint16 `yaml:"port" default:"161"`
+}
+
+// Authentication represents the authentication credentials for a target host
+type Authentication struct {
+	ProtocolVersion string `yaml:"protocol_version"`
+	Community       string `yaml:"community"`
 }
 
 // Defaults represents the supported default values for a policy

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
 
@@ -50,11 +51,11 @@ func TestSNMPHost(t *testing.T) {
 	t.Run("Successfully walks a host", func(t *testing.T) {
 		// Setup
 		objectIDsToQuery := []string{ipAddressObjectID}
-		fakeWalker := snmp.NewFakeSNMPWalker("")
-		host := snmp.NewHost("192.168.1.1", logger, func(_ string) snmp.Walker { return fakeWalker }, objectIDsToQuery)
+		fakeWalker := snmp.NewFakeSNMPWalker("192.168.1.1", 161, nil)
+		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) snmp.Walker { return fakeWalker }, objectIDsToQuery)
 
 		// Execute
-		oids, err := host.Walk("192.168.1.1")
+		oids, err := host.Walk()
 
 		// Assert
 		assert.NoError(t, err)
@@ -67,10 +68,10 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker := &MockSNMP{}
 		mockWalker.On("Connect").Return(assert.AnError)
 		mockWalker.On("Close").Return(nil)
-		host := snmp.NewHost("192.168.1.1", logger, func(_ string) snmp.Walker { return mockWalker }, []string{"1.3.6.1.2.1.4.20.1.1"})
+		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) snmp.Walker { return mockWalker }, []string{"1.3.6.1.2.1.4.20.1.1"})
 
 		// Execute
-		oids, err := host.Walk("192.168.1.1")
+		oids, err := host.Walk()
 
 		// Assert
 		assert.Error(t, err)
@@ -84,10 +85,10 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
 		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
-		host := snmp.NewHost("192.168.1.1", logger, func(_ string) snmp.Walker { return mockWalker }, []string{ipAddressObjectID})
+		host := snmp.NewHost("192.168.1.1", 161, nil, logger, func(_ string, _ uint16, _ *config.Authentication) snmp.Walker { return mockWalker }, []string{ipAddressObjectID})
 
 		// Execute
-		oids, err := host.Walk("192.168.1.1")
+		oids, err := host.Walk()
 
 		// Assert
 		assert.Error(t, err)

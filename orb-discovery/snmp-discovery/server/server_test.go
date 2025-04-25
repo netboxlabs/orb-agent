@@ -92,7 +92,7 @@ func TestServerCreateDeletePolicy(t *testing.T) {
             site: New York NY
         scope:
           targets: 
-            - 192.168.31.1
+            - host: 192.168.31.1
     `)
 
 	w := httptest.NewRecorder()

@@ -45,13 +45,15 @@ func TestManagerParsePolicies(t *testing.T) {
                 comments: test
             scope:
               targets:
-                - 192.168.1.1
+                - host: 192.168.1.1
+                  port: 162
        `)
 
 		policies, err := manager.ParsePolicies(yamlData)
 		assert.NoError(t, err)
 		assert.Contains(t, policies, "policy1")
-		assert.Equal(t, "test", policies["policy1"].Config.Defaults.Comments)
+		assert.Equal(t, "192.168.1.1", policies["policy1"].Scope.Targets[0].Host)
+		assert.Equal(t, uint16(162), policies["policy1"].Scope.Targets[0].Port)
 	})
 
 	t.Run("No Policies", func(t *testing.T) {
@@ -70,11 +72,11 @@ func TestManagerPolicyLifecycle(t *testing.T) {
           policy1:
             scope:
               targets:
-                - 192.168.1.1
+                - host: 192.168.1.1
           policy2:
             scope:
               targets:
-                - 192.168.2.1
+                - host: 192.168.2.1
           policy3:
             scope:
               targets: []
