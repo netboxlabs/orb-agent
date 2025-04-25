@@ -24,6 +24,7 @@ orb:
   backends:
     network_discovery:
     device_discovery:
+    ...
 ```
 
 | Parameter | Type | Required | Description |
