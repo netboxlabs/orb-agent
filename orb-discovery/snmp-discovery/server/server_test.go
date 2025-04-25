@@ -108,6 +108,33 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, w.Code)
 	assert.Contains(t, w.Body.String(), `policies [test-policy] were started`)
 
+	// Try to create the same policy again
+	body = []byte(`
+    policies:
+      test-pol:
+        scope:
+          targets: 
+            - host: 192.168.31.1
+          authentication:
+            protocol_version: SNMPv2c
+            community: public
+      test-policy:
+        scope:
+          targets: 
+            - host: 192.168.31.1
+          authentication:
+            protocol_version: SNMPv2c
+            community: public
+    `)
+	w = httptest.NewRecorder()
+	request, _ = http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-yaml")
+
+	srv.Router().ServeHTTP(w, request)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), `policy 'test-policy' already exists`)
+
 	// Delete policy
 	w = httptest.NewRecorder()
 	request, _ = http.NewRequest(http.MethodDelete, "/api/v1/policies/test-policy", nil)
@@ -115,4 +142,114 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `policy 'test-policy' was deleted`)
+
+	// Try to delete the same policy again
+	w = httptest.NewRecorder()
+	request, _ = http.NewRequest(http.MethodDelete, "/api/v1/policies/test-policy", nil)
+	srv.Router().ServeHTTP(w, request)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), `policy not found`)
+}
+
+func TestServerCreateInvalidPolicy(t *testing.T) {
+	tests := []struct {
+		desc          string
+		contentType   string
+		body          []byte
+		returnCode    int
+		returnMessage string
+	}{
+		{
+			desc:          "invalid content type",
+			contentType:   "application/json",
+			body:          []byte(``),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `invalid Content-Type. Only 'application/x-yaml' is supported`,
+		},
+		{
+			desc:          "invalid YAML",
+			contentType:   "application/x-yaml",
+			body:          []byte(`invalid`),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `yaml: unmarshal errors:`,
+		},
+		{
+			desc:        "no policies found",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies: {}
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `no policies found in the request`,
+		},
+		{
+			desc:        "no targets found",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: public
+              test-policy-invalid:
+                config:
+                  defaults:
+                    site: New York NY
+                scope:
+                  ports: [80, 443]
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: public
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy-invalid : no targets found in the policy`,
+		},
+		{
+			desc:        "missing authentication",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: public
+              test-policy-invalid:
+                config:
+                  defaults:
+                    site: New York NY
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy-invalid : missing authentication details`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			ctx := context.Background()
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+			client := new(MockClient)
+			policyManager := policy.NewManager(ctx, logger, client)
+
+			srv := server.NewServer("localhost", 8073, logger, policyManager, "1.0.0")
+
+			// Create invalid policy request
+			w := httptest.NewRecorder()
+			request, _ := http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(tt.body))
+			request.Header.Set("Content-Type", tt.contentType)
+
+			srv.Router().ServeHTTP(w, request)
+
+			assert.Equal(t, tt.returnCode, w.Code)
+			assert.Contains(t, w.Body.String(), tt.returnMessage)
+		})
+	}
 }

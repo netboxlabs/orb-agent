@@ -74,7 +74,7 @@ func TestManagerParsePolicies(t *testing.T) {
 
 		_, err := manager.ParsePolicies(yamlData)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "policy 'policy1' is missing authentication")
+		assert.Contains(t, err.Error(), "policy1 : missing authentication details")
 	})
 
 	t.Run("No Policies", func(t *testing.T) {
