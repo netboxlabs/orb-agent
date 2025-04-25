@@ -90,7 +90,6 @@ agent_selector_matches_all:
     path: folder4/policy4.yaml
 ```
 
-
 ### policy.yaml
 Each policy file should explicitly declare the backend it applies to within the policy data itself. For example, a `policy.yaml` that targets the `device_discovery` backend might look like this:
 
