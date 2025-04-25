@@ -43,12 +43,52 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	}
 
 	for name, policy := range payload.Policies {
-		if policy.Scope.Authentication.ProtocolVersion == "" || policy.Scope.Authentication.Community == "" {
-			return nil, fmt.Errorf("%s : missing authentication details", name)
+		if err := validatePolicy(policy); err != nil {
+			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
 	}
 
 	return payload.Policies, nil
+}
+
+func validatePolicy(policy config.Policy) error {
+	if policy.Scope.Authentication.ProtocolVersion == "" {
+		return fmt.Errorf("missing protocol version")
+	}
+
+	if policy.Scope.Authentication.ProtocolVersion != "SNMPv1" && policy.Scope.Authentication.ProtocolVersion != "SNMPv2c" && policy.Scope.Authentication.ProtocolVersion != "SNMPv3" {
+		return fmt.Errorf("unsupported protocol version")
+	}
+
+	if policy.Scope.Authentication.ProtocolVersion == "SNMPv2c" || policy.Scope.Authentication.ProtocolVersion == "SNMPv1" {
+		if policy.Scope.Authentication.Community == "" {
+			return fmt.Errorf("missing community")
+		}
+	}
+
+	if policy.Scope.Authentication.ProtocolVersion == "SNMPv3" {
+		if policy.Scope.Authentication.Username == "" {
+			return fmt.Errorf("missing username")
+		}
+
+		if policy.Scope.Authentication.AuthPassphrase == "" {
+			return fmt.Errorf("missing auth passphrase")
+		}
+
+		if policy.Scope.Authentication.PrivPassphrase == "" {
+			return fmt.Errorf("missing priv passphrase")
+		}
+
+		if policy.Scope.Authentication.AuthProtocol == "" {
+			return fmt.Errorf("missing auth protocol")
+		}
+
+		if policy.Scope.Authentication.PrivProtocol == "" {
+			return fmt.Errorf("missing priv protocol")
+		}
+	}
+
+	return nil
 }
 
 // HasPolicy checks if the policy exists

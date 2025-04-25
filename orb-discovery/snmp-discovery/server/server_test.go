@@ -229,7 +229,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     - host: 192.168.31.1
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy-invalid : missing authentication details`,
+			returnMessage: `test-policy-invalid : invalid policy : missing protocol version`,
 		},
 	}
 	for _, tt := range tests {

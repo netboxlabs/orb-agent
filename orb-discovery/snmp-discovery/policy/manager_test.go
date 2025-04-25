@@ -62,7 +62,7 @@ func TestManagerParsePolicies(t *testing.T) {
 		assert.Equal(t, "public", policies["policy1"].Scope.Authentication.Community)
 	})
 
-	t.Run("Missing Authentication", func(t *testing.T) {
+	t.Run("Invalid Policy", func(t *testing.T) {
 		yamlData := []byte(`
         policies:
           policy1:
@@ -74,7 +74,7 @@ func TestManagerParsePolicies(t *testing.T) {
 
 		_, err := manager.ParsePolicies(yamlData)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "policy1 : missing authentication details")
+		assert.Contains(t, err.Error(), "policy1 : invalid policy : missing protocol version")
 	})
 
 	t.Run("No Policies", func(t *testing.T) {
