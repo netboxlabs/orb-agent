@@ -10,6 +10,7 @@ COMMIT_SHA := $(shell git rev-parse --short HEAD)
 install-dev-tools:
 	@go install github.com/mfridman/tparse@latest
 	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@go install github.com/jandelgado/gcov2lcov@latest
 	
 .PHONY: build
 clean:
@@ -37,7 +38,7 @@ test-coverage:
 	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd" | tparse -format=markdown > .coverage/test-report.md
 	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep total | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
-
+	@gcov2lcov -infile=.coverage/cover.out -outfile=.coverage/lcov.info
 
 .PHONY: test
 test:
