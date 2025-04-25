@@ -1,19 +1,19 @@
 package snmp
 
-// FakeSNMPWalker is a no-op implementation of SNMPWalker
+// FakeSNMPWalker is a no-op implementation of Walker
 type FakeSNMPWalker struct{}
 
-// Connect implements SNMPWalker interface
+// Connect implements Walker interface
 func (n *FakeSNMPWalker) Connect() error {
 	return nil
 }
 
-// Close implements SNMPWalker interface
+// Close implements Walker interface
 func (n *FakeSNMPWalker) Close() error {
 	return nil
 }
 
-// Walk implements SNMPWalker interface
+// Walk implements Walker interface
 func (n *FakeSNMPWalker) Walk(oid string) (ObjectIDValueMap, error) {
 	if oid == "1.3.6.1.2.1.4.20.1.1" {
 		return ObjectIDValueMap{
@@ -23,6 +23,7 @@ func (n *FakeSNMPWalker) Walk(oid string) (ObjectIDValueMap, error) {
 	return make(ObjectIDValueMap), nil
 }
 
-func NewFakeSNMPWalker(_ string) SNMPWalker {
+// NewFakeSNMPWalker creates a new FakeSNMPWalker
+func NewFakeSNMPWalker(_ string) Walker {
 	return &FakeSNMPWalker{}
 }

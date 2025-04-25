@@ -58,7 +58,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	}
 
 	if !m.HasPolicy(name) {
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewSNMPWalker)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient)
 		if err != nil {
 			return err
 		}

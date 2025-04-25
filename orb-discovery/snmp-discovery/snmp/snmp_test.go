@@ -14,7 +14,7 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
 
-// MockSNMP is a mock for SNMPWalker
+// MockSNMP is a mock for Walker
 type MockSNMP struct {
 	mock.Mock
 }
@@ -46,20 +46,20 @@ func (m *MockClient) Ingest(context.Context, []diode.Entity) (*diodepb.IngestRes
 
 func TestSNMPHost(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	const ipAddressObjectId = "1.3.6.1.2.1.4.20.1.1"
+	const ipAddressObjectID = "1.3.6.1.2.1.4.20.1.1"
 	t.Run("Successfully walks a host", func(t *testing.T) {
 		// Setup
-		objectIdsToQuery := []string{ipAddressObjectId}
+		objectIDsToQuery := []string{ipAddressObjectID}
 		fakeWalker := snmp.NewFakeSNMPWalker("")
-		host := snmp.NewSNMPHost("192.168.1.1", logger, func(_ string) snmp.SNMPWalker { return fakeWalker }, objectIdsToQuery)
+		host := snmp.NewHost("192.168.1.1", logger, func(_ string) snmp.Walker { return fakeWalker }, objectIDsToQuery)
 
 		// Execute
 		oids, err := host.Walk("192.168.1.1")
 
 		// Assert
 		assert.NoError(t, err)
-		assert.Equal(t, len(objectIdsToQuery), len(oids))
-		assert.Equal(t, "192.168.1.1", oids[ipAddressObjectId])
+		assert.Equal(t, len(objectIDsToQuery), len(oids))
+		assert.Equal(t, "192.168.1.1", oids[ipAddressObjectID])
 	})
 
 	t.Run("Handles SNMP connection error", func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker := &MockSNMP{}
 		mockWalker.On("Connect").Return(assert.AnError)
 		mockWalker.On("Close").Return(nil)
-		host := snmp.NewSNMPHost("192.168.1.1", logger, func(_ string) snmp.SNMPWalker { return mockWalker }, []string{"1.3.6.1.2.1.4.20.1.1"})
+		host := snmp.NewHost("192.168.1.1", logger, func(_ string) snmp.Walker { return mockWalker }, []string{"1.3.6.1.2.1.4.20.1.1"})
 
 		// Execute
 		oids, err := host.Walk("192.168.1.1")
@@ -84,7 +84,7 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
 		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
-		host := snmp.NewSNMPHost("192.168.1.1", logger, func(_ string) snmp.SNMPWalker { return mockWalker }, []string{ipAddressObjectId})
+		host := snmp.NewHost("192.168.1.1", logger, func(_ string) snmp.Walker { return mockWalker }, []string{ipAddressObjectID})
 
 		// Execute
 		oids, err := host.Walk("192.168.1.1")
@@ -96,19 +96,19 @@ func TestSNMPHost(t *testing.T) {
 	})
 }
 
-// Connect implements SNMPWalker interface
+// Connect implements Walker interface
 func (m *MockSNMP) Connect() error {
 	args := m.Called()
 	return args.Error(0)
 }
 
-// Close implements SNMPWalker interface
+// Close implements Walker interface
 func (m *MockSNMP) Close() error {
 	args := m.Called()
 	return args.Error(0)
 }
 
-// Walk implements SNMPWalker interface
+// Walk implements Walker interface
 func (m *MockSNMP) Walk(oid string) (snmp.ObjectIDValueMap, error) {
 	args := m.Called(oid)
 	return nil, args.Error(1)

@@ -31,11 +31,11 @@ type Runner struct {
 	timeout           time.Duration
 	scope             config.Scope
 	config            config.PolicyConfig
-	snmpClientFactory func(host string) snmp.SNMPWalker
+	snmpClientFactory func(host string) snmp.Walker
 }
 
 // NewRunner returns a new policy runner
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, snmpClientFactory func(host string) snmp.SNMPWalker) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, snmpClientFactory func(host string) snmp.Walker) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
@@ -78,7 +78,7 @@ func (r *Runner) run() {
 	entities := make([]diode.Entity, 0)
 
 	for _, target := range r.scope.Targets {
-		host := snmp.NewSNMPHost(target, r.logger, r.snmpClientFactory, mapper.ObjectIDs())
+		host := snmp.NewHost(target, r.logger, r.snmpClientFactory, mapper.ObjectIDs())
 		oids, err := host.Walk(target)
 		if err != nil {
 			r.logger.Warn("Error crawling host", "ip", target, "error", err)

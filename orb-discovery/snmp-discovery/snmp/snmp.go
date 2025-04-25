@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -23,6 +24,7 @@ type ObjectIDMapper struct {
 	mapping ObjectIDMapping
 }
 
+// NewObjectIDMapper creates a new ObjectIDMapper
 func NewObjectIDMapper() *ObjectIDMapper {
 	return &ObjectIDMapper{
 		mapping: ObjectIDMapping{
@@ -31,7 +33,7 @@ func NewObjectIDMapper() *ObjectIDMapper {
 	}
 }
 
-// mapObjectIDsToEntity maps ObjectIDs to entities
+// MapObjectIDsToEntity maps ObjectIDs to entities
 // In future this will be dynamic based on the ObjectIDMapping from the policy
 func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diode.Entity {
 	ipEntity := &diode.IPAddress{
@@ -40,6 +42,7 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 	return []diode.Entity{ipEntity}
 }
 
+// ObjectIDs returns the ObjectIDs that the ObjectIDMapper can map
 func (m *ObjectIDMapper) ObjectIDs() []string {
 	objectIDs := make([]string, 0, len(m.mapping))
 	for objectID := range m.mapping {
@@ -48,35 +51,38 @@ func (m *ObjectIDMapper) ObjectIDs() []string {
 	return objectIDs
 }
 
-type SNMPHost struct {
+// Host is a struct that represents an SNMP host
+type Host struct {
 	address           string
 	objects           map[string]string
 	logger            *slog.Logger
-	snmpClientFactory func(host string) SNMPWalker
+	snmpClientFactory func(host string) Walker
 	objectIDs         []string
 }
 
-func NewSNMPHost(host string, logger *slog.Logger, snmpClientFactory func(host string) SNMPWalker, objectIds []string) *SNMPHost {
-	return &SNMPHost{
+// NewHost creates a new Host
+func NewHost(host string, logger *slog.Logger, snmpClientFactory func(host string) Walker, objectIDs []string) *Host {
+	return &Host{
 		address:           host,
 		objects:           make(map[string]string),
 		logger:            logger,
 		snmpClientFactory: snmpClientFactory,
-		objectIDs:         objectIds,
+		objectIDs:         objectIDs,
 	}
 }
 
-func (s *SNMPHost) Walk(host string) (ObjectIDValueMap, error) {
+// Walk walks the SNMP host
+func (s *Host) Walk(host string) (ObjectIDValueMap, error) {
 	s.logger.Info("Scanning", "host", host)
 
-	snmpClient := s.snmpClientFactory(host)
+	Client := s.snmpClientFactory(host)
 	defer func() {
-		if err := snmpClient.Close(); err != nil {
+		if err := Client.Close(); err != nil {
 			s.logger.Warn("Error closing SNMP connection", "host", host, "error", err)
 		}
 	}()
 
-	err := snmpClient.Connect()
+	err := Client.Connect()
 	if err != nil {
 		s.logger.Warn("Could not connect to host", "host", host, "error", err)
 		return nil, err
@@ -84,7 +90,7 @@ func (s *SNMPHost) Walk(host string) (ObjectIDValueMap, error) {
 
 	output := make(ObjectIDValueMap)
 	for _, objectID := range s.objectIDs {
-		pdu, err := snmpClient.Walk(objectID)
+		pdu, err := Client.Walk(objectID)
 		if err != nil {
 			s.logger.Warn("Error walking ObjectID", "objectID", objectID, "error", err)
 			return nil, err
@@ -101,17 +107,18 @@ func (s *SNMPHost) Walk(host string) (ObjectIDValueMap, error) {
 	return output, nil
 }
 
-// SNMPClient wraps gosnmp.GoSNMP to implement the SNMPWalker interface
-type SNMPClient struct {
+// Client wraps gosnmp.GoSNMP to implement the Walker interface
+type Client struct {
 	*gosnmp.GoSNMP
 }
 
-// Close implements the SNMPWalker interface by closing the SNMP connection
-func (c *SNMPClient) Close() error {
+// Close implements the Walker interface by closing the SNMP connection
+func (c *Client) Close() error {
 	return c.Conn.Close()
 }
 
-func (c *SNMPClient) Walk(objectID string) (ObjectIDValueMap, error) {
+// Walk implements the Walker interface by walking the SNMP tree
+func (c *Client) Walk(objectID string) (ObjectIDValueMap, error) {
 	pdu, err := c.WalkAll(objectID)
 	if err != nil {
 		return nil, err
@@ -127,9 +134,9 @@ func (c *SNMPClient) Walk(objectID string) (ObjectIDValueMap, error) {
 	return output, nil
 }
 
-// NewSNMPWalker creates a new SNMPClient for the given target host
-func NewSNMPWalker(host string) SNMPWalker {
-	return &SNMPClient{
+// NewClient creates a new Client for the given target host
+func NewClient(host string) Walker {
+	return &Client{
 		&gosnmp.GoSNMP{
 			Target:    host,
 			Port:      161,
@@ -140,10 +147,10 @@ func NewSNMPWalker(host string) SNMPWalker {
 	}
 }
 
-// SNMPWalker interface defines methods for walking SNMP trees
+// Walker interface defines methods for walking SNMP trees
 // It allows for connecting to SNMP devices, traversing ObjectID trees,
 // and properly closing connections when finished
-type SNMPWalker interface {
+type Walker interface {
 	Walk(objectID string) (ObjectIDValueMap, error)
 	Connect() error
 	Close() error
