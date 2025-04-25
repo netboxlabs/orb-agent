@@ -231,6 +231,132 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			returnCode:    http.StatusBadRequest,
 			returnMessage: `test-policy-invalid : invalid policy : missing protocol version`,
 		},
+		{
+			desc:        "unsupported protocol version",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv4
+                    community: public
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy : invalid policy : unsupported protocol version`,
+		},
+		{
+			desc:        "missing community",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv2c
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy : invalid policy : missing community`,
+		},
+		{
+			desc:        "missing username for SNMPv3",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    auth_passphrase: pass
+                    priv_passphrase: pass
+                    auth_protocol: MD5
+                    priv_protocol: DES
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy : invalid policy : missing username`,
+		},
+		{
+			desc:        "missing auth passphrase for SNMPv3",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    username: user
+                    priv_passphrase: pass
+                    auth_protocol: MD5
+                    priv_protocol: DES
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy : invalid policy : missing auth passphrase`,
+		},
+		{
+			desc:        "missing priv passphrase for SNMPv3",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    username: user
+                    auth_passphrase: pass
+                    auth_protocol: MD5
+                    priv_protocol: DES
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy : invalid policy : missing priv passphrase`,
+		},
+		{
+			desc:        "missing auth protocol for SNMPv3",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    username: user
+                    auth_passphrase: pass
+                    priv_passphrase: pass
+                    priv_protocol: DES
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy : invalid policy : missing auth protocol`,
+		},
+		{
+			desc:        "missing priv protocol for SNMPv3",
+			contentType: "application/x-yaml",
+			body: []byte(`
+            policies:
+              test-policy:
+                scope:
+                  targets:
+                    - host: 192.168.31.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    username: user
+                    auth_passphrase: pass
+                    priv_passphrase: pass
+                    auth_protocol: MD5
+            `),
+			returnCode:    http.StatusBadRequest,
+			returnMessage: `test-policy : invalid policy : missing priv protocol`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
