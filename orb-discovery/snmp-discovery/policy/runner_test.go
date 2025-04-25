@@ -182,39 +182,45 @@ func TestRunnerWithOptions(t *testing.T) {
 	}
 }
 
-// func TestSNMPDataMappingAndIngestion(t *testing.T) {
-// 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-// 	mockClient := new(MockDiodeClient)
-// 	ctx := context.Background()
+func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mockClient := new(MockDiodeClient)
+	ctx := context.Background()
 
-// 	// Map SNMP data to entities
-// 	expectedEntities := []diode.Entity{
-// 		&diode.IPAddress{
-// 			Address: diode.String("192.168.1.1"),
-// 		},
-// 	}
+	policyConfig := config.Policy{
+		Config: config.PolicyConfig{},
+		Scope: config.Scope{
+			Targets: []string{"192.168.1.1"},
+		},
+	}
 
-// 	// Setup mock client expectations
-// 	mockClient.On("Ingest", mock.Anything, mock.Anything).Return(&diodepb.IngestResponse{}, nil)
+	// Create runner
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker)
+	assert.NoError(t, err)
 
-// 	// Create runner
-// 	runner, err := policy.NewRunner(ctx, logger, "test-successful-ingestion-policy", config.Policy{
-// 		Config: config.PolicyConfig{},
-// 		Scope: config.Scope{
-// 			Targets: []string{"192.168.1.1"},
-// 		},
-// 	}, mockClient, snmp.NewFakeSNMPWalker)
-// 	assert.NoError(t, err)
+	// Use a channel to signal that Ingest was called
+	ingestCalled := make(chan bool, 1)
 
-// 	// Start the process
-// 	runner.Start()
+	expectedEntities := []diode.Entity{&diode.IPAddress{Address: diode.String("192.168.1.1/32")}}
 
-// 	time.Sleep(3 * time.Second)
+	mockClient.On("Ingest", mock.Anything, expectedEntities).Run(func(args mock.Arguments) {
+		ingestCalled <- true
+		entities := args.Get(1).([]diode.Entity)
+		assert.Equal(t, expectedEntities, entities, "Ingest should be called with the correct entities")
+	}).Return(&diodepb.IngestResponse{}, nil)
 
-// 	// Stop the process
-// 	err = runner.Stop()
-// 	assert.NoError(t, err)
+	// Start the process
+	runner.Start()
 
-// 	// Verify that Ingest was called with the expected entities
-// 	mockClient.AssertCalled(t, "Ingest", mock.Anything, expectedEntities)
-// }
+	// Wait for Ingest to be called or timeout
+	select {
+	case <-ingestCalled:
+		// Success
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout: Ingest was not called")
+	}
+
+	// Stop the process
+	err = runner.Stop()
+	assert.NoError(t, err)
+}
