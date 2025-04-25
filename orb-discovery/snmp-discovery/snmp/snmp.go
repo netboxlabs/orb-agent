@@ -77,14 +77,17 @@ func NewHost(host string, port uint16, authentication *config.Authentication, lo
 func (s *Host) Walk() (ObjectIDValueMap, error) {
 	s.logger.Info("Scanning", "host", s.address)
 
-	snmpClient := s.ClientFactory(s.address, s.port, s.authentication)
+	snmpClient, err := s.ClientFactory(s.address, s.port, s.authentication)
+	if err != nil {
+		return nil, err
+	}
 	defer func() {
 		if err := snmpClient.Close(); err != nil {
 			s.logger.Warn("Error closing SNMP connection", "host", s.address, "error", err)
 		}
 	}()
 
-	err := snmpClient.Connect()
+	err = snmpClient.Connect()
 	if err != nil {
 		s.logger.Warn("Could not connect to host", "host", s.address, "error", err)
 		return nil, err
@@ -144,10 +147,10 @@ const (
 )
 
 // ClientFactory is a function that creates a new SNMPClient
-type ClientFactory func(host string, port uint16, authentication *config.Authentication) Walker
+type ClientFactory func(host string, port uint16, authentication *config.Authentication) (Walker, error)
 
 // NewClient creates a new SNMPClient for the given target host
-func NewClient(host string, port uint16, authentication *config.Authentication) Walker {
+func NewClient(host string, port uint16, authentication *config.Authentication) (Walker, error) {
 	if authentication.ProtocolVersion == ProtocolVersion2c {
 		return &Client{
 			&gosnmp.GoSNMP{
