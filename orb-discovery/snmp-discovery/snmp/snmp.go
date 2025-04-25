@@ -54,7 +54,6 @@ type Host struct {
 	address        string
 	port           uint16
 	authentication *config.Authentication
-	objects        map[string]string
 	logger         *slog.Logger
 	ClientFactory  ClientFactory
 }
@@ -65,7 +64,6 @@ func NewHost(host string, port uint16, authentication *config.Authentication, lo
 		address:        host,
 		port:           port,
 		authentication: authentication,
-		objects:        make(map[string]string),
 		logger:         logger,
 		ClientFactory:  ClientFactory,
 	}
