@@ -38,9 +38,7 @@ jobs:
         run: go build ./...
       - name: Install additional dependencies
         run: |
-          go install github.com/mfridman/tparse@v0.14.0
-          sudo apt-get -y install nmap
-          sudo setcap cap_net_raw,cap_net_admin=eip $(which nmap)
+          make install-dev-tools
       - name: Run go test
         id: go-test
         run: |
