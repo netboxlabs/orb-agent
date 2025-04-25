@@ -167,7 +167,7 @@ func TestObjectIDs(t *testing.T) {
 }
 
 func TestNewClient(t *testing.T) {
-	t.Run("Creates SNMPv2c client successfully", func(t *testing.T) {
+	t.Run("Creates SNMPv1 client successfully", func(t *testing.T) {
 		auth := &config.Authentication{
 			ProtocolVersion: snmp.ProtocolVersion1,
 			Community:       "public",
