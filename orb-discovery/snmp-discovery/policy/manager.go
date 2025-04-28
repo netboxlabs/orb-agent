@@ -43,7 +43,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	}
 
 	for name, policy := range payload.Policies {
-		if err := validatePolicy(policy); err != nil {
+		if err := m.validatePolicy(policy); err != nil {
 			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
 	}
@@ -51,7 +51,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	return payload.Policies, nil
 }
 
-func validatePolicy(policy config.Policy) error {
+func (m *Manager) validatePolicy(policy config.Policy) error {
 	if policy.Scope.Authentication.ProtocolVersion == "" {
 		return fmt.Errorf("missing protocol version")
 	}
@@ -66,25 +66,35 @@ func validatePolicy(policy config.Policy) error {
 		}
 	}
 
+	// m.logger.Info("validating policy", "policy", policy.Scope.Authentication)
+
 	if policy.Scope.Authentication.ProtocolVersion == "SNMPv3" {
-		if policy.Scope.Authentication.Username == "" {
-			return fmt.Errorf("missing username")
+		if policy.Scope.Authentication.SecurityLevel != "noAuthNoPriv" &&
+			policy.Scope.Authentication.SecurityLevel != "authNoPriv" &&
+			policy.Scope.Authentication.SecurityLevel != "authPriv" {
+			return fmt.Errorf("invalid security level %s", policy.Scope.Authentication.SecurityLevel)
 		}
+		if policy.Scope.Authentication.SecurityLevel == "authNoPriv" || policy.Scope.Authentication.SecurityLevel == "authPriv" {
+			if policy.Scope.Authentication.Username == "" {
+				return fmt.Errorf("missing username")
+			}
 
-		if policy.Scope.Authentication.AuthPassphrase == "" {
-			return fmt.Errorf("missing auth passphrase")
+			if policy.Scope.Authentication.AuthPassphrase == "" {
+				return fmt.Errorf("missing auth passphrase")
+			}
+
+			if policy.Scope.Authentication.AuthProtocol == "" {
+				return fmt.Errorf("missing auth protocol")
+			}
 		}
+		if policy.Scope.Authentication.SecurityLevel == "authPriv" {
+			if policy.Scope.Authentication.PrivPassphrase == "" {
+				return fmt.Errorf("missing priv passphrase")
+			}
 
-		if policy.Scope.Authentication.PrivPassphrase == "" {
-			return fmt.Errorf("missing priv passphrase")
-		}
-
-		if policy.Scope.Authentication.AuthProtocol == "" {
-			return fmt.Errorf("missing auth protocol")
-		}
-
-		if policy.Scope.Authentication.PrivProtocol == "" {
-			return fmt.Errorf("missing priv protocol")
+			if policy.Scope.Authentication.PrivProtocol == "" {
+				return fmt.Errorf("missing priv protocol")
+			}
 		}
 	}
 
