@@ -218,6 +218,35 @@ func TestNewClient(t *testing.T) {
 			},
 			expectError: false,
 		},
+
+		{
+			name: "Invalid SNMPv3 auth protocol",
+			auth: &config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion3,
+				Username:        "testuser",
+				AuthProtocol:    "InvalidProtocol",
+				AuthPassphrase:  "testpass",
+				PrivProtocol:    "DES",
+				PrivPassphrase:  "testpass",
+				SecurityLevel:   "authPriv",
+			},
+			expectError:    true,
+			expectedErrMsg: "unsupported authentication protocol: InvalidProtocol",
+		},
+		{
+			name: "Invalid SNMPv3 priv protocol",
+			auth: &config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion3,
+				Username:        "testuser",
+				AuthProtocol:    "MD5",
+				AuthPassphrase:  "testpass",
+				PrivProtocol:    "InvalidProtocol",
+				PrivPassphrase:  "testpass",
+				SecurityLevel:   "authPriv",
+			},
+			expectError:    true,
+			expectedErrMsg: "unsupported privacy protocol: InvalidProtocol",
+		},
 		{
 			name: "Returns error for unsupported protocol version",
 			auth: &config.Authentication{
