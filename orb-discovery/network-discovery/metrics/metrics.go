@@ -21,6 +21,7 @@ var (
 	counterCache       = map[string]metric.Int64Counter{}
 	upDownCounterCache = map[string]metric.Int64UpDownCounter{}
 	histogramCache     = map[string]metric.Float64Histogram{}
+	gaugeCache         = map[string]metric.Int64Gauge{}
 )
 
 // SetupMetricsExport configures the OTLP metrics exporter with a periodic reader.
@@ -111,9 +112,22 @@ func GetHistogram(name string, description string) metric.Float64Histogram {
 	return h
 }
 
-// GetDiscoveryAttempts returns the counter for discovery attempts.
-func GetDiscoveryAttempts() metric.Int64Counter {
-	return GetCounter("discovery_attempts", "Number of network discovery attempts")
+// GetGauge returns a cached gauge or creates a new one if not exists.
+func GetGauge(name string, description string) metric.Int64Gauge {
+	if meter == nil {
+		return nil
+	}
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+
+	// Create the gauge
+	g, err := meter.Int64Gauge(name, metric.WithDescription(description))
+	if err != nil {
+		log.Printf("Error creating gauge %s: %v", name, err)
+		return nil
+	}
+	gaugeCache[name] = g
+	return g
 }
 
 // GetDiscoverySuccess returns the counter for successful discoveries.
@@ -134,6 +148,11 @@ func GetPolicyExecutions() metric.Int64Counter {
 // GetAPIRequests returns the counter for API requests
 func GetAPIRequests() metric.Int64Counter {
 	return GetCounter("api_requests", "Number of API requests")
+}
+
+// GetDiscoveredHosts returns the gauge for number of hosts discovered
+func GetDiscoveredHosts() metric.Int64Gauge {
+	return GetGauge("discovered_hosts", "Number of hosts discovered in each run")
 }
 
 // GetDiscoveryLatency returns the histogram for discovery latency

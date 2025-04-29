@@ -10,6 +10,8 @@ import (
 	"github.com/Ullaakut/nmap/v3"
 	"github.com/go-co-op/gocron/v2"
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
 	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
@@ -71,12 +73,22 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 // run runs the policy
 func (r *Runner) run() {
-	metrics.GetPolicyExecutions().Add(context.Background(), 1)
+	if rMetric := metrics.GetPolicyExecutions(); rMetric != nil {
+		rMetric.Add(r.ctx, 1,
+			metric.WithAttributes(
+				attribute.String("policy", r.ctx.Value(policyKey).(string)),
+			))
+	}
 	startTime := time.Now()
 
 	defer func() {
-		elapsed := time.Since(startTime).Seconds() * 1000
-		metrics.GetDiscoveryLatency().Record(context.Background(), elapsed)
+		if rMetric := metrics.GetDiscoveryLatency(); rMetric != nil {
+			// Calculate duration in milliseconds
+			duration := float64(time.Since(startTime).Milliseconds())
+			rMetric.Record(r.ctx, duration, metric.WithAttributes(
+				attribute.String("policy", r.ctx.Value(policyKey).(string)),
+			))
+		}
 	}()
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
@@ -167,6 +179,13 @@ func (r *Runner) run() {
 	scanner, err := nmap.NewScanner(ctx, options...)
 	if err != nil {
 		r.logger.Error("error creating scanner", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+			rMetric.Add(r.ctx, 1,
+				metric.WithAttributes(
+					attribute.String("policy", r.ctx.Value(policyKey).(string)),
+					attribute.String("error", err.Error()),
+				))
+		}
 		return
 	}
 	r.logger.Info("running scanner", slog.Any("targets", r.scope.Targets), slog.Any("policy", r.ctx.Value(policyKey)))
@@ -176,7 +195,30 @@ func (r *Runner) run() {
 	}
 	if err != nil {
 		r.logger.Error("error running scanner", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+			rMetric.Add(r.ctx, 1,
+				metric.WithAttributes(
+					attribute.String("policy", r.ctx.Value(policyKey).(string)),
+					attribute.String("error", err.Error()),
+				))
+		}
 		return
+	}
+
+	// Record success count with host count attribute
+	if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
+		rMetric.Add(r.ctx, 1,
+			metric.WithAttributes(
+				attribute.String("policy", r.ctx.Value(policyKey).(string)),
+			))
+	}
+
+	// Record discovered hosts as a dedicated gauge metric
+	if hMetric := metrics.GetDiscoveredHosts(); hMetric != nil {
+		hMetric.Record(r.ctx, int64(len(result.Hosts)),
+			metric.WithAttributes(
+				attribute.String("policy", r.ctx.Value(policyKey).(string)),
+			))
 	}
 
 	entities := make([]diode.Entity, 0, len(result.Hosts))
@@ -270,8 +312,8 @@ func (r *Runner) run() {
 
 // Start starts the policy runner
 func (r *Runner) Start() {
-	if metric := metrics.GetActivePolicies(); metric != nil {
-		metric.Add(context.Background(), 1)
+	if rMetric := metrics.GetActivePolicies(); rMetric != nil {
+		rMetric.Add(r.ctx, 1)
 	}
 	r.scheduler.Start()
 }
@@ -281,8 +323,8 @@ func (r *Runner) Stop() error {
 	if err := r.scheduler.StopJobs(); err != nil {
 		return err
 	}
-	if metric := metrics.GetActivePolicies(); metric != nil {
-		metric.Add(context.Background(), -1)
+	if rMetric := metrics.GetActivePolicies(); rMetric != nil {
+		rMetric.Add(r.ctx, -1)
 	}
 	return r.scheduler.Shutdown()
 }
