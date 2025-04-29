@@ -288,7 +288,7 @@ func TestRunnerWalkError(t *testing.T) {
 	mockHost.On("Walk", mock.Anything).Return(nil, errors.New("walk error"))
 
 	// Create a mock client factory that returns the mock host
-	mockClientFactory := func(host string, port uint16, retries int, authentication *config.Authentication) (snmp.Walker, error) {
+	mockClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
 		return mockHost, nil
 	}
 
