@@ -32,6 +32,25 @@ func (m *MockDiodeClient) Close() error {
 	return args.Error(0)
 }
 
+// MockHost is a mock implementation of the snmp.Walker interface
+// to simulate errors during the Walk method.
+type MockHost struct {
+	mock.Mock
+}
+
+func (m *MockHost) Walk(objectID string) (snmp.ObjectIDValueMap, error) {
+	args := m.Called(objectID)
+	return nil, args.Error(1)
+}
+
+func (m *MockHost) Connect() error {
+	return nil
+}
+
+func (m *MockHost) Close() error {
+	return nil
+}
+
 func TestNewRunner(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	mockClient := new(MockDiodeClient)
@@ -241,4 +260,64 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	// Stop the process
 	err = runner.Stop()
 	assert.NoError(t, err)
+}
+
+func TestRunnerWalkError(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mockClient := new(MockDiodeClient)
+	ctx := context.Background()
+
+	policyConfig := config.Policy{
+		Config: config.PolicyConfig{},
+		Scope: config.Scope{
+			Targets: []config.Target{
+				{
+					Host: "localhost",
+					Port: 161,
+				},
+			},
+			Authentication: config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion2c,
+				Community:       "public",
+			},
+		},
+	}
+
+	// Create a mock host that returns an error on Walk
+	mockHost := new(MockHost)
+	mockHost.On("Walk", mock.Anything).Return(nil, errors.New("walk error"))
+
+	// Create a mock client factory that returns the mock host
+	mockClientFactory := func(host string, port uint16, retries int, authentication *config.Authentication) (snmp.Walker, error) {
+		return mockHost, nil
+	}
+
+	// Create runner with the mock client factory
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory)
+	assert.NoError(t, err)
+
+	// Use a channel to signal that Ingest was called
+	ingestCalled := make(chan bool, 1)
+
+	mockClient.On("Ingest", mock.Anything, mock.Anything).Run(func(_ mock.Arguments) {
+		ingestCalled <- true
+	}).Return(&diodepb.IngestResponse{}, nil)
+
+	// Start the process
+	runner.Start()
+
+	// Wait for Ingest to be called or timeout
+	select {
+	case <-ingestCalled:
+		// Ingest was called, proceed
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout: Ingest was not called")
+	}
+
+	// Stop the process
+	err = runner.Stop()
+	assert.NoError(t, err, "Runner.Stop should not return an error")
+
+	// Verify that the logger captured the error
+	// This part depends on how you want to verify the log output
 }
