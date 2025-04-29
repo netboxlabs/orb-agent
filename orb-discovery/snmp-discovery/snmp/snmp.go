@@ -173,6 +173,14 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 			},
 		}, nil
 	case ProtocolVersion3:
+		authProtocol, err := getAuthProtocol(authentication.AuthProtocol)
+		if err != nil {
+			return nil, err
+		}
+		privProtocol, err := getPrivProtocol(authentication.PrivProtocol)
+		if err != nil {
+			return nil, err
+		}
 		return &Client{
 			&gosnmp.GoSNMP{
 				Target:  host,
@@ -182,9 +190,9 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 				Retries: retries,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,
-					AuthenticationProtocol:   getAuthProtocol(authentication.AuthProtocol),
+					AuthenticationProtocol:   authProtocol,
 					AuthenticationPassphrase: authentication.AuthPassphrase,
-					PrivacyProtocol:          getPrivProtocol(authentication.PrivProtocol),
+					PrivacyProtocol:          privProtocol,
 					PrivacyPassphrase:        authentication.PrivPassphrase,
 				},
 			},
@@ -193,28 +201,28 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 	return nil, fmt.Errorf("unsupported protocol version: %s", authentication.ProtocolVersion)
 }
 
-func getAuthProtocol(authProtocol string) gosnmp.SnmpV3AuthProtocol {
+func getAuthProtocol(authProtocol string) (gosnmp.SnmpV3AuthProtocol, error) {
 	switch authProtocol {
 	case "NoAuth":
-		return gosnmp.NoAuth
+		return gosnmp.NoAuth, nil
 	case "MD5":
-		return gosnmp.MD5
+		return gosnmp.MD5, nil
 	case "SHA":
-		return gosnmp.SHA
+		return gosnmp.SHA, nil
 	}
-	return gosnmp.NoAuth
+	return gosnmp.NoAuth, fmt.Errorf("unsupported authentication protocol: %s", authProtocol)
 }
 
-func getPrivProtocol(privProtocol string) gosnmp.SnmpV3PrivProtocol {
+func getPrivProtocol(privProtocol string) (gosnmp.SnmpV3PrivProtocol, error) {
 	switch privProtocol {
 	case "NoPriv":
-		return gosnmp.NoPriv
+		return gosnmp.NoPriv, nil
 	case "DES":
-		return gosnmp.DES
+		return gosnmp.DES, nil
 	case "AES":
-		return gosnmp.AES
+		return gosnmp.AES, nil
 	}
-	return gosnmp.AES
+	return gosnmp.NoPriv, fmt.Errorf("unsupported privacy protocol: %s", privProtocol)
 }
 
 // Walker interface defines methods for walking SNMP trees
