@@ -20,6 +20,10 @@ Usage of network-discovery:
     	diode client secret (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_SECRET})
   -diode-target string
     	diode target (REQUIRED)
+  --otel-endpoint string
+    	OpenTelemetry exporter endpoint
+  --otel-export-period int
+    	Period in seconds between OpenTelemetry exports (default: 60)
   -help
     	show this help
   -host string

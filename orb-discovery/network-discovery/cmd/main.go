@@ -12,6 +12,7 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/network-discovery/server"
 	"github.com/netboxlabs/orb-discovery/network-discovery/version"
@@ -49,6 +50,8 @@ func main() {
 	logLevel := flag.String("log-level", "INFO", "log level")
 	logFormat := flag.String("log-format", "TEXT", "log format")
 	help := flag.Bool("help", false, "show this help")
+	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint")
+	otelExportPeriod := flag.Int("otel-export-period", 60, "Period in seconds between OpenTelemetry exports")
 
 	flag.Parse()
 
@@ -80,6 +83,13 @@ func main() {
 
 	ctx := context.Background()
 	logger := config.NewLogger(*logLevel, *logFormat)
+
+	if otelEndpoint != nil && *otelEndpoint != "" {
+		if err := metrics.SetupMetricsExport(ctx, *otelEndpoint, *otelExportPeriod); err != nil {
+			logger.Error("failed to setup metrics export", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	policyManager := policy.NewManager(ctx, logger, client)
 	server := server.NewServer(*host, *port, logger, policyManager, version.GetBuildVersion())

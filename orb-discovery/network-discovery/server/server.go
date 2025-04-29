@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
 )
 
@@ -52,6 +55,36 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		host:   host,
 		port:   port,
 	}
+	// Custom middleware to count API calls and measure latency
+	server.router.Use(func(c *gin.Context) {
+		// Start timer for latency
+		startTime := time.Now()
+
+		// Process request
+		c.Next()
+
+		if apiMetric := metrics.GetAPIRequests(); apiMetric != nil {
+			apiMetric.Add(c.Request.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
+
+		if apiMetric := metrics.GetAPIResponseLatency(); apiMetric != nil {
+			// Calculate duration in milliseconds
+			duration := float64(time.Since(startTime).Milliseconds())
+			apiMetric.Record(c.Request.Context(), duration,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
+	})
 
 	v1 := server.router.Group("/api/v1")
 	{

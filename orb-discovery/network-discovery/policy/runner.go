@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 )
 
 // Define a custom type for the context key
@@ -69,6 +71,14 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 // run runs the policy
 func (r *Runner) run() {
+	metrics.GetPolicyExecutions().Add(context.Background(), 1)
+	startTime := time.Now()
+
+	defer func() {
+		elapsed := time.Since(startTime).Seconds() * 1000
+		metrics.GetDiscoveryLatency().Record(context.Background(), elapsed)
+	}()
+
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
@@ -178,8 +188,24 @@ func (r *Runner) run() {
 		if r.config.Defaults.Description != "" {
 			ip.Description = diode.String(r.config.Defaults.Description)
 		}
+		hasComments := false
 		if r.config.Defaults.Comments != "" {
+			hasComments = true
 			ip.Comments = diode.String(r.config.Defaults.Comments)
+		}
+		if r.config.Defaults.Vrf != "" {
+			ip.Vrf = &diode.VRF{
+				Name: diode.String(r.config.Defaults.Vrf),
+				Rd:   diode.String(r.config.Defaults.Vrf),
+			}
+		}
+		if r.config.Defaults.Tenant != "" {
+			ip.Tenant = &diode.Tenant{
+				Name: diode.String(r.config.Defaults.Tenant),
+			}
+		}
+		if r.config.Defaults.Role != "" {
+			ip.Role = diode.String(r.config.Defaults.Role)
 		}
 		if len(r.config.Defaults.Tags) > 0 {
 			var tags []*diode.Tag
@@ -188,6 +214,47 @@ func (r *Runner) run() {
 			}
 			ip.Tags = tags
 		}
+
+		if !hasComments {
+			var metadata config.HostMetadata
+
+			if host.ExtraPorts != nil {
+				metadata.ExtraPorts = make([]config.ExtraPort, len(host.ExtraPorts))
+				for i, extraPort := range host.ExtraPorts {
+					metadata.ExtraPorts[i] = config.ExtraPort{
+						State: extraPort.State,
+						Count: extraPort.Count,
+					}
+				}
+			}
+			if host.Hostnames != nil {
+				metadata.Hostnames = make([]config.Hostname, len(host.Hostnames))
+				for i, hostname := range host.Hostnames {
+					metadata.Hostnames[i] = config.Hostname{
+						Name: hostname.Name,
+						Type: hostname.Type,
+					}
+				}
+			}
+			if host.Ports != nil {
+				metadata.Ports = make([]config.Port, len(host.Ports))
+				for i, port := range host.Ports {
+					metadata.Ports[i] = config.Port{
+						Number:   int(port.ID),
+						Protocol: port.Protocol,
+						Service:  port.Service.Name,
+						State:    port.State.State,
+					}
+				}
+			}
+			data, err := json.Marshal(&metadata)
+			if err != nil {
+				r.logger.Error("error marshalling metadata", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+			} else {
+				ip.Comments = diode.String(string(data))
+			}
+		}
+
 		entities = append(entities, ip)
 	}
 
@@ -203,6 +270,9 @@ func (r *Runner) run() {
 
 // Start starts the policy runner
 func (r *Runner) Start() {
+	if metric := metrics.GetActivePolicies(); metric != nil {
+		metric.Add(context.Background(), 1)
+	}
 	r.scheduler.Start()
 }
 
@@ -210,6 +280,9 @@ func (r *Runner) Start() {
 func (r *Runner) Stop() error {
 	if err := r.scheduler.StopJobs(); err != nil {
 		return err
+	}
+	if metric := metrics.GetActivePolicies(); metric != nil {
+		metric.Add(context.Background(), -1)
 	}
 	return r.scheduler.Shutdown()
 }
