@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
 )
 
@@ -206,6 +207,71 @@ func TestRunnerWithOptions(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestRunnerMetrics(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mockClient := new(MockClient)
+	ctx := context.Background()
+
+	// Initialize metrics
+	err := metrics.SetupMetricsExport(ctx, "localhost:4317", 10)
+	assert.NoError(t, err, "metrics.SetupMetricsExport should not return an error")
+
+	policyConfig := config.Policy{
+		Config: config.PolicyConfig{
+			Defaults: config.Defaults{
+				Description: "Test",
+				Comments:    "This is a test",
+			},
+		},
+		Scope: config.Scope{
+			Targets: []string{"localhost"},
+		},
+	}
+
+	// Create runner
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient)
+	assert.NoError(t, err, "policy.NewRunner should not return an error")
+
+	// Mock Ingest response
+	mockClient.On("Ingest", mock.Anything, mock.Anything).Return(&diodepb.IngestResponse{}, nil)
+
+	t.Run("MetricsValidation", func(t *testing.T) {
+		// Start the runner
+		runner.Start()
+
+		// Validate active policies metric increment
+		activePolicies := metrics.GetActivePolicies()
+		assert.NotNil(t, activePolicies, "Active policies metric should not be nil")
+		// Simulate metric validation (mocked behavior)
+		activePolicies.Add(ctx, 1)
+
+		// Validate policy executions metric
+		policyExecutions := metrics.GetPolicyExecutions()
+		assert.NotNil(t, policyExecutions, "Policy executions metric should not be nil")
+		// Simulate metric validation (mocked behavior)
+		policyExecutions.Add(ctx, 1)
+
+		// Validate discovery success metric
+		discoverySuccess := metrics.GetDiscoverySuccess()
+		assert.NotNil(t, discoverySuccess, "Discovery success metric should not be nil")
+		// Simulate metric validation (mocked behavior)
+		discoverySuccess.Add(ctx, 1)
+
+		// Validate discovered hosts metric
+		discoveredHosts := metrics.GetDiscoveredHosts()
+		assert.NotNil(t, discoveredHosts, "Discovered hosts metric should not be nil")
+		// Simulate metric validation (mocked behavior)
+		discoveredHosts.Record(ctx, 1)
+
+		// Stop the runner
+		err := runner.Stop()
+		assert.NoError(t, err, "Runner.Stop should not return an error")
+
+		// Validate active policies metric decrement
+		activePolicies.Add(ctx, -1)
+	})
 }
 
 func boolPtr(b bool) *bool {

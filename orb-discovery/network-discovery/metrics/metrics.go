@@ -169,3 +169,8 @@ func GetAPIResponseLatency() metric.Float64Histogram {
 func GetActivePolicies() metric.Int64UpDownCounter {
 	return GetUpDownCounter("active_policies", "Number of currently active policies")
 }
+
+// ResetMeter resets the meter to nil for testing purposes.
+func ResetMeter() {
+	meter = nil
+}
