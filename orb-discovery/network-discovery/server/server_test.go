@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/network-discovery/server"
 )
@@ -38,6 +39,9 @@ func TestServerConfigureAndStart(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	client := new(MockClient)
 	policyManager := policy.NewManager(ctx, logger, client)
+
+	err := metrics.SetupMetricsExport(ctx, "localhost:4317", 10)
+	assert.NoError(t, err, "metrics.SetupMetricsExport should not return an error")
 
 	srv := server.NewServer("localhost", 8080, logger, policyManager, "1.0.0")
 	srv.Start()
