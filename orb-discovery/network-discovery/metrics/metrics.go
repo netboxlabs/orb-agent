@@ -3,7 +3,7 @@ package metrics
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -22,12 +22,13 @@ var (
 	upDownCounterCache = map[string]metric.Int64UpDownCounter{}
 	histogramCache     = map[string]metric.Float64Histogram{}
 	gaugeCache         = map[string]metric.Int64Gauge{}
+	logger             *slog.Logger
 )
 
 // SetupMetricsExport configures the OTLP metrics exporter with a periodic reader.
-func SetupMetricsExport(ctx context.Context, endpoint string, exportPeriodSeconds int) error {
+func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string, exportPeriodSeconds int) error {
 	if endpoint == "" {
-		log.Println("No metrics endpoint provided, metrics collection is disabled")
+		logg.Info("No metrics endpoint provided, metrics collection is disabled")
 		return nil
 	}
 
@@ -45,7 +46,7 @@ func SetupMetricsExport(ctx context.Context, endpoint string, exportPeriodSecond
 	meterProvider = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	otel.SetMeterProvider(meterProvider)
 	meter = otel.Meter("network-discovery")
-
+	logger = logg
 	return nil
 }
 
@@ -64,7 +65,7 @@ func GetCounter(name string, description string) metric.Int64Counter {
 	// Create the counter (error handling omitted for brevity)
 	c, err := meter.Int64Counter(name, metric.WithDescription(description))
 	if err != nil {
-		log.Printf("Error creating counter %s: %v", name, err)
+		logger.Error("Error creating counter", "name", name, "error", err)
 		return nil
 	}
 	counterCache[name] = c
@@ -84,7 +85,7 @@ func GetUpDownCounter(name string, description string) metric.Int64UpDownCounter
 	}
 	c, err := meter.Int64UpDownCounter(name, metric.WithDescription(description))
 	if err != nil {
-		log.Printf("Error creating updown counter %s: %v", name, err)
+		logger.Error("Error creating updown counter", "name", name, "error", err)
 		return nil
 	}
 	upDownCounterCache[name] = c
@@ -104,7 +105,7 @@ func GetHistogram(name string, description string) metric.Float64Histogram {
 	}
 	h, err := meter.Float64Histogram(name, metric.WithDescription(description))
 	if err != nil {
-		log.Printf("Error creating histogram %s: %v", name, err)
+		logger.Error("Error creating histogram", "name", name, "error", err)
 		return nil
 	}
 	histogramCache[name] = h
@@ -119,10 +120,12 @@ func GetGauge(name string, description string) metric.Int64Gauge {
 	cacheLock.Lock()
 	defer cacheLock.Unlock()
 
-	// Create the gauge
+	if g, ok := gaugeCache[name]; ok {
+		return g
+	}
 	g, err := meter.Int64Gauge(name, metric.WithDescription(description))
 	if err != nil {
-		log.Printf("Error creating gauge %s: %v", name, err)
+		logger.Error("Error creating gauge", "name", name, "error", err)
 		return nil
 	}
 	gaugeCache[name] = g

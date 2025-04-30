@@ -2,6 +2,8 @@ package metrics_test
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,9 +16,9 @@ import (
 
 func TestSetupMetricsExport(t *testing.T) {
 	ctx := context.Background()
-
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	t.Run("EmptyEndpoint", func(t *testing.T) {
-		err := metrics.SetupMetricsExport(ctx, "", 10)
+		err := metrics.SetupMetricsExport(ctx, logger, "", 10)
 		assert.NoError(t, err, "Should not return error with empty endpoint")
 	})
 
@@ -190,8 +192,9 @@ func TestConvenienceFunctions(t *testing.T) {
 // setupTestMeter creates a no-op meter provider for testing
 func setupTestMeter(_ *testing.T) error {
 	ctx := context.Background()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	// Use the no-op meter provider for testing to avoid actual metrics export
-	return metrics.SetupMetricsExport(ctx, "localhost:4317", 10)
+	return metrics.SetupMetricsExport(ctx, logger, "localhost:4317", 10)
 }
 
 // MockMeter is a mock implementation of metric.Meter for testing

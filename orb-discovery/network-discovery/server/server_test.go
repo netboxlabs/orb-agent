@@ -40,7 +40,7 @@ func TestServerConfigureAndStart(t *testing.T) {
 	client := new(MockClient)
 	policyManager := policy.NewManager(ctx, logger, client)
 
-	err := metrics.SetupMetricsExport(ctx, "localhost:4317", 10)
+	err := metrics.SetupMetricsExport(ctx, logger, "localhost:4317", 10)
 	assert.NoError(t, err, "metrics.SetupMetricsExport should not return an error")
 
 	srv := server.NewServer("localhost", 8080, logger, policyManager, "1.0.0")

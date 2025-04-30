@@ -218,7 +218,7 @@ func TestRunnerMetrics(t *testing.T) {
 	ctx := context.Background()
 
 	// Initialize metrics
-	err := metrics.SetupMetricsExport(ctx, "localhost:4317", 10)
+	err := metrics.SetupMetricsExport(ctx, logger, "localhost:4317", 10)
 	assert.NoError(t, err, "metrics.SetupMetricsExport should not return an error")
 
 	policyConfig := config.Policy{

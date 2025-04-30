@@ -86,7 +86,7 @@ func main() {
 	logger := config.NewLogger(*logLevel, *logFormat)
 
 	if otelEndpoint != nil && *otelEndpoint != "" {
-		if err := metrics.SetupMetricsExport(ctx, *otelEndpoint, *otelExportPeriod); err != nil {
+		if err := metrics.SetupMetricsExport(ctx, logger, *otelEndpoint, *otelExportPeriod); err != nil {
 			logger.Error("failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
