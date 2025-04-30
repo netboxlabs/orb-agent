@@ -83,6 +83,9 @@ func TestRunnerRun(t *testing.T) {
 					Defaults: config.Defaults{
 						Description: "Test",
 						Comments:    "This is a test",
+						Vrf:         "test-vrf",
+						Tenant:      "test-tenant",
+						Role:        "test-role",
 						Tags:        []string{"test", "ip"},
 					},
 				},
@@ -234,12 +237,25 @@ func TestRunnerMetrics(t *testing.T) {
 	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 
+	// Use a channel to signal that Ingest was called
+	ingestCalled := make(chan bool, 1)
+
 	// Mock Ingest response
-	mockClient.On("Ingest", mock.Anything, mock.Anything).Return(&diodepb.IngestResponse{}, nil)
+	mockClient.On("Ingest", mock.Anything, mock.Anything).Run(func(_ mock.Arguments) {
+		ingestCalled <- true
+	}).Return(&diodepb.IngestResponse{}, nil)
 
 	t.Run("MetricsValidation", func(t *testing.T) {
 		// Start the runner
 		runner.Start()
+
+		// Wait for Ingest to be called or timeout
+		select {
+		case <-ingestCalled:
+			// Success
+		case <-time.After(10 * time.Second):
+			t.Fatal("Timeout: Ingest was not called")
+		}
 
 		// Validate active policies metric increment
 		activePolicies := metrics.GetActivePolicies()
