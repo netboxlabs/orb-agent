@@ -163,7 +163,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 		}
 		rPolicies = append(rPolicies, name)
 	}
-
+	s.logger.Info("policies started", "policies", rPolicies)
 	c.IndentedJSON(http.StatusCreated, Response{fmt.Sprintf("policies [%s] were started", strings.Join(rPolicies, ","))})
 }
 
@@ -173,7 +173,7 @@ func (s *Server) deletePolicy(c *gin.Context) {
 		c.IndentedJSON(http.StatusNotFound, Response{"policy not found"})
 		return
 	}
-
+	s.logger.Info("policy stopped", "policy", policy)
 	if err := s.manager.StopPolicy(policy); err != nil {
 		c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
 	} else {

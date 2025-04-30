@@ -32,7 +32,7 @@ func SetupMetricsExport(ctx context.Context, endpoint string, exportPeriodSecond
 	}
 
 	exporter, err := otlpmetric.New(ctx,
-		otlpmetric.WithEndpoint(endpoint),
+		otlpmetric.WithEndpointURL(endpoint),
 		otlpmetric.WithInsecure(),
 	)
 	if err != nil {
@@ -46,7 +46,6 @@ func SetupMetricsExport(ctx context.Context, endpoint string, exportPeriodSecond
 	otel.SetMeterProvider(meterProvider)
 	meter = otel.Meter("network-discovery")
 
-	log.Printf("Metrics export configured with endpoint: %s and period: %d seconds", endpoint, exportPeriodSeconds)
 	return nil
 }
 

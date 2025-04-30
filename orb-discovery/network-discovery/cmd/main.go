@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -89,6 +90,7 @@ func main() {
 			logger.Error("failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
+		logger.Info("Metrics export configured", slog.String("endpoint", *otelEndpoint), slog.Int("period_seconds", *otelExportPeriod))
 	}
 
 	policyManager := policy.NewManager(ctx, logger, client)
