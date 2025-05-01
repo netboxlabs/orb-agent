@@ -43,6 +43,7 @@ type deviceDiscoveryBackend struct {
 	diodeClientID      string
 	diodeClientSecret  string
 	diodeAppNamePrefix string
+	diodeOtelEndpoint  string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -84,6 +85,12 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	d.diodeClientSecret = common.Diode.ClientSecret
 	d.diodeAppNamePrefix = common.Diode.AgentName
 
+	if common.Otel.Grpc != "" {
+		d.diodeOtelEndpoint = common.Otel.Grpc
+		d.logger.Info("device-discovery using OTLP metrics endpoint",
+			slog.String("endpoint", d.diodeOtelEndpoint))
+	}
+
 	return nil
 }
 
@@ -110,6 +117,10 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		"--diode-client-id", d.diodeClientID,
 		"--diode-client-secret", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
+	}
+
+	if d.diodeOtelEndpoint != "" {
+		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
 	d.logger.Info("device-discovery startup", slog.Any("arguments", pvOptions))
