@@ -10,8 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
 )
 
@@ -52,6 +55,36 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		host:   host,
 		port:   port,
 	}
+	// Custom middleware to count API calls and measure latency
+	server.router.Use(func(c *gin.Context) {
+		// Start timer for latency
+		startTime := time.Now()
+
+		// Process request
+		c.Next()
+
+		if apiMetric := metrics.GetAPIRequests(); apiMetric != nil {
+			apiMetric.Add(c.Request.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
+
+		if apiMetric := metrics.GetAPIResponseLatency(); apiMetric != nil {
+			// Calculate duration in milliseconds
+			duration := float64(time.Since(startTime).Milliseconds())
+			apiMetric.Record(c.Request.Context(), duration,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
+	})
 
 	v1 := server.router.Group("/api/v1")
 	{
@@ -130,7 +163,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 		}
 		rPolicies = append(rPolicies, name)
 	}
-
+	s.logger.Info("policies started", "policies", rPolicies)
 	c.IndentedJSON(http.StatusCreated, Response{fmt.Sprintf("policies [%s] were started", strings.Join(rPolicies, ","))})
 }
 
@@ -140,7 +173,7 @@ func (s *Server) deletePolicy(c *gin.Context) {
 		c.IndentedJSON(http.StatusNotFound, Response{"policy not found"})
 		return
 	}
-
+	s.logger.Info("policy stopped", "policy", policy)
 	if err := s.manager.StopPolicy(policy); err != nil {
 		c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
 	} else {

@@ -2,6 +2,33 @@ package config
 
 import "time"
 
+// Hostname represents a hostname associated with a host
+type Hostname struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// Port represents a network port
+type Port struct {
+	Number   int    `json:"number"`
+	Protocol string `json:"protocol"`
+	Service  string `json:"service"`
+	State    string `json:"state"`
+}
+
+// ExtraPort represents additional port information
+type ExtraPort struct {
+	State string `json:"state"`
+	Count int    `json:"count"`
+}
+
+// HostMetadata represents the metadata of a host
+type HostMetadata struct {
+	Hostnames  []Hostname  `json:"hostnames"`
+	Ports      []Port      `json:"ports"`
+	ExtraPorts []ExtraPort `json:"extra_ports"`
+}
+
 // Status represents the status of the network-discovery service
 type Status struct {
 	StartTime     time.Time `json:"start_time"`
@@ -24,6 +51,9 @@ type Scope struct {
 
 // Defaults represents the supported default values for a policy
 type Defaults struct {
+	Vrf         string   `yaml:"vrf,omitempty"`
+	Tenant      string   `yaml:"tenant,omitempty"`
+	Role        string   `yaml:"role,omitempty"`
 	Description string   `yaml:"description,omitempty"`
 	Comments    string   `yaml:"comments,omitempty"`
 	Tags        []string `yaml:"tags,omitempty"`

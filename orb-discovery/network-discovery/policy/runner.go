@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -9,8 +10,11 @@ import (
 	"github.com/Ullaakut/nmap/v3"
 	"github.com/go-co-op/gocron/v2"
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 )
 
 // Define a custom type for the context key
@@ -69,6 +73,25 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 // run runs the policy
 func (r *Runner) run() {
+	policyName := r.ctx.Value(policyKey).(string)
+	if rMetric := metrics.GetPolicyExecutions(); rMetric != nil {
+		rMetric.Add(r.ctx, 1,
+			metric.WithAttributes(
+				attribute.String("policy", policyName),
+			))
+	}
+	startTime := time.Now()
+
+	defer func() {
+		if rMetric := metrics.GetDiscoveryLatency(); rMetric != nil {
+			// Calculate duration in milliseconds
+			duration := float64(time.Since(startTime).Milliseconds())
+			rMetric.Record(r.ctx, duration, metric.WithAttributes(
+				attribute.String("policy", policyName),
+			))
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
@@ -125,7 +148,7 @@ func (r *Runner) run() {
 					}
 				} else {
 					r.logger.Warn("Skipping additional TCP scan due to conflict", "skipped_scan", scanType,
-						"selected_scan", selectedTCPScan, slog.Any("policy", r.ctx.Value(policyKey)))
+						"selected_scan", selectedTCPScan, slog.String("policy", policyName))
 				}
 			} else if fn, exists := privilegedScans[scanType]; exists {
 				options = append(options, fn())
@@ -145,7 +168,7 @@ func (r *Runner) run() {
 	if r.scope.PingScan != nil && *r.scope.PingScan {
 		if hasOtherScans || selectedTCPScan != "" {
 			r.logger.Warn("Skipping ping scan because it is not valid with any other scan types",
-				slog.Any("policy", r.ctx.Value(policyKey)))
+				slog.String("policy", policyName))
 		} else {
 			options = append(options, nmap.WithPingScan())
 		}
@@ -156,17 +179,47 @@ func (r *Runner) run() {
 
 	scanner, err := nmap.NewScanner(ctx, options...)
 	if err != nil {
-		r.logger.Error("error creating scanner", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Error("error creating scanner", slog.Any("error", err), slog.String("policy", policyName))
+		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+			rMetric.Add(r.ctx, 1,
+				metric.WithAttributes(
+					attribute.String("policy", policyName),
+					attribute.String("error", err.Error()),
+				))
+		}
 		return
 	}
-	r.logger.Info("running scanner", slog.Any("targets", r.scope.Targets), slog.Any("policy", r.ctx.Value(policyKey)))
+	r.logger.Info("running scanner", slog.Any("targets", r.scope.Targets), slog.String("policy", policyName))
 	result, warnings, err := scanner.Run()
 	if len(*warnings) > 0 {
 		r.logger.Warn("run finished with warnings", slog.String("warnings", fmt.Sprintf("%v", *warnings)))
 	}
 	if err != nil {
-		r.logger.Error("error running scanner", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Error("error running scanner", slog.Any("error", err), slog.String("policy", policyName))
+		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+			rMetric.Add(r.ctx, 1,
+				metric.WithAttributes(
+					attribute.String("policy", policyName),
+					attribute.String("error", err.Error()),
+				))
+		}
 		return
+	}
+
+	// Record success count with host count attribute
+	if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
+		rMetric.Add(r.ctx, 1,
+			metric.WithAttributes(
+				attribute.String("policy", policyName),
+			))
+	}
+
+	// Record discovered hosts as a dedicated gauge metric
+	if hMetric := metrics.GetDiscoveredHosts(); hMetric != nil {
+		hMetric.Record(r.ctx, int64(len(result.Hosts)),
+			metric.WithAttributes(
+				attribute.String("policy", policyName),
+			))
 	}
 
 	entities := make([]diode.Entity, 0, len(result.Hosts))
@@ -178,8 +231,24 @@ func (r *Runner) run() {
 		if r.config.Defaults.Description != "" {
 			ip.Description = diode.String(r.config.Defaults.Description)
 		}
+		hasComments := false
 		if r.config.Defaults.Comments != "" {
+			hasComments = true
 			ip.Comments = diode.String(r.config.Defaults.Comments)
+		}
+		if r.config.Defaults.Vrf != "" {
+			ip.Vrf = &diode.VRF{
+				Name: diode.String(r.config.Defaults.Vrf),
+				Rd:   diode.String(r.config.Defaults.Vrf),
+			}
+		}
+		if r.config.Defaults.Tenant != "" {
+			ip.Tenant = &diode.Tenant{
+				Name: diode.String(r.config.Defaults.Tenant),
+			}
+		}
+		if r.config.Defaults.Role != "" {
+			ip.Role = diode.String(r.config.Defaults.Role)
 		}
 		if len(r.config.Defaults.Tags) > 0 {
 			var tags []*diode.Tag
@@ -188,21 +257,65 @@ func (r *Runner) run() {
 			}
 			ip.Tags = tags
 		}
+
+		if !hasComments {
+			var metadata config.HostMetadata
+
+			if host.ExtraPorts != nil {
+				metadata.ExtraPorts = make([]config.ExtraPort, len(host.ExtraPorts))
+				for i, extraPort := range host.ExtraPorts {
+					metadata.ExtraPorts[i] = config.ExtraPort{
+						State: extraPort.State,
+						Count: extraPort.Count,
+					}
+				}
+			}
+			if host.Hostnames != nil {
+				metadata.Hostnames = make([]config.Hostname, len(host.Hostnames))
+				for i, hostname := range host.Hostnames {
+					metadata.Hostnames[i] = config.Hostname{
+						Name: hostname.Name,
+						Type: hostname.Type,
+					}
+				}
+			}
+			if host.Ports != nil {
+				metadata.Ports = make([]config.Port, len(host.Ports))
+				for i, port := range host.Ports {
+					metadata.Ports[i] = config.Port{
+						Number:   int(port.ID),
+						Protocol: port.Protocol,
+						Service:  port.Service.Name,
+						State:    port.State.State,
+					}
+				}
+			}
+			data, err := json.Marshal(&metadata)
+			if err != nil {
+				r.logger.Error("error marshalling metadata", slog.Any("error", err), slog.String("policy", policyName))
+			} else {
+				ip.Comments = diode.String(string(data))
+			}
+		}
+
 		entities = append(entities, ip)
 	}
 
 	resp, err := r.client.Ingest(r.ctx, entities)
 	if err != nil {
-		r.logger.Error("error ingesting entities", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Error("error ingesting entities", slog.Any("error", err), slog.String("policy", policyName))
 	} else if resp != nil && resp.Errors != nil {
-		r.logger.Error("error ingesting entities", slog.Any("error", resp.Errors), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Error("error ingesting entities", slog.Any("error", resp.Errors), slog.String("policy", policyName))
 	} else {
-		r.logger.Info("entities ingested successfully", slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Info("entities ingested successfully", slog.String("policy", policyName))
 	}
 }
 
 // Start starts the policy runner
 func (r *Runner) Start() {
+	if rMetric := metrics.GetActivePolicies(); rMetric != nil {
+		rMetric.Add(r.ctx, 1)
+	}
 	r.scheduler.Start()
 }
 
@@ -210,6 +323,9 @@ func (r *Runner) Start() {
 func (r *Runner) Stop() error {
 	if err := r.scheduler.StopJobs(); err != nil {
 		return err
+	}
+	if rMetric := metrics.GetActivePolicies(); rMetric != nil {
+		rMetric.Add(r.ctx, -1)
 	}
 	return r.scheduler.Shutdown()
 }
