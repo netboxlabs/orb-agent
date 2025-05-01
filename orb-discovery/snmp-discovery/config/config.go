@@ -48,13 +48,13 @@ type PolicyConfig struct {
 	Timeout  int      `yaml:"timeout"`
 }
 
-// Policy represents a network-discovery policy
+// Policy represents a snmp-discovery policy
 type Policy struct {
 	Config PolicyConfig `yaml:"config"`
 	Scope  Scope        `yaml:"scope"`
 }
 
-// Policies represents a collection of network-discovery policies
+// Policies represents a collection of snmp-discovery policies
 type Policies struct {
 	Policies map[string]Policy `mapstructure:"policies"`
 }

@@ -146,7 +146,7 @@ func (m *Manager) Stop() error {
 	return nil
 }
 
-// GetCapabilities returns the capabilities of network-discovery
+// GetCapabilities returns the capabilities of snm-discovery
 func (m *Manager) GetCapabilities() []string {
 	return []string{"targets"}
 }
