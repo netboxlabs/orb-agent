@@ -9,6 +9,7 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
 
@@ -73,21 +74,28 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	r.logger.Info("Starting SNMP crawl...")
-	mapper := snmp.NewObjectIDMapper()
+	mapper := mapping.NewObjectIDMapper(r.scope.Mappings, r.logger)
+	objectIDs := mapper.ObjectIDs()
+	r.logger.Info("Starting SNMP crawl of targets", slog.Any("targetCount", len(r.scope.Targets)), slog.Any("objectCount", len(objectIDs)))
 	entities := make([]diode.Entity, 0)
 
 	for _, target := range r.scope.Targets {
 		host := snmp.NewHost(target.Host, target.Port, r.scope.Retries, &r.scope.Authentication, r.logger, r.ClientFactory)
-		oids, err := host.Walk(mapper.ObjectIDs())
+		oids, err := host.Walk(objectIDs)
 		if err != nil {
 			r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
 			continue
 		}
+
 		entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 		entities = append(entities, entitiesForTarget...)
 	}
 	r.logger.Info("SNMP crawl complete.")
+
+	if len(entities) == 0 {
+		r.logger.Info("No entities to ingest", slog.Any("policy", r.ctx.Value(policyKey)))
+		return
+	}
 
 	resp, err := r.client.Ingest(ctx, entities)
 	if err != nil {

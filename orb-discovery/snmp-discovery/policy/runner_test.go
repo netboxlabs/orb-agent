@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
@@ -38,7 +39,7 @@ type MockHost struct {
 	mock.Mock
 }
 
-func (m *MockHost) Walk(objectID string) (snmp.ObjectIDValueMap, error) {
+func (m *MockHost) Walk(objectID string) (mapping.ObjectIDValueMap, error) {
 	args := m.Called(objectID)
 	return nil, args.Error(1)
 }
@@ -64,6 +65,20 @@ func TestNewRunner(t *testing.T) {
 				{
 					Host: "localhost",
 					Port: 161,
+				},
+			},
+			Mappings: []config.MappingEntry{
+				{
+					OID:    "iso.3.6.1.2.1.2.2.1",
+					Entity: "interface",
+					Field:  "_id",
+					MappingEntries: []config.MappingEntry{
+						{
+							OID:    "iso.3.6.1.2.1.2.2.1.2",
+							Entity: "interface",
+							Field:  "name",
+						},
+					},
 				},
 			},
 		},
@@ -121,6 +136,20 @@ func TestRunnerRun(t *testing.T) {
 						ProtocolVersion: snmp.ProtocolVersion2c,
 						Community:       "public",
 					},
+					Mappings: []config.MappingEntry{
+						{
+							OID:    "iso.3.6.1.2.1.2.2.1",
+							Entity: "interface",
+							Field:  "_id",
+							MappingEntries: []config.MappingEntry{
+								{
+									OID:    "iso.3.6.1.2.1.2.2.1.2",
+									Entity: "interface",
+									Field:  "name",
+								},
+							},
+						},
+					},
 				},
 			}
 			ctx := context.Background()
@@ -154,67 +183,6 @@ func TestRunnerRun(t *testing.T) {
 	}
 }
 
-func TestRunnerWithOptions(t *testing.T) {
-	tests := []struct {
-		name     string
-		policy   config.Policy
-		expected []string
-	}{
-		{
-			name: "with SNMP version and community",
-			policy: config.Policy{
-				Config: config.PolicyConfig{},
-				Scope: config.Scope{
-					Targets: []config.Target{
-						{
-							Host: "localhost",
-							Port: 161,
-						},
-					},
-					Authentication: config.Authentication{
-						ProtocolVersion: snmp.ProtocolVersion2c,
-						Community:       "public",
-					},
-				},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			mockClient := new(MockDiodeClient)
-			ctx := context.Background()
-
-			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", tt.policy, mockClient, snmp.NewFakeSNMPWalker)
-			assert.NoError(t, err)
-
-			// Use a channel to signal that Ingest was called
-			ingestCalled := make(chan bool, 1)
-
-			mockClient.On("Ingest", mock.Anything, mock.Anything).Run(func(_ mock.Arguments) {
-				ingestCalled <- true
-			}).Return(&diodepb.IngestResponse{}, nil)
-
-			// Start the process
-			runner.Start()
-
-			// Wait for Ingest to be called or timeout
-			select {
-			case <-ingestCalled:
-				// Success
-			case <-time.After(10 * time.Second):
-				t.Fatal("Timeout: Ingest was not called")
-			}
-
-			// Stop the process
-			err = runner.Stop()
-			assert.NoError(t, err)
-		})
-	}
-}
-
 func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockDiodeClient)
@@ -228,6 +196,20 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 					Host: "192.168.1.1",
 				},
 			},
+			Mappings: []config.MappingEntry{
+				{
+					OID:    "iso.3.6.1.2.1.2.2.1",
+					Entity: "interface",
+					Field:  "_id",
+					MappingEntries: []config.MappingEntry{
+						{
+							OID:    "iso.3.6.1.2.1.2.2.1.2",
+							Entity: "interface",
+							Field:  "name",
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -238,7 +220,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	// Use a channel to signal that Ingest was called
 	ingestCalled := make(chan bool, 1)
 
-	expectedEntities := []diode.Entity{&diode.IPAddress{Address: diode.String("192.168.1.1/32")}}
+	expectedEntities := []diode.Entity{&diode.Interface{Name: diode.String("GigabitEthernet1/0/1")}}
 
 	mockClient.On("Ingest", mock.Anything, expectedEntities).Run(func(args mock.Arguments) {
 		ingestCalled <- true
@@ -296,9 +278,8 @@ func TestRunnerWalkError(t *testing.T) {
 	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory)
 	assert.NoError(t, err)
 
-	// Use a channel to signal that Ingest was called
+	// Set up a channel to detect if Ingest is called (it shouldn't be)
 	ingestCalled := make(chan bool, 1)
-
 	mockClient.On("Ingest", mock.Anything, mock.Anything).Run(func(_ mock.Arguments) {
 		ingestCalled <- true
 	}).Return(&diodepb.IngestResponse{}, nil)
@@ -306,18 +287,15 @@ func TestRunnerWalkError(t *testing.T) {
 	// Start the process
 	runner.Start()
 
-	// Wait for Ingest to be called or timeout
+	// Wait to verify that Ingest is NOT called
 	select {
 	case <-ingestCalled:
-		// Ingest was called, proceed
-	case <-time.After(10 * time.Second):
-		t.Fatal("Timeout: Ingest was not called")
+		t.Fatal("Ingest was called when it should not have been")
+	case <-time.After(2 * time.Second):
+		// Success - Ingest was not called
 	}
 
 	// Stop the process
 	err = runner.Stop()
 	assert.NoError(t, err, "Runner.Stop should not return an error")
-
-	// Verify that the logger captured the error
-	// This part depends on how you want to verify the log output
 }

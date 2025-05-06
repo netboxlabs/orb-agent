@@ -14,6 +14,8 @@ type Scope struct {
 	Targets        []Target       `yaml:"targets"`
 	Authentication Authentication `yaml:"authentication"`
 	Retries        int            `yaml:"retries"`
+	MappingConfig  string         `yaml:"mapping_config,omitempty"`
+	Mappings       []MappingEntry `yaml:"mappings,omitempty"`
 }
 
 // Target represents a target host to crawl
@@ -57,4 +59,19 @@ type Policy struct {
 // Policies represents a collection of snmp-discovery policies
 type Policies struct {
 	Policies map[string]Policy `mapstructure:"policies"`
+}
+
+// Mapping represents the structure of the mapping YAML file
+type Mapping struct {
+	Entries []MappingEntry `yaml:"entries"`
+}
+
+// MappingEntry represents a single entry in the mapping YAML file
+type MappingEntry struct {
+	OID            string         `yaml:"oid"`
+	Entity         string         `yaml:"entity"`
+	Field          string         `yaml:"field"`
+	Description    string         `yaml:"description"`
+	MappingEntries []MappingEntry `yaml:"mapping_entries"`
+	IdentifierSize int            `yaml:"identifier_size"`
 }
