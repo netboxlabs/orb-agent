@@ -55,6 +55,8 @@ Current supported defaults:
 | site  | str | NetBox Site Name (defaults to 'undefined' if not specified) |
 | role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
 | if_type | str | Interface Type (defaults to 'other' if not specified) |
+| location | str | Device location |
+| tenant | str | Device tenant |
 | description | str  | General description   |
 | comments   | str  | General comments       |
 | tags       | list | List of tags           |
@@ -118,6 +120,8 @@ orb:
           defaults:
             site: New York NY
             role: switch
+            location: Row A
+            tenant: NetBox Labs
             description: for all
             comments: comment all
             tags: [tag1, tag2]
