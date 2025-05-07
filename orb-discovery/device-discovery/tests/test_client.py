@@ -48,6 +48,8 @@ def sample_data():
             role=None,
             tags=None,
             if_type="other",
+            location="local",
+            tenant="test",
             device=None,
             interface=None,
             ipaddress=None,

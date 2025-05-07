@@ -12,6 +12,7 @@ from netboxlabs.diode.sdk.ingester import (
     Entity,
     Interface,
     IPAddress,
+    Location,
     Platform,
     Prefix,
 )
@@ -73,6 +74,8 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
         status="active",
         site=defaults.site,
         tags=tags,
+        location=Location(name=defaults.location, site=defaults.site),
+        tenant=defaults.tenant,
         description=description,
         comments=comments,
     )
@@ -105,7 +108,11 @@ def translate_interface(
         description = defaults.interface.description
 
     description = interface_info.get("description", description)
-    mac_address = interface_info.get("mac_address") if interface_info.get("mac_address") != "" else None
+    mac_address = (
+        interface_info.get("mac_address")
+        if interface_info.get("mac_address") != ""
+        else None
+    )
 
     interface = Interface(
         device=device,
@@ -190,7 +197,6 @@ def translate_interface_ips(
                         Entity(
                             prefix=Prefix(
                                 prefix=str(network),
-                                scope_site=defaults.site,
                                 vrf=prefix_vrf,
                                 role=prefix_role,
                                 tenant=prefix_tenant,

@@ -81,6 +81,8 @@ def sample_defaults():
         site="New York",
         tags=["tag1", "tag2"],
         if_type="other",
+        location="local",
+        tenant="test",
         device=ObjectParameters(comments="testing", tags=["devtag"]),
         interface=ObjectParameters(description="testing", tags=["inttag"]),
         ipaddress=IpamParameters(description="ip test", tags=["iptag"]),
@@ -99,6 +101,9 @@ def test_translate_device(sample_device_info, sample_defaults):
     assert device.site.name == "New York"
     assert device.comments == "testing"
     assert device.role.name == "undefined"
+    assert device.location.name == "local"
+    assert device.location.site.name == "New York"
+    assert device.tenant.name == "test"
     assert len(device.tags) == 3
 
 

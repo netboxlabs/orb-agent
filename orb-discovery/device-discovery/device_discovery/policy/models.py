@@ -57,6 +57,8 @@ class Defaults(BaseModel):
     site: str | None = Field(default="undefined", description="Site name, optional")
     role: str | None = Field(default="undefined", description="Device Role name, optional")
     if_type: str | None = Field(default="other", description="Interface type, optional")
+    location: str | None = Field(default=None, description="Location name, optional")
+    tenant: str | None = Field(default=None, description="Tenant name, optional")
     tags: list[str] | None = Field(default=None, description="Tags, optional")
     device: ObjectParameters | None = Field(default=None, description="Device parameters, optional")
     interface: ObjectParameters | None = Field(default=None, description="Interface parameters, optional")
