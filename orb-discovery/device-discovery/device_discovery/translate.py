@@ -252,6 +252,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
 
     vlan = VLAN(
         vid=int(vid),
+        site=defaults.site,
         name=vlan_name,
         group=group,
         tenant=tenant,
