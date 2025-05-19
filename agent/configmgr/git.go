@@ -213,9 +213,10 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]backend.Backend) {
 	// Fetch latest updates from remote
 	err := gc.repo.Fetch(&gitv5.FetchOptions{
-		RemoteName: "origin",
-		Auth:       gc.authMethod,
-		RefSpecs:   []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
+		RemoteName:      "origin",
+		Auth:            gc.authMethod,
+		InsecureSkipTLS: gc.config.SkipTLS,
+		RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
 	})
 	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
 		gc.logger.Error("Failed to fetch latest changes", slog.Any("error", err))
@@ -382,8 +383,9 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 
 	// Fetch all branches and references
 	if err = repo.Fetch(&gitv5.FetchOptions{
-		RemoteName: "origin",
-		Auth:       gc.authMethod,
+		RemoteName:      "origin",
+		Auth:            gc.authMethod,
+		InsecureSkipTLS: gc.config.SkipTLS,
 	}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
 		return err
 	}

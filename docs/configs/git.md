@@ -21,6 +21,7 @@ orb:
         username: "username"
         password: ${PASSWORD|TOKEN}
         private_key: path/to/certificate.pem
+        skip_tls: True #defaults false
   backends:
     network_discovery:
     device_discovery:
