@@ -30,6 +30,7 @@ type GitManager struct {
 	Username   string  `yaml:"username"`
 	Password   string  `yaml:"password"`
 	PrivateKey string  `yaml:"private_key"`
+	SkipTLS    bool    `yaml:"skip_tls"`
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.
