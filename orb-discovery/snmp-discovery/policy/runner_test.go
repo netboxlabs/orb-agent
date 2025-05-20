@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
@@ -39,9 +38,9 @@ type MockHost struct {
 	mock.Mock
 }
 
-func (m *MockHost) Walk(objectID string) (mapping.ObjectIDValueMap, error) {
-	args := m.Called(objectID)
-	return nil, args.Error(1)
+func (m *MockHost) Walk(objectID string, identifierSize int) (map[string]snmp.PDU, error) {
+	args := m.Called(objectID, identifierSize)
+	return args.Get(0).(map[string]snmp.PDU), args.Error(1)
 }
 
 func (m *MockHost) Connect() error {
@@ -267,7 +266,7 @@ func TestRunnerWalkError(t *testing.T) {
 
 	// Create a mock host that returns an error on Walk
 	mockHost := new(MockHost)
-	mockHost.On("Walk", mock.Anything).Return(nil, errors.New("walk error"))
+	mockHost.On("Walk", mock.Anything, mock.Anything).Return(nil, errors.New("walk error"))
 
 	// Create a mock client factory that returns the mock host
 	mockClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {

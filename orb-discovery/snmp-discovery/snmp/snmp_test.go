@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,24 @@ import (
 // MockSNMP is a mock for Walker
 type MockSNMP struct {
 	mock.Mock
+}
+
+// Connect implements Walker interface
+func (m *MockSNMP) Connect() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// Close implements Walker interface
+func (m *MockSNMP) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// Walk implements Walker interface
+func (m *MockSNMP) Walk(oid string, identifierSize int) (map[string]snmp.PDU, error) {
+	args := m.Called(oid, identifierSize)
+	return args.Get(0).(map[string]snmp.PDU), args.Error(1)
 }
 
 // MockConn is a mock for the connection
@@ -50,12 +69,45 @@ func (m *MockClient) Ingest(context.Context, []diode.Entity) (*diodepb.IngestRes
 func TestSNMPHost(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	const ipAddressObjectID = "1.3.6.1.2.1.4.20.1.1"
+	const interfaceObjectID = "1.3.6.1.2.1.2.2.1"
+	objectIDsToQuery := make(map[string]int)
+	objectIDsToQuery[ipAddressObjectID] = 4
+	objectIDsToQuery[interfaceObjectID] = 1
+
 	t.Run("Successfully walks a host", func(t *testing.T) {
 		// Setup
-		objectIDsToQuery := []string{ipAddressObjectID}
 		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
 			fakeWalker, _ := snmp.NewFakeSNMPWalker("192.168.1.1", 161, 3, nil)
 			return fakeWalker, nil
+		}
+		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
+
+		// Execute
+		oids, err := host.Walk(map[string]int{
+			ipAddressObjectID: 4,
+		})
+
+		// Assert
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(oids))
+		assert.Equal(t, mapping.Value{Value: "192.168.1.1", Type: mapping.Asn1BER(mapping.IPAddress)}, oids[ipAddressObjectID])
+	})
+
+	t.Run("Handles multiple OIDs with different types", func(t *testing.T) {
+		// Setup
+		mockWalker := &MockSNMP{}
+		mockWalker.On("Connect").Return(nil)
+		mockWalker.On("Close").Return(nil)
+		mockWalker.On("Walk", ipAddressObjectID, 4).Return(map[string]snmp.PDU{
+			ipAddressObjectID: {Value: "192.168.1.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
+		}, nil)
+		mockWalker.On("Walk", interfaceObjectID, 1).Return(map[string]snmp.PDU{
+			interfaceObjectID + ".1": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			interfaceObjectID + ".2": {Value: 1000000, Type: gosnmp.Integer, IdentifierSize: 1},
+		}, nil)
+
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
+			return mockWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
@@ -64,8 +116,37 @@ func TestSNMPHost(t *testing.T) {
 
 		// Assert
 		assert.NoError(t, err)
-		assert.Equal(t, len(objectIDsToQuery), len(oids))
-		assert.Equal(t, mapping.Value{Value: "192.168.1.1", Type: mapping.Asn1BER(mapping.IPAddress)}, oids[ipAddressObjectID])
+		assert.Equal(t, 3, len(oids))
+		assert.Equal(t, mapping.Value{Value: "192.168.1.1", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4}, oids[ipAddressObjectID])
+		assert.Equal(t, mapping.Value{Value: "GigabitEthernet1/0/1", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1}, oids[interfaceObjectID+".1"])
+		assert.Equal(t, mapping.Value{Value: "1000000", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 1}, oids[interfaceObjectID+".2"])
+		mockWalker.AssertExpectations(t)
+	})
+
+	t.Run("Handles connection close errors", func(t *testing.T) {
+		// Setup
+		mockWalker := &MockSNMP{}
+		mockWalker.On("Connect").Return(nil)
+		mockWalker.On("Close").Return(fmt.Errorf("close error"))
+		mockWalker.On("Walk", ipAddressObjectID, 4).Return(map[string]snmp.PDU{
+			ipAddressObjectID: {Value: "192.168.1.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
+		}, nil)
+
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
+			return mockWalker, nil
+		}
+		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
+
+		// Execute
+		oids, err := host.Walk(map[string]int{
+			ipAddressObjectID: 4,
+		})
+
+		// Assert
+		assert.NoError(t, err) // Close error should be logged but not returned
+		assert.Equal(t, 1, len(oids))
+		assert.Equal(t, mapping.Value{Value: "192.168.1.1", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4}, oids[ipAddressObjectID])
+		mockWalker.AssertExpectations(t)
 	})
 
 	t.Run("Handles SNMP connection error", func(t *testing.T) {
@@ -79,7 +160,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk([]string{"1.3.6.1.2.1.4.20.1.1"})
+		oids, err := host.Walk(objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
@@ -92,18 +173,50 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker := &MockSNMP{}
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
-		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
+		mockWalker.On("Walk", mock.Anything, mock.Anything).Return(make(map[string]snmp.PDU), assert.AnError)
 		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
 			return mockWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk([]string{ipAddressObjectID})
+		oids, err := host.Walk(objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
 		assert.Nil(t, oids)
+		mockWalker.AssertExpectations(t)
+	})
+
+	t.Run("Handles PDU mapping error", func(t *testing.T) {
+		// Setup
+		mockWalker := &MockSNMP{}
+		mockWalker.On("Connect").Return(nil)
+		mockWalker.On("Close").Return(nil)
+		mockWalker.On("Walk", ipAddressObjectID, 4).Return(map[string]snmp.PDU{
+			ipAddressObjectID: {Value: "192.168.1.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
+		}, nil)
+		mockWalker.On("Walk", interfaceObjectID, 1).Return(map[string]snmp.PDU{
+			interfaceObjectID + ".1": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			interfaceObjectID + ".2": {Value: "invalid", Type: gosnmp.Asn1BER(255), IdentifierSize: 1}, // Invalid type
+		}, nil)
+
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
+			return mockWalker, nil
+		}
+		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
+
+		// Execute
+		oids, err := host.Walk(objectIDsToQuery)
+
+		// Assert
+		assert.NoError(t, err)        // Walk should continue despite PDU mapping error
+		assert.Equal(t, 2, len(oids)) // Should have 2 valid PDUs
+		assert.Equal(t, mapping.Value{Value: "192.168.1.1", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4}, oids[ipAddressObjectID])
+		assert.Equal(t, mapping.Value{Value: "GigabitEthernet1/0/1", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1}, oids[interfaceObjectID+".1"])
+		// The invalid PDU should be skipped
+		_, exists := oids[interfaceObjectID+".2"]
+		assert.False(t, exists)
 		mockWalker.AssertExpectations(t)
 	})
 
@@ -112,37 +225,19 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker := &MockSNMP{}
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
-		mockWalker.On("Walk", mock.Anything).Return(nil, assert.AnError)
+		mockWalker.On("Walk", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 		snmpClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
 			return nil, fmt.Errorf("error creating client")
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk([]string{ipAddressObjectID})
+		oids, err := host.Walk(objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
 		assert.Nil(t, oids)
 	})
-}
-
-// Connect implements Walker interface
-func (m *MockSNMP) Connect() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-// Close implements Walker interface
-func (m *MockSNMP) Close() error {
-	args := m.Called()
-	return args.Error(0)
-}
-
-// Walk implements Walker interface
-func (m *MockSNMP) Walk(oid string) (mapping.ObjectIDValueMap, error) {
-	args := m.Called(oid)
-	return nil, args.Error(1)
 }
 
 func TestNewClient(t *testing.T) {
@@ -243,6 +338,185 @@ func TestNewClient(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, client)
+			}
+		})
+	}
+}
+
+func TestMapPDU(t *testing.T) {
+	testCases := []struct {
+		name          string
+		pdu           snmp.PDU
+		expectedValue mapping.Value
+		expectError   bool
+	}{
+		{
+			name: "OctetString as string",
+			pdu: snmp.PDU{
+				Name:  "test.1",
+				Type:  gosnmp.OctetString,
+				Value: "test string",
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.OctetString),
+				Value: "test string",
+			},
+			expectError: false,
+		},
+		{
+			name: "OctetString as bytes",
+			pdu: snmp.PDU{
+				Name:  "test.2",
+				Type:  gosnmp.OctetString,
+				Value: []byte("test bytes"),
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.OctetString),
+				Value: "test bytes",
+			},
+			expectError: false,
+		},
+		{
+			name: "Integer",
+			pdu: snmp.PDU{
+				Name:  "test.3",
+				Type:  gosnmp.Integer,
+				Value: 42,
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.Integer),
+				Value: "42",
+			},
+			expectError: false,
+		},
+		{
+			name: "IPAddress",
+			pdu: snmp.PDU{
+				Name:  "test.4",
+				Type:  gosnmp.IPAddress,
+				Value: "192.168.1.1",
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.IPAddress),
+				Value: "192.168.1.1",
+			},
+			expectError: false,
+		},
+		{
+			name: "ObjectIdentifier",
+			pdu: snmp.PDU{
+				Name:  "test.5",
+				Type:  gosnmp.ObjectIdentifier,
+				Value: "1.3.6.1.2.1.1.1.0",
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.ObjectIdentifier),
+				Value: "1.3.6.1.2.1.1.1.0",
+			},
+			expectError: false,
+		},
+		{
+			name: "TimeTicks",
+			pdu: snmp.PDU{
+				Name:  "test.6",
+				Type:  gosnmp.TimeTicks,
+				Value: uint32(123456),
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.TimeTicks),
+				Value: "123456",
+			},
+			expectError: false,
+		},
+		{
+			name: "Counter32",
+			pdu: snmp.PDU{
+				Name:  "test.7",
+				Type:  gosnmp.Counter32,
+				Value: uint32(4294967295),
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.Counter32),
+				Value: "4294967295",
+			},
+			expectError: false,
+		},
+		{
+			name: "Gauge32",
+			pdu: snmp.PDU{
+				Name:  "test.8",
+				Type:  gosnmp.Gauge32,
+				Value: uint32(65535),
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.Gauge32),
+				Value: "65535",
+			},
+			expectError: false,
+		},
+		{
+			name: "Counter64",
+			pdu: snmp.PDU{
+				Name:  "test.9",
+				Type:  gosnmp.Counter64,
+				Value: uint64(18446744073709551615),
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.Counter64),
+				Value: "18446744073709551615",
+			},
+			expectError: false,
+		},
+		{
+			name: "Unhandled type",
+			pdu: snmp.PDU{
+				Name:  "test.10",
+				Type:  gosnmp.Asn1BER(255), // Invalid type
+				Value: "test",
+			},
+			expectedValue: mapping.Value{},
+			expectError:   true,
+		},
+		{
+			name: "Empty OctetString",
+			pdu: snmp.PDU{
+				Name:  "test.11",
+				Type:  gosnmp.OctetString,
+				Value: "",
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.OctetString),
+				Value: "",
+			},
+			expectError: false,
+		},
+		{
+			name: "Zero Integer",
+			pdu: snmp.PDU{
+				Name:  "test.12",
+				Type:  gosnmp.Integer,
+				Value: 0,
+			},
+			expectedValue: mapping.Value{
+				Type:  mapping.Asn1BER(gosnmp.Integer),
+				Value: "0",
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := snmp.MapPDU(tc.pdu)
+
+			if tc.expectError {
+				assert.Error(t, err)
+				assert.Empty(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.expectedValue.Type, result.Type)
+				assert.Equal(t, tc.expectedValue.Value, result.Value)
+				assert.Equal(t, tc.pdu.IdentifierSize, result.IdentifierSize)
 			}
 		})
 	}

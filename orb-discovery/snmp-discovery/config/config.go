@@ -74,4 +74,11 @@ type MappingEntry struct {
 	Description    string         `yaml:"description"`
 	MappingEntries []MappingEntry `yaml:"mapping_entries"`
 	IdentifierSize int            `yaml:"identifier_size"`
+	Relationship   Relationship   `yaml:"relationship"`
+}
+
+// Relationship represents a relationship between two entities
+type Relationship struct {
+	Type  string `yaml:"type"`
+	Field string `yaml:"field"`
 }

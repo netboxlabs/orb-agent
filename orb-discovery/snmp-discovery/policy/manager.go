@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"gopkg.in/yaml.v3"
@@ -63,16 +62,25 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		payload.Policies[name] = updatedPolicy
 	}
 
+	// Load the mapping config
+	for name, policy := range payload.Policies {
+		mappingConfig, err := m.loadMappingConfig(policy)
+		if err != nil {
+			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
+		}
+
+		// Create a new policy with updated mappings
+		updatedPolicy := payload.Policies[name]
+		updatedPolicy.Scope.Mappings = mappingConfig.Entries
+		payload.Policies[name] = updatedPolicy
+	}
+
 	return payload.Policies, nil
 }
 
 func (m *Manager) loadMappingConfig(policy config.Policy) (config.Mapping, error) {
 	m.logger.Debug("Loading mapping config", "mappingConfig", policy.Scope.MappingConfig)
-	mappingFilePath, err := filepath.Abs(policy.Scope.MappingConfig)
-	if err != nil {
-		return config.Mapping{}, fmt.Errorf("failed to get absolute path for mapping config: %w", err)
-	}
-	mappingConfigFileContents, err := os.ReadFile(mappingFilePath)
+	mappingConfigFileContents, err := os.ReadFile(policy.Scope.MappingConfig)
 	if err != nil {
 		return config.Mapping{}, fmt.Errorf("failed to read mapping config file: %w", err)
 	}
@@ -137,12 +145,7 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		return fmt.Errorf("missing mapping configuration file")
 	}
 
-	mappingFilePath, err := filepath.Abs(policy.Scope.MappingConfig)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for mapping config: %w", err)
-	}
-
-	if _, err := os.Stat(mappingFilePath); os.IsNotExist(err) {
+	if _, err := os.Stat(policy.Scope.MappingConfig); os.IsNotExist(err) {
 		return fmt.Errorf("mapping configuration file does not exist")
 	}
 
@@ -158,8 +161,13 @@ func (m *Manager) HasPolicy(name string) bool {
 // StartPolicy starts the policy
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	m.logger.Debug("Starting policy", "policy", policy)
+	m.logger.Debug("Starting policy", "policy", policy)
 	if len(policy.Scope.Targets) == 0 {
 		return fmt.Errorf("%s : no targets found in the policy", name)
+	}
+
+	if len(policy.Scope.Mappings) == 0 {
+		return fmt.Errorf("%s : no mappings found in the policy", name)
 	}
 
 	if len(policy.Scope.Mappings) == 0 {
