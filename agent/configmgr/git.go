@@ -396,7 +396,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 
-	refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod})
+	refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod, InsecureSkipTLS: gc.config.SkipTLS})
 	if err != nil {
 		return err
 	}
@@ -421,10 +421,11 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 
 	// Now clone the repository with the determined branch
 	gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
-		Auth:          gc.authMethod,
-		URL:           gc.config.URL,
-		ReferenceName: plumbing.NewBranchReferenceName(branchName),
-		SingleBranch:  true,
+		Auth:            gc.authMethod,
+		URL:             gc.config.URL,
+		ReferenceName:   plumbing.NewBranchReferenceName(branchName),
+		SingleBranch:    true,
+		InsecureSkipTLS: gc.config.SkipTLS,
 	})
 	if err != nil {
 		return err
