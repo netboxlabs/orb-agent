@@ -1,9 +1,6 @@
 run:
   timeout: 5m
-  modules-download-mode: readonly
-
-output:
-  formats: colored-line-number
+  modules-download-mode: readonly 
 
 linters:
   enable:
