@@ -344,7 +344,8 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return errors.New("URL is required for Git Config Manager")
 	}
 
-	if gc.config.Auth == "basic" {
+	switch gc.config.Auth {
+	case "basic":
 		if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 			return err
 		}
@@ -352,7 +353,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 			Username: gc.config.Username,
 			Password: gc.config.Password,
 		}
-	} else if gc.config.Auth == "ssh" {
+	case "ssh":
 		if gc.config.PrivateKey != "" {
 			if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 				return err
