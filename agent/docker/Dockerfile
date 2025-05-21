@@ -1,7 +1,7 @@
 ARG PKTVISOR_TAG=develop
 ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
-ARG GO_VERSION=1.23
+ARG GO_VERSION=1.24
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS builder
 
