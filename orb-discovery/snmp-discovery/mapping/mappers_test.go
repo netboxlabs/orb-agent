@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 )
 
 func TestIPAddressMapper_Map(t *testing.T) {
@@ -305,15 +304,11 @@ func TestDeviceMapper_Map(t *testing.T) {
 
 	// Create a mock manufacturer data retriever
 	mockManufacturers := &MockManufacturerDataRetriever{}
-	mockManufacturers.On("GetManufacturer", 9).Return(data.Manufacturer{
-		PrivateEnterpriseNumber: 9,
-		Name:                    "Cisco",
-	}, nil)
-	mockManufacturers.On("GetManufacturer", 25506).Return(data.Manufacturer{
-		PrivateEnterpriseNumber: 25506,
-		Name:                    "Juniper",
-	}, nil)
-	mockManufacturers.On("GetManufacturer", 999).Return(data.Manufacturer{}, fmt.Errorf("manufacturer not found"))
+	mockManufacturers.On("GetManufacturer", 9).Return("Cisco", nil)
+	mockManufacturers.On("GetManufacturer", 25506).Return("Juniper", nil)
+	mockManufacturers.On("GetManufacturer", 999).Return("", fmt.Errorf("manufacturer not found"))
+	mockManufacturers.On("GetDeviceModel", 1234).Return("cisco4000", nil)
+	mockManufacturers.On("GetDeviceModel", 999).Return("", fmt.Errorf("device model not found"))
 
 	mapper := &DeviceMapper{
 		devices: mockManufacturers,
@@ -363,6 +358,12 @@ func TestDeviceMapper_Map(t *testing.T) {
 			},
 			expectedEntity: &diode.Device{
 				Name: stringPtr("router1"),
+				DeviceType: &diode.DeviceType{
+					Manufacturer: &diode.Manufacturer{
+						Name: diode.String("Cisco"),
+					},
+					Model: diode.String("cisco4000"),
+				},
 				Platform: &diode.Platform{
 					Manufacturer: &diode.Manufacturer{
 						Name: diode.String("Cisco"),
@@ -438,6 +439,12 @@ func TestDeviceMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.Device{
+				DeviceType: &diode.DeviceType{
+					Manufacturer: &diode.Manufacturer{
+						Name: diode.String("unknown"),
+					},
+					Model: diode.String("unknown"),
+				},
 				Platform: &diode.Platform{
 					Manufacturer: &diode.Manufacturer{
 						Name: diode.String("unknown"),
@@ -473,9 +480,14 @@ type MockManufacturerDataRetriever struct {
 	mock.Mock
 }
 
-func (m *MockManufacturerDataRetriever) GetManufacturer(id int) (data.Manufacturer, error) {
+func (m *MockManufacturerDataRetriever) GetManufacturer(id int) (string, error) {
 	args := m.Called(id)
-	return args.Get(0).(data.Manufacturer), args.Error(1)
+	return args.Get(0).(string), args.Error(1)
+}
+
+func (m *MockManufacturerDataRetriever) GetDeviceModel(id int) (string, error) {
+	args := m.Called(id)
+	return args.Get(0).(string), args.Error(1)
 }
 
 // Helper functions to create pointers

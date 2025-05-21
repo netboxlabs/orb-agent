@@ -9,17 +9,17 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 )
 
 type FakeManufacturers struct{}
 
-func (f *FakeManufacturers) GetManufacturer(id int) (data.Manufacturer, error) {
-	return data.Manufacturer{
-		PrivateEnterpriseNumber: id,
-		Name:                    "Cisco",
-	}, nil
+func (f *FakeManufacturers) GetManufacturer(_ int) (string, error) {
+	return "Cisco", nil
+}
+
+func (f *FakeManufacturers) GetDeviceModel(_ int) (string, error) {
+	return "cisco4000", nil
 }
 
 func TestMapObjectIDsToEntity(t *testing.T) {
@@ -323,6 +323,12 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 			expected: []diode.Entity{
 				&diode.Device{
+					DeviceType: &diode.DeviceType{
+						Manufacturer: &diode.Manufacturer{
+							Name: diode.String("Cisco"),
+						},
+						Model: &[]string{"cisco4000"}[0],
+					},
 					Platform: &diode.Platform{
 						Manufacturer: &diode.Manufacturer{
 							Name: diode.String("Cisco"),

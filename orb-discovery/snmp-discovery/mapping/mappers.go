@@ -107,15 +107,31 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 				case "name":
 					device.Name = &value.Value
 				case "platform":
-					manufacturer, err := m.GetDeviceModel(value.Value)
+					manufacturerID, modelID, err := m.getDeviceIDs(value.Value)
 					if err != nil {
-						logger.Warn("Error getting device model, assigning default manufacturer", "error", err, "value", value.Value)
-						manufacturer = "unknown"
+						logger.Warn("Error getting device IDs, skipping", "error", err, "objectID", objectID, "value", value.Value)
+						continue
+					}
+					manufacturer, err := m.devices.GetManufacturer(manufacturerID)
+					if err != nil {
+						logger.Warn("Error getting manufacturer, skipping", "error", err, "objectID", objectID, "value", value.Value)
+						continue
 					}
 					device.Platform = &diode.Platform{
 						Manufacturer: &diode.Manufacturer{
 							Name: diode.String(manufacturer),
 						},
+					}
+					model, err := m.devices.GetDeviceModel(modelID)
+					if err != nil {
+						logger.Warn("Error getting device model, assigning default model", "error", err, "objectID", objectID, "value", value.Value)
+						continue
+					}
+					device.DeviceType = &diode.DeviceType{
+						Manufacturer: &diode.Manufacturer{
+							Name: diode.String(manufacturer),
+						},
+						Model: &model,
 					}
 				default:
 					logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
@@ -126,11 +142,7 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 	return &device
 }
 
-// GetDeviceModel returns the device model for a given OID
-func (m *DeviceMapper) GetDeviceModel(objectID string) (string, error) {
-	manufacturer := "unknown"
-
-	// Split the OID into parts
+func (m *DeviceMapper) getDeviceIDs(objectID string) (int, int, error) {
 	parts := strings.Split(objectID, ".")
 	if len(parts) > 0 && parts[0] == "" {
 		parts = parts[1:]
@@ -140,25 +152,17 @@ func (m *DeviceMapper) GetDeviceModel(objectID string) (string, error) {
 	// Check if we have enough parts to extract manufacturer and model IDs
 	if len(parts) > ManufacturerIDIndex {
 		manID, err := strconv.Atoi(parts[ManufacturerIDIndex])
-		if err == nil {
-			man, err := m.devices.GetManufacturer(manID)
-			if err != nil {
-				return "", err
-			}
-			manufacturer = man.Name
-			// TODO: Handle modelID extraction and mapping once the functionality for
-			//       associating model IDs with devices is implemented. This code is
-			//       currently a placeholder and should be activated when the feature
-			//       is ready.
-			// modelID, err := strconv.Atoi(parts[len(parts)-1])
-			// if err == nil {
-			// 	if device, ok := man.Products[modelID]; ok {
-			// 		deviceType = device
-			// 	}
-			// }
-
+		if err != nil {
+			return 0, 0, err
 		}
+
+		modelID, err := strconv.Atoi(parts[len(parts)-1])
+		if err != nil {
+			return 0, 0, err
+		}
+
+		return manID, modelID, nil
 	}
 
-	return manufacturer, nil
+	return 0, 0, fmt.Errorf("invalid objectID: %s", objectID)
 }
