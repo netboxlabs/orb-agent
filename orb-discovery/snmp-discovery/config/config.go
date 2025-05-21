@@ -13,7 +13,6 @@ type Status struct {
 type Scope struct {
 	Targets        []Target       `yaml:"targets"`
 	Authentication Authentication `yaml:"authentication"`
-	Retries        int            `yaml:"retries"`
 	MappingConfig  string         `yaml:"mapping_config,omitempty"`
 	Mappings       []MappingEntry `yaml:"mappings,omitempty"`
 }
@@ -49,6 +48,7 @@ type PolicyConfig struct {
 	Defaults    Defaults `yaml:"defaults"`
 	Timeout     int      `yaml:"timeout"`
 	DevicesFile string   `yaml:"devices_file,omitempty"`
+	Retries     int      `yaml:"retries"`
 }
 
 // Policy represents a snmp-discovery policy
