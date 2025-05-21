@@ -57,7 +57,7 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
     comments = None
 
     if defaults.device:
-        tags.extend(defaults.device.tags)
+        tags.extend(defaults.device.tags or [])
         description = defaults.device.description
         comments = defaults.device.comments
 
@@ -104,7 +104,7 @@ def translate_interface(
     description = None
 
     if defaults.interface:
-        tags.extend(defaults.interface.tags)
+        tags.extend(defaults.interface.tags or [])
         description = defaults.interface.description
 
     description = interface_info.get("description", description)
@@ -170,7 +170,7 @@ def translate_interface_ips(
     prefix_vrf = None
 
     if defaults.ipaddress:
-        ip_tags.extend(defaults.ipaddress.tags)
+        ip_tags.extend(defaults.ipaddress.tags or [])
         ip_comments = defaults.ipaddress.comments
         ip_description = defaults.ipaddress.description
         ip_role = defaults.ipaddress.role
@@ -178,7 +178,7 @@ def translate_interface_ips(
         ip_vrf = defaults.ipaddress.vrf
 
     if defaults.prefix:
-        prefix_tags.extend(defaults.prefix.tags)
+        prefix_tags.extend(defaults.prefix.tags or [])
         prefix_comments = defaults.prefix.comments
         prefix_description = defaults.prefix.description
         prefix_role = defaults.prefix.role
@@ -235,7 +235,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
         defaults (Defaults): Default configuration.
 
     """
-    tags = defaults.tags if defaults.tags else []
+    tags = list(defaults.tags) if defaults.tags else []
     comments = None
     description = None
     group = None
@@ -243,7 +243,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
     role = None
 
     if defaults.vlan:
-        tags.extend(defaults.vlan.tags)
+        tags.extend(defaults.vlan.tags or [])
         comments = defaults.vlan.comments
         description = defaults.vlan.description
         group = defaults.vlan.group

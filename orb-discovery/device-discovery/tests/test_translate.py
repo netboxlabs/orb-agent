@@ -87,7 +87,7 @@ def sample_defaults():
         interface=ObjectParameters(description="testing", tags=["inttag"]),
         ipaddress=IpamParameters(description="ip test", tags=["iptag"]),
         prefix=IpamParameters(description="prefix test", tags=["prefixtag"]),
-        vlan=VlanParameters(tags=["vlantag"]),
+        vlan=VlanParameters(comments="test"),
     )
 
 
@@ -212,9 +212,9 @@ def test_translate_vlan(sample_defaults):
 
     assert vlan.vid == 1
     assert vlan.name == "Test VLAN"
-    assert len(vlan.tags) == 3
+    assert len(vlan.tags) == 2
     assert vlan.site.name == "New York"
-    assert vlan.comments == ""
+    assert vlan.comments == "test"
 
 
 def test_translate_vlan_with_defaults(sample_defaults):
