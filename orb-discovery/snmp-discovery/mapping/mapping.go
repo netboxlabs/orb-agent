@@ -3,12 +3,12 @@ package mapping
 import (
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 )
 
 // Value is a struct that contains a value and a type of an SNMP object
@@ -113,11 +113,6 @@ type mappingEntry struct {
 	Relationship   config.Relationship
 }
 
-var entityMappers = map[string]orbToEntityMapper{
-	"ipAddress": &IPAddressMapper{},
-	"interface": &InterfaceMapper{},
-}
-
 func (m *mappingEntry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistry *EntityRegistry, logger *slog.Logger) []diode.Entity {
 	logger.Debug("Mapping value to entity", "value", pdus)
 	if m.Mapper == nil {
@@ -134,16 +129,24 @@ func (m *mappingEntry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entity
 }
 
 // NewObjectIDMapper creates a new ObjectIDMapper
-func NewObjectIDMapper(mappings []config.MappingEntry, logger *slog.Logger) *ObjectIDMapper {
+func NewObjectIDMapper(mappings []config.MappingEntry, logger *slog.Logger, devices data.DeviceDataRetreiver) *ObjectIDMapper {
+	entityMappers := map[string]orbToEntityMapper{
+		"ipAddress": &IPAddressMapper{},
+		"interface": &InterfaceMapper{},
+		"device": &DeviceMapper{
+			devices: devices,
+		},
+	}
 	mapping := make(map[string]*mappingEntry)
 	for _, m := range mappings {
 		logger.Debug("Adding mapping", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
-		mappingEntry := newMappingEntry(m, logger)
+		mappingEntry := newMappingEntry(m, logger, entityMappers)
 		if mappingEntry == nil {
 			continue
 		}
 		mapping[m.OID] = mappingEntry
 	}
+
 	return &ObjectIDMapper{
 		mapping:  mapping,
 		logger:   logger,
@@ -155,83 +158,6 @@ type orbToEntityMapper interface {
 	Map(pdus map[ObjectIDIndex]*ObjectIDValue, mappingEntry *mappingEntry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity
 }
 
-// IPAddressMapper is a struct that maps IP addresses to entities
-type IPAddressMapper struct{}
-
-// Map maps IP addresses to entities
-func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *mappingEntry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity {
-	logger.Debug("Mapping values to ipAddress entity", "values", values, "mappingEntry", mappingEntry)
-	ipAddress := diode.IPAddress{}
-
-	// for each value in the map, map it to the ip address entity
-	for objectID, value := range values {
-		logger.Debug("Mapping value to ipAddress entity", "objectID", objectID, "value", value)
-		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
-			if objectID.HasParent(mappingEntry.OID) {
-				switch propertyMappingEntry.Field {
-				case "address":
-					x := fmt.Sprintf("%s/32", string(value.Index))
-					ipAddress.Address = &x
-				case "assigned_object":
-					if propertyMappingEntry.Relationship != (config.Relationship{}) {
-						linkedEntity := entityRegistry.GetOrCreateEntity(EntityType(propertyMappingEntry.Relationship.Type), ObjectIDIndex(value.Value))
-						if linkedEntity == nil {
-							logger.Warn("No linked entity found while mapping assigned object", "relationship", propertyMappingEntry.Relationship)
-							continue
-						}
-						// Handle relationship mapping
-						if propertyMappingEntry.Relationship.Type == "interface" {
-							ipAddress.AssignedObject = linkedEntity.(*diode.Interface)
-						}
-					}
-				default:
-					logger.Warn("Unknown field", "field", mappingEntry.Field)
-				}
-			}
-		}
-	}
-	return &ipAddress
-}
-
-// InterfaceMapper is a struct that maps interfaces to entities
-type InterfaceMapper struct{}
-
-// Map maps interfaces to entities
-func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *mappingEntry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity {
-	logger.Debug("Mapping values to interface entity", "values", values, "mappingEntry", mappingEntry)
-	interfaceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), getIndex(values)).(*diode.Interface)
-
-	for objectID, value := range values {
-		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
-			if objectID.HasParent(propertyMappingEntry.OID) {
-				logger.Debug("Mapping value to interface entity with mapper", "objectID", objectID, "value", value, "mappingEntry", propertyMappingEntry)
-				switch propertyMappingEntry.Field {
-				case "name":
-					interfaceEntity.Name = &value.Value
-				case "speed":
-					speed, err := strconv.Atoi(value.Value)
-					if err != nil {
-						logger.Warn("Error converting speed to int", "error", err, "value", value.Value)
-						continue
-					}
-					speed64 := int64(speed)
-					interfaceEntity.Speed = &speed64
-				case "macAddress":
-					interfaceEntity.PrimaryMacAddress = &diode.MACAddress{
-						MacAddress: &value.Value,
-					}
-				case "adminStatus":
-					enabled := value.Value == "1"
-					interfaceEntity.Enabled = &enabled
-				default:
-					logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
-				}
-			}
-		}
-	}
-	return interfaceEntity
-}
-
 func getIndex(values map[ObjectIDIndex]*ObjectIDValue) ObjectIDIndex {
 	for _, pdu := range values {
 		return pdu.Index
@@ -239,7 +165,7 @@ func getIndex(values map[ObjectIDIndex]*ObjectIDValue) ObjectIDIndex {
 	return ""
 }
 
-func newMappingEntry(m config.MappingEntry, logger *slog.Logger) *mappingEntry {
+func newMappingEntry(m config.MappingEntry, logger *slog.Logger, entityMappers map[string]orbToEntityMapper) *mappingEntry {
 	mapper := entityMappers[m.Entity]
 	if mapper == nil {
 		logger.Warn("No mapper found for entity. Ignoring.", "entity", m.Entity)

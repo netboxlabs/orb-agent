@@ -9,8 +9,18 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 )
+
+type FakeManufacturers struct{}
+
+func (f *FakeManufacturers) GetManufacturer(id int) (data.Manufacturer, error) {
+	return data.Manufacturer{
+		PrivateEnterpriseNumber: id,
+		Name:                    "Cisco",
+	}, nil
+}
 
 func TestMapObjectIDsToEntity(t *testing.T) {
 	tests := []struct {
@@ -269,11 +279,63 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Device with name",
+			mapping: []config.MappingEntry{
+				{
+					OID:    ".1.3.6.1.2.1.1",
+					Entity: "device",
+					Field:  "_id",
+					MappingEntries: []config.MappingEntry{
+						{
+							OID:    ".1.3.6.1.2.1.1.5.0",
+							Entity: "device",
+							Field:  "name",
+						},
+					},
+				},
+			},
+			objectIDs: mapping.ObjectIDValueMap{
+				".1.3.6.1.2.1.1.5.0": mapping.Value{Value: "test", Type: mapping.Asn1BER(mapping.OctetString)},
+			},
+			expected: []diode.Entity{
+				&diode.Device{Name: diode.String("test")},
+			},
+		},
+		{
+			name: "Device with platform from sysObjectID",
+			mapping: []config.MappingEntry{
+				{
+					OID:    ".1.3.6.1.2.1.1",
+					Entity: "device",
+					Field:  "_id",
+					MappingEntries: []config.MappingEntry{
+						{
+							OID:    ".1.3.6.1.2.1.1.2.0",
+							Entity: "device",
+							Field:  "platform",
+						},
+					},
+				},
+			},
+			objectIDs: mapping.ObjectIDValueMap{
+				".1.3.6.1.2.1.1.2.0": mapping.Value{Value: "1.3.6.1.4.1.9.1.1234", Type: mapping.Asn1BER(mapping.ObjectIdentifier)},
+			},
+			expected: []diode.Entity{
+				&diode.Device{
+					Platform: &diode.Platform{
+						Manufacturer: &diode.Manufacturer{
+							Name: diode.String("Cisco"),
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mapper := mapping.NewObjectIDMapper(tt.mapping, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})))
+			mapper := mapping.NewObjectIDMapper(tt.mapping, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), &FakeManufacturers{})
 			entities := mapper.MapObjectIDsToEntity(tt.objectIDs)
 
 			assert.ElementsMatch(t, tt.expected, entities)
@@ -330,7 +392,7 @@ func TestObjectIDs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mapper := mapping.NewObjectIDMapper(tt.mapping, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})))
+			mapper := mapping.NewObjectIDMapper(tt.mapping, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), &FakeManufacturers{})
 			objectIDs := mapper.ObjectIDs()
 
 			assert.Equal(t, tt.expectedOIDs, objectIDs)

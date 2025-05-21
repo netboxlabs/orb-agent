@@ -9,6 +9,7 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 )
@@ -33,6 +34,7 @@ type Runner struct {
 	scope         config.Scope
 	config        config.PolicyConfig
 	ClientFactory snmp.ClientFactory
+	manufacturers data.DeviceDataRetreiver
 }
 
 // NewRunner returns a new policy runner
@@ -42,11 +44,20 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		return nil, err
 	}
 
+	manufacturers := data.NewEmptyDevicesList()
+	if policy.Config.DevicesFile != "" {
+		manufacturers, err = data.NewDevices(policy.Config.DevicesFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	runner := &Runner{
 		scheduler:     s,
 		client:        client,
 		logger:        logger,
 		ClientFactory: ClientFactory,
+		manufacturers: manufacturers,
 	}
 
 	runner.task = gocron.NewTask(runner.run)
@@ -74,7 +85,7 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	mapper := mapping.NewObjectIDMapper(r.scope.Mappings, r.logger)
+	mapper := mapping.NewObjectIDMapper(r.scope.Mappings, r.logger, r.manufacturers)
 	objectIDs := mapper.ObjectIDs()
 	r.logger.Info("Starting SNMP crawl of targets", slog.Any("targetCount", len(r.scope.Targets)), slog.Any("objectCount", len(objectIDs)))
 	entities := make([]diode.Entity, 0)

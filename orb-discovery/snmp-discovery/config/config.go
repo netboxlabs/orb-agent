@@ -45,9 +45,10 @@ type Defaults struct {
 
 // PolicyConfig represents the configuration of a policy
 type PolicyConfig struct {
-	Schedule *string  `yaml:"schedule,omitempty"`
-	Defaults Defaults `yaml:"defaults"`
-	Timeout  int      `yaml:"timeout"`
+	Schedule    *string  `yaml:"schedule,omitempty"`
+	Defaults    Defaults `yaml:"defaults"`
+	Timeout     int      `yaml:"timeout"`
+	DevicesFile string   `yaml:"devices_file,omitempty"`
 }
 
 // Policy represents a snmp-discovery policy

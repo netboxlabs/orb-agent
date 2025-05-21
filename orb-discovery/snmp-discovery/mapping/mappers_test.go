@@ -1,13 +1,16 @@
 package mapping
 
 import (
+	"fmt"
 	"log/slog"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 )
 
 func TestIPAddressMapper_Map(t *testing.T) {
@@ -294,6 +297,185 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			assert.Equal(t, tt.expectedEntity.Enabled, iface.Enabled)
 		})
 	}
+}
+
+func TestDeviceMapper_Map(t *testing.T) {
+	logger := slog.Default()
+	registry := NewEntityRegistry(logger)
+
+	// Create a mock manufacturer data retriever
+	mockManufacturers := &MockManufacturerDataRetriever{}
+	mockManufacturers.On("GetManufacturer", 9).Return(data.Manufacturer{
+		PrivateEnterpriseNumber: 9,
+		Name:                    "Cisco",
+	}, nil)
+	mockManufacturers.On("GetManufacturer", 25506).Return(data.Manufacturer{
+		PrivateEnterpriseNumber: 25506,
+		Name:                    "Juniper",
+	}, nil)
+	mockManufacturers.On("GetManufacturer", 999).Return(data.Manufacturer{}, fmt.Errorf("manufacturer not found"))
+
+	mapper := &DeviceMapper{
+		devices: mockManufacturers,
+	}
+
+	tests := []struct {
+		name           string
+		values         map[ObjectIDIndex]*ObjectIDValue
+		mappingEntry   *mappingEntry
+		expectedEntity *diode.Device
+		expectError    bool
+	}{
+		{
+			name: "successful mapping with name and platform",
+			values: map[ObjectIDIndex]*ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "router1",
+					Type:   OctetString,
+				},
+				"1.3.6.1.2.1.1.2.0": {
+					OID:    "1.3.6.1.2.1.1.2.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.2",
+					Value:  "1.3.6.1.4.1.9.1.1234",
+					Type:   ObjectIdentifier,
+				},
+			},
+			mappingEntry: &mappingEntry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mappingEntry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.2",
+						Entity: "device",
+						Field:  "platform",
+					},
+				},
+			},
+			expectedEntity: &diode.Device{
+				Name: stringPtr("router1"),
+				Platform: &diode.Platform{
+					Manufacturer: &diode.Manufacturer{
+						Name: diode.String("Cisco"),
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "mapping with unknown manufacturer",
+			values: map[ObjectIDIndex]*ObjectIDValue{
+				"1.3.6.1.2.1.1.2.0": {
+					OID:    "1.3.6.1.2.1.1.2.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.2",
+					Value:  "1.3.6.1.4.1.999.1.1234",
+					Type:   ObjectIdentifier,
+				},
+			},
+			mappingEntry: &mappingEntry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mappingEntry{
+					{
+						OID:    "1.3.6.1.2.1.1.2",
+						Entity: "device",
+						Field:  "platform",
+					},
+				},
+			},
+			expectedEntity: &diode.Device{
+				Platform: &diode.Platform{
+					Manufacturer: &diode.Manufacturer{
+						Name: diode.String("unknown"),
+					},
+				},
+			},
+			expectError: false,
+		},
+		{
+			name:   "empty values map",
+			values: map[ObjectIDIndex]*ObjectIDValue{},
+			mappingEntry: &mappingEntry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+			},
+			expectedEntity: &diode.Device{},
+			expectError:    false,
+		},
+		{
+			name: "invalid OID format",
+			values: map[ObjectIDIndex]*ObjectIDValue{
+				"1.3.6.1.2.1.1.2.0": {
+					OID:    "1.3.6.1.2.1.1.2.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.2",
+					Value:  "invalid.oid",
+					Type:   ObjectIdentifier,
+				},
+			},
+			mappingEntry: &mappingEntry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mappingEntry{
+					{
+						OID:    "1.3.6.1.2.1.1.2",
+						Entity: "device",
+						Field:  "platform",
+					},
+				},
+			},
+			expectedEntity: &diode.Device{
+				Platform: &diode.Platform{
+					Manufacturer: &diode.Manufacturer{
+						Name: diode.String("unknown"),
+					},
+				},
+			},
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, logger)
+
+			if tt.expectError {
+				assert.Nil(t, entity)
+				return
+			}
+
+			assert.NotNil(t, entity)
+			device, ok := entity.(*diode.Device)
+			assert.True(t, ok)
+			assert.Equal(t, tt.expectedEntity.Name, device.Name)
+			if tt.expectedEntity.Platform != nil && device.Platform != nil {
+				assert.Equal(t, tt.expectedEntity.Platform.Manufacturer.Name, device.Platform.Manufacturer.Name)
+			}
+		})
+	}
+}
+
+// MockManufacturerDataRetriever is a mock implementation of ManufacturerDataRetriever
+type MockManufacturerDataRetriever struct {
+	mock.Mock
+}
+
+func (m *MockManufacturerDataRetriever) GetManufacturer(id int) (data.Manufacturer, error) {
+	args := m.Called(id)
+	return args.Get(0).(data.Manufacturer), args.Error(1)
 }
 
 // Helper functions to create pointers
