@@ -35,11 +35,21 @@ type Authentication struct {
 	PrivPassphrase  string `yaml:"priv_passphrase"`
 }
 
-// Defaults represents the supported default values for a policy
-type Defaults struct {
+// EntityDefaults represents default values for a specific entity type
+type EntityDefaults struct {
 	Description string   `yaml:"description,omitempty"`
 	Comments    string   `yaml:"comments,omitempty"`
 	Tags        []string `yaml:"tags,omitempty"`
+}
+
+// Defaults represents the supported default values for a policy
+type Defaults struct {
+	Description string         `yaml:"description,omitempty"`
+	Comments    string         `yaml:"comments,omitempty"`
+	Tags        []string       `yaml:"tags,omitempty"`
+	IPAddress   EntityDefaults `yaml:"ip_address,omitempty"`
+	Interface   EntityDefaults `yaml:"interface,omitempty"`
+	Device      EntityDefaults `yaml:"device,omitempty"`
 }
 
 // PolicyConfig represents the configuration of a policy

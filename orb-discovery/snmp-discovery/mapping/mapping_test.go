@@ -341,7 +341,12 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mapper := mapping.NewObjectIDMapper(tt.mapping, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), &FakeManufacturers{})
+			mapper := mapping.NewObjectIDMapper(
+				tt.mapping,
+				slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})),
+				&FakeManufacturers{},
+				&config.Defaults{},
+			)
 			entities := mapper.MapObjectIDsToEntity(tt.objectIDs)
 
 			assert.ElementsMatch(t, tt.expected, entities)
@@ -398,7 +403,12 @@ func TestObjectIDs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mapper := mapping.NewObjectIDMapper(tt.mapping, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), &FakeManufacturers{})
+			mapper := mapping.NewObjectIDMapper(
+				tt.mapping,
+				slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})),
+				&FakeManufacturers{},
+				&config.Defaults{},
+			)
 			objectIDs := mapper.ObjectIDs()
 
 			assert.Equal(t, tt.expectedOIDs, objectIDs)

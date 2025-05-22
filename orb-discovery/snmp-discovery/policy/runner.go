@@ -85,7 +85,7 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	mapper := mapping.NewObjectIDMapper(r.scope.Mappings, r.logger, r.manufacturers)
+	mapper := mapping.NewObjectIDMapper(r.scope.Mappings, r.logger, r.manufacturers, &r.config.Defaults)
 	objectIDs := mapper.ObjectIDs()
 	r.logger.Info("Starting SNMP crawl of targets", slog.Any("targetCount", len(r.scope.Targets)), slog.Any("objectCount", len(objectIDs)))
 	entities := make([]diode.Entity, 0)

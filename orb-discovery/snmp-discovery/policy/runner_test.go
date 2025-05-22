@@ -122,6 +122,19 @@ func TestRunnerRun(t *testing.T) {
 						Description: "Test",
 						Comments:    "This is a test",
 						Tags:        []string{"test", "snmp"},
+						IPAddress: config.EntityDefaults{
+							Description: "IP Address Default",
+							Comments:    "IP Address Comment",
+							Tags:        []string{"ip", "default"},
+						},
+						Interface: config.EntityDefaults{
+							Description: "Interface Default",
+							Tags:        []string{"interface", "default"},
+						},
+						Device: config.EntityDefaults{
+							Description: "Device Default",
+							Tags:        []string{"device", "default"},
+						},
 					},
 				},
 				Scope: config.Scope{
@@ -188,7 +201,26 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	ctx := context.Background()
 
 	policyConfig := config.Policy{
-		Config: config.PolicyConfig{},
+		Config: config.PolicyConfig{
+			Defaults: config.Defaults{
+				Description: "Test",
+				Comments:    "This is a test",
+				Tags:        []string{"test", "snmp"},
+				IPAddress: config.EntityDefaults{
+					Description: "IP Address Default",
+					Comments:    "IP Address Comment",
+					Tags:        []string{"ip", "default"},
+				},
+				Interface: config.EntityDefaults{
+					Description: "Interface Default",
+					Tags:        []string{"interface", "default"},
+				},
+				Device: config.EntityDefaults{
+					Description: "Device Default",
+					Tags:        []string{"device", "default"},
+				},
+			},
+		},
 		Scope: config.Scope{
 			Targets: []config.Target{
 				{
@@ -219,7 +251,18 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	// Use a channel to signal that Ingest was called
 	ingestCalled := make(chan bool, 1)
 
-	expectedEntities := []diode.Entity{&diode.Interface{Name: diode.String("GigabitEthernet1/0/1")}}
+	expectedEntities := []diode.Entity{
+		&diode.Interface{
+			Name:        diode.String("GigabitEthernet1/0/1"),
+			Description: diode.String("Interface Default"),
+			Tags: []*diode.Tag{
+				{Name: diode.String("interface")},
+				{Name: diode.String("default")},
+				{Name: diode.String("test")},
+				{Name: diode.String("snmp")},
+			},
+		},
+	}
 
 	mockClient.On("Ingest", mock.Anything, expectedEntities).Run(func(args mock.Arguments) {
 		ingestCalled <- true
@@ -233,14 +276,14 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	// Wait for Ingest to be called or timeout
 	select {
 	case <-ingestCalled:
-		// Success
+		// Ingest was called, proceed
 	case <-time.After(10 * time.Second):
 		t.Fatal("Timeout: Ingest was not called")
 	}
 
 	// Stop the process
 	err = runner.Stop()
-	assert.NoError(t, err)
+	assert.NoError(t, err, "Runner.Stop should not return an error")
 }
 
 func TestRunnerWalkError(t *testing.T) {
