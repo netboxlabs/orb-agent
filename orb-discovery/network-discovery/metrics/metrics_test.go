@@ -6,12 +6,11 @@ import (
 	"os"
 	"testing"
 
+	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
-
-	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 )
 
 func TestSetupMetricsExport(t *testing.T) {

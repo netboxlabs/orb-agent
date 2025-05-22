@@ -11,7 +11,6 @@ import (
 	"syscall"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
 	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"

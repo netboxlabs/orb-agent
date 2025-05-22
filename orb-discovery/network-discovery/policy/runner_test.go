@@ -10,12 +10,11 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-
 	"github.com/netboxlabs/orb-discovery/network-discovery/config"
 	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 type MockClient struct {
@@ -288,6 +287,45 @@ func TestRunnerMetrics(t *testing.T) {
 		// Validate active policies metric decrement
 		activePolicies.Add(ctx, -1)
 	})
+}
+
+func TestRunnerNoHosts(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	mockClient := new(MockClient)
+
+	// Set up policy with target and port configuration likely to result in no hosts found
+	policyConfig := config.Policy{
+		Config: config.PolicyConfig{
+			Schedule: nil, // Run immediately
+		},
+		Scope: config.Scope{
+			Targets:    []string{"10.0.0.2"},
+			Ports:      []string{"1"}, // Port 1 is typically not open
+			FastMode:   boolPtr(true), // Speed up the scan for test purposes
+			MaxRetries: intPtr(0),     // Don't retry to keep the test fast
+		},
+	}
+	ctx := context.Background()
+
+	// Create runner
+	runner, err := policy.NewRunner(ctx, logger, "test-no-hosts", policyConfig, mockClient)
+	assert.NoError(t, err, "policy.NewRunner should not return an error")
+
+	// Configure mock to verify Ingest is NOT called
+	mockClient.On("Close").Return(nil)
+
+	// Start the runner
+	runner.Start()
+
+	// Wait for a short time to allow the scan to run
+	time.Sleep(2 * time.Second)
+
+	// Stop the runner
+	err = runner.Stop()
+	assert.NoError(t, err, "Runner.Stop should not return an error")
+
+	// Check that Ingest was not called since no hosts should have been found
+	mockClient.AssertNotCalled(t, "Ingest", mock.Anything, mock.Anything)
 }
 
 func boolPtr(b bool) *bool {

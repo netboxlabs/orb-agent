@@ -3,9 +3,8 @@ package version_test
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/netboxlabs/orb-discovery/network-discovery/version"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestVersion(t *testing.T) {
