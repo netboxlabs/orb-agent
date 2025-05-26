@@ -55,11 +55,15 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
     tags = list(defaults.tags) if defaults.tags else []
     description = None
     comments = None
+    location = None
 
     if defaults.device:
         tags.extend(defaults.device.tags or [])
         description = defaults.device.description
         comments = defaults.device.comments
+
+    if defaults.location:
+        location = Location(name=defaults.location, site=defaults.site)
 
     device = Device(
         name=device_info.get("hostname"),
@@ -74,7 +78,7 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
         status="active",
         site=defaults.site,
         tags=tags,
-        location=Location(name=defaults.location, site=defaults.site),
+        location=location,
         tenant=defaults.tenant,
         description=description,
         comments=comments,
@@ -252,7 +256,6 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
 
     vlan = VLAN(
         vid=int(vid),
-        site=defaults.site,
         name=vlan_name,
         group=group,
         tenant=tenant,
