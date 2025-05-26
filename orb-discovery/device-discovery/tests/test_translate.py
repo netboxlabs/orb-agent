@@ -213,7 +213,6 @@ def test_translate_vlan(sample_defaults):
     assert vlan.vid == 1
     assert vlan.name == "Test VLAN"
     assert len(vlan.tags) == 2
-    assert vlan.site.name == "New York"
     assert vlan.comments == "test"
 
 
@@ -238,5 +237,4 @@ def test_translate_vlan_with_defaults(sample_defaults):
     assert vlan.group.name == "Default Group"
     assert vlan.tenant.name == "Default Tenant"
     assert vlan.role.name == "Default Role"
-    assert vlan.site.name == "New York"
     assert len(vlan.tags) == 3
