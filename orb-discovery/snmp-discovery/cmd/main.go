@@ -67,7 +67,7 @@ func main() {
 	}
 
 	client, err := diode.NewClient(
-		*diodeTarget,
+		resolveEnv(*diodeTarget),
 		producerName,
 		version.GetBuildVersion(),
 		diode.WithClientID(resolveEnv(*diodeClientID)),
