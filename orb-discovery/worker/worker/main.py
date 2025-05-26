@@ -96,6 +96,10 @@ def main():
 
     try:
         args = parser.parse_args()
+        target = args.diode_target
+        if target.startswith("${") and target.endswith("}"):
+            env_var = target[2:-1]
+            target = os.getenv(env_var, target)
         client_id = args.diode_client_id
         if client_id.startswith("${") and client_id.endswith("}"):
             env_var = client_id[2:-1]
@@ -109,7 +113,7 @@ def main():
             setup_metrics_export(args.otel_endpoint, args.otel_export_period)
 
         config = DiodeConfig(
-            target=args.diode_target,
+            target=target,
             prefix=args.diode_app_name_prefix,
             client_id=client_id,
             client_secret=client_secret,
