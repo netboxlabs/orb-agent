@@ -54,6 +54,9 @@ scope:
   targets:  # List of SNMP targets to discover
     - host: "192.168.1.1"  # Required: Hostname or IP address
       port: 161  # Optional: SNMP port (default: 161)
+    - host: "10.10.10.0/24"  # CIDR range: expands to all IPs in the subnet
+    - host: "10.10.10.10-20" # Dash range: expands to 10.10.10.10, 10.10.10.11, ..., 10.10.10.20
+    - host: "mydevice.local" # Hostname
   authentication:  # SNMP authentication settings
     protocol_version: "SNMPv2c"  # Required: SNMP protocol version ("SNMPv1", "SNMPv2c", or "SNMPv3")
     community: "public"  # Required for v1/v2c: SNMP community string
@@ -65,7 +68,21 @@ scope:
     # priv_protocol: "AES"
     # priv_passphrase: "privkey"
   retries: 3  # Optional: Number of SNMP retries (default: 0)
-```
+
+#### Target Range Formats
+
+The `host` field in `targets` supports the following formats:
+
+- **Single IP address:**
+  - `192.168.1.1`
+- **Hostname:**
+  - `mydevice.local`
+- **CIDR range:**
+  - `10.10.10.0/24` (expands to all IPs in the subnet)
+- **Dash range:**
+  - `10.10.10.10-20` (expands to 10.10.10.10, 10.10.10.11, ..., 10.10.10.20)
+
+Invalid or out-of-bounds ranges will be skipped and logged.
 
 ### Defaults
 
