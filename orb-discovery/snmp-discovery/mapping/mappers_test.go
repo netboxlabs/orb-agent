@@ -6,11 +6,10 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func TestIPAddressMapper_Map(t *testing.T) {
@@ -87,12 +86,14 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			defaults: &config.Defaults{
-				Description: "Global description",
-				Tags:        []string{"global-tag1", "global-tag2"},
+				IPAddress: config.IPAddressDefaults{
+					Description: "IP Address Description",
+					Tags:        []string{"global-tag1", "global-tag2"},
+				},
 			},
 			expectedEntity: &diode.IPAddress{
 				Address:     stringPtr("192.168.1.1/32"),
-				Description: stringPtr("Global description"),
+				Description: stringPtr("IP Address Description"),
 				Tags: []*diode.Tag{
 					{Name: stringPtr("global-tag1")},
 					{Name: stringPtr("global-tag2")},
@@ -129,7 +130,7 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			defaults: &config.Defaults{
-				IPAddress: config.EntityDefaults{
+				IPAddress: config.IPAddressDefaults{
 					Description: "IP Address specific description",
 					Tags:        []string{"ip-tag1", "ip-tag2"},
 				},
@@ -173,9 +174,8 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			defaults: &config.Defaults{
-				Description: "Global description",
-				Tags:        []string{"global-tag1", "global-tag2"},
-				IPAddress: config.EntityDefaults{
+				Tags: []string{"global-tag1", "global-tag2"},
+				IPAddress: config.IPAddressDefaults{
 					Description: "IP Address specific description",
 					Tags:        []string{"ip-tag1", "ip-tag2"},
 				},
@@ -252,6 +252,51 @@ func TestIPAddressMapper_Map(t *testing.T) {
 			expectedEntity: &diode.IPAddress{},
 			expectError:    false,
 		},
+		{
+			name: "mapping with tenant default and entity-specific defaults",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.4.20.1.1.192.168.1.1": {
+					OID:    "1.3.6.1.2.1.4.20.1.1.192.168.1.1",
+					Index:  "192.168.1.1",
+					Parent: "1.3.6.1.2.1.4.20.1.1",
+					Value:  "192.168.1.1",
+					Type:   mapping.IPAddress,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.4.20.1.1",
+				Entity: "ipAddress",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.4.20.1.1",
+						Entity: "ipAddress",
+						Field:  "address",
+					},
+				},
+			},
+			defaults: &config.Defaults{
+				IPAddress: config.IPAddressDefaults{
+					Description: "IP Address specific description",
+					Tenant:      "ip-address-tenant",
+					Role:        "ip-address-role",
+					Vrf:         "ip-address-vrf",
+				},
+			},
+			expectedEntity: &diode.IPAddress{
+				Address:     stringPtr("192.168.1.1/32"),
+				Description: stringPtr("IP Address specific description"),
+				Tenant: &diode.Tenant{
+					Name: stringPtr("ip-address-tenant"),
+				},
+				Role: stringPtr("ip-address-role"),
+				Vrf: &diode.VRF{
+					Name: stringPtr("ip-address-vrf"),
+					Rd:   stringPtr("ip-address-vrf"),
+				},
+			},
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -271,11 +316,20 @@ func TestIPAddressMapper_Map(t *testing.T) {
 			assert.True(t, ok)
 			assert.Equal(t, tt.expectedEntity.Address, ipAddress.Address)
 			assert.Equal(t, tt.expectedEntity.Description, ipAddress.Description)
+			assert.Equal(t, tt.expectedEntity.Role, ipAddress.Role)
+			if tt.expectedEntity.Vrf != nil {
+				assert.Equal(t, tt.expectedEntity.Vrf.Name, ipAddress.Vrf.Name)
+				assert.Equal(t, tt.expectedEntity.Vrf.Rd, ipAddress.Vrf.Rd)
+			}
 			if tt.expectedEntity.Tags != nil {
 				assert.Equal(t, len(tt.expectedEntity.Tags), len(ipAddress.Tags))
 				for i, tag := range tt.expectedEntity.Tags {
 					assert.Equal(t, tag.Name, ipAddress.Tags[i].Name)
 				}
+			}
+			if tt.expectedEntity.Tenant != nil {
+				assert.NotNil(t, ipAddress.Tenant)
+				assert.Equal(t, tt.expectedEntity.Tenant.Name, ipAddress.Tenant.Name)
 			}
 		})
 	}
@@ -371,7 +425,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "mapping with global defaults",
+			name: "mapping with defaults",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.2.2.1.1.1": {
 					OID:    "1.3.6.1.2.1.2.2.1.1.1",
@@ -406,112 +460,12 @@ func TestInterfaceMapper_Map(t *testing.T) {
 				},
 			},
 			defaults: &config.Defaults{
-				Description: "Global description",
-				Tags:        []string{"global-tag1", "global-tag2"},
-			},
-			expectedEntity: &diode.Interface{
-				Name:        stringPtr("eth0"),
-				Description: stringPtr("Global description"),
-				Tags: []*diode.Tag{
-					{Name: stringPtr("global-tag1")},
-					{Name: stringPtr("global-tag2")},
-				},
-			},
-			expectError: false,
-		},
-		{
-			name: "mapping with entity-specific defaults",
-			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
-				"1.3.6.1.2.1.2.2.1.1.1": {
-					OID:    "1.3.6.1.2.1.2.2.1.1.1",
-					Index:  "1",
-					Parent: "1.3.6.1.2.1.2.2.1.1",
-					Value:  "1",
-					Type:   mapping.Integer,
-				},
-				"1.3.6.1.2.1.2.2.1.2.1": {
-					OID:    "1.3.6.1.2.1.2.2.1.2.1",
-					Index:  "1",
-					Parent: "1.3.6.1.2.1.2.2.1.2",
-					Value:  "eth0",
-					Type:   mapping.OctetString,
-				},
-			},
-			mappingEntry: &mapping.Entry{
-				OID:    "1.3.6.1.2.1.2.2.1.1",
-				Entity: "interface",
-				Field:  "_id",
-				MappingEntries: []mapping.Entry{
-					{
-						OID:    "1.3.6.1.2.1.2.2.1.1",
-						Entity: "interface",
-						Field:  "_id",
-					},
-					{
-						OID:    "1.3.6.1.2.1.2.2.1.2",
-						Entity: "interface",
-						Field:  "name",
-					},
-				},
-			},
-			defaults: &config.Defaults{
-				Interface: config.EntityDefaults{
+				Interface: config.InterfaceDefaults{
 					Description: "Interface specific description",
 					Tags:        []string{"interface-tag1", "interface-tag2"},
+					Type:        "ethernet",
 				},
-			},
-			expectedEntity: &diode.Interface{
-				Name:        stringPtr("eth0"),
-				Description: stringPtr("Interface specific description"),
-				Tags: []*diode.Tag{
-					{Name: stringPtr("interface-tag1")},
-					{Name: stringPtr("interface-tag2")},
-				},
-			},
-			expectError: false,
-		},
-		{
-			name: "mapping with both global and entity-specific defaults",
-			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
-				"1.3.6.1.2.1.2.2.1.1.1": {
-					OID:    "1.3.6.1.2.1.2.2.1.1.1",
-					Index:  "1",
-					Parent: "1.3.6.1.2.1.2.2.1.1",
-					Value:  "1",
-					Type:   mapping.Integer,
-				},
-				"1.3.6.1.2.1.2.2.1.2.1": {
-					OID:    "1.3.6.1.2.1.2.2.1.2.1",
-					Index:  "1",
-					Parent: "1.3.6.1.2.1.2.2.1.2",
-					Value:  "eth0",
-					Type:   mapping.OctetString,
-				},
-			},
-			mappingEntry: &mapping.Entry{
-				OID:    "1.3.6.1.2.1.2.2.1.1",
-				Entity: "interface",
-				Field:  "_id",
-				MappingEntries: []mapping.Entry{
-					{
-						OID:    "1.3.6.1.2.1.2.2.1.1",
-						Entity: "interface",
-						Field:  "_id",
-					},
-					{
-						OID:    "1.3.6.1.2.1.2.2.1.2",
-						Entity: "interface",
-						Field:  "name",
-					},
-				},
-			},
-			defaults: &config.Defaults{
-				Description: "Global description",
-				Tags:        []string{"global-tag1", "global-tag2"},
-				Interface: config.EntityDefaults{
-					Description: "Interface specific description",
-					Tags:        []string{"interface-tag1", "interface-tag2"},
-				},
+				Tags: []string{"global-tag1", "global-tag2"},
 			},
 			expectedEntity: &diode.Interface{
 				Name:        stringPtr("eth0"),
@@ -522,6 +476,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					{Name: stringPtr("global-tag1")},
 					{Name: stringPtr("global-tag2")},
 				},
+				Type: stringPtr("ethernet"),
 			},
 			expectError: false,
 		},
@@ -599,6 +554,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			if tt.expectedEntity.PrimaryMacAddress != nil {
 				assert.Equal(t, tt.expectedEntity.PrimaryMacAddress.MacAddress, iface.PrimaryMacAddress.MacAddress)
 			}
+			assert.Equal(t, tt.expectedEntity.Type, iface.Type)
 			assert.Equal(t, tt.expectedEntity.Enabled, iface.Enabled)
 			assert.Equal(t, tt.expectedEntity.Description, iface.Description)
 			if tt.expectedEntity.Tags != nil {
@@ -685,82 +641,6 @@ func TestDeviceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "mapping with global defaults",
-			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
-				"1.3.6.1.2.1.1.5.0": {
-					OID:    "1.3.6.1.2.1.1.5.0",
-					Index:  "0",
-					Parent: "1.3.6.1.2.1.1.5",
-					Value:  "router1",
-					Type:   mapping.OctetString,
-				},
-			},
-			mappingEntry: &mapping.Entry{
-				OID:    "1.3.6.1.2.1.1",
-				Entity: "device",
-				Field:  "_id",
-				MappingEntries: []mapping.Entry{
-					{
-						OID:    "1.3.6.1.2.1.1.5",
-						Entity: "device",
-						Field:  "name",
-					},
-				},
-			},
-			defaults: &config.Defaults{
-				Description: "Global description",
-				Tags:        []string{"global-tag1", "global-tag2"},
-			},
-			expectedEntity: &diode.Device{
-				Name:        stringPtr("router1"),
-				Description: stringPtr("Global description"),
-				Tags: []*diode.Tag{
-					{Name: stringPtr("global-tag1")},
-					{Name: stringPtr("global-tag2")},
-				},
-			},
-			expectError: false,
-		},
-		{
-			name: "mapping with entity-specific defaults",
-			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
-				"1.3.6.1.2.1.1.5.0": {
-					OID:    "1.3.6.1.2.1.1.5.0",
-					Index:  "0",
-					Parent: "1.3.6.1.2.1.1.5",
-					Value:  "router1",
-					Type:   mapping.OctetString,
-				},
-			},
-			mappingEntry: &mapping.Entry{
-				OID:    "1.3.6.1.2.1.1",
-				Entity: "device",
-				Field:  "_id",
-				MappingEntries: []mapping.Entry{
-					{
-						OID:    "1.3.6.1.2.1.1.5",
-						Entity: "device",
-						Field:  "name",
-					},
-				},
-			},
-			defaults: &config.Defaults{
-				Device: config.EntityDefaults{
-					Description: "Device specific description",
-					Tags:        []string{"device-tag1", "device-tag2"},
-				},
-			},
-			expectedEntity: &diode.Device{
-				Name:        stringPtr("router1"),
-				Description: stringPtr("Device specific description"),
-				Tags: []*diode.Tag{
-					{Name: stringPtr("device-tag1")},
-					{Name: stringPtr("device-tag2")},
-				},
-			},
-			expectError: false,
-		},
-		{
 			name: "mapping with both global and entity-specific defaults",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.1.5.0": {
@@ -784,21 +664,37 @@ func TestDeviceMapper_Map(t *testing.T) {
 				},
 			},
 			defaults: &config.Defaults{
-				Description: "Global description",
-				Tags:        []string{"global-tag1", "global-tag2"},
-				Device: config.EntityDefaults{
+				Tags:     []string{"global-tag1", "global-tag2"},
+				Role:     "test-role",
+				Site:     "test-site",
+				Location: "test-location",
+				Device: config.DeviceDefaults{
 					Description: "Device specific description",
 					Tags:        []string{"device-tag1", "device-tag2"},
+					Comments:    "Device specific comments",
 				},
 			},
 			expectedEntity: &diode.Device{
 				Name:        stringPtr("router1"),
 				Description: stringPtr("Device specific description"),
+				Comments:    stringPtr("Device specific comments"),
 				Tags: []*diode.Tag{
 					{Name: stringPtr("device-tag1")},
 					{Name: stringPtr("device-tag2")},
 					{Name: stringPtr("global-tag1")},
 					{Name: stringPtr("global-tag2")},
+				},
+				Role: &diode.DeviceRole{
+					Name: stringPtr("test-role"),
+				},
+				Site: &diode.Site{
+					Name: stringPtr("test-site"),
+				},
+				Location: &diode.Location{
+					Name: stringPtr("test-location"),
+					Site: &diode.Site{
+						Name: stringPtr("test-site"),
+					},
 				},
 			},
 			expectError: false,
@@ -880,6 +776,13 @@ func TestDeviceMapper_Map(t *testing.T) {
 				assert.Equal(t, tt.expectedEntity.Platform.Manufacturer.Name, device.Platform.Manufacturer.Name)
 			}
 			assert.Equal(t, tt.expectedEntity.Description, device.Description)
+			if tt.expectedEntity.Location != nil {
+				assert.Equal(t, tt.expectedEntity.Location.Name, device.Location.Name)
+				assert.Equal(t, tt.expectedEntity.Location.Site.Name, device.Location.Site.Name)
+			}
+			if tt.expectedEntity.Site != nil {
+				assert.Equal(t, tt.expectedEntity.Site.Name, device.Site.Name)
+			}
 			if tt.expectedEntity.Tags != nil {
 				assert.Equal(t, len(tt.expectedEntity.Tags), len(device.Tags))
 				for i, tag := range tt.expectedEntity.Tags {

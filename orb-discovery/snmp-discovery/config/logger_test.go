@@ -4,10 +4,9 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 )
 
 func TestNewLogger(t *testing.T) {

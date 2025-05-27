@@ -7,13 +7,68 @@ import (
 	"strings"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 )
 
 // IPAddressMapper is a struct that maps IP addresses to entities
 type IPAddressMapper struct{}
+
+// applyDefaults applies default values to an IP address entity
+func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *config.Defaults) {
+	if defaults == nil {
+		return
+	}
+	entityDefaults := defaults.IPAddress
+
+	// Apply entity-specific defaults
+	if entityDefaults.Description != "" {
+		entity.Description = &entityDefaults.Description
+	}
+	if entityDefaults.Comments != "" {
+		entity.Comments = &entityDefaults.Comments
+	}
+
+	// Collect tags from both entity-specific and global defaults
+	var tags []*diode.Tag
+	if len(entityDefaults.Tags) > 0 {
+		for _, tag := range entityDefaults.Tags {
+			tags = append(tags, &diode.Tag{Name: &tag})
+		}
+	}
+	if len(defaults.Tags) > 0 {
+		for _, tag := range defaults.Tags {
+			tags = append(tags, &diode.Tag{Name: &tag})
+		}
+	}
+
+	// Apply tags if any exist
+	if len(tags) > 0 {
+		entity.Tags = tags
+	}
+
+	// Apply global defaults if not overridden by entity-specific defaults
+	if entity.Description == nil && entityDefaults.Description != "" {
+		entity.Description = &entityDefaults.Description
+	}
+	if entity.Comments == nil && entityDefaults.Comments != "" {
+		entity.Comments = &entityDefaults.Comments
+	}
+	if entity.Tenant == nil && entityDefaults.Tenant != "" {
+		entity.Tenant = &diode.Tenant{
+			Name: &entityDefaults.Tenant,
+		}
+	}
+	if entity.Role == nil && entityDefaults.Role != "" {
+		entity.Role = &entityDefaults.Role
+	}
+	if entity.Vrf == nil && entityDefaults.Vrf != "" {
+		entity.Vrf = &diode.VRF{
+			Name: &entityDefaults.Vrf,
+			Rd:   &entityDefaults.Vrf,
+		}
+	}
+}
 
 // Map maps IP addresses to entities
 func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity {
@@ -51,39 +106,8 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 		}
 	}
 
-	// Apply defaults if available
-	if defaults := entityRegistry.GetDefaults(); defaults != nil && fieldFound {
-		// Apply IP address specific defaults
-		if defaults.IPAddress.Description != "" {
-			ipAddress.Description = &defaults.IPAddress.Description
-		}
-		if defaults.IPAddress.Comments != "" {
-			ipAddress.Comments = &defaults.IPAddress.Comments
-		}
-		var tags []*diode.Tag
-		// Add entity-specific tags
-		if len(defaults.IPAddress.Tags) > 0 {
-			for _, tag := range defaults.IPAddress.Tags {
-				tags = append(tags, &diode.Tag{Name: &tag})
-			}
-		}
-		// Add global tags
-		if len(defaults.Tags) > 0 {
-			for _, tag := range defaults.Tags {
-				tags = append(tags, &diode.Tag{Name: &tag})
-			}
-		}
-		if len(tags) > 0 {
-			ipAddress.Tags = tags
-		}
-
-		// Apply global defaults if not overridden by entity-specific defaults
-		if ipAddress.Description == nil && defaults.Description != "" {
-			ipAddress.Description = &defaults.Description
-		}
-		if ipAddress.Comments == nil && defaults.Comments != "" {
-			ipAddress.Comments = &defaults.Comments
-		}
+	if fieldFound {
+		m.applyDefaults(&ipAddress, entityRegistry.GetDefaults())
 	}
 
 	return &ipAddress
@@ -91,6 +115,46 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 
 // InterfaceMapper is a struct that maps interfaces to entities
 type InterfaceMapper struct{}
+
+// applyDefaults applies default values to an interface entity
+func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *config.Defaults) {
+	if defaults == nil {
+		return
+	}
+	entityDefaults := defaults.Interface
+
+	// Apply entity-specific defaults
+	if entityDefaults.Description != "" {
+		entity.Description = &entityDefaults.Description
+	}
+
+	// Collect tags from both entity-specific and global defaults
+	var tags []*diode.Tag
+	if len(entityDefaults.Tags) > 0 {
+		for _, tag := range entityDefaults.Tags {
+			tags = append(tags, &diode.Tag{Name: &tag})
+		}
+	}
+	if len(defaults.Tags) > 0 {
+		for _, tag := range defaults.Tags {
+			tags = append(tags, &diode.Tag{Name: &tag})
+		}
+	}
+
+	// Apply tags if any exist
+	if len(tags) > 0 {
+		entity.Tags = tags
+	}
+
+	// Apply global defaults if not overridden by entity-specific defaults
+	if entity.Description == nil && entityDefaults.Description != "" {
+		entity.Description = &entityDefaults.Description
+	}
+
+	if entity.Type == nil && entityDefaults.Type != "" {
+		entity.Type = &entityDefaults.Type
+	}
+}
 
 // Map maps interfaces to entities
 func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity {
@@ -132,32 +196,8 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	}
 
 	// Apply defaults if available
-	if defaults := entityRegistry.GetDefaults(); defaults != nil && fieldFound {
-		// Apply interface specific defaults
-		if defaults.Interface.Description != "" {
-			interfaceEntity.Description = &defaults.Interface.Description
-		}
-		var tags []*diode.Tag
-		// Add entity-specific tags
-		if len(defaults.Interface.Tags) > 0 {
-			for _, tag := range defaults.Interface.Tags {
-				tags = append(tags, &diode.Tag{Name: &tag})
-			}
-		}
-		// Add global tags
-		if len(defaults.Tags) > 0 {
-			for _, tag := range defaults.Tags {
-				tags = append(tags, &diode.Tag{Name: &tag})
-			}
-		}
-		if len(tags) > 0 {
-			interfaceEntity.Tags = tags
-		}
-
-		// Apply global defaults if not overridden by entity-specific defaults
-		if interfaceEntity.Description == nil && defaults.Description != "" {
-			interfaceEntity.Description = &defaults.Description
-		}
+	if fieldFound {
+		m.applyDefaults(interfaceEntity, entityRegistry.GetDefaults())
 	}
 
 	return interfaceEntity
@@ -166,6 +206,71 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 // DeviceMapper is a struct that maps devices to entities
 type DeviceMapper struct {
 	devices data.DeviceDataRetreiver
+}
+
+// applyDefaults applies default values to a device entity
+func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defaults) {
+	if defaults == nil {
+		return
+	}
+	entityDefaults := defaults.Device
+
+	// Apply entity-specific defaults
+	if entityDefaults.Description != "" {
+		entity.Description = &entityDefaults.Description
+	}
+	if entityDefaults.Comments != "" {
+		entity.Comments = &entityDefaults.Comments
+	}
+
+	// Collect tags from both entity-specific and global defaults
+	var tags []*diode.Tag
+	if len(entityDefaults.Tags) > 0 {
+		for _, tag := range entityDefaults.Tags {
+			tags = append(tags, &diode.Tag{Name: &tag})
+		}
+	}
+	if len(defaults.Tags) > 0 {
+		for _, tag := range defaults.Tags {
+			tags = append(tags, &diode.Tag{Name: &tag})
+		}
+	}
+
+	// Apply tags if any exist
+	if len(tags) > 0 {
+		entity.Tags = tags
+	}
+
+	// Apply global defaults if not overridden by entity-specific defaults
+	if entity.Description == nil && entityDefaults.Description != "" {
+		entity.Description = &entityDefaults.Description
+	}
+	if entity.Comments == nil && entityDefaults.Comments != "" {
+		entity.Comments = &entityDefaults.Comments
+	}
+
+	if entity.Role == nil && defaults.Role != "" {
+		entity.Role = &diode.DeviceRole{
+			Name: &defaults.Role,
+		}
+	}
+
+	if entity.Site == nil && defaults.Site != "" {
+		entity.Site = &diode.Site{
+			Name: &defaults.Site,
+		}
+	}
+
+	if entity.Location == nil && defaults.Location != "" {
+		entity.Location = &diode.Location{
+			Name: &defaults.Location,
+		}
+		if entity.Location.Site == nil && defaults.Site != "" {
+			entity.Location.Site = &diode.Site{
+				Name: &defaults.Site,
+			}
+		}
+	}
 }
 
 // NewDeviceMapper creates a new DeviceMapper
@@ -227,32 +332,8 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 	}
 
 	// Apply defaults if available
-	if defaults := entityRegistry.GetDefaults(); fieldFound && defaults != nil {
-		// Apply device specific defaults
-		if defaults.Device.Description != "" {
-			deviceEntity.Description = &defaults.Device.Description
-		}
-		var tags []*diode.Tag
-		// Add entity-specific tags
-		if len(defaults.Device.Tags) > 0 {
-			for _, tag := range defaults.Device.Tags {
-				tags = append(tags, &diode.Tag{Name: &tag})
-			}
-		}
-		// Add global tags
-		if len(defaults.Tags) > 0 {
-			for _, tag := range defaults.Tags {
-				tags = append(tags, &diode.Tag{Name: &tag})
-			}
-		}
-		if len(tags) > 0 {
-			deviceEntity.Tags = tags
-		}
-
-		// Apply global defaults if not overridden by entity-specific defaults
-		if deviceEntity.Description == nil && defaults.Description != "" {
-			deviceEntity.Description = &defaults.Description
-		}
+	if fieldFound {
+		m.applyDefaults(deviceEntity, entityRegistry.GetDefaults())
 	}
 
 	return deviceEntity

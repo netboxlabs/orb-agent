@@ -10,12 +10,11 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 type MockDiodeClient struct {
@@ -119,19 +118,17 @@ func TestRunnerRun(t *testing.T) {
 				Config: config.PolicyConfig{
 					Schedule: nil,
 					Defaults: config.Defaults{
-						Description: "Test",
-						Comments:    "This is a test",
-						Tags:        []string{"test", "snmp"},
-						IPAddress: config.EntityDefaults{
+						Tags: []string{"test", "snmp"},
+						IPAddress: config.IPAddressDefaults{
 							Description: "IP Address Default",
 							Comments:    "IP Address Comment",
 							Tags:        []string{"ip", "default"},
 						},
-						Interface: config.EntityDefaults{
+						Interface: config.InterfaceDefaults{
 							Description: "Interface Default",
 							Tags:        []string{"interface", "default"},
 						},
-						Device: config.EntityDefaults{
+						Device: config.DeviceDefaults{
 							Description: "Device Default",
 							Tags:        []string{"device", "default"},
 						},
@@ -203,19 +200,17 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	policyConfig := config.Policy{
 		Config: config.PolicyConfig{
 			Defaults: config.Defaults{
-				Description: "Test",
-				Comments:    "This is a test",
-				Tags:        []string{"test", "snmp"},
-				IPAddress: config.EntityDefaults{
+				Tags: []string{"test", "snmp"},
+				IPAddress: config.IPAddressDefaults{
 					Description: "IP Address Default",
 					Comments:    "IP Address Comment",
 					Tags:        []string{"ip", "default"},
 				},
-				Interface: config.EntityDefaults{
+				Interface: config.InterfaceDefaults{
 					Description: "Interface Default",
 					Tags:        []string{"interface", "default"},
 				},
-				Device: config.EntityDefaults{
+				Device: config.DeviceDefaults{
 					Description: "Device Default",
 					Tags:        []string{"device", "default"},
 				},

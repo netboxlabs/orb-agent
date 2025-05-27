@@ -2,7 +2,6 @@ package snmp
 
 import (
 	"github.com/gosnmp/gosnmp"
-
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 )
 

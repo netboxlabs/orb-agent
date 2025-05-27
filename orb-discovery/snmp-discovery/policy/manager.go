@@ -8,10 +8,9 @@ import (
 	"os"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"gopkg.in/yaml.v3"
-
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
+	"gopkg.in/yaml.v3"
 )
 
 // Manager represents the policy manager

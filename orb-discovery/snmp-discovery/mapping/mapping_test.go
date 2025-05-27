@@ -6,10 +6,9 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/stretchr/testify/assert"
-
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
+	"github.com/stretchr/testify/assert"
 )
 
 type FakeManufacturers struct{}

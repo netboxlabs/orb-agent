@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gosnmp/gosnmp"
-
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 )
