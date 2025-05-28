@@ -108,11 +108,13 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
 		"--diode-client-id", d.diodeClientID,
-		"--diode-client-secret", d.diodeClientSecret,
+		"--diode-client-secret", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("snmp-discovery startup", slog.Any("arguments", pvOptions))
+
+	pvOptions[9] = d.diodeClientSecret
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
