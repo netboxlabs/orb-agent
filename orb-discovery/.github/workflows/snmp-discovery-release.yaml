@@ -1,11 +1,11 @@
-name: Device Discovery - release
+name: SNMP Discovery - release
 on:
   workflow_dispatch:
   push:
-    branches:
-        - "release"
+    branches: [ release ]
     paths:
-        - "device-discovery/**"
+      - "snmp-discovery/**"
+      - "!snmp-discovery/docker/**"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -14,9 +14,8 @@ concurrency:
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  PYTHON_RUNTIME_VERSION: "3.11"
-  APP_NAME: device-discovery
-  PYTHON_PACKAGE_NAME: netboxlabs_device_discovery
+  GO_VERSION: '1.24'
+  APP_NAME: snmp-discovery
 
 permissions:
   contents: write
@@ -24,18 +23,6 @@ permissions:
   pull-requests: write
 
 jobs:
-  get-python-package-name:
-    name: Get Python package name
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Python package name
-        id: python-package-name
-        run: echo "python-package-name=${{ env.PYTHON_PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
-    outputs:
-        python-package-name: ${{ steps.python-package-name.outputs.python-package-name }}
-
   get-next-version:
     name: Semantic release get next version
     runs-on: ubuntu-latest
@@ -132,54 +119,53 @@ jobs:
 
   build:
     name: Build
-    needs: [ get-python-package-name, get-next-version ]
+    needs: get-next-version
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: ${{ env.APP_NAME  }}
-    permissions:
-      id-token: write
-      contents: read
+    strategy:
+      fail-fast: false
+    if: needs.get-next-version.outputs.new-release-published == 'true'
     env:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
-      BUILD_TRACK: release
       BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
-      OUTPUT_FILENAME: ${{ needs.get-python-package-name.outputs.python-package-name }}-${{ needs.get-next-version.outputs.new-release-version }}.tar.gz
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf #v3.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@6524bf65af31da8d45b59e8c27de4bd072b392f5 #v3.8.0
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3.3.0
         with:
-          python-version: ${{ env.PYTHON_RUNTIME_VERSION }}
-      - name: Insert version variables into Python
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set build info
         run: |
-          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" device_discovery/version.py
-          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" device_discovery/version.py
-          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" device_discovery/version.py
-      - name: Display contents of version.py
-        run: cat device_discovery/version.py
-      - name: Build sdist 
-        run: |
-          pip install toml-cli
-          toml set --toml-path pyproject.toml project.version ${{ env.BUILD_VERSION }}
-          cat pyproject.toml | grep version
-          python3 -m pip install --upgrade build
-          python3 -m build --sdist --outdir dist/
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          echo $BUILD_COMMIT > ./snmp-discovery/version/BUILD_COMMIT.txt
+          echo $BUILD_VERSION > ./snmp-discovery/version/BUILD_VERSION.txt
+
+      - name: Build image and push
+        uses: docker/build-push-action@48aba3b46d1b1fec4febb7c5d0c644b249a11355 #v6.10.0
         with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: ${{env.APP_NAME}}/dist/${{ env.OUTPUT_FILENAME }}
-          retention-days: 30
-          if-no-files-found: error
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@67339c736fd9354cd4f8cb0b744f2b82a74b5c70 #v1.12.3
-        with:
-          packages-dir: ${{env.APP_NAME}}/dist
+          context: snmp-discovery
+          file: snmp-discovery/docker/Dockerfile
+          platforms: linux/amd64, linux/arm64
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            netboxlabs/snmp-discovery:latest
+            netboxlabs/snmp-discovery:${{ env.BUILD_VERSION }}
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
 
   semantic-release:
     name: Semantic release
-    needs: [ build ]
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -64,7 +64,8 @@ jobs:
                     { "message": "*", "release": "patch"},
                     { "message": "fix*", "release": "patch" },
                     { "message": "feat*", "release": "minor" },
-                    { "message": "perf*",  "release": "major" }
+                    { "message": "perf*",  "release": "major" },
+                    { "message": "major*",  "release": "major" }
                   ]
                 }],
                 "@semantic-release/release-notes-generator",
@@ -204,7 +205,8 @@ jobs:
                     { "message": "*", "release": "patch"},
                     { "message": "fix*", "release": "patch" },
                     { "message": "feat*", "release": "minor" },
-                    { "message": "perf*",  "release": "major" }
+                    { "message": "perf*",  "release": "major" },
+                    { "message": "major*",  "release": "major" }
                   ]
                 }],
                 "@semantic-release/release-notes-generator",
