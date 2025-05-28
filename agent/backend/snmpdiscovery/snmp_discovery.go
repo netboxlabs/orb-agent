@@ -170,7 +170,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	var version string
 	var readinessErr error
-	for backoff := range readinessBackoff {
+	for backoff := 1; backoff <= readinessBackoff; backoff++ {
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("snmp-discovery readiness ok, got version ",
