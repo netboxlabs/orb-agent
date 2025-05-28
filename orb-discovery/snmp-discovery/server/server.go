@@ -105,7 +105,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 		return
 	}
 
-	s.logger.Info("Found %d policies", "policyCount", len(policies))
+	s.logger.Info("Received policies", "policyCount", len(policies))
 
 	rPolicies := []string{}
 	for name, policy := range policies {

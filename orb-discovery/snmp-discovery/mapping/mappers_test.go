@@ -372,7 +372,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					OID:    "1.3.6.1.2.1.2.2.1.6.1",
 					Index:  "1",
 					Parent: "1.3.6.1.2.1.2.2.1.6",
-					Value:  "00:11:22:33:44:55",
+					Value:  "\\x00\\x11\\x22\\x33\\x44\\x55",
 					Type:   mapping.OctetString,
 				},
 				"1.3.6.1.2.1.2.2.1.7.1": {

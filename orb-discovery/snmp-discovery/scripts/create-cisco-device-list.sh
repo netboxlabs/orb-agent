@@ -21,7 +21,7 @@ grep "1\.3\.6\.1\.4\.1\.9\.1\." "$TMPFILE" | while read -r line; do
   ID=$(echo "$OID" | awk -F. '{print $NF}')
   echo "  - id: $ID"
   echo "    oid: $OID"
-  echo "    name: $NAME"
+  echo "    name: \"$NAME\""
 done
 
 # Clean up

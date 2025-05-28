@@ -171,6 +171,10 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					interfaceEntity.Name = &value.Value
 					fieldFound = true
 				case "speed":
+					if value.Value == "" {
+						logger.Debug("Speed is empty", "value", value.Value)
+						continue
+					}
 					speed, err := strconv.Atoi(value.Value)
 					if err != nil {
 						logger.Warn("Error converting speed to int", "error", err, "value", value.Value)
@@ -180,8 +184,13 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					interfaceEntity.Speed = &speed64
 					fieldFound = true
 				case "macAddress":
+					macAddress, err := formatMACAddress(value.Value)
+					if err != nil {
+						logger.Warn("Error formatting mac address", "error", err, "value", value.Value)
+						continue
+					}
 					interfaceEntity.PrimaryMacAddress = &diode.MACAddress{
-						MacAddress: &value.Value,
+						MacAddress: &macAddress,
 					}
 					fieldFound = true
 				case "adminStatus":
@@ -201,6 +210,20 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	}
 
 	return interfaceEntity
+}
+
+func formatMACAddress(rawStr string) (string, error) {
+	// Decode escaped characters into actual bytes
+	unquoted, err := strconv.Unquote(`"` + rawStr + `"`)
+	if err != nil {
+		return "", fmt.Errorf("failed to unquote string: %v", err)
+	}
+
+	macParts := make([]string, len(unquoted))
+	for i := 0; i < len(unquoted); i++ {
+		macParts[i] = fmt.Sprintf("%02x", unquoted[i])
+	}
+	return strings.Join(macParts, ":"), nil
 }
 
 // DeviceMapper is a struct that maps devices to entities

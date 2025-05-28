@@ -160,7 +160,6 @@ func (m *Manager) HasPolicy(name string) bool {
 // StartPolicy starts the policy
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	m.logger.Debug("Starting policy", "policy", policy)
-	m.logger.Debug("Starting policy", "policy", policy)
 	if len(policy.Scope.Targets) == 0 {
 		return fmt.Errorf("%s : no targets found in the policy", name)
 	}

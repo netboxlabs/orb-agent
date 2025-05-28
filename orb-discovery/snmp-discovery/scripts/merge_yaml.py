@@ -50,7 +50,7 @@ def parse_value(val):
     # Try to convert to int if possible
     if re.match(r'^\d+$', val):
         return int(val)
-    return val
+    return re.sub(r'[^a-zA-Z0-9\s]', '', val)
 
 def merge_dicts(dicts):
     merged = {}

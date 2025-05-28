@@ -95,7 +95,7 @@ func (r *Runner) run() {
 	expandedTargets := r.expandTargetRanges(r.scope.Targets)
 
 	entities = r.queryTargets(expandedTargets, objectIDs, mapper, entities)
-	r.logger.Info("SNMP crawl complete.")
+	r.logger.Info("SNMP crawl complete", slog.Any("policy", r.ctx.Value(policyKey)), slog.Any("entityCount", len(entities)))
 
 	if len(entities) == 0 {
 		r.logger.Info("No entities to ingest", slog.Any("policy", r.ctx.Value(policyKey)))
