@@ -55,11 +55,8 @@ Current supported defaults:
 | site  | str | NetBox Site Name (defaults to 'undefined' if not specified) |
 | role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
 | if_type | str | Interface Type (defaults to 'other' if not specified) |
-<<<<<<< HEAD
-=======
 | location | str | Device location |
 | tenant | str | Device tenant |
->>>>>>> origin/develop
 | description | str  | General description   |
 | comments   | str  | General comments       |
 | tags       | list | List of tags           |
