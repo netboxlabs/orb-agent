@@ -35,7 +35,8 @@ orb:
 Run command:
 ```sh
  docker run -v /local/orb:/opt/orb/ \
- -e DIODE_API_KEY={YOUR_API_KEY} \
+ -e DIODE_CLIENT_ID={YOUR_DIODE_CLIENT_ID} \
+ -e DIODE_CLIENT_SECRET={YOUR_DIODE_CLIENT_SECRET} \
  -e PASS={DEVICE_PASSWORD} \
  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
@@ -62,7 +63,8 @@ napalm-ros-0.3.2.tar.gz # try install from a tar.gz
 Run command:
 ```sh
  docker run -v /local/orb:/opt/orb/ \
- -e DIODE_API_KEY={YOUR_API_KEY} \
+ -e DIODE_CLIENT_ID={YOUR_DIODE_CLIENT_ID} \
+ -e DIODE_CLIENT_SECRET={YOUR_DIODE_CLIENT_SECRET} \
  -e PASS={DEVICE_PASSWORD} \
  -e INSTALL_DRIVERS_PATH=/opt/orb/drivers.txt \
  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
@@ -96,7 +98,8 @@ orb:
 Run command:
 ```sh
  docker run -v /local/orb:/opt/orb/ \
- -e DIODE_API_KEY={YOUR_API_KEY} \
+ -e DIODE_CLIENT_ID={YOUR_DIODE_CLIENT_ID} \
+ -e DIODE_CLIENT_SECRET={YOUR_DIODE_CLIENT_SECRET} \
  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
@@ -146,7 +149,8 @@ nbl-custom-worker-1.0.2.tar.gz # try install from a tar.gz
 Run command:
 ```sh
  docker run -v /local/orb:/opt/orb/ \
- -e DIODE_API_KEY={YOUR_API_KEY} \
+ -e DIODE_CLIENT_ID={YOUR_DIODE_CLIENT_ID} \
+ -e DIODE_CLIENT_SECRET={YOUR_DIODE_CLIENT_SECRET} \
  -e INSTALL_WORKERS_PATH=/opt/orb/workers.txt \
  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
