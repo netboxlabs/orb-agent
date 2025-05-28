@@ -67,7 +67,7 @@ config:
   schedule: "*/5 * * * *"  # Optional: Cron expression for scheduling
   retries: 3  # Optional: Number of SNMP retries (default: 0)
   timeout: 2
-  device_file: /opt/orb/devices.yaml # data about device types
+  devices_file: /opt/orb/devices.yaml # data about device types
   defaults:  # Optional: Default values for entities
     description: "Global description"  # Optional: Global description for all entities
     comments: "Global comments"  # Optional: Global comments for all entities
