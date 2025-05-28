@@ -40,7 +40,8 @@ type snmpDiscoveryBackend struct {
 	apiProtocol string
 
 	diodeTarget        string
-	diodeAPIKey        string
+	diodeClientID      string
+	diodeClientSecret  string
 	diodeAppNamePrefix string
 
 	startTime  time.Time
@@ -79,7 +80,8 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	}
 
 	d.diodeTarget = common.Diode.Target
-	d.diodeAPIKey = common.Diode.APIKey
+	d.diodeClientID = common.Diode.ClientID
+	d.diodeClientSecret = common.Diode.ClientSecret
 	d.diodeAppNamePrefix = common.Diode.AgentName
 
 	return nil
@@ -105,13 +107,12 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		"--host", d.apiHost,
 		"--port", d.apiPort,
 		"--diode-target", d.diodeTarget,
-		"--diode-api-key", "********",
+		"--diode-client-id", d.diodeClientID,
+		"--diode-client-secret", d.diodeClientSecret,
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 	}
 
 	d.logger.Info("snmp-discovery startup", slog.Any("arguments", pvOptions))
-
-	pvOptions[7] = d.diodeAPIKey
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
