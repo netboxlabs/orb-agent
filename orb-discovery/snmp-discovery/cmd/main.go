@@ -50,9 +50,9 @@ func main() {
 	logFormat := flag.String("log-format", "TEXT", "log format")
 	help := flag.Bool("help", false, "show this help")
 	// Add new flags for metrics
-	metricsEndpoint := flag.String("metrics-endpoint", "", "OpenTelemetry metrics endpoint (e.g. localhost:4317)."+
-		" Environment variables can be used by wrapping them in ${} (e.g. ${METRICS_ENDPOINT})")
-	metricsExportPeriod := flag.Int("metrics-export-period", 10, "OpenTelemetry metrics export period in seconds")
+	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
+		" Environment variables can be used by wrapping them in ${} (e.g. ${OTEL_ENDPOINT})")
+	otelExportPeriod := flag.Int("otel-export-period", 10, "Period in seconds between OpenTelemetry exports")
 
 	flag.Parse()
 
@@ -86,7 +86,7 @@ func main() {
 	logger := config.NewLogger(*logLevel, *logFormat)
 
 	// Initialize metrics
-	if err := metrics.SetupMetricsExport(ctx, logger, resolveEnv(*metricsEndpoint), *metricsExportPeriod); err != nil {
+	if err := metrics.SetupMetricsExport(ctx, logger, resolveEnv(*otelEndpoint), *otelExportPeriod); err != nil {
 		logger.Error("failed to setup metrics export", "error", err)
 		os.Exit(1)
 	}

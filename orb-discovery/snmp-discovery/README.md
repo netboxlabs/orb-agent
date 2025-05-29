@@ -20,8 +20,9 @@ Usage of snmp-discovery:
     	log format (default "TEXT")
   -log-level string
     	log level (default "INFO")
-  -port int
-    	server port (default 8070)
+  -otel-endpoint string    # OpenTelemetry exporter endpoint
+  -otel-export-period int
+    	Period in seconds between OpenTelemetry exports (default 10)
 ```
 
 ## Configuration
@@ -137,3 +138,63 @@ The `authentication` section configures SNMP authentication settings:
 - `authKey`: The authentication key (required for v3)
 - `privProtocol`: The privacy protocol (required for v3)
 - `privKey`: The privacy key (required for v3)
+
+### Metrics
+
+The SNMP discovery service includes comprehensive metrics collection using OpenTelemetry. Metrics can be configured using command-line flags or environment variables.
+
+#### Available Metrics
+
+The following metrics are collected:
+
+- **discovery_attempts**: Counter of SNMP discovery attempts
+- **discovery_success**: Counter of successful SNMP discoveries
+- **discovery_failure**: Counter of failed SNMP discoveries
+- **policy_executions**: Counter of policy executions
+- **api_requests**: Counter of API requests
+- **discovery_latency**: Histogram of SNMP discovery latency
+- **api_response_latency**: Histogram of API response latency
+- **active_policies**: UpDown counter of active policies
+
+#### Configuration Options
+
+Metrics can be configured using the following options:
+
+1. **Command-line flags:**
+   ```bash
+   -otel-endpoint string    # OpenTelemetry exporter endpoint
+   -otel-export-period int  # Export period in seconds
+   ```
+
+2. **Environment variables:**
+   ```bash
+   OTEL_ENDPOINT="http://localhost:4317"  # OpenTelemetry exporter endpoint
+   OTEL_EXPORT_PERIOD=10                  # Export period in seconds
+   ```
+
+#### Example Configuration
+
+To enable metrics export to an OpenTelemetry collector:
+
+```bash
+snmp-discovery \
+  -otel-endpoint="http://localhost:4317" \
+  -otel-export-period=10
+```
+
+Or using environment variables:
+
+```bash
+export OTEL_ENDPOINT="http://localhost:4317"
+export OTEL_EXPORT_PERIOD=10
+snmp-discovery
+```
+
+#### Troubleshooting
+
+If metrics are not being exported:
+
+1. Verify the OpenTelemetry collector is running and accessible
+2. Check the metrics endpoint URL is correct
+3. Ensure the export period is set appropriately
+4. Check the application logs for any metrics-related errors
