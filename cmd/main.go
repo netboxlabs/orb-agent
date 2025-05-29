@@ -16,6 +16,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/backend/snmpdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/worker"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/version"
@@ -37,6 +38,7 @@ func init() {
 	devicediscovery.Register()
 	networkdiscovery.Register()
 	worker.Register()
+	snmpdiscovery.Register()
 }
 
 // Version prints the version of the agent

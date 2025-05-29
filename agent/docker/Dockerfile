@@ -1,6 +1,7 @@
 ARG PKTVISOR_TAG=develop
 ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
+ARG SNMP_DISCOVERY_TAG=latest
 ARG GO_VERSION=1.24
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS builder
@@ -22,6 +23,8 @@ RUN --mount=target=. \
 FROM netboxlabs/opentelemetry-infinity:${OTEL_TAG} AS otlpinf
 
 FROM netboxlabs/network-discovery:${NETWORK_DISCOVERY_TAG} AS network-discovery
+
+FROM netboxlabs/snmp-discovery:${SNMP_DISCOVERY_TAG} AS snmp-discovery
 
 FROM orbcommunity/pktvisor:${PKTVISOR_TAG} AS pktvisor
 
@@ -47,6 +50,7 @@ COPY --from=pktvisor /iana /iana
 COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
+COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-discovery
 
 RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 
