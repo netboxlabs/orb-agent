@@ -11,10 +11,12 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 type MockDiodeClient struct {
@@ -50,7 +52,13 @@ func (m *MockHost) Close() error {
 	return nil
 }
 
+func setupTestMetrics(t *testing.T) {
+	err := metrics.SetupMetricsExport(context.Background(), slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})), "http://localhost:4317", 10)
+	require.NoError(t, err)
+}
+
 func TestNewRunner(t *testing.T) {
+	setupTestMetrics(t)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	mockClient := new(MockDiodeClient)
 	cron := "0 0 * * *"
@@ -89,25 +97,34 @@ func TestNewRunner(t *testing.T) {
 }
 
 func TestRunnerRun(t *testing.T) {
+	setupTestMetrics(t)
 	tests := []*struct {
-		desc         string
-		mockResponse diodepb.IngestResponse
-		mockError    error
+		desc          string
+		mockResponse  diodepb.IngestResponse
+		mockError     error
+		expectSuccess bool
+		expectFailure bool
 	}{
 		{
-			desc:         "no error",
-			mockResponse: diodepb.IngestResponse{},
-			mockError:    nil,
+			desc:          "no error",
+			mockResponse:  diodepb.IngestResponse{},
+			mockError:     nil,
+			expectSuccess: true,
+			expectFailure: false,
 		},
 		{
-			desc:         "local error",
-			mockResponse: diodepb.IngestResponse{},
-			mockError:    errors.New("ingestion failed"),
+			desc:          "local error",
+			mockResponse:  diodepb.IngestResponse{},
+			mockError:     errors.New("ingestion failed"),
+			expectSuccess: false,
+			expectFailure: true,
 		},
 		{
-			desc:         "server error",
-			mockResponse: diodepb.IngestResponse{Errors: []string{"fail1", "fail2"}},
-			mockError:    nil,
+			desc:          "server error",
+			mockResponse:  diodepb.IngestResponse{Errors: []string{"fail1", "fail2"}},
+			mockError:     nil,
+			expectSuccess: false,
+			expectFailure: true,
 		},
 	}
 	for _, tt := range tests {
@@ -188,11 +205,22 @@ func TestRunnerRun(t *testing.T) {
 			// Stop the process
 			err = runner.Stop()
 			assert.NoError(t, err, "Runner.Stop should not return an error")
+
+			// Verify metrics were recorded
+			if tt.expectSuccess {
+				assert.NotNil(t, metrics.GetDiscoverySuccess())
+			}
+			if tt.expectFailure {
+				assert.NotNil(t, metrics.GetDiscoveryFailure())
+			}
+			assert.NotNil(t, metrics.GetDiscoveryAttempts())
+			assert.NotNil(t, metrics.GetDiscoveryLatency())
 		})
 	}
 }
 
 func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
+	setupTestMetrics(t)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockDiodeClient)
 	ctx := context.Background()
@@ -282,6 +310,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 }
 
 func TestRunnerWalkError(t *testing.T) {
+	setupTestMetrics(t)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockDiodeClient)
 	ctx := context.Background()

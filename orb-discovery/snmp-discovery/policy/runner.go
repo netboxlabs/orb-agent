@@ -10,6 +10,7 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/targets"
 )
@@ -114,15 +115,32 @@ func (r *Runner) run() {
 
 func (r *Runner) queryTargets(expandedTargets []config.Target, objectIDs map[string]int, mapper *mapping.ObjectIDMapper, entities []diode.Entity) []diode.Entity {
 	for _, target := range expandedTargets {
+		// Track discovery attempt
+		metrics.GetDiscoveryAttempts().Add(r.ctx, 1)
+
+		// Start timing the discovery
+		startTime := time.Now()
+
 		host := snmp.NewHost(target.Host, target.Port, r.config.Retries, &r.scope.Authentication, r.logger, r.ClientFactory)
 		oids, err := host.Walk(objectIDs)
 		if err != nil {
 			r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
+			// Track failed discovery
+			metrics.GetDiscoveryFailure().Add(r.ctx, 1)
 			continue
 		}
 
+		// Track successful discovery
+		metrics.GetDiscoverySuccess().Add(r.ctx, 1)
+
+		// Record discovery latency
+		metrics.GetDiscoveryLatency().Record(r.ctx, time.Since(startTime).Seconds())
+
 		entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 		entities = append(entities, entitiesForTarget...)
+
+		// Update discovered hosts gauge
+		metrics.GetDiscoveredHosts().Record(r.ctx, int64(len(entitiesForTarget)))
 	}
 	return entities
 }
