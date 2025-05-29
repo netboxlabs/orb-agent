@@ -83,6 +83,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 // run runs the policy
 func (r *Runner) run() {
+	// Track policy execution
+	metrics.GetPolicyExecutions().Add(r.ctx, 1)
+
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
