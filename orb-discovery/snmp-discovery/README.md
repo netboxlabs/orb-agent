@@ -16,6 +16,8 @@ Usage of snmp-discovery:
     	show this help
   -host string
     	server host (default "0.0.0.0")
+  -port int
+      server port (default 8070)
   -log-format string
     	log format (default "TEXT")
   -log-level string
