@@ -13,6 +13,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// SNMPDefaultPort is the default SNMP port
+	SNMPDefaultPort = 161
+)
+
 // Manager represents the policy manager
 type Manager struct {
 	policies map[string]*Runner
@@ -48,8 +53,8 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		}
 	}
 
-	// Load the mapping config
 	for name, policy := range payload.Policies {
+		// Load the mapping config
 		mappingConfig, err := m.loadMappingConfig(policy)
 		if err != nil {
 			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
@@ -57,19 +62,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 
 		// Create a new policy with updated mappings
 		updatedPolicy := payload.Policies[name]
-		updatedPolicy.Scope.Mappings = mappingConfig.Entries
-		payload.Policies[name] = updatedPolicy
-	}
-
-	// Load the mapping config
-	for name, policy := range payload.Policies {
-		mappingConfig, err := m.loadMappingConfig(policy)
-		if err != nil {
-			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
-		}
-
-		// Create a new policy with updated mappings
-		updatedPolicy := payload.Policies[name]
+		m.applyDefaults(&updatedPolicy)
 		updatedPolicy.Scope.Mappings = mappingConfig.Entries
 		payload.Policies[name] = updatedPolicy
 	}
@@ -77,6 +70,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	return payload.Policies, nil
 }
 
+// loadMappingConfig loads the mapping config from the file
 func (m *Manager) loadMappingConfig(policy config.Policy) (config.Mapping, error) {
 	m.logger.Debug("Loading mapping config", "mappingConfig", policy.Scope.MappingConfig)
 	mappingConfigFileContents, err := os.ReadFile(policy.Scope.MappingConfig)
@@ -92,6 +86,17 @@ func (m *Manager) loadMappingConfig(policy config.Policy) (config.Mapping, error
 	return mappingConfig, nil
 }
 
+// applyDefaults applies the default values to the policy
+// Note: this is different to the default mapping values (comments, tags etc)
+func (m *Manager) applyDefaults(policy *config.Policy) {
+	for i, target := range policy.Scope.Targets {
+		if target.Port == 0 {
+			policy.Scope.Targets[i].Port = SNMPDefaultPort
+		}
+	}
+}
+
+// validatePolicy validates the policy
 func (m *Manager) validatePolicy(policy config.Policy) error {
 	if policy.Scope.Authentication.ProtocolVersion == "" {
 		return fmt.Errorf("missing protocol version")
@@ -106,8 +111,6 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			return fmt.Errorf("missing community")
 		}
 	}
-
-	// m.logger.Info("validating policy", "policy", policy.Scope.Authentication)
 
 	if policy.Scope.Authentication.ProtocolVersion == "SNMPv3" {
 		if policy.Scope.Authentication.SecurityLevel != "noAuthNoPriv" &&

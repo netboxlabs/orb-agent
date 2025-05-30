@@ -58,6 +58,7 @@ func TestManagerParsePolicies(t *testing.T) {
               targets:
                 - host: 192.168.1.1
                   port: 162
+                - host: 192.168.1.2
               authentication:
                 protocol_version: SNMPv2c
                 community: public
@@ -77,6 +78,8 @@ func TestManagerParsePolicies(t *testing.T) {
 		assert.Equal(t, uint16(162), policies["policy1"].Scope.Targets[0].Port)
 		assert.Equal(t, snmp.ProtocolVersion2c, policies["policy1"].Scope.Authentication.ProtocolVersion)
 		assert.Equal(t, "public", policies["policy1"].Scope.Authentication.Community)
+		assert.Equal(t, "192.168.1.2", policies["policy1"].Scope.Targets[1].Host)
+		assert.Equal(t, uint16(161), policies["policy1"].Scope.Targets[1].Port)
 	})
 
 	t.Run("Invalid MappingConfig", func(t *testing.T) {

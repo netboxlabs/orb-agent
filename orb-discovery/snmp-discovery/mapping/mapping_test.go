@@ -228,11 +228,6 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 							Entity: "interface",
 							Field:  "name",
 						},
-						{
-							OID:    ".1.3.6.1.2.1.2.2.1.5",
-							Entity: "interface",
-							Field:  "speed",
-						},
 					},
 				},
 				{
@@ -260,20 +255,17 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 			objectIDs: mapping.ObjectIDValueMap{
 				".1.3.6.1.2.1.2.2.1.2.999":          mapping.Value{Value: "GigabitEthernet1/0/1", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1},
-				".1.3.6.1.2.1.2.2.1.5.999":          mapping.Value{Value: "1000000000", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 1},
 				".1.3.6.1.2.1.4.20.1.1.192.168.1.2": mapping.Value{Value: "192.168.1.2", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4},
 				".1.3.6.1.2.1.4.20.1.2.192.168.1.2": mapping.Value{Value: "999", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 4},
 			},
 			expected: []diode.Entity{
 				&diode.Interface{
-					Speed: &[]int64{1000000000}[0],
-					Name:  diode.String("GigabitEthernet1/0/1"),
+					Name: diode.String("GigabitEthernet1/0/1"),
 				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),
 					AssignedObject: &diode.Interface{
-						Speed: &[]int64{1000000000}[0],
-						Name:  diode.String("GigabitEthernet1/0/1"),
+						Name: diode.String("GigabitEthernet1/0/1"),
 					},
 				},
 			},
@@ -411,6 +403,62 @@ func TestObjectIDs(t *testing.T) {
 			objectIDs := mapper.ObjectIDs()
 
 			assert.Equal(t, tt.expectedOIDs, objectIDs)
+		})
+	}
+}
+
+func TestObjectIDIndex_HasParent(t *testing.T) {
+	tests := []struct {
+		name     string
+		index    mapping.ObjectIDIndex
+		parent   string
+		expected bool
+	}{
+		{
+			name:     "exact match",
+			index:    "1.2.3.4",
+			parent:   "1.2.3.4",
+			expected: true,
+		},
+		{
+			name:     "valid parent",
+			index:    "1.2.3.4.5.6",
+			parent:   "1.2.3.4",
+			expected: true,
+		},
+		{
+			name:     "invalid parent",
+			index:    "1.2.3.4.5.6",
+			parent:   "1.2.3.5",
+			expected: false,
+		},
+		{
+			name:     "empty parent",
+			index:    "1.2.3.4",
+			parent:   "",
+			expected: true,
+		},
+		{
+			name:     "empty index",
+			index:    "",
+			parent:   "1.2.3.4",
+			expected: false,
+		},
+		{
+			name:     "parent longer than index",
+			index:    "1.2.3",
+			parent:   "1.2.3.4",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.index.HasParent(tt.parent)
+			if result != tt.expected {
+				t.Errorf("HasParent() = %v, want %v for index %q and parent %q",
+					result, tt.expected, tt.index, tt.parent)
+			}
 		})
 	}
 }

@@ -68,6 +68,7 @@ func (r *EntityRegistry) GetOrCreateEntity(entityType EntityType, index ObjectID
 	}
 	if r.entities[entityType][index] == nil {
 		entity, err := createEntity(entityType)
+		r.logger.Debug("Entity not found, creating", "entityType", entityType, "index", index, "entity", entity)
 		if err != nil {
 			r.logger.Warn("Error creating entity", "error", err, "entityType", entityType, "index", index)
 			return nil
@@ -116,7 +117,8 @@ type Entry struct {
 
 // MapToEntity maps a value to an entity
 func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) []diode.Entity {
-	logger.Debug("Mapping value to entity", "value", pdus)
+	logger.Debug("Mapping value to entity", "entity", m.Entity, "value", pdus)
+
 	if m.Mapper == nil {
 		logger.Warn("No mapper found for entity. Ignoring.", "entity", m.Entity)
 		return nil
@@ -235,7 +237,6 @@ func NewObjectIDIndexDetails(index string) *ObjectIDIndexDetails {
 // MapObjectIDsToEntity maps ObjectIDs to entities
 func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diode.Entity {
 	objectIDIndexMap := m.groupByObjectIDIndex(objectIDs)
-
 	entities := make([]diode.Entity, 0, len(objectIDIndexMap))
 	for index, value := range objectIDIndexMap {
 		m.logger.Debug("Mapping objectIDIndex", "objectIDIndex", index, "values", value.Values)

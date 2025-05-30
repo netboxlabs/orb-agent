@@ -80,7 +80,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	for objectID, value := range values {
 		logger.Debug("Mapping value to ipAddress entity", "objectID", objectID, "value", value)
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
-			if objectID.HasParent(mappingEntry.OID) {
+			if objectID.HasParent(propertyMappingEntry.OID) {
 				switch propertyMappingEntry.Field {
 				case "address":
 					x := fmt.Sprintf("%s/32", string(value.Index))
