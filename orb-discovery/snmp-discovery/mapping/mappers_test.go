@@ -303,8 +303,7 @@ func TestIPAddressMapper_Map(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
 			mapper := &mapping.IPAddressMapper{}
-			registry.SetDefaults(tt.defaults)
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
 
 			if tt.expectError {
 				assert.Nil(t, entity)
@@ -535,11 +534,8 @@ func TestInterfaceMapper_Map(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := slog.Default()
 			registry := mapping.NewEntityRegistry(logger)
-			if tt.defaults != nil {
-				registry.SetDefaults(tt.defaults)
-			}
 			mapper := &mapping.InterfaceMapper{}
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
 
 			if tt.expectError {
 				assert.Nil(t, entity)
@@ -756,8 +752,7 @@ func TestDeviceMapper_Map(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
-			registry.SetDefaults(tt.defaults)
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
 
 			if tt.expectError {
 				assert.Nil(t, entity)

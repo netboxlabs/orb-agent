@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 )
 
@@ -38,6 +39,23 @@ func init() {
 	gin.SetMode(gin.ReleaseMode)
 }
 
+// metricsMiddleware is a middleware that records API metrics
+func metricsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Record API request
+		metrics.GetAPIRequests().Add(c.Request.Context(), 1)
+
+		// Start timing the request
+		startTime := time.Now()
+
+		// Process request
+		c.Next()
+
+		// Record API response latency
+		metrics.GetAPIResponseLatency().Record(c.Request.Context(), time.Since(startTime).Seconds())
+	}
+}
+
 // NewServer returns a new snmp-discovery server
 func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manager, version string) *Server {
 	server := &Server{
@@ -51,6 +69,9 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		host:   host,
 		port:   port,
 	}
+
+	// Add metrics middleware
+	server.router.Use(metricsMiddleware())
 
 	v1 := server.router.Group("/api/v1")
 	{
