@@ -47,6 +47,7 @@ type Scope struct {
 	TopPorts     *int     `yaml:"top_ports,omitempty"`
 	ScanTypes    []string `yaml:"scan_types,omitempty"`
 	MaxRetries   *int     `yaml:"max_retries,omitempty"`
+	DNSServers   []string `yaml:"dns_servers,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy
@@ -57,6 +58,7 @@ type Defaults struct {
 	Description string   `yaml:"description,omitempty"`
 	Comments    string   `yaml:"comments,omitempty"`
 	Tags        []string `yaml:"tags,omitempty"`
+	NetworkMask *int     `yaml:"network_mask,omitempty"`
 }
 
 // PolicyConfig represents the configuration of a policy

@@ -104,6 +104,10 @@ func (r *Runner) run() {
 		nmap.WithPortExclusions(r.scope.ExcludePorts...)
 	}
 
+	if len(r.scope.DNSServers) > 0 {
+		options = append(options, nmap.WithCustomDNSServers(r.scope.DNSServers...))
+	}
+
 	if r.scope.FastMode != nil && *r.scope.FastMode {
 		options = append(options, nmap.WithFastMode())
 	}
@@ -114,6 +118,11 @@ func (r *Runner) run() {
 
 	if r.scope.TopPorts != nil {
 		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
+	}
+
+	NetMask := "/32"
+	if r.config.Defaults.NetworkMask != nil && *r.config.Defaults.NetworkMask > 0 {
+		NetMask = fmt.Sprintf("/%d", *r.config.Defaults.NetworkMask)
 	}
 
 	hasOtherScans := false
@@ -175,6 +184,7 @@ func (r *Runner) run() {
 
 	options = append(options, nmap.WithNonInteractive())
 	options = append(options, nmap.WithTargets(r.scope.Targets...))
+	options = append(options, nmap.WithForcedDNSResolution())
 
 	scanner, err := nmap.NewScanner(ctx, options...)
 	if err != nil {
@@ -233,7 +243,7 @@ func (r *Runner) run() {
 		r.logger.Debug("processing host", slog.Any("host_address", host.Addresses), slog.Any("host_ports", host.Ports),
 			slog.Any("host_hostnames", host.Hostnames), slog.String("policy", policyName))
 		ip := &diode.IPAddress{
-			Address: diode.String(host.Addresses[0].Addr + "/32"),
+			Address: diode.String(host.Addresses[0].Addr + NetMask),
 		}
 		if r.config.Defaults.Description != "" {
 			ip.Description = diode.String(r.config.Defaults.Description)
@@ -265,6 +275,20 @@ func (r *Runner) run() {
 			ip.Tags = tags
 		}
 
+		if host.Hostnames != nil {
+			var fallbackHostname string
+			for _, hostname := range host.Hostnames {
+				fallbackHostname = hostname.Name
+				if hostname.Type == "PTR" {
+					ip.DnsName = diode.String(hostname.Name)
+					break
+				}
+			}
+			if ip.DnsName == nil && fallbackHostname != "" {
+				ip.DnsName = diode.String(fallbackHostname)
+			}
+		}
+
 		if !hasComments {
 			var metadata config.HostMetadata
 
@@ -274,15 +298,6 @@ func (r *Runner) run() {
 					metadata.ExtraPorts[i] = config.ExtraPort{
 						State: extraPort.State,
 						Count: extraPort.Count,
-					}
-				}
-			}
-			if host.Hostnames != nil {
-				metadata.Hostnames = make([]config.Hostname, len(host.Hostnames))
-				for i, hostname := range host.Hostnames {
-					metadata.Hostnames[i] = config.Hostname{
-						Name: hostname.Name,
-						Type: hostname.Type,
 					}
 				}
 			}

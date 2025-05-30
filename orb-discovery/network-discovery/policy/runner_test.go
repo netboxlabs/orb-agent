@@ -132,11 +132,17 @@ func TestRunnerWithOptions(t *testing.T) {
 		{
 			name: "with ports and exclude ports",
 			policy: config.Policy{
-				Config: config.PolicyConfig{},
+				Config: config.PolicyConfig{
+					Defaults: config.Defaults{
+						Description: "Test with ports",
+						NetworkMask: intPtr(24),
+					},
+				},
 				Scope: config.Scope{
 					Targets:      []string{"localhost"},
 					Ports:        []string{"80", "443"},
 					ExcludePorts: []string{"22"},
+					DNSServers:   []string{"8.8.8.8"},
 				},
 			},
 		},
