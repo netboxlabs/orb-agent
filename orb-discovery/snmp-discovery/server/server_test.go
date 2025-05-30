@@ -12,10 +12,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 type MockClient struct {
@@ -37,6 +39,9 @@ func TestServerConfigureAndStart(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	client := new(MockClient)
 	policyManager := policy.NewManager(ctx, logger, client)
+
+	err := setupTestMeter(t)
+	require.NoError(t, err)
 
 	srv := server.NewServer("localhost", 8081, logger, policyManager, "1.0.0")
 	srv.Start()
@@ -104,6 +109,9 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 		_ = os.Remove("valid_mapping.yaml")
 	}()
 
+	err := setupTestMeter(t)
+	require.NoError(t, err)
+
 	w := httptest.NewRecorder()
 	request, _ := http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/x-yaml")
@@ -164,6 +172,14 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	assert.Contains(t, w.Body.String(), `policy not found`)
+}
+
+// setupTestMeter creates a no-op meter provider for testing
+func setupTestMeter(_ *testing.T) error {
+	ctx := context.Background()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// Use the no-op meter provider for testing to avoid actual metrics export
+	return metrics.SetupMetricsExport(ctx, logger, "localhost:4317", 10)
 }
 
 func writeMappingConfigFile(filename string) {
