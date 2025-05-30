@@ -45,7 +45,7 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 	)
 	meterProvider = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	otel.SetMeterProvider(meterProvider)
-	meter = otel.Meter("network-discovery")
+	meter = otel.Meter("snmp-discovery")
 	logger = logg
 	return nil
 }
