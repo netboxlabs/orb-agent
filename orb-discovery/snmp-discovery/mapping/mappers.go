@@ -71,7 +71,7 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 }
 
 // Map maps IP addresses to entities
-func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity {
+func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
 	logger.Debug("Mapping values to ipAddress entity", "values", values, "mappingEntry", mappingEntry)
 	ipAddress := diode.IPAddress{}
 
@@ -107,7 +107,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	}
 
 	if fieldFound {
-		m.applyDefaults(&ipAddress, entityRegistry.GetDefaults())
+		m.applyDefaults(&ipAddress, defaults)
 	}
 
 	return &ipAddress
@@ -157,7 +157,7 @@ func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *confi
 }
 
 // Map maps interfaces to entities
-func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity {
+func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
 	logger.Debug("Mapping values to interface entity", "values", values, "mappingEntry", mappingEntry)
 	interfaceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), getIndex(values)).(*diode.Interface)
 
@@ -206,7 +206,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 
 	// Apply defaults if available
 	if fieldFound {
-		m.applyDefaults(interfaceEntity, entityRegistry.GetDefaults())
+		m.applyDefaults(interfaceEntity, defaults)
 	}
 
 	return interfaceEntity
@@ -304,7 +304,7 @@ func NewDeviceMapper(devices data.DeviceDataRetreiver) *DeviceMapper {
 }
 
 // Map maps devices to entities
-func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity {
+func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
 	logger.Debug("Mapping values to device entity", "values", values, "mappingEntry", mappingEntry)
 	deviceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), getIndex(values)).(*diode.Device)
 
@@ -356,7 +356,7 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 
 	// Apply defaults if available
 	if fieldFound {
-		m.applyDefaults(deviceEntity, entityRegistry.GetDefaults())
+		m.applyDefaults(deviceEntity, defaults)
 	}
 
 	return deviceEntity

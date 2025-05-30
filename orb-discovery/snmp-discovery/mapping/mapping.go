@@ -50,7 +50,6 @@ const (
 type EntityRegistry struct {
 	entities map[EntityType]map[ObjectIDIndex]diode.Entity
 	logger   *slog.Logger
-	defaults *config.Defaults
 }
 
 // NewEntityRegistry creates a new EntityRegistry
@@ -59,16 +58,6 @@ func NewEntityRegistry(logger *slog.Logger) *EntityRegistry {
 		entities: make(map[EntityType]map[ObjectIDIndex]diode.Entity),
 		logger:   logger,
 	}
-}
-
-// SetDefaults sets the defaults for the registry
-func (r *EntityRegistry) SetDefaults(defaults *config.Defaults) {
-	r.defaults = defaults
-}
-
-// GetDefaults returns the defaults for the registry
-func (r *EntityRegistry) GetDefaults() *config.Defaults {
-	return r.defaults
 }
 
 // GetOrCreateEntity returns an entity from the EntityRegistry or creates a new one if it doesn't exist
@@ -111,6 +100,7 @@ type ObjectIDMapper struct {
 	mapping  map[string]*Entry
 	logger   *slog.Logger
 	registry *EntityRegistry
+	defaults *config.Defaults
 }
 
 // Entry is a struct that contains a mapping entry
@@ -125,13 +115,13 @@ type Entry struct {
 }
 
 // MapToEntity maps a value to an entity
-func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistry *EntityRegistry, logger *slog.Logger) []diode.Entity {
+func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) []diode.Entity {
 	logger.Debug("Mapping value to entity", "value", pdus)
 	if m.Mapper == nil {
 		logger.Warn("No mapper found for entity. Ignoring.", "entity", m.Entity)
 		return nil
 	}
-	entity := m.Mapper.Map(pdus, m, entityRegistry, logger)
+	entity := m.Mapper.Map(pdus, m, entityRegistry, defaults, logger)
 	logger.Debug("Entity returned from mapper", "entity", entity)
 	if entity == nil {
 		logger.Warn("No entity returned from mapper. Ignoring.", "entity", m.Entity)
@@ -159,20 +149,16 @@ func NewObjectIDMapper(mappings []config.MappingEntry, logger *slog.Logger, devi
 		mapping[m.OID] = Entry
 	}
 
-	registry := NewEntityRegistry(logger)
-	if defaults != nil {
-		registry.SetDefaults(defaults)
-	}
-
 	return &ObjectIDMapper{
 		mapping:  mapping,
 		logger:   logger,
-		registry: registry,
+		registry: NewEntityRegistry(logger),
+		defaults: defaults,
 	}
 }
 
 type orbToEntityMapper interface {
-	Map(pdus map[ObjectIDIndex]*ObjectIDValue, Entry *Entry, entityRegistry *EntityRegistry, logger *slog.Logger) diode.Entity
+	Map(pdus map[ObjectIDIndex]*ObjectIDValue, Entry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity
 }
 
 func getIndex(values map[ObjectIDIndex]*ObjectIDValue) ObjectIDIndex {
@@ -258,7 +244,7 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 			m.logger.Warn("Error finding mapping entry", "error", err, "objectID", value.Index)
 			continue
 		}
-		entities = append(entities, Entry.MapToEntity(value.Values, m.registry, m.logger)...)
+		entities = append(entities, Entry.MapToEntity(value.Values, m.registry, m.defaults, m.logger)...)
 	}
 	return entities
 }
