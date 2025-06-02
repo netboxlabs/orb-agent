@@ -13,7 +13,16 @@ import (
 )
 
 // IPAddressMapper is a struct that maps IP addresses to entities
-type IPAddressMapper struct{}
+type IPAddressMapper struct {
+	logger *slog.Logger
+}
+
+// NewIPAddressMapper creates a new IPAddressMapper
+func NewIPAddressMapper(logger *slog.Logger) *IPAddressMapper {
+	return &IPAddressMapper{
+		logger: logger,
+	}
+}
 
 // applyDefaults applies default values to an IP address entity
 func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *config.Defaults) {
@@ -72,14 +81,14 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 }
 
 // Map maps IP addresses to entities
-func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
-	logger.Debug("Mapping values to ipAddress entity", "values", values, "mappingEntry", mappingEntry)
+func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
+	m.logger.Debug("Mapping values to ipAddress entity", "values", values, "mappingEntry", mappingEntry)
 	ipAddress := diode.IPAddress{}
 
 	fieldFound := false
 	// for each value in the map, map it to the ip address entity
 	for objectID, value := range values {
-		logger.Debug("Mapping value to ipAddress entity", "objectID", objectID, "value", value)
+		m.logger.Debug("Mapping value to ipAddress entity", "objectID", objectID, "value", value)
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
 				switch propertyMappingEntry.Field {
@@ -91,7 +100,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					if propertyMappingEntry.Relationship != (config.Relationship{}) {
 						linkedEntity := entityRegistry.GetOrCreateEntity(EntityType(propertyMappingEntry.Relationship.Type), ObjectIDIndex(value.Value))
 						if linkedEntity == nil {
-							logger.Warn("No linked entity found while mapping assigned object", "relationship", propertyMappingEntry.Relationship)
+							m.logger.Warn("No linked entity found while mapping assigned object", "relationship", propertyMappingEntry.Relationship)
 							continue
 						}
 						// Handle relationship mapping
@@ -101,7 +110,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						}
 					}
 				default:
-					logger.Warn("Unknown field", "field", mappingEntry.Field)
+					m.logger.Warn("Unknown field", "field", mappingEntry.Field)
 				}
 			}
 		}
@@ -115,7 +124,16 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 }
 
 // InterfaceMapper is a struct that maps interfaces to entities
-type InterfaceMapper struct{}
+type InterfaceMapper struct {
+	logger *slog.Logger
+}
+
+// NewInterfaceMapper creates a new InterfaceMapper
+func NewInterfaceMapper(logger *slog.Logger) *InterfaceMapper {
+	return &InterfaceMapper{
+		logger: logger,
+	}
+}
 
 // applyDefaults applies default values to an interface entity
 func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *config.Defaults) {
@@ -156,27 +174,27 @@ func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *confi
 }
 
 // Map maps interfaces to entities
-func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
-	logger.Debug("Mapping values to interface entity", "values", values, "mappingEntry", mappingEntry)
+func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
+	m.logger.Debug("Mapping values to interface entity", "values", values, "mappingEntry", mappingEntry)
 	interfaceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), getIndex(values)).(*diode.Interface)
 
 	fieldFound := false
 	for objectID, value := range values {
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
-				logger.Debug("Mapping value to interface entity with mapper", "objectID", objectID, "value", value, "mappingEntry", propertyMappingEntry)
+				m.logger.Debug("Mapping value to interface entity with mapper", "objectID", objectID, "value", value, "mappingEntry", propertyMappingEntry)
 				switch propertyMappingEntry.Field {
 				case "name":
 					interfaceEntity.Name = &value.Value
 					fieldFound = true
 				case "speed":
 					if value.Value == "" {
-						logger.Debug("Speed is empty", "value", value.Value)
+						m.logger.Debug("Speed is empty", "value", value.Value)
 						continue
 					}
 					speed, err := strconv.Atoi(value.Value)
 					if err != nil {
-						logger.Warn("Error converting speed to int", "error", err, "value", value.Value)
+						m.logger.Warn("Error converting speed to int", "error", err, "value", value.Value)
 						continue
 					}
 					speed64 := int64(speed)
@@ -185,7 +203,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				case "macAddress":
 					macAddress, err := formatMACAddress(value.Value)
 					if err != nil {
-						logger.Warn("Error formatting mac address", "error", err, "value", value.Value)
+						m.logger.Warn("Error formatting mac address", "error", err, "value", value.Value)
 						continue
 					}
 					interfaceEntity.PrimaryMacAddress = &diode.MACAddress{
@@ -199,7 +217,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				case "device":
 					// TODO: This should be the current device
 				default:
-					logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
+					m.logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
 				}
 			}
 		}
@@ -230,6 +248,7 @@ func formatMACAddress(rawStr string) (string, error) {
 // DeviceMapper is a struct that maps devices to entities
 type DeviceMapper struct {
 	devices data.DeviceDataRetreiver
+	logger  *slog.Logger
 }
 
 // applyDefaults applies default values to a device entity
@@ -298,22 +317,23 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 }
 
 // NewDeviceMapper creates a new DeviceMapper
-func NewDeviceMapper(devices data.DeviceDataRetreiver) *DeviceMapper {
+func NewDeviceMapper(devices data.DeviceDataRetreiver, logger *slog.Logger) *DeviceMapper {
 	return &DeviceMapper{
 		devices: devices,
+		logger:  logger,
 	}
 }
 
 // Map maps devices to entities
-func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
-	logger.Debug("Mapping values to device entity", "values", values, "mappingEntry", mappingEntry)
+func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
+	m.logger.Debug("Mapping values to device entity", "values", values, "mappingEntry", mappingEntry)
 	deviceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), getIndex(values)).(*diode.Device)
 
 	fieldFound := false
 	for objectID, value := range values {
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
-				logger.Debug("Mapping value to device entity with mapper", "objectID", objectID, "value", value, "mappingEntry", propertyMappingEntry)
+				m.logger.Debug("Mapping value to device entity with mapper", "objectID", objectID, "value", value, "mappingEntry", propertyMappingEntry)
 				switch propertyMappingEntry.Field {
 				case "name":
 					deviceEntity.Name = &value.Value
@@ -322,12 +342,12 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 					// Use getDeviceIDs to get the manufacturer and model
 					manufacturerID, modelID, err := m.getDeviceIDs(value.Value)
 					if err != nil {
-						logger.Warn("Error getting device IDs", "error", err, "value", value.Value)
+						m.logger.Warn("Error getting device IDs", "error", err, "value", value.Value)
 						continue
 					}
 					manufacturer, err := m.devices.GetManufacturer(manufacturerID)
 					if err != nil {
-						logger.Warn("Error getting manufacturer", "error", err, "manufacturerID", manufacturerID)
+						m.logger.Warn("Error getting manufacturer", "error", err, "manufacturerID", manufacturerID)
 						continue
 					}
 
@@ -343,7 +363,7 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 
 					deviceModel, err := m.devices.GetDeviceModel(modelID)
 					if err != nil {
-						logger.Warn("Error getting device model", "error", err, "modelID", modelID)
+						m.logger.Warn("Error getting device model", "error", err, "modelID", modelID)
 					}
 					deviceEntity.DeviceType = &diode.DeviceType{
 						Model:        &deviceModel,
@@ -351,7 +371,7 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 					}
 					fieldFound = true
 				default:
-					logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
+					m.logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
 				}
 			}
 		}

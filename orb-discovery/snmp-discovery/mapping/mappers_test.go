@@ -302,8 +302,8 @@ func TestIPAddressMapper_Map(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
-			mapper := &mapping.IPAddressMapper{}
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
+			mapper := mapping.NewIPAddressMapper(logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults)
 
 			if tt.expectError {
 				assert.Nil(t, entity)
@@ -534,8 +534,8 @@ func TestInterfaceMapper_Map(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := slog.Default()
 			registry := mapping.NewEntityRegistry(logger)
-			mapper := &mapping.InterfaceMapper{}
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
+			mapper := mapping.NewInterfaceMapper(logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults)
 
 			if tt.expectError {
 				assert.Nil(t, entity)
@@ -574,7 +574,7 @@ func TestDeviceMapper_Map(t *testing.T) {
 	mockManufacturers.On("GetDeviceModel", 1234).Return("cisco4000", nil)
 	mockManufacturers.On("GetDeviceModel", 999).Return("", fmt.Errorf("device model not found"))
 
-	mapper := mapping.NewDeviceMapper(mockManufacturers)
+	mapper := mapping.NewDeviceMapper(mockManufacturers, logger)
 
 	tests := []struct {
 		name           string
@@ -752,7 +752,7 @@ func TestDeviceMapper_Map(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults)
 
 			if tt.expectError {
 				assert.Nil(t, entity)
