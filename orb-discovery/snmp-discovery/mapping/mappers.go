@@ -248,7 +248,7 @@ func (m *InterfaceMapper) FormatMACAddress(input string) (string, error) {
 	}
 
 	output := strings.Join(parts, ":")
-	m.logger.Info("Formatting mac address", "rawStr", input, "output", output)
+	m.logger.Debug("Formatted mac address", "input", input, "output", output)
 	return output, nil
 }
 
