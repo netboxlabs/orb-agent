@@ -579,6 +579,18 @@ func TestInterfaceMapper_FormatMACAddress(t *testing.T) {
 			expected:    "00:11:22:33:44:55",
 			expectError: false,
 		},
+		{
+			name:        "invalid (too short) hex string with backslashes",
+			input:       "\x00\x11\x22\x33\x44",
+			expected:    "",
+			expectError: true,
+		},
+		{
+			name:        "invalid (too long) hex string with backslashes",
+			input:       "\x00\x11\x22\x33\x44\x55\x66",
+			expected:    "",
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {

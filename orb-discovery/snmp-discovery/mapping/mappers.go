@@ -233,23 +233,13 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 
 // FormatMACAddress formats a MAC address from a string to a colon-separated hex string
 func (m *InterfaceMapper) FormatMACAddress(input string) (string, error) {
-	// var party
-	// for _, c := range []byte(input) {
-	// 	hexValue := fmt.Sprintf("%02x", c)
-
-	// 	m.logger.Info("Character", "character", c, "hex", fmt.Sprintf("%02x", c))
-	// }
-
-	// // Remove double backslashes (\\x) and replace with actual hex marker
-	// cleaned := strings.ReplaceAll(input, `\x`, "\\x")
-
 	// Decode the hex string to bytes
 	bytes := []byte(input)
 
 	// Check for correct MAC address length
-	// if len(bytes) != 6 {
-	// 	return "", fmt.Errorf("invalid MAC address length: got %d bytes", len(bytes))
-	// }
+	if len(bytes) != 6 {
+		return "", fmt.Errorf("invalid MAC address length: got %d bytes", len(bytes))
+	}
 
 	// Format to colon-separated hex string
 	var parts []string
