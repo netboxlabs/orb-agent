@@ -250,7 +250,28 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 			m.logger.Warn("Error finding mapping entry", "error", err, "objectID", value.Index)
 			continue
 		}
-		entities = append(entities, Entry.MapToEntity(value.Values, m.registry, m.defaults, m.logger)...)
+		newEntities := Entry.MapToEntity(value.Values, m.registry, m.defaults, m.logger)
+		entities = append(entities, newEntities...)
+	}
+
+	var currentDevice *diode.Device
+	for _, entity := range entities {
+		// check if it's a diode.Device
+		if device, ok := entity.(*diode.Device); ok {
+			if currentDevice != nil {
+				m.logger.Warn("Multiple devices found. Ignoring.", "device", device)
+			}
+			// check if the device has a name
+			currentDevice = device
+		}
+	}
+	if currentDevice == nil {
+		m.logger.Warn("No device found.")
+	}
+	for _, entity := range entities {
+		if diodeInterface, ok := entity.(*diode.Interface); ok {
+			diodeInterface.Device = currentDevice
+		}
 	}
 	return entities
 }
