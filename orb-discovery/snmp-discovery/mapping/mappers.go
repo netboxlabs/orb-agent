@@ -3,6 +3,7 @@ package mapping
 import (
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -151,9 +152,7 @@ func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *confi
 		entity.Description = &entityDefaults.Description
 	}
 
-	if entity.Type == nil && entityDefaults.Type != "" {
-		entity.Type = &entityDefaults.Type
-	}
+	entity.Type = &entityDefaults.Type
 }
 
 // Map maps interfaces to entities
@@ -190,13 +189,15 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						continue
 					}
 					interfaceEntity.PrimaryMacAddress = &diode.MACAddress{
-						MacAddress: &macAddress,
+						MacAddress: &macAddress, // TODO: This format is not correct - being rejected by netbox
 					}
 					fieldFound = true
 				case "adminStatus":
 					enabled := value.Value == "1"
 					interfaceEntity.Enabled = &enabled
 					fieldFound = true
+				case "device":
+					// TODO: This should be the current device
 				default:
 					logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
 				}
@@ -335,6 +336,8 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 					}
 
 					deviceEntity.Platform = &diode.Platform{
+						Name:         &manufacturer,
+						Slug:         toSlug(&manufacturer),
 						Manufacturer: &manufacturerEntity,
 					}
 
@@ -385,4 +388,26 @@ func (m *DeviceMapper) getDeviceIDs(objectID string) (int, int, error) {
 	}
 
 	return 0, 0, fmt.Errorf("invalid objectID: %s", objectID)
+}
+
+func toSlug(input *string) *string {
+	// Convert to lowercase
+	slug := strings.ToLower(*input)
+
+	// Remove all non-word characters (except spaces and dashes)
+	re := regexp.MustCompile(`[^\w\s-]`)
+	slug = re.ReplaceAllString(slug, "")
+
+	// Replace spaces and underscores with dashes
+	slug = strings.ReplaceAll(slug, " ", "-")
+	slug = strings.ReplaceAll(slug, "_", "-")
+
+	// Collapse multiple dashes into one
+	re = regexp.MustCompile(`-+`)
+	slug = re.ReplaceAllString(slug, "-")
+
+	// Trim leading/trailing dashes
+	slug = strings.Trim(slug, "-")
+
+	return &slug
 }
