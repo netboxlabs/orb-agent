@@ -144,6 +144,7 @@ func TestRunnerRun(t *testing.T) {
 						Interface: config.InterfaceDefaults{
 							Description: "Interface Default",
 							Tags:        []string{"interface", "default"},
+							Type:        "unknown",
 						},
 						Device: config.DeviceDefaults{
 							Description: "Device Default",
@@ -237,6 +238,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 				Interface: config.InterfaceDefaults{
 					Description: "Interface Default",
 					Tags:        []string{"interface", "default"},
+					Type:        "unknown",
 				},
 				Device: config.DeviceDefaults{
 					Description: "Device Default",
@@ -284,6 +286,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 				{Name: diode.String("test")},
 				{Name: diode.String("snmp")},
 			},
+			Type: diode.String("unknown"),
 		},
 	}
 
