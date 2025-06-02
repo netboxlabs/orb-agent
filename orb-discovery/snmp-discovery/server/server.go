@@ -13,6 +13,8 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // Response represents the server response
@@ -42,8 +44,15 @@ func init() {
 // metricsMiddleware is a middleware that records API metrics
 func metricsMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Record API request
-		metrics.GetAPIRequests().Add(c.Request.Context(), 1)
+		if apiMetric := metrics.GetAPIRequests(); apiMetric != nil {
+			apiMetric.Add(c.Request.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
 
 		// Start timing the request
 		startTime := time.Now()
@@ -52,7 +61,18 @@ func metricsMiddleware() gin.HandlerFunc {
 		c.Next()
 
 		// Record API response latency
-		metrics.GetAPIResponseLatency().Record(c.Request.Context(), time.Since(startTime).Seconds())
+
+		if apiMetric := metrics.GetAPIResponseLatency(); apiMetric != nil {
+			// Calculate duration in milliseconds
+			duration := float64(time.Since(startTime).Milliseconds())
+			apiMetric.Record(c.Request.Context(), duration,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
 	}
 }
 

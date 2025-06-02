@@ -367,11 +367,11 @@ func TestMapPDU(t *testing.T) {
 			pdu: snmp.PDU{
 				Name:  "test.2",
 				Type:  gosnmp.OctetString,
-				Value: []byte("test bytes"),
+				Value: []byte("\xF4\x7F\x35\x93\xAF\xC0"),
 			},
 			expectedValue: mapping.Value{
 				Type:  mapping.Asn1BER(gosnmp.OctetString),
-				Value: "test bytes",
+				Value: string([]byte("\xF4\x7F\x35\x93\xAF\xC0")),
 			},
 			expectError: false,
 		},

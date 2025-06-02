@@ -57,7 +57,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		// Load the mapping config
 		mappingConfig, err := m.loadMappingConfig(policy)
 		if err != nil {
-			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
+			return nil, fmt.Errorf("%s : invalid mapping config : %w", name, err)
 		}
 
 		// Create a new policy with updated mappings

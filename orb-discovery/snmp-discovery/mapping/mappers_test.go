@@ -302,8 +302,8 @@ func TestIPAddressMapper_Map(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
-			mapper := &mapping.IPAddressMapper{}
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
+			mapper := mapping.NewIPAddressMapper(logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults)
 
 			if tt.expectError {
 				assert.Nil(t, entity)
@@ -371,7 +371,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					OID:    "1.3.6.1.2.1.2.2.1.6.1",
 					Index:  "1",
 					Parent: "1.3.6.1.2.1.2.2.1.6",
-					Value:  "\\x00\\x11\\x22\\x33\\x44\\x55",
+					Value:  "\x00\x11\x22\x33\x44\x55",
 					Type:   mapping.OctetString,
 				},
 				"1.3.6.1.2.1.2.2.1.7.1": {
@@ -534,8 +534,8 @@ func TestInterfaceMapper_Map(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := slog.Default()
 			registry := mapping.NewEntityRegistry(logger)
-			mapper := &mapping.InterfaceMapper{}
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
+			mapper := mapping.NewInterfaceMapper(logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults)
 
 			if tt.expectError {
 				assert.Nil(t, entity)
@@ -563,6 +563,50 @@ func TestInterfaceMapper_Map(t *testing.T) {
 	}
 }
 
+func TestInterfaceMapper_FormatMACAddress(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewInterfaceMapper(logger)
+
+	tests := []struct {
+		name        string
+		input       string
+		expected    string
+		expectError bool
+	}{
+		{
+			name:        "valid hex string with backslashes",
+			input:       "\x00\x11\x22\x33\x44\x55",
+			expected:    "00:11:22:33:44:55",
+			expectError: false,
+		},
+		{
+			name:        "invalid (too short) hex string with backslashes",
+			input:       "\x00\x11\x22\x33\x44",
+			expected:    "",
+			expectError: true,
+		},
+		{
+			name:        "invalid (too long) hex string with backslashes",
+			input:       "\x00\x11\x22\x33\x44\x55\x66",
+			expected:    "",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := mapper.FormatMACAddress(tt.input)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Empty(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
 func TestDeviceMapper_Map(t *testing.T) {
 	logger := slog.Default()
 
@@ -574,7 +618,7 @@ func TestDeviceMapper_Map(t *testing.T) {
 	mockManufacturers.On("GetDeviceModel", 1234).Return("cisco4000", nil)
 	mockManufacturers.On("GetDeviceModel", 999).Return("", fmt.Errorf("device model not found"))
 
-	mapper := mapping.NewDeviceMapper(mockManufacturers)
+	mapper := mapping.NewDeviceMapper(mockManufacturers, logger)
 
 	tests := []struct {
 		name           string
@@ -752,7 +796,7 @@ func TestDeviceMapper_Map(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
-			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults, logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults)
 
 			if tt.expectError {
 				assert.Nil(t, entity)

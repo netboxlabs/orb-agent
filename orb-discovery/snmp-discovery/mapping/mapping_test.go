@@ -78,6 +78,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						MacAddress: &[]string{"00:00:00:00:00:00"}[0],
 					},
 					Enabled: &[]bool{true}[0],
+					Type:    diode.String("virtual"),
 				},
 				&diode.Interface{
 					Speed: &[]int64{1000000000}[0],
@@ -86,6 +87,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						MacAddress: &[]string{"00:00:00:00:00:11"}[0],
 					},
 					Enabled: &[]bool{false}[0],
+					Type:    diode.String("virtual"),
 				},
 			},
 		},
@@ -153,6 +155,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						MacAddress: &[]string{"00:00:00:00:00:00"}[0],
 					},
 					Enabled: &[]bool{true}[0],
+					Type:    diode.String("virtual"),
 				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),
@@ -261,11 +264,13 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			expected: []diode.Entity{
 				&diode.Interface{
 					Name: diode.String("GigabitEthernet1/0/1"),
+					Type: diode.String("virtual"),
 				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),
 					AssignedObject: &diode.Interface{
 						Name: diode.String("GigabitEthernet1/0/1"),
+						Type: diode.String("virtual"),
 					},
 				},
 			},
@@ -321,6 +326,8 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						Model: &[]string{"cisco4000"}[0],
 					},
 					Platform: &diode.Platform{
+						Name: diode.String("Cisco"),
+						Slug: diode.String("cisco"),
 						Manufacturer: &diode.Manufacturer{
 							Name: diode.String("Cisco"),
 						},
@@ -336,7 +343,11 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 				tt.mapping,
 				slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})),
 				&FakeManufacturers{},
-				&config.Defaults{},
+				&config.Defaults{
+					Interface: config.InterfaceDefaults{
+						Type: "virtual",
+					},
+				},
 			)
 			entities := mapper.MapObjectIDsToEntity(tt.objectIDs)
 
