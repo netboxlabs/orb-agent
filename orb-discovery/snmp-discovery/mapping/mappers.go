@@ -182,7 +182,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	for objectID, value := range values {
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
-				m.logger.Debug("Mapping value to interface entity with mapper", "objectID", objectID, "value", value, "mappingEntry", propertyMappingEntry)
+				m.logger.Debug("Mapping value to interface entity with mapper", "objectID", objectID, "value", value)
 				switch propertyMappingEntry.Field {
 				case "name":
 					interfaceEntity.Name = &value.Value
@@ -214,8 +214,6 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					enabled := value.Value == "1"
 					interfaceEntity.Enabled = &enabled
 					fieldFound = true
-				case "device":
-					// TODO: This should be the current device
 				default:
 					m.logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
 				}
