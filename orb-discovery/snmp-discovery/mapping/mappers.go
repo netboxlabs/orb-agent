@@ -201,7 +201,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					interfaceEntity.Speed = &speed64
 					fieldFound = true
 				case "macAddress":
-					macAddress, err := formatMACAddress(value.Value)
+					macAddress, err := m.FormatMACAddress(value.Value)
 					if err != nil {
 						m.logger.Warn("Error formatting mac address", "error", err, "value", value.Value)
 						continue
@@ -231,18 +231,35 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	return interfaceEntity
 }
 
-func formatMACAddress(rawStr string) (string, error) {
-	// Decode escaped characters into actual bytes
-	unquoted, err := strconv.Unquote(`"` + rawStr + `"`)
-	if err != nil {
-		return "", fmt.Errorf("failed to unquote string: %v", err)
+// FormatMACAddress formats a MAC address from a string to a colon-separated hex string
+func (m *InterfaceMapper) FormatMACAddress(input string) (string, error) {
+	// var party
+	// for _, c := range []byte(input) {
+	// 	hexValue := fmt.Sprintf("%02x", c)
+
+	// 	m.logger.Info("Character", "character", c, "hex", fmt.Sprintf("%02x", c))
+	// }
+
+	// // Remove double backslashes (\\x) and replace with actual hex marker
+	// cleaned := strings.ReplaceAll(input, `\x`, "\\x")
+
+	// Decode the hex string to bytes
+	bytes := []byte(input)
+
+	// Check for correct MAC address length
+	// if len(bytes) != 6 {
+	// 	return "", fmt.Errorf("invalid MAC address length: got %d bytes", len(bytes))
+	// }
+
+	// Format to colon-separated hex string
+	var parts []string
+	for _, b := range bytes {
+		parts = append(parts, fmt.Sprintf("%02x", b))
 	}
 
-	macParts := make([]string, len(unquoted))
-	for i := 0; i < len(unquoted); i++ {
-		macParts[i] = fmt.Sprintf("%02x", unquoted[i])
-	}
-	return strings.Join(macParts, ":"), nil
+	output := strings.Join(parts, ":")
+	m.logger.Info("Formatting mac address", "rawStr", input, "output", output)
+	return output, nil
 }
 
 // DeviceMapper is a struct that maps devices to entities
