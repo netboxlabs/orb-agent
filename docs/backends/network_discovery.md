@@ -61,8 +61,8 @@ The scope defines a list of targets to be scanned.
 | top_ports | int | no | Scan <number> most common ports (--top-ports). |
 | max_retries | int | no | Caps number of port scan probe retransmissions (--max-retries). |
 | scan_types | list | no | Scan technique to be used by NMAP. Supports [udp,connect,syn,ack,window,null,fin,xmas,maimon,sctp_init,sctp_cookie_echo,ip_protocol]. If more than one TCP scan type (`connect,syn,ack,window,null,fin,xmas,maimon`) is defined, only the fist one will be applied. |
-| dns_servers | list | no | Specify alternate DNS servers for DNS resolution |
-| os_detection | bool | no | Enables NMAP OS detection. |
+| dns_servers | list | no | Specify alternate DNS servers for DNS resolution (--dns-servers). |
+| os_detection | bool | no | Enables NMAP OS detection (-O). |
 | use_target_masks | bool | no | When enabled (default: True), applies the most specific subnet mask from the defined targets to discovered IPs. Only affects targets defined as subnets (e.g., 192.168.1.0/24), not ranges or individual IPs. |
 
 ### Sample
