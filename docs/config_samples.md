@@ -97,7 +97,7 @@ orb:
 
 Run command:
 ```sh
- docker run -v /local/orb:/opt/orb/ \
+ docker run --net=host -v /local/orb:/opt/orb/ \
  -e DIODE_CLIENT_ID={YOUR_DIODE_CLIENT_ID} \
  -e DIODE_CLIENT_SECRET={YOUR_DIODE_CLIENT_SECRET} \
  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
