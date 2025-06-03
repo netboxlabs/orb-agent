@@ -239,7 +239,6 @@ func (r *Runner) run() {
 
 	options = append(options, nmap.WithNonInteractive())
 	options = append(options, nmap.WithTargets(r.scope.Targets...))
-	options = append(options, nmap.WithForcedDNSResolution())
 
 	scanner, err := nmap.NewScanner(ctx, options...)
 	if err != nil {
