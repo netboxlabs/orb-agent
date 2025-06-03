@@ -158,6 +158,17 @@ func TestRunnerWithOptions(t *testing.T) {
 			},
 		},
 		{
+			name: "with os detection and without target masks",
+			policy: config.Policy{
+				Config: config.PolicyConfig{},
+				Scope: config.Scope{
+					Targets:        []string{"localhost"},
+					OSDetection:    boolPtr(true),
+					UseTargetMasks: boolPtr(false),
+				},
+			},
+		},
+		{
 			name: "with top ports and ping scan",
 			policy: config.Policy{
 				Config: config.PolicyConfig{},
@@ -332,6 +343,52 @@ func TestRunnerNoHosts(t *testing.T) {
 
 	// Check that Ingest was not called since no hosts should have been found
 	mockClient.AssertNotCalled(t, "Ingest", mock.Anything, mock.Anything)
+}
+
+func TestRunnerWithNetworkMask(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mockClient := new(MockClient)
+	ctx := context.Background()
+
+	policyConfig := config.Policy{
+		Config: config.PolicyConfig{
+			Schedule: nil, // Run immediately
+		},
+		Scope: config.Scope{
+			Targets:    []string{"127.0.0.1/28"},
+			FastMode:   boolPtr(true),
+			MaxRetries: intPtr(0),
+		},
+	}
+
+	// Create runner
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient)
+	assert.NoError(t, err)
+
+	// Use a channel to signal that Ingest was called
+	ingestCalled := make(chan bool, 1)
+
+	mockClient.On("Ingest", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		ingestCalled <- true
+		entities := args.Get(1).([]diode.Entity)
+		assert.NotEmpty(t, entities, "Entities should not be empty when scanning a network with a mask")
+		assert.Contains(t, *entities[0].(*diode.IPAddress).Address, "/28", "The scanned entity should reflect the network mask")
+	}).Return(&diodepb.IngestResponse{}, nil)
+
+	// Start the process
+	runner.Start()
+
+	// Wait for Ingest to be called or timeout
+	select {
+	case <-ingestCalled:
+		// Success
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout: Ingest was not called")
+	}
+
+	// Stop the process
+	err = runner.Stop()
+	assert.NoError(t, err)
 }
 
 func boolPtr(b bool) *bool {

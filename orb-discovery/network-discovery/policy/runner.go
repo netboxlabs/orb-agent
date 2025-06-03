@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/Ullaakut/nmap/v3"
@@ -25,6 +27,13 @@ const (
 	defaultTimeout            = 2 * time.Minute
 )
 
+// targetInfo stores information about each target
+type targetInfo struct {
+	original string
+	network  *net.IPNet
+	mask     string
+}
+
 // Runner represents the policy runner
 type Runner struct {
 	scheduler gocron.Scheduler
@@ -35,6 +44,49 @@ type Runner struct {
 	timeout   time.Duration
 	scope     config.Scope
 	config    config.PolicyConfig
+	targets   []targetInfo
+}
+
+// parseTargets parses the target specifications and returns targetInfo slice
+func parseTargets(targets []string) []targetInfo {
+	var result []targetInfo
+	for _, target := range targets {
+		if strings.Contains(target, "/") {
+			info := targetInfo{original: target}
+			_, network, err := net.ParseCIDR(target)
+			if err == nil {
+				info.network = network
+				maskBits, _ := network.Mask.Size()
+				info.mask = fmt.Sprintf("/%d", maskBits)
+				result = append(result, info)
+			}
+		}
+	}
+	return result
+}
+
+// getIPWithMask returns the IP address with the appropriate mask based on the most specific target network
+func (r *Runner) getIPWithMask(ipStr string, defaultMask string) string {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return ipStr + defaultMask
+	}
+
+	var bestTarget *targetInfo
+	var bestMask int
+	for _, target := range r.targets {
+		if target.network.Contains(ip) {
+			maskBits, _ := target.network.Mask.Size()
+			if bestTarget == nil || maskBits > bestMask {
+				bestTarget = &target
+				bestMask = maskBits
+			}
+		}
+	}
+	if bestTarget != nil {
+		return ipStr + bestTarget.mask
+	}
+	return ipStr + defaultMask
 }
 
 // NewRunner returns a new policy runner
@@ -67,6 +119,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	runner.ctx = context.WithValue(ctx, policyKey, name)
 	runner.scope = policy.Scope
 	runner.config = policy.Config
+
+	runner.targets = parseTargets(policy.Scope.Targets)
+
 	return runner, nil
 }
 
@@ -97,15 +152,20 @@ func (r *Runner) run() {
 	var options []nmap.Option
 
 	if len(r.scope.Ports) > 0 {
-		nmap.WithPorts(r.scope.Ports...)
+		options = append(options, nmap.WithPorts(r.scope.Ports...))
 	}
 
 	if len(r.scope.ExcludePorts) > 0 {
-		nmap.WithPortExclusions(r.scope.ExcludePorts...)
+		options = append(options, nmap.WithPortExclusions(r.scope.ExcludePorts...))
 	}
 
 	if len(r.scope.DNSServers) > 0 {
 		options = append(options, nmap.WithCustomDNSServers(r.scope.DNSServers...))
+	}
+
+	if r.scope.OSDetection != nil && *r.scope.OSDetection {
+		options = append(options, nmap.WithOSDetection())
+		options = append(options, nmap.WithPrivileged())
 	}
 
 	if r.scope.FastMode != nil && *r.scope.FastMode {
@@ -118,11 +178,6 @@ func (r *Runner) run() {
 
 	if r.scope.TopPorts != nil {
 		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
-	}
-
-	NetMask := "/32"
-	if r.config.Defaults.NetworkMask != nil && *r.config.Defaults.NetworkMask > 0 {
-		NetMask = fmt.Sprintf("/%d", *r.config.Defaults.NetworkMask)
 	}
 
 	hasOtherScans := false
@@ -239,11 +294,37 @@ func (r *Runner) run() {
 	}
 	r.logger.Info("discovery complete", slog.Int("hosts_found", len(result.Hosts)), slog.String("policy", policyName))
 
+	// Track discovered hosts
+	processedEntries := make(map[string]bool)
+
+	defaultMask := "/32"
+	if r.config.Defaults.NetworkMask != nil && *r.config.Defaults.NetworkMask > 0 {
+		defaultMask = fmt.Sprintf("/%d", *r.config.Defaults.NetworkMask)
+	}
+
 	for _, host := range result.Hosts {
 		r.logger.Debug("processing host", slog.Any("host_address", host.Addresses), slog.Any("host_ports", host.Ports),
 			slog.Any("host_hostnames", host.Hostnames), slog.String("policy", policyName))
+		if len(host.Addresses) == 0 {
+			continue
+		}
+
+		addr := host.Addresses[0].Addr
+		if _, exists := processedEntries[addr]; exists {
+			r.logger.Info("skipping already processed IP address", slog.String("ip_address", addr), slog.String("policy", policyName))
+			continue
+		}
+
+		var ipAddr string
+		if r.scope.UseTargetMasks != nil && !*r.scope.UseTargetMasks {
+			ipAddr = addr + defaultMask
+		} else {
+			ipAddr = r.getIPWithMask(addr, defaultMask)
+		}
+		processedEntries[addr] = true
+
 		ip := &diode.IPAddress{
-			Address: diode.String(host.Addresses[0].Addr + NetMask),
+			Address: diode.String(ipAddr),
 		}
 		if r.config.Defaults.Description != "" {
 			ip.Description = diode.String(r.config.Defaults.Description)

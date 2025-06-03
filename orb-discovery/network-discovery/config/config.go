@@ -38,16 +38,18 @@ type Status struct {
 
 // Scope represents the scope of a policy
 type Scope struct {
-	Targets      []string `yaml:"targets"`
-	Ports        []string `yaml:"ports,omitempty"`
-	ExcludePorts []string `yaml:"exclude_ports,omitempty"`
-	Timing       *int     `yaml:"timing,omitempty"`
-	FastMode     *bool    `yaml:"fast_mode,omitempty"`
-	PingScan     *bool    `yaml:"ping_scan,omitempty"`
-	TopPorts     *int     `yaml:"top_ports,omitempty"`
-	ScanTypes    []string `yaml:"scan_types,omitempty"`
-	MaxRetries   *int     `yaml:"max_retries,omitempty"`
-	DNSServers   []string `yaml:"dns_servers,omitempty"`
+	Targets        []string `yaml:"targets"`
+	Ports          []string `yaml:"ports,omitempty"`
+	ExcludePorts   []string `yaml:"exclude_ports,omitempty"`
+	Timing         *int     `yaml:"timing,omitempty"`
+	FastMode       *bool    `yaml:"fast_mode,omitempty"`
+	PingScan       *bool    `yaml:"ping_scan,omitempty"`
+	TopPorts       *int     `yaml:"top_ports,omitempty"`
+	ScanTypes      []string `yaml:"scan_types,omitempty"`
+	MaxRetries     *int     `yaml:"max_retries,omitempty"`
+	DNSServers     []string `yaml:"dns_servers,omitempty"`
+	OSDetection    *bool    `yaml:"os_detection,omitempty"`
+	UseTargetMasks *bool    `yaml:"use_target_masks,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy
