@@ -131,4 +131,4 @@ class PolicyManager:
         for name, runner in self.runners.items():
             logger.info(f"Stopping policy '{name}'")
             runner.stop()
-        self.runners = []
+        self.runners = {}

@@ -138,4 +138,4 @@ def test_stop_all_policies(policy_manager):
     mock_runner2.stop.assert_called_once()
 
     # Ensure runners dictionary is emptied
-    assert policy_manager.runners == []
+    assert policy_manager.runners == {}
