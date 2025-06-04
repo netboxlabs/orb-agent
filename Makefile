@@ -1,6 +1,3 @@
-include agent/docker/.env
-
-# expects to be set as env var
 PRODUCTION_AGENT_REF_TAG ?= latest
 PRODUCTION_AGENT_DEBUG_REF_TAG ?= latest-debug
 REF_TAG ?= develop

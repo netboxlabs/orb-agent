@@ -38,7 +38,6 @@ RUN \
 RUN mkdir -p /opt/orb
 
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
-COPY --from=builder /src/orb-agent/agent/docker/agent_default.yaml /opt/orb/agent_default.yaml
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
 COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
 
