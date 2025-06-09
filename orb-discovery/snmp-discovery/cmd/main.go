@@ -94,7 +94,11 @@ func main() {
 		logger.Info("Metrics export configured", slog.String("endpoint", *otelEndpoint), slog.Int("period_seconds", *otelExportPeriod))
 	}
 
-	policyManager := policy.NewManager(ctx, logger, client)
+	policyManager, err := policy.NewManager(ctx, logger, client)
+	if err != nil {
+		logger.Error("failed to create policy manager", "error", err)
+		os.Exit(1)
+	}
 	server := server.NewServer(*host, *port, logger, policyManager, version.GetBuildVersion())
 
 	// handle signals

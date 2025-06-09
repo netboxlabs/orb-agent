@@ -2,16 +2,19 @@ package policy
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed mapping.yaml
+var embeddedMapping embed.FS
 
 const (
 	// SNMPDefaultPort is the default SNMP port
@@ -20,20 +23,27 @@ const (
 
 // Manager represents the policy manager
 type Manager struct {
-	policies map[string]*Runner
-	client   diode.Client
-	logger   *slog.Logger
-	ctx      context.Context
+	policies      map[string]*Runner
+	client        diode.Client
+	logger        *slog.Logger
+	ctx           context.Context
+	mappingConfig config.Mapping
 }
 
 // NewManager returns a new policy manager
-func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) *Manager {
-	return &Manager{
-		ctx:      ctx,
-		client:   client,
-		logger:   logger,
-		policies: make(map[string]*Runner),
+func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) (*Manager, error) {
+	mappingConfig, err := loadMappingConfig()
+	if err != nil {
+		logger.Error("Failed to load mapping config", "error", err)
+		return nil, err
 	}
+	return &Manager{
+		ctx:           ctx,
+		client:        client,
+		logger:        logger,
+		mappingConfig: mappingConfig,
+		policies:      make(map[string]*Runner),
+	}, nil
 }
 
 // ParsePolicies parses the policies from the request
@@ -53,34 +63,27 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		}
 	}
 
-	for name, policy := range payload.Policies {
-		// Load the mapping config
-		mappingConfig, err := m.loadMappingConfig(policy)
-		if err != nil {
-			return nil, fmt.Errorf("%s : invalid mapping config : %w", name, err)
-		}
+	for name := range payload.Policies {
 
 		// Create a new policy with updated mappings
 		updatedPolicy := payload.Policies[name]
 		m.applyDefaults(&updatedPolicy)
-		updatedPolicy.Scope.Mappings = mappingConfig.Entries
 		payload.Policies[name] = updatedPolicy
 	}
 
 	return payload.Policies, nil
 }
 
-// loadMappingConfig loads the mapping config from the file
-func (m *Manager) loadMappingConfig(policy config.Policy) (config.Mapping, error) {
-	m.logger.Debug("Loading mapping config", "mappingConfig", policy.Scope.MappingConfig)
-	mappingConfigFileContents, err := os.ReadFile(policy.Scope.MappingConfig)
+// loadMappingConfig loads the mapping config from the embedded file
+func loadMappingConfig() (config.Mapping, error) {
+	mappingConfigFileContents, err := embeddedMapping.ReadFile("mapping.yaml")
 	if err != nil {
-		return config.Mapping{}, fmt.Errorf("failed to read mapping config file: %w", err)
+		return config.Mapping{}, fmt.Errorf("failed to read embedded mapping config file: %w", err)
 	}
 
 	var mappingConfig config.Mapping
 	if err := yaml.Unmarshal(mappingConfigFileContents, &mappingConfig); err != nil {
-		return config.Mapping{}, err
+		return config.Mapping{}, fmt.Errorf("failed to unmarshal embedded mapping config: %w", err)
 	}
 
 	return mappingConfig, nil
@@ -142,15 +145,6 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		}
 	}
 
-	// Validate MappingConfig
-	if policy.Scope.MappingConfig == "" {
-		return fmt.Errorf("missing mapping configuration file")
-	}
-
-	if _, err := os.Stat(policy.Scope.MappingConfig); os.IsNotExist(err) {
-		return fmt.Errorf("mapping configuration file does not exist")
-	}
-
 	return nil
 }
 
@@ -167,16 +161,8 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 		return fmt.Errorf("%s : no targets found in the policy", name)
 	}
 
-	if len(policy.Scope.Mappings) == 0 {
-		return fmt.Errorf("%s : no mappings found in the policy", name)
-	}
-
-	if len(policy.Scope.Mappings) == 0 {
-		return fmt.Errorf("%s : no mappings found in the policy", name)
-	}
-
 	if !m.HasPolicy(name) {
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient, &m.mappingConfig)
 		if err != nil {
 			return err
 		}
