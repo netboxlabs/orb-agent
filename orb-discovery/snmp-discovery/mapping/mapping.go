@@ -84,12 +84,16 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 		return &diode.IPAddress{}, nil
 	case "interface":
 		return &diode.Interface{
-			Name: &[]string{"Unknown"}[0],
+			Name: StringPtr("Unknown"),
 		}, nil
 	case "device":
 		return &diode.Device{}, nil
 	}
 	return nil, fmt.Errorf("unimplemented entity type: %s", entityType)
+}
+
+func StringPtr(s string) *string {
+	return &s
 }
 
 // ObjectIDValueMap is a map of ObjectIDs to their values
