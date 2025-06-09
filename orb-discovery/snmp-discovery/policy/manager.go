@@ -23,19 +23,25 @@ const (
 
 // Manager represents the policy manager
 type Manager struct {
-	policies map[string]*Runner
-	client   diode.Client
-	logger   *slog.Logger
-	ctx      context.Context
+	policies      map[string]*Runner
+	client        diode.Client
+	logger        *slog.Logger
+	ctx           context.Context
+	mappingConfig config.Mapping
 }
 
 // NewManager returns a new policy manager
 func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) *Manager {
+	mappingConfig, err := loadMappingConfig()
+	if err != nil {
+		logger.Error("Failed to load mapping config", "error", err)
+	}
 	return &Manager{
-		ctx:      ctx,
-		client:   client,
-		logger:   logger,
-		policies: make(map[string]*Runner),
+		ctx:           ctx,
+		client:        client,
+		logger:        logger,
+		mappingConfig: mappingConfig,
+		policies:      make(map[string]*Runner),
 	}
 }
 
@@ -57,16 +63,10 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	}
 
 	for name := range payload.Policies {
-		// Load the mapping config
-		mappingConfig, err := m.loadMappingConfig()
-		if err != nil {
-			return nil, fmt.Errorf("invalid mapping config : %w", err)
-		}
 
 		// Create a new policy with updated mappings
 		updatedPolicy := payload.Policies[name]
 		m.applyDefaults(&updatedPolicy)
-		updatedPolicy.Scope.Mappings = mappingConfig.Entries
 		payload.Policies[name] = updatedPolicy
 	}
 
@@ -74,8 +74,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 }
 
 // loadMappingConfig loads the mapping config from the embedded file
-func (m *Manager) loadMappingConfig() (config.Mapping, error) {
-	m.logger.Debug("Loading embedded mapping config")
+func loadMappingConfig() (config.Mapping, error) {
 	mappingConfigFileContents, err := embeddedMapping.ReadFile("mapping.yaml")
 	if err != nil {
 		return config.Mapping{}, fmt.Errorf("failed to read embedded mapping config file: %w", err)
@@ -161,16 +160,8 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 		return fmt.Errorf("%s : no targets found in the policy", name)
 	}
 
-	if len(policy.Scope.Mappings) == 0 {
-		return fmt.Errorf("%s : no mappings found in the policy", name)
-	}
-
-	if len(policy.Scope.Mappings) == 0 {
-		return fmt.Errorf("%s : no mappings found in the policy", name)
-	}
-
 	if !m.HasPolicy(name) {
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient, m.mappingConfig)
 		if err != nil {
 			return err
 		}

@@ -73,17 +73,19 @@ func TestNewRunner(t *testing.T) {
 					Port: 161,
 				},
 			},
-			Mappings: []config.MappingEntry{
-				{
-					OID:    "iso.3.6.1.2.1.2.2.1",
-					Entity: "interface",
-					Field:  "_id",
-					MappingEntries: []config.MappingEntry{
-						{
-							OID:    "iso.3.6.1.2.1.2.2.1.2",
-							Entity: "interface",
-							Field:  "name",
-						},
+		},
+	}
+	mappingConfig := config.Mapping{
+		Entries: []config.MappingEntry{
+			{
+				OID:    "iso.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []config.MappingEntry{
+					{
+						OID:    "iso.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
 					},
 				},
 			},
@@ -92,7 +94,7 @@ func TestNewRunner(t *testing.T) {
 	ctx := context.Background()
 
 	// Create new runner
-	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker)
+	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, mappingConfig)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 }
 
@@ -163,26 +165,29 @@ func TestRunnerRun(t *testing.T) {
 						ProtocolVersion: snmp.ProtocolVersion2c,
 						Community:       "public",
 					},
-					Mappings: []config.MappingEntry{
-						{
-							OID:    "iso.3.6.1.2.1.2.2.1",
-							Entity: "interface",
-							Field:  "_id",
-							MappingEntries: []config.MappingEntry{
-								{
-									OID:    "iso.3.6.1.2.1.2.2.1.2",
-									Entity: "interface",
-									Field:  "name",
-								},
+				},
+			}
+			ctx := context.Background()
+
+			mappingConfig := config.Mapping{
+				Entries: []config.MappingEntry{
+					{
+						OID:    "iso.3.6.1.2.1.2.2.1",
+						Entity: "interface",
+						Field:  "_id",
+						MappingEntries: []config.MappingEntry{
+							{
+								OID:    "iso.3.6.1.2.1.2.2.1.2",
+								Entity: "interface",
+								Field:  "name",
 							},
 						},
 					},
 				},
 			}
-			ctx := context.Background()
 
 			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker)
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, mappingConfig)
 			assert.NoError(t, err, "policy.NewRunner should not return an error")
 
 			// Use a channel to signal that Ingest was called
@@ -252,17 +257,20 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 					Host: "192.168.1.1",
 				},
 			},
-			Mappings: []config.MappingEntry{
-				{
-					OID:    "iso.3.6.1.2.1.2.2.1",
-					Entity: "interface",
-					Field:  "_id",
-					MappingEntries: []config.MappingEntry{
-						{
-							OID:    "iso.3.6.1.2.1.2.2.1.2",
-							Entity: "interface",
-							Field:  "name",
-						},
+		},
+	}
+
+	mappingConfig := config.Mapping{
+		Entries: []config.MappingEntry{
+			{
+				OID:    "iso.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []config.MappingEntry{
+					{
+						OID:    "iso.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
 					},
 				},
 			},
@@ -270,7 +278,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	}
 
 	// Create runner
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, mappingConfig)
 	assert.NoError(t, err)
 
 	// Use a channel to signal that Ingest was called
@@ -343,8 +351,12 @@ func TestRunnerWalkError(t *testing.T) {
 		return mockHost, nil
 	}
 
+	mappingConfig := config.Mapping{
+		Entries: []config.MappingEntry{},
+	}
+
 	// Create runner with the mock client factory
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory, mappingConfig)
 	assert.NoError(t, err)
 
 	// Set up a channel to detect if Ingest is called (it shouldn't be)

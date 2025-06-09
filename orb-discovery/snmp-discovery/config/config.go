@@ -13,8 +13,6 @@ type Status struct {
 type Scope struct {
 	Targets        []Target       `yaml:"targets"`
 	Authentication Authentication `yaml:"authentication"`
-	MappingConfig  string         `yaml:"mapping_config,omitempty"`
-	Mappings       []MappingEntry `yaml:"mappings,omitempty"`
 }
 
 // Target represents a target host to crawl

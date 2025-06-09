@@ -103,8 +103,6 @@ func TestManagerParsePolicies(t *testing.T) {
 		policies, err := manager.ParsePolicies(yamlData)
 		assert.NoError(t, err)
 		assert.Contains(t, policies, "policy1")
-		// Verify that the embedded mapping was loaded
-		assert.NotEmpty(t, policies["policy1"].Scope.Mappings)
 	})
 
 	t.Run("Invalid Policy", func(t *testing.T) {
