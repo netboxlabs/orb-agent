@@ -33,19 +33,10 @@ func (m *MockRunner) Stop() error {
 	return args.Error(0)
 }
 
-func writeMappingConfigFile(filename string) {
-	_ = os.WriteFile(filename, []byte(`
-    entries:
-      - oid: 1.3.6.1.2.1.1.1.0
-        entity: device
-        field: description
-        description: "Device description string (sysDescr)"
-    `), 0o644)
-}
-
 func TestManagerParsePolicies(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
-	manager := policy.NewManager(context.Background(), logger, nil)
+	manager, err := policy.NewManager(context.Background(), logger, nil)
+	assert.NoError(t, err)
 
 	t.Run("Valid Policy", func(t *testing.T) {
 		yamlData := []byte(`
@@ -62,14 +53,7 @@ func TestManagerParsePolicies(t *testing.T) {
               authentication:
                 protocol_version: SNMPv2c
                 community: public
-              mapping_config: "valid_mapping.yaml"
        `)
-
-		// Create a dummy valid mapping file
-		writeMappingConfigFile("valid_mapping.yaml")
-		defer func() {
-			_ = os.Remove("valid_mapping.yaml")
-		}()
 
 		policies, err := manager.ParsePolicies(yamlData)
 		assert.NoError(t, err)
@@ -82,7 +66,7 @@ func TestManagerParsePolicies(t *testing.T) {
 		assert.Equal(t, uint16(161), policies["policy1"].Scope.Targets[1].Port)
 	})
 
-	t.Run("Policy with mapping config (now ignored)", func(t *testing.T) {
+	t.Run("Valid Policy with Embedded Mapping", func(t *testing.T) {
 		yamlData := []byte(`
         policies:
           policy1:
@@ -96,10 +80,9 @@ func TestManagerParsePolicies(t *testing.T) {
               authentication:
                 protocol_version: SNMPv2c
                 community: public
-              mapping_config: "invalid_mapping.yaml"
        `)
 
-		// Since we now use embedded mapping, this should succeed even with invalid mapping file path
+		// With embedded mapping, policies should parse successfully
 		policies, err := manager.ParsePolicies(yamlData)
 		assert.NoError(t, err)
 		assert.Contains(t, policies, "policy1")
@@ -130,7 +113,8 @@ func TestManagerParsePolicies(t *testing.T) {
 
 func TestManagerPolicyLifecycle(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
-	manager := policy.NewManager(context.Background(), logger, nil)
+	manager, err := policy.NewManager(context.Background(), logger, nil)
+	assert.NoError(t, err)
 	yamlData := []byte(`
         policies:
           policy1:
@@ -140,7 +124,6 @@ func TestManagerPolicyLifecycle(t *testing.T) {
               authentication:
                 protocol_version: SNMPv2c
                 community: public
-              mapping_config: "valid_mapping.yaml"
           policy2:
             scope:
               targets:
@@ -148,21 +131,13 @@ func TestManagerPolicyLifecycle(t *testing.T) {
               authentication:
                 protocol_version: SNMPv2c
                 community: public
-              mapping_config: "valid_mapping.yaml"
           policy3:
             scope:
               targets: []
               authentication:
                 protocol_version: SNMPv2c
                 community: public
-              mapping_config: "valid_mapping.yaml"
        `)
-
-	// Create a dummy valid mapping file
-	writeMappingConfigFile("valid_mapping.yaml")
-	defer func() {
-		_ = os.Remove("valid_mapping.yaml")
-	}()
 
 	policies, err := manager.ParsePolicies(yamlData)
 	assert.NoError(t, err)

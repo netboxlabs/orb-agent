@@ -31,10 +31,11 @@ type Manager struct {
 }
 
 // NewManager returns a new policy manager
-func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) *Manager {
+func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) (*Manager, error) {
 	mappingConfig, err := loadMappingConfig()
 	if err != nil {
 		logger.Error("Failed to load mapping config", "error", err)
+		return nil, err
 	}
 	return &Manager{
 		ctx:           ctx,
@@ -42,7 +43,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) *
 		logger:        logger,
 		mappingConfig: mappingConfig,
 		policies:      make(map[string]*Runner),
-	}
+	}, nil
 }
 
 // ParsePolicies parses the policies from the request
