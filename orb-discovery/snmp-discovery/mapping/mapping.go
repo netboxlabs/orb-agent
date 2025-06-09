@@ -83,7 +83,9 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 	case "ipAddress":
 		return &diode.IPAddress{}, nil
 	case "interface":
-		return &diode.Interface{}, nil
+		return &diode.Interface{
+			Name: &[]string{"Unknown"}[0],
+		}, nil
 	case "device":
 		return &diode.Device{}, nil
 	}

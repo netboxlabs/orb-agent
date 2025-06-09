@@ -514,8 +514,10 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					},
 				},
 			},
-			expectedEntity: &diode.Interface{},
-			expectError:    false,
+			expectedEntity: &diode.Interface{
+				Name: stringPtr("Unknown"),
+			},
+			expectError: false,
 		},
 		{
 			name:   "empty values map",
@@ -525,8 +527,10 @@ func TestInterfaceMapper_Map(t *testing.T) {
 				Entity: "interface",
 				Field:  "_id",
 			},
-			expectedEntity: &diode.Interface{},
-			expectError:    false,
+			expectedEntity: &diode.Interface{
+				Name: stringPtr("Unknown"),
+			},
+			expectError: false,
 		},
 	}
 
