@@ -118,6 +118,11 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 
 	if fieldFound {
 		m.applyDefaults(&ipAddress, defaults)
+		if ipAddress.Address != nil {
+			m.logger.Debug("Successfully mapped IP address", "address", *ipAddress.Address)
+		} else {
+			m.logger.Debug("Successfully mapped IP address (address field empty)")
+		}
 	}
 
 	return &ipAddress
@@ -224,6 +229,11 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	// Apply defaults if available
 	if fieldFound {
 		m.applyDefaults(interfaceEntity, defaults)
+		if interfaceEntity.Name != nil {
+			m.logger.Debug("Successfully mapped interface", "name", *interfaceEntity.Name)
+		} else {
+			m.logger.Debug("Successfully mapped interface (name field empty)")
+		}
 	}
 
 	return interfaceEntity
@@ -385,6 +395,11 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 	// Apply defaults if available
 	if fieldFound {
 		m.applyDefaults(deviceEntity, defaults)
+		if deviceEntity.Name != nil {
+			m.logger.Debug("Successfully mapped device", "name", *deviceEntity.Name)
+		} else {
+			m.logger.Debug("Successfully mapped device (name field empty)")
+		}
 	}
 
 	return deviceEntity
