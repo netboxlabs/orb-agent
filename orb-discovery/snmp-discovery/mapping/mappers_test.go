@@ -53,7 +53,7 @@ func TestIPAddressMapper_Map(t *testing.T) {
 			},
 			defaults: nil,
 			expectedEntity: &diode.IPAddress{
-				Address: stringPtr("192.168.1.1/32"),
+				Address: mapping.StringPtr("192.168.1.1/32"),
 			},
 			expectError: false,
 		},
@@ -92,11 +92,11 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.IPAddress{
-				Address:     stringPtr("192.168.1.1/32"),
-				Description: stringPtr("IP Address Description"),
+				Address:     mapping.StringPtr("192.168.1.1/32"),
+				Description: mapping.StringPtr("IP Address Description"),
 				Tags: []*diode.Tag{
-					{Name: stringPtr("global-tag1")},
-					{Name: stringPtr("global-tag2")},
+					{Name: mapping.StringPtr("global-tag1")},
+					{Name: mapping.StringPtr("global-tag2")},
 				},
 			},
 			expectError: false,
@@ -136,11 +136,11 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.IPAddress{
-				Address:     stringPtr("192.168.1.1/32"),
-				Description: stringPtr("IP Address specific description"),
+				Address:     mapping.StringPtr("192.168.1.1/32"),
+				Description: mapping.StringPtr("IP Address specific description"),
 				Tags: []*diode.Tag{
-					{Name: stringPtr("ip-tag1")},
-					{Name: stringPtr("ip-tag2")},
+					{Name: mapping.StringPtr("ip-tag1")},
+					{Name: mapping.StringPtr("ip-tag2")},
 				},
 			},
 			expectError: false,
@@ -181,13 +181,13 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.IPAddress{
-				Address:     stringPtr("192.168.1.1/32"),
-				Description: stringPtr("IP Address specific description"),
+				Address:     mapping.StringPtr("192.168.1.1/32"),
+				Description: mapping.StringPtr("IP Address specific description"),
 				Tags: []*diode.Tag{
-					{Name: stringPtr("ip-tag1")},
-					{Name: stringPtr("ip-tag2")},
-					{Name: stringPtr("global-tag1")},
-					{Name: stringPtr("global-tag2")},
+					{Name: mapping.StringPtr("ip-tag1")},
+					{Name: mapping.StringPtr("ip-tag2")},
+					{Name: mapping.StringPtr("global-tag1")},
+					{Name: mapping.StringPtr("global-tag2")},
 				},
 			},
 			expectError: false,
@@ -237,7 +237,7 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.IPAddress{
-				Address: stringPtr("192.168.1.1/32"),
+				Address: mapping.StringPtr("192.168.1.1/32"),
 			},
 			expectError: false,
 		},
@@ -284,15 +284,15 @@ func TestIPAddressMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.IPAddress{
-				Address:     stringPtr("192.168.1.1/32"),
-				Description: stringPtr("IP Address specific description"),
+				Address:     mapping.StringPtr("192.168.1.1/32"),
+				Description: mapping.StringPtr("IP Address specific description"),
 				Tenant: &diode.Tenant{
-					Name: stringPtr("ip-address-tenant"),
+					Name: mapping.StringPtr("ip-address-tenant"),
 				},
-				Role: stringPtr("ip-address-role"),
+				Role: mapping.StringPtr("ip-address-role"),
 				Vrf: &diode.VRF{
-					Name: stringPtr("ip-address-vrf"),
-					Rd:   stringPtr("ip-address-vrf"),
+					Name: mapping.StringPtr("ip-address-vrf"),
+					Rd:   mapping.StringPtr("ip-address-vrf"),
 				},
 			},
 			expectError: false,
@@ -416,9 +416,9 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			},
 			defaults: nil,
 			expectedEntity: &diode.Interface{
-				Name:              stringPtr("eth0"),
+				Name:              mapping.StringPtr("eth0"),
 				Speed:             int64Ptr(1000000),
-				PrimaryMacAddress: &diode.MACAddress{MacAddress: stringPtr("00:11:22:33:44:55")},
+				PrimaryMacAddress: &diode.MACAddress{MacAddress: mapping.StringPtr("00:11:22:33:44:55")},
 				Enabled:           boolPtr(true),
 			},
 			expectError: false,
@@ -467,15 +467,15 @@ func TestInterfaceMapper_Map(t *testing.T) {
 				Tags: []string{"global-tag1", "global-tag2"},
 			},
 			expectedEntity: &diode.Interface{
-				Name:        stringPtr("eth0"),
-				Description: stringPtr("Interface specific description"),
+				Name:        mapping.StringPtr("eth0"),
+				Description: mapping.StringPtr("Interface specific description"),
 				Tags: []*diode.Tag{
-					{Name: stringPtr("interface-tag1")},
-					{Name: stringPtr("interface-tag2")},
-					{Name: stringPtr("global-tag1")},
-					{Name: stringPtr("global-tag2")},
+					{Name: mapping.StringPtr("interface-tag1")},
+					{Name: mapping.StringPtr("interface-tag2")},
+					{Name: mapping.StringPtr("global-tag1")},
+					{Name: mapping.StringPtr("global-tag2")},
 				},
-				Type: stringPtr("ethernet"),
+				Type: mapping.StringPtr("ethernet"),
 			},
 			expectError: false,
 		},
@@ -514,8 +514,10 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					},
 				},
 			},
-			expectedEntity: &diode.Interface{},
-			expectError:    false,
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("Unknown"),
+			},
+			expectError: false,
 		},
 		{
 			name:   "empty values map",
@@ -525,8 +527,10 @@ func TestInterfaceMapper_Map(t *testing.T) {
 				Entity: "interface",
 				Field:  "_id",
 			},
-			expectedEntity: &diode.Interface{},
-			expectError:    false,
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("Unknown"),
+			},
+			expectError: false,
 		},
 	}
 
@@ -665,16 +669,16 @@ func TestDeviceMapper_Map(t *testing.T) {
 			},
 			defaults: nil,
 			expectedEntity: &diode.Device{
-				Name: stringPtr("router1"),
+				Name: mapping.StringPtr("router1"),
 				DeviceType: &diode.DeviceType{
 					Manufacturer: &diode.Manufacturer{
-						Name: stringPtr("Cisco"),
+						Name: mapping.StringPtr("Cisco"),
 					},
-					Model: stringPtr("cisco4000"),
+					Model: mapping.StringPtr("cisco4000"),
 				},
 				Platform: &diode.Platform{
 					Manufacturer: &diode.Manufacturer{
-						Name: stringPtr("Cisco"),
+						Name: mapping.StringPtr("Cisco"),
 					},
 				},
 			},
@@ -715,25 +719,25 @@ func TestDeviceMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.Device{
-				Name:        stringPtr("router1"),
-				Description: stringPtr("Device specific description"),
-				Comments:    stringPtr("Device specific comments"),
+				Name:        mapping.StringPtr("router1"),
+				Description: mapping.StringPtr("Device specific description"),
+				Comments:    mapping.StringPtr("Device specific comments"),
 				Tags: []*diode.Tag{
-					{Name: stringPtr("device-tag1")},
-					{Name: stringPtr("device-tag2")},
-					{Name: stringPtr("global-tag1")},
-					{Name: stringPtr("global-tag2")},
+					{Name: mapping.StringPtr("device-tag1")},
+					{Name: mapping.StringPtr("device-tag2")},
+					{Name: mapping.StringPtr("global-tag1")},
+					{Name: mapping.StringPtr("global-tag2")},
 				},
 				Role: &diode.DeviceRole{
-					Name: stringPtr("test-role"),
+					Name: mapping.StringPtr("test-role"),
 				},
 				Site: &diode.Site{
-					Name: stringPtr("test-site"),
+					Name: mapping.StringPtr("test-site"),
 				},
 				Location: &diode.Location{
-					Name: stringPtr("test-location"),
+					Name: mapping.StringPtr("test-location"),
 					Site: &diode.Site{
-						Name: stringPtr("test-site"),
+						Name: mapping.StringPtr("test-site"),
 					},
 				},
 			},
@@ -776,7 +780,7 @@ func TestDeviceMapper_Map(t *testing.T) {
 				},
 			},
 			expectedEntity: &diode.Device{
-				Name: stringPtr("router1"),
+				Name: mapping.StringPtr("router1"),
 			},
 			expectError: false,
 		},
@@ -848,10 +852,6 @@ func (m *MockManufacturerDataRetriever) GetDeviceModel(id int) (string, error) {
 }
 
 // Helper functions to create pointers
-func stringPtr(s string) *string {
-	return &s
-}
-
 func int64Ptr(i int64) *int64 {
 	return &i
 }

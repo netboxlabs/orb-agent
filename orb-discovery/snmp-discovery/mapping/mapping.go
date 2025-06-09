@@ -83,11 +83,18 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 	case "ipAddress":
 		return &diode.IPAddress{}, nil
 	case "interface":
-		return &diode.Interface{}, nil
+		return &diode.Interface{
+			Name: StringPtr("Unknown"),
+		}, nil
 	case "device":
 		return &diode.Device{}, nil
 	}
 	return nil, fmt.Errorf("unimplemented entity type: %s", entityType)
+}
+
+// StringPtr is a helper function to create a pointer to a string
+func StringPtr(s string) *string {
+	return &s
 }
 
 // ObjectIDValueMap is a map of ObjectIDs to their values
