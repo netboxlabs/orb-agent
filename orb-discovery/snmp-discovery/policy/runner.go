@@ -38,11 +38,11 @@ type Runner struct {
 	config        config.PolicyConfig
 	ClientFactory snmp.ClientFactory
 	manufacturers data.DeviceDataRetreiver
-	mappingConfig config.Mapping
+	mappingConfig *config.Mapping
 }
 
 // NewRunner returns a new policy runner
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory, mappingConfig config.Mapping) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory, mappingConfig *config.Mapping) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err

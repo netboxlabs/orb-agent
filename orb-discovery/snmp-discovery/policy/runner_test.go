@@ -94,7 +94,7 @@ func TestNewRunner(t *testing.T) {
 	ctx := context.Background()
 
 	// Create new runner
-	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, mappingConfig)
+	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 }
 
@@ -187,7 +187,7 @@ func TestRunnerRun(t *testing.T) {
 			}
 
 			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, mappingConfig)
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig)
 			assert.NoError(t, err, "policy.NewRunner should not return an error")
 
 			// Use a channel to signal that Ingest was called
@@ -278,7 +278,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	}
 
 	// Create runner
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, mappingConfig)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig)
 	assert.NoError(t, err)
 
 	// Use a channel to signal that Ingest was called
@@ -356,7 +356,7 @@ func TestRunnerWalkError(t *testing.T) {
 	}
 
 	// Create runner with the mock client factory
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory, mappingConfig)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory, &mappingConfig)
 	assert.NoError(t, err)
 
 	// Set up a channel to detect if Ingest is called (it shouldn't be)
