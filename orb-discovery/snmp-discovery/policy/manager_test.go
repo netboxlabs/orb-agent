@@ -82,7 +82,7 @@ func TestManagerParsePolicies(t *testing.T) {
 		assert.Equal(t, uint16(161), policies["policy1"].Scope.Targets[1].Port)
 	})
 
-	t.Run("Invalid MappingConfig", func(t *testing.T) {
+	t.Run("Policy with mapping config (now ignored)", func(t *testing.T) {
 		yamlData := []byte(`
         policies:
           policy1:
@@ -99,9 +99,12 @@ func TestManagerParsePolicies(t *testing.T) {
               mapping_config: "invalid_mapping.yaml"
        `)
 
-		_, err := manager.ParsePolicies(yamlData)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "policy1 : invalid policy : mapping configuration file does not exist")
+		// Since we now use embedded mapping, this should succeed even with invalid mapping file path
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		// Verify that the embedded mapping was loaded
+		assert.NotEmpty(t, policies["policy1"].Scope.Mappings)
 	})
 
 	t.Run("Invalid Policy", func(t *testing.T) {

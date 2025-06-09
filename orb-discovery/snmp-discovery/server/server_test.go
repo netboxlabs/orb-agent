@@ -467,49 +467,6 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			returnCode:    http.StatusBadRequest,
 			returnMessage: `test-policy : invalid policy : missing priv protocol`,
 		},
-		{
-			desc:        "missing mapping config",
-			contentType: "application/x-yaml",
-			body: []byte(`
-            policies:
-              test-policy:
-                scope:
-                  targets:
-                    - host: 192.168.31.1
-                  authentication:
-                    protocol_version: SNMPv3
-                    security_level: authPriv
-                    username: user
-                    auth_passphrase: pass
-                    priv_passphrase: pass
-                    auth_protocol: MD5
-                    priv_protocol: DES
-            `),
-			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing mapping config`,
-		},
-		{
-			desc:        "missing mapping config file",
-			contentType: "application/x-yaml",
-			body: []byte(`
-            policies:
-              test-policy:
-                scope:
-                  targets:
-                    - host: 192.168.31.1
-                  authentication:
-                    protocol_version: SNMPv3
-                    security_level: authPriv
-                    username: user
-                    auth_passphrase: pass
-                    priv_passphrase: pass
-                    auth_protocol: MD5
-                    priv_protocol: DES
-                  mapping_config: invalid_mapping.yaml
-            `),
-			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : mapping configuration file does not exist`,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.desc, func(t *testing.T) {
