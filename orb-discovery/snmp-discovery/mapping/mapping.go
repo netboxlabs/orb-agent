@@ -92,6 +92,7 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 	return nil, fmt.Errorf("unimplemented entity type: %s", entityType)
 }
 
+// StringPtr is a helper function to create a pointer to a string
 func StringPtr(s string) *string {
 	return &s
 }
