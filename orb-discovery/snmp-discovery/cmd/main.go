@@ -12,6 +12,7 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/server"
@@ -94,7 +95,13 @@ func main() {
 		logger.Info("Metrics export configured", slog.String("endpoint", *otelEndpoint), slog.Int("period_seconds", *otelExportPeriod))
 	}
 
-	policyManager, err := policy.NewManager(ctx, logger, client)
+	manufacturers, err := data.NewManufacturerLookup()
+	if err != nil {
+		logger.Error("Failed to load manufacturer lookup", "error", err)
+		os.Exit(1)
+	}
+
+	policyManager, err := policy.NewManager(ctx, logger, client, manufacturers)
 	if err != nil {
 		logger.Error("failed to create policy manager", "error", err)
 		os.Exit(1)

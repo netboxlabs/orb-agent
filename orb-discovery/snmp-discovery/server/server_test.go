@@ -38,7 +38,7 @@ func TestServerConfigureAndStart(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	client := new(MockClient)
-	policyManager, err := policy.NewManager(ctx, logger, client)
+	policyManager, err := policy.NewManager(ctx, logger, client, nil)
 	require.NoError(t, err)
 
 	err = setupTestMeter(t)
@@ -66,7 +66,7 @@ func TestServerGetCapabilities(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	client := new(MockClient)
-	policyManager, err := policy.NewManager(ctx, logger, client)
+	policyManager, err := policy.NewManager(ctx, logger, client, nil)
 	require.NoError(t, err)
 
 	srv := server.NewServer("localhost", 8081, logger, policyManager, "1.0.0")
@@ -86,7 +86,7 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	client := new(MockClient)
-	policyManager, err := policy.NewManager(ctx, logger, client)
+	policyManager, err := policy.NewManager(ctx, logger, client, nil)
 	require.NoError(t, err)
 
 	srv := server.NewServer("localhost", 8081, logger, policyManager, "1.0.0")
@@ -95,6 +95,7 @@ func TestServerCreateDeletePolicy(t *testing.T) {
     policies:
       test-policy:
         config:
+          lookup_extensions_dir: /tmp/lookup_extensions
           defaults:
             site: New York NY
         scope:
@@ -121,14 +122,9 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 	// Try to create the same policy again
 	body = []byte(`
     policies:
-      test-pol:
-        scope:
-          targets: 
-            - host: 192.168.31.1
-          authentication:
-            protocol_version: SNMPv2c
-            community: public
       test-policy:
+        config:
+          lookup_extensions_dir: /tmp/lookup_extensions
         scope:
           targets: 
             - host: 192.168.31.1
@@ -208,6 +204,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -216,6 +214,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     community: public
               test-policy-invalid:
                 config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                   defaults:
                     site: New York NY
                 scope:
@@ -233,6 +232,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -241,6 +242,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     community: public
               test-policy-invalid:
                 config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                   defaults:
                     site: New York NY
                 scope:
@@ -256,6 +258,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -272,6 +276,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -287,6 +293,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -308,6 +316,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -328,6 +338,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -346,6 +358,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -364,6 +378,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -382,6 +398,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -402,6 +420,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -422,6 +442,8 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			body: []byte(`
             policies:
               test-policy:
+                config:
+                  lookup_extensions_dir: /tmp/lookup_extensions
                 scope:
                   targets:
                     - host: 192.168.31.1
@@ -443,7 +465,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 			client := new(MockClient)
 
-			policyManager, err := policy.NewManager(ctx, logger, client)
+			policyManager, err := policy.NewManager(ctx, logger, client, nil)
 			require.NoError(t, err)
 
 			srv := server.NewServer("localhost", 8073, logger, policyManager, "1.0.0")

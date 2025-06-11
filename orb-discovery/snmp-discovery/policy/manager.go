@@ -9,6 +9,7 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"gopkg.in/yaml.v3"
 )
@@ -28,21 +29,24 @@ type Manager struct {
 	logger        *slog.Logger
 	ctx           context.Context
 	mappingConfig config.Mapping
+	manufacturers data.ManufacturerRetriever
 }
 
 // NewManager returns a new policy manager
-func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) (*Manager, error) {
+func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client, manufacturers data.ManufacturerRetriever) (*Manager, error) {
 	mappingConfig, err := loadMappingConfig()
 	if err != nil {
 		logger.Error("Failed to load mapping config", "error", err)
 		return nil, err
 	}
+
 	return &Manager{
 		ctx:           ctx,
 		client:        client,
 		logger:        logger,
 		mappingConfig: mappingConfig,
 		policies:      make(map[string]*Runner),
+		manufacturers: manufacturers,
 	}, nil
 }
 
@@ -64,7 +68,6 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	}
 
 	for name := range payload.Policies {
-
 		// Create a new policy with updated mappings
 		updatedPolicy := payload.Policies[name]
 		m.applyDefaults(&updatedPolicy)
@@ -145,6 +148,10 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		}
 	}
 
+	if policy.Config.LookupExtensionsDir == "" {
+		return fmt.Errorf("missing lookup extensions directory")
+	}
+
 	return nil
 }
 
@@ -162,7 +169,15 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	}
 
 	if !m.HasPolicy(name) {
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient, &m.mappingConfig)
+		// Load device lookup extensions
+		deviceLookup, err := data.LoadDeviceLookupExtensions(policy.Config.LookupExtensionsDir)
+		if err != nil {
+			m.logger.Warn("Failed to load device lookup extensions", "error", err, "directory", policy.Config.LookupExtensionsDir)
+		} else {
+			m.logger.Info("Loaded device lookup extensions", "directory", policy.Config.LookupExtensionsDir)
+		}
+
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient, &m.mappingConfig, m.manufacturers, deviceLookup)
 		if err != nil {
 			return err
 		}

@@ -13,11 +13,13 @@ import (
 
 type FakeManufacturers struct{}
 
-func (f *FakeManufacturers) GetManufacturer(_ int) (string, error) {
+func (f *FakeManufacturers) GetManufacturer(_ string) (string, error) {
 	return "Cisco", nil
 }
 
-func (f *FakeManufacturers) GetDeviceModel(_ int) (string, error) {
+type FakeDeviceLookup struct{}
+
+func (f *FakeDeviceLookup) GetDevice(_ string, _ string) (string, error) {
 	return "cisco4000", nil
 }
 
@@ -152,7 +154,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 					Speed: &[]int64{1000000000}[0],
 					Name:  diode.String("GigabitEthernet1/0/1"),
 					PrimaryMacAddress: &diode.MACAddress{
-						MacAddress: &[]string{"00:00:00:00:00:00"}[0],
+						MacAddress: diode.String("00:00:00:00:00:00"),
 					},
 					Enabled: &[]bool{true}[0],
 					Type:    diode.String("virtual"),
@@ -323,7 +325,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						Manufacturer: &diode.Manufacturer{
 							Name: diode.String("Cisco"),
 						},
-						Model: &[]string{"cisco4000"}[0],
+						Model: diode.String("cisco4000"),
 					},
 					Platform: &diode.Platform{
 						Name: diode.String("Cisco"),
@@ -343,6 +345,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 				tt.mapping,
 				slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})),
 				&FakeManufacturers{},
+				&FakeDeviceLookup{},
 				&config.Defaults{
 					Interface: config.InterfaceDefaults{
 						Type: "virtual",
@@ -409,6 +412,7 @@ func TestObjectIDs(t *testing.T) {
 				tt.mapping,
 				slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})),
 				&FakeManufacturers{},
+				&FakeDeviceLookup{},
 				&config.Defaults{},
 			)
 			objectIDs := mapper.ObjectIDs()
