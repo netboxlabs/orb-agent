@@ -355,6 +355,9 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 				case "name":
 					deviceEntity.Name = &value.Value
 					fieldFound = true
+				case "description":
+					deviceEntity.Description = &value.Value
+					fieldFound = true
 				case "platform":
 					// Use getDeviceIDs to get the manufacturer and model
 					manufacturerID, modelID, err := m.getDeviceIDs(value.Value)

@@ -893,6 +893,48 @@ func TestDeviceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "successful mapping with description field",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "test-device",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.1.1.0": {
+					OID:    "1.3.6.1.2.1.1.1.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.1",
+					Value:  "Test device description from SNMP",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.1",
+						Entity: "device",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Device{
+				Name:        mapping.StringPtr("test-device"),
+				Description: mapping.StringPtr("Test device description from SNMP"),
+			},
+			expectError: false,
+		},
+		{
 			name:   "empty values map",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{},
 			mappingEntry: &mapping.Entry{
