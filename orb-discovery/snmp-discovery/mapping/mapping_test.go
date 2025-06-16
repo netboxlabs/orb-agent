@@ -81,6 +81,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 					},
 					Enabled: &[]bool{true}[0],
 					Type:    diode.String("virtual"),
+					Device:  &diode.Device{},
 				},
 				&diode.Interface{
 					Speed: &[]int64{1000000000}[0],
@@ -90,6 +91,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 					},
 					Enabled: &[]bool{false}[0],
 					Type:    diode.String("virtual"),
+					Device:  &diode.Device{},
 				},
 			},
 		},
@@ -158,6 +160,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 					},
 					Enabled: &[]bool{true}[0],
 					Type:    diode.String("virtual"),
+					Device:  &diode.Device{},
 				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),
@@ -265,14 +268,16 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 			expected: []diode.Entity{
 				&diode.Interface{
-					Name: diode.String("GigabitEthernet1/0/1"),
-					Type: diode.String("virtual"),
+					Name:   diode.String("GigabitEthernet1/0/1"),
+					Type:   diode.String("virtual"),
+					Device: &diode.Device{},
 				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),
 					AssignedObject: &diode.Interface{
-						Name: diode.String("GigabitEthernet1/0/1"),
-						Type: diode.String("virtual"),
+						Name:   diode.String("GigabitEthernet1/0/1"),
+						Type:   diode.String("virtual"),
+						Device: &diode.Device{},
 					},
 				},
 			},

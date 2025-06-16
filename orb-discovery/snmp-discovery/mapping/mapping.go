@@ -103,6 +103,15 @@ type ObjectIDValueMap map[string]Value
 // EntityType is a type that represents an entity type
 type EntityType string
 
+const (
+	// DeviceEntityType is the type of the device entity
+	DeviceEntityType EntityType = "device"
+	// InterfaceEntityType is the type of the interface entity
+	InterfaceEntityType EntityType = "interface"
+	// IPAddressEntityType is the type of the IP address entity
+	IPAddressEntityType EntityType = "ipAddress"
+)
+
 // ObjectIDMapper is a struct that maps ObjectIDs to entities
 type ObjectIDMapper struct {
 	mapping  map[string]*Entry
@@ -123,7 +132,7 @@ type Entry struct {
 }
 
 // MapToEntity maps a value to an entity
-func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) []diode.Entity {
+func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
 	logger.Debug("Mapping value to entity", "entity", m.Entity, "value", pdus)
 
 	if m.Mapper == nil {
@@ -136,7 +145,7 @@ func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistr
 		logger.Warn("No entity returned from mapper. Ignoring.", "entity", m.Entity)
 		return nil
 	}
-	return []diode.Entity{entity}
+	return entity
 }
 
 // NewObjectIDMapper creates a new ObjectIDMapper
@@ -250,36 +259,25 @@ func NewObjectIDIndexDetails(index string) *ObjectIDIndexDetails {
 // MapObjectIDsToEntity maps ObjectIDs to entities
 func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diode.Entity {
 	objectIDIndexMap := m.groupByObjectIDIndex(objectIDs)
-	entities := make([]diode.Entity, 0, len(objectIDIndexMap))
+	uniqueEntities := make(map[diode.Entity]bool)
 	for index, value := range objectIDIndexMap {
 		m.logger.Debug("Mapping objectIDIndex", "objectIDIndex", index, "values", value.Values)
-		Entry, err := m.getMappingEntry(value.Index)
+		entry, err := m.getMappingEntry(value.Index)
 		if err != nil {
 			m.logger.Warn("Error finding mapping entry", "error", err, "objectID", value.Index)
 			continue
 		}
-		newEntities := Entry.MapToEntity(value.Values, m.registry, m.defaults, m.logger)
-		entities = append(entities, newEntities...)
+		newEntity := entry.MapToEntity(value.Values, m.registry, m.defaults, m.logger)
+		uniqueEntities[newEntity] = true
 	}
 
-	var currentDevice *diode.Device
-	for _, entity := range entities {
-		// check if it's a diode.Device
-		if device, ok := entity.(*diode.Device); ok {
-			if currentDevice != nil {
-				m.logger.Warn("Multiple devices found. Ignoring.", "device", device)
-			}
-			// check if the device has a name
-			currentDevice = device
-		}
-	}
-	if currentDevice == nil {
-		m.logger.Warn("No device found.")
-	}
-	for _, entity := range entities {
+	currentDevice := m.registry.GetOrCreateEntity(DeviceEntityType, CurrentDeviceIndex).(*diode.Device)
+	entities := make([]diode.Entity, 0, len(uniqueEntities))
+	for entity := range uniqueEntities {
 		if diodeInterface, ok := entity.(*diode.Interface); ok {
 			diodeInterface.Device = currentDevice
 		}
+		entities = append(entities, entity)
 	}
 	return entities
 }

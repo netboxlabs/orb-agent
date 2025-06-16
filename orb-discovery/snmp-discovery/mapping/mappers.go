@@ -181,7 +181,7 @@ func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *confi
 // Map maps interfaces to entities
 func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
 	m.logger.Debug("Mapping values to interface entity", "values", values, "mappingEntry", mappingEntry)
-	interfaceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), getIndex(values)).(*diode.Interface)
+	interfaceEntity := entityRegistry.GetOrCreateEntity(InterfaceEntityType, getIndex(values)).(*diode.Interface)
 
 	fieldFound := false
 	for objectID, value := range values {
@@ -332,6 +332,9 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 	}
 }
 
+// CurrentDeviceIndex is the index of the current device
+const CurrentDeviceIndex = "CURRENT"
+
 // NewDeviceMapper creates a new DeviceMapper
 func NewDeviceMapper(manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever, logger *slog.Logger) *DeviceMapper {
 	return &DeviceMapper{
@@ -344,7 +347,7 @@ func NewDeviceMapper(manufacturers data.ManufacturerRetriever, deviceLookup data
 // Map maps devices to entities
 func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
 	m.logger.Debug("Mapping values to device entity", "values", values, "mappingEntry", mappingEntry)
-	deviceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), getIndex(values)).(*diode.Device)
+	deviceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), CurrentDeviceIndex).(*diode.Device)
 
 	fieldFound := false
 	for objectID, value := range values {

@@ -286,6 +286,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 
 	expectedEntities := []diode.Entity{
 		&diode.Interface{
+			Device:      &diode.Device{},
 			Name:        diode.String("GigabitEthernet1/0/1"),
 			Description: diode.String("Interface Default"),
 			Tags: []*diode.Tag{
