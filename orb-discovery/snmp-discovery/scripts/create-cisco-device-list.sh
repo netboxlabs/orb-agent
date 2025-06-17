@@ -14,9 +14,9 @@ echo "devices:"
 
 # Parse each matching line and append to YAML
 grep "1\.3\.6\.1\.4\.1\.9\.1\." "$TMPFILE" | while read -r line; do
-  OID=$(echo $line | awk '{print $2}')
+  OID=$(echo $line | awk '{print $2}' | sed 's/^"//' | sed 's/"$//')
   NAME=$(echo "$line" | awk '{print $1}')
-  echo "  $OID: $NAME"
+  echo "  .$OID: $NAME"
 done
 
 # Clean up
