@@ -230,7 +230,21 @@ type ObjectIDIndex string
 
 // HasParent returns true if the ObjectIDIndex has a parent
 func (o *ObjectIDIndex) HasParent(parent string) bool {
-	return strings.HasPrefix(string(*o), parent)
+	child := string(*o)
+	parentParts := strings.Split(parent, ".")
+	childParts := strings.Split(child, ".")
+
+	if len(parentParts) > len(childParts) {
+		return false
+	}
+
+	for i := 0; i < len(parentParts); i++ {
+		if parentParts[i] != childParts[i] {
+			return false // Mismatch found
+		}
+	}
+
+	return true
 }
 
 // ObjectIDIndexDetails is a struct that contains an index and a map of values

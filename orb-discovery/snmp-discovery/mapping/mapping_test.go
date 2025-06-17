@@ -456,7 +456,7 @@ func TestObjectIDIndex_HasParent(t *testing.T) {
 			name:     "empty parent",
 			index:    "1.2.3.4",
 			parent:   "",
-			expected: true,
+			expected: false,
 		},
 		{
 			name:     "empty index",
