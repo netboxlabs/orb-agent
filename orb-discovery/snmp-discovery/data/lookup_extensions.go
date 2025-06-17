@@ -80,25 +80,22 @@ func (m *ManufacturerLookup) GetManufacturer(id string) (string, error) {
 	return "", fmt.Errorf("manufacturer not found")
 }
 
-// DeviceRetriever is an interface that provides a method to retrieve device information by vendor and device IDs
+// DeviceRetriever is an interface that provides a method to retrieve device information by device OID
 type DeviceRetriever interface {
-	GetDevice(vendorID, deviceID string) (string, error)
+	GetDevice(deviceOID string) (string, error)
 }
 
 // DeviceLookup represents a device lookup service
 type DeviceLookup struct {
-	devicesByVendor map[string]map[string]string
+	devicesByVendor map[string]string
 }
 
-// GetDevice returns the device name for given vendor ID and device ID
-func (d *DeviceLookup) GetDevice(vendorID, deviceID string) (string, error) {
-	if devices, ok := d.devicesByVendor[vendorID]; ok {
-		if deviceName, ok := devices[deviceID]; ok {
-			return deviceName, nil
-		}
-		return "", fmt.Errorf("device ID %s not found for vendor %s", deviceID, vendorID)
+// GetDevice returns the device name for given device OID
+func (d *DeviceLookup) GetDevice(deviceOID string) (string, error) {
+	if device, ok := d.devicesByVendor[deviceOID]; ok {
+		return device, nil
 	}
-	return "", fmt.Errorf("vendor ID %s not found", vendorID)
+	return "", fmt.Errorf("device ID %s not found", deviceOID)
 }
 
 // LoadDeviceLookupExtensions loads device data from YAML files in the specified directory
@@ -107,11 +104,11 @@ func LoadDeviceLookupExtensions(dir string) (*DeviceLookup, error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return &DeviceLookup{
-			devicesByVendor: make(map[string]map[string]string),
+			devicesByVendor: make(map[string]string),
 		}, fmt.Errorf("failed to read directory %s: %w", dir, err)
 	}
 
-	devicesByVendor := make(map[string]map[string]string)
+	devicesByVendor := make(map[string]string)
 
 	for _, file := range files {
 		if !isLookupExtensionFile(file) {
@@ -142,14 +139,14 @@ func isLookupExtensionFile(file os.DirEntry) bool {
 }
 
 // loadYAMLFile loads a single YAML file and merges its data into devicesByVendor
-func loadYAMLFile(filePath string, devicesByVendor *map[string]map[string]string) error {
+func loadYAMLFile(filePath string, devicesByVendor *map[string]string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 
 	var fileData struct {
-		Devices map[string]map[string]string `yaml:"devices"`
+		Devices map[string]string `yaml:"devices"`
 	}
 
 	if err := yaml.Unmarshal(data, &fileData); err != nil {
@@ -157,14 +154,8 @@ func loadYAMLFile(filePath string, devicesByVendor *map[string]map[string]string
 	}
 
 	// Merge the data into devicesByVendor
-	for vendorID, devices := range fileData.Devices {
-		if (*devicesByVendor)[vendorID] == nil {
-			(*devicesByVendor)[vendorID] = make(map[string]string)
-		}
-
-		for deviceID, deviceName := range devices {
-			(*devicesByVendor)[vendorID][deviceID] = deviceName
-		}
+	for deviceOID, deviceName := range fileData.Devices {
+		(*devicesByVendor)[deviceOID] = deviceName
 	}
 
 	return nil

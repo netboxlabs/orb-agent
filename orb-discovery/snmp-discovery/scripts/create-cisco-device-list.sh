@@ -12,13 +12,11 @@ curl -sS "$MIB_URL" -o "$TMPFILE"
 # Start YAML
 echo "devices:"
 
-echo "  9: # Cisco PEN" 
-
 # Parse each matching line and append to YAML
 grep "1\.3\.6\.1\.4\.1\.9\.1\." "$TMPFILE" | while read -r line; do
-  ID=$(echo "$line" | awk '{print $2}' | sed 's/1\.3\.6\.1\.4\.1\.9\.//')
+  OID=$(echo $line | awk '{print $2}')
   NAME=$(echo "$line" | awk '{print $1}')
-  echo "    $ID: \"$NAME\""
+  echo "  $OID: $NAME"
 done
 
 # Clean up

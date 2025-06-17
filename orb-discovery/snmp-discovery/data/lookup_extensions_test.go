@@ -169,84 +169,43 @@ func TestManufacturerLookup_EdgeCases(t *testing.T) {
 func TestDeviceLookup_GetDevice(t *testing.T) {
 	// Create a test DeviceLookup with sample data
 	deviceLookup := &DeviceLookup{
-		devicesByVendor: map[string]map[string]string{
-			"1234": {
-				"5678": "Test Device A",
-				"9ABC": "Test Device B",
-			},
-			"ABCD": {
-				"1111": "Another Device",
-				"2222": "Yet Another Device",
-			},
+		devicesByVendor: map[string]string{
+			"1.3.6.1.4.1.9.1.1234": "Test Device A",
+			"1.3.6.1.4.1.9.1.4321": "Test Device B",
 		},
 	}
 
 	tests := []struct {
-		name     string
-		vendorID string
-		deviceID string
-		want     string
-		wantErr  bool
-		errMsg   string
+		name      string
+		deviceOID string
+		want      string
+		wantErr   bool
+		errMsg    string
 	}{
 		{
-			name:     "successful lookup - existing vendor and device",
-			vendorID: "1234",
-			deviceID: "5678",
-			want:     "Test Device A",
-			wantErr:  false,
+			name:      "successful lookup - existing vendor and device",
+			deviceOID: "1.3.6.1.4.1.9.1.1234",
+			want:      "Test Device A",
+			wantErr:   false,
 		},
 		{
-			name:     "successful lookup - another device",
-			vendorID: "1234",
-			deviceID: "9ABC",
-			want:     "Test Device B",
-			wantErr:  false,
+			name:      "successful lookup - another device",
+			deviceOID: "1.3.6.1.4.1.9.1.4321",
+			want:      "Test Device B",
+			wantErr:   false,
 		},
 		{
-			name:     "successful lookup - different vendor",
-			vendorID: "ABCD",
-			deviceID: "1111",
-			want:     "Another Device",
-			wantErr:  false,
-		},
-		{
-			name:     "non-existing vendor",
-			vendorID: "FFFF",
-			deviceID: "1234",
-			want:     "",
-			wantErr:  true,
-			errMsg:   "vendor ID FFFF not found",
-		},
-		{
-			name:     "existing vendor but non-existing device",
-			vendorID: "1234",
-			deviceID: "FFFF",
-			want:     "",
-			wantErr:  true,
-			errMsg:   "device ID FFFF not found for vendor 1234",
-		},
-		{
-			name:     "empty vendor ID",
-			vendorID: "",
-			deviceID: "1234",
-			want:     "",
-			wantErr:  true,
-			errMsg:   "vendor ID  not found",
-		},
-		{
-			name:     "empty device ID",
-			vendorID: "1234",
-			deviceID: "",
-			want:     "",
-			wantErr:  true,
-			errMsg:   "device ID  not found for vendor 1234",
+			name:      "unsuccessful lookup - non-existing device OID",
+			deviceOID: "1.3.6.1.4.1.9.1.987",
+			want:      "",
+			wantErr:   true,
+			errMsg:    "device ID 1.3.6.1.4.1.9.1.987 not found",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := deviceLookup.GetDevice(tt.vendorID, tt.deviceID)
+			got, err := deviceLookup.GetDevice(tt.deviceOID)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Equal(t, "", got)
@@ -273,72 +232,52 @@ func TestLoadDeviceLookupExtensions(t *testing.T) {
 		name     string
 		files    map[string]string
 		wantErr  bool
-		expected map[string]map[string]string
+		expected map[string]string
 	}{
 		{
 			name: "single valid YAML file",
 			files: map[string]string{
 				"devices.yaml": `devices:
-  "1234":
-    "5678": "Test Device A"
-    "9ABC": "Test Device B"
-  "ABCD":
-    "1111": "Another Device"`,
+  "1.3.6.1.4.1.9.1.1234": "Test Device A"
+  "1.3.6.1.4.1.9.1.4321": "Test Device B"`,
 			},
 			wantErr: false,
-			expected: map[string]map[string]string{
-				"1234": {
-					"5678": "Test Device A",
-					"9ABC": "Test Device B",
-				},
-				"ABCD": {
-					"1111": "Another Device",
-				},
+			expected: map[string]string{
+				"1.3.6.1.4.1.9.1.1234": "Test Device A",
+				"1.3.6.1.4.1.9.1.4321": "Test Device B",
 			},
 		},
 		{
 			name: "multiple YAML files with merge",
 			files: map[string]string{
 				"devices1.yaml": `devices:
-  "1234":
-    "5678": "Device A"`,
+  "1.3.6.1.4.1.9.1.1234": "Device A"`,
 				"devices2.yml": `devices:
-  "1234":
-    "9ABC": "Device B"
-  "ABCD":
-    "1111": "Device C"`,
+  "1.3.6.1.4.1.9.1.4321": "Device B"`,
 			},
 			wantErr: false,
-			expected: map[string]map[string]string{
-				"1234": {
-					"5678": "Device A",
-					"9ABC": "Device B",
-				},
-				"ABCD": {
-					"1111": "Device C",
-				},
+			expected: map[string]string{
+				"1.3.6.1.4.1.9.1.1234": "Device A",
+				"1.3.6.1.4.1.9.1.4321": "Device B",
 			},
 		},
 		{
 			name:     "empty directory",
 			files:    map[string]string{},
 			wantErr:  false,
-			expected: map[string]map[string]string{},
+			expected: map[string]string{},
 		},
 		{
 			name: "non-YAML files ignored",
 			files: map[string]string{
 				"devices.yaml": `devices:
-  "1234":
-    "5678": "Test Device"`,
+  "1.3.6.1.4.1.9.1.1234": "Test Device"`,
 				"readme.txt":  "This should be ignored",
 				"config.json": `{"ignored": true}`,
 			},
 			wantErr: false,
-			expected: map[string]map[string]string{
-				"1234": {
-					"5678": "Test Device",
-				},
+			expected: map[string]string{
+				"1.3.6.1.4.1.9.1.1234": "Test Device",
 			},
 		},
 	}
@@ -414,12 +353,10 @@ func TestLoadDeviceLookupExtensions_InvalidYAML(t *testing.T) {
 
 	// Create a valid YAML file and an invalid one
 	validYAML := `devices:
-  "1234":
-    "5678": "Valid Device"`
+  "1.3.6.1.4.1.9.1.1234": "Valid Device"`
 
 	invalidYAML := `devices:
-  "1234":
-    "5678": "Invalid YAML
+  "1.3.6.1.4.1.9.1.1234": "Invalid YAML
       missing quotes and proper structure`
 
 	err = os.WriteFile(filepath.Join(tempDir, "valid.yaml"), []byte(validYAML), 0o644)
@@ -434,10 +371,8 @@ func TestLoadDeviceLookupExtensions_InvalidYAML(t *testing.T) {
 	assert.NotNil(t, deviceLookup)
 
 	// Should only contain data from valid file
-	expected := map[string]map[string]string{
-		"1234": {
-			"5678": "Valid Device",
-		},
+	expected := map[string]string{
+		"1.3.6.1.4.1.9.1.1234": "Valid Device",
 	}
 	assert.Equal(t, expected, deviceLookup.devicesByVendor)
 }
@@ -551,45 +486,33 @@ func TestLoadYAMLFile(t *testing.T) {
 	tests := []struct {
 		name     string
 		content  string
-		initial  map[string]map[string]string
-		expected map[string]map[string]string
+		initial  map[string]string
+		expected map[string]string
 		wantErr  bool
 	}{
 		{
 			name: "valid YAML file",
 			content: `devices:
-  "1234":
-    "5678": "Device A"
-    "9ABC": "Device B"`,
-			initial: make(map[string]map[string]string),
-			expected: map[string]map[string]string{
-				"1234": {
-					"5678": "Device A",
-					"9ABC": "Device B",
-				},
+    "1.3.6.1.4.1.9.1.1234": "Device A"
+    "1.3.6.1.4.1.9.1.4321": "Device B"`,
+			initial: make(map[string]string),
+			expected: map[string]string{
+				"1.3.6.1.4.1.9.1.1234": "Device A",
+				"1.3.6.1.4.1.9.1.4321": "Device B",
 			},
 			wantErr: false,
 		},
 		{
 			name: "merge with existing data",
 			content: `devices:
-  "1234":
-    "DDDD": "Device D"
-  "ABCD":
-    "1111": "Device C"`,
-			initial: map[string]map[string]string{
-				"1234": {
-					"5678": "Device A",
-				},
+    "1.3.6.1.4.1.9.1.1234": "Device A"
+    "1.3.6.1.4.1.9.1.4321": "Device B"`,
+			initial: map[string]string{
+				"1.3.6.1.4.1.9.1.1234": "Device A",
 			},
-			expected: map[string]map[string]string{
-				"1234": {
-					"5678": "Device A",
-					"DDDD": "Device D",
-				},
-				"ABCD": {
-					"1111": "Device C",
-				},
+			expected: map[string]string{
+				"1.3.6.1.4.1.9.1.1234": "Device A",
+				"1.3.6.1.4.1.9.1.4321": "Device B",
 			},
 			wantErr: false,
 		},
@@ -600,15 +523,15 @@ func TestLoadYAMLFile(t *testing.T) {
     "5678": [unclosed list
       - item1
       - item2`,
-			initial:  make(map[string]map[string]string),
-			expected: make(map[string]map[string]string),
+			initial:  make(map[string]string),
+			expected: make(map[string]string),
 			wantErr:  true,
 		},
 		{
 			name:     "empty file",
 			content:  "",
-			initial:  make(map[string]map[string]string),
-			expected: make(map[string]map[string]string),
+			initial:  make(map[string]string),
+			expected: make(map[string]string),
 			wantErr:  false,
 		},
 	}
@@ -621,12 +544,9 @@ func TestLoadYAMLFile(t *testing.T) {
 			require.NoError(t, err)
 
 			// Create initial devicesByVendor map
-			devicesByVendor := make(map[string]map[string]string)
+			devicesByVendor := make(map[string]string)
 			for k, v := range tt.initial {
-				devicesByVendor[k] = make(map[string]string)
-				for dk, dv := range v {
-					devicesByVendor[k][dk] = dv
-				}
+				devicesByVendor[k] = v
 			}
 
 			// Test loadYAMLFile
@@ -642,7 +562,7 @@ func TestLoadYAMLFile(t *testing.T) {
 }
 
 func TestLoadYAMLFile_FileErrors(t *testing.T) {
-	devicesByVendor := make(map[string]map[string]string)
+	devicesByVendor := make(map[string]string)
 
 	// Test with non-existent file
 	err := loadYAMLFile("/path/that/does/not/exist.yaml", &devicesByVendor)

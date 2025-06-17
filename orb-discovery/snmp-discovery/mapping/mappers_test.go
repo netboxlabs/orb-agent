@@ -616,9 +616,9 @@ func TestDeviceMapper_Map(t *testing.T) {
 
 	// Create a mock manufacturer data retriever
 	mockDeviceLookup := &MockDeviceLookup{}
-	mockDeviceLookup.On("GetDevice", "9", "1.1234").Return("cisco4000", nil)
-	mockDeviceLookup.On("GetDevice", "9", "1.9999").Return("", fmt.Errorf("device not found"))
-	mockDeviceLookup.On("GetDevice", "123", "1.5678").Return("device-with-unknown-manufacturer", nil)
+	mockDeviceLookup.On("GetDevice", "1.3.6.1.4.1.9.1.1234").Return("cisco4000", nil)
+	mockDeviceLookup.On("GetDevice", "1.3.6.1.4.1.9.1.9999").Return("", fmt.Errorf("device not found"))
+	mockDeviceLookup.On("GetDevice", "1.3.6.1.4.1.123.1.5678").Return("device-with-unknown-manufacturer", nil)
 
 	mockManufacturers := &MockManufacturerDataRetriever{}
 	mockManufacturers.On("GetManufacturer", "9").Return("Cisco", nil)
@@ -1000,8 +1000,8 @@ type MockDeviceLookup struct {
 	mock.Mock
 }
 
-func (m *MockDeviceLookup) GetDevice(vendorID, deviceID string) (string, error) {
-	args := m.Called(vendorID, deviceID)
+func (m *MockDeviceLookup) GetDevice(deviceOID string) (string, error) {
+	args := m.Called(deviceOID)
 	return args.Get(0).(string), args.Error(1)
 }
 

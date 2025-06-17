@@ -19,7 +19,7 @@ func (f *FakeManufacturers) GetManufacturer(_ string) (string, error) {
 
 type FakeDeviceLookup struct{}
 
-func (f *FakeDeviceLookup) GetDevice(_ string, _ string) (string, error) {
+func (f *FakeDeviceLookup) GetDevice(_ string) (string, error) {
 	return "cisco4000", nil
 }
 
