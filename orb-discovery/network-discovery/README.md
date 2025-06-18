@@ -59,12 +59,12 @@ policies:
         - 192.168.0.34/24
         - google.com
 ```
-## Run device-discovery
-device-discovery can be run by installing it with pip
+## Run network-discovery
+network-discovery can be run by cloning it's git repo
 ```sh
 git clone https://github.com/netboxlabs/orb-discovery.git
 cd network-discovery/
-make bin
+make build
 build/network-discovery --diode-target grpc://192.168.31.114:8080/diode  --diode-client-id '${DIODE_CLIENT_ID}' --diode-client-secret '${DIODE_CLIENT_SECRET}'
 ```
 
