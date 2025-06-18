@@ -1,0 +1,19 @@
+devices:
+  .1.3.6.1.4.1.6876.4.10: vmwNSX
+  .1.3.6.1.4.1.6876.4.3: vmwVC
+  .1.3.6.1.4.1.6876.4.2: vmwDVS
+  .1.3.6.1.4.1.6876.4.131: vmwNSXManagerAppliance
+  .1.3.6.1.4.1.6876.4.6: vmwGenericAppliance
+  .1.3.6.1.4.1.6876.4.130: vmwNSXEdgeAppliance
+  .1.3.6.1.4.1.6876.4.1: vmwESX
+  .1.3.6.1.4.1.6876.4.31: vmwHCXGateway
+  .1.3.6.1.4.1.6876.4.7: vmwEmbeddedVirtualCenterAppliance
+  .1.3.6.1.4.1.6876.4.11: vmwProducts
+  .1.3.6.1.4.1.6876.4.4: vmwServer
+  .1.3.6.1.4.1.6876.4.9: vmwManagementAppliance
+  .1.3.6.1.4.1.6876.4.8: vmwInfrastructureAppliance
+  .1.3.6.1.4.1.6876.4.230: vmwHCXManager
+  .1.3.6.1.4.1.6876.4.132: vmwNSXControllerAppliance
+  .1.3.6.1.4.1.6876.4.50: vmwVrops
+  .1.3.6.1.4.1.6876.4.5: vmwVCOps
+  .1.3.6.1.4.1.6876.60.1: oidESX

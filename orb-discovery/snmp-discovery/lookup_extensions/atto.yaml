@@ -1,0 +1,11 @@
+devices:
+  .1.3.6.1.4.1.4547.1: attoProducts
+  .1.3.6.1.4.1.4547.3.2: attoProductsMIB
+  .1.3.6.1.4.1.4547.2: attoMgmt
+  .1.3.6.1.4.1.4547.1.4: attoFB6500
+  .1.3.6.1.4.1.4547.1.3: attoHba
+  .1.3.6.1.4.1.4547: attotech
+  .1.3.6.1.4.1.4547.4: attoAgentCapability
+  .1.3.6.1.4.1.4547.1.1: attoGenericDevice
+  .1.3.6.1.4.1.4547.3: attoModules
+  .1.3.6.1.4.1.4547.1.5: attoFB6500N

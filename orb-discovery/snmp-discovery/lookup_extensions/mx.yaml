@@ -1,0 +1,24 @@
+devices:
+  .1.3.6.1.4.1.4935.1.10: mediatrixLiaison322
+  .1.3.6.1.4.1.4935.1.23: mediatrix4104Plus
+  .1.3.6.1.4.1.4935.1.21: mediatrix4102
+  .1.3.6.1.4.1.4935.1.2: mediatrix-III-4FXO
+  .1.3.6.1.4.1.4935.1.4: mediatrix1104
+  .1.3.6.1.4.1.4935.1.19: mediatrixLiaison522
+  .1.3.6.1.4.1.4935.1.9: mediatrixLiaison312
+  .1.3.6.1.4.1.4935.1.1: mediatrix-III-4FXS
+  .1.3.6.1.4.1.4935.1.25: mediatrix4108
+  .1.3.6.1.4.1.4935.1.40: cienaLE46VM
+  .1.3.6.1.4.1.4935.1.18: mediatrixLiaison512
+  .1.3.6.1.4.1.4935.1.8: mediatrix2102
+  .1.3.6.1.4.1.4935.1.3: mediatrix1102
+  .1.3.6.1.4.1.4935.1.7: mediatrix1204
+  .1.3.6.1.4.1.4935.1.5: mediatrix1124
+  .1.3.6.1.4.1.4935.1.45: mediatrixLP16
+  .1.3.6.1.4.1.4935.90.2: mxProductsMIB
+  .1.3.6.1.4.1.4935.1.22: mediatrix4104
+  .1.3.6.1.4.1.4935.1.20: mediatrix0102
+  .1.3.6.1.4.1.4935.1.35: mediatrix4124
+  .1.3.6.1.4.1.4935.1.30: mediatrix4116
+  .1.3.6.1.4.1.4935.1.6: mediatrix-III-4FXS-4M
+  .1.3.6.1.4.1.4935.1.50: mediatrixLP24
