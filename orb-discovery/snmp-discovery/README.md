@@ -1,8 +1,8 @@
 # snmp-discovery
-Orb snmp discovery backend
+Orb snmp discovery backend, which is a wrapper over [NMAP](https://nmap.org/) scanner.
 
 ### Usage
-```bash
+```sh
 Usage of snmp-discovery:
  -diode-app-name-prefix string
     	diode producer_app_name prefix
@@ -11,192 +11,265 @@ Usage of snmp-discovery:
   -diode-client-secret string
     	diode client secret (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_SECRET})
   -diode-target string
-    	diode target (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_TARGET})
+    	diode target (REQUIRED)
+  --otel-endpoint string
+    	OpenTelemetry exporter endpoint
+  --otel-export-period int
+    	Period in seconds between OpenTelemetry exports (default: 60)
   -help
     	show this help
   -host string
     	server host (default "0.0.0.0")
-  -port int
-      server port (default 8070)
   -log-format string
     	log format (default "TEXT")
   -log-level string
     	log level (default "INFO")
-  -otel-endpoint string    # OpenTelemetry exporter endpoint
-  -otel-export-period int
-    	Period in seconds between OpenTelemetry exports (default 10)
+  -port int
+    	server port (default 8070)
 ```
 
-## Configuration
+### Policy RFC
+```yaml
+policies:
+  snmp_network_1:
+    config:
+      schedule: "0 */6 * * *" # Cron expression - every 6 hours
+      timeout: 300 # Timeout in seconds (default 2 minutes)
+      retries: 3 # Number of retries
+      defaults:
+        tags: ["snmp-discovery", "orb"]
+        site: "datacenter-01"
+        location: "rack-42"
+        role: "network"
+        ip_address:
+          description: "SNMP discovered IP"
+          role: "management"
+          tenant: "network-ops"
+          vrf: "management"
+        interface:
+          description: "Auto-discovered interface"
+          if_type: "ethernet"
+        device:
+          description: "SNMP discovered device"
+          comments: "Automatically discovered via SNMP"
+      lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing device data yaml files (see below)
+    scope:
+      targets:
+        - host: "192.168.1.1"
+        - host: "192.168.1.254"
+        - host: "10.0.0.1"
+          port: 162  # Non-standard SNMP port
+      authentication:
+        protocol_version: "v2c"
+        community: "public"
+        # For SNMPv3, use these fields instead:
+        # security_level: "authPriv"
+        # username: "snmp-user"
+        # auth_protocol: "SHA"
+        # auth_passphrase: "auth-password"
+        # priv_protocol: "AES"
+        # priv_passphrase: "priv-password"
+  discover_once: # will run only once
+    scope:
+      targets:
+        - host: "core-switch.example.com"
+          port: 161
+        - host: "192.168.100.50"
+          port: 161
+      authentication:
+        protocol_version: "v3"
+        security_level: "authPriv"
+        username: "monitoring"
+        auth_protocol: "SHA"
+        auth_passphrase: "secure-auth-pass"
+        priv_protocol: "AES" 
+        priv_passphrase: "secure-priv-pass"
+```
 
-The SNMP discovery service is configured using a YAML file. The configuration file has the following structure:
+### Device Model Lookup
+The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values.
+
+#### File Format
+Device lookup files must be in YAML format with a `.yaml` or `.yml` extension. Each file should contain a `devices` section that maps SNMP device OIDs to device names:
 
 ```yaml
-config:
-  schedule: "*/5 * * * *"  # Optional: Cron expression for scheduling
-  defaults:  # Optional: Default values for entities
-    description: "Global description"  # Optional: Global description for all entities
-    comments: "Global comments"  # Optional: Global comments for all entities
-    tags:  # Optional: Global tags for all entities
-      - "global"
-      - "snmp"
-    ip_address:  # Optional: Defaults specific to IP addresses
-      description: "IP Address description"
-      comments: "IP Address comments"
-      tags:
-        - "ip"
-        - "default"
-    interface:  # Optional: Defaults specific to interfaces
-      description: "Interface description"
-      tags:
-        - "interface"
-        - "default"
-    device:  # Optional: Defaults specific to devices
-      description: "Device description"
-      tags:
-        - "device"
-        - "default"
-scope:
-  targets:  # List of SNMP targets to discover
-    - host: "192.168.1.1"  # Required: Hostname or IP address
-      port: 161  # Optional: SNMP port (default: 161)
-    - host: "10.10.10.0/24"  # CIDR range: expands to all IPs in the subnet
-    - host: "10.10.10.10-20" # Dash range: expands to 10.10.10.10, 10.10.10.11, ..., 10.10.10.20
-    - host: "mydevice.local" # Hostname
-  authentication:  # SNMP authentication settings
-    protocol_version: "SNMPv2c"  # Required: SNMP protocol version ("SNMPv1", "SNMPv2c", or "SNMPv3")
-    community: "public"  # Required for v1/v2c: SNMP community string
-    # Optional for v3:
-    # username: "user"
-    # security_level: authPriv # Allowed values: ("NoAuthNoPriv", "AuthNoPriv", "AuthPriv")
-    # auth_protocol: "SHA"
-    # auth_passphrase: "authkey"
-    # priv_protocol: "AES"
-    # priv_passphrase: "privkey"
-  retries: 3  # Optional: Number of SNMP retries (default: 0)
-
-#### Target Range Formats
-
-The `host` field in `targets` supports the following formats:
-
-- **Single IP address:**
-  - `192.168.1.1`
-- **Hostname:**
-  - `mydevice.local`
-- **CIDR range:**
-  - `10.10.10.0/24` (expands to all IPs in the subnet)
-- **Dash range:**
-  - `10.10.10.10-20` (expands to 10.10.10.10, 10.10.10.11, ..., 10.10.10.20)
-
-Invalid or out-of-bounds ranges will be skipped and logged.
-
-### Defaults
-
-The `defaults` section allows you to specify default values for entities discovered by SNMP. These defaults can be applied globally to all entities or specifically to certain entity types.
-
-#### Global Defaults
-
-Global defaults are applied to all entities if they don't have entity-specific defaults:
-
-- `description`: A global description for all entities
-- `comments`: Global comments for all entities
-- `tags`: Global tags for all entities
-
-#### Entity-Specific Defaults
-
-Entity-specific defaults override global defaults for their respective entity types:
-
-- `ipAddress`: Defaults for IP addresses
-  - `description`: Description for IP addresses
-  - `comments`: Comments for IP addresses
-  - `tags`: Tags for IP addresses
-
-- `interface`: Defaults for interfaces
-  - `description`: Description for interfaces
-  - `tags`: Tags for interfaces
-
-- `device`: Defaults for devices
-  - `description`: Description for devices
-  - `tags`: Tags for devices
-
-### Mappings
-
-The `mappings` section defines how SNMP OIDs are mapped to entities. Each mapping entry has the following fields:
-
-- `oid`: The SNMP OID to map
-- `entity`: The entity type to map to (e.g., "interface", "ipAddress", "device")
-- `field`: The field to map to
-- `identifierSize`: The size of the identifier in the OID (default: 1)
-- `mappingEntries`: Optional nested mappings for additional fields
-
-### Authentication
-
-The `authentication` section configures SNMP authentication settings:
-
-- `protocolVersion`: The SNMP protocol version ("1", "2c", or "3")
-- `community`: The SNMP community string (required for v1/v2c)
-- `username`: The SNMP username (required for v3)
-- `authProtocol`: The authentication protocol (required for v3)
-- `authKey`: The authentication key (required for v3)
-- `privProtocol`: The privacy protocol (required for v3)
-- `privKey`: The privacy key (required for v3)
-
-### Metrics
-
-The SNMP discovery service includes comprehensive metrics collection using OpenTelemetry. Metrics can be configured using command-line flags or environment variables.
-
-#### Available Metrics
-
-The following metrics are collected:
-
-- **discovery_attempts**: Counter of SNMP discovery attempts
-- **discovery_success**: Counter of successful SNMP discoveries
-- **discovery_failure**: Counter of failed SNMP discoveries
-- **policy_executions**: Counter of policy executions
-- **api_requests**: Counter of API requests
-- **discovery_latency**: Histogram of SNMP discovery latency
-- **api_response_latency**: Histogram of API response latency
-- **active_policies**: UpDown counter of active policies
-
-#### Configuration Options
-
-Metrics can be configured using the following options:
-
-1. **Command-line flags:**
-   ```bash
-   -otel-endpoint string    # OpenTelemetry exporter endpoint
-   -otel-export-period int  # Export period in seconds
-   ```
-
-2. **Environment variables:**
-   ```bash
-   OTEL_ENDPOINT="http://localhost:4317"  # OpenTelemetry exporter endpoint
-   OTEL_EXPORT_PERIOD=10                  # Export period in seconds
-   ```
-
-#### Example Configuration
-
-To enable metrics export to an OpenTelemetry collector:
-
-```bash
-snmp-discovery \
-  -otel-endpoint="http://localhost:4317" \
-  -otel-export-period=10
+devices:
+  .1.3.6.1.4.1.9.1.1215: ciscoMwr2941DCA
+  .1.3.6.1.4.1.9.1.489: catalyst2955C12
+  .1.3.6.1.4.1.9.1.2101: ciscoASR92024TZM
+  .1.3.6.1.4.1.9.1.2874: ciscoCat930048H
+  .1.3.6.1.4.1.9.1.2276: ciscoC6840xle
 ```
 
-Or using environment variables:
+#### Example Device Lookup Files
+The repository includes several pre-built device lookup files for popular vendors:
+
+- **Cisco devices**: `cisco.yaml` - Contains mappings for Cisco routers, switches, and other networking equipment
+- **TP-Link devices**: `tplink.yaml` - Contains mappings for TP-Link switches and routers
+- **Dell Networking**: `dell-networking.yaml` - Contains mappings for Dell networking equipment
+- **Lenovo devices**: `lenovo.yaml` - Contains mappings for Lenovo networking equipment
+- **Ruckus devices**: `ruckus.yaml` - Contains mappings for Ruckus wireless equipment
+
+#### Creating Custom Device Lookup Files
+You can create custom device lookup files for your specific hardware by:
+
+1. Identifying the SNMP device ObjectIDs for your equipment (usually found in vendor MIB files)
+2. Creating a YAML file with the format shown above. Ensure that ObjectIDs have a `.` prefix.
+3. Placing the file in your `lookup_extensions_dir` directory
+
+#### Downloading Device Lookup Files
+Pre-built device lookup files are available in the [`lookup_extensions/`](https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery/lookup_extension) directory of this repository. You can download these files from GitHub and place them in your `lookup_extensions_dir` to enhance device identification:
 
 ```bash
-export OTEL_ENDPOINT="http://localhost:4317"
-export OTEL_EXPORT_PERIOD=10
-snmp-discovery
+# Clone the repository to get device lookup files
+git clone https://github.com/netboxlabs/orb-discovery.git
+cd orb-discovery/snmp-discovery/lookup_extensions/
+
+# Copy the files to your lookup extensions directory
+cp *.yaml /opt/orb/snmp-extensions/
 ```
 
-#### Troubleshooting
+#### How It Works
+When snmp-discovery encounters a device during scanning, it:
 
-If metrics are not being exported:
+1. Retrieves the device's SNMP system object ID (sysObjectID)
+2. Searches through all YAML files in the `lookup_extensions_dir`
+3. If a match is found, uses the human-readable device name instead of the raw OID
+4. If no match is found, falls back to the original OID value
 
-1. Verify the OpenTelemetry collector is running and accessible
-2. Check the metrics endpoint URL is correct
-3. Ensure the export period is set appropriately
-4. Check the application logs for any metrics-related errors
+This provides much more meaningful device identification in your discovery results, making it easier to understand what equipment has been discovered on your network.
+
+## Run snmp-discovery
+snmp-discovery can be run by cloning it's git repo
+```sh
+git clone https://github.com/netboxlabs/orb-discovery.git
+cd snmp-discovery/
+make bin
+build/snmp-discovery --diode-target grpc://192.168.31.114:8080/diode  --diode-client-id '${DIODE_CLIENT_ID}' --diode-client-secret '${DIODE_CLIENT_SECRET}'
+```
+
+### ⚠️ Warning
+Be **AWARE** that executing a policy with only targets defined will use default SNMP parameters:
+
+- **Protocol Version**: v2c (if not specified)
+- **Community**: "public" (if not specified for v1/v2c)
+- **Port**: 161 (standard SNMP port, if not specified)
+- **Security Level**: noAuthNoPriv (if not specified for v3)
+
+Always ensure proper authentication is configured for production environments to avoid security risks.
+
+### Docker Image
+device-discovery can be build and run using docker:
+```sh
+cd snmp-discovery/
+docker build --no-cache -t snmp-discovery:develop -f docker/Dockerfile .
+docker run --net=host -e DIODE_CLIENT_ID={YOUR_CLIENT} \
+ -e DIODE_CLIENT_SECRET=${YOUR_SECRET} \
+ snmp-discovery:develop snmp-discovery \
+ --diode-target grpc://192.168.31.114:8080/diode \
+ --diode-client-id '${DIODE_CLIENT_ID}' \
+ --diode-client-secret '${DIODE_CLIENT_SECRET}'
+```
+
+### Routes (v1)
+
+#### Get runtime and capabilities information
+
+<details>
+ <summary><code>GET</code> <code><b>/api/v1/status</b></code> <code>(gets network runtime data)</code></summary>
+
+##### Parameters
+
+> None
+
+##### Responses
+
+> | http code     | content-type                      | response                                                            |
+> |---------------|-----------------------------------|---------------------------------------------------------------------|
+> | `200`         | `application/json; charset=utf-8` |  `{"start_time": "2024-12-03T17:56:53.682805366-03:00", "up_time_seconds": 3678, "version": "0.1.0" }`                    |
+
+##### Example cURL
+
+> ```sh
+>  curl -X GET -H "Content-Type: application/json" http://localhost:8073/api/v1/status
+> ```
+
+</details>
+
+<details>
+ <summary><code>GET</code> <code><b>/api/v1/capabilities</b></code> <code>(gets snmp-discovery capabilities)</code></summary>
+
+##### Parameters
+
+> None
+
+##### Responses
+
+> | http code     | content-type                      | response                                                            |
+> |---------------|-----------------------------------|---------------------------------------------------------------------|
+> | `200`         | `application/json; charset=utf-8` | `{"supported_args":["targets, ports"]}`      |
+
+##### Example cURL
+
+> ```sh
+>  curl -X GET -H "Content-Type: application/json" http://localhost:8073/api/v1/capabilities
+> ```
+
+</details>
+
+#### Policies Management
+
+
+<details>
+ <summary><code>POST</code> <code><b>/api/v1/policies</b></code> <code>(Creates a new policy)</code></summary>
+
+##### Parameters
+
+> | name      |  type     | data type               | description                                                           |
+> |-----------|-----------|-------------------------|-----------------------------------------------------------------------|
+> | None      |  required | YAML object             | yaml format specified in [Policy RFC](#policy-rfc)                    |
+ 
+
+##### Responses
+
+> | http code     | content-type                       | response                                                            |
+> |---------------|------------------------------------|---------------------------------------------------------------------|
+> | `201`         | `application/json; charset=UTF-8`  | `{"detail":"policy 'policy_name' was started"}`                     |
+> | `400`         | `application/json; charset=UTF-8`  | `{ "detail": "invalid Content-Type. Only 'application/x-yaml' is supported" }`|
+> | `400`         | `application/json; charset=UTF-8`  | Any other policy error                                              |
+> | `403`         | `application/json; charset=UTF-8`  | `{ "detail": "config field is required" }`                          |
+> | `409`         | `application/json; charset=UTF-8`  | `{ "detail": "policy 'policy_name' already exists" }`               |
+ 
+
+##### Example cURL
+
+> ```sh
+>  curl -X POST -H "Content-Type: application/x-yaml" --data-binary @policy.yaml http://localhost:8073/api/v1/policies
+> ```
+
+</details>
+
+<details>
+ <summary><code>DELETE</code> <code><b>/api/v1/policies/{policy_name}</b></code> <code>(delete a existing policy)</code></summary>
+
+##### Parameters
+
+> | name              |  type     | data type      | description                         |
+> |-------------------|-----------|----------------|-------------------------------------|
+> |   `policy_name`   |  required | string         | The unique policy name              |
+
+##### Responses
+
+> | http code     | content-type                      | response                                                            |
+> |---------------|-----------------------------------|---------------------------------------------------------------------|
+> | `200`         | `application/json; charset=UTF-8` | `{ "detail": "policy 'policy_name' was deleted" }`                  |
+> | `400`         | `application/json; charset=UTF-8` | Any other policy deletion error                                     |
+> | `404`         | `application/json; charset=UTF-8` | `{ "detail": "policy 'policy_name' not found" }`                    |
+
+##### Example cURL
+
+> ```sh
+>  curl -X DELETE http://localhost:8073/api/v1/policies/policy_name
+> ```
+
+</details>
