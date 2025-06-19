@@ -158,9 +158,9 @@ The relative path used by `pip install` should point to the directory containing
 
 ## SNMP Discovery Backend
 
-This sample configuration file demonstrates the device discovery backend connecting to a Cisco router at 192.168.0.5. It retrieves device, interface, and IP information, then sends the data to a [diode](https://github.com/netboxlabs/diode) server running at 192.168.0.100.
+The SNMP discovery backend leverages SNMP (Simple Network Management Protocol) to connect to network devices and collect network information. It uses [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) to ingest Device, Interface, IP Address, Mac Address, Platform, Manufacturer, and Site entities.
 
-snmp-policy.yaml
+### Basic Configuration
 ```yaml
 orb:
   config_manager:
@@ -174,186 +174,75 @@ orb:
         agent_name: agent01
     snmp_discovery:
   policies:
-    snmp_discovery:
-      snmp_cisco:
-        config:
-          retries: 1
-          devices_file: /opt/orb/device-data.yaml
-        scope:
-          authentication:
-              protocol_version: SNMPv2c
-              community: cisco-c3750
-          targets:
-            - host: 192.168.0.5
-              port: 161
-          mapping_config: /opt/orb/snmp-mapping.yaml
+    snmp_network_1:
+      config:
+        schedule: "0 */6 * * *" # Cron expression - every 6 hours
+        timeout: 300 # Timeout in seconds (default 2 minutes)
+        retries: 3 # Number of retries
+        defaults:
+          tags: ["snmp-discovery", "orb"]
+          site: "datacenter-01"
+          location: "rack-42"
+          role: "network"
+          ip_address:
+            description: "SNMP discovered IP"
+            role: "management"
+            tenant: "network-ops"
+            vrf: "management"
+          interface:
+            description: "Auto-discovered interface"
+            if_type: "ethernet"
+          device:
+            description: "SNMP discovered device"
+            comments: "Automatically discovered via SNMP"
+        lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing device data yaml files (see below)
+      scope:
+        targets:
+          - host: "192.168.1.1"
+          - host: "192.168.1.254"
+          - host: "10.0.0.1"
+            port: 162  # Non-standard SNMP port
+        authentication:
+          protocol_version: "v2c"
+          community: "public"
+          # For SNMPv3, use these fields instead:
+          # security_level: "authPriv"
+          # username: "snmp-user"
+          # auth_protocol: "SHA"
+          # auth_passphrase: "auth-password"
+          # priv_protocol: "AES"
+          # priv_passphrase: "priv-password"
+    discover_once: # will run only once
+      scope:
+        targets:
+          - host: "core-switch.example.com"
+            port: 161
+          - host: "192.168.100.50"
+            port: 161
+        authentication:
+          protocol_version: "v3"
+          security_level: "authPriv"
+          username: "monitoring"
+          auth_protocol: "SHA"
+          auth_passphrase: "secure-auth-pass"
+          priv_protocol: "AES" 
+          priv_passphrase: "secure-priv-pass"
 ```
 
-device-data.yaml
-```yaml
-manufacturers:
-  - name: Reserved
-    pen: 0
-  - name: NxNetworks
-    pen: 1
-  - name: IBM httpsw3ibmcomstandards 
-    pen: 2
-  - name: Carnegie Mellon
-    pen: 3
-  - name: Unix
-    pen: 4
-  - name: ACC
-    pen: 5
-  - name: TWG
-    pen: 6
-  - name: CAYMAN
-    pen: 7
-  - name: PSI
-    pen: 8
-  - name: ciscoSystems
-    pen: 9
-  - name: NSC
-    pen: 10
-  - name: HewlettPackard
-    pen: 11
-  - name: Epilogue
-    pen: 12
-  - name: U of Tennessee
-    pen: 13
-  - name: BBN Technologies
-    pen: 14
-  - name: Xylogics Inc
-    pen: 15
-  - name: Timeplex
-    pen: 16
-  - name: Canstar
-    pen: 17
-  - name: Wellfleet
-    pen: 18
-  - name: TRW
-    pen: 19
-  - name: MIT
-    pen: 20
-  - name: EON
-    pen: 21
-  - name: Fibronics
-    pen: 22
-  - name: Novell
-    pen: 23
-  - name: Spider Systems
-    pen: 24
-  - name: NSFNET
-    pen: 25
-  #  ... (other manufacturers can be added here)
-devices:
-  - id: 1
-    oid: 136141911
-    name: ciscoGatewayServer
-  - id: 2
-    oid: 136141912
-    name: ciscoTerminalServer
-  - id: 3
-    oid: 136141913
-    name: ciscoTrouter
-  - id: 4
-    oid: 136141914
-    name: ciscoProtocolTranslator
-  - id: 5
-    oid: 136141915
-    name: ciscoIGS
-  - id: 6
-    oid: 136141916
-    name: cisco3000
-  - id: 7
-    oid: 136141917
-    name: cisco4000
-  - id: 8
-    oid: 136141918
-    name: cisco7000
-  - id: 9
-    oid: 136141919
-    name: ciscoCS500
-  - id: 10
-    oid: 1361419110
-    name: cisco2000
-  - id: 11
-    oid: 1361419111
-    name: ciscoAGSplus
-  - id: 12
-    oid: 1361419112
-    name: cisco7010
-  - id: 13
-    oid: 1361419113
-    name: cisco2500
-  - id: 14
-    oid: 1361419114
-    name: cisco4500
-  - id: 15
-    oid: 1361419115
-    name: cisco2102
-  - id: 16
-    oid: 1361419116
-    name: cisco2202
-  # ... (other devices can be added here)
-```
+### Device Model Lookup
+The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIds (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectId values.
 
-snmp-mapping.yaml
-```yaml
-entries:
-  # Interface mappings
-  - oid: ".1.3.6.1.2.1.2.2.1"
-    entity: "interface"
-    field: "_id"
-    identifier_size: 1
-    mapping_entries:
-      - oid: ".1.3.6.1.2.1.2.2.1.2"
-        entity: "interface"
-        field: "name"
-      - oid: ".1.3.6.1.2.1.2.2.1.5"
-        entity: "interface"
-        field: "speed"
-      - oid: ".1.3.6.1.2.1.2.2.1.6"
-        entity: "interface"
-        field: "macAddress"
-      - oid: ".1.3.6.1.2.1.2.2.1.7"
-        entity: "interface"
-        field: "adminStatus"
+Device model lookup files to put in the `lookup_extenions_dir` are available from the [`orb-discovery` repository](https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery/lookup_extension). More details about the file format and adding devices that aren't already covered are [available here](https://github.com/netboxlabs/orb-discovery/blob/release/snmp-discovery/README.md#device-model-lookup).
 
-  # IP Address mappings
-  - oid: ".1.3.6.1.2.1.4.20.1"
-    entity: "ipAddress"
-    field: "_id"
-    identifier_size: 4
-    mapping_entries:
-      - oid: ".1.3.6.1.2.1.4.20.1.1"
-        entity: "ipAddress"
-        field: "address"
-      - oid: ".1.3.6.1.2.1.4.20.1.2"
-        entity: "ipAddress"
-        field: "assigned_object"
-        relationship:
-          type: "interface"
-          field: "_id"
+### Running the SNMP Discovery Backend
 
-  # Device mappings
-  - oid: ".1.3.6.1.2.1.1"
-    entity: "device"
-    field: "_id"
-    mapping_entries:
-      - oid: ".1.3.6.1.2.1.1.5.0"
-        entity: "device"
-        field: "name"
-      - oid: ".1.3.6.1.2.1.1.2.0"
-        entity: "device"
-        field: "platform"
-```
+Run using the following command (assuming you have placed all the files above in the `/local/orb` directory):
 
-Run using the following command (assuming you have placed all the files above in the `/local/orb` directory )
 ```bash
 docker run --net=host \
     -v "/local/orb:/opt/orb/" \
     -e DIODE_CLIENT_ID=$DIODE_CLIENT_ID \
     -e DIODE_CLIENT_SECRET=$DIODE_CLIENT_SECRET \
     netboxlabs/orb-agent:latest \
-    run -d -c "/opt/orb/snmp-config.yaml"
+    run -c "/opt/orb/snmp-config.yaml"
 ```
