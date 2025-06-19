@@ -360,6 +360,13 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					Value:  "eth0",
 					Type:   mapping.OctetString,
 				},
+				"1.3.6.1.2.1.2.2.1.4.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.5.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.5",
+					Value:  "1500",
+					Type:   mapping.Integer,
+				},
 				"1.3.6.1.2.1.2.2.1.5.1": {
 					OID:    "1.3.6.1.2.1.2.2.1.5.1",
 					Index:  "1",
@@ -398,6 +405,11 @@ func TestInterfaceMapper_Map(t *testing.T) {
 						Field:  "name",
 					},
 					{
+						OID:    "1.3.6.1.2.1.2.2.1.4",
+						Entity: "interface",
+						Field:  "mtu",
+					},
+					{
 						OID:    "1.3.6.1.2.1.2.2.1.5",
 						Entity: "interface",
 						Field:  "speed",
@@ -418,6 +430,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectedEntity: &diode.Interface{
 				Name:              mapping.StringPtr("eth0"),
 				Speed:             int64Ptr(1000000),
+				Mtu:               int64Ptr(1500),
 				PrimaryMacAddress: &diode.MACAddress{MacAddress: mapping.StringPtr("00:11:22:33:44:55")},
 				Enabled:           boolPtr(true),
 				Type:              mapping.StringPtr("other"),
@@ -553,6 +566,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			iface, ok := entity.(*diode.Interface)
 			assert.True(t, ok)
 			assert.Equal(t, tt.expectedEntity.Name, iface.Name)
+			assert.Equal(t, tt.expectedEntity.Mtu, iface.Mtu)
 			assert.Equal(t, tt.expectedEntity.Speed, iface.Speed)
 			if tt.expectedEntity.PrimaryMacAddress != nil {
 				assert.Equal(t, tt.expectedEntity.PrimaryMacAddress.MacAddress, iface.PrimaryMacAddress.MacAddress)
