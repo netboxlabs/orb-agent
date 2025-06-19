@@ -95,6 +95,9 @@ orb:
     worker:
       worker_policy_1:
        # see docs/backends/worker.md
+    snmp_discovery:
+      snmp_policy_1:
+       # see docs/backends/snmp.md
  ```
 
 ## Running the agent
