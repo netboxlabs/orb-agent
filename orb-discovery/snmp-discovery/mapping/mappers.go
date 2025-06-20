@@ -315,7 +315,7 @@ func (m *InterfaceMapper) FormatMACAddress(input string) (string, error) {
 	// Format to colon-separated hex string
 	var parts []string
 	for _, b := range bytes {
-		parts = append(parts, fmt.Sprintf("%02x", b))
+		parts = append(parts, fmt.Sprintf("%02X", b))
 	}
 
 	output := strings.Join(parts, ":")

@@ -601,6 +601,12 @@ func TestInterfaceMapper_FormatMACAddress(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:        "valid hex string with lowercase letters",
+			input:       "\x00\x11\x22\x33\x44\xab",
+			expected:    "00:11:22:33:44:AB",
+			expectError: false,
+		},
+		{
 			name:        "invalid (too short) hex string with backslashes",
 			input:       "\x00\x11\x22\x33\x44",
 			expected:    "",
