@@ -57,7 +57,7 @@ class Client:
     def init_client(
         self,
         prefix: str,
-        target: str,
+        target: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,
         dry_run: bool = False,
@@ -69,7 +69,7 @@ class Client:
         Args:
         ----
             prefix (str): The prefix for the producer app name.
-            target (str): The target endpoint for the Diode client.
+            target (str | None): The target endpoint for the Diode client.
             client_id (str | None): The client ID for authentication.
             client_secret (str | None): The client secret for authentication.
             dry_run (bool): If True, the client will not perform actual ingestion.

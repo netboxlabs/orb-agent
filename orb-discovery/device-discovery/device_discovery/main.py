@@ -134,11 +134,9 @@ def main():
         target = resolve_env_var(args.diode_target)
         client_id = resolve_env_var(args.diode_client_id)
         client_secret = resolve_env_var(args.diode_client_secret)
-        output_dir = (
-            resolve_env_var(args.dry_run_output_dir)
-            if args.dry_run_output_dir
-            else None
-        )
+        output_dir = None
+        if args.dry_run_output_dir:
+            output_dir = resolve_env_var(args.dry_run_output_dir)
 
         if args.otel_endpoint:
             setup_metrics_export(args.otel_endpoint, args.otel_export_period)

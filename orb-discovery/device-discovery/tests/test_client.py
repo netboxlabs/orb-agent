@@ -143,3 +143,39 @@ def test_ingest_without_initialization():
     client = Client()
     with pytest.raises(ValueError, match="Diode client not initialized"):
         client.ingest("", {})
+
+
+def test_client_dry_run(tmp_path, sample_data):
+    """Ensure dry-run initializes DiodeDryRunClient."""
+    client = Client()
+    client.init_client(
+        prefix="prefix",
+        dry_run=True,
+        dry_run_output_dir=tmp_path,
+    )
+    hostname = sample_data["device"]["hostname"]
+    client.ingest(hostname, sample_data)
+    files = list(tmp_path.glob("prefix_device-discovery*.json"))
+
+    assert len(files) == 1
+    for file in files:
+        with open(file) as f:
+            data = f.read()
+            assert sample_data["device"]["hostname"] in data
+            assert sample_data["interface"]["GigabitEthernet0/0"]["mac_address"] in data
+
+
+def test_client_dry_run_stdout(capsys, sample_data):
+    """Ensure dry-run initializes with None output dir when not provided."""
+    client = Client()
+    client.init_client(
+        prefix="prefix",
+        dry_run=True,
+    )
+
+    hostname = sample_data["device"]["hostname"]
+    client.ingest(hostname, sample_data)
+
+    captured = capsys.readouterr()
+    assert sample_data["device"]["hostname"] in captured.out
+    assert sample_data["interface"]["GigabitEthernet0/0"]["mac_address"] in captured.out

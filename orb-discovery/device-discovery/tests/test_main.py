@@ -68,6 +68,7 @@ def test_main_with_config(mock_parse_args, mock_client, mock_uvicorn_run):
         diode_client_secret="def",
         host="0.0.0.0",
         port=1234,
+        dry_run_output_dir=None
     )
 
     with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
@@ -89,6 +90,7 @@ def test_main_start_server_failure(mock_parse_args, mock_client, mock_uvicorn_ru
         diode_client_secret="def",
         host="0.0.0.0",
         port=1234,
+        dry_run_output_dir=None
     )
     mock_uvicorn_run.side_effect = Exception("Test Start Server Failure")
 
@@ -144,3 +146,33 @@ def test_main_missing_policy(mock_parse_args):
             main()
         except Exception as e:
             assert str(e) == "Test Exit"
+
+def test_main_dry_run(monkeypatch, mock_parse_args, mock_client, mock_uvicorn_run):
+    """Verify CLI initializes client in dry-run mode with resolved path."""
+    monkeypatch.setenv("OUTPUT_DIR", "/tmp/outdir")
+    mock_parse_args.return_value = MagicMock(
+        diode_target="grpc",
+        diode_client_id="abc",
+        diode_client_secret="def",
+        diode_app_name_prefix=None,
+        host="0.0.0.0",
+        port=1234,
+        dry_run=True,
+        dry_run_output_dir="${OUTPUT_DIR}",
+        otel_endpoint=None,
+        otel_export_period=60,
+    )
+    with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
+        try:
+            main()
+        except Exception:
+            pass
+    mock_client.return_value.init_client.assert_called_once_with(
+        prefix=None,
+        target="grpc",
+        client_id="abc",
+        client_secret="def",
+        dry_run=True,
+        dry_run_output_dir="/tmp/outdir",
+    )
+    mock_uvicorn_run.assert_called_once()
