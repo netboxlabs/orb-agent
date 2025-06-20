@@ -60,6 +60,24 @@ def test_main_keyboard_interrupt(mock_parse_args):
             assert str(e) == "Test Exit"
 
 
+def test_main_missing_required_args(mock_parse_args):
+    """Test handling of missing required arguments in main."""
+    mock_parse_args.return_value = MagicMock(
+        diode_target=None,
+        diode_client_id=None,
+        diode_client_secret=None,
+        host="0.0.0.0",
+        port=1234,
+        dry_run=False,
+        dry_run_output_dir=None,
+    )
+    with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
+        try:
+            main()
+        except Exception as e:
+            assert str(e) == "Test Exit"
+
+
 def test_main_with_config(mock_parse_args, mock_client, mock_uvicorn_run):
     """Test running the CLI with a configuration file and no environment file."""
     mock_parse_args.return_value = MagicMock(
@@ -68,7 +86,7 @@ def test_main_with_config(mock_parse_args, mock_client, mock_uvicorn_run):
         diode_client_secret="def",
         host="0.0.0.0",
         port=1234,
-        dry_run_output_dir=None
+        dry_run_output_dir=None,
     )
 
     with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
@@ -90,7 +108,7 @@ def test_main_start_server_failure(mock_parse_args, mock_client, mock_uvicorn_ru
         diode_client_secret="def",
         host="0.0.0.0",
         port=1234,
-        dry_run_output_dir=None
+        dry_run_output_dir=None,
     )
     mock_uvicorn_run.side_effect = Exception("Test Start Server Failure")
 
@@ -146,6 +164,7 @@ def test_main_missing_policy(mock_parse_args):
             main()
         except Exception as e:
             assert str(e) == "Test Exit"
+
 
 def test_main_dry_run(monkeypatch, mock_parse_args, mock_client, mock_uvicorn_run):
     """Verify CLI initializes client in dry-run mode with resolved path."""

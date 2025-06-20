@@ -71,7 +71,7 @@ def main():
         "--diode-target",
         help="Diode target. Environment variable can be used by wrapping it in ${} (e.g. ${TARGET})",
         type=str,
-        required=True,
+        required=False,
     )
 
     parser.add_argument(
@@ -79,7 +79,7 @@ def main():
         "--diode-client-id",
         help="Diode Client ID. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_ID})",
         type=str,
-        required=True,
+        required=False,
     )
 
     parser.add_argument(
@@ -87,7 +87,7 @@ def main():
         "--diode-client-secret",
         help="Diode Client Secret. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_SECRET})",
         type=str,
-        required=True,
+        required=False,
     )
 
     parser.add_argument(
@@ -131,12 +131,35 @@ def main():
 
     try:
         args = parser.parse_args()
-        target = resolve_env_var(args.diode_target)
-        client_id = resolve_env_var(args.diode_client_id)
-        client_secret = resolve_env_var(args.diode_client_secret)
-        output_dir = None
-        if args.dry_run_output_dir:
-            output_dir = resolve_env_var(args.dry_run_output_dir)
+        if not args.dry_run:
+            missing = [
+                name
+                for name, val in [
+                    ("--diode-target", args.diode_target),
+                    ("--diode-client-id", args.diode_client_id),
+                    ("--diode-client-secret", args.diode_client_secret),
+                ]
+                if not val
+            ]
+            if missing:
+                parser.error(
+                    f"{', '.join(missing)} required when not running with --dry-run"
+                )
+
+        target = resolve_env_var(args.diode_target) if args.diode_target else None
+        client_id = (
+            resolve_env_var(args.diode_client_id) if args.diode_client_id else None
+        )
+        client_secret = (
+            resolve_env_var(args.diode_client_secret)
+            if args.diode_client_secret
+            else None
+        )
+        output_dir = (
+            resolve_env_var(args.dry_run_output_dir)
+            if args.dry_run_output_dir
+            else None
+        )
 
         if args.otel_endpoint:
             setup_metrics_export(args.otel_endpoint, args.otel_export_period)
