@@ -3,7 +3,8 @@ Orb device discovery backend
 
 ### Usage
 ```bash
-usage: device-discovery [-h] [-V] [-s HOST] [-p PORT] -t DIODE_TARGET -c DIODE_CLIENT_ID -k DIODE_CLIENT_SECRET [-a DIODE_APP_NAME_PREFIX] [--otel-endpoint OTEL_ENDPOINT] [--otel-export-period OTEL_EXPORT_PERIOD]
+usage: device-discovery [-h] [-V] [-s HOST] [-p PORT] -t DIODE_TARGET -c DIODE_CLIENT_ID -k DIODE_CLIENT_SECRET [-a DIODE_APP_NAME_PREFIX] [-d] [-o DRY_RUN_OUTPUT_DIR]
+               [--otel-endpoint OTEL_ENDPOINT] [--otel-export-period OTEL_EXPORT_PERIOD]
 
 Orb Device Discovery Backend
 
@@ -20,6 +21,9 @@ options:
                         Diode Client Secret. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_SECRET})
   -a DIODE_APP_NAME_PREFIX, --diode-app-name-prefix DIODE_APP_NAME_PREFIX
                         Diode producer_app_name prefix
+  -d, --dry-run         Run in dry-run mode, do not ingest data
+  -o DRY_RUN_OUTPUT_DIR, --dry-run-output-dir DRY_RUN_OUTPUT_DIR
+                        Output dir for dry-run mode
   --otel-endpoint OTEL_ENDPOINT
                         OpenTelemetry exporter endpoint
   --otel-export-period OTEL_EXPORT_PERIOD
