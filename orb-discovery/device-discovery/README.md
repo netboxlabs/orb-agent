@@ -14,21 +14,20 @@ options:
   -s HOST, --host HOST  Server host
   -p PORT, --port PORT  Server port
   -t DIODE_TARGET, --diode-target DIODE_TARGET
-                        Diode target
+                        Diode target. Environment variable can be used by wrapping it in ${} (e.g. ${TARGET})
   -c DIODE_CLIENT_ID, --diode-client-id DIODE_CLIENT_ID
-                        Diode Client ID. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_ID})
+                        Diode Client ID. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_ID})
   -k DIODE_CLIENT_SECRET, --diode-client-secret DIODE_CLIENT_SECRET
-                        Diode Client Secret. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_SECRET})
+                        Diode Client Secret. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_SECRET})
   -a DIODE_APP_NAME_PREFIX, --diode-app-name-prefix DIODE_APP_NAME_PREFIX
                         Diode producer_app_name prefix
   -d, --dry-run         Run in dry-run mode, do not ingest data
   -o DRY_RUN_OUTPUT_DIR, --dry-run-output-dir DRY_RUN_OUTPUT_DIR
-                        Output dir for dry-run mode
+                        Output dir for dry-run mode. Environment variable can be used by wrapping it in ${} (e.g. ${OUTPUT_DIR})
   --otel-endpoint OTEL_ENDPOINT
                         OpenTelemetry exporter endpoint
   --otel-export-period OTEL_EXPORT_PERIOD
                         Period in seconds between OpenTelemetry exports (default: 60)
-```
 
 ### Policy RFC
 ```yaml

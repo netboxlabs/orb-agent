@@ -69,7 +69,7 @@ def main():
     parser.add_argument(
         "-t",
         "--diode-target",
-        help="Diode target",
+        help="Diode target. Environment variable can be used by wrapping it in ${} (e.g. ${TARGET})",
         type=str,
         required=True,
     )
@@ -77,7 +77,7 @@ def main():
     parser.add_argument(
         "-c",
         "--diode-client-id",
-        help="Diode Client ID. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_ID})",
+        help="Diode Client ID. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_ID})",
         type=str,
         required=True,
     )
@@ -85,7 +85,7 @@ def main():
     parser.add_argument(
         "-k",
         "--diode-client-secret",
-        help="Diode Client Secret. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_SECRET})",
+        help="Diode Client Secret. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_SECRET})",
         type=str,
         required=True,
     )
@@ -109,7 +109,7 @@ def main():
     parser.add_argument(
         "-o",
         "--dry-run-output-dir",
-        help="Output dir for dry-run mode",
+        help="Output dir for dry-run mode. Environment variable can be used by wrapping it in ${} (e.g. ${OUTPUT_DIR})",
         type=str,
         required=False,
     )
