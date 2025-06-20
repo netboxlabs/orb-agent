@@ -1,8 +1,7 @@
 ARG PKTVISOR_TAG=develop
 ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
-ARG SNMP_DISCOVERY_TAG=latest
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.23
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-bullseye AS builder
 
@@ -24,8 +23,6 @@ FROM netboxlabs/opentelemetry-infinity:${OTEL_TAG} AS otlpinf
 
 FROM netboxlabs/network-discovery:${NETWORK_DISCOVERY_TAG} AS network-discovery
 
-FROM netboxlabs/snmp-discovery:${SNMP_DISCOVERY_TAG} AS snmp-discovery
-
 FROM orbcommunity/pktvisor:${PKTVISOR_TAG} AS pktvisor
 
 FROM python:3.12-slim-bullseye
@@ -38,6 +35,7 @@ RUN \
 RUN mkdir -p /opt/orb
 
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
+COPY --from=builder /src/orb-agent/agent/docker/agent_default.yaml /opt/orb/agent_default.yaml
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
 COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
 
@@ -49,10 +47,6 @@ COPY --from=pktvisor /iana /iana
 COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
-
-RUN mkdir -p /etc/snmp-discovery/lookup-extensions
-COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-discovery
-COPY --from=snmp-discovery /etc/snmp-discovery/lookup-extensions /etc/snmp-discovery/lookup-extensions
 
 RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 

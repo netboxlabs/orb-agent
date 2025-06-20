@@ -1,10 +1,12 @@
+include agent/docker/.env
+
+# expects to be set as env var
 PRODUCTION_AGENT_REF_TAG ?= latest
 PRODUCTION_AGENT_DEBUG_REF_TAG ?= latest-debug
 REF_TAG ?= develop
 DEBUG_REF_TAG ?= develop-debug
 PKTVISOR_TAG ?= develop
 PKTVISOR_DEBUG_TAG ?= develop-debug
-SNMP_DISCOVERY_TAG ?= latest
 DOCKERHUB_REPO = netboxlabs
 ORB_DOCKERHUB_REPO = netboxlabs
 BUILD_DIR = build
@@ -37,9 +39,6 @@ endif
 install-dev-tools:
 	@go install github.com/mfridman/tparse@latest
 
-.PHONY: deps
-deps:
-	@go mod tidy
 
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
@@ -64,7 +63,6 @@ agent:
 	docker build --no-cache \
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
-	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \

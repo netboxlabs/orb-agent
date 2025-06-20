@@ -43,7 +43,6 @@ type workerBackend struct {
 	diodeClientID      string
 	diodeClientSecret  string
 	diodeAppNamePrefix string
-	diodeOtelEndpoint  string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -85,12 +84,6 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	d.diodeClientSecret = common.Diode.ClientSecret
 	d.diodeAppNamePrefix = common.Diode.AgentName
 
-	if common.Otel.Grpc != "" {
-		d.diodeOtelEndpoint = common.Otel.Grpc
-		d.logger.Info("orb-worker using OTLP metrics endpoint",
-			slog.String("endpoint", d.diodeOtelEndpoint))
-	}
-
 	return nil
 }
 
@@ -117,10 +110,6 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		"--diode-client-id", d.diodeClientID,
 		"--diode-client-secret", "********",
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
-	}
-
-	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
 	d.logger.Info("worker startup", slog.Any("arguments", pvOptions))

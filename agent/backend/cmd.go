@@ -81,10 +81,10 @@ func (c *CmdWrapper) Status() CmdStatus {
 
 // GetStdout returns the stdout channel
 func (c *CmdWrapper) GetStdout() <-chan string {
-	return c.Stdout
+	return c.Cmd.Stdout
 }
 
 // GetStderr returns the stderr channel
 func (c *CmdWrapper) GetStderr() <-chan string {
-	return c.Stderr
+	return c.Cmd.Stderr
 }

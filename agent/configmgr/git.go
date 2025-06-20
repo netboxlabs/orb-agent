@@ -213,10 +213,9 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]backend.Backend) {
 	// Fetch latest updates from remote
 	err := gc.repo.Fetch(&gitv5.FetchOptions{
-		RemoteName:      "origin",
-		Auth:            gc.authMethod,
-		InsecureSkipTLS: gc.config.SkipTLS,
-		RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
+		RemoteName: "origin",
+		Auth:       gc.authMethod,
+		RefSpecs:   []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
 	})
 	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
 		gc.logger.Error("Failed to fetch latest changes", slog.Any("error", err))
@@ -344,8 +343,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return errors.New("URL is required for Git Config Manager")
 	}
 
-	switch gc.config.Auth {
-	case "basic":
+	if gc.config.Auth == "basic" {
 		if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 			return err
 		}
@@ -353,7 +351,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 			Username: gc.config.Username,
 			Password: gc.config.Password,
 		}
-	case "ssh":
+	} else if gc.config.Auth == "ssh" {
 		if gc.config.PrivateKey != "" {
 			if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 				return err
@@ -384,9 +382,8 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 
 	// Fetch all branches and references
 	if err = repo.Fetch(&gitv5.FetchOptions{
-		RemoteName:      "origin",
-		Auth:            gc.authMethod,
-		InsecureSkipTLS: gc.config.SkipTLS,
+		RemoteName: "origin",
+		Auth:       gc.authMethod,
 	}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
 		return err
 	}
@@ -397,7 +394,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 
-	refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod, InsecureSkipTLS: gc.config.SkipTLS})
+	refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod})
 	if err != nil {
 		return err
 	}
@@ -422,11 +419,10 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 
 	// Now clone the repository with the determined branch
 	gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
-		Auth:            gc.authMethod,
-		URL:             gc.config.URL,
-		ReferenceName:   plumbing.NewBranchReferenceName(branchName),
-		SingleBranch:    true,
-		InsecureSkipTLS: gc.config.SkipTLS,
+		Auth:          gc.authMethod,
+		URL:           gc.config.URL,
+		ReferenceName: plumbing.NewBranchReferenceName(branchName),
+		SingleBranch:  true,
 	})
 	if err != nil {
 		return err

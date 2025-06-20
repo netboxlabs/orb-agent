@@ -1,0 +1,15 @@
+version: "1.0"
+
+visor:
+  taps:
+
+orb:
+  config_manager: 
+   active: local
+  backends:
+    device_discovery:
+    network_discovery:
+    common:
+      diode:
+        target: grpc://localhost:8080/diode
+        api_key: ${DIODE_API_KEY}

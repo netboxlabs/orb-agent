@@ -55,8 +55,7 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 				return
 			}
 		} else if strings.Contains(r.URL.Path, "/api/v1/policies") {
-			switch r.Method {
-			case http.MethodPost:
+			if r.Method == http.MethodPost {
 				w.WriteHeader(http.StatusOK)
 				response := map[string]any{
 					"status":  "success",
@@ -67,7 +66,7 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-			case http.MethodDelete:
+			} else if r.Method == http.MethodDelete {
 				w.WriteHeader(http.StatusOK)
 				response := map[string]any{
 					"status":  "success",
