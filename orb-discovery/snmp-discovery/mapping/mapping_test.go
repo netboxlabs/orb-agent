@@ -80,7 +80,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						MacAddress: &[]string{"00:00:00:00:00:00"}[0],
 					},
 					Enabled: &[]bool{true}[0],
-					Type:    diode.String("virtual"),
+					Type:    diode.String("other"),
 					Device:  &diode.Device{},
 				},
 				&diode.Interface{
@@ -90,7 +90,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						MacAddress: &[]string{"00:00:00:00:00:11"}[0],
 					},
 					Enabled: &[]bool{false}[0],
-					Type:    diode.String("virtual"),
+					Type:    diode.String("other"),
 					Device:  &diode.Device{},
 				},
 			},
@@ -159,7 +159,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 						MacAddress: diode.String("00:00:00:00:00:00"),
 					},
 					Enabled: &[]bool{true}[0],
-					Type:    diode.String("virtual"),
+					Type:    diode.String("other"),
 					Device:  &diode.Device{},
 				},
 				&diode.IPAddress{
@@ -269,14 +269,14 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			expected: []diode.Entity{
 				&diode.Interface{
 					Name:   diode.String("GigabitEthernet1/0/1"),
-					Type:   diode.String("virtual"),
+					Type:   diode.String("other"),
 					Device: &diode.Device{},
 				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),
 					AssignedObject: &diode.Interface{
 						Name:   diode.String("GigabitEthernet1/0/1"),
-						Type:   diode.String("virtual"),
+						Type:   diode.String("other"),
 						Device: &diode.Device{},
 					},
 				},
@@ -353,7 +353,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 				&FakeDeviceLookup{},
 				&config.Defaults{
 					Interface: config.InterfaceDefaults{
-						Type: "virtual",
+						Type: "other",
 					},
 				},
 			)

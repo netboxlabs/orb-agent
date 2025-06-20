@@ -433,7 +433,6 @@ func TestInterfaceMapper_Map(t *testing.T) {
 				Mtu:               int64Ptr(1500),
 				PrimaryMacAddress: &diode.MACAddress{MacAddress: mapping.StringPtr("00:11:22:33:44:55")},
 				Enabled:           boolPtr(true),
-				Type:              mapping.StringPtr("other"),
 			},
 			expectError: false,
 		},
@@ -530,7 +529,6 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			},
 			expectedEntity: &diode.Interface{
 				Name: mapping.StringPtr("unknown"),
-				Type: mapping.StringPtr("other"),
 			},
 			expectError: false,
 		},
@@ -544,7 +542,6 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			},
 			expectedEntity: &diode.Interface{
 				Name: mapping.StringPtr("unknown"),
-				Type: mapping.StringPtr("other"),
 			},
 			expectError: false,
 		},

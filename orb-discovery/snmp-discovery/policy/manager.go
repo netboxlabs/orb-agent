@@ -105,6 +105,10 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 	if policy.Config.LookupExtensionsDir == "" {
 		policy.Config.LookupExtensionsDir = config.DefaultLookupExtensionsDir
 	}
+
+	if policy.Config.Defaults.Interface.Type == "" {
+		policy.Config.Defaults.Interface.Type = "other"
+	}
 }
 
 // validatePolicy validates the policy

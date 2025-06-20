@@ -146,7 +146,7 @@ func TestRunnerRun(t *testing.T) {
 						Interface: config.InterfaceDefaults{
 							Description: "Interface Default",
 							Tags:        []string{"interface", "default"},
-							Type:        "unknown",
+							Type:        "other",
 						},
 						Device: config.DeviceDefaults{
 							Description: "Device Default",
