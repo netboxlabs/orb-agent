@@ -27,7 +27,7 @@ const (
 	removePolicyTimeout = 20
 	defaultExec         = "snmp-discovery"
 	defaultAPIHost      = "localhost"
-	defaultAPIPort      = "8073"
+	defaultAPIPort      = "8070"
 )
 
 type snmpDiscoveryBackend struct {
