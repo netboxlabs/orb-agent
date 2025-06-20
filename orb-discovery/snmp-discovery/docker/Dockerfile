@@ -10,14 +10,21 @@ ARG TARGETOS TARGETARCH
 
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/snmp-discovery ./cmd/main.go
 
-FROM alpine:3.20
+FROM alpine:3.22
 
+# Copy the binary
 COPY --from=builder /build/snmp-discovery /usr/local/bin/snmp-discovery
 
+# Create application directories
+RUN mkdir -p /etc/snmp-discovery/lookup-extensions
+
+# Copy lookup extensions to proper location
+COPY --from=builder /src/snmp-discovery/lookup_extensions /etc/snmp-discovery/lookup-extensions
+
 LABEL maintainer="techops@netboxlabs.com"
-LABEL org.opencontainers.image.title="Orb snmp Discovery"
-LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-discovery/tree/develop/snmp-discovery"
-LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-discovery/tree/develop/snmp-discovery"
+LABEL org.opencontainers.image.title="Orb SNMP Discovery"
+LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery"
+LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery"
 LABEL org.opencontainers.image.description="NetBox Labs snmp-discovery image"
 LABEL org.opencontainers.image.vendor="NetBox Labs, Inc"
 LABEL org.opencontainers.image.authors="techops@netboxlabs.com"

@@ -100,6 +100,11 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 			policy.Scope.Targets[i].Port = SNMPDefaultPort
 		}
 	}
+
+	// Set default lookup extensions directory if not specified
+	if policy.Config.LookupExtensionsDir == "" {
+		policy.Config.LookupExtensionsDir = config.DefaultLookupExtensionsDir
+	}
 }
 
 // validatePolicy validates the policy
@@ -146,10 +151,6 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 				return fmt.Errorf("missing priv protocol")
 			}
 		}
-	}
-
-	if policy.Config.LookupExtensionsDir == "" {
-		return fmt.Errorf("missing lookup extensions directory")
 	}
 
 	return nil

@@ -52,7 +52,7 @@ policies:
         device:
           description: "SNMP discovered device"
           comments: "Automatically discovered via SNMP"
-      lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing device data yaml files (see below)
+      lookup_extensions_dir: "/opt/orb/snmp-extensions" # (Optional) Specifies an override for the directory containing device data yaml files (see below). Defaults to `/etc/snmp-discovery/lookup-extensions
     scope:
       targets:
         - host: "192.168.1.1"
@@ -87,7 +87,7 @@ policies:
 ```
 
 ### Device Model Lookup
-The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values.
+The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values. This only needs to be set if additional or modified files are being provided instead of the ones that are included with orb-discovery and orb-agent.
 
 #### File Format
 Device lookup files must be in YAML format with a `.yaml` or `.yml` extension. Each file should contain a `devices` section that maps SNMP device OIDs to device names:
@@ -102,13 +102,15 @@ devices:
 ```
 
 #### Example Device Lookup Files
-The repository includes several pre-built device lookup files for popular vendors:
+The repository includes several pre-built device lookup files for popular vendors. These are included in the orb-discovery and orb-agent images.
 
 - **Cisco devices**: `cisco.yaml` - Contains mappings for Cisco routers, switches, and other networking equipment
 - **TP-Link devices**: `tplink.yaml` - Contains mappings for TP-Link switches and routers
 - **Dell Networking**: `dell-networking.yaml` - Contains mappings for Dell networking equipment
 - **Lenovo devices**: `lenovo.yaml` - Contains mappings for Lenovo networking equipment
 - **Ruckus devices**: `ruckus.yaml` - Contains mappings for Ruckus wireless equipment
+
+The full list of vendor device files is available [here](https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery/lookup_extension).
 
 #### Creating Custom Device Lookup Files
 You can create custom device lookup files for your specific hardware by:

@@ -2,6 +2,11 @@ package config
 
 import "time"
 
+const (
+	// DefaultLookupExtensionsDir is the default directory for lookup extensions
+	DefaultLookupExtensionsDir = "/etc/snmp-discovery/lookup-extensions"
+)
+
 // Status represents the status of the snmp-discovery service
 type Status struct {
 	StartTime     time.Time `json:"start_time"`
