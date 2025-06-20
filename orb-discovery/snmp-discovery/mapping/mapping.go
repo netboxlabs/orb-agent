@@ -87,7 +87,6 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 	case "interface":
 		return &diode.Interface{
 			Name: StringPtr("unknown"),
-			// Type: StringPtr("other"),
 		}, nil
 	case "device":
 		return &diode.Device{}, nil
