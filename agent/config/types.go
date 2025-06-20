@@ -30,6 +30,7 @@ type GitManager struct {
 	Username   string  `yaml:"username"`
 	Password   string  `yaml:"password"`
 	PrivateKey string  `yaml:"private_key"`
+	SkipTLS    bool    `yaml:"skip_tls"`
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.
@@ -68,8 +69,8 @@ type ManagerSecrets struct {
 // BackendCommons represents common configuration for backends
 type BackendCommons struct {
 	Otel struct {
-		Host        string            `yaml:"host"`
-		Port        int               `yaml:"port"`
+		Grpc        string            `yaml:"grpc"`
+		HTTP        string            `yaml:"http"`
 		AgentLabels map[string]string `yaml:"agent_labels"`
 	} `yaml:"otel"`
 	Diode struct {
