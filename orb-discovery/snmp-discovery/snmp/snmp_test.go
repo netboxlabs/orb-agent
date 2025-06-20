@@ -432,7 +432,7 @@ func TestMapPDU(t *testing.T) {
 			pdu: snmp.PDU{
 				Name:  "test.7",
 				Type:  gosnmp.Counter32,
-				Value: uint32(4294967295),
+				Value: uint(4294967295),
 			},
 			expectedValue: mapping.Value{
 				Type:  mapping.Asn1BER(gosnmp.Counter32),
@@ -445,11 +445,11 @@ func TestMapPDU(t *testing.T) {
 			pdu: snmp.PDU{
 				Name:  "test.8",
 				Type:  gosnmp.Gauge32,
-				Value: uint32(65535),
+				Value: uint(4294967295),
 			},
 			expectedValue: mapping.Value{
 				Type:  mapping.Asn1BER(gosnmp.Gauge32),
-				Value: "65535",
+				Value: "4294967295",
 			},
 			expectError: false,
 		},
@@ -458,7 +458,7 @@ func TestMapPDU(t *testing.T) {
 			pdu: snmp.PDU{
 				Name:  "test.9",
 				Type:  gosnmp.Counter64,
-				Value: uint64(18446744073709551615),
+				Value: uint(18446744073709551615),
 			},
 			expectedValue: mapping.Value{
 				Type:  mapping.Asn1BER(gosnmp.Counter64),

@@ -3,6 +3,7 @@ package snmp
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -60,14 +61,14 @@ func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) 
 			return nil, err
 		}
 		for k, value := range pdu {
-			s.logger.Debug("Mapping PDU", "objectID", k, "value", value)
+			s.logger.Debug("Mapping PDU", "objectID", k, "value", value, "ValueType", reflect.TypeOf(value.Value))
 			value, err := MapPDU(value)
 			if err != nil {
 				s.logger.Warn("Error mapping PDU", "objectID", k, "error", err)
 				continue
 			}
 			output[k] = value
-			output[k] = value
+			s.logger.Debug("Mapped PDU", "objectID", k, "value", value)
 		}
 	}
 
@@ -100,12 +101,8 @@ func MapPDU(pdu PDU) (mapping.Value, error) {
 		if ticks, ok := pdu.Value.(uint32); ok {
 			value = fmt.Sprintf("%d", ticks)
 		}
-	case gosnmp.Counter32, gosnmp.Gauge32:
-		if val, ok := pdu.Value.(uint32); ok {
-			value = fmt.Sprintf("%d", val)
-		}
-	case gosnmp.Counter64:
-		if val, ok := pdu.Value.(uint64); ok {
+	case gosnmp.Counter32, gosnmp.Gauge32, gosnmp.Counter64:
+		if val, ok := pdu.Value.(uint); ok {
 			value = fmt.Sprintf("%d", val)
 		}
 	default:
@@ -178,6 +175,7 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 				Community: authentication.Community,
 				Version:   gosnmp.Version1,
 				Timeout:   time.Duration(2) * time.Second,
+				Retries:   retries,
 			},
 		}, nil
 	case ProtocolVersion2c:
@@ -188,6 +186,7 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 				Community: authentication.Community,
 				Version:   gosnmp.Version2c,
 				Timeout:   time.Duration(2) * time.Second,
+				Retries:   retries,
 			},
 		}, nil
 	case ProtocolVersion3:
