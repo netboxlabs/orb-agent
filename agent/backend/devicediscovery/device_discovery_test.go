@@ -33,7 +33,7 @@ func TestDeviceDiscoveryBackendStart(t *testing.T) {
 
 		if r.URL.Path == "/api/v1/status" {
 			response := StatusResponse{
-				Version:   "1.3.4",
+				Version:   "1.3.5",
 				StartTime: "2023-10-01T12:00:00Z",
 				UpTime:    123.456,
 			}
