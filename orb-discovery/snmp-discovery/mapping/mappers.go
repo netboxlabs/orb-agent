@@ -3,6 +3,7 @@ package mapping
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -93,8 +94,33 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 			if objectID.HasParent(propertyMappingEntry.OID) {
 				switch propertyMappingEntry.Field {
 				case "address":
-					x := fmt.Sprintf("%s/32", string(value.Index))
-					ipAddress.Address = &x
+					if ipAddress.Address != nil && strings.HasPrefix(*ipAddress.Address, "/") {
+						x := fmt.Sprintf("%s%s", string(value.Index), *ipAddress.Address)
+						ipAddress.Address = &x
+					} else if ipAddress.Address == nil || *ipAddress.Address == "" {
+						x := fmt.Sprintf("%s/32", value.Index)
+						ipAddress.Address = &x
+					}
+					fieldFound = true
+				case "address_prefixSize":
+					prefixLength, err := maskToPrefixSize(value.Value)
+					if err != nil {
+						m.logger.Warn("Error converting mask to prefix size", "error", err, "value", value.Value)
+						continue
+					}
+					if ipAddress.Address == nil || *ipAddress.Address == "" {
+						x := fmt.Sprintf("/%d", prefixLength)
+						ipAddress.Address = &x
+					} else {
+						prefixParts := strings.Split(*ipAddress.Address, "/")
+						if len(prefixParts) >= 1 {
+							x := fmt.Sprintf("%s/%d", prefixParts[0], prefixLength)
+							ipAddress.Address = &x
+						} else {
+							x := fmt.Sprintf("%s/%d", *ipAddress.Address, prefixLength)
+							ipAddress.Address = &x
+						}
+					}
 					fieldFound = true
 				case "assigned_object":
 					if propertyMappingEntry.Relationship != (config.Relationship{}) {
@@ -126,6 +152,30 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	}
 
 	return &ipAddress
+}
+
+func maskToPrefixSize(maskStr string) (int, error) {
+	parts := strings.Split(maskStr, ".")
+	if len(parts) != 4 {
+		return 0, fmt.Errorf("invalid mask format: %s", maskStr)
+	}
+
+	// Convert string to IP mask
+	ip := net.ParseIP(maskStr)
+	if ip == nil {
+		return 0, fmt.Errorf("could not parse IP: %s", maskStr)
+	}
+
+	// Convert to 4-byte representation and compute prefix
+	ip = ip.To4()
+	if ip == nil {
+		return 0, fmt.Errorf("not an IPv4 address: %s", maskStr)
+	}
+
+	mask := net.IPv4Mask(ip[0], ip[1], ip[2], ip[3])
+	ones, _ := mask.Size()
+
+	return ones, nil
 }
 
 // InterfaceMapper is a struct that maps interfaces to entities

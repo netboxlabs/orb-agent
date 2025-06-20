@@ -81,7 +81,9 @@ func (r *EntityRegistry) GetOrCreateEntity(entityType EntityType, index ObjectID
 func createEntity(entityType EntityType) (diode.Entity, error) {
 	switch entityType {
 	case "ipAddress":
-		return &diode.IPAddress{}, nil
+		return &diode.IPAddress{
+			Address: StringPtr(""),
+		}, nil
 	case "interface":
 		return &diode.Interface{
 			Name: StringPtr("unknown"),
