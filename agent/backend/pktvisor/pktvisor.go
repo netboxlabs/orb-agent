@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -302,9 +303,17 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 
 	p.configFile = tmpFile.Name()
 
-	if common.Otel.Host != "" && common.Otel.Port != 0 {
-		p.otelReceiverHost = common.Otel.Host
-		p.otelReceiverPort = common.Otel.Port
+	if common.Otel.HTTP != "" {
+		uri, err := url.Parse(common.Otel.HTTP)
+		if err != nil {
+			return fmt.Errorf("failed to parse otel receiver http url: %w", err)
+		}
+		p.otelReceiverHost = uri.Hostname()
+		port, err := strconv.Atoi(uri.Port())
+		if err != nil {
+			return fmt.Errorf("failed to parse otel receiver port: %w", err)
+		}
+		p.otelReceiverPort = port
 		p.logger.Info("configured otel receiver host", slog.String("host", p.otelReceiverHost),
 			slog.Int("port", p.otelReceiverPort))
 	}

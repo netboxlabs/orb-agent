@@ -16,14 +16,14 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/otel"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
+	"github.com/netboxlabs/orb-agent/agent/backend/snmpdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/worker"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
 const (
-	defaultConfig                   = "/opt/orb/agent_default.yaml"
-	routineKey    config.ContextKey = "routine"
+	routineKey config.ContextKey = "routine"
 )
 
 var (
@@ -37,6 +37,7 @@ func init() {
 	devicediscovery.Register()
 	networkdiscovery.Register()
 	worker.Register()
+	snmpdiscovery.Register()
 }
 
 // Version prints the version of the agent
@@ -64,15 +65,9 @@ func loadConfig(path string, configData *config.Config) error {
 	return nil
 }
 
-func initConfig() config.Config {
+// Run starts the agent
+func Run(_ *cobra.Command, _ []string) {
 	var configData config.Config
-
-	// Load default config
-	if _, err := os.Stat(defaultConfig); err == nil {
-		if err := loadConfig(defaultConfig, &configData); err != nil {
-			cobra.CheckErr(fmt.Errorf("error loading default config: %w", err))
-		}
-	}
 
 	// Override with user-provided config files
 	for _, conf := range cfgFiles {
@@ -80,13 +75,6 @@ func initConfig() config.Config {
 			cobra.CheckErr(fmt.Errorf("error loading config file %s: %w", conf, err))
 		}
 	}
-
-	return configData
-}
-
-// Run starts the agent
-func Run(_ *cobra.Command, _ []string) {
-	configData := initConfig()
 
 	// logger
 	var l slog.Level
@@ -98,12 +86,13 @@ func Run(_ *cobra.Command, _ []string) {
 	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l, AddSource: false})
 	logger := slog.New(h)
 
-	logger.Info("backends loaded", slog.Any("backends", configData.OrbAgent.Backends))
-
-	configData.OrbAgent.ConfigFile = defaultConfig
 	if len(cfgFiles) > 0 {
 		configData.OrbAgent.ConfigFile = cfgFiles[0]
+	} else {
+		cobra.CheckErr(fmt.Errorf("no config file specified, use --config or -c flag to provide config files"))
 	}
+
+	logger.Info("backends loaded", slog.Any("backends", configData.OrbAgent.Backends))
 
 	// new agent
 	a, err := agent.New(logger, configData)

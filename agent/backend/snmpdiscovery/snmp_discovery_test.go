@@ -1,4 +1,4 @@
-package networkdiscovery_test
+package snmpdiscovery_test
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
-	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/snmpdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -26,7 +26,7 @@ type StatusResponse struct {
 	UpTime    float64 `json:"up_time"`
 }
 
-func TestNetworkDiscoveryBackendStart(t *testing.T) {
+func TestSNMPDiscoveryBackendStart(t *testing.T) {
 	// Create server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -108,7 +108,7 @@ func TestNetworkDiscoveryBackendStart(t *testing.T) {
 	// Override NewCmdOptions to return our mock
 	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
 		// Assert that the correct parameters were passed
-		assert.Equal(t, "network-discovery", name, "Expected command name to be network-discovery")
+		assert.Equal(t, "snmp-discovery", name, "Expected command name to be snmp-discovery")
 		assert.Contains(t, args, "--port", "Expected args to contain port")
 		assert.Contains(t, args, "--host", "Expected args to contain host")
 		assert.False(t, options.Buffered, "Expected buffered to be false")
@@ -116,11 +116,11 @@ func TestNetworkDiscoveryBackendStart(t *testing.T) {
 		return mockCmd
 	}
 
-	assert.True(t, networkdiscovery.Register(), "Failed to register NetworkDiscovery backend")
+	assert.True(t, snmpdiscovery.Register(), "Failed to register SNMP Discovery backend")
 
-	assert.True(t, backend.HaveBackend("network_discovery"), "Failed to get NetworkDiscovery backend")
+	assert.True(t, backend.HaveBackend("snmp_discovery"), "Failed to get SNMP Discovery backend")
 
-	be := backend.GetBackend("network_discovery")
+	be := backend.GetBackend("snmp_discovery")
 
 	assert.Equal(t, backend.Unknown, be.GetInitialState())
 
@@ -169,7 +169,7 @@ func TestNetworkDiscoveryBackendStart(t *testing.T) {
 	mockCmd.AssertExpectations(t)
 }
 
-func TestNetworkDiscoveryBackendCompleted(t *testing.T) {
+func TestSNMPDiscoveryBackendCompleted(t *testing.T) {
 	// Create a mock command that simulates a failure
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupCompletedProcess(mockCmd, 0, nil)
@@ -184,11 +184,11 @@ func TestNetworkDiscoveryBackendCompleted(t *testing.T) {
 		return mockCmd
 	}
 
-	assert.True(t, networkdiscovery.Register(), "Failed to register NetworkDiscovery backend")
+	assert.True(t, snmpdiscovery.Register(), "Failed to register SNMP Discovery backend")
 
-	assert.True(t, backend.HaveBackend("network_discovery"), "Failed to get NetworkDiscovery backend")
+	assert.True(t, backend.HaveBackend("snmp_discovery"), "Failed to get SNMP Discovery backend")
 
-	be := backend.GetBackend("network_discovery")
+	be := backend.GetBackend("snmp_discovery")
 
 	// Configure backend with invalid parameters
 	err := be.Configure(slog.Default(), nil, map[string]any{

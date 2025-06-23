@@ -15,7 +15,7 @@ concurrency:
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  GO_VERSION: '1.23'
+  GO_VERSION: '1.24'
   APP_NAME: orb-agent
 
 permissions:
@@ -65,7 +65,7 @@ jobs:
                     { "message": "*", "release": "patch"},
                     { "message": "fix*", "release": "patch" },
                     { "message": "feat*", "release": "minor" },
-                    { "message": "perf*",  "release": "major" }
+                    { "message": "major*",  "release": "major" }
                   ]
                 }],
                 "@semantic-release/release-notes-generator",
@@ -210,7 +210,7 @@ jobs:
                     { "message": "*", "release": "patch"},
                     { "message": "fix*", "release": "patch" },
                     { "message": "feat*", "release": "minor" },
-                    { "message": "perf*",  "release": "major" }
+                    { "message": "major*",  "release": "major" }
                   ]
                 }],
                 "@semantic-release/release-notes-generator",

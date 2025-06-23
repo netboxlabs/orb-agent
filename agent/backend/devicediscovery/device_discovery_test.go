@@ -33,7 +33,7 @@ func TestDeviceDiscoveryBackendStart(t *testing.T) {
 
 		if r.URL.Path == "/api/v1/status" {
 			response := StatusResponse{
-				Version:   "1.3.4",
+				Version:   "1.3.5",
 				StartTime: "2023-10-01T12:00:00Z",
 				UpTime:    123.456,
 			}
@@ -54,7 +54,8 @@ func TestDeviceDiscoveryBackendStart(t *testing.T) {
 				return
 			}
 		} else if strings.Contains(r.URL.Path, "/api/v1/policies") {
-			if r.Method == http.MethodPost {
+			switch r.Method {
+			case http.MethodPost:
 				w.WriteHeader(http.StatusOK)
 				response := map[string]any{
 					"status":  "success",
@@ -65,7 +66,7 @@ func TestDeviceDiscoveryBackendStart(t *testing.T) {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
-			} else if r.Method == http.MethodDelete {
+			case http.MethodDelete:
 				w.WriteHeader(http.StatusOK)
 				response := map[string]any{
 					"status":  "success",
