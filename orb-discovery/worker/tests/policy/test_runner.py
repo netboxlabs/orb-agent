@@ -36,6 +36,15 @@ def sample_diode_config():
         prefix="test",
     )
 
+@pytest.fixture
+def sample_diode_dry_run_config():
+    """Fixture for a sample DiodeConfig object."""
+    return DiodeConfig(
+        target="",
+        prefix="test",
+        dry_run=True,
+        dry_run_output_dir="/tmp/dry_run",
+    )
 
 @pytest.fixture
 def mock_load_class():
@@ -60,6 +69,14 @@ def mock_diode_client():
         mock_instance = MagicMock()
         mock_diode_client.return_value = mock_instance
         yield mock_diode_client
+
+@pytest.fixture
+def mock_diode_dry_run_client():
+    """Fixture to mock the DiodeDryRunClient constructor."""
+    with patch("worker.policy.runner.DiodeDryRunClient") as mock_diode_dry_run_client:
+        mock_instance = MagicMock()
+        mock_diode_dry_run_client.return_value = mock_instance
+        yield mock_diode_dry_run_client
 
 
 @pytest.fixture
@@ -120,6 +137,26 @@ def test_setup_policy_runner_with_one_time_run(
         assert mock_start.called
         assert policy_runner.status == Status.RUNNING
 
+def test_setup_policy_runner_dry_run(
+    policy_runner,
+    sample_diode_dry_run_config,
+    sample_policy,
+    mock_load_class,
+    mock_diode_dry_run_client,
+):
+    """Test setting up the PolicyRunner with dry run configuration."""
+    with patch.object(policy_runner.scheduler, "start") as mock_start, patch.object(
+        policy_runner.scheduler, "add_job"
+    ) as mock_add_job:
+
+        policy_runner.setup("policy1", sample_diode_dry_run_config, sample_policy)
+
+        # Ensure scheduler starts and job is added
+        mock_start.assert_called_once()
+        mock_add_job.assert_called_once()
+        mock_load_class.assert_called_once()
+        mock_diode_dry_run_client.assert_called_once()
+        assert policy_runner.status == Status.RUNNING
 
 def test_run_success(policy_runner, sample_policy, mock_diode_client, mock_backend):
     """Test the run function for a successful execution."""

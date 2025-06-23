@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
-from netboxlabs.diode.sdk import DiodeClient
+from netboxlabs.diode.sdk import DiodeClient, DiodeDryRunClient
 
 from worker.backend import Backend, load_class
 from worker.metrics import get_metric
@@ -50,17 +50,24 @@ class PolicyRunner:
         backend = backend_class()
 
         metadata = backend.setup()
-        client = DiodeClient(
-            target=diode_config.target,
-            app_name=(
-                f"{diode_config.prefix}/{metadata.app_name}"
-                if diode_config.prefix
-                else metadata.app_name
-            ),
-            app_version=metadata.app_version,
-            client_id=diode_config.client_id,
-            client_secret=diode_config.client_secret,
+        app_name = (
+            f"{diode_config.prefix}/{metadata.app_name}"
+            if diode_config.prefix
+            else metadata.app_name
         )
+        if diode_config.dry_run:
+            client = DiodeDryRunClient(
+                app_name=app_name,
+                output_dir=diode_config.dry_run_output_dir,
+            )
+        else:
+            client = DiodeClient(
+                target=diode_config.target,
+                app_name=app_name,
+                app_version=metadata.app_version,
+                client_id=diode_config.client_id,
+                client_secret=diode_config.client_secret,
+            )
 
         self.metadata = metadata
         self.policy = policy
@@ -90,7 +97,9 @@ class PolicyRunner:
         if active_policies:
             active_policies.add(1, {"policy": self.name})
 
-    def run(self, client: DiodeClient, backend: Backend, policy: Policy):
+    def run(
+        self, client: DiodeClient | DiodeDryRunClient, backend: Backend, policy: Policy
+    ):
         """
         Run the custom backend code for the specified scope.
 

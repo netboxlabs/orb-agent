@@ -21,10 +21,12 @@ class Status(Enum):
 class DiodeConfig(BaseModel):
     """Model for a diode configuration."""
 
-    target: str
+    target: str | None = None
     prefix: str | None = None
     client_id: str | None = None
     client_secret: str | None = None
+    dry_run: bool = False
+    dry_run_output_dir: str | None = None
 
 
 class Metadata(BaseModel):
