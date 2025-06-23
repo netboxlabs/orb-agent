@@ -28,6 +28,7 @@ options:
                         OpenTelemetry exporter endpoint
   --otel-export-period OTEL_EXPORT_PERIOD
                         Period in seconds between OpenTelemetry exports (default: 60)
+```
 
 ### Policy RFC
 ```yaml
