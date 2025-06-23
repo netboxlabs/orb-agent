@@ -16,6 +16,25 @@ from device_discovery.server import app
 from device_discovery.version import version_semver
 
 
+def resolve_env_var(value: str) -> str:
+    """
+    Resolve environment variable if value is in ${VAR_NAME} format.
+
+    Args:
+    ----
+        value (str): The value to resolve, may contain ${ENV_VAR} pattern
+
+    Returns:
+    -------
+        str: The resolved value from environment variable, or original value if not a variable reference
+
+    """
+    if value.startswith("${") and value.endswith("}"):
+        env_var = value[2:-1]
+        return os.getenv(env_var, value)
+    return value
+
+
 def main():
     """
     Main entry point for the Agent CLI.
@@ -50,31 +69,47 @@ def main():
     parser.add_argument(
         "-t",
         "--diode-target",
-        help="Diode target",
+        help="Diode target. Environment variable can be used by wrapping it in ${} (e.g. ${TARGET})",
         type=str,
-        required=True,
+        required=False,
     )
 
     parser.add_argument(
         "-c",
         "--diode-client-id",
-        help="Diode Client ID. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_ID})",
+        help="Diode Client ID. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_ID})",
         type=str,
-        required=True,
+        required=False,
     )
 
     parser.add_argument(
         "-k",
         "--diode-client-secret",
-        help="Diode Client Secret. Environment variables can be used by wrapping them in ${} (e.g. ${MY_CLIENT_SECRET})",
+        help="Diode Client Secret. Environment variable can be used by wrapping it in ${} (e.g. ${MY_CLIENT_SECRET})",
         type=str,
-        required=True,
+        required=False,
     )
 
     parser.add_argument(
         "-a",
         "--diode-app-name-prefix",
         help="Diode producer_app_name prefix",
+        type=str,
+        required=False,
+    )
+
+    parser.add_argument(
+        "-d",
+        "--dry-run",
+        help="Run in dry-run mode, do not ingest data",
+        action="store_true",
+        required=False,
+    )
+
+    parser.add_argument(
+        "-o",
+        "--dry-run-output-dir",
+        help="Output dir for dry-run mode. Environment variable can be used by wrapping it in ${} (e.g. ${OUTPUT_DIR})",
         type=str,
         required=False,
     )
@@ -96,18 +131,35 @@ def main():
 
     try:
         args = parser.parse_args()
-        target = args.diode_target
-        if target.startswith("${") and target.endswith("}"):
-            env_var = target[2:-1]
-            target = os.getenv(env_var, target)
-        client_id = args.diode_client_id
-        if client_id.startswith("${") and client_id.endswith("}"):
-            env_var = client_id[2:-1]
-            client_id = os.getenv(env_var, client_id)
-        client_secret = args.diode_client_secret
-        if client_secret.startswith("${") and client_secret.endswith("}"):
-            env_var = client_secret[2:-1]
-            client_secret = os.getenv(env_var, client_secret)
+        if not args.dry_run:
+            missing = [
+                name
+                for name, val in [
+                    ("--diode-target", args.diode_target),
+                    ("--diode-client-id", args.diode_client_id),
+                    ("--diode-client-secret", args.diode_client_secret),
+                ]
+                if not val
+            ]
+            if missing:
+                parser.error(
+                    f"{', '.join(missing)} required when not running with --dry-run"
+                )
+
+        target = resolve_env_var(args.diode_target) if args.diode_target else None
+        client_id = (
+            resolve_env_var(args.diode_client_id) if args.diode_client_id else None
+        )
+        client_secret = (
+            resolve_env_var(args.diode_client_secret)
+            if args.diode_client_secret
+            else None
+        )
+        output_dir = (
+            resolve_env_var(args.dry_run_output_dir)
+            if args.dry_run_output_dir
+            else None
+        )
 
         if args.otel_endpoint:
             setup_metrics_export(args.otel_endpoint, args.otel_export_period)
@@ -118,6 +170,8 @@ def main():
             target=target,
             client_id=client_id,
             client_secret=client_secret,
+            dry_run=args.dry_run,
+            dry_run_output_dir=output_dir,
         )
 
         uvicorn.run(

@@ -5,7 +5,7 @@
 import logging
 import threading
 
-from netboxlabs.diode.sdk import DiodeClient
+from netboxlabs.diode.sdk import DiodeClient, DiodeDryRunClient
 
 from device_discovery.translate import translate_data
 from device_discovery.version import version_semver
@@ -57,9 +57,11 @@ class Client:
     def init_client(
         self,
         prefix: str,
-        target: str,
+        target: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,
+        dry_run: bool = False,
+        dry_run_output_dir: str | None = None,
     ):
         """
         Initialize the Diode client with the specified target, client credentials, and TLS verification.
@@ -67,19 +69,27 @@ class Client:
         Args:
         ----
             prefix (str): The prefix for the producer app name.
-            target (str): The target endpoint for the Diode client.
+            target (str | None): The target endpoint for the Diode client.
             client_id (str | None): The client ID for authentication.
             client_secret (str | None): The client secret for authentication.
+            dry_run (bool): If True, the client will not perform actual ingestion.
+            dry_run_output_dir (str | None): Directory for dry-run output, if applicable.
 
         """
         with self._lock:
-            self.diode_client = DiodeClient(
-                target=target,
-                app_name=f"{prefix}/{APP_NAME}" if prefix else APP_NAME,
-                app_version=APP_VERSION,
-                client_id=client_id,
-                client_secret=client_secret,
-            )
+            if dry_run:
+                self.diode_client = DiodeDryRunClient(
+                    app_name=f"{prefix}/{APP_NAME}" if prefix else APP_NAME,
+                    output_dir=dry_run_output_dir,
+                )
+            else:
+                self.diode_client = DiodeClient(
+                    target=target,
+                    app_name=f"{prefix}/{APP_NAME}" if prefix else APP_NAME,
+                    app_version=APP_VERSION,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                )
 
     def ingest(self, hostname: str, data: dict):
         """
