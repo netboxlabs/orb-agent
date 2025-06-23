@@ -39,11 +39,13 @@ type deviceDiscoveryBackend struct {
 	apiPort     string
 	apiProtocol string
 
-	diodeTarget        string
-	diodeClientID      string
-	diodeClientSecret  string
-	diodeAppNamePrefix string
-	diodeOtelEndpoint  string
+	diodeTarget          string
+	diodeClientID        string
+	diodeClientSecret    string
+	diodeAppNamePrefix   string
+	diodeOtelEndpoint    string
+	diodeDryRun          bool
+	diodeDryRunOutputDir string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -84,6 +86,27 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	d.diodeClientID = common.Diode.ClientID
 	d.diodeClientSecret = common.Diode.ClientSecret
 	d.diodeAppNamePrefix = common.Diode.AgentName
+	d.diodeDryRun = common.Diode.DryRun
+	d.diodeDryRunOutputDir = common.Diode.DryRunOutputDir
+
+	if target, prs := config["target"].(string); prs {
+		d.diodeTarget = target
+	}
+	if clientID, prs := config["client_id"].(string); prs {
+		d.diodeClientID = clientID
+	}
+	if clientSecret, prs := config["client_secret"].(string); prs {
+		d.diodeClientSecret = clientSecret
+	}
+	if agentName, prs := config["agent_name"].(string); prs {
+		d.diodeAppNamePrefix = agentName
+	}
+	if dryRun, prs := config["dry_run"].(bool); prs {
+		d.diodeDryRun = dryRun
+	}
+	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
+		d.diodeDryRunOutputDir = dryRunOutputDir
+	}
 
 	if common.Otel.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otel.Grpc
@@ -110,13 +133,22 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	pvOptions := []string{
-		"--host", d.apiHost,
-		"--port", d.apiPort,
-		"--diode-target", d.diodeTarget,
-		"--diode-client-id", d.diodeClientID,
-		"--diode-client-secret", "********",
-		"--diode-app-name-prefix", d.diodeAppNamePrefix,
+	var pvOptions []string
+	if d.diodeDryRun {
+		pvOptions = []string{
+			"--dry-run",
+			"--dry-run-output-dir", d.diodeDryRunOutputDir,
+			"--diode-app-name-prefix", d.diodeAppNamePrefix,
+		}
+	} else {
+		pvOptions = []string{
+			"--host", d.apiHost,
+			"--port", d.apiPort,
+			"--diode-target", d.diodeTarget,
+			"--diode-client-id", d.diodeClientID,
+			"--diode-client-secret", "********",
+			"--diode-app-name-prefix", d.diodeAppNamePrefix,
+		}
 	}
 
 	if d.diodeOtelEndpoint != "" {
