@@ -2,3 +2,4 @@ diode/
 orb-configs/
 build/
 .coverage/
+.vscode/
