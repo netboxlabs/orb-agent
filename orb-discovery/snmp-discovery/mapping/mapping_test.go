@@ -74,7 +74,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 			expected: []diode.Entity{
 				&diode.Interface{
-					Speed: &[]int64{1000000000}[0],
+					Speed: &[]int64{1000000}[0],
 					Name:  diode.String("GigabitEthernet1/0/1"),
 					PrimaryMacAddress: &diode.MACAddress{
 						MacAddress: &[]string{"00:00:00:00:00:00"}[0],
@@ -84,7 +84,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 					Device:  &diode.Device{},
 				},
 				&diode.Interface{
-					Speed: &[]int64{1000000000}[0],
+					Speed: &[]int64{1000000}[0],
 					Name:  diode.String("GigabitEthernet1/0/1"),
 					PrimaryMacAddress: &diode.MACAddress{
 						MacAddress: &[]string{"00:00:00:00:00:11"}[0],
@@ -153,7 +153,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 			expected: []diode.Entity{
 				&diode.Interface{
-					Speed: &[]int64{1000000000}[0],
+					Speed: &[]int64{1000000}[0],
 					Name:  diode.String("GigabitEthernet1/0/1"),
 					PrimaryMacAddress: &diode.MACAddress{
 						MacAddress: diode.String("00:00:00:00:00:00"),

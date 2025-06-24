@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -236,13 +237,30 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	interfaceEntity := entityRegistry.GetOrCreateEntity(InterfaceEntityType, getIndex(values)).(*diode.Interface)
 
 	fieldFound := false
-	for objectID, value := range values {
+	valueKeys := make([]ObjectIDIndex, 0, len(values))
+	for objectID := range values {
+		valueKeys = append(valueKeys, objectID)
+	}
+	// Sort the keys to ensure a consistent processing order.
+	// Reverse the keys to prioritize fields like speed before type during mapping.
+	slices.Sort(valueKeys)
+	slices.Reverse(valueKeys)
+	for _, objectID := range valueKeys {
+		value := values[objectID]
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
 				m.logger.Debug("Mapping value to interface entity with mapper", "objectID", objectID, "value", value)
 				switch propertyMappingEntry.Field {
 				case "name":
 					interfaceEntity.Name = &value.Value
+					fieldFound = true
+				case "type":
+					defaultType := ""
+					if defaults != nil && defaults.Interface.Type != "" {
+						defaultType = defaults.Interface.Type
+					}
+					interfaceType := GetNetboxType(value.Value, defaultType, interfaceEntity.Speed)
+					interfaceEntity.Type = &interfaceType
 					fieldFound = true
 				case "speed":
 					if value.Value == "" {
@@ -254,8 +272,9 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						m.logger.Warn("Error converting speed to int", "error", err, "value", value.Value)
 						continue
 					}
-					speed64 := int64(speed)
-					interfaceEntity.Speed = &speed64
+					bitsPerSecond := int64(speed)
+					kiloBitsPerSecond := bitsPerSecond / 1000
+					interfaceEntity.Speed = &kiloBitsPerSecond
 					fieldFound = true
 				case "mtu":
 					if value.Value == "" {

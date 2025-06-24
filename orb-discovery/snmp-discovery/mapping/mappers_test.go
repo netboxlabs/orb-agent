@@ -429,7 +429,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			defaults: nil,
 			expectedEntity: &diode.Interface{
 				Name:              mapping.StringPtr("eth0"),
-				Speed:             int64Ptr(1000000),
+				Speed:             int64Ptr(1000),
 				Mtu:               int64Ptr(1500),
 				PrimaryMacAddress: &diode.MACAddress{MacAddress: mapping.StringPtr("00:11:22:33:44:55")},
 				Enabled:           boolPtr(true),
@@ -533,6 +533,58 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "mapping with type and speed values",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.3.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.3.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.3",
+					Value:  "6",
+					Type:   mapping.Integer,
+				},
+				"1.3.6.1.2.1.2.2.1.5.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.5.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.5",
+					Value:  "10000000",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.1",
+						Entity: "interface",
+						Field:  "_id",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.3",
+						Entity: "interface",
+						Field:  "type",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.5",
+						Entity: "interface",
+						Field:  "speed",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Interface{
+				Speed: int64Ptr(10000),
+				Type:  mapping.StringPtr("10base-t"),
+			},
+			expectError: false,
+		},
+		{
 			name:   "empty values map",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{},
 			mappingEntry: &mapping.Entry{
@@ -562,15 +614,27 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			assert.NotNil(t, entity)
 			iface, ok := entity.(*diode.Interface)
 			assert.True(t, ok)
-			assert.Equal(t, tt.expectedEntity.Name, iface.Name)
-			assert.Equal(t, tt.expectedEntity.Mtu, iface.Mtu)
-			assert.Equal(t, tt.expectedEntity.Speed, iface.Speed)
+			if tt.expectedEntity.Name != nil {
+				assert.Equal(t, tt.expectedEntity.Name, iface.Name)
+			}
+			if tt.expectedEntity.Mtu != nil {
+				assert.Equal(t, tt.expectedEntity.Mtu, iface.Mtu)
+			}
+			if tt.expectedEntity.Speed != nil {
+				assert.Equal(t, tt.expectedEntity.Speed, iface.Speed)
+			}
 			if tt.expectedEntity.PrimaryMacAddress != nil {
 				assert.Equal(t, tt.expectedEntity.PrimaryMacAddress.MacAddress, iface.PrimaryMacAddress.MacAddress)
 			}
-			assert.Equal(t, tt.expectedEntity.Type, iface.Type)
-			assert.Equal(t, tt.expectedEntity.Enabled, iface.Enabled)
-			assert.Equal(t, tt.expectedEntity.Description, iface.Description)
+			if tt.expectedEntity.Type != nil {
+				assert.Equal(t, tt.expectedEntity.Type, iface.Type, "Expected type to be %s, got %s", *tt.expectedEntity.Type, *iface.Type)
+			}
+			if tt.expectedEntity.Enabled != nil {
+				assert.Equal(t, tt.expectedEntity.Enabled, iface.Enabled, "Expected enabled to be %t, got %t", *tt.expectedEntity.Enabled, *iface.Enabled)
+			}
+			if tt.expectedEntity.Description != nil {
+				assert.Equal(t, tt.expectedEntity.Description, iface.Description, "Expected description to be %s, got %s", *tt.expectedEntity.Description, *iface.Description)
+			}
 			if tt.expectedEntity.Tags != nil {
 				assert.Equal(t, len(tt.expectedEntity.Tags), len(iface.Tags))
 				for i, tag := range tt.expectedEntity.Tags {
