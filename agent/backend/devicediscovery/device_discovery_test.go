@@ -231,12 +231,20 @@ func TestDeviceDiscoveryBackendDryRun(t *testing.T) {
 	mocks.SetupSuccessfulProcess(mockCmd, 12345)
 
 	originalNewCmdOptions := backend.NewCmdOptions
-	var capturedArgs []string
+	defer func() {
+		backend.NewCmdOptions = originalNewCmdOptions
+	}()
+
 	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
-		capturedArgs = args
+		assert.Equal(t, "device-discovery", name, "Expected command name to be device-discovery")
+		assert.Contains(t, args, "--dry-run")
+		assert.Contains(t, args, "--dry-run-output-dir")
+		assert.NotContains(t, args, "--host")
+		assert.NotContains(t, args, "--port")
+		assert.False(t, options.Buffered, "Expected buffered to be false")
+		assert.True(t, options.Streaming, "Expected streaming to be true")
 		return mockCmd
 	}
-	defer func() { backend.NewCmdOptions = originalNewCmdOptions }()
 
 	assert.True(t, devicediscovery.Register())
 	be := backend.GetBackend("device_discovery")
@@ -264,11 +272,6 @@ func TestDeviceDiscoveryBackendDryRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	err = be.Start(ctx, cancel)
 	assert.NoError(t, err)
-
-	assert.Contains(t, capturedArgs, "--dry-run")
-	assert.Contains(t, capturedArgs, "--dry-run-output-dir")
-	assert.NotContains(t, capturedArgs, "--host")
-	assert.NotContains(t, capturedArgs, "--port")
 
 	assert.False(t, be.GetStartTime().IsZero())
 
