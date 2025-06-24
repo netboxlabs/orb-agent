@@ -157,7 +157,9 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 
 	d.logger.Info("device-discovery startup", slog.Any("arguments", pvOptions))
 
-	pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun && len(pvOptions) > 9 {
+		pvOptions[9] = d.diodeClientSecret
+	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,

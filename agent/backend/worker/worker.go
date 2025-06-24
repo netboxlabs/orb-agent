@@ -157,7 +157,9 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 
 	d.logger.Info("worker startup", slog.Any("arguments", pvOptions))
 
-	pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun && len(pvOptions) > 9 {
+		pvOptions[9] = d.diodeClientSecret
+	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
@@ -177,7 +179,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		stderr := d.proc.GetStderr()
 		for stdout != nil || stderr != nil {
 			select {
-			case line, open := <-stderr:
+			case line, open := <-stdout:
 				if !open {
 					stdout = nil
 					continue
