@@ -1,7 +1,7 @@
 name: Orb Agent - PR Semantic Release Check
 on:
   pull_request:
-    branches: [ develop ]
+    branches: [ release_version_comment ]
     paths:
       - "agent/**"
       - "cmd/**"
@@ -58,7 +58,7 @@ jobs:
           write-mode: overwrite
           contents: |
             {
-              "branches": "release",
+              "branches": "release_version_comment",
               "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
               "debug": "true",
               "tagFormat": "v${version}",
