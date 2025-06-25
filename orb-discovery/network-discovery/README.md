@@ -12,28 +12,32 @@ sudo setcap cap_net_raw,cap_net_admin=eip $(which nmap)
 ### Usage
 ```sh
 Usage of network-discovery:
- -diode-app-name-prefix string
-    	diode producer_app_name prefix
+  -diode-app-name-prefix string
+        diode producer_app_name prefix
   -diode-client-id string
-    	diode client ID (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_ID})
+        diode client ID. Environment variable can be used by wrapping it in ${} (e.g. ${DIODE_CLIENT_ID})
   -diode-client-secret string
-    	diode client secret (REQUIRED). Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_SECRET})
+        diode client secret. Environment variable can be used by wrapping it in ${} (e.g. ${DIODE_CLIENT_SECRET})
   -diode-target string
-    	diode target (REQUIRED)
-  --otel-endpoint string
-    	OpenTelemetry exporter endpoint
-  --otel-export-period int
-    	Period in seconds between OpenTelemetry exports (default: 60)
+        diode target. Environment variable can be used by wrapping it in ${} (e.g. ${DIODE_TARGET})
+  -dry-run
+        run in dry-run mode, do not ingest data
+  -dry-run-output-dir string
+        output dir for dry-run mode.  Environment variable can be used by wrapping it in ${} (e.g. ${DRY_RUN_OUTPUT_DIR})
   -help
-    	show this help
+        show this help
   -host string
-    	server host (default "0.0.0.0")
+        server host (default "0.0.0.0")
   -log-format string
-    	log format (default "TEXT")
+        log format (default "TEXT")
   -log-level string
-    	log level (default "INFO")
+        log level (default "INFO")
+  -otel-endpoint string
+        OpenTelemetry exporter endpoint
+  -otel-export-period int
+        Period in seconds between OpenTelemetry exports (default 60)
   -port int
-    	server port (default 8073)
+        server port (default 8073)
 ```
 
 ### Policy RFC

@@ -41,12 +41,16 @@ func resolveEnv(value string) string {
 func main() {
 	host := flag.String("host", "0.0.0.0", "server host")
 	port := flag.Int("port", 8073, "server port")
-	diodeTarget := flag.String("diode-target", "", "diode target (REQUIRED)")
-	diodeClientID := flag.String("diode-client-id", "", "diode client ID (REQUIRED)."+
-		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_ID})")
-	diodeClientSecret := flag.String("diode-client-secret", "", "diode client secret (REQUIRED)."+
-		" Environment variables can be used by wrapping them in ${} (e.g. ${MY_DIODE_CLIENT_SECRET})")
+	diodeTarget := flag.String("diode-target", "", "diode target."+
+		" Environment variable can be used by wrapping it in ${} (e.g. ${DIODE_TARGET})")
+	diodeClientID := flag.String("diode-client-id", "", "diode client ID."+
+		" Environment variable can be used by wrapping it in ${} (e.g. ${DIODE_CLIENT_ID})")
+	diodeClientSecret := flag.String("diode-client-secret", "", "diode client secret."+
+		" Environment variable can be used by wrapping it in ${} (e.g. ${DIODE_CLIENT_SECRET})")
 	diodeAppNamePrefix := flag.String("diode-app-name-prefix", "", "diode producer_app_name prefix")
+	dryRun := flag.Bool("dry-run", false, "run in dry-run mode, do not ingest data")
+	dryRunOutputDir := flag.String("dry-run-output-dir", "", "output dir for dry-run mode. "+
+		" Environment variable can be used by wrapping it in ${} (e.g. ${DRY_RUN_OUTPUT_DIR})")
 	logLevel := flag.String("log-level", "INFO", "log level")
 	logFormat := flag.String("log-format", "TEXT", "log format")
 	help := flag.Bool("help", false, "show this help")
@@ -55,12 +59,15 @@ func main() {
 
 	flag.Parse()
 
-	if *help || *diodeTarget == "" || *diodeClientID == "" || *diodeClientSecret == "" {
+	if *help {
 		fmt.Fprintf(os.Stderr, "Usage of network-discovery:\n")
 		flag.PrintDefaults()
-		if *help {
-			os.Exit(0)
-		}
+		os.Exit(0)
+	}
+
+	if !*dryRun && (*diodeTarget == "" || *diodeClientID == "" || *diodeClientSecret == "") {
+		fmt.Fprintf(os.Stderr, "Usage of network-discovery:\n")
+		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
@@ -69,15 +76,24 @@ func main() {
 		producerName = fmt.Sprintf("%s/%s", *diodeAppNamePrefix, AppName)
 	}
 
-	client, err := diode.NewClient(
-		resolveEnv(*diodeTarget),
-		producerName,
-		version.GetBuildVersion(),
-		diode.WithClientID(resolveEnv(*diodeClientID)),
-		diode.WithClientSecret(resolveEnv(*diodeClientSecret)),
-	)
+	var client diode.Client
+	var err error
+	if *dryRun {
+		client, err = diode.NewDryRunClient(
+			producerName,
+			resolveEnv(*dryRunOutputDir),
+		)
+	} else {
+		client, err = diode.NewClient(
+			resolveEnv(*diodeTarget),
+			producerName,
+			version.GetBuildVersion(),
+			diode.WithClientID(resolveEnv(*diodeClientID)),
+			diode.WithClientSecret(resolveEnv(*diodeClientSecret)),
+		)
+	}
 	if err != nil {
-		fmt.Printf("error creating diode client: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error creating diode client: %v\n", err)
 		os.Exit(1)
 	}
 
