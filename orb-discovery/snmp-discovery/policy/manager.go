@@ -101,11 +101,6 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		}
 	}
 
-	// Set default lookup extensions directory if not specified
-	if policy.Config.LookupExtensionsDir == "" {
-		policy.Config.LookupExtensionsDir = config.DefaultLookupExtensionsDir
-	}
-
 	if policy.Config.Defaults.Interface.Type == "" {
 		policy.Config.Defaults.Interface.Type = "other"
 	}

@@ -109,29 +109,6 @@ func TestManagerParsePolicies(t *testing.T) {
 		assert.Contains(t, err.Error(), "policy1 : invalid policy : missing protocol version")
 	})
 
-	t.Run("Valid Policy - Missing LookupExtensionsDir (Uses Default)", func(t *testing.T) {
-		yamlData := []byte(`
-        policies:
-          policy1:
-            config:
-              defaults:
-                comments: test
-            scope:
-              targets:
-                - host: 192.168.1.1
-                  port: 162
-              authentication:
-                protocol_version: SNMPv2c
-                community: public
-    `)
-
-		policies, err := manager.ParsePolicies(yamlData)
-		assert.NoError(t, err)
-		assert.Contains(t, policies, "policy1")
-		// Verify default value is applied
-		assert.Equal(t, config.DefaultLookupExtensionsDir, policies["policy1"].Config.LookupExtensionsDir)
-	})
-
 	t.Run("Valid Policy - Explicit LookupExtensionsDir", func(t *testing.T) {
 		yamlData := []byte(`
         policies:
@@ -209,9 +186,6 @@ func TestManagerPolicyLifecycle(t *testing.T) {
 
 	policies, err := manager.ParsePolicies(yamlData)
 	assert.NoError(t, err)
-
-	// Verify default value is applied to policy4
-	assert.Equal(t, config.DefaultLookupExtensionsDir, policies["policy4"].Config.LookupExtensionsDir)
 
 	// Start policies
 	err = manager.StartPolicy("policy1", policies["policy1"])

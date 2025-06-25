@@ -113,14 +113,11 @@ The repository includes several pre-built device lookup files for popular vendor
 The full list of vendor device files is available [here](https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery/lookup_extension).
 
 #### Creating Custom Device Lookup Files
-You can create custom device lookup files for your specific hardware by:
+You can create custom device lookup files for your specific hardware or to override the name of a device model by:
 
 1. Identifying the SNMP device ObjectIDs for your equipment (usually found in vendor MIB files)
 2. Creating a YAML file with the format shown above. Ensure that ObjectIDs have a `.` prefix.
 3. Placing the file in your `lookup_extensions_dir` directory
-
-#### Downloading Device Lookup Files
-Pre-built device lookup files are available in the [`lookup_extensions/`](https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery/lookup_extension) directory of this repository. You can download these files from GitHub and place them in your `lookup_extensions_dir` to enhance device identification:
 
 ```bash
 # Clone the repository to get device lookup files

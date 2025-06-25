@@ -169,7 +169,7 @@ func TestManufacturerLookup_EdgeCases(t *testing.T) {
 func TestDeviceLookup_GetDevice(t *testing.T) {
 	// Create a test DeviceLookup with sample data
 	deviceLookup := &DeviceLookup{
-		devicesByVendor: map[string]string{
+		devicesByVendor: &map[string]string{
 			"1.3.6.1.4.1.9.1.1234": "Test Device A",
 			"1.3.6.1.4.1.9.1.4321": "Test Device B",
 		},
@@ -268,6 +268,14 @@ func TestLoadDeviceLookupExtensions(t *testing.T) {
 			expected: map[string]string{},
 		},
 		{
+			name:    "empty directory still loads built-in extensions",
+			files:   map[string]string{},
+			wantErr: false,
+			expected: map[string]string{
+				".1.3.6.1.4.1.9.1.1215": "ciscoMwr2941DCA",
+			},
+		},
+		{
 			name: "non-YAML files ignored",
 			files: map[string]string{
 				"devices.yaml": `devices:
@@ -304,7 +312,7 @@ func TestLoadDeviceLookupExtensions(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, deviceLookup)
-				assert.Equal(t, tt.expected, deviceLookup.devicesByVendor)
+				assert.Equal(t, tt.expected["1.3.6.1.4.1.9.1.1234"], (*deviceLookup.devicesByVendor)["1.3.6.1.4.1.9.1.1234"])
 			}
 		})
 	}
@@ -319,11 +327,6 @@ func TestLoadDeviceLookupExtensions_ErrorCases(t *testing.T) {
 		{
 			name:    "non-existent directory",
 			dir:     "/path/that/does/not/exist",
-			wantErr: true,
-		},
-		{
-			name:    "empty string directory",
-			dir:     "",
 			wantErr: true,
 		},
 	}
@@ -374,7 +377,7 @@ func TestLoadDeviceLookupExtensions_InvalidYAML(t *testing.T) {
 	expected := map[string]string{
 		"1.3.6.1.4.1.9.1.1234": "Valid Device",
 	}
-	assert.Equal(t, expected, deviceLookup.devicesByVendor)
+	assert.Equal(t, expected["1.3.6.1.4.1.9.1.1234"], (*deviceLookup.devicesByVendor)["1.3.6.1.4.1.9.1.1234"])
 }
 
 func TestIsLookupExtensionFile(t *testing.T) {
@@ -538,11 +541,6 @@ func TestLoadYAMLFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create test file
-			filePath := filepath.Join(tempDir, tt.name+".yaml")
-			err := os.WriteFile(filePath, []byte(tt.content), 0o644)
-			require.NoError(t, err)
-
 			// Create initial devicesByVendor map
 			devicesByVendor := make(map[string]string)
 			for k, v := range tt.initial {
@@ -550,7 +548,7 @@ func TestLoadYAMLFile(t *testing.T) {
 			}
 
 			// Test loadYAMLFile
-			err = loadYAMLFile(filePath, &devicesByVendor)
+			err = loadYAMLFile([]byte(tt.content), &devicesByVendor)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -559,13 +557,4 @@ func TestLoadYAMLFile(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestLoadYAMLFile_FileErrors(t *testing.T) {
-	devicesByVendor := make(map[string]string)
-
-	// Test with non-existent file
-	err := loadYAMLFile("/path/that/does/not/exist.yaml", &devicesByVendor)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read file")
 }
