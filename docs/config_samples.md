@@ -195,7 +195,7 @@ orb:
           device:
             description: "SNMP discovered device"
             comments: "Automatically discovered via SNMP"
-        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies an override for the directory containing device data yaml files (see below)
+        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies aa directory containing additional device data yaml files (see below)
       scope:
         targets:
           - host: "192.168.1.1"
@@ -230,9 +230,9 @@ orb:
 ```
 
 ### Device Model Lookup
-The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIds (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectId values. This only needs to be set if additional or modified files are being provided instead of the ones that are included with orb-discovery and orb-agent.
+The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIds (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectId values. This only needs to be set if additional or modified files are being provided in addition the ones that are included with orb-discovery and orb-agent.
 
-Device model lookup files to put in the `lookup_extenions_dir` are available from the [`orb-discovery` repository](https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery/lookup_extension). More details about the file format and adding devices that aren't already covered are [available here](https://github.com/netboxlabs/orb-discovery/blob/release/snmp-discovery/README.md#device-model-lookup).
+More details about the file format and adding devices that aren't already covered are [available here](https://github.com/netboxlabs/orb-discovery/blob/release/snmp-discovery/README.md#device-model-lookup).
 
 ### Running the SNMP Discovery Backend
 
