@@ -286,6 +286,10 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						m.logger.Warn("Error converting mtu to int64", "error", err, "value", value.Value)
 						continue
 					}
+					if mtu <= 0 {
+						m.logger.Warn("MTU is less than or equal to 0", "value", value.Value)
+						continue
+					}
 					mtu64 := mtu
 					interfaceEntity.Mtu = &mtu64
 					fieldFound = true
