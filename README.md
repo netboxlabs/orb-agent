@@ -78,7 +78,7 @@ A special `common` subsection under `backends` defines configuration settings th
           client_id: ${DIODE_CLIENT_ID}
           client_secret: ${DIODE_CLIENT_SECRET}
           agent_name: agent01
-          dry_run: False
+          dry_run: false
           dry_run_output_dir: /opt/orb
 ```
 
