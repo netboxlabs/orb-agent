@@ -177,7 +177,8 @@ orb:
     snmp_network_1:
       config:
         schedule: "0 */6 * * *" # Cron expression - every 6 hours
-        timeout: 300 # Timeout in seconds (default 2 minutes)
+        timeout: 300 # Timeout for policy in seconds (default 2 minutes)
+        snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds)
         retries: 3 # Number of retries
         defaults:
           tags: ["snmp-discovery", "orb"]
@@ -195,7 +196,7 @@ orb:
           device:
             description: "SNMP discovered device"
             comments: "Automatically discovered via SNMP"
-        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies aa directory containing additional device data yaml files (see below)
+        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing additional device data yaml files (see below)
       scope:
         targets:
           - host: "192.168.1.1"
