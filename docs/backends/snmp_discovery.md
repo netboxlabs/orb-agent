@@ -36,7 +36,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
 | schedule | cron format | no | Cron expression for scheduling (e.g., "*/5 * * * *") |
-| timeout | integer | no | Timeout in minutes for SNMP operations (defaults to 2) |
+| timeout | integer | no | Timeout for whole policy in seconds (defaults to 120) |
+| snmp_timeout | integer | no | Timeout for SNMP operations in seconds for SNMP operations (defaults to 5) |
 | retries | integer | no | Number of retries for SNMP operations (defaults to 0) |
 | lookup_extensions_dir | string | no | Directory containing device model lookup files |
 | defaults | map | no | Default values for entities (description, comments, tags, etc.) |
@@ -98,7 +99,8 @@ A sample policy including all parameters supported by the SNMP discovery backend
 ```yaml
 config:
   schedule: "0 */6 * * *" # Cron expression - every 6 hours
-  timeout: 300 # Timeout in seconds (default 2 minutes)
+  timeout: 300 # Timeout for policy in seconds (default 2 minutes)
+  snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds)
   retries: 3 # Number of retries
   defaults:
     tags: ["snmp-discovery", "orb"]
