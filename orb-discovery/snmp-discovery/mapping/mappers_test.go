@@ -759,6 +759,114 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			},
 			expectError: false,
 		},
+		{
+			name: "mapping with speed below minimum should result in nil speed",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.1.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.1",
+					Value:  "1",
+					Type:   mapping.Integer,
+				},
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.5.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.5.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.5",
+					Value:  "0",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.1",
+						Entity: "interface",
+						Field:  "_id",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.5",
+						Entity: "interface",
+						Field:  "speed",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Interface{
+				Name:  mapping.StringPtr("eth0"),
+				Speed: nil, // Speed should be nil when value is below minimum
+			},
+			expectError: false,
+		},
+		{
+			name: "mapping with speed above maximum should result in nil speed",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.1.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.1",
+					Value:  "1",
+					Type:   mapping.Integer,
+				},
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.5.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.5.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.5",
+					Value:  "2147483648000",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.1",
+						Entity: "interface",
+						Field:  "_id",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.5",
+						Entity: "interface",
+						Field:  "speed",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Interface{
+				Name:  mapping.StringPtr("eth0"),
+				Speed: nil, // Speed should be nil when value is above maximum
+			},
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {

@@ -14,6 +14,12 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 )
 
+// Interface speed constants
+const (
+	minInterfaceSpeed = 1
+	maxInterfaceSpeed = 2147483647
+)
+
 // IPAddressMapper is a struct that maps IP addresses to entities
 type IPAddressMapper struct {
 	logger *slog.Logger
@@ -274,6 +280,11 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					}
 					bitsPerSecond := int64(speed)
 					kiloBitsPerSecond := bitsPerSecond / 1000
+					// Check if speed is within valid range (1 to 2147483647 inclusive)
+					if kiloBitsPerSecond < minInterfaceSpeed || kiloBitsPerSecond > maxInterfaceSpeed {
+						m.logger.Warn("Interface speed is outside valid range (1-2147483647)", "speed", speed, "value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
+						continue
+					}
 					interfaceEntity.Speed = &kiloBitsPerSecond
 					fieldFound = true
 				case "mtu":
