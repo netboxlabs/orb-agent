@@ -247,3 +247,53 @@ docker run --net=host \
     netboxlabs/orb-agent:latest \
     run -c "/opt/orb/snmp-config.yaml"
 ```
+
+## Diode Dry Run Mode
+
+The Orb Agent supports a diode dry run mode that allows you to test your configuration without sending data to the Diode server. This is useful for debugging and validating your configuration.
+
+### Basic Configuration
+
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    device_discovery:
+    common:
+      diode:
+        dry_run: true
+        dry_run_output_dir: /opt/orb/
+        # No need for target, client_id, client_secret when in dry_run mode
+        agent_name: agent01
+  policies:
+    device_discovery:
+      discovery_1:
+        config:
+          defaults:
+            site: New York NY
+        scope:
+          - driver: ios
+            hostname: 192.168.0.5
+            username: admin
+            password: ${PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-napalm.conf
+```
+
+Run command:
+```sh
+docker run -v /local/orb:/opt/orb/ \
+-e PASS={DEVICE_PASSWORD} \
+-v /local/output:/opt/orb/output \
+netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+When running in dry run mode, the agent will:
+1. Process all policies as usual
+2. Write the data that would be sent to Diode as JSON files in the specified output directory.
+3. For this sample policy, a file named `agent01_device-discovery_<timestamp>.json` will be generated in `/opt/orb` folder.
+4. No data will be sent to any remote server
+
+This allows you to inspect the data that would be collected and sent to Diode Server before configuring the actual connection.
+This feature is supported by the [Device Discovery](./backends/device_discovery.md), [Network Discovery](./backends/network_discovery.md), [Worker](./backends/worker.md) and [SNMP Discovery](./backends/snmp_discovery.md) backends.

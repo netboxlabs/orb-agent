@@ -201,3 +201,85 @@ func TestSNMPDiscoveryBackendCompleted(t *testing.T) {
 
 	assert.Error(t, err)
 }
+
+func TestNetworkDiscoveryBackendDryRun(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/status":
+			response := StatusResponse{Version: "1.3.5", StartTime: "2023-10-01T12:00:00Z", UpTime: 123.456}
+			_ = json.NewEncoder(w).Encode(response)
+		case r.URL.Path == "/api/v1/capabilities":
+			capabilities := map[string]any{"capability": true}
+			_ = json.NewEncoder(w).Encode(capabilities)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/policies"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	assert.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12345)
+
+	originalNewCmdOptions := backend.NewCmdOptions
+	defer func() {
+		backend.NewCmdOptions = originalNewCmdOptions
+	}()
+
+	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
+		assert.Equal(t, "snmp-discovery", name, "Expected command name to be snmp-discovery")
+		assert.Contains(t, args, "--dry-run")
+		assert.Contains(t, args, "--dry-run-output-dir")
+		assert.NotContains(t, args, "--host")
+		assert.NotContains(t, args, "--port")
+		assert.False(t, options.Buffered, "Expected buffered to be false")
+		assert.True(t, options.Streaming, "Expected streaming to be true")
+		return mockCmd
+	}
+
+	assert.True(t, snmpdiscovery.Register())
+	be := backend.GetBackend("snmp_discovery")
+
+	beCommons := config.BackendCommons{
+		Diode: struct {
+			Target          string `yaml:"target"`
+			ClientID        string `yaml:"client_id"`
+			ClientSecret    string `yaml:"client_secret"`
+			AgentName       string `yaml:"agent_name"`
+			DryRun          bool   `yaml:"dry_run"`
+			DryRunOutputDir string `yaml:"dry_run_output_dir"`
+		}{
+			DryRun:          true,
+			DryRunOutputDir: "/tmp/dry-run-output",
+		},
+	}
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host": serverURL.Hostname(),
+		"port": serverURL.Port(),
+	}, beCommons)
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	err = be.Start(ctx, cancel)
+	assert.NoError(t, err)
+
+	assert.False(t, be.GetStartTime().IsZero())
+
+	err = be.RemovePolicy(policies.PolicyData{ID: "1", Name: "policy", Data: map[string]any{"k": "v"}})
+	assert.NoError(t, err)
+
+	err = be.Stop(context.WithValue(context.Background(), config.ContextKey("routine"), "test"))
+	assert.NoError(t, err)
+
+	mockCmd.AssertExpectations(t)
+}
