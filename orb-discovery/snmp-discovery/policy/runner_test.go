@@ -353,7 +353,7 @@ func TestRunnerWalkError(t *testing.T) {
 	mockHost.On("Walk", mock.Anything, mock.Anything).Return(nil, errors.New("walk error"))
 
 	// Create a mock client factory that returns the mock host
-	mockClientFactory := func(_ string, _ uint16, _ int, _ *config.Authentication) (snmp.Walker, error) {
+	mockClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
 		return mockHost, nil
 	}
 

@@ -16,17 +16,19 @@ type Host struct {
 	address        string
 	port           uint16
 	retries        int
+	timeout        time.Duration
 	authentication *config.Authentication
 	logger         *slog.Logger
 	ClientFactory  ClientFactory
 }
 
 // NewHost creates a new Host
-func NewHost(host string, port uint16, retries int, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory) *Host {
+func NewHost(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory) *Host {
 	return &Host{
 		address:        host,
 		port:           port,
 		retries:        retries,
+		timeout:        timeout,
 		authentication: authentication,
 		logger:         logger,
 		ClientFactory:  ClientFactory,
@@ -37,7 +39,7 @@ func NewHost(host string, port uint16, retries int, authentication *config.Authe
 func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) {
 	s.logger.Info("Scanning", "host", s.address)
 
-	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.authentication)
+	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.timeout, s.authentication)
 	if err != nil {
 		return nil, err
 	}
@@ -162,10 +164,10 @@ const (
 )
 
 // ClientFactory is a function that creates a new SNMPClient
-type ClientFactory func(host string, port uint16, retries int, authentication *config.Authentication) (Walker, error)
+type ClientFactory func(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication) (Walker, error)
 
 // NewClient creates a new SNMPClient for the given target host
-func NewClient(host string, port uint16, retries int, authentication *config.Authentication) (Walker, error) {
+func NewClient(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication) (Walker, error) {
 	switch authentication.ProtocolVersion {
 	case ProtocolVersion1:
 		return &Client{
@@ -174,7 +176,7 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 				Port:      port,
 				Community: authentication.Community,
 				Version:   gosnmp.Version1,
-				Timeout:   time.Duration(2) * time.Second,
+				Timeout:   timeout,
 				Retries:   retries,
 			},
 		}, nil
@@ -185,7 +187,7 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 				Port:      port,
 				Community: authentication.Community,
 				Version:   gosnmp.Version2c,
-				Timeout:   time.Duration(2) * time.Second,
+				Timeout:   timeout,
 				Retries:   retries,
 			},
 		}, nil
@@ -203,7 +205,7 @@ func NewClient(host string, port uint16, retries int, authentication *config.Aut
 				Target:  host,
 				Port:    port,
 				Version: gosnmp.Version3,
-				Timeout: time.Duration(2) * time.Second,
+				Timeout: timeout,
 				Retries: retries,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,

@@ -1,6 +1,8 @@
 package snmp
 
 import (
+	"time"
+
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 )
@@ -35,6 +37,6 @@ func (n *FakeSNMPWalker) Walk(oid string, _ int) (map[string]PDU, error) {
 }
 
 // NewFakeSNMPWalker creates a new FakeSNMPWalker
-func NewFakeSNMPWalker(_ string, _ uint16, _ int, _ *config.Authentication) (Walker, error) {
+func NewFakeSNMPWalker(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (Walker, error) {
 	return &FakeSNMPWalker{}, nil
 }

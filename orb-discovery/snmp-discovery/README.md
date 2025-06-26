@@ -38,7 +38,8 @@ policies:
   snmp_network_1:
     config:
       schedule: "0 */6 * * *" # Cron expression - every 6 hours
-      timeout: 300 # Timeout in seconds (default 2 minutes)
+      timeout: 300 # Timeout for policy in seconds (default 2 minutes)
+      snmp_timeout: 300 # Timeout for SNMP operations in seconds (default 5 seconds)
       retries: 3 # Number of retries
       defaults:
         tags: ["snmp-discovery", "orb"]

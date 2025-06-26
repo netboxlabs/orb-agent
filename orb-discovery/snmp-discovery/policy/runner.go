@@ -22,8 +22,9 @@ type contextKey string
 
 // Define the policy key
 const (
-	policyKey      contextKey = "policy"
-	defaultTimeout            = 2 * time.Minute
+	policyKey          contextKey = "policy"
+	defaultTimeout                = 2 * time.Minute
+	defaultSNMPTimeout            = 5 * time.Second
 )
 
 // Runner represents the policy runner
@@ -34,6 +35,7 @@ type Runner struct {
 	client        diode.Client
 	logger        *slog.Logger
 	timeout       time.Duration
+	snmpTimeout   time.Duration
 	scope         config.Scope
 	config        config.PolicyConfig
 	ClientFactory snmp.ClientFactory
@@ -69,9 +71,13 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if err != nil {
 		return nil, err
 	}
-	runner.timeout = time.Duration(policy.Config.Timeout) * time.Minute
+	runner.timeout = time.Duration(policy.Config.Timeout) * time.Second
 	if runner.timeout == 0 {
 		runner.timeout = defaultTimeout
+	}
+	runner.snmpTimeout = time.Duration(policy.Config.SNMPTimeout) * time.Second
+	if runner.snmpTimeout == 0 {
+		runner.snmpTimeout = defaultSNMPTimeout
 	}
 	runner.ctx = context.WithValue(ctx, policyKey, name)
 	runner.scope = policy.Scope
@@ -144,7 +150,7 @@ func (r *Runner) queryTargets(expandedTargets []config.Target, objectIDs map[str
 		// Start timing the discovery
 		startTime := time.Now()
 
-		host := snmp.NewHost(target.Host, target.Port, r.config.Retries, &r.scope.Authentication, r.logger, r.ClientFactory)
+		host := snmp.NewHost(target.Host, target.Port, r.config.Retries, r.snmpTimeout, &r.scope.Authentication, r.logger, r.ClientFactory)
 		oids, err := host.Walk(objectIDs)
 		if err != nil {
 			r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
