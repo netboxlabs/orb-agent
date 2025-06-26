@@ -50,9 +50,7 @@ COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
 
-RUN mkdir -p /etc/snmp-discovery/lookup-extensions
 COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-discovery
-COPY --from=snmp-discovery /etc/snmp-discovery/lookup-extensions /etc/snmp-discovery/lookup-extensions
 
 RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 

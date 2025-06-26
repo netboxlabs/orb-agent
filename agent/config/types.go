@@ -74,10 +74,12 @@ type BackendCommons struct {
 		AgentLabels map[string]string `yaml:"agent_labels"`
 	} `yaml:"otel"`
 	Diode struct {
-		Target       string `yaml:"target"`
-		ClientID     string `yaml:"client_id"`
-		ClientSecret string `yaml:"client_secret"`
-		AgentName    string `yaml:"agent_name"`
+		Target          string `yaml:"target"`
+		ClientID        string `yaml:"client_id"`
+		ClientSecret    string `yaml:"client_secret"`
+		AgentName       string `yaml:"agent_name"`
+		DryRun          bool   `yaml:"dry_run"`
+		DryRunOutputDir string `yaml:"dry_run_output_dir"`
 	}
 }
 
