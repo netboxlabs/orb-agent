@@ -195,7 +195,7 @@ orb:
           device:
             description: "SNMP discovered device"
             comments: "Automatically discovered via SNMP"
-        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies aa directory containing additional device data yaml files (see below)
+        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing additional device data yaml files (see below)
       scope:
         targets:
           - host: "192.168.1.1"
