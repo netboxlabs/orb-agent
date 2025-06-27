@@ -69,10 +69,12 @@ func (m *MockClient) Ingest(context.Context, []diode.Entity) (*diodepb.IngestRes
 func TestSNMPHost(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	const ipAddressObjectID = "1.3.6.1.2.1.4.20.1.1"
-	const interfaceObjectID = "1.3.6.1.2.1.2.2.1"
+	const interfaceNameOID = "1.3.6.1.2.1.2.2.1.2"
+	const interfaceSpeedOID = "1.3.6.1.2.1.2.2.1.5"
 	objectIDsToQuery := make(map[string]int)
 	objectIDsToQuery[ipAddressObjectID] = 4
-	objectIDsToQuery[interfaceObjectID] = 1
+	objectIDsToQuery[interfaceNameOID] = 1
+	objectIDsToQuery[interfaceSpeedOID] = 1
 
 	t.Run("Successfully walks a host", func(t *testing.T) {
 		// Setup
@@ -101,9 +103,11 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Walk", ipAddressObjectID, 4).Return(map[string]snmp.PDU{
 			ipAddressObjectID: {Value: "192.168.1.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
 		}, nil)
-		mockWalker.On("Walk", interfaceObjectID, 1).Return(map[string]snmp.PDU{
-			interfaceObjectID + ".1": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
-			interfaceObjectID + ".2": {Value: 1000000, Type: gosnmp.Integer, IdentifierSize: 1},
+		mockWalker.On("Walk", interfaceNameOID, 1).Return(map[string]snmp.PDU{
+			interfaceNameOID + ".1": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+		}, nil)
+		mockWalker.On("Walk", interfaceSpeedOID, 1).Return(map[string]snmp.PDU{
+			interfaceSpeedOID + ".1": {Value: 1000000, Type: gosnmp.Integer, IdentifierSize: 1},
 		}, nil)
 
 		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
@@ -118,8 +122,8 @@ func TestSNMPHost(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 3, len(oids))
 		assert.Equal(t, mapping.Value{Value: "192.168.1.1", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4}, oids[ipAddressObjectID])
-		assert.Equal(t, mapping.Value{Value: "GigabitEthernet1/0/1", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1}, oids[interfaceObjectID+".1"])
-		assert.Equal(t, mapping.Value{Value: "1000000", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 1}, oids[interfaceObjectID+".2"])
+		assert.Equal(t, mapping.Value{Value: "GigabitEthernet1/0/1", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1}, oids[interfaceNameOID+".1"])
+		assert.Equal(t, mapping.Value{Value: "1000000", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 1}, oids[interfaceSpeedOID+".1"])
 		mockWalker.AssertExpectations(t)
 	})
 
@@ -196,9 +200,11 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Walk", ipAddressObjectID, 4).Return(map[string]snmp.PDU{
 			ipAddressObjectID: {Value: "192.168.1.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
 		}, nil)
-		mockWalker.On("Walk", interfaceObjectID, 1).Return(map[string]snmp.PDU{
-			interfaceObjectID + ".1": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
-			interfaceObjectID + ".2": {Value: "invalid", Type: gosnmp.Asn1BER(255), IdentifierSize: 1}, // Invalid type
+		mockWalker.On("Walk", interfaceNameOID, 1).Return(map[string]snmp.PDU{
+			interfaceNameOID + ".1": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+		}, nil)
+		mockWalker.On("Walk", interfaceSpeedOID, 1).Return(map[string]snmp.PDU{
+			interfaceSpeedOID + ".1": {Value: "invalid", Type: gosnmp.Asn1BER(255), IdentifierSize: 1}, // Invalid type
 		}, nil)
 
 		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
@@ -213,9 +219,9 @@ func TestSNMPHost(t *testing.T) {
 		assert.NoError(t, err)        // Walk should continue despite PDU mapping error
 		assert.Equal(t, 2, len(oids)) // Should have 2 valid PDUs
 		assert.Equal(t, mapping.Value{Value: "192.168.1.1", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4}, oids[ipAddressObjectID])
-		assert.Equal(t, mapping.Value{Value: "GigabitEthernet1/0/1", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1}, oids[interfaceObjectID+".1"])
+		assert.Equal(t, mapping.Value{Value: "GigabitEthernet1/0/1", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1}, oids[interfaceNameOID+".1"])
 		// The invalid PDU should be skipped
-		_, exists := oids[interfaceObjectID+".2"]
+		_, exists := oids[interfaceSpeedOID+".1"]
 		assert.False(t, exists)
 		mockWalker.AssertExpectations(t)
 	})

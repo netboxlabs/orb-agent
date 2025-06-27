@@ -28,11 +28,25 @@ func (n *FakeSNMPWalker) Walk(oid string, _ int) (map[string]PDU, error) {
 		}, nil
 	}
 
-	if oid == "iso.3.6.1.2.1.2.2.1" {
+	if oid == "1.3.6.1.2.1.2.2.1.2" {
+		return map[string]PDU{
+			"1.3.6.1.2.1.2.2.1.2.999": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString},
+		}, nil
+	}
+
+	if oid == "1.3.6.1.2.1.2.2.1.5" {
+		return map[string]PDU{
+			"1.3.6.1.2.1.2.2.1.5.999": {Value: 1000000, Type: gosnmp.Integer},
+		}, nil
+	}
+
+	// Handle the new child OID format for policy tests
+	if oid == "iso.3.6.1.2.1.2.2.1.2" {
 		return map[string]PDU{
 			"iso.3.6.1.2.1.2.2.1.2.999": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString},
 		}, nil
 	}
+
 	return make(map[string]PDU), nil
 }
 

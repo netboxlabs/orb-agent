@@ -349,11 +349,24 @@ func (m *ObjectIDMapper) getMappingEntry(objectID string) (*Entry, error) {
 // ObjectIDs returns the ObjectIDs that the ObjectIDMapper can map
 func (m *ObjectIDMapper) ObjectIDs() map[string]int {
 	objectIDs := make(map[string]int)
-	for objectID := range m.mapping {
-		if m.mapping[objectID].IdentifierSize == 0 {
-			objectIDs[objectID] = 1
+	for _, entry := range m.mapping {
+		// If the entry has child mapping entries, add the child OIDs
+		if len(entry.MappingEntries) > 0 {
+			for _, childEntry := range entry.MappingEntries {
+				if childEntry.IdentifierSize == 0 {
+					objectIDs[childEntry.OID] = 1
+				} else {
+					// Use the child's IdentifierSize if it is non-zero; otherwise, use the parent's IdentifierSize.
+					objectIDs[childEntry.OID] = childEntry.IdentifierSize
+				}
+			}
 		} else {
-			objectIDs[objectID] = m.mapping[objectID].IdentifierSize
+			// If no child entries, add the parent OID itself
+			if entry.IdentifierSize == 0 {
+				objectIDs[entry.OID] = 1
+			} else {
+				objectIDs[entry.OID] = entry.IdentifierSize
+			}
 		}
 	}
 	return objectIDs

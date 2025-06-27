@@ -385,7 +385,7 @@ func TestObjectIDs(t *testing.T) {
 			},
 		},
 		{
-			name: "Duplicate OID",
+			name: "Child OIDs from parent mapping",
 			mapping: []config.MappingEntry{
 				{
 					OID:    ".1.3.6.1.2.1.2.2.1",
@@ -406,7 +406,8 @@ func TestObjectIDs(t *testing.T) {
 				},
 			},
 			expectedOIDs: map[string]int{
-				".1.3.6.1.2.1.2.2.1": 1,
+				".1.3.6.1.2.1.2.2.1.2": 1,
+				".1.3.6.1.2.1.2.2.1.5": 1,
 			},
 		},
 	}
