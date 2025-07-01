@@ -267,11 +267,6 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 				".1.3.6.1.2.1.4.20.1.2.192.168.1.2": mapping.Value{Value: "999", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 4},
 			},
 			expected: []diode.Entity{
-				&diode.Interface{
-					Name:   diode.String("GigabitEthernet1/0/1"),
-					Type:   diode.String("other"),
-					Device: &diode.Device{},
-				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),
 					AssignedObject: &diode.Interface{
