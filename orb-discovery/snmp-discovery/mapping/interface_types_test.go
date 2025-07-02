@@ -215,8 +215,8 @@ var tests = []struct {
 		name:                 "ethernetCsmacd 10Mbps",
 		ifType:               "6",
 		defaultInterfaceType: "",
-		expectedNetboxType:   "10base-t",
-		description:          "ethernetCsmacd with 10Mbps should map to 10base-t",
+		expectedNetboxType:   "100base-tx",
+		description:          "ethernetCsmacd with 10Mbps should map to 100base-tx",
 		speed:                int64Ptr(10000),
 	},
 	{
@@ -263,8 +263,8 @@ var tests = []struct {
 		name:                 "ethernetCsmacd 1Mbps",
 		ifType:               "6",
 		defaultInterfaceType: "",
-		expectedNetboxType:   "10base-t",
-		description:          "ethernetCsmacd with 1Mbps should map to 10base-t",
+		expectedNetboxType:   "100base-tx",
+		description:          "ethernetCsmacd with 1Mbps should map to 100base-tx",
 		speed:                int64Ptr(1000),
 	},
 	{

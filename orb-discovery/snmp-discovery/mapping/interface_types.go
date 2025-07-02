@@ -149,9 +149,6 @@ func isEthernetInterfaceType(ifType string) bool {
 }
 
 func getEthernetInterfaceType(speed *int64) string {
-	if *speed <= 10000 {
-		return "10base-t"
-	}
 	if *speed <= 100000 {
 		return "100base-tx"
 	}
