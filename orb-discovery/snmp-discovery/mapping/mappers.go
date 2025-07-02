@@ -20,6 +20,12 @@ const (
 	maxInterfaceSpeed = 2147483647
 )
 
+// MTU constants
+const (
+	minInterfaceMTU = 1
+	maxInterfaceMTU = 2147483647
+)
+
 // IPAddressMapper is a struct that maps IP addresses to entities
 type IPAddressMapper struct {
 	logger *slog.Logger
@@ -297,8 +303,9 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						m.logger.Warn("Error converting mtu to int64", "error", err, "value", value.Value)
 						continue
 					}
-					if mtu <= 0 {
-						m.logger.Warn("MTU is less than or equal to 0", "value", value.Value)
+					// Check if MTU is within valid range (1 to 2147483647 inclusive) and not overflowing int32
+					if mtu < minInterfaceMTU || mtu > maxInterfaceMTU {
+						m.logger.Warn("Interface MTU is outside valid range (1-2147483647) or overflows int32", "mtu", mtu, "value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
 						continue
 					}
 					mtu64 := mtu
