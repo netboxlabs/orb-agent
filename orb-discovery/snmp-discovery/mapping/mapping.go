@@ -116,10 +116,10 @@ const (
 
 // ObjectIDMapper is a struct that maps ObjectIDs to entities
 type ObjectIDMapper struct {
-	mapping  map[string]*Entry
-	logger   *slog.Logger
-	registry *EntityRegistry
-	defaults *config.Defaults
+	mappingConfig *Config
+	logger        *slog.Logger
+	registry      *EntityRegistry
+	defaults      *config.Defaults
 }
 
 // Entry is a struct that contains a mapping entry
@@ -150,8 +150,13 @@ func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistr
 	return entity
 }
 
-// NewObjectIDMapper creates a new ObjectIDMapper
-func NewObjectIDMapper(mappings []config.MappingEntry, logger *slog.Logger, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever, defaults *config.Defaults) *ObjectIDMapper {
+// Config is a struct that contains a mapping of ObjectIDs to Entries
+type Config struct {
+	mapping map[string]*Entry
+}
+
+// NewConfig creates a new Config
+func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever) *Config {
 	entityMappers := map[string]orbToEntityMapper{
 		"ipAddress": &IPAddressMapper{
 			logger: logger,
@@ -174,12 +179,18 @@ func NewObjectIDMapper(mappings []config.MappingEntry, logger *slog.Logger, manu
 		}
 		mapping[m.OID] = Entry
 	}
+	return &Config{
+		mapping: mapping,
+	}
+}
 
+// NewObjectIDMapper creates a new ObjectIDMapper
+func NewObjectIDMapper(mappingConfig *Config, logger *slog.Logger, defaults *config.Defaults) *ObjectIDMapper {
 	return &ObjectIDMapper{
-		mapping:  mapping,
-		logger:   logger,
-		registry: NewEntityRegistry(logger),
-		defaults: defaults,
+		mappingConfig: mappingConfig,
+		logger:        logger,
+		registry:      NewEntityRegistry(logger),
+		defaults:      defaults,
 	}
 }
 
@@ -278,7 +289,7 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 	uniqueEntities := make(map[diode.Entity]bool)
 	for index, value := range objectIDIndexMap {
 		m.logger.Debug("Mapping objectIDIndex", "objectIDIndex", index, "values", value.Values)
-		entry, err := m.getMappingEntry(value.Index)
+		entry, err := m.mappingConfig.getMappingEntry(value.Index)
 		if err != nil {
 			m.logger.Warn("Error finding mapping entry", "error", err, "objectID", value.Index)
 			continue
@@ -357,7 +368,7 @@ func newObjectIDValue(objectID string, value Value) (*ObjectIDValue, error) {
 }
 
 // Gets the mapper for the closest parent objectID
-func (m *ObjectIDMapper) getMappingEntry(objectID string) (*Entry, error) {
+func (m *Config) getMappingEntry(objectID string) (*Entry, error) {
 	for {
 		if value, found := m.mapping[objectID]; found {
 			return value, nil
@@ -373,7 +384,7 @@ func (m *ObjectIDMapper) getMappingEntry(objectID string) (*Entry, error) {
 }
 
 // ObjectIDs returns the ObjectIDs that the ObjectIDMapper can map
-func (m *ObjectIDMapper) ObjectIDs() map[string]int {
+func (m *Config) ObjectIDs() map[string]int {
 	objectIDs := make(map[string]int)
 	for _, entry := range m.mapping {
 		// If the entry has child mapping entries, add the child OIDs

@@ -110,22 +110,20 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	mapper := mapping.NewObjectIDMapper(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, &r.config.Defaults)
-	objectIDs := mapper.ObjectIDs()
-
-	r.logger.Info("Starting SNMP crawl of targets", slog.Any("targetCount", len(r.scope.Targets)), slog.Any("objectCount", len(objectIDs)))
-	entities := make([]diode.Entity, 0)
+	r.logger.Info("Starting SNMP crawl of targets", slog.Any("targetCount", len(r.scope.Targets)))
 
 	// Expand all targets
 	expandedTargets := r.expandTargetRanges(r.scope.Targets)
 
-	entities = r.queryTargets(expandedTargets, objectIDs, mapper, entities)
+	entities := r.queryTargets(expandedTargets)
 	r.logger.Info("SNMP crawl complete", slog.Any("policy", r.ctx.Value(policyKey)), slog.Any("entityCount", len(entities)))
 
 	if len(entities) == 0 {
 		r.logger.Info("No entities to ingest", slog.Any("policy", r.ctx.Value(policyKey)))
 		return
 	}
+
+	r.logEntitiesForIngestion(entities)
 
 	resp, err := r.client.Ingest(ctx, entities)
 	if err != nil {
@@ -137,8 +135,21 @@ func (r *Runner) run() {
 	}
 }
 
-func (r *Runner) queryTargets(expandedTargets []config.Target, objectIDs map[string]int, mapper *mapping.ObjectIDMapper, entities []diode.Entity) []diode.Entity {
+func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
+	for _, entity := range entities {
+		r.logger.Debug("Entity for ingestion", slog.Any("entity", entity.ConvertToProtoMessage()))
+	}
+}
+
+func (r *Runner) queryTargets(expandedTargets []config.Target) []diode.Entity {
+	mappingConfig := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup)
+	objectIDs := mappingConfig.ObjectIDs()
+	r.logger.Info("Querying targets", slog.Any("targetCount", len(expandedTargets)), slog.Any("objectCount", len(objectIDs)))
+
+	entities := make([]diode.Entity, 0)
+
 	for _, target := range expandedTargets {
+		mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, &r.config.Defaults)
 		policyName := r.ctx.Value(policyKey).(string)
 		// Track discovery attempt
 		if rMetric := metrics.GetDiscoveryAttempts(); rMetric != nil {
