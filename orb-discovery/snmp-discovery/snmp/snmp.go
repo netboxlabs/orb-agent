@@ -125,7 +125,10 @@ type Client struct {
 
 // Close implements the Walker interface by closing the SNMP connection
 func (c *Client) Close() error {
-	return c.Conn.Close()
+	if c.Conn != nil {
+		return c.Conn.Close()
+	}
+	return nil
 }
 
 // Walk implements the Walker interface by walking the SNMP tree
@@ -202,11 +205,12 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 		}
 		return &Client{
 			&gosnmp.GoSNMP{
-				Target:  host,
-				Port:    port,
-				Version: gosnmp.Version3,
-				Timeout: timeout,
-				Retries: retries,
+				Target:        host,
+				Port:          port,
+				Version:       gosnmp.Version3,
+				Timeout:       timeout,
+				Retries:       retries,
+				SecurityModel: gosnmp.UserSecurityModel,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,
 					AuthenticationProtocol:   authProtocol,
