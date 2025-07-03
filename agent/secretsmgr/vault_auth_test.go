@@ -51,12 +51,8 @@ func TestNewAuthentication(t *testing.T) {
 
 func TestTokenAuth_Authenticate(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 
 	ctx := context.Background()
 
