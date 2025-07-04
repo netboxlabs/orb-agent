@@ -66,6 +66,8 @@ Current supported defaults:
 | Key          | Type  | Description                   |
 |-------------|------|---------------------------------|
 | device      | map  | Device-specific defaults        |
+| ├─ model | str  | Device type model (overrides the model automatically retrieved from NAPALM)   |
+| ├─ manufacturer | str  | Device manufacturer (overrides the defined/discovered NAPALM driver name) |
 | ├─ description | str  | Device description           |
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
@@ -102,8 +104,10 @@ The scope defines a list of devices that can be accessed and pulled data.
 | hostname | string | yes  | Device hostname |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
-| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
 | driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
+| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
+| override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
+
 
 
 
@@ -126,6 +130,8 @@ orb:
             comments: comment all
             tags: [tag1, tag2]
             device:
+              model: C9200-48P
+              manufacturer: Cisco
               description: device description
               comments: this device
               tags: [tag3, tag4]
@@ -153,6 +159,9 @@ orb:
           - hostname: myhost.com
             username: remote
             password: 12345
+            override_defaults:
+              role: router
+              location: Row B
 ```
 
 ### Advanced Sample
