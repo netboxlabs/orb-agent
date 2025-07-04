@@ -3,10 +3,10 @@
 """NetBox Labs - Translate Unit Tests."""
 
 import pytest
-from netboxlabs.diode.sdk.ingester import Tag
 
 from device_discovery.policy.models import (
     Defaults,
+    DeviceParameters,
     IpamParameters,
     ObjectParameters,
     VlanParameters,
@@ -83,12 +83,19 @@ def sample_defaults():
         if_type="other",
         location="local",
         tenant="test",
-        device=ObjectParameters(comments="testing", tags=["devtag"]),
+        device=DeviceParameters(comments="testing", tags=["devtag"]),
         interface=ObjectParameters(description="testing", tags=["inttag"]),
         ipaddress=IpamParameters(description="ip test", tags=["iptag"]),
         prefix=IpamParameters(description="prefix test", tags=["prefixtag"]),
         vlan=VlanParameters(comments="test"),
     )
+
+
+@pytest.fixture
+def sample_override_defaults(sample_defaults):
+    """Sample defaults with device overrides."""
+    sample_defaults.device.model = "Catalyst"
+    return sample_defaults
 
 
 def test_translate_device(sample_device_info, sample_defaults):
@@ -105,6 +112,13 @@ def test_translate_device(sample_device_info, sample_defaults):
     assert device.location.site.name == "New York"
     assert device.tenant.name == "test"
     assert len(device.tags) == 3
+
+
+def test_translate_device_with_overrides(sample_device_info, sample_override_defaults):
+    """Ensure device translation respects model overrides."""
+    device = translate_device(sample_device_info, sample_override_defaults)
+    assert device.device_type.model == "Catalyst"
+    assert device.device_type.manufacturer.name == "Cisco"
 
 
 def test_translate_interface(

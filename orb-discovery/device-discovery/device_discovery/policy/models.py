@@ -18,24 +18,24 @@ class Status(Enum):
     FAILED = "failed"
 
 
-class Napalm(BaseModel):
-    """Model for NAPALM configuration."""
-
-    driver: str | None = Field(default=None, description="Driver name, optional")
-    hostname: str
-    username: str
-    password: str
-    timeout: int = 60
-    optional_args: dict[str, Any] | None = Field(
-        default=None, description="Optional arguments"
-    )
-
 class ObjectParameters(BaseModel):
     """Model for object parameters."""
 
     comments: str | None = Field(default=None, description="Comments, optional")
     description: str | None = Field(default=None, description="Description, optional")
     tags: list[str] | None = Field(default=None, description="Tags, optional")
+
+
+class DeviceParameters(ObjectParameters):
+    """Model for device specific parameters."""
+
+    model: str | None = Field(
+        default=None, description="Device model override, optional"
+    )
+    manufacturer: str | None = Field(
+        default=None, description="Device manufacturer override, optional"
+    )
+
 
 class VlanParameters(ObjectParameters):
     """Model for VLAN parameters."""
@@ -44,6 +44,7 @@ class VlanParameters(ObjectParameters):
     tenant: str | None = Field(default=None, description="VLAN tenant, optional")
     role: str | None = Field(default=None, description="VLAN role, optional")
 
+
 class IpamParameters(ObjectParameters):
     """Model for IPAM parameters."""
 
@@ -51,26 +52,42 @@ class IpamParameters(ObjectParameters):
     tenant: str | None = Field(default=None, description="IPAM tenant, optional")
     vrf: str | None = Field(default=None, description="IPAM VRF, optional")
 
+
 class Defaults(BaseModel):
     """Model for default configuration."""
 
     site: str | None = Field(default="undefined", description="Site name, optional")
-    role: str | None = Field(default="undefined", description="Device Role name, optional")
+    role: str | None = Field(
+        default="undefined", description="Device Role name, optional"
+    )
     if_type: str | None = Field(default="other", description="Interface type, optional")
     location: str | None = Field(default=None, description="Location name, optional")
     tenant: str | None = Field(default=None, description="Tenant name, optional")
     tags: list[str] | None = Field(default=None, description="Tags, optional")
-    device: ObjectParameters | None = Field(default=None, description="Device parameters, optional")
-    interface: ObjectParameters | None = Field(default=None, description="Interface parameters, optional")
-    ipaddress: IpamParameters | None = Field(default=None, description="IP Address parameters, optional")
-    prefix: IpamParameters | None = Field(default=None, description="Prefix parameters, optional")
-    vlan: VlanParameters | None = Field(default=None, description="VLAN parameters, optional")
+    device: DeviceParameters | None = Field(
+        default=None, description="Device parameters, optional"
+    )
+    interface: ObjectParameters | None = Field(
+        default=None, description="Interface parameters, optional"
+    )
+    ipaddress: IpamParameters | None = Field(
+        default=None, description="IP Address parameters, optional"
+    )
+    prefix: IpamParameters | None = Field(
+        default=None, description="Prefix parameters, optional"
+    )
+    vlan: VlanParameters | None = Field(
+        default=None, description="VLAN parameters, optional"
+    )
+
 
 class Config(BaseModel):
     """Model for discovery configuration."""
 
     schedule: str | None = Field(default=None, description="cron interval, optional")
-    defaults: Defaults | None = Field(default=None, description="Default configuration, optional")
+    defaults: Defaults | None = Field(
+        default=None, description="Default configuration, optional"
+    )
 
     @field_validator("schedule")
     @classmethod
@@ -92,6 +109,23 @@ class Config(BaseModel):
         except CroniterBadCronError:
             raise ValueError("Invalid cron schedule format.")
         return value
+
+
+class Napalm(BaseModel):
+    """Model for NAPALM configuration."""
+
+    driver: str | None = Field(default=None, description="Driver name, optional")
+    hostname: str
+    username: str
+    password: str
+    timeout: int = 60
+    optional_args: dict[str, Any] | None = Field(
+        default=None, description="Optional arguments"
+    )
+    override_defaults: Defaults | None = Field(
+        default=None,
+        description="Override default configuration for this host, optional",
+    )
 
 
 class Policy(BaseModel):

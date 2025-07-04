@@ -53,6 +53,8 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
 
     """
     tags = list(defaults.tags) if defaults.tags else []
+    model = device_info.get("model")
+    manufacturer = device_info.get("vendor")
     description = None
     comments = None
     location = None
@@ -61,18 +63,16 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
         tags.extend(defaults.device.tags or [])
         description = defaults.device.description
         comments = defaults.device.comments
+        model = defaults.device.model or model
+        manufacturer = defaults.device.manufacturer or manufacturer
 
     if defaults.location:
         location = Location(name=defaults.location, site=defaults.site)
 
     device = Device(
         name=device_info.get("hostname"),
-        device_type=DeviceType(
-            model=device_info.get("model"), manufacturer=device_info.get("vendor")
-        ),
-        platform=Platform(
-            name=device_info.get("driver"), manufacturer=device_info.get("vendor")
-        ),
+        device_type=DeviceType(model=model, manufacturer=manufacturer),
+        platform=Platform(name=device_info.get("driver"), manufacturer=manufacturer),
         role=defaults.role,
         serial=device_info.get("serial_number"),
         status="active",
