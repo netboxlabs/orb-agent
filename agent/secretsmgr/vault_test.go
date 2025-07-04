@@ -4,29 +4,79 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	vault "github.com/hashicorp/vault/api"
-	vaulthttp "github.com/hashicorp/vault/http"
-	vaultsrv "github.com/hashicorp/vault/vault"
+	"github.com/hashicorp/vault/sdk/helper/testcluster"
+	"github.com/hashicorp/vault/sdk/helper/testcluster/docker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
+func createTestVault(t *testing.T) (*docker.DockerCluster, *vault.Client) {
+	t.Helper()
+	opts := &docker.DockerClusterOptions{
+		ImageRepo:    "hashicorp/vault", // or "hashicorp/vault-enterprise"
+		ImageTag:     "latest",
+		DisableMlock: true,
+		DisableTLS:   true,
+		ClusterOptions: testcluster.ClusterOptions{
+			NumCores: 1,
+			VaultNodeConfig: &testcluster.VaultNodeConfig{
+				LogLevel: "INFO",
+				StorageOptions: map[string]string{
+					"performance_multiplier": "1",
+				},
+			},
+		},
+	}
+	cluster := docker.NewTestDockerCluster(t, opts)
+
+	client := cluster.Nodes()[0].APIClient()
+	_, err := client.Logical().Read("sys/storage/raft/configuration")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Enable KV v2 secret engine
+	mountInput := &vault.MountInput{
+		Type:    "kv",
+		Options: map[string]string{"version": "2"},
+	}
+	err = client.Sys().Mount("testsecret", mountInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for KV v2 to become available
+	time.Sleep(100 * time.Millisecond)
+
+	// Setup various test secrets
+	secrets := map[string]map[string]any{
+		"app/credentials": {
+			"password": "secretvalue",
+			"numeric":  12345,
+			"empty":    "",
+		},
+	}
+
+	for path, data := range secrets {
+		_, err = client.KVv2("testsecret").Put(context.Background(), path, data)
+		require.NoError(t, err, "Failed to set up secret at %s", path)
+	}
+
+	return cluster, client
+}
+
 func TestVaultManager_getSecret(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 
 	// Create the vault manager with the test client
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -100,64 +150,10 @@ func TestVaultManager_getSecret(t *testing.T) {
 	}
 }
 
-func createTestVault(t *testing.T) (net.Listener, *vault.Client) {
-	t.Helper()
-
-	// Create an in-memory, unsealed core
-	core, keyShares, rootToken := vaultsrv.TestCoreUnsealed(t)
-	_ = keyShares
-
-	// Start an HTTP server for the core
-	ln, addr := vaulthttp.TestServer(t, core)
-
-	// Create a client that talks to the server
-	conf := vault.DefaultConfig()
-	conf.Address = addr
-
-	client, err := vault.NewClient(conf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client.SetToken(rootToken)
-
-	// Enable KV v2 secret engine
-	mountInput := &vault.MountInput{
-		Type:    "kv",
-		Options: map[string]string{"version": "2"},
-	}
-	err = client.Sys().Mount("testsecret", mountInput)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Wait for KV v2 to become available
-	time.Sleep(100 * time.Millisecond)
-
-	// Setup various test secrets
-	secrets := map[string]map[string]any{
-		"app/credentials": {
-			"password": "secretvalue",
-			"numeric":  12345,
-			"empty":    "",
-		},
-	}
-
-	for path, data := range secrets {
-		_, err = client.KVv2("testsecret").Put(context.Background(), path, data)
-		require.NoError(t, err, "Failed to set up secret at %s", path)
-	}
-
-	return ln, client
-}
-
 func TestVaultManager_processString(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 	// Create the vault manager with the test client
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -232,12 +228,8 @@ func TestVaultManager_processString(t *testing.T) {
 
 func TestVaultManager_processMap(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 
 	// Create the vault manager with the test client
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -329,12 +321,8 @@ func TestVaultManager_processMap(t *testing.T) {
 
 func TestVaultManager_processSlice(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 
 	// Create the vault manager with the test client
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -419,12 +407,8 @@ func TestVaultManager_processSlice(t *testing.T) {
 
 func TestVaultManager_SolvePolicySecrets(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 
 	// Create the vault manager with the test client
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -542,12 +526,8 @@ func TestVaultManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 
 func TestVaultManager_pollSecrets(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 
 	// Create the vault manager with the test client
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -609,14 +589,10 @@ func TestVaultManager_pollSecrets(t *testing.T) {
 
 func TestVaultManager_Start(t *testing.T) {
 	// Create test vault server
-	ln, client := createTestVault(t)
-	defer func() {
-		if err := ln.Close(); err != nil {
-			assert.NoError(t, err, "Failed to close test vault listener")
-		}
-	}()
+	cluster, client := createTestVault(t)
+	defer cluster.Cleanup()
 
-	addr := ln.Addr().String()
+	addr := cluster.ClusterNodes[0].HostPort
 	token := client.Token()
 
 	tests := []struct {
