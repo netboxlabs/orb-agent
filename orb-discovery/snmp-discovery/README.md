@@ -69,11 +69,33 @@ policies:
         community: "public"
         # For SNMPv3, use these fields instead:
         # security_level: "authPriv"
-        # username: "snmp-user"
+        # username: "${SNMP_USERNAME}"
         # auth_protocol: "SHA"
-        # auth_passphrase: "auth-password"
+        # auth_passphrase: "${SNMP_AUTH_PASS}"
         # priv_protocol: "AES"
-        # priv_passphrase: "priv-password"
+        # priv_passphrase: "${SNMP_PRIV_PASS}"
+
+**Note:** The following authentication fields support environment variable substitution using the `${VARNAME}` syntax:
+
+- `community`
+- `username`
+- `auth_passphrase`
+- `priv_passphrase`
+
+For example:
+
+```yaml
+authentication:
+  protocol_version: "v3"
+  security_level: "authPriv"
+  username: "${SNMP_USERNAME}"
+  auth_protocol: "SHA"
+  auth_passphrase: "${SNMP_AUTH_PASS}"
+  priv_protocol: "AES"
+  priv_passphrase: "${SNMP_PRIV_PASS}"
+```
+
+If the referenced environment variable is not set, the service will exit with an error.
   discover_once: # will run only once
     scope:
       targets:

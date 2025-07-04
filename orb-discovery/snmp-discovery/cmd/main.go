@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -16,28 +15,12 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/server"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/utils"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/version"
 )
 
 // AppName is the application name
 const AppName = "snmp-discovery"
-
-func resolveEnv(value string) string {
-	// Check if the value starts with ${ and ends with }
-	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
-		// Extract the environment variable name
-		envVar := value[2 : len(value)-1]
-		// Get the value of the environment variable
-		envValue := os.Getenv(envVar)
-		if envValue != "" {
-			return envValue
-		}
-		fmt.Printf("error: a provided environment %s variable is not set\n", envVar)
-		os.Exit(1)
-	}
-	// Return the original value if no substitution occurs
-	return value
-}
 
 func main() {
 	host := flag.String("host", "0.0.0.0", "server host")
@@ -84,15 +67,15 @@ func main() {
 	if *dryRun {
 		client, err = diode.NewDryRunClient(
 			producerName,
-			resolveEnv(*dryRunOutputDir),
+			utils.ResolveEnvOrExit(*dryRunOutputDir),
 		)
 	} else {
 		client, err = diode.NewClient(
-			resolveEnv(*diodeTarget),
+			utils.ResolveEnvOrExit(*diodeTarget),
 			producerName,
 			version.GetBuildVersion(),
-			diode.WithClientID(resolveEnv(*diodeClientID)),
-			diode.WithClientSecret(resolveEnv(*diodeClientSecret)),
+			diode.WithClientID(utils.ResolveEnvOrExit(*diodeClientID)),
+			diode.WithClientSecret(utils.ResolveEnvOrExit(*diodeClientSecret)),
 		)
 	}
 	if err != nil {

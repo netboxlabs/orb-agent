@@ -11,6 +11,7 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -71,6 +72,9 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		// Create a new policy with updated mappings
 		updatedPolicy := payload.Policies[name]
 		m.applyDefaults(&updatedPolicy)
+		if err := m.resolveAuthenticationEnvVars(&updatedPolicy); err != nil {
+			return nil, fmt.Errorf("%s : failed to resolve environment variables : %w", name, err)
+		}
 		payload.Policies[name] = updatedPolicy
 	}
 
@@ -212,4 +216,28 @@ func (m *Manager) Stop() error {
 // GetCapabilities returns the capabilities of snm-discovery
 func (m *Manager) GetCapabilities() []string {
 	return []string{"targets"}
+}
+
+// resolveAuthenticationEnvVars resolves environment variables in authentication configuration
+func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
+	auth := &policy.Scope.Authentication
+	fields := []struct {
+		field *string
+		label string
+	}{
+		{&auth.Community, "community"},
+		{&auth.Username, "username"},
+		{&auth.AuthPassphrase, "auth_passphrase"},
+		{&auth.PrivPassphrase, "priv_passphrase"},
+	}
+	// Iterate over the fields and resolve environment variables
+	for _, f := range fields {
+		resolved, err := utils.ResolveEnv(*f.field)
+		if err != nil {
+			return fmt.Errorf("failed to resolve %s environment variable: %w", f.label, err)
+		}
+		*f.field = resolved
+	}
+
+	return nil
 }

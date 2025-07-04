@@ -14,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockRunner mocks the Runner
@@ -138,6 +139,236 @@ func TestManagerParsePolicies(t *testing.T) {
 		_, err := manager.ParsePolicies(yamlData)
 		assert.Error(t, err)
 		assert.Equal(t, "no policies found in the request", err.Error())
+	})
+
+	t.Run("Environment Variable Resolution - Community", func(t *testing.T) {
+		// Set test environment variable
+		err := os.Setenv("SNMP_COMMUNITY", "test-community")
+		require.NoError(t, err)
+		defer func() { _ = os.Unsetenv("SNMP_COMMUNITY") }()
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: ${SNMP_COMMUNITY}
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "test-community", policies["policy1"].Scope.Authentication.Community)
+	})
+
+	t.Run("Environment Variable Resolution - Username", func(t *testing.T) {
+		// Set test environment variables
+		err := os.Setenv("SNMP_USERNAME", "test-user")
+		require.NoError(t, err)
+		err = os.Setenv("SNMP_AUTH_PASS", "test-auth-pass")
+		require.NoError(t, err)
+		defer func() {
+			_ = os.Unsetenv("SNMP_USERNAME")
+			_ = os.Unsetenv("SNMP_AUTH_PASS")
+		}()
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv3
+                security_level: authNoPriv
+                username: ${SNMP_USERNAME}
+                auth_protocol: SHA
+                auth_passphrase: ${SNMP_AUTH_PASS}
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "test-user", policies["policy1"].Scope.Authentication.Username)
+		assert.Equal(t, "test-auth-pass", policies["policy1"].Scope.Authentication.AuthPassphrase)
+	})
+
+	t.Run("Environment Variable Resolution - All Auth Fields", func(t *testing.T) {
+		// Set test environment variables
+		err := os.Setenv("SNMP_COMMUNITY", "test-community")
+		require.NoError(t, err)
+		err = os.Setenv("SNMP_USERNAME", "test-user")
+		require.NoError(t, err)
+		err = os.Setenv("SNMP_AUTH_PASS", "test-auth-pass")
+		require.NoError(t, err)
+		err = os.Setenv("SNMP_PRIV_PASS", "test-priv-pass")
+		require.NoError(t, err)
+		defer func() {
+			_ = os.Unsetenv("SNMP_COMMUNITY")
+			_ = os.Unsetenv("SNMP_USERNAME")
+			_ = os.Unsetenv("SNMP_AUTH_PASS")
+			_ = os.Unsetenv("SNMP_PRIV_PASS")
+		}()
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv3
+                security_level: authPriv
+                username: ${SNMP_USERNAME}
+                auth_protocol: SHA
+                auth_passphrase: ${SNMP_AUTH_PASS}
+                priv_protocol: AES
+                priv_passphrase: ${SNMP_PRIV_PASS}
+          policy2:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.2
+              authentication:
+                protocol_version: SNMPv2c
+                community: ${SNMP_COMMUNITY}
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Contains(t, policies, "policy2")
+
+		// Check policy1 (SNMPv3)
+		assert.Equal(t, "test-user", policies["policy1"].Scope.Authentication.Username)
+		assert.Equal(t, "test-auth-pass", policies["policy1"].Scope.Authentication.AuthPassphrase)
+		assert.Equal(t, "test-priv-pass", policies["policy1"].Scope.Authentication.PrivPassphrase)
+
+		// Check policy2 (SNMPv2c)
+		assert.Equal(t, "test-community", policies["policy2"].Scope.Authentication.Community)
+	})
+
+	t.Run("Environment Variable Resolution - No Substitution", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "public", policies["policy1"].Scope.Authentication.Community)
+	})
+
+	t.Run("Environment Variable Resolution - Mixed Values", func(t *testing.T) {
+		// Set test environment variable
+		err := os.Setenv("SNMP_COMMUNITY", "test-community")
+		require.NoError(t, err)
+		defer func() { _ = os.Unsetenv("SNMP_COMMUNITY") }()
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: ${SNMP_COMMUNITY}
+          policy2:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.2
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Contains(t, policies, "policy2")
+
+		// Check policy1 (with env var)
+		assert.Equal(t, "test-community", policies["policy1"].Scope.Authentication.Community)
+
+		// Check policy2 (without env var)
+		assert.Equal(t, "public", policies["policy2"].Scope.Authentication.Community)
+	})
+
+	t.Run("Environment Variable Resolution - Missing Environment Variable", func(t *testing.T) {
+		// Ensure the environment variable is not set
+		err := os.Unsetenv("MISSING_SNMP_COMMUNITY")
+		require.NoError(t, err)
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: ${MISSING_SNMP_COMMUNITY}
+       `)
+
+		_, err = manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "policy1 : failed to resolve environment variables")
+		assert.Contains(t, err.Error(), "failed to resolve community environment variable")
+		assert.Contains(t, err.Error(), "environment variable MISSING_SNMP_COMMUNITY is not set")
+	})
+
+	t.Run("Environment Variable Resolution - Missing Username Environment Variable", func(t *testing.T) {
+		// Ensure the environment variable is not set
+		err := os.Unsetenv("MISSING_SNMP_USERNAME")
+		require.NoError(t, err)
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv3
+                security_level: authNoPriv
+                username: ${MISSING_SNMP_USERNAME}
+                auth_protocol: SHA
+                auth_passphrase: test-pass
+       `)
+
+		_, err = manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "policy1 : failed to resolve environment variables")
+		assert.Contains(t, err.Error(), "failed to resolve username environment variable")
+		assert.Contains(t, err.Error(), "environment variable MISSING_SNMP_USERNAME is not set")
 	})
 }
 
