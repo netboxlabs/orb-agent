@@ -205,14 +205,14 @@ orb:
             port: 162  # Non-standard SNMP port
         authentication:
           protocol_version: "v2c"
-          community: "public"
+          community: "public" # Also supports resolving values from environment variables eg ${SNMP_COMMUNITY}
           # For SNMPv3, use these fields instead:
           # security_level: "authPriv"
-          # username: "snmp-user"
+          # username: "snmp-user" # Also supports resolving values from environment variables eg ${SNMP_USERNAME}
           # auth_protocol: "SHA"
-          # auth_passphrase: "auth-password"
+          # auth_passphrase: "auth-password" # Also supports resolving values from environment variables eg ${SNMP_AUTH_PASSPHRASE}
           # priv_protocol: "AES"
-          # priv_passphrase: "priv-password"
+          # priv_passphrase: "priv-password"# Also supports resolving values from environment variables eg ${SNMP_PRIV_PASSPHRASE}
     discover_once: # will run only once
       scope:
         targets:
@@ -229,6 +229,13 @@ orb:
           priv_protocol: "AES" 
           priv_passphrase: "secure-priv-pass"
 ```
+
+**Note:** The following authentication fields support environment variable substitution using the `${VARNAME}` syntax:
+
+- `community`
+- `username`
+- `auth_passphrase`
+- `priv_passphrase`
 
 ### Device Model Lookup
 The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIds (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectId values. This only needs to be set if additional or modified files are being provided in addition the ones that are included with orb-discovery and orb-agent.
