@@ -204,7 +204,7 @@ orb:
           - host: "10.0.0.1"
             port: 162  # Non-standard SNMP port
         authentication:
-          protocol_version: "v2c"
+          protocol_version: "SNMPv2c"
           community: "public" # Also supports resolving values from environment variables eg ${SNMP_COMMUNITY}
           # For SNMPv3, use these fields instead:
           # security_level: "authPriv"
@@ -221,7 +221,7 @@ orb:
           - host: "192.168.100.50"
             port: 161
         authentication:
-          protocol_version: "v3"
+          protocol_version: "SNMPv3"
           security_level: "authPriv"
           username: "monitoring"
           auth_protocol: "SHA"
