@@ -1,11 +1,7 @@
 name: Orb Agent - PR Semantic Release Check
 on:
   pull_request:
-    branches: [ develop ]
-    # paths:
-     # - "agent/**"
-     # - "cmd/**"
-     # - "!agent/docker/**"
+    branches: [ release ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref }}
