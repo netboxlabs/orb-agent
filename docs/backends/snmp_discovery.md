@@ -126,6 +126,6 @@ scope:
     - host: "10.0.0.1"
       port: 162  # Non-standard SNMP port
   authentication:
-    protocol_version: "v2c"
+    protocol_version: "SNMPv2c"
     community: "public"
 ```
