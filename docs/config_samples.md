@@ -324,18 +324,11 @@ orb:
     network_discovery:
     snmp_discovery:
     worker:
-    
-    # Packet capture backend that exports to OpenTelemetry via HTTP
-    pktvisor:
-      config_file: "/opt/orb/pktvisor.yaml"
-       
+          
     common:
       otel:
         # gRPC endpoint for discovery backends
         grpc: "grpc://otel-collector.monitoring.svc.cluster.local:4317"
-        
-        # HTTP endpoint for pktvisor backend  
-        http: "http://otel-collector.monitoring.svc.cluster.local:4318"
         
         # Labels attached to all telemetry data
         agent_labels:
