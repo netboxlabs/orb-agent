@@ -307,7 +307,7 @@ This feature is supported by the [Device Discovery](./backends/device_discovery.
 
 ## Exporting OpenTelemetry Metrics
 
-The backends support exporting metrics using OpenTelemetry. The discovery backends do so over GRPC, and pktvisor does so over http.
+The backends support exporting metrics using OpenTelemetryover GRPC.
 
 ### Basic Configuration
 
