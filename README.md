@@ -81,7 +81,7 @@ A special `common` subsection under `backends` defines configuration settings th
           dry_run: false
           dry_run_output_dir: /opt/orb
         otel:
-          grpc: "grpc://otel-collector:4317" # or `http: "http://otel-collector:4318"`
+          grpc: "grpc://otel-collector:4317"
           agent_labels:
             environment: "production"
             datacenter: "us-east-1"
