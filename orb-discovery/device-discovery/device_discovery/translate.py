@@ -254,9 +254,10 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
         tenant = defaults.vlan.tenant
         role = defaults.vlan.role
 
+    clean_name = " ".join(vlan_name.strip().split())
     vlan = VLAN(
         vid=int(vid),
-        name=vlan_name,
+        name=clean_name,
         group=group,
         tenant=tenant,
         role=role,

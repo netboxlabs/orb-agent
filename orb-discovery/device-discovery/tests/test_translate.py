@@ -221,13 +221,24 @@ def test_translate_data(
 def test_translate_vlan(sample_defaults):
     """Ensure VLAN translation is correct."""
     vid = "1"
-    vlan_name = "Test VLAN"
+    vlan_name = "Test  VLAN   "
     vlan = translate_vlan(vid, vlan_name, sample_defaults)
 
     assert vlan.vid == 1
     assert vlan.name == "Test VLAN"
     assert len(vlan.tags) == 2
     assert vlan.comments == "test"
+
+    vid = "2"
+    vlan_name = "Test - VLAN   "
+    vlan = translate_vlan(vid, vlan_name, sample_defaults)
+    assert vlan.vid == 2
+    assert vlan.name == "Test - VLAN"
+
+    vlan_name = "info-vlan "
+    vlan = translate_vlan(vid, vlan_name, sample_defaults)
+    assert vlan.vid == 2
+    assert vlan.name == "info-vlan"
 
 
 def test_translate_vlan_with_defaults(sample_defaults):
