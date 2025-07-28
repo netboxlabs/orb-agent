@@ -304,3 +304,63 @@ When running in dry run mode, the agent will:
 
 This allows you to inspect the data that would be collected and sent to Diode Server before configuring the actual connection.
 This feature is supported by the [Device Discovery](./backends/device_discovery.md), [Network Discovery](./backends/network_discovery.md), [Worker](./backends/worker.md) and [SNMP Discovery](./backends/snmp_discovery.md) backends.
+
+## Exporting OpenTelemetry Metrics
+
+The backends support exporting metrics using OpenTelemetryover GRPC.
+
+### Basic Configuration
+
+```yaml
+orb:
+  config_manager:
+    active: local
+  labels:
+    agent_id: "network-agent-001"
+    location: "datacenter-east"
+  backends:
+    # Discovery backends that export to OpenTelemetry via gRPC
+    device_discovery:
+    network_discovery:
+    snmp_discovery:
+    worker:
+          
+    common:
+      otel:
+        # gRPC endpoint for discovery backends
+        grpc: "grpc://otel-collector.monitoring.svc.cluster.local:4317"
+        
+        # Labels attached to all telemetry data
+        agent_labels:
+          environment: "production"
+          datacenter: "us-east-1"
+          cluster: "main"
+          service: "orb-agent"
+          version: "v2.0.0"
+          team: "platform"
+      
+      diode:
+        target: "grpc://diode.example.com:8080/diode"
+        client_id: "${DIODE_CLIENT_ID}"
+        client_secret: "${DIODE_CLIENT_SECRET}"
+        agent_name: "network-agent-001"
+  
+  policies:
+    device_discovery:
+      policy_1:
+        config:
+          schedule: "0 */6 * * *"
+        scope:
+          - driver: ios
+            hostname: "192.168.1.1"
+            username: "admin"
+            password: "${DEVICE_PASSWORD}"
+    
+    network_discovery:
+      policy_1:
+        config:
+          schedule: "0 */2 * * *"
+          timeout: 5
+        scope:
+          targets: [192.168.1.0, 192.168.1.1]
+```

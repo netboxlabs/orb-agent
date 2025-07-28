@@ -67,7 +67,7 @@ Only the `network_discovery`, `device_discovery`, `worker` and `snmp_discovery` 
 - [SNMP Discovery](./docs/backends/snmp_discovery.md)
 
 #### Common
-A special `common` subsection under `backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings to all backends.
+A special `common` subsection under `backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings and OpenTelemetry configuration to all backends.
 
 ```yaml
   backends:
@@ -80,6 +80,12 @@ A special `common` subsection under `backends` defines configuration settings th
           agent_name: agent01
           dry_run: false
           dry_run_output_dir: /opt/orb
+        otel:
+          grpc: "grpc://otel-collector:4317"
+          agent_labels:
+            environment: "production"
+            datacenter: "us-east-1"
+            service: "network-monitoring"
 ```
 
 ### Policies
