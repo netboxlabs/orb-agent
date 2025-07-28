@@ -108,12 +108,12 @@ orb:
 To run `orb-agent`, use the following command from the directory where your created your `agent.yaml` file:
 
 ```sh
- docker run --net=host -v $(PWD):/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+ docker run --net=host -v ${PWD}:/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 The container needs sufficient permissions, to send `icmp` and `tcp` packets. This can either be achieved by setting the network-mode to `host` or by changing the container user to `root`: 
 
 ```sh
- docker run -u root -v $(PWD):/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+ docker run -u root -v ${PWD}:/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
 ### Configuration samples
