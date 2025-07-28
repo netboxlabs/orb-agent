@@ -54,7 +54,7 @@ jobs:
           write-mode: overwrite
           contents: |
             {
-              "branches": "release_version_comment",
+              "branches": "release",
               "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
               "debug": "true",
               "tagFormat": "v${version}",
