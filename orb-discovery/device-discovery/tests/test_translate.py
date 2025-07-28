@@ -240,6 +240,10 @@ def test_translate_vlan(sample_defaults):
     assert vlan.vid == 2
     assert vlan.name == "info-vlan"
 
+    vid = "NA"
+    vlan = translate_vlan(vid, vlan_name, sample_defaults)
+    assert vlan is None
+
 
 def test_translate_vlan_with_defaults(sample_defaults):
     """Ensure VLAN translation includes default values."""

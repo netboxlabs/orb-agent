@@ -228,7 +228,7 @@ def translate_interface_ips(
     return ip_entities
 
 
-def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
+def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
     """
     Translate VLAN information for a given VLAN ID.
 
@@ -239,6 +239,10 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
         defaults (Defaults): Default configuration.
 
     """
+    try:
+        vid_int = int(vid)
+    except ValueError:
+        return None
     tags = list(defaults.tags) if defaults.tags else []
     comments = None
     description = None
@@ -256,7 +260,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN:
 
     clean_name = " ".join(vlan_name.strip().split())
     vlan = VLAN(
-        vid=int(vid),
+        vid=vid_int,
         name=clean_name,
         group=group,
         tenant=tenant,
@@ -302,6 +306,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
     if data.get("vlan"):
         for vid, vlan_info in data.get("vlan").items():
             vlan = translate_vlan(vid, vlan_info.get("name"), defaults)
-            entities.append(Entity(vlan=vlan))
+            if vlan:
+                entities.append(Entity(vlan=vlan))
 
     return entities
