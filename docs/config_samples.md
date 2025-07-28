@@ -177,7 +177,8 @@ orb:
     snmp_network_1:
       config:
         schedule: "0 */6 * * *" # Cron expression - every 6 hours
-        timeout: 300 # Timeout in seconds (default 2 minutes)
+        timeout: 300 # Timeout for policy in seconds (default 2 minutes)
+        snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds)
         retries: 3 # Number of retries
         defaults:
           tags: ["snmp-discovery", "orb"]
@@ -195,7 +196,7 @@ orb:
           device:
             description: "SNMP discovered device"
             comments: "Automatically discovered via SNMP"
-        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies aa directory containing additional device data yaml files (see below)
+        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing additional device data yaml files (see below)
       scope:
         targets:
           - host: "192.168.1.1"
@@ -203,15 +204,15 @@ orb:
           - host: "10.0.0.1"
             port: 162  # Non-standard SNMP port
         authentication:
-          protocol_version: "v2c"
-          community: "public"
+          protocol_version: "SNMPv2c"
+          community: "public" # Also supports resolving values from environment variables eg ${SNMP_COMMUNITY}
           # For SNMPv3, use these fields instead:
           # security_level: "authPriv"
-          # username: "snmp-user"
+          # username: "snmp-user" # Also supports resolving values from environment variables eg ${SNMP_USERNAME}
           # auth_protocol: "SHA"
-          # auth_passphrase: "auth-password"
+          # auth_passphrase: "auth-password" # Also supports resolving values from environment variables eg ${SNMP_AUTH_PASSPHRASE}
           # priv_protocol: "AES"
-          # priv_passphrase: "priv-password"
+          # priv_passphrase: "priv-password"# Also supports resolving values from environment variables eg ${SNMP_PRIV_PASSPHRASE}
     discover_once: # will run only once
       scope:
         targets:
@@ -220,7 +221,7 @@ orb:
           - host: "192.168.100.50"
             port: 161
         authentication:
-          protocol_version: "v3"
+          protocol_version: "SNMPv3"
           security_level: "authPriv"
           username: "monitoring"
           auth_protocol: "SHA"
@@ -228,6 +229,13 @@ orb:
           priv_protocol: "AES" 
           priv_passphrase: "secure-priv-pass"
 ```
+
+**Note:** The following authentication fields support environment variable substitution using the `${VARNAME}` syntax:
+
+- `community`
+- `username`
+- `auth_passphrase`
+- `priv_passphrase`
 
 ### Device Model Lookup
 The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIds (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectId values. This only needs to be set if additional or modified files are being provided in addition the ones that are included with orb-discovery and orb-agent.
@@ -246,3 +254,53 @@ docker run --net=host \
     netboxlabs/orb-agent:latest \
     run -c "/opt/orb/snmp-config.yaml"
 ```
+
+## Diode Dry Run Mode
+
+The Orb Agent supports a diode dry run mode that allows you to test your configuration without sending data to the Diode server. This is useful for debugging and validating your configuration.
+
+### Basic Configuration
+
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    device_discovery:
+    common:
+      diode:
+        dry_run: true
+        dry_run_output_dir: /opt/orb/
+        # No need for target, client_id, client_secret when in dry_run mode
+        agent_name: agent01
+  policies:
+    device_discovery:
+      discovery_1:
+        config:
+          defaults:
+            site: New York NY
+        scope:
+          - driver: ios
+            hostname: 192.168.0.5
+            username: admin
+            password: ${PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-napalm.conf
+```
+
+Run command:
+```sh
+docker run -v /local/orb:/opt/orb/ \
+-e PASS={DEVICE_PASSWORD} \
+-v /local/output:/opt/orb/output \
+netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+When running in dry run mode, the agent will:
+1. Process all policies as usual
+2. Write the data that would be sent to Diode as JSON files in the specified output directory.
+3. For this sample policy, a file named `agent01_device-discovery_<timestamp>.json` will be generated in `/opt/orb` folder.
+4. No data will be sent to any remote server
+
+This allows you to inspect the data that would be collected and sent to Diode Server before configuring the actual connection.
+This feature is supported by the [Device Discovery](./backends/device_discovery.md), [Network Discovery](./backends/network_discovery.md), [Worker](./backends/worker.md) and [SNMP Discovery](./backends/snmp_discovery.md) backends.
