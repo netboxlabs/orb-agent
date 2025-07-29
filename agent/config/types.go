@@ -33,10 +33,20 @@ type GitManager struct {
 	SkipTLS    bool    `yaml:"skip_tls"`
 }
 
+// FleetManager represents the Orb ConfigManager configuration.
+type FleetManager struct {
+	URL          string `yaml:"url"`
+	TokenURL     string `yaml:"token_url"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	TopicName    string `yaml:"topic_name"`
+}
+
 // Sources represents the configuration for manager sources, including cloud, local and git.
 type Sources struct {
 	Local LocalManager `yaml:"local"`
 	Git   GitManager   `yaml:"git"`
+	Fleet FleetManager `yaml:"orb"`
 }
 
 // ManagerConfig represents the configuration for the Config Manager

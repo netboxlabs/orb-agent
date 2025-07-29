@@ -3,6 +3,8 @@ module github.com/netboxlabs/orb-agent
 go 1.24.4
 
 require (
+	github.com/eclipse/paho.golang v0.22.0
+	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/go-cmd/cmd v1.4.3
 	github.com/go-co-op/gocron/v2 v2.15.0
 	github.com/go-git/go-git/v5 v5.14.0
@@ -43,6 +45,7 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-hclog v1.6.3 // indirect
@@ -96,6 +99,7 @@ require (
 	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/exp v0.0.0-20250531010427-b6e5de432a8b // indirect
 	golang.org/x/net v0.41.0 // indirect
+	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
 	golang.org/x/time v0.11.0 // indirect

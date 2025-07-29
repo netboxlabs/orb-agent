@@ -22,6 +22,8 @@ func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string) Manag
 		return &localConfigManager{logger: logger, pMgr: pMgr}
 	case "git":
 		return &gitConfigManager{logger: logger, pMgr: pMgr}
+	case "fleet":
+		return NewFleetConfigManager(logger, pMgr)
 	default:
 		return &localConfigManager{logger: logger, pMgr: pMgr}
 	}

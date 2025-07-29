@@ -16,9 +16,7 @@ COMMIT_HASH = $(shell git rev-parse --short HEAD)
 OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
 OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
 
-all: platform
-
-.PHONY: all agent agent_bin
+.PHONY: agent agent_bin
 
 clean:
 	rm -rf ${BUILD_DIR}
@@ -49,7 +47,7 @@ agent_bin:
 test-coverage:
 	@mkdir -p .coverage
 	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd" | tparse -format=markdown > .coverage/test-report.md
-	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
+	@cat .coverage/cover.out.tmp | grep -Ev "cmd" | tee .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep total | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 
 .PHONY: lint
