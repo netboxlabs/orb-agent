@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,6 +220,9 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Use a channel to signal when the goroutine has finished
+	done := make(chan bool, 1)
+
 	publishFunc := func(ctx context.Context, payload []byte) error {
 		return mockPublish.Publish(ctx, payload)
 	}
@@ -227,7 +231,10 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Twice()
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, publishFunc)
+	go func() {
+		hb.sendHeartbeats(ctx, cancel, publishFunc)
+		done <- true
+	}()
 
 	// Let it run briefly
 	time.Sleep(10 * time.Millisecond)
@@ -235,13 +242,13 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 	// Cancel context immediately
 	cancel()
 
-	// Give time for cleanup
-	time.Sleep(10 * time.Millisecond)
+	// Wait for the goroutine to finish
+	<-done
 
 	// Assert
 	mockPublish.AssertExpectations(t)
 
-	// Verify context is properly cleaned up
+	// Verify context is properly cleaned up (now safe to read after goroutine finished)
 	assert.Nil(t, hb.heartbeatCtx)
 }
 
@@ -311,11 +318,20 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 	defer hb.hbTicker.Stop()
 
 	var capturedPayloads [][]byte
+	var mutex sync.Mutex
+
+	// Use a channel to signal when the goroutine has finished
+	done := make(chan bool, 1)
+
 	publishFunc := func(ctx context.Context, payload []byte) error {
-		// Store a copy of the payload
+		// Store a copy of the payload with proper synchronization
 		payloadCopy := make([]byte, len(payload))
 		copy(payloadCopy, payload)
+
+		mutex.Lock()
 		capturedPayloads = append(capturedPayloads, payloadCopy)
+		mutex.Unlock()
+
 		return nil
 	}
 
@@ -323,7 +339,10 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 	defer cancel()
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, publishFunc)
+	go func() {
+		hb.sendHeartbeats(ctx, cancel, publishFunc)
+		done <- true
+	}()
 
 	// Wait for initial heartbeat
 	time.Sleep(10 * time.Millisecond)
@@ -331,14 +350,19 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 	// Cancel to trigger offline heartbeat
 	cancel()
 
-	// Wait for cleanup
-	time.Sleep(10 * time.Millisecond)
+	// Wait for goroutine to finish
+	<-done
 
-	// Assert
-	assert.GreaterOrEqual(t, len(capturedPayloads), 2, "Should have at least initial and final heartbeats")
+	// Assert - now safe to read capturedPayloads
+	mutex.Lock()
+	payloadsCopy := make([][]byte, len(capturedPayloads))
+	copy(payloadsCopy, capturedPayloads)
+	mutex.Unlock()
+
+	assert.GreaterOrEqual(t, len(payloadsCopy), 2, "Should have at least initial and final heartbeats")
 
 	// Verify all payloads are valid heartbeat messages
-	for i, payload := range capturedPayloads {
+	for i, payload := range payloadsCopy {
 		var heartbeat messages.Heartbeat
 		err := json.Unmarshal(payload, &heartbeat)
 		require.NoError(t, err, "Heartbeat %d should be valid JSON", i)
