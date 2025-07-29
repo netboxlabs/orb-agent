@@ -22,3 +22,21 @@ const (
 
 // State represents the current state of an agent in the system
 type HeartbeatState int
+
+type OrbAgentInfo struct {
+	Version string `json:"version"`
+}
+
+type BackendInfo struct {
+	Version string                 `json:"version"`
+	Data    map[string]interface{} `json:"data"`
+}
+
+const CurrentCapabilitiesSchemaVersion = "1.0"
+
+type Capabilities struct {
+	SchemaVersion string                 `json:"schema_version"`
+	OrbAgent      OrbAgentInfo           `json:"orb_agent"`
+	AgentTags     map[string]string      `json:"agent_tags"`
+	Backends      map[string]BackendInfo `json:"backends"`
+}

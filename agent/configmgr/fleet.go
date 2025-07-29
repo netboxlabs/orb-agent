@@ -20,6 +20,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/messages"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
 // Compile-time check to ensure fleetConfigManager implements Manager interface
@@ -55,14 +56,14 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 
 	// use the token to connect over MQTT v5
-	err = fleetManager.connect(token.MQTTURL, token.AccessToken, token.Topics.Inbox)
+	err = fleetManager.connect(token.MQTTURL, token.AccessToken, token.Topics.Inbox, backends)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName string) error {
+func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName string, backends map[string]backend.Backend) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
@@ -90,6 +91,11 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName s
 					{Topic: topicName, QoS: 1},
 				},
 			})
+			if err != nil {
+				fleetManager.logger.Error("failed to subscribe", "topic", topicName, "error", err)
+			} else {
+				fleetManager.logger.Info("successfully subscribed", "topic", topicName)
+			}
 
 			go fleetManager.heartbeater.sendHeartbeats(context.Background(), context.CancelFunc(nil), func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
@@ -104,11 +110,20 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName s
 				}
 				return nil
 			})
-			if err != nil {
-				fleetManager.logger.Error("failed to subscribe to mytopic", "error", err)
-			} else {
-				fleetManager.logger.Info("successfully subscribed to mytopic")
-			}
+
+			go fleetManager.sendCapabilities(context.Background(), backends, func(ctx context.Context, payload []byte) error {
+				_, err := cm.Publish(ctx, &paho.Publish{
+					Topic:   "capabilities",
+					Payload: payload,
+					QoS:     1,
+					Retain:  false,
+				})
+				if err != nil {
+					// TODO: reconnect?
+					return err
+				}
+				return nil
+			})
 		},
 		OnConnectError: func(err error) {
 			fleetManager.logger.Error("MQTT connection error", "error", err)
@@ -157,6 +172,50 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName s
 	}
 
 	fleetManager.logger.Info("MQTT connection manager started successfully")
+	return nil
+}
+
+func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, publishFunc func(ctx context.Context, payload []byte) error) error {
+
+	capabilities := messages.Capabilities{
+		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
+		// AgentTags:     fleetManager.config.OrbAgent.Tags, // TODO: add tags
+		OrbAgent: messages.OrbAgentInfo{
+			Version: version.GetBuildVersion(),
+		},
+	}
+
+	capabilities.Backends = make(map[string]messages.BackendInfo)
+	for name, be := range backends {
+		ver, err := be.Version()
+		if err != nil {
+			fleetManager.logger.Error("backend failed to retrieve version, skipping", "backend", name, "error", err)
+			continue
+		}
+		cp, err := be.GetCapabilities()
+		if err != nil {
+			fleetManager.logger.Error("backend failed to retrieve capabilities, skipping", "backend", name, "error", err)
+			continue
+		}
+		capabilities.Backends[name] = messages.BackendInfo{
+			Version: ver,
+			Data:    cp,
+		}
+	}
+
+	body, err := json.Marshal(capabilities)
+	if err != nil {
+		fleetManager.logger.Error("backend failed to marshal capabilities, skipping", "error", err)
+		return err
+	}
+
+	fleetManager.logger.Info("sending capabilities", "value", string(body))
+	err = publishFunc(ctx, body)
+	if err != nil {
+		fleetManager.logger.Error("error sending capabilities", "error", err)
+		return err
+	}
+
 	return nil
 }
 
