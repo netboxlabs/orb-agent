@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -395,4 +398,437 @@ func TestHeartbeater_Constants(t *testing.T) {
 	// Test that constants are properly defined
 	assert.Equal(t, 50*time.Second, HeartbeatFreq)
 	assert.Equal(t, 5*time.Minute, RestartTimeMin)
+}
+
+func TestFleetConfigManager_GetToken_Success(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Create mock HTTP server
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request method and headers
+		assert.Equal(t, "POST", r.Method)
+		assert.Equal(t, "application/x-www-form-urlencoded", r.Header.Get("Content-Type"))
+		assert.Contains(t, r.Header.Get("Authorization"), "Basic ")
+
+		// Verify request body
+		err := r.ParseForm()
+		assert.NoError(t, err)
+		assert.Equal(t, "client_credentials", r.Form.Get("grant_type"))
+		assert.Contains(t, r.Form.Get("scope"), "rabbitmq.read")
+		assert.Contains(t, r.Form.Get("scope"), "rabbitmq.write")
+		assert.Contains(t, r.Form.Get("scope"), "rabbitmq.configure")
+
+		// Return valid token response
+		response := tokenResponse{
+			AccessToken: "test_access_token",
+			MQTTURL:     "mqtt://test.example.com:1883",
+			Topics: tokenResponseTopics{
+				Inbox:  "test/inbox",
+				Outbox: "test/outbox",
+			},
+			ExpiresIn: 3600,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Act
+	token, err := fleetManager.getToken(server.URL, "test_client_id", "test_client_secret")
+
+	// Assert
+	require.NoError(t, err)
+	assert.NotNil(t, token)
+	assert.Equal(t, "test_access_token", token.AccessToken)
+	assert.Equal(t, "mqtt://test.example.com:1883", token.MQTTURL)
+	assert.Equal(t, "test/inbox", token.Topics.Inbox)
+	assert.Equal(t, "test/outbox", token.Topics.Outbox)
+	assert.Equal(t, 3600, token.ExpiresIn)
+}
+
+func TestFleetConfigManager_GetToken_HTTPError(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Create mock HTTP server that returns error
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("Unauthorized"))
+	}))
+	defer server.Close()
+
+	// Act
+	token, err := fleetManager.getToken(server.URL, "invalid_client", "invalid_secret")
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "token request failed")
+}
+
+func TestFleetConfigManager_GetToken_InvalidJSON(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Create mock HTTP server that returns invalid JSON
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("invalid json"))
+	}))
+	defer server.Close()
+
+	// Act
+	token, err := fleetManager.getToken(server.URL, "test_client", "test_secret")
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "failed to parse token response")
+}
+
+func TestFleetConfigManager_GetToken_NetworkError(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Act with invalid URL
+	token, err := fleetManager.getToken("http://invalid.nonexistent.url:99999", "test", "test")
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "failed to send request")
+}
+
+func TestFleetConfigManager_GetToken_InvalidURL(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Act with malformed URL
+	token, err := fleetManager.getToken("://invalid-url", "test", "test")
+
+	// Assert
+	assert.Error(t, err)
+	assert.Nil(t, token)
+	assert.Contains(t, err.Error(), "failed to create request")
+}
+
+func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Act with invalid URL
+	err := fleetManager.connect("://invalid-url", "test_token", "test/topic")
+
+	// Assert
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing protocol scheme") // URL parsing error
+}
+
+func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Act with valid URL but don't expect successful connection
+	// since we don't have a real MQTT server
+	err := fleetManager.connect("mqtt://localhost:1883", "test_token", "test/topic")
+
+	// Assert - we expect connection to fail since no server is running,
+	// but URL parsing should succeed
+	assert.Error(t, err)
+	// The actual error could be context deadline exceeded or connection refused
+	assert.True(t,
+		strings.Contains(err.Error(), "context deadline exceeded") ||
+			strings.Contains(err.Error(), "connection refused") ||
+			strings.Contains(err.Error(), "no such host") ||
+			strings.Contains(err.Error(), "server denied connect"),
+		"Expected connection-related error, got: %v", err)
+}
+
+func TestFleetConfigManager_Start_TokenError(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Create config with invalid token URL
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     "http://invalid.nonexistent.url:99999",
+						ClientID:     "test_client",
+						ClientSecret: "test_secret",
+					},
+				},
+			},
+		},
+	}
+
+	backends := make(map[string]backend.Backend)
+
+	// Act
+	err := fleetManager.Start(cfg, backends)
+
+	// Assert
+	assert.Error(t, err)
+}
+
+func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Create mock HTTP server for token endpoint
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := tokenResponse{
+			AccessToken: "test_token",
+			MQTTURL:     "://invalid-mqtt-url", // Invalid MQTT URL
+			Topics: tokenResponseTopics{
+				Inbox:  "test/inbox",
+				Outbox: "test/outbox",
+			},
+			ExpiresIn: 3600,
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     server.URL,
+						ClientID:     "test_client",
+						ClientSecret: "test_secret",
+					},
+				},
+			},
+		},
+	}
+
+	backends := make(map[string]backend.Backend)
+
+	// Act
+	err := fleetManager.Start(cfg, backends)
+
+	// Assert
+	assert.Error(t, err)
+}
+
+func TestFleetConfigManager_DispatchToHandlers(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Act - currently this method is a TODO, so it should not panic
+	payload := []byte(`{"test": "data"}`)
+
+	// This should not panic since it's currently empty implementation
+	fleetManager.dispatchToHandlers("config", payload)
+	fleetManager.dispatchToHandlers("policy", payload)
+	fleetManager.dispatchToHandlers("unknown", payload)
+
+	// Assert - reaching this point means no panic occurred
+	assert.True(t, true, "dispatchToHandlers should handle all message types without panic")
+}
+
+func TestFleetConfigManager_GetContext(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	originalCtx := context.Background()
+	testCtx := context.WithValue(originalCtx, "test_key", "test_value")
+
+	// Act
+	resultCtx := fleetManager.GetContext(testCtx)
+
+	// Assert
+	assert.Equal(t, testCtx, resultCtx, "GetContext should return the context as-is")
+
+	// Verify the context value is preserved
+	assert.Equal(t, "test_value", resultCtx.Value("test_key"))
+}
+
+func TestTokenResponse_Marshaling(t *testing.T) {
+	// Arrange
+	original := tokenResponse{
+		AccessToken: "test_token_123",
+		MQTTURL:     "mqtt://test.example.com:1883",
+		Topics: tokenResponseTopics{
+			Inbox:  "agent/inbox",
+			Outbox: "agent/outbox",
+		},
+		ExpiresIn: 7200,
+	}
+
+	// Act - Marshal to JSON
+	jsonData, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	// Act - Unmarshal back
+	var unmarshaled tokenResponse
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	require.NoError(t, err)
+
+	// Assert
+	assert.Equal(t, original.AccessToken, unmarshaled.AccessToken)
+	assert.Equal(t, original.MQTTURL, unmarshaled.MQTTURL)
+	assert.Equal(t, original.Topics.Inbox, unmarshaled.Topics.Inbox)
+	assert.Equal(t, original.Topics.Outbox, unmarshaled.Topics.Outbox)
+	assert.Equal(t, original.ExpiresIn, unmarshaled.ExpiresIn)
+}
+
+func TestTokenResponseTopics_Marshaling(t *testing.T) {
+	// Arrange
+	original := tokenResponseTopics{
+		Inbox:  "custom/inbox/topic",
+		Outbox: "custom/outbox/topic",
+	}
+
+	// Act
+	jsonData, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var unmarshaled tokenResponseTopics
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	require.NoError(t, err)
+
+	// Assert
+	assert.Equal(t, original.Inbox, unmarshaled.Inbox)
+	assert.Equal(t, original.Outbox, unmarshaled.Outbox)
+}
+
+func TestFleetConfigManager_MessageTypeUserPropertyKey(t *testing.T) {
+	// Test that the message type user property key constant is properly defined
+	assert.Equal(t, "message_type", MessageTypeUserPropertyKey)
+}
+
+func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
+	// This test verifies the happy path integration but without actual MQTT connection
+	// due to complexity of mocking MQTT server
+
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Create mock HTTP server for successful token response
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := tokenResponse{
+			AccessToken: "integration_test_token",
+			MQTTURL:     "mqtt://localhost:1883", // Valid but non-existent
+			Topics: tokenResponseTopics{
+				Inbox:  "integration/inbox",
+				Outbox: "integration/outbox",
+			},
+			ExpiresIn: 3600,
+		}
+		json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Act - test token retrieval part of the flow
+	token, err := fleetManager.getToken(server.URL, "integration_client", "integration_secret")
+
+	// Assert - token retrieval should succeed
+	require.NoError(t, err)
+	assert.Equal(t, "integration_test_token", token.AccessToken)
+	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
+	assert.Equal(t, "integration/inbox", token.Topics.Inbox)
+
+	// Note: We don't test the full Start() method here because it would require
+	// a real MQTT broker, but we've verified the token retrieval part works
+}
+
+func TestFleetConfigManager_CompilerInterfaceCheck(t *testing.T) {
+	// This test ensures that fleetConfigManager implements the Manager interface
+	// The actual check is done at compile time with: var _ Manager = (*fleetConfigManager)(nil)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Verify that fleetManager can be assigned to Manager interface
+	var manager Manager = fleetManager
+	assert.NotNil(t, manager)
+
+	// Verify that all Manager interface methods are available
+	ctx := context.Background()
+	resultCtx := manager.GetContext(ctx)
+	assert.NotNil(t, resultCtx)
+}
+
+// Test edge cases for heartbeater ticker cleanup
+func TestFleetConfigManager_HeartbeaterTickerCleanup(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+
+	// Act
+	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+
+	// Verify ticker is created
+	assert.NotNil(t, fleetManager.heartbeater.hbTicker)
+
+	// Stop ticker to clean up
+	fleetManager.heartbeater.hbTicker.Stop()
+
+	// Assert - no panic should occur
+	assert.True(t, true, "Ticker cleanup should not cause issues")
+}
+
+// Test multiple fleetConfigManager instances
+func TestFleetConfigManager_MultipleInstances(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr1 := &mockPolicyManagerForFleet{}
+	mockPMgr2 := &mockPolicyManagerForFleet{}
+
+	// Act
+	manager1 := NewFleetConfigManager(logger, mockPMgr1)
+	manager2 := NewFleetConfigManager(logger, mockPMgr2)
+
+	// Assert
+	assert.NotEqual(t, manager1, manager2, "Different instances should be created")
+	assert.NotEqual(t, manager1.heartbeater, manager2.heartbeater, "Each should have separate heartbeater")
+	assert.NotEqual(t, manager1.heartbeater.hbTicker, manager2.heartbeater.hbTicker, "Each should have separate ticker")
+
+	// Cleanup
+	manager1.heartbeater.hbTicker.Stop()
+	manager2.heartbeater.hbTicker.Stop()
 }
