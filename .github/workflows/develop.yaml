@@ -1,6 +1,8 @@
 name: Orb Agent - develop
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [ develop ]
   push:
     branches: [ develop ]
     paths:
@@ -18,17 +20,9 @@ env:
 jobs:
     build-and-push:
       runs-on: ubuntu-latest
-      strategy:
-        fail-fast: false
       steps:
         - name: Checkout
           uses: actions/checkout@v4
-
-        - name: Set up QEMU
-          uses: docker/setup-qemu-action@4574d27a4764455b42196d70a065bc6853246a25 #v3.4.0
-
-        - name: Set up Docker Buildx
-          uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca #v3.9.0
 
         - name: Login to Docker Hub
           uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3.3.0
@@ -51,6 +45,12 @@ jobs:
             registry: netboxlabs.jfrog.io
             username: ${{ steps.setup-jfrog-cli.outputs.oidc-user }}
             password: ${{ steps.setup-jfrog-cli.outputs.oidc-token }}
+
+        - name: Set up QEMU
+          uses: docker/setup-qemu-action@4574d27a4764455b42196d70a065bc6853246a25 #v3.4.0
+
+        - name: Set up Docker Buildx
+          uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca #v3.9.0
 
         - name: Verify QEMU installation
           run: |
