@@ -177,15 +177,15 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
-	if err = a.startBackends(ctx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
-		return err
-	}
+	// if err = a.startBackends(ctx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
+	// 	return err
+	// }
 
 	if err = a.configManager.Start(a.config, a.backends); err != nil {
 		return err
 	}
 
-	a.logonWithHeartbeat()
+	// a.logonWithHeartbeat()
 
 	return nil
 }

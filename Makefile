@@ -50,6 +50,10 @@ test-coverage:
 	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep total | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 
+.PHONY: test
+test:
+	@go test -race ./... 
+
 .PHONY: lint
 lint:
 	@golangci-lint run ./... --config .github/golangci.yaml
@@ -60,6 +64,16 @@ fix-lint:
 
 agent:
 	docker build --no-cache \
+	  --build-arg GOARCH=$(GOARCH) \
+	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
+	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
+	  -f agent/docker/Dockerfile .
+
+agent_fast:
+	docker build \
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \

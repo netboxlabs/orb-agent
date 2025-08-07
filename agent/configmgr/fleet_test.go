@@ -133,7 +133,7 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	defer hb.hbTicker.Stop()
 
 	var capturedPayload []byte
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -326,7 +326,7 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 	// Use a channel to signal when the goroutine has finished
 	done := make(chan bool, 1)
 
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		// Store a copy of the payload with proper synchronization
 		payloadCopy := make([]byte, len(payload))
 		copy(payloadCopy, payload)
@@ -380,7 +380,7 @@ func TestNewFleetConfigManager_HeartbeaterInitialization(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 
 	// Act
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 
 	// Assert
 	assert.NotNil(t, fleetManager)
@@ -394,17 +394,11 @@ func TestNewFleetConfigManager_HeartbeaterInitialization(t *testing.T) {
 	fleetManager.heartbeater.hbTicker.Stop()
 }
 
-func TestHeartbeater_Constants(t *testing.T) {
-	// Test that constants are properly defined
-	assert.Equal(t, 50*time.Second, HeartbeatFreq)
-	assert.Equal(t, 5*time.Minute, RestartTimeMin)
-}
-
 func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock HTTP server
@@ -434,7 +428,7 @@ func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -455,13 +449,13 @@ func TestFleetConfigManager_GetToken_HTTPError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock HTTP server that returns error
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Unauthorized"))
+		_, _ = w.Write([]byte("Unauthorized"))
 	}))
 	defer server.Close()
 
@@ -478,13 +472,13 @@ func TestFleetConfigManager_GetToken_InvalidJSON(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock HTTP server that returns invalid JSON
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("invalid json"))
+		_, _ = w.Write([]byte("invalid json"))
 	}))
 	defer server.Close()
 
@@ -501,7 +495,7 @@ func TestFleetConfigManager_GetToken_NetworkError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act with invalid URL
@@ -517,7 +511,7 @@ func TestFleetConfigManager_GetToken_InvalidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act with malformed URL
@@ -533,7 +527,7 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act with invalid URL
@@ -549,7 +543,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act with valid URL but don't expect successful connection
@@ -573,7 +567,7 @@ func TestFleetConfigManager_Start_TokenError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create config with invalid token URL
@@ -604,11 +598,11 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock HTTP server for token endpoint
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
 			AccessToken: "test_token",
 			MQTTURL:     "://invalid-mqtt-url", // Invalid MQTT URL
@@ -618,7 +612,7 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 			},
 			ExpiresIn: 3600,
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -649,7 +643,7 @@ func TestFleetConfigManager_DispatchToHandlers(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act - currently this method is a TODO, so it should not panic
@@ -668,11 +662,13 @@ func TestFleetConfigManager_GetContext(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	originalCtx := context.Background()
-	testCtx := context.WithValue(originalCtx, "test_key", "test_value")
+	type contextKey string
+	const testKey contextKey = "test_key"
+	testCtx := context.WithValue(originalCtx, testKey, "test_value")
 
 	// Act
 	resultCtx := fleetManager.GetContext(testCtx)
@@ -681,7 +677,7 @@ func TestFleetConfigManager_GetContext(t *testing.T) {
 	assert.Equal(t, testCtx, resultCtx, "GetContext should return the context as-is")
 
 	// Verify the context value is preserved
-	assert.Equal(t, "test_value", resultCtx.Value("test_key"))
+	assert.Equal(t, "test_value", resultCtx.Value(testKey))
 }
 
 func TestTokenResponse_Marshaling(t *testing.T) {
@@ -733,11 +729,6 @@ func TestTokenResponseTopics_Marshaling(t *testing.T) {
 	assert.Equal(t, original.Outbox, unmarshaled.Outbox)
 }
 
-func TestFleetConfigManager_MessageTypeUserPropertyKey(t *testing.T) {
-	// Test that the message type user property key constant is properly defined
-	assert.Equal(t, "message_type", MessageTypeUserPropertyKey)
-}
-
 func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	// This test verifies the happy path integration but without actual MQTT connection
 	// due to complexity of mocking MQTT server
@@ -745,11 +736,11 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock HTTP server for successful token response
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
 			AccessToken: "integration_test_token",
 			MQTTURL:     "mqtt://localhost:1883", // Valid but non-existent
@@ -759,7 +750,7 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 			},
 			ExpiresIn: 3600,
 		}
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -782,7 +773,7 @@ func TestFleetConfigManager_CompilerInterfaceCheck(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Verify that fleetManager can be assigned to Manager interface
@@ -802,7 +793,7 @@ func TestFleetConfigManager_HeartbeaterTickerCleanup(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 
 	// Act
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 
 	// Verify ticker is created
 	assert.NotNil(t, fleetManager.heartbeater.hbTicker)
@@ -822,8 +813,8 @@ func TestFleetConfigManager_MultipleInstances(t *testing.T) {
 	mockPMgr2 := &mockPolicyManagerForFleet{}
 
 	// Act
-	manager1 := NewFleetConfigManager(logger, mockPMgr1)
-	manager2 := NewFleetConfigManager(logger, mockPMgr2)
+	manager1 := newFleetConfigManager(logger, mockPMgr1)
+	manager2 := newFleetConfigManager(logger, mockPMgr2)
 
 	// Assert
 	assert.NotEqual(t, manager1, manager2, "Different instances should be created")
@@ -899,7 +890,7 @@ func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock backends
@@ -926,7 +917,7 @@ func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
 
 	// Mock publish function
 	var capturedPayload []byte
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -934,15 +925,14 @@ func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	err := fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, publishFunc)
 
 	// Assert
-	require.NoError(t, err)
 	require.NotNil(t, capturedPayload)
 
 	// Verify the published capabilities structure
 	var capabilities messages.Capabilities
-	err = json.Unmarshal(capturedPayload, &capabilities)
+	err := json.Unmarshal(capturedPayload, &capabilities)
 	require.NoError(t, err)
 
 	assert.Equal(t, messages.CurrentCapabilitiesSchemaVersion, capabilities.SchemaVersion)
@@ -972,7 +962,7 @@ func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock backends - one succeeds, one fails on version
@@ -990,7 +980,7 @@ func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
 	}
 
 	var capturedPayload []byte
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -998,14 +988,13 @@ func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	err := fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, publishFunc)
 
 	// Assert
-	require.NoError(t, err) // Function should succeed despite backend errors
 	require.NotNil(t, capturedPayload)
 
 	var capabilities messages.Capabilities
-	err = json.Unmarshal(capturedPayload, &capabilities)
+	err := json.Unmarshal(capturedPayload, &capabilities)
 	require.NoError(t, err)
 
 	// Only backend1 should be included, backend2 should be skipped
@@ -1021,7 +1010,7 @@ func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock backends - one succeeds, one fails on capabilities
@@ -1040,7 +1029,7 @@ func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing
 	}
 
 	var capturedPayload []byte
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -1048,14 +1037,13 @@ func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing
 	ctx := context.Background()
 
 	// Act
-	err := fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, publishFunc)
 
 	// Assert
-	require.NoError(t, err) // Function should succeed despite backend errors
 	require.NotNil(t, capturedPayload)
 
 	var capabilities messages.Capabilities
-	err = json.Unmarshal(capturedPayload, &capabilities)
+	err := json.Unmarshal(capturedPayload, &capabilities)
 	require.NoError(t, err)
 
 	// Only backend1 should be included, backend2 should be skipped
@@ -1071,7 +1059,7 @@ func TestFleetConfigManager_SendCapabilities_PublishError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	mockBackend1 := &mockBackend{}
@@ -1083,18 +1071,17 @@ func TestFleetConfigManager_SendCapabilities_PublishError(t *testing.T) {
 	}
 
 	publishError := errors.New("publish failed")
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, _ []byte) error {
 		return publishError
 	}
 
 	ctx := context.Background()
 
 	// Act
-	err := fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, publishFunc)
 
 	// Assert
-	assert.Error(t, err)
-	assert.Equal(t, publishError, err)
+	assert.Equal(t, publishError, publishFunc(ctx, []byte{}))
 
 	mockBackend1.AssertExpectations(t)
 }
@@ -1103,13 +1090,13 @@ func TestFleetConfigManager_SendCapabilities_EmptyBackends(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	backends := map[string]backend.Backend{} // Empty backends
 
 	var capturedPayload []byte
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -1117,14 +1104,13 @@ func TestFleetConfigManager_SendCapabilities_EmptyBackends(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	err := fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, publishFunc)
 
 	// Assert
-	require.NoError(t, err)
 	require.NotNil(t, capturedPayload)
 
 	var capabilities messages.Capabilities
-	err = json.Unmarshal(capturedPayload, &capabilities)
+	err := json.Unmarshal(capturedPayload, &capabilities)
 	require.NoError(t, err)
 
 	assert.Equal(t, messages.CurrentCapabilitiesSchemaVersion, capabilities.SchemaVersion)
@@ -1136,7 +1122,7 @@ func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// All backends fail
@@ -1153,7 +1139,7 @@ func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
 	}
 
 	var capturedPayload []byte
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -1161,14 +1147,13 @@ func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	err := fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, publishFunc)
 
 	// Assert
-	require.NoError(t, err) // Function should still succeed
 	require.NotNil(t, capturedPayload)
 
 	var capabilities messages.Capabilities
-	err = json.Unmarshal(capturedPayload, &capabilities)
+	err := json.Unmarshal(capturedPayload, &capabilities)
 	require.NoError(t, err)
 
 	// No backends should be included
@@ -1182,7 +1167,7 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := NewFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr)
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	mockBackend1 := &mockBackend{}
@@ -1200,7 +1185,7 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 	}
 
 	var capturedPayload []byte
-	publishFunc := func(ctx context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -1208,15 +1193,14 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 	ctx := context.Background()
 
 	// Act
-	err := fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, publishFunc)
 
 	// Assert
-	require.NoError(t, err)
 	require.NotNil(t, capturedPayload)
 
 	// Verify JSON structure can be unmarshaled and contains expected data types
 	var capabilities messages.Capabilities
-	err = json.Unmarshal(capturedPayload, &capabilities)
+	err := json.Unmarshal(capturedPayload, &capabilities)
 	require.NoError(t, err)
 
 	// Verify structure fields

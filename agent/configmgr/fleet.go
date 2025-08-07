@@ -16,6 +16,7 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/messages"
@@ -32,21 +33,22 @@ type fleetConfigManager struct {
 	heartbeater *heartbeater
 }
 
-func NewFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
+const (
+	heartbeatFreq              = 5 * time.Second
+	messageTypeUserPropertyKey = "message_type"
+)
+
+func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
 	return &fleetConfigManager{
 		logger: logger,
 		pMgr:   pMgr,
 		heartbeater: &heartbeater{
 			logger:       logger,
-			hbTicker:     time.NewTicker(HeartbeatFreq),
+			hbTicker:     time.NewTicker(heartbeatFreq),
 			heartbeatCtx: context.Background(),
 		},
 	}
 }
-
-const (
-	MessageTypeUserPropertyKey = "message_type"
-)
 
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	// call the token url to get the token
@@ -56,14 +58,14 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 
 	// use the token to connect over MQTT v5
-	err = fleetManager.connect(token.MQTTURL, token.AccessToken, token.Topics.Inbox, backends)
+	err = fleetManager.connect(token.MQTTURL, token.AccessToken, token.Topics, backends)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName string, backends map[string]backend.Backend) error {
+func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
@@ -79,51 +81,60 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName s
 		KeepAlive:                     30,
 		CleanStartOnInitialConnection: true,
 		ConnectTimeout:                10 * time.Second,
-		ReconnectBackoff: func(attempts int) time.Duration {
+		ReconnectBackoff: func(_ int) time.Duration {
 			return 10 * time.Second
 		},
-		OnConnectionUp: func(cm *autopaho.ConnectionManager, connAck *paho.Connack) {
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			fleetManager.logger.Info("MQTT connection established", "server", serverURL.String())
 
 			// Subscribe to "mytopic" when connection is established
-			_, err := cm.Subscribe(context.Background(), &paho.Subscribe{
-				Subscriptions: []paho.SubscribeOptions{
-					{Topic: topicName, QoS: 1},
-				},
-			})
-			if err != nil {
-				fleetManager.logger.Error("failed to subscribe", "topic", topicName, "error", err)
-			} else {
-				fleetManager.logger.Info("successfully subscribed", "topic", topicName)
-			}
+			// _, err := cm.Subscribe(context.Background(), &paho.Subscribe{
+			// 	Subscriptions: []paho.SubscribeOptions{
+			// 		{Topic: topics.Inbox, QoS: 1},
+			// 	},
+			// })
+			// if err != nil {
+			// 	fleetManager.logger.Error("failed to subscribe", "topic", topics.Inbox, "error", err)
+			// } else {
+			// 	fleetManager.logger.Info("successfully subscribed", "topic", topics.Inbox)
+			// }
 
-			go fleetManager.heartbeater.sendHeartbeats(context.Background(), context.CancelFunc(nil), func(ctx context.Context, payload []byte) error {
-				_, err := cm.Publish(ctx, &paho.Publish{
-					Topic:   "heartbeat",
+			fleetManager.heartbeater.sendHeartbeats(context.Background(), context.CancelFunc(nil), func(ctx context.Context, payload []byte) error {
+				publishResponse, err := cm.Publish(ctx, &paho.Publish{
+					Topic:   topics.Heartbeat,
 					Payload: payload,
 					QoS:     1,
 					Retain:  false,
 				})
 				if err != nil {
+					fleetManager.logger.Error("failed to publish heartbeat", "error", err)
 					// TODO: reconnect?
 					return err
 				}
+				if publishResponse.ReasonCode != 0 {
+					fleetManager.logger.Debug("failed to publish heartbeat", "reason_code", publishResponse.ReasonCode, "topic", topics.Heartbeat)
+					return fmt.Errorf("reason code indicates failure: %d", publishResponse.ReasonCode)
+				}
+				fleetManager.logger.Debug("heartbeat sent",
+					"topic", topics.Heartbeat,
+					"payload", string(payload),
+				)
 				return nil
 			})
 
-			go fleetManager.sendCapabilities(context.Background(), backends, func(ctx context.Context, payload []byte) error {
-				_, err := cm.Publish(ctx, &paho.Publish{
-					Topic:   "capabilities",
-					Payload: payload,
-					QoS:     1,
-					Retain:  false,
-				})
-				if err != nil {
-					// TODO: reconnect?
-					return err
-				}
-				return nil
-			})
+			// go fleetManager.sendCapabilities(context.Background(), backends, func(ctx context.Context, payload []byte) error {
+			// 	_, err := cm.Publish(ctx, &paho.Publish{
+			// 		Topic:   topics.Heartbeat,
+			// 		Payload: payload,
+			// 		QoS:     1,
+			// 		Retain:  false,
+			// 	})
+			// 	if err != nil {
+			// 		// TODO: reconnect?
+			// 		return err
+			// 	}
+			// 	return nil
+			// })
 		},
 		OnConnectError: func(err error) {
 			fleetManager.logger.Error("MQTT connection error", "error", err)
@@ -132,7 +143,7 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName s
 			ClientID: clientID,
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
 				func(pr paho.PublishReceived) (bool, error) {
-					messageType := pr.Packet.Properties.User.Get(MessageTypeUserPropertyKey)
+					messageType := pr.Packet.Properties.User.Get(messageTypeUserPropertyKey)
 					// Log any published messages to subscribed topics
 					fleetManager.logger.Info("received MQTT message",
 						"topic", pr.Packet.Topic,
@@ -151,6 +162,10 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName s
 	if token != "" {
 		cfg.ConnectUsername = "token" // Using token as username, adjust as needed for your auth scheme
 		cfg.ConnectPassword = []byte(token)
+	} else {
+		// TODO: remove these temporary credentials
+		cfg.ConnectUsername = "admin"
+		cfg.ConnectPassword = []byte("admin")
 	}
 
 	// Create and start the connection manager
@@ -175,8 +190,7 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token, topicName s
 	return nil
 }
 
-func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, publishFunc func(ctx context.Context, payload []byte) error) error {
-
+func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, publishFunc func(ctx context.Context, payload []byte) error) {
 	capabilities := messages.Capabilities{
 		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
 		// AgentTags:     fleetManager.config.OrbAgent.Tags, // TODO: add tags
@@ -206,17 +220,14 @@ func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, ba
 	body, err := json.Marshal(capabilities)
 	if err != nil {
 		fleetManager.logger.Error("backend failed to marshal capabilities, skipping", "error", err)
-		return err
+		return
 	}
 
 	fleetManager.logger.Info("sending capabilities", "value", string(body))
 	err = publishFunc(ctx, body)
 	if err != nil {
 		fleetManager.logger.Error("error sending capabilities", "error", err)
-		return err
 	}
-
-	return nil
 }
 
 type heartbeater struct {
@@ -225,13 +236,7 @@ type heartbeater struct {
 	heartbeatCtx context.Context
 }
 
-// HeartbeatFreq how often to heartbeat
-const HeartbeatFreq = 50 * time.Second
-
-// RestartTimeMin minimum time to wait between restarts
-const RestartTimeMin = 5 * time.Minute
-
-func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, t time.Time, agentsState messages.HeartbeatState) {
+func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, _ time.Time, _ messages.HeartbeatState) {
 	hbData := messages.Heartbeat{
 		AgentID: "orb-agent",
 		Version: "1.0.0",
@@ -245,6 +250,8 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func
 
 	if err := publishFunc(ctx, body); err != nil {
 		hb.logger.Error("error sending heartbeat", "error", err)
+	} else {
+		hb.logger.Debug("heartbeat sent", "payload", string(body))
 	}
 }
 
@@ -267,7 +274,7 @@ func (hb *heartbeater) sendHeartbeats(ctx context.Context, cancelFunc context.Ca
 	}
 }
 
-func (fleetManager *fleetConfigManager) dispatchToHandlers(messageType string, payload []byte) {
+func (fleetManager *fleetConfigManager) dispatchToHandlers(_ string, _ []byte) {
 	// TODO: dispatch to handlers
 	// switch messageType {
 	// case "config":
@@ -278,8 +285,9 @@ func (fleetManager *fleetConfigManager) dispatchToHandlers(messageType string, p
 }
 
 type tokenResponseTopics struct {
-	Inbox  string `json:"inbox"`
-	Outbox string `json:"outbox"`
+	Heartbeat string `json:"heartbeat"`
+	Inbox     string `json:"inbox"`
+	Outbox    string `json:"outbox"`
 }
 
 type tokenResponse struct {
@@ -321,7 +329,11 @@ func (fleetManager *fleetConfigManager) getToken(tokenURL string, clientID strin
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fleetManager.logger.Error("failed to close response body", "error", err)
+		}
+	}()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
