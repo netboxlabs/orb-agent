@@ -30,34 +30,17 @@ type Agent interface {
 }
 
 type orbAgent struct {
-	logger            *slog.Logger
-	config            config.Config
-	backends          map[string]backend.Backend
-	backendState      map[string]*backend.State
-	backendsCommon    config.BackendCommons
-	cancelFunction    context.CancelFunc
-	rpcFromCancelFunc context.CancelFunc
-
-	asyncContext context.Context
-
-	heartbeatCtx    context.Context
-	heartbeatCancel context.CancelFunc
-
-	// Retry Mechanism to ensure the Request is received
-	groupRequestSucceeded  context.CancelFunc
-	policyRequestSucceeded context.CancelFunc
-
-	// AgentGroup channels sent from core
-	groupsInfos map[string]groupInfo
+	logger         *slog.Logger
+	config         config.Config
+	backends       map[string]backend.Backend
+	backendState   map[string]*backend.State
+	backendsCommon config.BackendCommons
+	ctx            context.Context
+	cancelFunction context.CancelFunc
 
 	policyManager  policymgr.PolicyManager
 	configManager  configmgr.Manager
 	secretsManager secretsmgr.Manager
-}
-
-type groupInfo struct {
-	Name      string
-	ChannelID string
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -75,11 +58,17 @@ func New(logger *slog.Logger, c config.Config) (Agent, error) {
 		return nil, err
 	}
 
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active)
+	// Pass a background context to the config manager at construction time. The
+	// manager keeps its own copy and later derives child contexts from the
+	// runtime context supplied in Agent.Start.
+	cm := configmgr.New(context.Background(), logger, pm, c.OrbAgent.ConfigManager.Active)
 
 	return &orbAgent{
-		logger: logger, config: c, policyManager: pm, configManager: cm,
-		secretsManager: sm, groupsInfos: make(map[string]groupInfo),
+		logger:         logger,
+		config:         c,
+		policyManager:  pm,
+		configManager:  cm,
+		secretsManager: sm,
 	}, nil
 }
 
@@ -88,6 +77,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	if len(cfgBackends) == 0 {
 		return errors.New("no backends specified")
 	}
+	a.ctx = agentCtx
 	a.backends = make(map[string]backend.Backend, len(cfgBackends))
 	a.backendState = make(map[string]*backend.State)
 
@@ -135,8 +125,11 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 			Status:        initialState,
 			LastRestartTS: time.Now(),
 		}
-		if err := be.Start(context.WithCancel(backendCtx)); err != nil {
-			a.logger.Info("failed to start backend", slog.String("backend", name), slog.Any("error", err))
+		// Create a cancellable context for the backend and ensure we pass both
+		// the context and its cancel function to Start, matching the Backend
+		// interface.
+		runCtx, cancel := context.WithCancel(backendCtx)
+		if err := be.Start(runCtx, cancel); err != nil {
 			var errMessage string
 			if initialState == backend.BackendError {
 				errMessage = err.Error()
@@ -158,9 +151,6 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		a.logger.Debug("Startup of agent execution duration", slog.String("Start() execution duration", time.Since(t).String()))
 	}(startTime)
 	agentCtx := context.WithValue(ctx, routineKey, "agentRoutine")
-	asyncCtx, cancelAllAsync := context.WithCancel(context.WithValue(ctx, routineKey, "asyncParent"))
-	a.asyncContext = asyncCtx
-	a.rpcFromCancelFunc = cancelAllAsync
 	a.cancelFunction = cancelFunc
 	a.logger.Info("agent started", slog.String("version", version.GetBuildVersion()), slog.Any("routine", agentCtx.Value(routineKey)))
 	a.logger.Info("requested backends", slog.Any("values", a.config.OrbAgent.Backends))
@@ -177,7 +167,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
-	if err = a.startBackends(ctx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
+	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
 		return err
 	}
 
@@ -185,28 +175,11 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
-	// a.logonWithHeartbeat()
-
 	return nil
-}
-
-func (a *orbAgent) logonWithHeartbeat() {
-	a.heartbeatCtx, a.heartbeatCancel = a.extendContext("heartbeat")
-	a.logger.Info("heartbeat routine started")
-}
-
-func (a *orbAgent) logoffWithHeartbeat(ctx context.Context) {
-	a.logger.Debug("stopping heartbeat, going offline status", slog.Any("routine", ctx.Value(routineKey)))
-	if a.heartbeatCtx != nil {
-		a.heartbeatCancel()
-	}
 }
 
 func (a *orbAgent) Stop(ctx context.Context) {
 	a.logger.Info("routine call for stop agent", slog.Any("routine", ctx.Value(routineKey)))
-	if a.rpcFromCancelFunc != nil {
-		a.rpcFromCancelFunc()
-	}
 	for name, b := range a.backends {
 		if state, _, _ := b.GetRunningStatus(); state == backend.Running {
 			a.logger.Debug("stopping backend", slog.String("backend", name))
@@ -215,14 +188,7 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			}
 		}
 	}
-	a.logoffWithHeartbeat(ctx)
 	a.logger.Debug("stopping agent with number of go routines and go calls", slog.Int("goroutines", runtime.NumGoroutine()), slog.Int64("gocalls", runtime.NumCgoCall()))
-	if a.policyRequestSucceeded != nil {
-		a.policyRequestSucceeded()
-	}
-	if a.groupRequestSucceeded != nil {
-		a.groupRequestSucceeded()
-	}
 	defer a.cancelFunction()
 }
 
@@ -263,7 +229,6 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 
 func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
 	ctx = a.configManager.GetContext(ctx)
-	a.logoffWithHeartbeat(ctx)
 	a.logger.Info("restarting comms", slog.String("reason", reason))
 	for name := range a.backends {
 		a.logger.Info("restarting backend", slog.String("backend", name), slog.String("reason", reason))
@@ -280,5 +245,5 @@ func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
 func (a *orbAgent) extendContext(routine string) (context.Context, context.CancelFunc) {
 	uuidTraceID := uuid.NewString()
 	a.logger.Debug("creating context for receiving message", slog.String("routine", routine), slog.String("trace-id", uuidTraceID))
-	return context.WithCancel(context.WithValue(context.WithValue(a.asyncContext, routineKey, routine), config.ContextKey("trace-id"), uuidTraceID))
+	return context.WithCancel(context.WithValue(context.WithValue(a.ctx, routineKey, routine), config.ContextKey("trace-id"), uuidTraceID))
 }

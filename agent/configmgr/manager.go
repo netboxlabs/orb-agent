@@ -16,14 +16,14 @@ type Manager interface {
 }
 
 // New creates a new instance of ConfigManager based on the configuration
-func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string) Manager {
+func New(ctx context.Context, logger *slog.Logger, pMgr policymgr.PolicyManager, active string) Manager {
 	switch active {
 	case "local":
 		return &localConfigManager{logger: logger, pMgr: pMgr}
 	case "git":
 		return &gitConfigManager{logger: logger, pMgr: pMgr}
 	case "fleet":
-		return newFleetConfigManager(logger, pMgr)
+		return newFleetConfigManagerWithContext(ctx, logger, pMgr)
 	default:
 		return &localConfigManager{logger: logger, pMgr: pMgr}
 	}

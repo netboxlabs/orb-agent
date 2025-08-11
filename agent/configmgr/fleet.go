@@ -38,16 +38,67 @@ const (
 	messageTypeUserPropertyKey = "message_type"
 )
 
-func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
+type heartbeater struct {
+	logger       *slog.Logger
+	hbTicker     *time.Ticker
+	heartbeatCtx context.Context
+}
+
+func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, _ time.Time, _ messages.HeartbeatState) {
+	hbData := messages.Heartbeat{
+		AgentID: "orb-agent",
+		Version: "1.0.0",
+	}
+
+	body, err := json.Marshal(hbData)
+	if err != nil {
+		hb.logger.Error("error marshalling heartbeat", "error", err)
+		return
+	}
+
+	if err := publishFunc(ctx, body); err != nil {
+		hb.logger.Error("error sending heartbeat", "error", err)
+	} else {
+		hb.logger.Debug("heartbeat sent", "payload", string(body))
+	}
+}
+
+func (hb *heartbeater) sendHeartbeats(publishFunc func(ctx context.Context, payload []byte) error) {
+	hb.logger.Debug("start heartbeats routine", slog.Any("routine", hb.heartbeatCtx.Value("routine")))
+	hb.sendSingleHeartbeat(hb.heartbeatCtx, publishFunc, time.Now(), messages.Online)
+	for {
+		select {
+		case <-hb.heartbeatCtx.Done():
+			hb.logger.Debug("context done, stopping heartbeats routine")
+			hb.sendSingleHeartbeat(hb.heartbeatCtx, publishFunc, time.Now(), messages.Offline)
+			hb.heartbeatCtx = nil
+			return
+		case t := <-hb.hbTicker.C:
+			hb.sendSingleHeartbeat(hb.heartbeatCtx, publishFunc, t, messages.Online)
+		}
+	}
+}
+
+func newFleetConfigManagerWithContext(ctx context.Context, logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
+	// The passed ctx represents the lifecycle of the fleet configuration
+	// manager.  All child goroutines (heartbeat, MQTT, etc.) inherit from it so
+	// that a single cancellation propagates everywhere.
 	return &fleetConfigManager{
 		logger: logger,
 		pMgr:   pMgr,
 		heartbeater: &heartbeater{
 			logger:       logger,
 			hbTicker:     time.NewTicker(heartbeatFreq),
-			heartbeatCtx: context.Background(),
+			heartbeatCtx: ctx,
 		},
 	}
+}
+
+// newFleetConfigManager is a backward-compatibility shim for existing callers
+// (primarily unit tests) that do not pass a context. It creates a manager that
+// uses a background context.
+func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
+	return newFleetConfigManagerWithContext(context.Background(), logger, pMgr)
 }
 
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
@@ -65,7 +116,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	return nil
 }
 
-func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
+func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
@@ -99,7 +150,7 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topi
 			// 	fleetManager.logger.Info("successfully subscribed", "topic", topics.Inbox)
 			// }
 
-			fleetManager.heartbeater.sendHeartbeats(context.Background(), context.CancelFunc(nil), func(ctx context.Context, payload []byte) error {
+			fleetManager.heartbeater.sendHeartbeats(func(ctx context.Context, payload []byte) error {
 				publishResponse, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Heartbeat,
 					Payload: payload,
@@ -122,19 +173,19 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topi
 				return nil
 			})
 
-			// go fleetManager.sendCapabilities(context.Background(), backends, func(ctx context.Context, payload []byte) error {
-			// 	_, err := cm.Publish(ctx, &paho.Publish{
-			// 		Topic:   topics.Heartbeat,
-			// 		Payload: payload,
-			// 		QoS:     1,
-			// 		Retain:  false,
-			// 	})
-			// 	if err != nil {
-			// 		// TODO: reconnect?
-			// 		return err
-			// 	}
-			// 	return nil
-			// })
+			go fleetManager.sendCapabilities(ctx, backends, func(ctx context.Context, payload []byte) error {
+				_, err := cm.Publish(ctx, &paho.Publish{
+					Topic:   topics.Capabilities,
+					Payload: payload,
+					QoS:     1,
+					Retain:  false,
+				})
+				if err != nil {
+					// TODO: reconnect?
+					return err
+				}
+				return nil
+			})
 		},
 		OnConnectError: func(err error) {
 			fleetManager.logger.Error("MQTT connection error", "error", err)
@@ -168,19 +219,19 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topi
 		cfg.ConnectPassword = []byte("admin")
 	}
 
-	// Create and start the connection manager
-	ctx := context.Background()
+	// Create and start the connection manager using the long-lived context.
 	connectionManager, err := autopaho.NewConnection(ctx, cfg)
 	if err != nil {
 		fleetManager.logger.Error("failed to create MQTT connection", "error", err)
 		return err
 	}
 
-	// Wait for initial connection (with timeout)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Wait for the initial connection; bound this operation with a timeout that
+	// is still cancellable from the parent.
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	err = connectionManager.AwaitConnection(ctx)
+	err = connectionManager.AwaitConnection(waitCtx)
 	if err != nil {
 		fleetManager.logger.Error("failed to establish initial MQTT connection", "error", err)
 		return err
@@ -188,6 +239,12 @@ func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topi
 
 	fleetManager.logger.Info("MQTT connection manager started successfully")
 	return nil
+}
+
+// connect is a backward-compatibility shim that invokes connectWithContext with
+// the fleet manager’s root context.
+func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
+	return fleetManager.connectWithContext(fleetManager.heartbeater.heartbeatCtx, fleetMQTTURL, token, topics, backends)
 }
 
 func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, publishFunc func(ctx context.Context, payload []byte) error) {
@@ -230,50 +287,6 @@ func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, ba
 	}
 }
 
-type heartbeater struct {
-	logger       *slog.Logger
-	hbTicker     *time.Ticker
-	heartbeatCtx context.Context
-}
-
-func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, _ time.Time, _ messages.HeartbeatState) {
-	hbData := messages.Heartbeat{
-		AgentID: "orb-agent",
-		Version: "1.0.0",
-	}
-
-	body, err := json.Marshal(hbData)
-	if err != nil {
-		hb.logger.Error("error marshalling heartbeat", "error", err)
-		return
-	}
-
-	if err := publishFunc(ctx, body); err != nil {
-		hb.logger.Error("error sending heartbeat", "error", err)
-	} else {
-		hb.logger.Debug("heartbeat sent", "payload", string(body))
-	}
-}
-
-func (hb *heartbeater) sendHeartbeats(ctx context.Context, cancelFunc context.CancelFunc, publishFunc func(ctx context.Context, payload []byte) error) {
-	hb.logger.Debug("start heartbeats routine", slog.Any("routine", ctx.Value("routine")))
-	hb.sendSingleHeartbeat(ctx, publishFunc, time.Now(), messages.Online)
-	defer func() {
-		cancelFunc()
-	}()
-	for {
-		select {
-		case <-ctx.Done():
-			hb.logger.Debug("context done, stopping heartbeats routine")
-			hb.sendSingleHeartbeat(ctx, publishFunc, time.Now(), messages.Offline)
-			hb.heartbeatCtx = nil
-			return
-		case t := <-hb.hbTicker.C:
-			hb.sendSingleHeartbeat(ctx, publishFunc, t, messages.Online)
-		}
-	}
-}
-
 func (fleetManager *fleetConfigManager) dispatchToHandlers(_ string, _ []byte) {
 	// TODO: dispatch to handlers
 	// switch messageType {
@@ -285,9 +298,10 @@ func (fleetManager *fleetConfigManager) dispatchToHandlers(_ string, _ []byte) {
 }
 
 type tokenResponseTopics struct {
-	Heartbeat string `json:"heartbeat"`
-	Inbox     string `json:"inbox"`
-	Outbox    string `json:"outbox"`
+	Heartbeat    string `json:"heartbeat"`
+	Capabilities string `json:"capabilities"`
+	Inbox        string `json:"inbox"`
+	Outbox       string `json:"outbox"`
 }
 
 type tokenResponse struct {
@@ -297,7 +311,10 @@ type tokenResponse struct {
 	ExpiresIn   int                 `json:"expires_in"`
 }
 
-func (fleetManager *fleetConfigManager) getToken(tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
+// getTokenWithContext is the internal implementation that obeys the supplied
+// context for cancellation.  It was introduced so that production code can be
+// context-aware while preserving the original test helper signature.
+func (fleetManager *fleetConfigManager) getTokenWithContext(ctx context.Context, tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
 	scopes := []string{
 		"rabbitmq.read:*/*",
 		"rabbitmq.write:*/*",
@@ -325,7 +342,7 @@ func (fleetManager *fleetConfigManager) getToken(tokenURL string, clientID strin
 		},
 	}
 
-	resp, err := httpClient.Do(req.WithContext(context.Background()))
+	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -346,6 +363,12 @@ func (fleetManager *fleetConfigManager) getToken(tokenURL string, clientID strin
 	}
 
 	return &tokenResponse, nil
+}
+
+// getToken is kept for backward-compatibility with existing tests. It delegates
+// to getTokenWithContext using the fleet manager’s root context.
+func (fleetManager *fleetConfigManager) getToken(tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
+	return fleetManager.getTokenWithContext(fleetManager.heartbeater.heartbeatCtx, tokenURL, clientID, clientSecret)
 }
 
 func (fleetManager *fleetConfigManager) GetContext(ctx context.Context) context.Context {
