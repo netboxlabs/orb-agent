@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -240,10 +239,4 @@ func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
 	a.logger.Info("all backends and comms were restarted")
 
 	return nil
-}
-
-func (a *orbAgent) extendContext(routine string) (context.Context, context.CancelFunc) {
-	uuidTraceID := uuid.NewString()
-	a.logger.Debug("creating context for receiving message", slog.String("routine", routine), slog.String("trace-id", uuidTraceID))
-	return context.WithCancel(context.WithValue(context.WithValue(a.ctx, routineKey, routine), config.ContextKey("trace-id"), uuidTraceID))
 }

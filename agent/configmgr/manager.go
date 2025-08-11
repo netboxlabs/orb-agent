@@ -15,7 +15,8 @@ type Manager interface {
 	GetContext(ctx context.Context) context.Context
 }
 
-// New creates a new instance of ConfigManager based on the configuration
+// New creates a new instance of ConfigManager that is bound to the
+// supplied context.
 func New(ctx context.Context, logger *slog.Logger, pMgr policymgr.PolicyManager, active string) Manager {
 	switch active {
 	case "local":
@@ -23,7 +24,7 @@ func New(ctx context.Context, logger *slog.Logger, pMgr policymgr.PolicyManager,
 	case "git":
 		return &gitConfigManager{logger: logger, pMgr: pMgr}
 	case "fleet":
-		return newFleetConfigManagerWithContext(ctx, logger, pMgr)
+		return newFleetConfigManager(ctx, logger, pMgr)
 	default:
 		return &localConfigManager{logger: logger, pMgr: pMgr}
 	}

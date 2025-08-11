@@ -63,23 +63,32 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func
 	}
 }
 
-func (hb *heartbeater) sendHeartbeats(publishFunc func(ctx context.Context, payload []byte) error) {
-	hb.logger.Debug("start heartbeats routine", slog.Any("routine", hb.heartbeatCtx.Value("routine")))
-	hb.sendSingleHeartbeat(hb.heartbeatCtx, publishFunc, time.Now(), messages.Online)
+// sendHeartbeats starts a goroutine that periodically issues heartbeats until the
+// supplied context is cancelled.  The cancelFunc parameter is ignored by the
+// implementation but is accepted for backward-compatibility with unit tests
+// that expect to pass it.
+func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, publishFunc func(ctx context.Context, payload []byte) error) {
+	// Update our internal reference so other methods that read hb.heartbeatCtx
+	// (if any) remain accurate.
+	hb.heartbeatCtx = ctx
+
+	hb.logger.Debug("start heartbeats routine", slog.Any("routine", ctx.Value("routine")))
+	hb.sendSingleHeartbeat(ctx, publishFunc, time.Now(), messages.Online)
+
 	for {
 		select {
-		case <-hb.heartbeatCtx.Done():
+		case <-ctx.Done():
 			hb.logger.Debug("context done, stopping heartbeats routine")
-			hb.sendSingleHeartbeat(hb.heartbeatCtx, publishFunc, time.Now(), messages.Offline)
+			hb.sendSingleHeartbeat(ctx, publishFunc, time.Now(), messages.Offline)
 			hb.heartbeatCtx = nil
 			return
 		case t := <-hb.hbTicker.C:
-			hb.sendSingleHeartbeat(hb.heartbeatCtx, publishFunc, t, messages.Online)
+			hb.sendSingleHeartbeat(ctx, publishFunc, t, messages.Online)
 		}
 	}
 }
 
-func newFleetConfigManagerWithContext(ctx context.Context, logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
+func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
 	// The passed ctx represents the lifecycle of the fleet configuration
 	// manager.  All child goroutines (heartbeat, MQTT, etc.) inherit from it so
 	// that a single cancellation propagates everywhere.
@@ -92,13 +101,6 @@ func newFleetConfigManagerWithContext(ctx context.Context, logger *slog.Logger, 
 			heartbeatCtx: ctx,
 		},
 	}
-}
-
-// newFleetConfigManager is a backward-compatibility shim for existing callers
-// (primarily unit tests) that do not pass a context. It creates a manager that
-// uses a background context.
-func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
-	return newFleetConfigManagerWithContext(context.Background(), logger, pMgr)
 }
 
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
@@ -150,7 +152,8 @@ func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, 
 			// 	fleetManager.logger.Info("successfully subscribed", "topic", topics.Inbox)
 			// }
 
-			fleetManager.heartbeater.sendHeartbeats(func(ctx context.Context, payload []byte) error {
+			// start heartbeat loop bound to the same connection-level context
+			fleetManager.heartbeater.sendHeartbeats(ctx, func() {}, func(ctx context.Context, payload []byte) error {
 				publishResponse, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Heartbeat,
 					Payload: payload,
