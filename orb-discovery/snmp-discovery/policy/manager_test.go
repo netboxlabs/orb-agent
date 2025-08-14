@@ -464,6 +464,257 @@ func TestManagerGetCapabilities(t *testing.T) {
 	assert.Equal(t, []string{"targets"}, capabilities)
 }
 
+func TestManagerApplyDefaults_RoleAndSite(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	assert.NoError(t, err)
+
+	t.Run("Empty Role gets set to undefined", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "existing-site"
+                # role is intentionally omitted (empty)
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "existing-site", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("Empty Site gets set to default", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                role: "existing-role"
+                # site is intentionally omitted (empty)
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "existing-role", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("Both Role and Site empty get default values", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: "test"
+                # both role and site are intentionally omitted (empty)
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("Existing Role and Site values are preserved", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                role: "custom-role"
+                site: "custom-site"
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "custom-role", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "custom-site", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("Empty string Role and Site get default values", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                role: ""
+                site: ""
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
+	})
+}
+
+func TestManagerApplyDefaults_Location(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	assert.NoError(t, err)
+
+	t.Run("Empty Location gets set to undefined", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                role: "existing-role"
+                site: "existing-site"
+                # location is intentionally omitted (empty)
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
+		assert.Equal(t, "existing-role", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "existing-site", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("Existing Location value is preserved", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                role: "custom-role"
+                site: "custom-site"
+                location: "custom-location"
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "custom-location", policies["policy1"].Config.Defaults.Location)
+		assert.Equal(t, "custom-role", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "custom-site", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("Empty string Location gets default value", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                role: "existing-role"
+                site: "existing-site"
+                location: ""
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
+		assert.Equal(t, "existing-role", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "existing-site", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("All defaults (Role, Site, Location) empty get default values", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: "test"
+                # role, site, and location are intentionally omitted (empty)
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
+	})
+
+	t.Run("All defaults (Role, Site, Location) as empty strings get default values", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                role: ""
+                site: ""
+                location: ""
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
+		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
+	})
+}
+
 func TestManagerStartPolicyWithDeviceLookupExtensions(t *testing.T) {
 	// Create a temporary directory for device lookup files
 	tempDir := t.TempDir()
