@@ -217,20 +217,28 @@ func newMappingEntry(m config.MappingEntry, logger *slog.Logger, entityMappers m
 		Field:          m.Field,
 		Mapper:         mapper,
 		IdentifierSize: m.IdentifierSize,
-		MappingEntries: newChildMappingEntries(m.MappingEntries, logger),
+		MappingEntries: newChildMappingEntries(m.MappingEntries, logger, m.IdentifierSize),
 		Relationship:   m.Relationship,
 	}
 }
 
-func newChildMappingEntries(configMappingEntries []config.MappingEntry, logger *slog.Logger) []Entry {
+func newChildMappingEntries(configMappingEntries []config.MappingEntry, logger *slog.Logger, parentIdentifierSize int) []Entry {
 	childMappingEntries := make([]Entry, 0, len(configMappingEntries))
 	for _, m := range configMappingEntries {
 		logger.Debug("Adding child mapping entry", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
+
+		// Use child's IdentifierSize if specified, otherwise inherit from parent
+		identifierSize := m.IdentifierSize
+		if identifierSize == 0 {
+			identifierSize = parentIdentifierSize
+		}
+
 		child := &Entry{
 			OID:            m.OID,
 			Entity:         m.Entity,
 			Field:          m.Field,
-			MappingEntries: newChildMappingEntries(m.MappingEntries, logger),
+			IdentifierSize: identifierSize,
+			MappingEntries: newChildMappingEntries(m.MappingEntries, logger, identifierSize),
 			Relationship:   m.Relationship,
 		}
 		childMappingEntries = append(childMappingEntries, *child)
