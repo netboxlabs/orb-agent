@@ -105,7 +105,10 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+<<<<<<< HEAD
 
+=======
+>>>>>>> 263625a (simplify contexts)
 	// call the token url to get the token
 	token, err := fleetManager.getToken(ctx, cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	if err != nil {
