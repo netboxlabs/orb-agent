@@ -104,8 +104,10 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 }
 
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// call the token url to get the token
-	token, err := fleetManager.getToken(cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
+	token, err := fleetManager.getToken(ctx, cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	if err != nil {
 		return err
 	}
@@ -314,10 +316,7 @@ type tokenResponse struct {
 	ExpiresIn   int                 `json:"expires_in"`
 }
 
-// getTokenWithContext is the internal implementation that obeys the supplied
-// context for cancellation.  It was introduced so that production code can be
-// context-aware while preserving the original test helper signature.
-func (fleetManager *fleetConfigManager) getTokenWithContext(ctx context.Context, tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
+func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
 	scopes := []string{
 		"rabbitmq.read:*/*",
 		"rabbitmq.write:*/*",
@@ -366,12 +365,6 @@ func (fleetManager *fleetConfigManager) getTokenWithContext(ctx context.Context,
 	}
 
 	return &tokenResponse, nil
-}
-
-// getToken is kept for backward-compatibility with existing tests. It delegates
-// to getTokenWithContext using the fleet manager’s root context.
-func (fleetManager *fleetConfigManager) getToken(tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
-	return fleetManager.getTokenWithContext(fleetManager.heartbeater.heartbeatCtx, tokenURL, clientID, clientSecret)
 }
 
 func (fleetManager *fleetConfigManager) GetContext(ctx context.Context) context.Context {
