@@ -433,7 +433,8 @@ func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 	defer server.Close()
 
 	// Act
-	token, err := fleetManager.getToken(server.URL, "test_client_id", "test_client_secret")
+	ctx := context.Background()
+	token, err := fleetManager.getToken(ctx, server.URL, "test_client_id", "test_client_secret")
 
 	// Assert
 	require.NoError(t, err)
@@ -460,7 +461,8 @@ func TestFleetConfigManager_GetToken_HTTPError(t *testing.T) {
 	defer server.Close()
 
 	// Act
-	token, err := fleetManager.getToken(server.URL, "invalid_client", "invalid_secret")
+	ctx := context.Background()
+	token, err := fleetManager.getToken(ctx, server.URL, "invalid_client", "invalid_secret")
 
 	// Assert
 	assert.Error(t, err)
@@ -483,7 +485,8 @@ func TestFleetConfigManager_GetToken_InvalidJSON(t *testing.T) {
 	defer server.Close()
 
 	// Act
-	token, err := fleetManager.getToken(server.URL, "test_client", "test_secret")
+	ctx := context.Background()
+	token, err := fleetManager.getToken(ctx, server.URL, "test_client", "test_secret")
 
 	// Assert
 	assert.Error(t, err)
@@ -499,7 +502,8 @@ func TestFleetConfigManager_GetToken_NetworkError(t *testing.T) {
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act with invalid URL
-	token, err := fleetManager.getToken("http://invalid.nonexistent.url:99999", "test", "test")
+	ctx := context.Background()
+	token, err := fleetManager.getToken(ctx, "http://invalid.nonexistent.url:99999", "test", "test")
 
 	// Assert
 	assert.Error(t, err)
@@ -515,7 +519,8 @@ func TestFleetConfigManager_GetToken_InvalidURL(t *testing.T) {
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act with malformed URL
-	token, err := fleetManager.getToken("://invalid-url", "test", "test")
+	ctx := context.Background()
+	token, err := fleetManager.getToken(ctx, "://invalid-url", "test", "test")
 
 	// Assert
 	assert.Error(t, err)
@@ -757,7 +762,8 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	defer server.Close()
 
 	// Act - test token retrieval part of the flow
-	token, err := fleetManager.getToken(server.URL, "integration_client", "integration_secret")
+	ctx := context.Background()
+	token, err := fleetManager.getToken(ctx, server.URL, "integration_client", "integration_secret")
 
 	// Assert - token retrieval should succeed
 	require.NoError(t, err)
@@ -786,6 +792,169 @@ func TestFleetConfigManager_CompilerInterfaceCheck(t *testing.T) {
 	ctx := context.Background()
 	resultCtx := manager.GetContext(ctx)
 	assert.NotNil(t, resultCtx)
+}
+
+func TestFleetConfigManager_ConfigurationFallback(t *testing.T) {
+	// Test that token response values take priority over configuration values
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	pMgr := &mockPolicyManagerForFleet{}
+
+	// Create fleet manager
+	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Test data
+	fleetCfg := config.FleetManager{
+		MQTTURL:           "mqtts://config-mqtt.example.com:8883",
+		HeartbeatTopic:    "config/heartbeat",
+		CapabilitiesTopic: "config/capabilities",
+	}
+
+	tokenResp := &tokenResponse{
+		AccessToken: "test-token",
+		MQTTURL:     "mqtts://token-mqtt.example.com:8883",
+		Topics: tokenResponseTopics{
+			Heartbeat:    "token/heartbeat",
+			Capabilities: "token/capabilities",
+			Inbox:        "token/inbox",
+			Outbox:       "token/outbox",
+		},
+	}
+
+	// Test merge functionality
+	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
+
+	// Verify token response values take priority
+	assert.Equal(t, "mqtts://token-mqtt.example.com:8883", mqttURL, "Token response MQTT URL should take priority")
+	assert.Equal(t, "token/heartbeat", topics.Heartbeat, "Token response heartbeat topic should take priority")
+	assert.Equal(t, "token/capabilities", topics.Capabilities, "Token response capabilities topic should take priority")
+
+	// Verify token response values are used for inbox/outbox
+	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
+	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
+}
+
+func TestFleetConfigManager_ConfigurationFallback_EmptyConfig(t *testing.T) {
+	// Test that token response values are used when configuration is empty
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	pMgr := &mockPolicyManagerForFleet{}
+
+	// Create fleet manager
+	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Test data - empty configuration
+	fleetCfg := config.FleetManager{
+		TokenURL:     "https://auth.example.com/token",
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		// No MQTT URL or topics configured
+	}
+
+	tokenResp := &tokenResponse{
+		AccessToken: "test-token",
+		MQTTURL:     "mqtts://token-mqtt.example.com:8883",
+		Topics: tokenResponseTopics{
+			Heartbeat:    "token/heartbeat",
+			Capabilities: "token/capabilities",
+			Inbox:        "token/inbox",
+			Outbox:       "token/outbox",
+		},
+	}
+
+	// Test merge functionality
+	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
+
+	// Verify token response values are used when config is empty
+	assert.Equal(t, "mqtts://token-mqtt.example.com:8883", mqttURL, "Token response MQTT URL should be used when config is empty")
+	assert.Equal(t, "token/heartbeat", topics.Heartbeat, "Token response heartbeat topic should be used when config is empty")
+	assert.Equal(t, "token/capabilities", topics.Capabilities, "Token response capabilities topic should be used when config is empty")
+	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
+	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
+}
+
+func TestFleetConfigManager_ConfigurationFallback_LegacySupport(t *testing.T) {
+	// Test that legacy TopicName field works correctly
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	pMgr := &mockPolicyManagerForFleet{}
+
+	// Create fleet manager
+	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Test data - legacy configuration
+	fleetCfg := config.FleetManager{
+		TokenURL:     "https://auth.example.com/token",
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		TopicName:    "legacy-topic", // Legacy field
+		// No specific heartbeat/capabilities topics
+	}
+
+	tokenResp := &tokenResponse{
+		AccessToken: "test-token",
+		MQTTURL:     "mqtts://token-mqtt.example.com:8883",
+		Topics: tokenResponseTopics{
+			Heartbeat:    "token/heartbeat",
+			Capabilities: "token/capabilities",
+			Inbox:        "token/inbox",
+			Outbox:       "token/outbox",
+		},
+	}
+
+	// Test merge functionality
+	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
+
+	// Verify token response topics override legacy configuration
+	assert.Equal(t, "mqtts://token-mqtt.example.com:8883", mqttURL, "Token response MQTT URL should be used")
+	assert.Equal(t, "token/heartbeat", topics.Heartbeat, "Token response should override legacy topic for heartbeat")
+	assert.Equal(t, "token/capabilities", topics.Capabilities, "Token response should override legacy topic for capabilities")
+	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
+	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
+}
+
+func TestFleetConfigManager_ConfigurationFallback_EmptyTokenResponse(t *testing.T) {
+	// Test that configuration values are used when token response values are empty
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	pMgr := &mockPolicyManagerForFleet{}
+
+	// Create fleet manager
+	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Test data - configuration has values, token response has empty values
+	fleetCfg := config.FleetManager{
+		MQTTURL:           "mqtts://config-mqtt.example.com:8883",
+		HeartbeatTopic:    "config/heartbeat",
+		CapabilitiesTopic: "config/capabilities",
+	}
+
+	tokenResp := &tokenResponse{
+		AccessToken: "test-token",
+		MQTTURL:     "", // Empty MQTT URL
+		Topics: tokenResponseTopics{
+			Heartbeat:    "", // Empty heartbeat topic
+			Capabilities: "", // Empty capabilities topic
+			Inbox:        "token/inbox",
+			Outbox:       "token/outbox",
+		},
+	}
+
+	// Test merge functionality
+	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
+
+	// Verify configuration values are used when token response is empty
+	assert.Equal(t, "mqtts://config-mqtt.example.com:8883", mqttURL, "Configuration MQTT URL should be used when token response is empty")
+	assert.Equal(t, "config/heartbeat", topics.Heartbeat, "Configuration heartbeat topic should be used when token response is empty")
+	assert.Equal(t, "config/capabilities", topics.Capabilities, "Configuration capabilities topic should be used when token response is empty")
+
+	// Verify token response values are still used for inbox/outbox
+	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
+	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
 }
 
 // Test edge cases for heartbeater ticker cleanup
