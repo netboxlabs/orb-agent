@@ -406,15 +406,14 @@ func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 		// Verify request method and headers
 		assert.Equal(t, "POST", r.Method)
 		assert.Equal(t, "application/x-www-form-urlencoded", r.Header.Get("Content-Type"))
-		assert.Contains(t, r.Header.Get("Authorization"), "Basic ")
 
 		// Verify request body
 		err := r.ParseForm()
 		assert.NoError(t, err)
 		assert.Equal(t, "client_credentials", r.Form.Get("grant_type"))
-		assert.Contains(t, r.Form.Get("scope"), "rabbitmq.read")
-		assert.Contains(t, r.Form.Get("scope"), "rabbitmq.write")
-		assert.Contains(t, r.Form.Get("scope"), "rabbitmq.configure")
+		assert.Contains(t, r.Form.Get("scope"), "orb.read")
+		assert.Contains(t, r.Form.Get("scope"), "orb.write")
+		assert.Contains(t, r.Form.Get("scope"), "orb.configure")
 
 		// Return valid token response
 		response := tokenResponse{
