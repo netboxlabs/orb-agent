@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -385,19 +384,18 @@ func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL s
 	fleetManager.logger.Debug("requesting access token", "token_url", tokenURL, "client_id", clientID)
 
 	scopes := []string{
-		"rabbitmq.read:*/*",
-		"rabbitmq.write:*/*",
-		"rabbitmq.configure:*/*",
+		"orb.read:*/*/*",
+		"orb.write:*/*/*",
+		"orb.configure:*/*/*",
 	}
 
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
 	data.Set("scope", strings.Join(scopes, " "))
+	data.Set("client_id", clientID)
+	data.Set("client_secret", clientSecret)
 
 	fleetManager.logger.Debug("sending token request", "url", tokenURL, "data", data, "client_id", clientID) //, "client_secret", clientSecret)
-
-	// Encode credentials in Basic Auth header
-	creds := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientID, clientSecret)))
 
 	req, err := http.NewRequest("POST", tokenURL, bytes.NewBufferString(data.Encode()))
 	if err != nil {
@@ -405,7 +403,6 @@ func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL s
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Authorization", "Basic "+creds)
 
 	// HTTP client with configurable timeout and TLS settings
 	httpClient := &http.Client{
