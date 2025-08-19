@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -104,18 +103,74 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 }
 
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// call the token url to get the token
-	token, err := fleetManager.getToken(cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
+	token, err := fleetManager.getToken(ctx, cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	if err != nil {
 		return err
 	}
 
-	// use the token to connect over MQTT v5
-	err = fleetManager.connect(token.MQTTURL, token.AccessToken, token.Topics, backends)
+	// merge configuration values with token response values (config takes priority)
+	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(cfg.OrbAgent.ConfigManager.Sources.Fleet, token)
+
+	// use the merged configuration to connect over MQTT v5
+	err = fleetManager.connect(mqttURL, token.AccessToken, topics, backends)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+// mergeConfigWithTokenResponse merges configuration values with token response values,
+// giving priority to token response values when they are provided
+func (fleetManager *fleetConfigManager) mergeConfigWithTokenResponse(fleetCfg config.FleetManager, token *tokenResponse) (string, tokenResponseTopics) {
+	// Start with configuration values as defaults
+	mqttURL := fleetCfg.MQTTURL
+	topics := tokenResponseTopics{
+		Heartbeat:    fleetCfg.HeartbeatTopic,
+		Capabilities: fleetCfg.CapabilitiesTopic,
+	}
+
+	// Handle legacy TopicName field for backward compatibility - only if specific topics aren't set
+	if fleetCfg.TopicName != "" && fleetCfg.HeartbeatTopic == "" && fleetCfg.CapabilitiesTopic == "" {
+		fleetManager.logger.Debug("using legacy topic name as base for heartbeat and capabilities", "topic", fleetCfg.TopicName)
+		topics.Heartbeat = fleetCfg.TopicName + "/heartbeat"
+		topics.Capabilities = fleetCfg.TopicName + "/capabilities"
+	}
+
+	// Override with token response values if provided (token takes priority)
+	if token.MQTTURL != "" {
+		fleetManager.logger.Debug("using MQTT URL from token response", "token_url", token.MQTTURL, "config_url", fleetCfg.MQTTURL)
+		mqttURL = token.MQTTURL
+	} else if mqttURL != "" {
+		fleetManager.logger.Debug("using MQTT URL from configuration", "config_url", mqttURL)
+	}
+
+	// Token response topics override configuration topics
+	if token.Topics.Heartbeat != "" {
+		fleetManager.logger.Debug("using heartbeat topic from token response", "token_topic", token.Topics.Heartbeat, "config_topic", topics.Heartbeat)
+		topics.Heartbeat = token.Topics.Heartbeat
+	}
+
+	if token.Topics.Capabilities != "" {
+		fleetManager.logger.Debug("using capabilities topic from token response", "token_topic", token.Topics.Capabilities, "config_topic", topics.Capabilities)
+		topics.Capabilities = token.Topics.Capabilities
+	}
+
+	// Token response always provides inbox/outbox topics
+	topics.Inbox = token.Topics.Inbox
+	topics.Outbox = token.Topics.Outbox
+
+	fleetManager.logger.Info("merged configuration and token response",
+		"mqtt_url", mqttURL,
+		"heartbeat_topic", topics.Heartbeat,
+		"capabilities_topic", topics.Capabilities,
+		"inbox_topic", topics.Inbox,
+		"outbox_topic", topics.Outbox)
+
+	return mqttURL, topics
 }
 
 func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
@@ -314,40 +369,54 @@ type tokenResponse struct {
 	ExpiresIn   int                 `json:"expires_in"`
 }
 
-// getTokenWithContext is the internal implementation that obeys the supplied
-// context for cancellation.  It was introduced so that production code can be
-// context-aware while preserving the original test helper signature.
-func (fleetManager *fleetConfigManager) getTokenWithContext(ctx context.Context, tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
+func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
+	// Input validation
+	if tokenURL == "" {
+		return nil, fmt.Errorf("token URL cannot be empty")
+	}
+	if clientID == "" {
+		return nil, fmt.Errorf("client ID cannot be empty")
+	}
+	if clientSecret == "" {
+		return nil, fmt.Errorf("client secret cannot be empty")
+	}
+
+	fleetManager.logger.Debug("requesting access token", "token_url", tokenURL, "client_id", clientID)
+
 	scopes := []string{
-		"rabbitmq.read:*/*",
-		"rabbitmq.write:*/*",
-		"rabbitmq.configure:*/*",
+		"orb.read:*/*/*",
+		"orb.write:*/*/*",
+		"orb.configure:*/*/*",
 	}
 
 	data := url.Values{}
 	data.Set("grant_type", "client_credentials")
 	data.Set("scope", strings.Join(scopes, " "))
+	data.Set("client_id", clientID)
+	data.Set("client_secret", clientSecret)
 
-	// Encode credentials in Basic Auth header
-	creds := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientID, clientSecret)))
+	fleetManager.logger.Debug("sending token request", "url", tokenURL, "data", data, "client_id", clientID) //, "client_secret", clientSecret)
 
 	req, err := http.NewRequest("POST", tokenURL, bytes.NewBufferString(data.Encode()))
 	if err != nil {
+		fleetManager.logger.Error("failed to create token request", "error", err, "token_url", tokenURL)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Authorization", "Basic "+creds)
 
-	// HTTP client with TLS verification disabled
+	// HTTP client with configurable timeout and TLS settings
 	httpClient := &http.Client{
+		Timeout: 30 * time.Second, // TODO: make configurable
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // TODO: make configurable?
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // TODO: make configurable
 		},
 	}
 
+	fleetManager.logger.Debug("sending token request", "url", tokenURL)
 	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
+		fleetManager.logger.Error("failed to send token request", "error", err, "token_url", tokenURL)
+		return nil, fmt.Errorf("failed to send request to %s: %w", tokenURL, err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
@@ -355,23 +424,39 @@ func (fleetManager *fleetConfigManager) getTokenWithContext(ctx context.Context,
 		}
 	}()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fleetManager.logger.Error("failed to read response body", "error", err, "status_code", resp.StatusCode)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("token request failed: %s", body)
+		fleetManager.logger.Error("token request failed",
+			"status_code", resp.StatusCode,
+			"response", string(body),
+			"token_url", tokenURL,
+			"client_id", clientID)
+		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var tokenResponse tokenResponse
 	if err := json.Unmarshal(body, &tokenResponse); err != nil {
+		fleetManager.logger.Error("failed to parse token response", "error", err, "response", string(body))
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
 	}
 
-	return &tokenResponse, nil
-}
+	// Validate token response
+	if tokenResponse.AccessToken == "" {
+		fleetManager.logger.Error("received empty access token", "response", string(body))
+		return nil, fmt.Errorf("received empty access token from server")
+	}
 
-// getToken is kept for backward-compatibility with existing tests. It delegates
-// to getTokenWithContext using the fleet manager’s root context.
-func (fleetManager *fleetConfigManager) getToken(tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
-	return fleetManager.getTokenWithContext(fleetManager.heartbeater.heartbeatCtx, tokenURL, clientID, clientSecret)
+	fleetManager.logger.Info("successfully obtained access token",
+		"token_url", tokenURL,
+		"expires_in", tokenResponse.ExpiresIn,
+		"mqtt_url", tokenResponse.MQTTURL)
+
+	return &tokenResponse, nil
 }
 
 func (fleetManager *fleetConfigManager) GetContext(ctx context.Context) context.Context {
