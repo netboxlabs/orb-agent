@@ -358,9 +358,9 @@ func (r *Runner) run() {
 		if host.Hostnames != nil {
 			var fallbackHostname string
 			for _, hostname := range host.Hostnames {
-				fallbackHostname = hostname.Name
+				fallbackHostname = strings.ToLower(hostname.Name)
 				if hostname.Type == "PTR" {
-					ip.DnsName = diode.String(hostname.Name)
+					ip.DnsName = diode.String(strings.ToLower(hostname.Name))
 					break
 				}
 			}
