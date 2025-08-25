@@ -384,9 +384,7 @@ func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL s
 	fleetManager.logger.Debug("requesting access token", "token_url", tokenURL, "client_id", clientID)
 
 	scopes := []string{
-		"orb.read:*/*/*",
-		"orb.write:*/*/*",
-		"orb.configure:*/*/*",
+		"orb.mqtt",
 	}
 
 	data := url.Values{}
