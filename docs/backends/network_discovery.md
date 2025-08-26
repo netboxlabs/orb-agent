@@ -64,6 +64,9 @@ The scope defines a list of targets to be scanned.
 | dns_servers | list | no | Specify alternate DNS servers for DNS resolution (--dns-servers). |
 | os_detection | bool | no | Enables NMAP OS detection (-O). |
 | use_target_masks | bool | no | When enabled (default: True), applies the most specific subnet mask from the defined targets to discovered IPs. Only affects targets defined as subnets (e.g., 192.168.1.0/24), not ranges or individual IPs. |
+| icmp_echo      | bool | no | Enables ICMP Echo discovery (-PE). Sends ICMP Echo Request (ping) probes to detect live hosts. |
+| icmp_timestamp | bool | no | Enables ICMP Timestamp discovery (-PP). Uses ICMP Timestamp Requests to discover hosts that respond to this type of probe. |
+| icmp_netmask   | bool | no | Enables ICMP Netmask discovery (-PM). Sends ICMP Address Mask Request packets to identify responsive hosts. |
 
 ### Sample
 A sample policy including all parameters supported by the network discovery backend.
