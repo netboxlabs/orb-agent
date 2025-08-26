@@ -180,6 +180,18 @@ func (r *Runner) run() {
 		options = append(options, nmap.WithMostCommonPorts(*r.scope.TopPorts))
 	}
 
+	if r.scope.ICMPEcho != nil && *r.scope.ICMPEcho {
+		options = append(options, nmap.WithICMPEchoDiscovery())
+	}
+
+	if r.scope.ICMPTimestamp != nil && *r.scope.ICMPTimestamp {
+		options = append(options, nmap.WithICMPTimestampDiscovery())
+	}
+
+	if r.scope.ICMPNetMask != nil && *r.scope.ICMPNetMask {
+		options = append(options, nmap.WithICMPNetMaskDiscovery())
+	}
+
 	hasOtherScans := false
 	selectedTCPScan := ""
 	if len(r.scope.ScanTypes) > 0 {

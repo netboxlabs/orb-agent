@@ -50,6 +50,9 @@ type Scope struct {
 	DNSServers     []string `yaml:"dns_servers,omitempty"`
 	OSDetection    *bool    `yaml:"os_detection,omitempty"`
 	UseTargetMasks *bool    `yaml:"use_target_masks,omitempty"`
+	ICMPEcho       *bool    `yaml:"icmp_echo,omitempty"`
+	ICMPTimestamp  *bool    `yaml:"icmp_timestamp,omitempty"`
+	ICMPNetMask    *bool    `yaml:"icmp_netmask,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy

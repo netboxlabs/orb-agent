@@ -196,6 +196,18 @@ func TestRunnerWithOptions(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "with icmp options",
+			policy: config.Policy{
+				Config: config.PolicyConfig{},
+				Scope: config.Scope{
+					Targets:       []string{"localhost"},
+					ICMPEcho:      boolPtr(true),
+					ICMPTimestamp: boolPtr(true),
+					ICMPNetMask:   boolPtr(true),
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
