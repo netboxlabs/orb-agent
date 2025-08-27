@@ -10,8 +10,8 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/env"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -244,7 +244,7 @@ func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
 	}
 	// Iterate over the fields and resolve environment variables
 	for _, f := range fields {
-		resolved, err := utils.ResolveEnv(*f.field)
+		resolved, err := env.ResolveEnv(*f.field)
 		if err != nil {
 			return fmt.Errorf("failed to resolve %s environment variable: %w", f.label, err)
 		}

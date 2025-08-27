@@ -1,17 +1,17 @@
-package utils_test
+package env_test
 
 import (
 	"os"
 	"testing"
 
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/utils"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/env"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestResolveEnv(t *testing.T) {
 	t.Run("No environment variable substitution", func(t *testing.T) {
-		result, err := utils.ResolveEnv("simple-value")
+		result, err := env.ResolveEnv("simple-value")
 		assert.NoError(t, err)
 		assert.Equal(t, "simple-value", result)
 	})
@@ -21,7 +21,7 @@ func TestResolveEnv(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = os.Unsetenv("TEST_VAR") }()
 
-		result, err := utils.ResolveEnv("${TEST_VAR}")
+		result, err := env.ResolveEnv("${TEST_VAR}")
 		assert.NoError(t, err)
 		assert.Equal(t, "test-value", result)
 	})
@@ -30,26 +30,26 @@ func TestResolveEnv(t *testing.T) {
 		err := os.Unsetenv("NONEXISTENT_VAR")
 		require.NoError(t, err)
 
-		result, err := utils.ResolveEnv("${NONEXISTENT_VAR}")
+		result, err := env.ResolveEnv("${NONEXISTENT_VAR}")
 		assert.Error(t, err)
 		assert.Equal(t, "", result)
 		assert.Contains(t, err.Error(), "environment variable NONEXISTENT_VAR is not set")
 	})
 
 	t.Run("Partial environment variable syntax", func(t *testing.T) {
-		result, err := utils.ResolveEnv("${TEST_VAR")
+		result, err := env.ResolveEnv("${TEST_VAR")
 		assert.NoError(t, err)
 		assert.Equal(t, "${TEST_VAR", result)
 	})
 
 	t.Run("Partial environment variable syntax 2", func(t *testing.T) {
-		result, err := utils.ResolveEnv("TEST_VAR}")
+		result, err := env.ResolveEnv("TEST_VAR}")
 		assert.NoError(t, err)
 		assert.Equal(t, "TEST_VAR}", result)
 	})
 
 	t.Run("Empty environment variable name", func(t *testing.T) {
-		result, err := utils.ResolveEnv("${}")
+		result, err := env.ResolveEnv("${}")
 		assert.NoError(t, err)
 		assert.Equal(t, "${}", result)
 	})
@@ -59,7 +59,7 @@ func TestResolveEnv(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = os.Unsetenv("TEST_VAR") }()
 
-		result, err := utils.ResolveEnv("prefix-${TEST_VAR}-suffix")
+		result, err := env.ResolveEnv("prefix-${TEST_VAR}-suffix")
 		assert.NoError(t, err)
 		assert.Equal(t, "prefix-${TEST_VAR}-suffix", result)
 	})
@@ -76,7 +76,7 @@ func TestResolveEnv(t *testing.T) {
 
 		// Current implementation only handles single environment variables
 		// Multiple variables in one string are not supported and will return an error
-		result, err := utils.ResolveEnv("${VAR1}-${VAR2}")
+		result, err := env.ResolveEnv("${VAR1}-${VAR2}")
 		assert.Error(t, err)
 		assert.Equal(t, "", result)
 		assert.Contains(t, err.Error(), "environment variable VAR1}-${VAR2 is not set")
@@ -87,19 +87,19 @@ func TestResolveEnv(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = os.Unsetenv("TEST_VAR_123") }()
 
-		result, err := utils.ResolveEnv("${TEST_VAR_123}")
+		result, err := env.ResolveEnv("${TEST_VAR_123}")
 		assert.NoError(t, err)
 		assert.Equal(t, "test-value-123", result)
 	})
 
 	t.Run("Empty string", func(t *testing.T) {
-		result, err := utils.ResolveEnv("")
+		result, err := env.ResolveEnv("")
 		assert.NoError(t, err)
 		assert.Equal(t, "", result)
 	})
 
 	t.Run("Only braces", func(t *testing.T) {
-		result, err := utils.ResolveEnv("{}")
+		result, err := env.ResolveEnv("{}")
 		assert.NoError(t, err)
 		assert.Equal(t, "{}", result)
 	})
@@ -107,7 +107,7 @@ func TestResolveEnv(t *testing.T) {
 
 func TestResolveEnvOrExit(t *testing.T) {
 	t.Run("No environment variable substitution", func(t *testing.T) {
-		result := utils.ResolveEnvOrExit("simple-value")
+		result := env.ResolveEnvOrExit("simple-value")
 		assert.Equal(t, "simple-value", result)
 	})
 
@@ -116,7 +116,7 @@ func TestResolveEnvOrExit(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = os.Unsetenv("TEST_VAR") }()
 
-		result := utils.ResolveEnvOrExit("${TEST_VAR}")
+		result := env.ResolveEnvOrExit("${TEST_VAR}")
 		assert.Equal(t, "test-value", result)
 	})
 

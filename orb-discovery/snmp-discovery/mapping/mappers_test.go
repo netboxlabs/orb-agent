@@ -1667,6 +1667,258 @@ func TestDeviceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "device description under 200 characters remains unchanged",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "test-device",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.1.1.0": {
+					OID:    "1.3.6.1.2.1.1.1.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.1",
+					Value:  "This is a short device description that is well under 200 characters",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.1",
+						Entity: "device",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Device{
+				Name:        mapping.StringPtr("test-device"),
+				Description: mapping.StringPtr("This is a short device description that is well under 200 characters"),
+			},
+			expectError: false,
+		},
+		{
+			name: "device description exactly 200 characters remains unchanged",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "test-device",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.1.1.0": {
+					OID:    "1.3.6.1.2.1.1.1.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.1",
+					Value:  "This device description is exactly 200 charactersxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.1",
+						Entity: "device",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Device{
+				Name:        mapping.StringPtr("test-device"),
+				Description: mapping.StringPtr("This device description is exactly 200 charactersxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+			},
+			expectError: false,
+		},
+		{
+			name: "device description over 200 characters gets truncated to 197 plus ellipsis",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "test-device",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.1.1.0": {
+					OID:    "1.3.6.1.2.1.1.1.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.1",
+					Value:  "This device description is deliberately longer than two hundred characters to test the truncation functionality that should cut it off at 197 characters and add an ellipsis suffix to indicate that the description was truncated due to length constraints",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.1",
+						Entity: "device",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Device{
+				Name:        mapping.StringPtr("test-device"),
+				Description: mapping.StringPtr("This device description is deliberately longer than two hundred characters to test the truncation functionality that should cut it off at 197 characters and add an ellipsis suffix to indicate that ..."),
+			},
+			expectError: false,
+		},
+		{
+			name: "device description with trailing whitespace gets trimmed and remains under 200 characters",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "test-device",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.1.1.0": {
+					OID:    "1.3.6.1.2.1.1.1.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.1",
+					Value:  "This device description has trailing whitespace that should be stripped    \t\n\r",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.1",
+						Entity: "device",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Device{
+				Name:        mapping.StringPtr("test-device"),
+				Description: mapping.StringPtr("This device description has trailing whitespace that should be stripped"),
+			},
+			expectError: false,
+		},
+		{
+			name: "device description with trailing whitespace gets trimmed but still over 200 characters and truncated",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "test-device",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.1.1.0": {
+					OID:    "1.3.6.1.2.1.1.1.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.1",
+					Value:  "This device description is deliberately longer than two hundred characters to test the truncation functionality that should cut it off at 197 characters and add an ellipsis suffix to indicate that the description was truncated due to length constraints                    \t\n\r",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.1",
+						Entity: "device",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Device{
+				Name:        mapping.StringPtr("test-device"),
+				Description: mapping.StringPtr("This device description is deliberately longer than two hundred characters to test the truncation functionality that should cut it off at 197 characters and add an ellipsis suffix to indicate that ..."),
+			},
+			expectError: false,
+		},
+		{
+			name: "device description at exactly 200 characters with trailing whitespace gets trimmed to under 200",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.1.5.0": {
+					OID:    "1.3.6.1.2.1.1.5.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.5",
+					Value:  "test-device",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.1.1.0": {
+					OID:    "1.3.6.1.2.1.1.1.0",
+					Index:  "0",
+					Parent: "1.3.6.1.2.1.1.1",
+					Value:  "This device description is exactly 200 charactersxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx     ",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.1",
+				Entity: "device",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.1.5",
+						Entity: "device",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.1.1",
+						Entity: "device",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Device{
+				Name:        mapping.StringPtr("test-device"),
+				Description: mapping.StringPtr("This device description is exactly 200 charactersxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+			},
+			expectError: false,
+		},
+		{
 			name:   "empty values map",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{},
 			mappingEntry: &mapping.Entry{

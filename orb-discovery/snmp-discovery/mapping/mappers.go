@@ -465,7 +465,11 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 					deviceEntity.Name = &value.Value
 					fieldFound = true
 				case "description":
-					deviceEntity.Description = &value.Value
+					description := strings.TrimRight(value.Value, " \t\n\r")
+					if len(description) > 200 {
+						description = description[:197] + "..."
+					}
+					deviceEntity.Description = &description
 					fieldFound = true
 				case "platform":
 					manufacturerID, err := m.getManufacturerID(value.Value)

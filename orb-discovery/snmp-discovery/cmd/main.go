@@ -12,10 +12,10 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/env"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/server"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/utils"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/version"
 )
 
@@ -67,15 +67,15 @@ func main() {
 	if *dryRun {
 		client, err = diode.NewDryRunClient(
 			producerName,
-			utils.ResolveEnvOrExit(*dryRunOutputDir),
+			env.ResolveEnvOrExit(*dryRunOutputDir),
 		)
 	} else {
 		client, err = diode.NewClient(
-			utils.ResolveEnvOrExit(*diodeTarget),
+			env.ResolveEnvOrExit(*diodeTarget),
 			producerName,
 			version.GetBuildVersion(),
-			diode.WithClientID(utils.ResolveEnvOrExit(*diodeClientID)),
-			diode.WithClientSecret(utils.ResolveEnvOrExit(*diodeClientSecret)),
+			diode.WithClientID(env.ResolveEnvOrExit(*diodeClientID)),
+			diode.WithClientSecret(env.ResolveEnvOrExit(*diodeClientSecret)),
 		)
 	}
 	if err != nil {
