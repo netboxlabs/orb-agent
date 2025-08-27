@@ -9,6 +9,7 @@ from device_discovery.policy.models import (
     DeviceParameters,
     IpamParameters,
     ObjectParameters,
+    Options,
     VlanParameters,
 )
 from device_discovery.translate import (
@@ -28,7 +29,8 @@ def sample_device_info():
         "model": "ISR4451",
         "vendor": "Cisco",
         "serial_number": "123456789",
-        "driver": "ios",
+        "os_version": "v15.2",
+        "platform": "ios",
         "interface_list": ["GigabitEthernet0/0", "GigabitEthernet0/0/1"],
     }
 
@@ -200,7 +202,7 @@ def test_translate_interface_ips(
 
 
 def test_translate_data(
-    sample_device_info, sample_interface_info, sample_interfaces_ip
+    sample_device_info, sample_interface_info, sample_interfaces_ip, sample_defaults
 ):
     """Ensure data translation is correct."""
     data = {
@@ -212,10 +214,27 @@ def test_translate_data(
     entities = list(translate_data(data))
     assert len(entities) == 5
     assert entities[0].device.name == "router1"
+    assert entities[0].device.site.name == "undefined"
+    assert entities[0].device.platform.name == "IOS v15.2"
     assert entities[1].interface.name == "GigabitEthernet0/0"
     assert entities[2].interface.name == "GigabitEthernet0/0/1"
     assert entities[3].prefix.prefix == "192.0.2.0/24"
     assert entities[4].ip_address.address == "192.0.2.1/24"
+
+    data["defaults"] = sample_defaults
+    data["options"] = Options(platform_omit_version=True)
+
+    entities = list(translate_data(data))
+    assert entities[0].device.site.name == "New York"
+    assert entities[0].device.platform.name == "ios"
+
+    data["defaults"].role = "switch"
+    data["defaults"].device.platform = "custom"
+    data["options"].platform_omit_version = False
+
+    entities = list(translate_data(data))
+    assert entities[0].device.platform.name == "custom"
+    assert entities[0].device.role.name == "switch"
 
 
 def test_translate_vlan(sample_defaults):

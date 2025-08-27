@@ -35,6 +35,9 @@ class DeviceParameters(ObjectParameters):
     manufacturer: str | None = Field(
         default=None, description="Device manufacturer override, optional"
     )
+    platform: str | None = Field(
+        default=None, description="Device platform override, optional"
+    )
 
 
 class VlanParameters(ObjectParameters):
@@ -81,12 +84,23 @@ class Defaults(BaseModel):
     )
 
 
+class Options(BaseModel):
+    """Model for discovery options."""
+
+    platform_omit_version: bool | None = Field(
+        default=False, description="Omit platform version, optional"
+    )
+
+
 class Config(BaseModel):
     """Model for discovery configuration."""
 
     schedule: str | None = Field(default=None, description="cron interval, optional")
     defaults: Defaults | None = Field(
         default=None, description="Default configuration, optional"
+    )
+    options: Options | None = Field(
+        default=None, description="Discovery options, optional"
     )
 
     @field_validator("schedule")

@@ -176,6 +176,7 @@ class PolicyRunner:
                 "interface": device.get_interfaces(),
                 "interface_ip": device.get_interfaces_ip(),
                 "defaults": config.defaults,
+                "options": config.options,
             }
             try:
                 data["vlan"] = device.get_vlans()

@@ -17,7 +17,7 @@ from netboxlabs.diode.sdk.ingester import (
     Prefix,
 )
 
-from device_discovery.policy.models import Defaults
+from device_discovery.policy.models import Defaults, Options
 
 
 def int32_overflows(number: int) -> bool:
@@ -55,6 +55,7 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
     tags = list(defaults.tags) if defaults.tags else []
     model = device_info.get("model")
     manufacturer = device_info.get("vendor")
+    platform = device_info.get("platform")
     description = None
     comments = None
     location = None
@@ -65,6 +66,7 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
         comments = defaults.device.comments
         model = defaults.device.model or model
         manufacturer = defaults.device.manufacturer or manufacturer
+        platform = defaults.device.platform or platform
 
     if defaults.location:
         location = Location(name=defaults.location, site=defaults.site)
@@ -72,7 +74,7 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
     device = Device(
         name=device_info.get("hostname"),
         device_type=DeviceType(model=model, manufacturer=manufacturer),
-        platform=Platform(name=device_info.get("driver"), manufacturer=manufacturer),
+        platform=Platform(name=platform, manufacturer=manufacturer),
         role=defaults.role,
         serial=device_info.get("serial_number"),
         status="active",
@@ -289,12 +291,19 @@ def translate_data(data: dict) -> Iterable[Entity]:
     entities = []
 
     defaults = data.get("defaults", Defaults())
+    options = data.get("options", Options())
 
     device_info = data.get("device", {})
     interfaces = data.get("interface", {})
     interfaces_ip = data.get("interface_ip", {})
     if device_info:
-        device_info["driver"] = data.get("driver")
+        if options.platform_omit_version:
+            device_info["platform"] = data.get("driver")
+        else:
+
+            device_info["platform"] = (
+                f"{data.get('driver', '').upper()} {device_info.get('os_version')}"
+            )
         device = translate_device(device_info, defaults)
         entities.append(Entity(device=device))
 
