@@ -283,3 +283,206 @@ func TestNetworkDiscoveryBackendDryRun(t *testing.T) {
 
 	mockCmd.AssertExpectations(t)
 }
+
+func TestNetworkDiscoveryLogLevel(t *testing.T) {
+	// Create a test server for all log level tests
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/status" {
+			response := StatusResponse{
+				Version:   "1.3.4",
+				StartTime: "2023-10-01T12:00:00Z",
+				UpTime:    123.456,
+			}
+			_ = json.NewEncoder(w).Encode(response)
+		}
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	assert.NoError(t, err)
+
+	// Test default log level
+	t.Run("DefaultLogLevel", func(t *testing.T) {
+		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+		repo, err := policies.NewMemRepo()
+		assert.NoError(t, err)
+
+		assert.True(t, networkdiscovery.Register())
+		be := backend.GetBackend("network_discovery")
+
+		// Configure without log_level - should use default
+		err = be.Configure(logger, repo, map[string]any{
+			"host": serverURL.Hostname(),
+			"port": serverURL.Port(),
+		}, config.BackendCommons{})
+		assert.NoError(t, err)
+
+		mockCmd := &mocks.MockCmd{}
+		mocks.SetupSuccessfulProcess(mockCmd, 12345)
+
+		originalNewCmdOptions := backend.NewCmdOptions
+		defer func() {
+			backend.NewCmdOptions = originalNewCmdOptions
+		}()
+
+		// Verify that default log level is used in command args
+		backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, args ...string) backend.Commander {
+			assert.Contains(t, args, "--log-level")
+			// Find the index of --log-level and check the next argument
+			for i, arg := range args {
+				if arg == "--log-level" && i+1 < len(args) {
+					assert.Equal(t, backend.DefaultLogLevel, args[i+1])
+					break
+				}
+			}
+			return mockCmd
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		err = be.Start(ctx, cancel)
+		assert.NoError(t, err)
+
+		// Stop the backend
+		_ = be.Stop(ctx)
+		mockCmd.AssertExpectations(t)
+	})
+
+	// Test custom log level
+	t.Run("CustomLogLevel", func(t *testing.T) {
+		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+		repo, err := policies.NewMemRepo()
+		assert.NoError(t, err)
+
+		assert.True(t, networkdiscovery.Register())
+		be := backend.GetBackend("network_discovery")
+
+		customLogLevel := "debug"
+		// Configure with custom log_level
+		err = be.Configure(logger, repo, map[string]any{
+			"host":      serverURL.Hostname(),
+			"port":      serverURL.Port(),
+			"log_level": customLogLevel,
+		}, config.BackendCommons{})
+		assert.NoError(t, err)
+
+		mockCmd := &mocks.MockCmd{}
+		mocks.SetupSuccessfulProcess(mockCmd, 12345)
+
+		originalNewCmdOptions := backend.NewCmdOptions
+		defer func() {
+			backend.NewCmdOptions = originalNewCmdOptions
+		}()
+
+		// Verify that custom log level is used in command args
+		backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, args ...string) backend.Commander {
+			assert.Contains(t, args, "--log-level")
+			// Find the index of --log-level and check the next argument
+			for i, arg := range args {
+				if arg == "--log-level" && i+1 < len(args) {
+					assert.Equal(t, customLogLevel, args[i+1])
+					break
+				}
+			}
+			return mockCmd
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		err = be.Start(ctx, cancel)
+		assert.NoError(t, err)
+
+		// Stop the backend
+		_ = be.Stop(ctx)
+		mockCmd.AssertExpectations(t)
+	})
+
+	// Test dry run mode includes log level
+	t.Run("DryRunWithLogLevel", func(t *testing.T) {
+		// Create a test server for dry run tests (even though dry run doesn't use HTTP, the backend still tries readiness checks)
+		dryRunServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.URL.Path == "/api/v1/status":
+				response := StatusResponse{Version: "1.3.5", StartTime: "2023-10-01T12:00:00Z", UpTime: 123.456}
+				_ = json.NewEncoder(w).Encode(response)
+			case r.URL.Path == "/api/v1/capabilities":
+				capabilities := map[string]any{"capability": true}
+				_ = json.NewEncoder(w).Encode(capabilities)
+			case strings.HasPrefix(r.URL.Path, "/api/v1/policies"):
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer dryRunServer.Close()
+
+		dryRunServerURL, err := url.Parse(dryRunServer.URL)
+		assert.NoError(t, err)
+
+		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+		repo, err := policies.NewMemRepo()
+		assert.NoError(t, err)
+
+		assert.True(t, networkdiscovery.Register())
+		be := backend.GetBackend("network_discovery")
+
+		beCommons := config.BackendCommons{
+			Diode: struct {
+				Target          string `yaml:"target"`
+				ClientID        string `yaml:"client_id"`
+				ClientSecret    string `yaml:"client_secret"`
+				AgentName       string `yaml:"agent_name"`
+				DryRun          bool   `yaml:"dry_run"`
+				DryRunOutputDir string `yaml:"dry_run_output_dir"`
+			}{
+				DryRun:          true,
+				DryRunOutputDir: "/tmp/dry-run-output",
+			},
+		}
+
+		customLogLevel := "debug"
+		err = be.Configure(logger, repo, map[string]any{
+			"host":      dryRunServerURL.Hostname(),
+			"port":      dryRunServerURL.Port(),
+			"log_level": customLogLevel,
+		}, beCommons)
+		assert.NoError(t, err)
+
+		mockCmd := &mocks.MockCmd{}
+		mocks.SetupSuccessfulProcess(mockCmd, 12345)
+
+		originalNewCmdOptions := backend.NewCmdOptions
+		defer func() {
+			backend.NewCmdOptions = originalNewCmdOptions
+		}()
+
+		// Verify that log level IS included in dry run mode
+		backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, args ...string) backend.Commander {
+			assert.Contains(t, args, "--log-level")
+			// Find the index of --log-level and check the next argument
+			for i, arg := range args {
+				if arg == "--log-level" && i+1 < len(args) {
+					assert.Equal(t, customLogLevel, args[i+1])
+					break
+				}
+			}
+			// Verify dry run specific args are also present
+			assert.Contains(t, args, "--dry-run")
+			assert.Contains(t, args, "--dry-run-output-dir")
+			// Verify non-dry-run args are NOT present
+			assert.NotContains(t, args, "--host")
+			assert.NotContains(t, args, "--port")
+			assert.NotContains(t, args, "--diode-target")
+			return mockCmd
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		err = be.Start(ctx, cancel)
+		assert.NoError(t, err)
+
+		// Stop the backend
+		err = be.Stop(context.WithValue(context.Background(), config.ContextKey("routine"), "test"))
+		assert.NoError(t, err)
+		mockCmd.AssertExpectations(t)
+	})
+}

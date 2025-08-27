@@ -46,6 +46,7 @@ type snmpDiscoveryBackend struct {
 	diodeOtelEndpoint    string
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
+	diodeLogLevel        string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -88,6 +89,7 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.diodeAppNamePrefix = common.Diode.AgentName
 	d.diodeDryRun = common.Diode.DryRun
 	d.diodeDryRunOutputDir = common.Diode.DryRunOutputDir
+	d.diodeLogLevel = backend.DefaultLogLevel
 
 	if target, prs := config["target"].(string); prs {
 		d.diodeTarget = target
@@ -106,6 +108,9 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	}
 	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
 		d.diodeDryRunOutputDir = dryRunOutputDir
+	}
+	if logLevel, prs := config["log_level"].(string); prs {
+		d.diodeLogLevel = logLevel
 	}
 
 	if common.Otel.Grpc != "" {
@@ -139,6 +144,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
 			"--diode-app-name-prefix", d.diodeAppNamePrefix,
+			"--log-level", d.diodeLogLevel,
 		}
 	} else {
 		pvOptions = []string{
@@ -148,6 +154,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 			"--diode-client-id", d.diodeClientID,
 			"--diode-client-secret", "********",
 			"--diode-app-name-prefix", d.diodeAppNamePrefix,
+			"--log-level", d.diodeLogLevel,
 		}
 	}
 
