@@ -303,7 +303,7 @@ func TestNetworkDiscoveryLogLevel(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Test default log level
-	t.Run("DefaultLogLevel", func(t *testing.T) {
+	t.Run("LogLevelNotSet", func(t *testing.T) {
 		logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 		repo, err := policies.NewMemRepo()
 		assert.NoError(t, err)
@@ -326,16 +326,9 @@ func TestNetworkDiscoveryLogLevel(t *testing.T) {
 			backend.NewCmdOptions = originalNewCmdOptions
 		}()
 
-		// Verify that default log level is used in command args
+		// Verify that log level is not set in command args
 		backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, args ...string) backend.Commander {
-			assert.Contains(t, args, "--log-level")
-			// Find the index of --log-level and check the next argument
-			for i, arg := range args {
-				if arg == "--log-level" && i+1 < len(args) {
-					assert.Equal(t, backend.DefaultLogLevel, args[i+1])
-					break
-				}
-			}
+			assert.NotContains(t, args, "--log-level")
 			return mockCmd
 		}
 

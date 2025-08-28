@@ -9,9 +9,6 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
-// DefaultLogLevel is the default log level used for backend operations
-const DefaultLogLevel = "info"
-
 // Running Status types
 const (
 	Unknown RunningStatus = iota
