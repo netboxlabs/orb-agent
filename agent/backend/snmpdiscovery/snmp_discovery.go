@@ -46,6 +46,7 @@ type snmpDiscoveryBackend struct {
 	diodeOtelEndpoint    string
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
+	diodeLogLevel        string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -107,6 +108,11 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
 		d.diodeDryRunOutputDir = dryRunOutputDir
 	}
+	if logLevel, prs := config["log_level"].(string); prs {
+		d.diodeLogLevel = logLevel
+	} else if debug, prs := config["debug"].(bool); prs && debug {
+		d.diodeLogLevel = "debug"
+	}
 
 	if common.Otel.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otel.Grpc
@@ -151,8 +157,16 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		}
 	}
 
+	if d.diodeLogLevel != "" {
+		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
+		d.logger.Info("snmp-discovery using log level",
+			slog.String("log_level", d.diodeLogLevel))
+	}
+
 	if d.diodeOtelEndpoint != "" {
 		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		d.logger.Info("snmp-discovery using OTLP metrics endpoint",
+			slog.String("endpoint", d.diodeOtelEndpoint))
 	}
 
 	d.logger.Info("snmp-discovery startup", slog.Any("arguments", pvOptions))
