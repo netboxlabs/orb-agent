@@ -46,6 +46,13 @@ Config defines data for the whole scope and is optional overall.
 |:---------:|:----:|:--------:|:-----------:|
 | schedule | cron format | no  |  If defined, it will execute scope following cron schedule time. If not defined, it will execute scope only once  |
 | defaults | map | no  |  key value pair that defines default values  |
+| options | map | no | key value pair that defines config options |
+
+#### Options
+Current supported options:
+|  Key  | Type |  Description  |
+|:-----:|:----:|:-------------:|
+| platform_omit_version  | bool | If True, only the driver name will be used as the NetBox platform name (defaults to 'False' if not specified) |
 
 #### Defaults
 Current supported defaults:
@@ -67,7 +74,8 @@ Current supported defaults:
 |-------------|------|---------------------------------|
 | device      | map  | Device-specific defaults        |
 | ├─ model | str  | Device type model (overrides the model automatically retrieved from NAPALM)   |
-| ├─ manufacturer | str  | Device manufacturer (overrides the defined/discovered NAPALM driver name) |
+| ├─ manufacturer | str  | Device manufacturer (overrides the vendor automatically retrieved from NAPALM) |
+| ├─ platform | str  | Device platform (overrides the defined/discovered NAPALM driver name and OS version) |
 | ├─ description | str  | Device description           |
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
