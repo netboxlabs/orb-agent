@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   GO_VERSION: '1.24'
@@ -35,6 +36,22 @@ jobs:
             username: ${{ secrets.DOCKERHUB_USERNAME }}
             password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+        - name: Setup JFrog CLI
+          id: setup-jfrog-cli
+          uses: jfrog/setup-jfrog-cli@ff5cb544114ffc152db9cea1cd3d5978d5074946 # v4.5.11
+          env:
+            JF_URL: https://netboxlabs.jfrog.io
+            JF_PROJECT: obs
+          with:
+            oidc-provider-name: github-ci
+
+        - name: Login to JFrog Artifactory
+          uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3
+          with:
+            registry: netboxlabs.jfrog.io
+            username: ${{ steps.setup-jfrog-cli.outputs.oidc-user }}
+            password: ${{ steps.setup-jfrog-cli.outputs.oidc-token }}
+
         - name: Verify QEMU installation
           run: |
               docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
@@ -55,6 +72,8 @@ jobs:
             push: true
             cache-from: type=gha
             cache-to: type=gha,mode=max
-            tags: netboxlabs/orb-agent:develop
+            tags: |
+              netboxlabs/orb-agent:develop
+              netboxlabs.jfrog.io/obs-builds/orb-agent:develop
             build-args: |
               GO_VERSION=${{ env.GO_VERSION }}  

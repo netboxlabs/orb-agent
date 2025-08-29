@@ -46,6 +46,7 @@ type networkDiscoveryBackend struct {
 	diodeOtelEndpoint    string
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
+	diodeLogLevel        string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -107,6 +108,11 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
 		d.diodeDryRunOutputDir = dryRunOutputDir
 	}
+	if logLevel, prs := config["log_level"].(string); prs {
+		d.diodeLogLevel = logLevel
+	} else if debug, prs := config["debug"].(bool); prs && debug {
+		d.diodeLogLevel = "debug"
+	}
 
 	if common.Otel.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otel.Grpc
@@ -151,14 +157,28 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		}
 	}
 
+	if d.diodeLogLevel != "" {
+		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
+		d.logger.Info("network-discovery using log level",
+			slog.String("log_level", d.diodeLogLevel))
+	}
+
 	if d.diodeOtelEndpoint != "" {
 		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		d.logger.Info("network-discovery using OTLP metrics endpoint",
+			slog.String("endpoint", d.diodeOtelEndpoint))
 	}
 
 	d.logger.Info("network-discovery startup", slog.Any("arguments", pvOptions))
 
-	if !d.diodeDryRun && len(pvOptions) > 9 {
-		pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun {
+		// Find and replace the masked client secret with the actual value
+		for i, arg := range pvOptions {
+			if arg == "********" {
+				pvOptions[i] = d.diodeClientSecret
+				break
+			}
+		}
 	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
