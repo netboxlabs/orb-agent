@@ -91,7 +91,7 @@ jobs:
             }
 
       - name: Install dependencies
-        run: npm i
+        run: npm install --legacy-peer-deps
 
       - name: Run semantic-release dry-run
         id: semantic-release
