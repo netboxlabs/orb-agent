@@ -1,6 +1,6 @@
 module github.com/netboxlabs/orb-discovery/network-discovery
 
-go 1.24.2
+go 1.24.6
 
 require (
 	github.com/Ullaakut/nmap/v3 v3.0.4
