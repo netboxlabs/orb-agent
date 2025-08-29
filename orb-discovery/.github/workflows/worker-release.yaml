@@ -55,7 +55,7 @@ jobs:
               "name": "${{ env.APP_NAME }}",
               "version": "1.0.0",
               "devDependencies": {
-                "semantic-release": "^24.2.7",
+                "semantic-release": "^25.0.0-beta.6",
                 "semantic-release-export-data": "^1.0.1",
                 "@semantic-release/changelog": "^6.0.3"
               }
@@ -198,7 +198,7 @@ jobs:
               "name": "${{ env.APP_NAME }}",
               "version": "1.0.0",
               "devDependencies": {
-                "semantic-release": "^24.2.7",
+                "semantic-release": "^25.0.0-beta.6",
                 "semantic-release-export-data": "^1.0.1",
                 "@semantic-release/changelog": "^6.0.3"
               }
