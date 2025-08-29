@@ -45,6 +45,7 @@ jobs:
               "version": "1.0.0",
               "devDependencies": {
                 "semantic-release-export-data": "^1.0.1",
+                "semantic-release": "25.0.0-beta.6",
                 "@semantic-release/changelog": "^6.0.3"
               }
             }
@@ -90,7 +91,7 @@ jobs:
               ]
             }
       - name: setup semantic-release
-        run: npm i
+        run: npm install --legacy-peer-deps
       - name: release dry-run
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
@@ -208,6 +209,7 @@ jobs:
               "version": "1.0.0",
               "devDependencies": {
                 "semantic-release-export-data": "^1.0.1",
+                "semantic-release": "25.0.0-beta.6",
                 "@semantic-release/changelog": "^6.0.3"
               }
             }
@@ -253,7 +255,7 @@ jobs:
               ]
             }
       - name: setup semantic-release
-        run: npm i
+        run: npm install --legacy-peer-deps
       - name: Release
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
