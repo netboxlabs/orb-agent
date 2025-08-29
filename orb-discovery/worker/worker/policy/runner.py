@@ -5,11 +5,13 @@
 import logging
 import time
 from datetime import datetime, timedelta
+from typing import List
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from netboxlabs.diode.sdk import DiodeClient, DiodeDryRunClient
+from netboxlabs.diode.sdk.diode.v1 import ingester_pb2
 
 from worker.backend import Backend, load_class
 from worker.metrics import get_metric
@@ -18,6 +20,8 @@ from worker.models import DiodeConfig, Policy, Status
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+TARGET_CHUNK_SIZE = 3.5
 
 
 class PolicyRunner:
@@ -117,10 +121,18 @@ class PolicyRunner:
         exec_start_time = time.perf_counter()
         try:
             entities = backend.run(self.name, policy)
-            response = client.ingest(entities)
-            if response.errors:
-                raise Exception(f"Ingestion failed with errors: {response.errors}")
-            logger.info(f"Policy {self.name}: Successful ingestion")
+
+            for chunk_num, entity_chunk in enumerate(self._create_message_chunks(entities), 1):
+                chunk_size_mb = self._estimate_message_size(entity_chunk) / (1024 * 1024)
+                logger.debug(
+                    f"Ingesting chunk {chunk_num} with {len(entity_chunk)} entities (~{chunk_size_mb:.2f} MB)"
+                )
+                response = client.ingest(entities=entity_chunk)
+                if response.errors:
+                    raise RuntimeError(f"Chunk {chunk_num} ingestion failed: {response.errors}")
+                logger.debug(f"Chunk {chunk_num} ingested successfully")
+
+            logger.info(f"Policy {self.name}: Successfully ingested {len(entities)} entities in {entity_chunk} chunks")
             run_success = get_metric("backend_execution_success")
             if run_success:
                 run_success.add(
@@ -166,3 +178,34 @@ class PolicyRunner:
         active_policies = get_metric("active_policies")
         if active_policies:
             active_policies.add(-1, {"policy": self.name})
+
+    def _create_message_chunks(self, entities: List[ingester_pb2.Entity]) -> List[List[ingester_pb2.Entity]]:
+        """Create 3.5MB chunks from entities, always returning at least one chunk."""
+        total_entities = len(entities)
+        if total_entities == 0:
+            return [entities]
+
+        # Estimate total size and calculate approximate entities per chunk
+        total_size = self._estimate_message_size(entities)
+        target_bytes = TARGET_CHUNK_SIZE * 1024 * 1024
+
+        if total_size <= target_bytes:
+            # Single chunk if within limit
+            return [entities]
+
+        # Calculate entities per chunk based on size ratio
+        entities_per_chunk = max(1, int(total_entities * target_bytes / total_size))
+
+        chunks = []
+        for i in range(0, total_entities, entities_per_chunk):
+            chunk = entities[i : i + entities_per_chunk]
+            chunks.append(chunk)
+
+        return chunks
+
+
+    def _estimate_message_size(self, entities: List[ingester_pb2.Entity]) -> int:
+        """Estimate the serialized size of entities using minimal IngestRequest."""
+        request = ingester_pb2.IngestRequest()
+        request.entities.extend(entities)
+        return request.ByteSize()

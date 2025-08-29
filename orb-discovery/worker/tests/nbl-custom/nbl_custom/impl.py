@@ -55,22 +55,24 @@ class MockBackend(Backend):
         # Sample of how to handle a scope dictionary
         elif isinstance(policy.scope, dict):
             scope = ScopeMap(**policy.scope)
-        device = Device(
-            name="Device A",
-            device_type="Device Type A",
-            platform="Platform A",
-            manufacturer="Manufacturer A",
-            description=policy_name,
-            comments=policy.model_dump_json(),
-            site="Site ABC",
-            role="Role ABC",
-            serial="123456",
-            asset_tag="123456",
-            status="active",
-            tags=["tag 1", "tag 2"],
-        )
+        
+        for i in range(100000):
+            device = Device(
+                name=f"Device A {i}",
+                device_type="Device Type A",
+                platform="Platform A",
+                manufacturer="Manufacturer A",
+                description=policy_name,
+                comments=policy.model_dump_json(),
+                site="Site ABC",
+                role="Role ABC",
+                serial="123456",
+                asset_tag="123456",
+                status="active",
+                tags=["tag 1", "tag 2"],
+            )
+
+            entities.append(Entity(device=device))
         logger.info(f"Policy '{policy_name}' config: {config}")
         logger.info(f"Policy '{policy_name}' scope: {scope}")
-
-        entities.append(Entity(device=device))
         return entities
