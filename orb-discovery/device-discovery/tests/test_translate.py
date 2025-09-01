@@ -236,6 +236,25 @@ def test_translate_data(
     assert entities[0].device.platform.name == "custom"
     assert entities[0].device.role.name == "switch"
 
+def test_translate_data_handles_none_defaults_and_options(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """Ensure translation works when defaults and options are None."""
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+        "defaults": None,
+        "options": None,
+    }
+
+    entities = list(translate_data(data))
+
+    assert len(entities) == 5
+    assert entities[0].device.site.name == "undefined"
+    assert entities[0].device.platform.name == "IOS v15.2"
+
 
 def test_translate_vlan(sample_defaults):
     """Ensure VLAN translation is correct."""

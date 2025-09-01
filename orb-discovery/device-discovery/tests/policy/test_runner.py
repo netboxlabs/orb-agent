@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from apscheduler.triggers.date import DateTrigger
 
-from device_discovery.policy.models import Config, Defaults, Napalm, Status
+from device_discovery.policy.models import Config, Defaults, Napalm, Options, Status
 from device_discovery.policy.runner import PolicyRunner
 
 
@@ -81,6 +81,22 @@ def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes):
         trigger = mock_add_job.call_args[1]["trigger"]
         assert isinstance(trigger, DateTrigger)
         assert mock_start.called
+        assert policy_runner.status == Status.RUNNING
+
+
+def test_setup_policy_runner_with_none_config(policy_runner, sample_scopes):
+    """Ensure PolicyRunner uses default config when none is provided."""
+    with (
+        patch.object(policy_runner.scheduler, "start") as mock_start,
+        patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
+    ):
+
+        policy_runner.setup("policy1", None, sample_scopes)
+
+        mock_start.assert_called_once()
+        assert mock_add_job.call_count == 2
+        assert isinstance(policy_runner.config.defaults, Defaults)
+        assert isinstance(policy_runner.config.options, Options)
         assert policy_runner.status == Status.RUNNING
 
 
