@@ -32,12 +32,12 @@ var (
 )
 
 func init() {
-	pktvisor.Register()
-	otel.Register()
 	devicediscovery.Register()
 	networkdiscovery.Register()
-	worker.Register()
+	otel.Register()
 	snmpdiscovery.Register()
+	pktvisor.Register()
+	worker.Register()
 }
 
 // Version prints the version of the agent
