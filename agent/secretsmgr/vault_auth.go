@@ -88,8 +88,8 @@ func (a *AuthToken) vaultAuthenticate(_ context.Context, cli *vault.Client) (*va
 type AuthAppRole struct {
 	RoleID        string  `yaml:"role_id"`
 	SecretID      string  `yaml:"secret_id"`
-	WrappingToken bool    `yaml:"wrapping_token,ommitempty"`
-	MountPath     *string `yaml:"mount_path,ommitempty"`
+	WrappingToken bool    `yaml:"wrapping_token,omitempty"`
+	MountPath     *string `yaml:"mount_path,omitempty"`
 }
 
 // UnmarshalYAML for AuthAppRole validates required fields after unmarshaling
