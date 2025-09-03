@@ -93,7 +93,7 @@ func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 
 	// Expected heartbeat data
 	expectedHeartbeat := messages.Heartbeat{
-		AgentID: "orb-agent",
+		AgentID: "test-agent-id",
 		Version: "1.0.0",
 	}
 	expectedPayload, _ := json.Marshal(expectedHeartbeat)
@@ -102,7 +102,7 @@ func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	mockPublish.On("Publish", ctx, expectedPayload).Return(nil)
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, mockPublish.Publish, testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
 
 	// Assert
 	mockPublish.AssertExpectations(t)
@@ -122,7 +122,7 @@ func TestHeartbeater_SendSingleHeartbeat_PublishError(t *testing.T) {
 	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(publishError)
 
 	// Act - should not panic despite publish error
-	hb.sendSingleHeartbeat(ctx, mockPublish.Publish, testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
 
 	// Assert
 	mockPublish.AssertExpectations(t)
@@ -143,7 +143,7 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, publishFunc, testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, publishFunc, "test-agent-id", testTime, messages.Online)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -152,7 +152,7 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	err := json.Unmarshal(capturedPayload, &heartbeat)
 	require.NoError(t, err)
 
-	assert.Equal(t, "orb-agent", heartbeat.AgentID)
+	assert.Equal(t, "test-agent-id", heartbeat.AgentID)
 	assert.Equal(t, "1.0.0", heartbeat.Version)
 }
 
@@ -172,7 +172,7 @@ func TestHeartbeater_SendHeartbeats_InitialHeartbeat(t *testing.T) {
 	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Once()
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
 
 	// Give some time for initial heartbeat
 	time.Sleep(10 * time.Millisecond)
@@ -200,7 +200,7 @@ func TestHeartbeater_SendHeartbeats_PeriodicHeartbeats(t *testing.T) {
 	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Times(4)
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
 
 	// Wait for some periodic heartbeats (ticker is 50ms in test)
 	time.Sleep(120 * time.Millisecond)
@@ -236,7 +236,7 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 
 	// Act
 	go func() {
-		hb.sendHeartbeats(ctx, cancel, publishFunc)
+		hb.sendHeartbeats(ctx, cancel, publishFunc, "test-agent-id")
 		done <- true
 	}()
 
@@ -272,7 +272,7 @@ func TestHeartbeater_SendHeartbeats_PublishErrors(t *testing.T) {
 	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(publishError).Times(4)
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
 
 	// Wait for some heartbeats with errors
 	time.Sleep(120 * time.Millisecond)
@@ -300,7 +300,7 @@ func TestHeartbeater_SendHeartbeats_ConcurrentCancellation(t *testing.T) {
 	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Maybe()
 
 	// Act - start heartbeats
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
 
 	// Cancel immediately in a separate goroutine
 	go func() {
@@ -344,7 +344,7 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 
 	// Act
 	go func() {
-		hb.sendHeartbeats(ctx, cancel, publishFunc)
+		hb.sendHeartbeats(ctx, cancel, publishFunc, "test-agent-id")
 		done <- true
 	}()
 
@@ -370,7 +370,7 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 		var heartbeat messages.Heartbeat
 		err := json.Unmarshal(payload, &heartbeat)
 		require.NoError(t, err, "Heartbeat %d should be valid JSON", i)
-		assert.Equal(t, "orb-agent", heartbeat.AgentID)
+		assert.Equal(t, "test-agent-id", heartbeat.AgentID)
 		assert.Equal(t, "1.0.0", heartbeat.Version)
 	}
 }
@@ -530,7 +530,7 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
 	trt := tokenResponseTopics{Inbox: "test/topic"}
-	err := fleetManager.connect("://invalid-url", "test_token", trt, backends)
+	err := fleetManager.connect("://invalid-url", "test_token", trt, backends, "test-agent-id")
 
 	// Assert
 	assert.Error(t, err)
@@ -548,7 +548,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// since we don't have a real MQTT server
 	backends := make(map[string]backend.Backend)
 	trt2 := tokenResponseTopics{Inbox: "test/topic"}
-	err := fleetManager.connect("mqtt://localhost:1883", "test_token", trt2, backends)
+	err := fleetManager.connect("mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id")
 
 	// Assert - we expect connection to fail since no server is running,
 	// but URL parsing should succeed
@@ -750,7 +750,7 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
 
 	// Test that topic generation works with the JWT
-	topics, err := GenerateTopicsFromTemplate(token.AccessToken)
+	topics, err := GenerateTopicsFromTemplate(token.AccessToken, "test-agent-123")
 	require.NoError(t, err)
 	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/inbox", topics.Inbox)
 	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/outbox", topics.Outbox)
@@ -1249,6 +1249,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 						TokenURL:     server.URL,
 						ClientID:     "test_client_id",
 						ClientSecret: "test_client_secret",
+						AgentID:      "test-agent-123",
 						MQTTURL:      "mqtt://fallback.example.com:1883",
 					},
 				},
@@ -1308,7 +1309,7 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := GenerateTopicsFromTemplate(tt.jwt)
+			topics, err := GenerateTopicsFromTemplate(tt.jwt, tt.expectedAgent)
 			require.NoError(t, err)
 
 			expectedTopics := &tokenResponseTopics{

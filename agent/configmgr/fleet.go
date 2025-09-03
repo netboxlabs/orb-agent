@@ -43,9 +43,9 @@ type heartbeater struct {
 	heartbeatCtx context.Context
 }
 
-func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, _ time.Time, _ messages.HeartbeatState) {
+func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, agentID string, _ time.Time, _ messages.HeartbeatState) {
 	hbData := messages.Heartbeat{
-		AgentID: "orb-agent",
+		AgentID: agentID,
 		Version: "1.0.0",
 	}
 
@@ -66,23 +66,23 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func
 // supplied context is cancelled.  The cancelFunc parameter is ignored by the
 // implementation but is accepted for backward-compatibility with unit tests
 // that expect to pass it.
-func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, publishFunc func(ctx context.Context, payload []byte) error) {
+func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, publishFunc func(ctx context.Context, payload []byte) error, agentID string) {
 	// Update our internal reference so other methods that read hb.heartbeatCtx
 	// (if any) remain accurate.
 	hb.heartbeatCtx = ctx
 
 	hb.logger.Debug("start heartbeats routine", slog.Any("routine", ctx.Value("routine")))
-	hb.sendSingleHeartbeat(ctx, publishFunc, time.Now(), messages.Online)
+	hb.sendSingleHeartbeat(ctx, publishFunc, agentID, time.Now(), messages.Online)
 
 	for {
 		select {
 		case <-ctx.Done():
 			hb.logger.Debug("context done, stopping heartbeats routine")
-			hb.sendSingleHeartbeat(ctx, publishFunc, time.Now(), messages.Offline)
+			hb.sendSingleHeartbeat(ctx, publishFunc, agentID, time.Now(), messages.Offline)
 			hb.heartbeatCtx = nil
 			return
 		case t := <-hb.hbTicker.C:
-			hb.sendSingleHeartbeat(ctx, publishFunc, t, messages.Online)
+			hb.sendSingleHeartbeat(ctx, publishFunc, agentID, t, messages.Online)
 		}
 	}
 }
@@ -112,13 +112,13 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		return err
 	}
 
-	// generate topics from JWT claims using hardcoded templates
-	topics, err := GenerateTopicsFromTemplate(token.AccessToken)
+	// generate topics from JWT claims and config agent_id using hardcoded templates
+	topics, err := GenerateTopicsFromTemplate(token.AccessToken, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID)
 	if err != nil {
-		return fmt.Errorf("failed to generate topics from JWT claims: %w", err)
+		return fmt.Errorf("failed to generate topics: %w", err)
 	}
 
-	fleetManager.logger.Info("generated topics from JWT claims",
+	fleetManager.logger.Info("generated topics from JWT org_id and config agent_id",
 		"heartbeat_topic", topics.Heartbeat,
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
@@ -131,14 +131,14 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 
 	// use the generated topics to connect over MQTT v5
-	err = fleetManager.connect(mqttURL, token.AccessToken, *topics, backends)
+	err = fleetManager.connect(mqttURL, token.AccessToken, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
+func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend, agentID string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
@@ -194,7 +194,7 @@ func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, 
 					"payload", string(payload),
 				)
 				return nil
-			})
+			}, agentID)
 
 			go fleetManager.sendCapabilities(ctx, backends, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
@@ -265,9 +265,9 @@ func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, 
 }
 
 // connect is a backward-compatibility shim that invokes connectWithContext with
-// the fleet manager’s root context.
-func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
-	return fleetManager.connectWithContext(fleetManager.heartbeater.heartbeatCtx, fleetMQTTURL, token, topics, backends)
+// the fleet manager's root context.
+func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend, agentID string) error {
+	return fleetManager.connectWithContext(fleetManager.heartbeater.heartbeatCtx, fleetMQTTURL, token, topics, backends, agentID)
 }
 
 func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, publishFunc func(ctx context.Context, payload []byte) error) {
