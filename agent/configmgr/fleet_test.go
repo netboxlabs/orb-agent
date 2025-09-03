@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -411,19 +412,13 @@ func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 		err := r.ParseForm()
 		assert.NoError(t, err)
 		assert.Equal(t, "client_credentials", r.Form.Get("grant_type"))
-		assert.Contains(t, r.Form.Get("scope"), "orb.read")
-		assert.Contains(t, r.Form.Get("scope"), "orb.write")
-		assert.Contains(t, r.Form.Get("scope"), "orb.configure")
+		assert.Contains(t, r.Form.Get("scope"), "orb.mqtt")
 
-		// Return valid token response
+		// Return valid token response (no longer includes topics)
 		response := tokenResponse{
 			AccessToken: "test_access_token",
 			MQTTURL:     "mqtt://test.example.com:1883",
-			Topics: tokenResponseTopics{
-				Inbox:  "test/inbox",
-				Outbox: "test/outbox",
-			},
-			ExpiresIn: 3600,
+			ExpiresIn:   3600,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -440,8 +435,6 @@ func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 	assert.NotNil(t, token)
 	assert.Equal(t, "test_access_token", token.AccessToken)
 	assert.Equal(t, "mqtt://test.example.com:1883", token.MQTTURL)
-	assert.Equal(t, "test/inbox", token.Topics.Inbox)
-	assert.Equal(t, "test/outbox", token.Topics.Outbox)
 	assert.Equal(t, 3600, token.ExpiresIn)
 }
 
@@ -610,13 +603,9 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	// Create mock HTTP server for token endpoint
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
-			AccessToken: "test_token",
-			MQTTURL:     "://invalid-mqtt-url", // Invalid MQTT URL
-			Topics: tokenResponseTopics{
-				Inbox:  "test/inbox",
-				Outbox: "test/outbox",
-			},
-			ExpiresIn: 3600,
+			AccessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJ0ZXN0LW9yZyIsImFnZW50X2lkIjoidGVzdC1hZ2VudC0xMjMiLCJpYXQiOjE1MTYyMzkwMjJ9.8U8W8j_2ZwV2GvO3QcI6LJl2a8XGrHPDYS9hM2y4k2I", // Valid JWT
+			MQTTURL:     "://invalid-mqtt-url",                                                                                                                                                       // Invalid MQTT URL
+			ExpiresIn:   3600,
 		}
 		_ = json.NewEncoder(w).Encode(response)
 	}))
@@ -691,11 +680,7 @@ func TestTokenResponse_Marshaling(t *testing.T) {
 	original := tokenResponse{
 		AccessToken: "test_token_123",
 		MQTTURL:     "mqtt://test.example.com:1883",
-		Topics: tokenResponseTopics{
-			Inbox:  "agent/inbox",
-			Outbox: "agent/outbox",
-		},
-		ExpiresIn: 7200,
+		ExpiresIn:   7200,
 	}
 
 	// Act - Marshal to JSON
@@ -710,8 +695,6 @@ func TestTokenResponse_Marshaling(t *testing.T) {
 	// Assert
 	assert.Equal(t, original.AccessToken, unmarshaled.AccessToken)
 	assert.Equal(t, original.MQTTURL, unmarshaled.MQTTURL)
-	assert.Equal(t, original.Topics.Inbox, unmarshaled.Topics.Inbox)
-	assert.Equal(t, original.Topics.Outbox, unmarshaled.Topics.Outbox)
 	assert.Equal(t, original.ExpiresIn, unmarshaled.ExpiresIn)
 }
 
@@ -748,13 +731,9 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	// Create mock HTTP server for successful token response
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
-			AccessToken: "integration_test_token",
-			MQTTURL:     "mqtt://localhost:1883", // Valid but non-existent
-			Topics: tokenResponseTopics{
-				Inbox:  "integration/inbox",
-				Outbox: "integration/outbox",
-			},
-			ExpiresIn: 3600,
+			AccessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJpbnRlZ3JhdGlvbi1vcmciLCJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.FY6z7lP4RwV3HvO5QfM8NLn2b8XHrIPDZT0hN4y6m3K", // Valid JWT with org_id="integration-org", agent_id="test-agent-123"
+			MQTTURL:     "mqtt://localhost:1883",                                                                                                                                                               // Valid but non-existent
+			ExpiresIn:   3600,
 		}
 		_ = json.NewEncoder(w).Encode(response)
 	}))
@@ -766,12 +745,18 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 
 	// Assert - token retrieval should succeed
 	require.NoError(t, err)
-	assert.Equal(t, "integration_test_token", token.AccessToken)
+	expectedJWT := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJpbnRlZ3JhdGlvbi1vcmciLCJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.FY6z7lP4RwV3HvO5QfM8NLn2b8XHrIPDZT0hN4y6m3K"
+	assert.Equal(t, expectedJWT, token.AccessToken)
 	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
-	assert.Equal(t, "integration/inbox", token.Topics.Inbox)
+
+	// Test that topic generation works with the JWT
+	topics, err := GenerateTopicsFromTemplate(token.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/inbox", topics.Inbox)
+	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/outbox", topics.Outbox)
 
 	// Note: We don't test the full Start() method here because it would require
-	// a real MQTT broker, but we've verified the token retrieval part works
+	// a real MQTT broker, but we've verified the token retrieval and topic generation works
 }
 
 func TestFleetConfigManager_CompilerInterfaceCheck(t *testing.T) {
@@ -791,169 +776,6 @@ func TestFleetConfigManager_CompilerInterfaceCheck(t *testing.T) {
 	ctx := context.Background()
 	resultCtx := manager.GetContext(ctx)
 	assert.NotNil(t, resultCtx)
-}
-
-func TestFleetConfigManager_ConfigurationFallback(t *testing.T) {
-	// Test that token response values take priority over configuration values
-	ctx := context.Background()
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	pMgr := &mockPolicyManagerForFleet{}
-
-	// Create fleet manager
-	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
-	defer fleetManager.heartbeater.hbTicker.Stop()
-
-	// Test data
-	fleetCfg := config.FleetManager{
-		MQTTURL:           "mqtts://config-mqtt.example.com:8883",
-		HeartbeatTopic:    "config/heartbeat",
-		CapabilitiesTopic: "config/capabilities",
-	}
-
-	tokenResp := &tokenResponse{
-		AccessToken: "test-token",
-		MQTTURL:     "mqtts://token-mqtt.example.com:8883",
-		Topics: tokenResponseTopics{
-			Heartbeat:    "token/heartbeat",
-			Capabilities: "token/capabilities",
-			Inbox:        "token/inbox",
-			Outbox:       "token/outbox",
-		},
-	}
-
-	// Test merge functionality
-	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
-
-	// Verify token response values take priority
-	assert.Equal(t, "mqtts://token-mqtt.example.com:8883", mqttURL, "Token response MQTT URL should take priority")
-	assert.Equal(t, "token/heartbeat", topics.Heartbeat, "Token response heartbeat topic should take priority")
-	assert.Equal(t, "token/capabilities", topics.Capabilities, "Token response capabilities topic should take priority")
-
-	// Verify token response values are used for inbox/outbox
-	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
-	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
-}
-
-func TestFleetConfigManager_ConfigurationFallback_EmptyConfig(t *testing.T) {
-	// Test that token response values are used when configuration is empty
-	ctx := context.Background()
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	pMgr := &mockPolicyManagerForFleet{}
-
-	// Create fleet manager
-	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
-	defer fleetManager.heartbeater.hbTicker.Stop()
-
-	// Test data - empty configuration
-	fleetCfg := config.FleetManager{
-		TokenURL:     "https://auth.example.com/token",
-		ClientID:     "client-id",
-		ClientSecret: "client-secret",
-		// No MQTT URL or topics configured
-	}
-
-	tokenResp := &tokenResponse{
-		AccessToken: "test-token",
-		MQTTURL:     "mqtts://token-mqtt.example.com:8883",
-		Topics: tokenResponseTopics{
-			Heartbeat:    "token/heartbeat",
-			Capabilities: "token/capabilities",
-			Inbox:        "token/inbox",
-			Outbox:       "token/outbox",
-		},
-	}
-
-	// Test merge functionality
-	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
-
-	// Verify token response values are used when config is empty
-	assert.Equal(t, "mqtts://token-mqtt.example.com:8883", mqttURL, "Token response MQTT URL should be used when config is empty")
-	assert.Equal(t, "token/heartbeat", topics.Heartbeat, "Token response heartbeat topic should be used when config is empty")
-	assert.Equal(t, "token/capabilities", topics.Capabilities, "Token response capabilities topic should be used when config is empty")
-	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
-	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
-}
-
-func TestFleetConfigManager_ConfigurationFallback_LegacySupport(t *testing.T) {
-	// Test that legacy TopicName field works correctly
-	ctx := context.Background()
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	pMgr := &mockPolicyManagerForFleet{}
-
-	// Create fleet manager
-	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
-	defer fleetManager.heartbeater.hbTicker.Stop()
-
-	// Test data - legacy configuration
-	fleetCfg := config.FleetManager{
-		TokenURL:     "https://auth.example.com/token",
-		ClientID:     "client-id",
-		ClientSecret: "client-secret",
-		TopicName:    "legacy-topic", // Legacy field
-		// No specific heartbeat/capabilities topics
-	}
-
-	tokenResp := &tokenResponse{
-		AccessToken: "test-token",
-		MQTTURL:     "mqtts://token-mqtt.example.com:8883",
-		Topics: tokenResponseTopics{
-			Heartbeat:    "token/heartbeat",
-			Capabilities: "token/capabilities",
-			Inbox:        "token/inbox",
-			Outbox:       "token/outbox",
-		},
-	}
-
-	// Test merge functionality
-	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
-
-	// Verify token response topics override legacy configuration
-	assert.Equal(t, "mqtts://token-mqtt.example.com:8883", mqttURL, "Token response MQTT URL should be used")
-	assert.Equal(t, "token/heartbeat", topics.Heartbeat, "Token response should override legacy topic for heartbeat")
-	assert.Equal(t, "token/capabilities", topics.Capabilities, "Token response should override legacy topic for capabilities")
-	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
-	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
-}
-
-func TestFleetConfigManager_ConfigurationFallback_EmptyTokenResponse(t *testing.T) {
-	// Test that configuration values are used when token response values are empty
-	ctx := context.Background()
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	pMgr := &mockPolicyManagerForFleet{}
-
-	// Create fleet manager
-	fleetManager := newFleetConfigManager(ctx, logger, pMgr)
-	defer fleetManager.heartbeater.hbTicker.Stop()
-
-	// Test data - configuration has values, token response has empty values
-	fleetCfg := config.FleetManager{
-		MQTTURL:           "mqtts://config-mqtt.example.com:8883",
-		HeartbeatTopic:    "config/heartbeat",
-		CapabilitiesTopic: "config/capabilities",
-	}
-
-	tokenResp := &tokenResponse{
-		AccessToken: "test-token",
-		MQTTURL:     "", // Empty MQTT URL
-		Topics: tokenResponseTopics{
-			Heartbeat:    "", // Empty heartbeat topic
-			Capabilities: "", // Empty capabilities topic
-			Inbox:        "token/inbox",
-			Outbox:       "token/outbox",
-		},
-	}
-
-	// Test merge functionality
-	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(fleetCfg, tokenResp)
-
-	// Verify configuration values are used when token response is empty
-	assert.Equal(t, "mqtts://config-mqtt.example.com:8883", mqttURL, "Configuration MQTT URL should be used when token response is empty")
-	assert.Equal(t, "config/heartbeat", topics.Heartbeat, "Configuration heartbeat topic should be used when token response is empty")
-	assert.Equal(t, "config/capabilities", topics.Capabilities, "Configuration capabilities topic should be used when token response is empty")
-
-	// Verify token response values are still used for inbox/outbox
-	assert.Equal(t, "token/inbox", topics.Inbox, "Token response inbox topic should be used")
-	assert.Equal(t, "token/outbox", topics.Outbox, "Token response outbox topic should be used")
 }
 
 // Test edge cases for heartbeater ticker cleanup
@@ -1389,4 +1211,114 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 	assert.IsType(t, map[string]interface{}{}, backendInfo.Data["object_val"])
 
 	mockBackend1.AssertExpectations(t)
+}
+
+func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
+	// This test verifies that the Start method correctly generates topics from JWT claims
+
+	// Create a valid JWT token with org_id and agent_id claims
+	// Header: {"alg":"HS256","typ":"JWT"}
+	// Payload: {"org_id":"integration-org","agent_id":"test-agent-123","iat":1516239022}
+	// Secret: "your-256-bit-secret"
+	validJWT := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJpbnRlZ3JhdGlvbi1vcmciLCJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.FY6z7lP4RwV3HvO5QfM8NLn2b8XHrIPDZT0hN4y6m3K"
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(context.Background(), logger, mockPMgr)
+	defer fleetManager.heartbeater.hbTicker.Stop()
+
+	// Create mock HTTP server that returns a JWT token
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		response := tokenResponse{
+			AccessToken: validJWT,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   3600,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create test config
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     server.URL,
+						ClientID:     "test_client_id",
+						ClientSecret: "test_client_secret",
+						MQTTURL:      "mqtt://fallback.example.com:1883",
+					},
+				},
+			},
+		},
+	}
+
+	// Mock backends
+	backends := make(map[string]backend.Backend)
+
+	// Since we can't easily mock the MQTT connection in this test,
+	// we expect the Start method to fail at the MQTT connection step,
+	// but succeed in generating topics from JWT claims
+	err := fleetManager.Start(cfg, backends)
+
+	// We expect an error because we can't actually connect to MQTT,
+	// but we want to verify that topic generation succeeded
+	// (The error should be related to MQTT connection, not JWT parsing)
+	require.Error(t, err)
+	// The error could be connection-related (mqtt, tcp, timeout, etc.)
+	errorMsg := strings.ToLower(err.Error())
+	assert.True(t,
+		strings.Contains(errorMsg, "mqtt") ||
+			strings.Contains(errorMsg, "connection") ||
+			strings.Contains(errorMsg, "timeout") ||
+			strings.Contains(errorMsg, "deadline"),
+		"Expected connection-related error, got: %s", err.Error())
+}
+
+func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
+	// Test the integration of JWT parsing with topic generation using real JWT
+	tests := []struct {
+		name          string
+		jwt           string
+		expectedOrg   string
+		expectedAgent string
+	}{
+		{
+			name: "production-like JWT",
+			// Header: {"alg":"HS256","typ":"JWT"}
+			// Payload: {"org_id":"acme-corp","agent_id":"agent-prod-456","iat":1516239022}
+			// Secret: "your-256-bit-secret"
+			jwt:           "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJhY21lLWNvcnAiLCJhZ2VudF9pZCI6ImFnZW50LXByb2QtNDU2IiwiaWF0IjoxNTE2MjM5MDIyfQ.P5LwR7mKzYt4PxV9QgN3OMo8c2fJsHGF3bU6pR7z9nL",
+			expectedOrg:   "acme-corp",
+			expectedAgent: "agent-prod-456",
+		},
+		{
+			name: "development JWT with different values",
+			// Header: {"alg":"HS256","typ":"JWT"}
+			// Payload: {"org_id":"dev-123","agent_id":"dev-agent-789","iat":1516239022}
+			// Secret: "your-256-bit-secret"
+			jwt:           "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJkZXYtMTIzIiwiYWdlbnRfaWQiOiJkZXYtYWdlbnQtNzg5IiwiaWF0IjoxNTE2MjM5MDIyfQ.M8PzT6qL3YuR5NvW1QnJ4Opr9e3aKtHIE4cV7sR8mON",
+			expectedOrg:   "dev-123",
+			expectedAgent: "dev-agent-789",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			topics, err := GenerateTopicsFromTemplate(tt.jwt)
+			require.NoError(t, err)
+
+			expectedTopics := &tokenResponseTopics{
+				Heartbeat:    fmt.Sprintf("/orgs/%s/agents/%s/heartbeat", tt.expectedOrg, tt.expectedAgent),
+				Capabilities: fmt.Sprintf("/orgs/%s/agents/%s/capabilities", tt.expectedOrg, tt.expectedAgent),
+				Inbox:        fmt.Sprintf("/orgs/%s/agents/%s/inbox", tt.expectedOrg, tt.expectedAgent),
+				Outbox:       fmt.Sprintf("/orgs/%s/agents/%s/outbox", tt.expectedOrg, tt.expectedAgent),
+			}
+
+			assert.Equal(t, expectedTopics, topics)
+		})
+	}
 }

@@ -35,15 +35,11 @@ type GitManager struct {
 
 // FleetManager represents the Orb ConfigManager configuration.
 type FleetManager struct {
-	URL               string `yaml:"url"`
-	TokenURL          string `yaml:"token_url"`
-	ClientID          string `yaml:"client_id"`
-	ClientSecret      string `yaml:"client_secret"`
-	MQTTURL           string `yaml:"mqtt_url,omitempty"`
-	HeartbeatTopic    string `yaml:"heartbeat_topic,omitempty"`
-	CapabilitiesTopic string `yaml:"capabilities_topic,omitempty"`
-	// TopicName is kept for backward compatibility
-	TopicName string `yaml:"topic_name,omitempty"`
+	URL          string `yaml:"url"`
+	TokenURL     string `yaml:"token_url"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	MQTTURL      string `yaml:"mqtt_url,omitempty"`
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.

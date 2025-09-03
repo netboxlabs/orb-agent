@@ -105,75 +105,37 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-<<<<<<< HEAD
 
-=======
->>>>>>> 263625a (simplify contexts)
 	// call the token url to get the token
 	token, err := fleetManager.getToken(ctx, cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	if err != nil {
 		return err
 	}
 
-	// merge configuration values with token response values (config takes priority)
-	mqttURL, topics := fleetManager.mergeConfigWithTokenResponse(cfg.OrbAgent.ConfigManager.Sources.Fleet, token)
-
-	// use the merged configuration to connect over MQTT v5
-	err = fleetManager.connect(mqttURL, token.AccessToken, topics, backends)
+	// generate topics from JWT claims using hardcoded templates
+	topics, err := GenerateTopicsFromTemplate(token.AccessToken)
 	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// mergeConfigWithTokenResponse merges configuration values with token response values,
-// giving priority to token response values when they are provided
-func (fleetManager *fleetConfigManager) mergeConfigWithTokenResponse(fleetCfg config.FleetManager, token *tokenResponse) (string, tokenResponseTopics) {
-	// Start with configuration values as defaults
-	mqttURL := fleetCfg.MQTTURL
-	topics := tokenResponseTopics{
-		Heartbeat:    fleetCfg.HeartbeatTopic,
-		Capabilities: fleetCfg.CapabilitiesTopic,
+		return fmt.Errorf("failed to generate topics from JWT claims: %w", err)
 	}
 
-	// Handle legacy TopicName field for backward compatibility - only if specific topics aren't set
-	if fleetCfg.TopicName != "" && fleetCfg.HeartbeatTopic == "" && fleetCfg.CapabilitiesTopic == "" {
-		fleetManager.logger.Debug("using legacy topic name as base for heartbeat and capabilities", "topic", fleetCfg.TopicName)
-		topics.Heartbeat = fleetCfg.TopicName + "/heartbeat"
-		topics.Capabilities = fleetCfg.TopicName + "/capabilities"
-	}
-
-	// Override with token response values if provided (token takes priority)
-	if token.MQTTURL != "" {
-		fleetManager.logger.Debug("using MQTT URL from token response", "token_url", token.MQTTURL, "config_url", fleetCfg.MQTTURL)
-		mqttURL = token.MQTTURL
-	} else if mqttURL != "" {
-		fleetManager.logger.Debug("using MQTT URL from configuration", "config_url", mqttURL)
-	}
-
-	// Token response topics override configuration topics
-	if token.Topics.Heartbeat != "" {
-		fleetManager.logger.Debug("using heartbeat topic from token response", "token_topic", token.Topics.Heartbeat, "config_topic", topics.Heartbeat)
-		topics.Heartbeat = token.Topics.Heartbeat
-	}
-
-	if token.Topics.Capabilities != "" {
-		fleetManager.logger.Debug("using capabilities topic from token response", "token_topic", token.Topics.Capabilities, "config_topic", topics.Capabilities)
-		topics.Capabilities = token.Topics.Capabilities
-	}
-
-	// Token response always provides inbox/outbox topics
-	topics.Inbox = token.Topics.Inbox
-	topics.Outbox = token.Topics.Outbox
-
-	fleetManager.logger.Info("merged configuration and token response",
-		"mqtt_url", mqttURL,
+	fleetManager.logger.Info("generated topics from JWT claims",
 		"heartbeat_topic", topics.Heartbeat,
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
 		"outbox_topic", topics.Outbox)
 
-	return mqttURL, topics
+	// use MQTT URL from token response or fallback to config
+	mqttURL := token.MQTTURL
+	if mqttURL == "" {
+		mqttURL = cfg.OrbAgent.ConfigManager.Sources.Fleet.MQTTURL
+	}
+
+	// use the generated topics to connect over MQTT v5
+	err = fleetManager.connect(mqttURL, token.AccessToken, *topics, backends)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend) error {
@@ -366,10 +328,9 @@ type tokenResponseTopics struct {
 }
 
 type tokenResponse struct {
-	AccessToken string              `json:"access_token"`
-	MQTTURL     string              `json:"mqtt_url"`
-	Topics      tokenResponseTopics `json:"topics"`
-	ExpiresIn   int                 `json:"expires_in"`
+	AccessToken string `json:"access_token"`
+	MQTTURL     string `json:"mqtt_url"`
+	ExpiresIn   int    `json:"expires_in"`
 }
 
 func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
