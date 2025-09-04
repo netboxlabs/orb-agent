@@ -27,8 +27,8 @@ func TestFillTopicTemplate(t *testing.T) {
 			name:     "basic substitution",
 			template: "/orgs/{org_id}/agents/{agent_id}/test",
 			claims: &TopicClaims{
-				OrgID:   "org123",
-				AgentID: "agent-456",
+				OrgID:    "org123",
+				ClientId: "agent-456",
 			},
 			expected: "/orgs/org123/agents/agent-456/test",
 		},
@@ -36,8 +36,8 @@ func TestFillTopicTemplate(t *testing.T) {
 			name:     "multiple occurrences",
 			template: "{org_id}/data/{org_id}/{agent_id}",
 			claims: &TopicClaims{
-				OrgID:   "company1",
-				AgentID: "agent-789",
+				OrgID:    "company1",
+				ClientId: "agent-789",
 			},
 			expected: "company1/data/company1/agent-789",
 		},
@@ -45,8 +45,8 @@ func TestFillTopicTemplate(t *testing.T) {
 			name:     "no placeholders",
 			template: "static/topic/name",
 			claims: &TopicClaims{
-				OrgID:   "org123",
-				AgentID: "agent-456",
+				OrgID:    "org123",
+				ClientId: "agent-456",
 			},
 			expected: "static/topic/name",
 		},
@@ -54,8 +54,8 @@ func TestFillTopicTemplate(t *testing.T) {
 			name:     "empty claims",
 			template: "/orgs/{org_id}/agents/{agent_id}/test",
 			claims: &TopicClaims{
-				OrgID:   "",
-				AgentID: "",
+				OrgID:    "",
+				ClientId: "",
 			},
 			expected: "/orgs//agents//test",
 		},

@@ -137,9 +137,12 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	if mqttURL == "" {
 		mqttURL = cfg.OrbAgent.ConfigManager.Sources.Fleet.MQTTURL
 	}
+	if mqttURL == "" {
+		return fmt.Errorf("no MQTT URL provided in token response or config")
+	}
 
 	// use the generated topics to connect over MQTT v5
-	err = fleetManager.connect(ctx, mqttURL, token.AccessToken, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID, jwtClaims.Zone)
+	err = fleetManager.connect(ctx, mqttURL, token.AccessToken, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims.Zone)
 	if err != nil {
 		return err
 	}
@@ -160,7 +163,7 @@ func parseJWTClaims(tokenString string) (*JWTClaims, error) {
 	}
 
 	var claims jwt.Claims
-	var customClaims map[string]interface{}
+	var customClaims map[string]any
 
 	// Extract both standard and custom claims without verification
 	if err := token.UnsafeClaimsWithoutVerification(&claims, &customClaims); err != nil {
@@ -185,16 +188,13 @@ func parseJWTClaims(tokenString string) (*JWTClaims, error) {
 	return jwtClaims, nil
 }
 
-func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend, agentID, zone string) error {
+func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend, clientID, zone string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
 		fleetManager.logger.Error("failed to parse ORB URL", "url", fleetMQTTURL, "error", err)
 		return err
 	}
-
-	// Configure autopaho client
-	clientID := agentID + time.Now().Format("20060102150405")
 
 	cfg := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{serverURL},
@@ -224,7 +224,7 @@ func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTUR
 				publishResponse, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Heartbeat,
 					Payload: payload,
-					QoS:     1,
+					QoS:     0,
 					Retain:  false,
 				})
 				if err != nil {
@@ -241,7 +241,7 @@ func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTUR
 					"payload", string(payload),
 				)
 				return nil
-			}, agentID)
+			}, clientID)
 
 			go fleetManager.sendCapabilities(ctx, backends, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
@@ -281,6 +281,7 @@ func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTUR
 
 	// Set authentication if token is provided
 	if token != "" {
+		fleetManager.logger.Info("setting MQTT authentication", "client_id", clientID, "zone", zone)
 		cfg.ConnectUsername = fmt.Sprintf("%s:%s", zone, clientID)
 		cfg.ConnectPassword = []byte(token)
 	}
@@ -393,6 +394,7 @@ func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL s
 	data.Set("scope", strings.Join(scopes, " "))
 	data.Set("client_id", clientID)
 	data.Set("client_secret", clientSecret)
+	data.Set("audience", "orb")
 
 	fleetManager.logger.Debug("sending token request", "url", tokenURL, "data", data, "client_id", clientID) //, "client_secret", clientSecret)
 

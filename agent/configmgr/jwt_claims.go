@@ -43,12 +43,11 @@ func fillTopicTemplate(template string, claims *TopicClaims) string {
 }
 
 // generateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
-func generateTopicsFromTemplate(tokenString string, clientId string, jwtClaims *JWTClaims) (*tokenResponseTopics, error) {
-
+func generateTopicsFromTemplate(tokenString string, clientID string, jwtClaims *JWTClaims) (*tokenResponseTopics, error) {
 	// Combine JWT org_id with config agent_id
 	topicClaims := &TopicClaims{
 		OrgID:    jwtClaims.OrgID,
-		ClientId: clientId,
+		ClientId: clientID,
 	}
 
 	templates := DefaultTopicTemplates()
