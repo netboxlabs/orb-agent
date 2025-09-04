@@ -7,6 +7,7 @@ orb:
         token_url: "http://0.0.0.0:8080/auth/token"
         client_id: "${FLEET_CLIENT_ID}"
         client_secret: "${FLEET_CLIENT_SECRET}"
+        agent_id: "my-fleet-agent-001"
   backends:
     network_discovery:
     common:
