@@ -2,6 +2,7 @@ package configmgr
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +71,19 @@ func (m *mockPolicyManagerForFleet) RemoveBackendPolicies(be backend.Backend, pe
 func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName string, beName string) error {
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
+}
+
+// rawJWTWithClaims builds a raw JWT string with the given claims.
+// Signature is a dummy value; ParseUnverified only inspects header/payload.
+func rawJWTWithClaims(claims map[string]any) string {
+	header := map[string]any{
+		"alg": "RS256",
+		"kid": "test-key",
+		"typ": "JWT",
+	}
+	h, _ := json.Marshal(header)
+	p, _ := json.Marshal(claims)
+	return base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(p) + ".sig"
 }
 
 // Test helper to create a heartbeater instance for testing
@@ -603,9 +617,13 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	// Create mock HTTP server for token endpoint
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
-			AccessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJ0ZXN0LW9yZyIsImFnZW50X2lkIjoidGVzdC1hZ2VudC0xMjMiLCJpYXQiOjE1MTYyMzkwMjJ9.8U8W8j_2ZwV2GvO3QcI6LJl2a8XGrHPDYS9hM2y4k2I", // Valid JWT
-			MQTTURL:     "://invalid-mqtt-url",                                                                                                                                                       // Invalid MQTT URL
-			ExpiresIn:   3600,
+			AccessToken: rawJWTWithClaims(map[string]any{
+				"org_id":   "test-org",
+				"agent_id": "test-agent-123",
+				"iat":      1516239022,
+			}),
+			MQTTURL:   "://invalid-mqtt-url", // Invalid MQTT URL
+			ExpiresIn: 3600,
 		}
 		_ = json.NewEncoder(w).Encode(response)
 	}))
@@ -731,9 +749,13 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	// Create mock HTTP server for successful token response
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
-			AccessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJpbnRlZ3JhdGlvbi1vcmciLCJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.FY6z7lP4RwV3HvO5QfM8NLn2b8XHrIPDZT0hN4y6m3K", // Valid JWT with org_id="integration-org", agent_id="test-agent-123"
-			MQTTURL:     "mqtt://localhost:1883",                                                                                                                                                               // Valid but non-existent
-			ExpiresIn:   3600,
+			AccessToken: rawJWTWithClaims(map[string]any{
+				"org_id":   "integration-org",
+				"agent_id": "test-agent-123",
+				"iat":      1516239022,
+			}),
+			MQTTURL:   "mqtt://localhost:1883", // Valid but non-existent
+			ExpiresIn: 3600,
 		}
 		_ = json.NewEncoder(w).Encode(response)
 	}))
@@ -745,7 +767,11 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 
 	// Assert - token retrieval should succeed
 	require.NoError(t, err)
-	expectedJWT := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJpbnRlZ3JhdGlvbi1vcmciLCJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.FY6z7lP4RwV3HvO5QfM8NLn2b8XHrIPDZT0hN4y6m3K"
+	expectedJWT := rawJWTWithClaims(map[string]any{
+		"org_id":   "integration-org",
+		"agent_id": "test-agent-123",
+		"iat":      1516239022,
+	})
 	assert.Equal(t, expectedJWT, token.AccessToken)
 	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
 
@@ -1217,10 +1243,11 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	// This test verifies that the Start method correctly generates topics from JWT claims
 
 	// Create a valid JWT token with org_id and agent_id claims
-	// Header: {"alg":"HS256","typ":"JWT"}
-	// Payload: {"org_id":"integration-org","agent_id":"test-agent-123","iat":1516239022}
-	// Secret: "your-256-bit-secret"
-	validJWT := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJpbnRlZ3JhdGlvbi1vcmciLCJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.FY6z7lP4RwV3HvO5QfM8NLn2b8XHrIPDZT0hN4y6m3K"
+	validJWT := rawJWTWithClaims(map[string]any{
+		"org_id":   "integration-org",
+		"agent_id": "test-agent-123",
+		"iat":      1516239022,
+	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockPMgr := &mockPolicyManagerForFleet{}
@@ -1289,19 +1316,21 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 	}{
 		{
 			name: "production-like JWT",
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":"acme-corp","agent_id":"agent-prod-456","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			jwt:           "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJhY21lLWNvcnAiLCJhZ2VudF9pZCI6ImFnZW50LXByb2QtNDU2IiwiaWF0IjoxNTE2MjM5MDIyfQ.P5LwR7mKzYt4PxV9QgN3OMo8c2fJsHGF3bU6pR7z9nL",
+			jwt: rawJWTWithClaims(map[string]any{
+				"org_id":   "acme-corp",
+				"agent_id": "agent-prod-456",
+				"iat":      1516239022,
+			}),
 			expectedOrg:   "acme-corp",
 			expectedAgent: "agent-prod-456",
 		},
 		{
 			name: "development JWT with different values",
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":"dev-123","agent_id":"dev-agent-789","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			jwt:           "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJkZXYtMTIzIiwiYWdlbnRfaWQiOiJkZXYtYWdlbnQtNzg5IiwiaWF0IjoxNTE2MjM5MDIyfQ.M8PzT6qL3YuR5NvW1QnJ4Opr9e3aKtHIE4cV7sR8mON",
+			jwt: rawJWTWithClaims(map[string]any{
+				"org_id":   "dev-123",
+				"agent_id": "dev-agent-789",
+				"iat":      1516239022,
+			}),
 			expectedOrg:   "dev-123",
 			expectedAgent: "dev-agent-789",
 		},
