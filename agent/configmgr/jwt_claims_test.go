@@ -88,29 +88,30 @@ func TestParseJWTClaims(t *testing.T) {
 		},
 		{
 			name: "valid JWT with org_id",
-			// This is a sample JWT with the claims we need (created using jwt.io)
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":"test-org","agent_id":"test-agent-123","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJ0ZXN0LW9yZyIsImFnZW50X2lkIjoidGVzdC1hZ2VudC0xMjMiLCJpYXQiOjE1MTYyMzkwMjJ9.8U8W8j_2ZwV2GvO3QcI6LJl2a8XGrHPDYS9hM2y4k2I",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"org_id":   "test-org",
+				"agent_id": "test-agent-123",
+				"iat":      1516239022,
+			}),
 			expected: &JWTClaims{
 				OrgID: "test-org",
 			},
 		},
 		{
 			name: "JWT missing org_id",
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"agent_id":"test-agent-123","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.QZ3K8j9QqgV2HvP4RdJ7MKm3b9YHsIPEZT0iN3z5l3J",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"agent_id": "test-agent-123",
+				"iat":      1516239022,
+			}),
 			expectedErr: "org_id claim not found",
 		},
 		{
 			name: "JWT with non-string org_id",
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":123,"agent_id":"test-agent-123","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOjEyMywiYWdlbnRfaWQiOiJ0ZXN0LWFnZW50LTEyMyIsImlhdCI6MTUxNjIzOTAyMn0.Vh9X8l2LwO6PvR5QfK9NMn4c0ZIsJGF1aU3oO4z6m5K",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"org_id":   123,
+				"agent_id": "test-agent-123",
+				"iat":      1516239022,
+			}),
 			expectedErr: "org_id claim not found or not a string",
 		},
 	}
@@ -135,23 +136,17 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 	tests := []struct {
 		name        string
 		tokenString string
-		expectedErr string
+		orgID       string
 		expected    *tokenResponseTopics
 	}{
 		{
-			name:        "empty token",
-			tokenString: "",
-			expectedErr: "failed to parse JWT claims",
-		},
-		{
-			name:        "invalid token",
-			tokenString: "invalid.token",
-			expectedErr: "failed to parse JWT claims",
-		},
-		{
 			name: "valid token generates correct topics",
-			// Valid JWT with org_id="test-org" and agent_id="test-agent-123"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJ0ZXN0LW9yZyIsImFnZW50X2lkIjoidGVzdC1hZ2VudC0xMjMiLCJpYXQiOjE1MTYyMzkwMjJ9.8U8W8j_2ZwV2GvO3QcI6LJl2a8XGrHPDYS9hM2y4k2I",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"org_id":   "test-org",
+				"agent_id": "test-agent-123",
+				"iat":      1516239022,
+			}),
+			orgID: "test-org",
 			expected: &tokenResponseTopics{
 				Heartbeat:    "/orgs/test-org/agents/test-agent-123/heartbeat",
 				Capabilities: "/orgs/test-org/agents/test-agent-123/capabilities",
@@ -161,11 +156,12 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 		},
 		{
 			name: "different org and agent values",
-			// JWT with org_id="prod-company" and agent_id="agent-456"
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":"prod-company","agent_id":"agent-456","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJwcm9kLWNvbXBhbnkiLCJhZ2VudF9pZCI6ImFnZW50LTQ1NiIsImlhdCI6MTUxNjIzOTAyMn0.KJ2NtX5zY8R9LwP3QfM6NOn5d1aJsHGE2bV4oQ6z7mL",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"org_id":   "prod-company",
+				"agent_id": "agent-456",
+				"iat":      1516239022,
+			}),
+			orgID: "prod-company",
 			expected: &tokenResponseTopics{
 				Heartbeat:    "/orgs/prod-company/agents/test-agent-123/heartbeat",
 				Capabilities: "/orgs/prod-company/agents/test-agent-123/capabilities",
@@ -177,16 +173,10 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(tt.tokenString, "test-agent-123")
+			topics, err := generateTopicsFromTemplate(tt.tokenString, "test-agent-123", &JWTClaims{OrgID: tt.orgID})
 
-			if tt.expectedErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedErr)
-				assert.Nil(t, topics)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tt.expected, topics)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, topics)
 		})
 	}
 }

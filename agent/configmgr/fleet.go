@@ -15,6 +15,8 @@ import (
 
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -103,17 +105,23 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 }
 
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, _ := context.WithCancel(context.Background())
+	// defer cancel() TODO: I dont think this is correct but we're cancelling the context too early so can't publish. Maybe they need to run under a different context?
 
+	fleetManager.logger.Info("starting fleet config manager", "token_url", cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, "client_id", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, "client_secret", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	// call the token url to get the token
 	token, err := fleetManager.getToken(ctx, cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	if err != nil {
 		return err
 	}
 
+	jwtClaims, err := parseJWTClaims(token.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
 	// generate topics from JWT claims and config agent_id using hardcoded templates
-	topics, err := generateTopicsFromTemplate(token.AccessToken, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID)
+	topics, err := generateTopicsFromTemplate(token.AccessToken, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims)
 	if err != nil {
 		return fmt.Errorf("failed to generate topics: %w", err)
 	}
@@ -131,14 +139,53 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 
 	// use the generated topics to connect over MQTT v5
-	err = fleetManager.connect(mqttURL, token.AccessToken, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID)
+	err = fleetManager.connect(ctx, mqttURL, token.AccessToken, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID, jwtClaims.Zone)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend, agentID string) error {
+// parseJWTClaims extracts org_id claim from a JWT token
+func parseJWTClaims(tokenString string) (*JWTClaims, error) {
+	if tokenString == "" {
+		return nil, fmt.Errorf("empty token string")
+	}
+
+	// Parse the JWT token without verification (since we already trust it from the token endpoint)
+	// We accept common signature algorithms used in JWTs
+	token, err := jwt.ParseSigned(tokenString, []jose.SignatureAlgorithm{jose.HS256, jose.HS384, jose.HS512, jose.RS256, jose.RS384, jose.RS512, jose.ES256, jose.ES384, jose.ES512})
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse JWT token: %w", err)
+	}
+
+	var claims jwt.Claims
+	var customClaims map[string]interface{}
+
+	// Extract both standard and custom claims without verification
+	if err := token.UnsafeClaimsWithoutVerification(&claims, &customClaims); err != nil {
+		return nil, fmt.Errorf("failed to extract claims from JWT: %w", err)
+	}
+
+	// Extract org_id from custom claims
+	jwtClaims := &JWTClaims{}
+
+	if orgID, ok := customClaims["orb:org_id"].(string); ok {
+		jwtClaims.OrgID = orgID
+	} else {
+		return nil, fmt.Errorf("orb:org_id claim not found or not a string in JWT token")
+	}
+
+	if zone, ok := customClaims["orb:zone"].(string); ok {
+		jwtClaims.Zone = zone
+	} else {
+		return nil, fmt.Errorf("orb:zone claim not found or not a string in JWT token")
+	}
+
+	return jwtClaims, nil
+}
+
+func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend, agentID, zone string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
@@ -147,7 +194,7 @@ func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, 
 	}
 
 	// Configure autopaho client
-	clientID := "orb-agent-" + time.Now().Format("20060102150405")
+	clientID := agentID + time.Now().Format("20060102150405")
 
 	cfg := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{serverURL},
@@ -234,12 +281,8 @@ func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, 
 
 	// Set authentication if token is provided
 	if token != "" {
-		cfg.ConnectUsername = "token" // Using token as username, adjust as needed for your auth scheme
+		cfg.ConnectUsername = fmt.Sprintf("%s:%s", zone, clientID)
 		cfg.ConnectPassword = []byte(token)
-	} else {
-		// TODO: remove these temporary credentials
-		cfg.ConnectUsername = "admin"
-		cfg.ConnectPassword = []byte("admin")
 	}
 
 	// Create and start the connection manager using the long-lived context.
@@ -262,12 +305,6 @@ func (fleetManager *fleetConfigManager) connectWithContext(ctx context.Context, 
 
 	fleetManager.logger.Info("MQTT connection manager started successfully")
 	return nil
-}
-
-// connect is a backward-compatibility shim that invokes connectWithContext with
-// the fleet manager's root context.
-func (fleetManager *fleetConfigManager) connect(fleetMQTTURL, token string, topics tokenResponseTopics, backends map[string]backend.Backend, agentID string) error {
-	return fleetManager.connectWithContext(fleetManager.heartbeater.heartbeatCtx, fleetMQTTURL, token, topics, backends, agentID)
 }
 
 func (fleetManager *fleetConfigManager) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, publishFunc func(ctx context.Context, payload []byte) error) {

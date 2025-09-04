@@ -544,7 +544,7 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
 	trt := tokenResponseTopics{Inbox: "test/topic"}
-	err := fleetManager.connect("://invalid-url", "test_token", trt, backends, "test-agent-id")
+	err := fleetManager.connect(context.Background(), "://invalid-url", "test_token", trt, backends, "test-agent-id", "test-zone")
 
 	// Assert
 	assert.Error(t, err)
@@ -562,7 +562,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// since we don't have a real MQTT server
 	backends := make(map[string]backend.Backend)
 	trt2 := tokenResponseTopics{Inbox: "test/topic"}
-	err := fleetManager.connect("mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id")
+	err := fleetManager.connect(context.Background(), "mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id", "test-zone")
 
 	// Assert - we expect connection to fail since no server is running,
 	// but URL parsing should succeed
@@ -618,9 +618,8 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
 			AccessToken: rawJWTWithClaims(map[string]any{
-				"org_id":   "test-org",
-				"agent_id": "test-agent-123",
-				"iat":      1516239022,
+				"orb:org_id": "test-org",
+				"iat":        1516239022,
 			}),
 			MQTTURL:   "://invalid-mqtt-url", // Invalid MQTT URL
 			ExpiresIn: 3600,
@@ -750,9 +749,8 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
 			AccessToken: rawJWTWithClaims(map[string]any{
-				"org_id":   "integration-org",
-				"agent_id": "test-agent-123",
-				"iat":      1516239022,
+				"orb:org_id": "integration-org",
+				"iat":        1516239022,
 			}),
 			MQTTURL:   "mqtt://localhost:1883", // Valid but non-existent
 			ExpiresIn: 3600,
@@ -768,15 +766,14 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	// Assert - token retrieval should succeed
 	require.NoError(t, err)
 	expectedJWT := rawJWTWithClaims(map[string]any{
-		"org_id":   "integration-org",
-		"agent_id": "test-agent-123",
-		"iat":      1516239022,
+		"orb:org_id": "integration-org",
+		"iat":        1516239022,
 	})
 	assert.Equal(t, expectedJWT, token.AccessToken)
 	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
 
 	// Test that topic generation works with the JWT
-	topics, err := generateTopicsFromTemplate(token.AccessToken, "test-agent-123")
+	topics, err := generateTopicsFromTemplate(token.AccessToken, "test-agent-123", &JWTClaims{OrgID: "integration-org"})
 	require.NoError(t, err)
 	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/inbox", topics.Inbox)
 	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/outbox", topics.Outbox)
@@ -1338,7 +1335,7 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(tt.jwt, tt.expectedAgent)
+			topics, err := generateTopicsFromTemplate(tt.jwt, tt.expectedAgent, &JWTClaims{OrgID: tt.expectedOrg})
 			require.NoError(t, err)
 
 			expectedTopics := &tokenResponseTopics{
