@@ -113,7 +113,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 
 	// generate topics from JWT claims and config agent_id using hardcoded templates
-	topics, err := GenerateTopicsFromTemplate(token.AccessToken, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID)
+	topics, err := generateTopicsFromTemplate(token.AccessToken, cfg.OrbAgent.ConfigManager.Sources.Fleet.AgentID)
 	if err != nil {
 		return fmt.Errorf("failed to generate topics: %w", err)
 	}

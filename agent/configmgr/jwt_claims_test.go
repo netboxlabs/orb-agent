@@ -177,7 +177,7 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := GenerateTopicsFromTemplate(tt.tokenString, "test-agent-123")
+			topics, err := generateTopicsFromTemplate(tt.tokenString, "test-agent-123")
 
 			if tt.expectedErr != "" {
 				require.Error(t, err)

@@ -750,7 +750,7 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
 
 	// Test that topic generation works with the JWT
-	topics, err := GenerateTopicsFromTemplate(token.AccessToken, "test-agent-123")
+	topics, err := generateTopicsFromTemplate(token.AccessToken, "test-agent-123")
 	require.NoError(t, err)
 	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/inbox", topics.Inbox)
 	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/outbox", topics.Outbox)
@@ -1228,7 +1228,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Create mock HTTP server that returns a JWT token
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
 			AccessToken: validJWT,
 			MQTTURL:     "mqtt://test.example.com:1883",
@@ -1309,7 +1309,7 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := GenerateTopicsFromTemplate(tt.jwt, tt.expectedAgent)
+			topics, err := generateTopicsFromTemplate(tt.jwt, tt.expectedAgent)
 			require.NoError(t, err)
 
 			expectedTopics := &tokenResponseTopics{

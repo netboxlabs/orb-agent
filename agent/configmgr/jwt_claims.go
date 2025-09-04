@@ -78,8 +78,8 @@ func fillTopicTemplate(template string, claims *TopicClaims) string {
 	return result
 }
 
-// GenerateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
-func GenerateTopicsFromTemplate(tokenString string, agentID string) (*tokenResponseTopics, error) {
+// generateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
+func generateTopicsFromTemplate(tokenString string, agentID string) (*tokenResponseTopics, error) {
 	jwtClaims, err := parseJWTClaims(tokenString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse JWT claims: %w", err)
