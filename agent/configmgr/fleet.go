@@ -47,8 +47,9 @@ type heartbeater struct {
 
 func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, agentID string, _ time.Time, _ messages.HeartbeatState) {
 	hbData := messages.Heartbeat{
-		AgentID: agentID,
-		Version: "1.0.0",
+		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
+		TimeStamp:     time.Now().UTC(),
+		State:         1,
 	}
 
 	body, err := json.Marshal(hbData)
@@ -121,7 +122,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 
 	// generate topics from JWT claims and config agent_id using hardcoded templates
-	topics, err := generateTopicsFromTemplate(token.AccessToken, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims)
+	topics, err := generateTopicsFromTemplate(token.AccessToken, jwtClaims)
 	if err != nil {
 		return fmt.Errorf("failed to generate topics: %w", err)
 	}
@@ -133,7 +134,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		"outbox_topic", topics.Outbox)
 
 	// use MQTT URL from token response or fallback to config
-	mqttURL := token.MQTTURL
+	mqttURL := jwtClaims.MqttURL
 	if mqttURL == "" {
 		mqttURL = cfg.OrbAgent.ConfigManager.Sources.Fleet.MQTTURL
 	}
@@ -173,6 +174,11 @@ func parseJWTClaims(tokenString string) (*JWTClaims, error) {
 	// Extract org_id from custom claims
 	jwtClaims := &JWTClaims{}
 
+	if agentID, ok := customClaims["orb:agent_id"].(string); ok {
+		jwtClaims.AgentID = agentID
+	} else {
+		return nil, fmt.Errorf("orb:agent_id claim not found or not a string in JWT token")
+	}
 	if orgID, ok := customClaims["orb:org_id"].(string); ok {
 		jwtClaims.OrgID = orgID
 	} else {
@@ -183,6 +189,11 @@ func parseJWTClaims(tokenString string) (*JWTClaims, error) {
 		jwtClaims.Zone = zone
 	} else {
 		return nil, fmt.Errorf("orb:zone claim not found or not a string in JWT token")
+	}
+	if ext, ok := customClaims["ext"].(map[string]any); ok {
+		if mqttURL, ok := ext["orb:mqtt_url"].(string); ok {
+			jwtClaims.MqttURL = mqttURL
+		}
 	}
 
 	return jwtClaims, nil
@@ -207,17 +218,17 @@ func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTUR
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			fleetManager.logger.Info("MQTT connection established", "server", serverURL.String())
 
-			// Subscribe to "mytopic" when connection is established
-			// _, err := cm.Subscribe(context.Background(), &paho.Subscribe{
-			// 	Subscriptions: []paho.SubscribeOptions{
-			// 		{Topic: topics.Inbox, QoS: 1},
-			// 	},
-			// })
-			// if err != nil {
-			// 	fleetManager.logger.Error("failed to subscribe", "topic", topics.Inbox, "error", err)
-			// } else {
-			// 	fleetManager.logger.Info("successfully subscribed", "topic", topics.Inbox)
-			// }
+			//Subscribe to "mytopic" when connection is established
+			_, err := cm.Subscribe(context.Background(), &paho.Subscribe{
+				Subscriptions: []paho.SubscribeOptions{
+					{Topic: topics.Inbox, QoS: 1},
+				},
+			})
+			if err != nil {
+				fleetManager.logger.Error("failed to subscribe", "topic", topics.Inbox, "error", err)
+			} else {
+				fleetManager.logger.Info("successfully subscribed", "topic", topics.Inbox)
+			}
 
 			// start heartbeat loop bound to the same connection-level context
 			fleetManager.heartbeater.sendHeartbeats(ctx, func() {}, func(ctx context.Context, payload []byte) error {

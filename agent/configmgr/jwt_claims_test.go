@@ -10,7 +10,7 @@ import (
 func TestDefaultTopicTemplates(t *testing.T) {
 	templates := DefaultTopicTemplates()
 
-	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/heartbeat", templates.Heartbeat)
+	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/heartbeats", templates.Heartbeat)
 	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/capabilities", templates.Capabilities)
 	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/inbox", templates.Inbox)
 	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/outbox", templates.Outbox)
@@ -173,7 +173,7 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(tt.tokenString, "test-agent-123", &JWTClaims{OrgID: tt.orgID})
+			topics, err := generateTopicsFromTemplate(tt.tokenString, &JWTClaims{AgentID: "test-agent-123", OrgID: tt.orgID})
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, topics)

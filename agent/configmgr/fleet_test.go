@@ -105,21 +105,23 @@ func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	ctx := context.Background()
 	testTime := time.Now()
 
-	// Expected heartbeat data
-	expectedHeartbeat := messages.Heartbeat{
-		AgentID: "test-agent-id",
-		Version: "1.0.0",
-	}
-	expectedPayload, _ := json.Marshal(expectedHeartbeat)
-
-	// Set up mock expectations
-	mockPublish.On("Publish", ctx, expectedPayload).Return(nil)
+	// We don't assert exact bytes; validate the marshalled heartbeat content
+	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil)
 
 	// Act
 	hb.sendSingleHeartbeat(ctx, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
 
-	// Assert
-	mockPublish.AssertExpectations(t)
+	// Assert: ensure one publish happened with a valid heartbeat payload
+	calls := mockPublish.Calls
+	require.Len(t, calls, 1)
+	payload, ok := calls[0].Arguments.Get(1).([]byte)
+	require.True(t, ok)
+
+	var hbMsg messages.Heartbeat
+	require.NoError(t, json.Unmarshal(payload, &hbMsg))
+	assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, hbMsg.SchemaVersion)
+	assert.Equal(t, messages.State(1), hbMsg.State)
+	assert.False(t, hbMsg.TimeStamp.IsZero())
 }
 
 func TestHeartbeater_SendSingleHeartbeat_PublishError(t *testing.T) {
@@ -166,8 +168,9 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	err := json.Unmarshal(capturedPayload, &heartbeat)
 	require.NoError(t, err)
 
-	assert.Equal(t, "test-agent-id", heartbeat.AgentID)
-	assert.Equal(t, "1.0.0", heartbeat.Version)
+	assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, heartbeat.SchemaVersion)
+	assert.Equal(t, messages.State(1), heartbeat.State)
+	assert.False(t, heartbeat.TimeStamp.IsZero())
 }
 
 func TestHeartbeater_SendHeartbeats_InitialHeartbeat(t *testing.T) {
@@ -379,13 +382,15 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 
 	assert.GreaterOrEqual(t, len(payloadsCopy), 2, "Should have at least initial and final heartbeats")
 
-	// Verify all payloads are valid heartbeat messages
+	// Verify all payloads are valid heartbeat messages and contain expected fields
 	for i, payload := range payloadsCopy {
 		var heartbeat messages.Heartbeat
 		err := json.Unmarshal(payload, &heartbeat)
 		require.NoError(t, err, "Heartbeat %d should be valid JSON", i)
-		assert.Equal(t, "test-agent-id", heartbeat.AgentID)
-		assert.Equal(t, "1.0.0", heartbeat.Version)
+		assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, heartbeat.SchemaVersion)
+		assert.False(t, heartbeat.TimeStamp.IsZero())
+		// Current implementation always sends Online state (1)
+		assert.Equal(t, messages.State(1), heartbeat.State)
 	}
 }
 
@@ -773,10 +778,10 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
 
 	// Test that topic generation works with the JWT
-	topics, err := generateTopicsFromTemplate(token.AccessToken, "test-agent-123", &JWTClaims{OrgID: "integration-org"})
+	topics, err := generateTopicsFromTemplate(token.AccessToken, &JWTClaims{AgentID: "test-agent-123", OrgID: "integration-org"})
 	require.NoError(t, err)
-	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/inbox", topics.Inbox)
-	assert.Equal(t, "/orgs/integration-org/agents/test-agent-123/outbox", topics.Outbox)
+	assert.Equal(t, "orgs/integration-org/agents/test-agent-123/inbox", topics.Inbox)
+	assert.Equal(t, "orgs/integration-org/agents/test-agent-123/outbox", topics.Outbox)
 
 	// Note: We don't test the full Start() method here because it would require
 	// a real MQTT broker, but we've verified the token retrieval and topic generation works
@@ -1239,11 +1244,11 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	// This test verifies that the Start method correctly generates topics from JWT claims
 
-	// Create a valid JWT token with org_id and agent_id claims
+	// Create a valid JWT token with orb-prefixed claims used by parseJWTClaims
 	validJWT := rawJWTWithClaims(map[string]any{
-		"org_id":   "integration-org",
-		"agent_id": "test-agent-123",
-		"iat":      1516239022,
+		"orb:org_id": "integration-org",
+		"orb:zone":   "default",
+		"iat":        1516239022,
 	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -1314,9 +1319,9 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 		{
 			name: "production-like JWT",
 			jwt: rawJWTWithClaims(map[string]any{
-				"org_id":   "acme-corp",
-				"agent_id": "agent-prod-456",
-				"iat":      1516239022,
+				"orb:org_id": "acme-corp",
+				"orb:zone":   "z1",
+				"iat":        1516239022,
 			}),
 			expectedOrg:   "acme-corp",
 			expectedAgent: "agent-prod-456",
@@ -1324,9 +1329,9 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 		{
 			name: "development JWT with different values",
 			jwt: rawJWTWithClaims(map[string]any{
-				"org_id":   "dev-123",
-				"agent_id": "dev-agent-789",
-				"iat":      1516239022,
+				"orb:org_id": "dev-123",
+				"orb:zone":   "z2",
+				"iat":        1516239022,
 			}),
 			expectedOrg:   "dev-123",
 			expectedAgent: "dev-agent-789",
@@ -1335,14 +1340,14 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(tt.jwt, tt.expectedAgent, &JWTClaims{OrgID: tt.expectedOrg})
+			topics, err := generateTopicsFromTemplate(tt.jwt, &JWTClaims{AgentID: tt.expectedAgent, OrgID: tt.expectedOrg})
 			require.NoError(t, err)
 
 			expectedTopics := &tokenResponseTopics{
-				Heartbeat:    fmt.Sprintf("/orgs/%s/agents/%s/heartbeat", tt.expectedOrg, tt.expectedAgent),
-				Capabilities: fmt.Sprintf("/orgs/%s/agents/%s/capabilities", tt.expectedOrg, tt.expectedAgent),
-				Inbox:        fmt.Sprintf("/orgs/%s/agents/%s/inbox", tt.expectedOrg, tt.expectedAgent),
-				Outbox:       fmt.Sprintf("/orgs/%s/agents/%s/outbox", tt.expectedOrg, tt.expectedAgent),
+				Heartbeat:    fmt.Sprintf("orgs/%s/agents/%s/heartbeats", tt.expectedOrg, tt.expectedAgent),
+				Capabilities: fmt.Sprintf("orgs/%s/agents/%s/capabilities", tt.expectedOrg, tt.expectedAgent),
+				Inbox:        fmt.Sprintf("orgs/%s/agents/%s/inbox", tt.expectedOrg, tt.expectedAgent),
+				Outbox:       fmt.Sprintf("orgs/%s/agents/%s/outbox", tt.expectedOrg, tt.expectedAgent),
 			}
 
 			assert.Equal(t, expectedTopics, topics)

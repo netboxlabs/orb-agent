@@ -6,8 +6,10 @@ import (
 
 // JWTClaims represents the JWT claims we extract for topic templating
 type JWTClaims struct {
-	OrgID string `json:"orb:org_id"`
-	Zone  string `json:"orb:zone"`
+	AgentID string `json:"agent_id"`
+	OrgID   string `json:"orb:org_id"`
+	Zone    string `json:"orb:zone"`
+	MqttURL string `json:"orb:mqtt_url"`
 }
 
 // TopicClaims combines org_id from JWT with agent_id from config
@@ -27,7 +29,7 @@ type TopicTemplates struct {
 // DefaultTopicTemplates returns the hardcoded topic templates
 func DefaultTopicTemplates() TopicTemplates {
 	return TopicTemplates{
-		Heartbeat:    "orgs/{org_id}/agents/{client_id}/heartbeat",
+		Heartbeat:    "orgs/{org_id}/agents/{client_id}/heartbeats",
 		Capabilities: "orgs/{org_id}/agents/{client_id}/capabilities",
 		Inbox:        "orgs/{org_id}/agents/{client_id}/inbox",
 		Outbox:       "orgs/{org_id}/agents/{client_id}/outbox",
@@ -43,11 +45,11 @@ func fillTopicTemplate(template string, claims *TopicClaims) string {
 }
 
 // generateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
-func generateTopicsFromTemplate(tokenString string, clientID string, jwtClaims *JWTClaims) (*tokenResponseTopics, error) {
+func generateTopicsFromTemplate(tokenString string, jwtClaims *JWTClaims) (*tokenResponseTopics, error) {
 	// Combine JWT org_id with config agent_id
 	topicClaims := &TopicClaims{
 		OrgID:    jwtClaims.OrgID,
-		ClientId: clientID,
+		ClientId: jwtClaims.AgentID,
 	}
 
 	templates := DefaultTopicTemplates()
