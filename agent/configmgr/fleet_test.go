@@ -431,7 +431,7 @@ func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 		err := r.ParseForm()
 		assert.NoError(t, err)
 		assert.Equal(t, "client_credentials", r.Form.Get("grant_type"))
-		assert.Contains(t, r.Form.Get("scope"), "orb.mqtt")
+		assert.Contains(t, r.Form.Get("scope"), "orb.mqtt:agent")
 
 		// Return valid token response (no longer includes topics)
 		response := tokenResponse{
