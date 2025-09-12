@@ -1,4 +1,4 @@
-package otel
+package opentelemetryinfinity
 
 import (
 	"bytes"
@@ -25,7 +25,6 @@ const (
 	versionTimeout      = 5
 	capabilitiesTimeout = 5
 	readinessBackoff    = 10
-	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 )
@@ -55,7 +54,7 @@ type info struct {
 
 // Register registers otel backend
 func Register() bool {
-	backend.Register("otel", &openTelemetryBackend{
+	backend.Register("opentelemetry_infinity", &openTelemetryBackend{
 		apiProtocol: "http",
 		exec:        defaultExec,
 	})
@@ -77,7 +76,7 @@ func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		o.apiPort = defaultAPIPort
 	}
 
-	o.agentLabels = common.Otel.AgentLabels
+	o.agentLabels = common.Otlp.AgentLabels
 
 	return nil
 }

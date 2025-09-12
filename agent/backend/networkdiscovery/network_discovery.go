@@ -114,8 +114,8 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 		d.diodeLogLevel = "debug"
 	}
 
-	if common.Otel.Grpc != "" {
-		d.diodeOtelEndpoint = common.Otel.Grpc
+	if common.Otlp.Grpc != "" {
+		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("network-discovery using OTLP metrics endpoint",
 			slog.String("endpoint", d.diodeOtelEndpoint))
 	}
