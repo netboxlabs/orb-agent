@@ -82,7 +82,11 @@ class PolicyRunner:
                     update=scope.override_defaults.model_dump(exclude_none=True)
                 )
             self.scheduler.add_job(
-                self.run, id=id, trigger=trigger, args=[id, scope, config]
+                self.run,
+                id=id,
+                trigger=trigger,
+                args=[id, scope, config],
+                misfire_grace_time=None,
             )
             if set_telemetry:
                 set_telemetry = False

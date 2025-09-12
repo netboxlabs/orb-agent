@@ -81,7 +81,23 @@ def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes):
         trigger = mock_add_job.call_args[1]["trigger"]
         assert isinstance(trigger, DateTrigger)
         assert mock_start.called
-        assert policy_runner.status == Status.RUNNING
+    assert policy_runner.status == Status.RUNNING
+
+
+def test_setup_sets_misfire_grace_time_none(
+    policy_runner, sample_config, sample_scopes
+):
+    """Ensure jobs are added with misfire_grace_time=None (run even if late)."""
+    with (
+        patch.object(policy_runner.scheduler, "start"),
+        patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
+    ):
+        policy_runner.setup("policy1", sample_config, sample_scopes)
+
+        # First add_job call corresponds to the device run job
+        first_call_kwargs = mock_add_job.call_args_list[0][1]
+        assert "misfire_grace_time" in first_call_kwargs
+        assert first_call_kwargs["misfire_grace_time"] is None
 
 
 def test_setup_policy_runner_with_none_config(policy_runner, sample_scopes):
