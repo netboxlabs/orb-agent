@@ -169,7 +169,7 @@ def test_run_success(policy_runner, sample_policy, mock_diode_client, mock_backe
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     mock_backend.run.return_value = entities
     mock_diode_client.ingest.return_value.errors = []
 
@@ -201,7 +201,7 @@ def test_run_ingestion_errors(
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     mock_backend.run.return_value = entities
 
     # Simulate ingestion errors
@@ -286,7 +286,7 @@ def test_metrics_during_policy_lifecycle(
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     mock_backend.run.return_value = entities
 
     # Setup mock for get_metric function
@@ -371,7 +371,7 @@ def test_create_message_chunks_empty_list(policy_runner):
     """Test _create_message_chunks with an empty entity list."""
     entities = []
     chunks = policy_runner._create_message_chunks(entities)
-    
+
     assert len(chunks) == 1
     assert chunks[0] == []
 
@@ -384,10 +384,10 @@ def test_create_message_chunks_single_chunk(policy_runner):
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     with patch.object(policy_runner, '_estimate_message_size', return_value=1024):  # Small size
         chunks = policy_runner._create_message_chunks(entities)
-    
+
     assert len(chunks) == 1
     assert len(chunks[0]) == 5
     assert chunks[0] == entities
@@ -401,18 +401,18 @@ def test_create_message_chunks_multiple_chunks(policy_runner):
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     # Mock size to be larger than target (3.5MB)
     with patch.object(policy_runner, '_estimate_message_size', return_value=5 * 1024 * 1024):  # 5MB
         chunks = policy_runner._create_message_chunks(entities)
-    
+
     # Should have multiple chunks
     assert len(chunks) > 1
-    
+
     # All entities should be present across chunks
     total_entities = sum(len(chunk) for chunk in chunks)
     assert total_entities == 10
-    
+
     # Each chunk should have at least 1 entity
     for chunk in chunks:
         assert len(chunk) >= 1
@@ -425,11 +425,11 @@ def test_create_message_chunks_edge_case_one_entity_per_chunk(policy_runner):
         entity = ingester_pb2.Entity()
         entity.device.name = f"large_device_{i}"
         entities.append(entity)
-    
+
     # Mock very large size to force one entity per chunk
     with patch.object(policy_runner, '_estimate_message_size', return_value=20 * 1024 * 1024):  # 20MB
         chunks = policy_runner._create_message_chunks(entities)
-    
+
     # Should have 3 chunks with 1 entity each
     assert len(chunks) == 3
     for chunk in chunks:
@@ -444,10 +444,10 @@ def test_estimate_message_size(policy_runner):
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     # Call the method
     size = policy_runner._estimate_message_size(entities)
-    
+
     # Should return a positive integer (actual protobuf size)
     assert isinstance(size, int)
     assert size > 0
@@ -457,7 +457,7 @@ def test_estimate_message_size_empty_list(policy_runner):
     """Test _estimate_message_size with empty entity list."""
     entities = []
     size = policy_runner._estimate_message_size(entities)
-    
+
     # Even empty request should have some minimal size
     assert isinstance(size, int)
     assert size >= 0
@@ -473,31 +473,31 @@ def test_run_with_multiple_chunks(policy_runner, sample_policy, mock_diode_clien
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     mock_backend.run.return_value = entities
     mock_diode_client.ingest.return_value.errors = []
 
     # Mock chunking to return multiple chunks
     with patch.object(
-        policy_runner, 
-        '_create_message_chunks', 
+        policy_runner,
+        '_create_message_chunks',
         return_value=[entities[:5], entities[5:]]
     ) as mock_chunks, \
          patch.object(
-        policy_runner, 
-        '_estimate_message_size', 
+        policy_runner,
+        '_estimate_message_size',
         return_value=1024
     ):
-        
+
         with caplog.at_level("DEBUG"):
             policy_runner.run(mock_diode_client, mock_backend, sample_policy)
 
         # Should call chunking method
         mock_chunks.assert_called_once_with(entities)
-        
+
         # Should call ingest twice (once per chunk)
         assert mock_diode_client.ingest.call_count == 2
-        
+
         # Verify log messages for chunking
         assert "Ingesting chunk 1 with 5 entities" in caplog.text
         assert "Ingesting chunk 2 with 5 entities" in caplog.text
@@ -515,33 +515,33 @@ def test_run_chunk_ingestion_error(policy_runner, sample_policy, mock_diode_clie
         entity = ingester_pb2.Entity()
         entity.device.name = f"test_device_{i}"
         entities.append(entity)
-    
+
     mock_backend.run.return_value = entities
 
     # Mock first chunk succeeds, second chunk fails
     responses = [MagicMock(), MagicMock()]
     responses[0].errors = []  # First chunk succeeds
     responses[1].errors = ["Chunk error"]  # Second chunk fails
-    
+
     mock_diode_client.ingest.side_effect = responses
 
     # Mock chunking to return two chunks
     with patch.object(
-        policy_runner, 
-        '_create_message_chunks', 
+        policy_runner,
+        '_create_message_chunks',
         return_value=[entities[:3], entities[3:]]
     ), \
          patch.object(
-        policy_runner, 
-        '_estimate_message_size', 
+        policy_runner,
+        '_estimate_message_size',
         return_value=1024
     ):
-        
+
         with caplog.at_level("ERROR"):
             policy_runner.run(mock_diode_client, mock_backend, sample_policy)
 
         # Should call ingest twice but fail on second chunk
         assert mock_diode_client.ingest.call_count == 2
-        
+
         # Should log the chunk error
         assert "Chunk 2 ingestion failed" in caplog.text

@@ -5,7 +5,6 @@
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import List
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -179,7 +178,7 @@ class PolicyRunner:
         if active_policies:
             active_policies.add(-1, {"policy": self.name})
 
-    def _create_message_chunks(self, entities: List[ingester_pb2.Entity]) -> List[List[ingester_pb2.Entity]]:
+    def _create_message_chunks(self, entities: list[ingester_pb2.Entity]) -> list[list[ingester_pb2.Entity]]:
         """Create 3.5MB chunks from entities, always returning at least one chunk."""
         total_entities = len(entities)
         if total_entities == 0:
@@ -204,7 +203,7 @@ class PolicyRunner:
         return chunks
 
 
-    def _estimate_message_size(self, entities: List[ingester_pb2.Entity]) -> int:
+    def _estimate_message_size(self, entities: list[ingester_pb2.Entity]) -> int:
         """Estimate the serialized size of entities using minimal IngestRequest."""
         request = ingester_pb2.IngestRequest()
         request.entities.extend(entities)

@@ -55,7 +55,7 @@ class MockBackend(Backend):
         # Sample of how to handle a scope dictionary
         elif isinstance(policy.scope, dict):
             scope = ScopeMap(**policy.scope)
-        
+
         for i in range(100000):
             device = Device(
                 name=f"Device A {i}",
