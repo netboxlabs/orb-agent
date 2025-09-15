@@ -244,7 +244,7 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	p.binary = defaultBinary
 	p.adminAPIHost = defaultAPIHost
 	p.adminAPIPort = defaultAPIPort
-	p.agentLabels = common.Otel.AgentLabels
+	p.agentLabels = common.Otlp.AgentLabels
 
 	// Create temp config file
 	tmpDir := os.TempDir()
@@ -303,18 +303,18 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 
 	p.configFile = tmpFile.Name()
 
-	if common.Otel.HTTP != "" {
-		uri, err := url.Parse(common.Otel.HTTP)
+	if common.Otlp.HTTP != "" {
+		uri, err := url.Parse(common.Otlp.HTTP)
 		if err != nil {
-			return fmt.Errorf("failed to parse otel receiver http url: %w", err)
+			return fmt.Errorf("failed to parse otlp receiver http url: %w", err)
 		}
 		p.otelReceiverHost = uri.Hostname()
 		port, err := strconv.Atoi(uri.Port())
 		if err != nil {
-			return fmt.Errorf("failed to parse otel receiver port: %w", err)
+			return fmt.Errorf("failed to parse otlp receiver port: %w", err)
 		}
 		p.otelReceiverPort = port
-		p.logger.Info("configured otel receiver host", slog.String("host", p.otelReceiverHost),
+		p.logger.Info("configured otlp receiver host", slog.String("host", p.otelReceiverHost),
 			slog.Int("port", p.otelReceiverPort))
 	}
 

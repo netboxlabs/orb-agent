@@ -68,11 +68,11 @@ type ManagerSecrets struct {
 
 // BackendCommons represents common configuration for backends
 type BackendCommons struct {
-	Otel struct {
+	Otlp struct {
 		Grpc        string            `yaml:"grpc"`
 		HTTP        string            `yaml:"http"`
 		AgentLabels map[string]string `yaml:"agent_labels"`
-	} `yaml:"otel"`
+	} `yaml:"otlp"`
 	Diode struct {
 		Target          string `yaml:"target"`
 		ClientID        string `yaml:"client_id"`

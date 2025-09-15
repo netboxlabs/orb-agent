@@ -108,8 +108,8 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 		d.diodeDryRunOutputDir = dryRunOutputDir
 	}
 
-	if common.Otel.Grpc != "" {
-		d.diodeOtelEndpoint = common.Otel.Grpc
+	if common.Otlp.Grpc != "" {
+		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("device-discovery using OTLP metrics endpoint",
 			slog.String("endpoint", d.diodeOtelEndpoint))
 	}
