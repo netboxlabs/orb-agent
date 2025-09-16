@@ -105,6 +105,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		"run",
 		"--server_host", o.apiHost,
 		"--server_port", o.apiPort,
+		"--log_timestamp", "false",
 	}
 
 	o.logger.Info("opentelemetry infinity startup", slog.Any("arguments", pvOptions))

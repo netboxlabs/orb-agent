@@ -123,8 +123,6 @@ jobs:
     name: Build
     needs: get-next-version
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
     if: needs.get-next-version.outputs.new-release-published == 'true'
     env:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}

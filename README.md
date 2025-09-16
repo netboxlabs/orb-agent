@@ -80,7 +80,7 @@ A special `common` subsection under `backends` defines configuration settings th
           agent_name: agent01
           dry_run: false
           dry_run_output_dir: /opt/orb
-        otel:
+        otlp:
           grpc: "grpc://otel-collector:4317"
           agent_labels:
             environment: "production"
