@@ -3,6 +3,7 @@ package opentelemetryinfinity
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -105,6 +106,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		"run",
 		"--server_host", o.apiHost,
 		"--server_port", o.apiPort,
+		"--log_timestamp=false",
 	}
 
 	o.logger.Info("opentelemetry infinity startup", slog.Any("arguments", pvOptions))
@@ -132,13 +134,13 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 					stdout = nil
 					continue
 				}
-				o.logger.Info("opentelemetry infinity stdout", slog.String("log", line))
+				o.logCollectorLine("stdout", line)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				o.logger.Info("opentelemetry infinity stderr", slog.String("log", line))
+				o.logCollectorLine("stderr", line)
 			}
 		}
 	}()
@@ -188,6 +190,16 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	}
 
 	return nil
+}
+
+func (o *openTelemetryBackend) logCollectorLine(stream, line string) {
+	logKey := fmt.Sprintf("opentelemetry infinity %s", stream)
+	raw := []byte(line)
+	if json.Valid(raw) {
+		o.logger.Info(logKey, slog.Any("log", json.RawMessage(raw)))
+		return
+	}
+	o.logger.Info(logKey, slog.String("log", line))
 }
 
 func (o *openTelemetryBackend) Stop(ctx context.Context) error {
