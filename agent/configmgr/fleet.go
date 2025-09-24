@@ -45,7 +45,7 @@ type heartbeater struct {
 	heartbeatCtx context.Context
 }
 
-func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, agentID string, _ time.Time, _ messages.HeartbeatState) {
+func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, _ string, _ time.Time, _ messages.HeartbeatState) {
 	hbData := messages.Heartbeat{
 		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
 		TimeStamp:     time.Now().UTC(),
@@ -74,7 +74,7 @@ func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc,
 	// (if any) remain accurate.
 	hb.heartbeatCtx = ctx
 
-	hb.logger.Debug("start heartbeats routine", slog.Any("routine", ctx.Value("routine")))
+	hb.logger.Debug("start heartbeats routine")
 	hb.sendSingleHeartbeat(ctx, publishFunc, agentID, time.Now(), messages.Online)
 
 	for {
@@ -106,8 +106,7 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 }
 
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
-	ctx, _ := context.WithCancel(context.Background())
-	// defer cancel() TODO: I dont think this is correct but we're cancelling the context too early so can't publish. Maybe they need to run under a different context?
+	ctx := context.Background()
 
 	fleetManager.logger.Info("starting fleet config manager", "token_url", cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, "client_id", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, "client_secret", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	// call the token url to get the token
@@ -116,10 +115,14 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		return err
 	}
 
+	fleetManager.logger.Debug("JWT token", "token", token.AccessToken)
+
 	jwtClaims, err := parseJWTClaims(token.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to parse JWT claims: %w", err)
 	}
+
+	fleetManager.logger.Debug("JWT claims", "jwtClaims", jwtClaims)
 
 	// generate topics from JWT claims and config agent_id using hardcoded templates
 	topics, err := generateTopicsFromTemplate(token.AccessToken, jwtClaims)
@@ -174,24 +177,31 @@ func parseJWTClaims(tokenString string) (*JWTClaims, error) {
 	// Extract org_id from custom claims
 	jwtClaims := &JWTClaims{}
 
-	if agentID, ok := customClaims["orb:agent_id"].(string); ok {
-		jwtClaims.AgentID = agentID
-	} else {
-		return nil, fmt.Errorf("orb:agent_id claim not found or not a string in JWT token")
-	}
 	if orgID, ok := customClaims["orb:org_id"].(string); ok {
 		jwtClaims.OrgID = orgID
 	} else {
 		return nil, fmt.Errorf("orb:org_id claim not found or not a string in JWT token")
 	}
-
 	if zone, ok := customClaims["orb:zone"].(string); ok {
 		jwtClaims.Zone = zone
 	} else {
 		return nil, fmt.Errorf("orb:zone claim not found or not a string in JWT token")
 	}
-	if ext, ok := customClaims["ext"].(map[string]any); ok {
-		if mqttURL, ok := ext["orb:mqtt_url"].(string); ok {
+	if clientID, ok := customClaims["client_id"].(string); ok {
+		jwtClaims.ClientID = clientID
+	} else {
+		return nil, fmt.Errorf("orb:zone claim not found or not a string in JWT token")
+	}
+
+	if extClaims, ok := customClaims["ext"].(map[string]any); ok {
+
+		if agentID, ok := extClaims["orb:agent_id"].(string); ok {
+			jwtClaims.AgentID = agentID
+		} else {
+			return nil, fmt.Errorf("orb:agent_id claim not found or not a string in JWT token")
+		}
+
+		if mqttURL, ok := extClaims["orb:mqtt_url"].(string); ok {
 			jwtClaims.MqttURL = mqttURL
 		}
 	}
@@ -218,20 +228,20 @@ func (fleetManager *fleetConfigManager) connect(ctx context.Context, fleetMQTTUR
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			fleetManager.logger.Info("MQTT connection established", "server", serverURL.String())
 
-			//Subscribe to "mytopic" when connection is established
-			_, err := cm.Subscribe(context.Background(), &paho.Subscribe{
-				Subscriptions: []paho.SubscribeOptions{
-					{Topic: topics.Inbox, QoS: 1},
-				},
-			})
-			if err != nil {
-				fleetManager.logger.Error("failed to subscribe", "topic", topics.Inbox, "error", err)
-			} else {
-				fleetManager.logger.Info("successfully subscribed", "topic", topics.Inbox)
-			}
+			// //Subscribe to "mytopic" when connection is established
+			// _, err := cm.Subscribe(context.Background(), &paho.Subscribe{
+			// 	Subscriptions: []paho.SubscribeOptions{
+			// 		{Topic: topics.Inbox, QoS: 1},
+			// 	},
+			// })
+			// if err != nil {
+			// 	fleetManager.logger.Error("failed to subscribe", "topic", topics.Inbox, "error", err)
+			// } else {
+			// 	fleetManager.logger.Info("successfully subscribed", "topic", topics.Inbox)
+			// }
 
 			// start heartbeat loop bound to the same connection-level context
-			fleetManager.heartbeater.sendHeartbeats(ctx, func() {}, func(ctx context.Context, payload []byte) error {
+			go fleetManager.heartbeater.sendHeartbeats(ctx, func() {}, func(ctx context.Context, payload []byte) error {
 				publishResponse, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Heartbeat,
 					Payload: payload,

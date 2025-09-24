@@ -755,6 +755,8 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 		response := tokenResponse{
 			AccessToken: rawJWTWithClaims(map[string]any{
 				"orb:org_id": "integration-org",
+				"orb:zone":   "default",
+				"client_id":  "test-client-123",
 				"iat":        1516239022,
 			}),
 			MQTTURL:   "mqtt://localhost:1883", // Valid but non-existent
@@ -772,16 +774,18 @@ func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
 	require.NoError(t, err)
 	expectedJWT := rawJWTWithClaims(map[string]any{
 		"orb:org_id": "integration-org",
+		"orb:zone":   "default",
+		"client_id":  "test-client-123",
 		"iat":        1516239022,
 	})
 	assert.Equal(t, expectedJWT, token.AccessToken)
 	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
 
 	// Test that topic generation works with the JWT
-	topics, err := generateTopicsFromTemplate(token.AccessToken, &JWTClaims{AgentID: "test-agent-123", OrgID: "integration-org"})
+	topics, err := generateTopicsFromTemplate(token.AccessToken, &JWTClaims{AgentID: "test-agent-123", OrgID: "integration-org", ClientID: "test-client-123"})
 	require.NoError(t, err)
-	assert.Equal(t, "orgs/integration-org/agents/test-agent-123/inbox", topics.Inbox)
-	assert.Equal(t, "orgs/integration-org/agents/test-agent-123/outbox", topics.Outbox)
+	assert.Equal(t, "orgs/integration-org/agents/test-client-123/inbox", topics.Inbox)
+	assert.Equal(t, "orgs/integration-org/agents/test-client-123/outbox", topics.Outbox)
 
 	// Note: We don't test the full Start() method here because it would require
 	// a real MQTT broker, but we've verified the token retrieval and topic generation works
@@ -1248,6 +1252,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	validJWT := rawJWTWithClaims(map[string]any{
 		"orb:org_id": "integration-org",
 		"orb:zone":   "default",
+		"client_id":  "test-client",
 		"iat":        1516239022,
 	})
 
@@ -1322,6 +1327,7 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 				"orb:org_id": "acme-corp",
 				"orb:zone":   "z1",
 				"iat":        1516239022,
+				"client_id":  "agent-prod-456",
 			}),
 			expectedOrg:   "acme-corp",
 			expectedAgent: "agent-prod-456",
@@ -1332,15 +1338,23 @@ func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
 				"orb:org_id": "dev-123",
 				"orb:zone":   "z2",
 				"iat":        1516239022,
+				"client_id":  "agent-dev-789",
 			}),
 			expectedOrg:   "dev-123",
-			expectedAgent: "dev-agent-789",
+			expectedAgent: "agent-dev-789",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(tt.jwt, &JWTClaims{AgentID: tt.expectedAgent, OrgID: tt.expectedOrg})
+			// Extract the client_id that would be in the JWT for proper testing
+			var clientID string
+			if tt.name == "production-like JWT" {
+				clientID = "agent-prod-456"
+			} else {
+				clientID = "agent-dev-789"
+			}
+			topics, err := generateTopicsFromTemplate(tt.jwt, &JWTClaims{OrgID: tt.expectedOrg, ClientID: clientID})
 			require.NoError(t, err)
 
 			expectedTopics := &tokenResponseTopics{

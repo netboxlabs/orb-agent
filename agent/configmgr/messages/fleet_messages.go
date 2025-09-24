@@ -2,9 +2,10 @@ package messages
 
 import "time"
 
-// Heartbeat represents a periodic message sent by an agent to indicate it's alive and active
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
 const CurrentHeartbeatSchemaVersion = "1.0"
+
+// Heartbeat represents a periodic message sent by an agent to indicate it's alive and active
 
 // State represents the current state of an agent in the system
 type State int
