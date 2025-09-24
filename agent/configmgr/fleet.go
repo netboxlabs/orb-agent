@@ -115,14 +115,10 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		return err
 	}
 
-	fleetManager.logger.Debug("JWT token", "token", token.AccessToken)
-
 	jwtClaims, err := parseJWTClaims(token.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to parse JWT claims: %w", err)
 	}
-
-	fleetManager.logger.Debug("JWT claims", "jwtClaims", jwtClaims)
 
 	// generate topics from JWT claims and config agent_id using hardcoded templates
 	topics, err := generateTopicsFromTemplate(token.AccessToken, jwtClaims)
