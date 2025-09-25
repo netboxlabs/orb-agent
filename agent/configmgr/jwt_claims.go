@@ -54,7 +54,7 @@ func parseJWTClaims(tokenString string) (*JWTClaims, error) {
 	if clientID, ok := customClaims["client_id"].(string); ok {
 		jwtClaims.ClientID = clientID
 	} else {
-		return nil, fmt.Errorf("orb:zone claim not found or not a string in JWT token")
+		return nil, fmt.Errorf("client_id claim not found or not a string in JWT token")
 	}
 	if agentID, ok := customClaims["orb:agent_id"].(string); ok {
 		jwtClaims.AgentID = agentID
