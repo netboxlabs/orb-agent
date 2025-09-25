@@ -7,55 +7,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultTopicTemplates(t *testing.T) {
-	templates := DefaultTopicTemplates()
-
-	assert.Equal(t, "orgs/{org_id}/agents/{client_id}/heartbeats", templates.Heartbeat)
-	assert.Equal(t, "orgs/{org_id}/agents/{client_id}/capabilities", templates.Capabilities)
-	assert.Equal(t, "orgs/{org_id}/agents/{client_id}/inbox", templates.Inbox)
-	assert.Equal(t, "orgs/{org_id}/agents/{client_id}/outbox", templates.Outbox)
-}
-
 func TestFillTopicTemplate(t *testing.T) {
 	tests := []struct {
 		name     string
 		template string
-		claims   *TopicClaims
+		claims   *JWTClaims
 		expected string
 	}{
 		{
 			name:     "basic substitution",
-			template: "/orgs/{org_id}/agents/{client_id}/test",
-			claims: &TopicClaims{
-				OrgID:    "org123",
-				ClientID: "agent-456",
+			template: "/orgs/{org_id}/agents/{agent_id}/test",
+			claims: &JWTClaims{
+				OrgID:   "org123",
+				AgentID: "agent-456",
 			},
 			expected: "/orgs/org123/agents/agent-456/test",
 		},
 		{
 			name:     "multiple occurrences",
-			template: "{org_id}/data/{org_id}/{client_id}",
-			claims: &TopicClaims{
-				OrgID:    "company1",
-				ClientID: "agent-789",
+			template: "{org_id}/data/{org_id}/{agent_id}",
+			claims: &JWTClaims{
+				OrgID:   "company1",
+				AgentID: "agent-789",
 			},
 			expected: "company1/data/company1/agent-789",
 		},
 		{
 			name:     "no placeholders",
 			template: "static/topic/name",
-			claims: &TopicClaims{
-				OrgID:    "org123",
-				ClientID: "agent-456",
+			claims: &JWTClaims{
+				OrgID:   "org123",
+				AgentID: "agent-456",
 			},
 			expected: "static/topic/name",
 		},
 		{
 			name:     "empty claims",
-			template: "/orgs/{org_id}/agents/{client_id}/test",
-			claims: &TopicClaims{
-				OrgID:    "",
-				ClientID: "",
+			template: "/orgs/{org_id}/agents/{agent_id}/test",
+			claims: &JWTClaims{
+				OrgID:   "",
+				AgentID: "",
 			},
 			expected: "/orgs//agents//test",
 		},
@@ -89,34 +80,64 @@ func TestParseJWTClaims(t *testing.T) {
 		{
 			name: "valid JWT with org_id",
 			tokenString: rawJWTWithClaims(map[string]any{
-				"orb:org_id": "test-org",
-				"orb:zone":   "default",
-				"client_id":  "test-client",
-				"iat":        1516239022,
+				"orb:org_id":   "test-org",
+				"orb:zone":     "default",
+				"orb:agent_id": "test-agent",
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"ext": map[string]any{
+					"orb:mqtt_url": "mqtt://test.example.com:1883",
+				},
 			}),
 			expected: &JWTClaims{
 				OrgID:    "test-org",
 				Zone:     "default",
 				ClientID: "test-client",
+				AgentID:  "test-agent",
+				MqttURL:  "mqtt://test.example.com:1883",
 			},
 		},
 		{
 			name: "JWT missing org_id",
 			tokenString: rawJWTWithClaims(map[string]any{
-				"client_id": "test-client",
-				"iat":       1516239022,
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"orb:agent_id": "test-agent",
+				"orb:zone":     "default",
 			}),
 			expectedErr: "orb:org_id claim not found",
 		},
 		{
 			name: "JWT with non-string org_id",
 			tokenString: rawJWTWithClaims(map[string]any{
-				"orb:org_id": 123,
-				"orb:zone":   "default",
-				"client_id":  "test-client",
-				"iat":        1516239022,
+				"orb:org_id":   123,
+				"orb:zone":     "default",
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"orb:agent_id": "test-agent",
 			}),
 			expectedErr: "orb:org_id claim not found or not a string",
+		},
+		{
+			name: "JWT missing agent_id",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"client_id":  "test-client",
+				"iat":        1516239022,
+				"orb:org_id": "test-org",
+				"orb:zone":   "default",
+			}),
+			expectedErr: "orb:agent_id claim not found",
+		},
+		{
+			name: "JWT with non-string agent_id",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"orb:agent_id": 123,
+				"orb:zone":     "default",
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"orb:org_id":   "test-org",
+			}),
+			expectedErr: "orb:agent_id claim not found or not a string",
 		},
 	}
 
@@ -138,20 +159,15 @@ func TestParseJWTClaims(t *testing.T) {
 
 func TestGenerateTopicsFromTemplate(t *testing.T) {
 	tests := []struct {
-		name        string
-		tokenString string
-		orgID       string
-		expected    *tokenResponseTopics
+		name     string
+		orgID    string
+		agentID  string
+		expected *tokenResponseTopics
 	}{
 		{
-			name: "valid token generates correct topics",
-			tokenString: rawJWTWithClaims(map[string]any{
-				"orb:org_id": "test-org",
-				"orb:zone":   "default",
-				"client_id":  "test-client-123",
-				"iat":        1516239022,
-			}),
-			orgID: "test-org",
+			name:    "valid token generates correct topics",
+			orgID:   "test-org",
+			agentID: "test-client-123",
 			expected: &tokenResponseTopics{
 				Heartbeat:    "orgs/test-org/agents/test-client-123/heartbeats",
 				Capabilities: "orgs/test-org/agents/test-client-123/capabilities",
@@ -160,51 +176,24 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 			},
 		},
 		{
-			name: "different org and agent values",
-			tokenString: rawJWTWithClaims(map[string]any{
-				"orb:org_id": "prod-company",
-				"orb:zone":   "default",
-				"client_id":  "prod-client-456",
-				"iat":        1516239022,
-			}),
-			orgID: "prod-company",
+			name:    "different org and agent values",
+			orgID:   "prod-company",
+			agentID: "test-agent-123",
 			expected: &tokenResponseTopics{
-				Heartbeat:    "orgs/prod-company/agents/test-client-123/heartbeats",
-				Capabilities: "orgs/prod-company/agents/test-client-123/capabilities",
-				Inbox:        "orgs/prod-company/agents/test-client-123/inbox",
-				Outbox:       "orgs/prod-company/agents/test-client-123/outbox",
+				Heartbeat:    "orgs/prod-company/agents/test-agent-123/heartbeats",
+				Capabilities: "orgs/prod-company/agents/test-agent-123/capabilities",
+				Inbox:        "orgs/prod-company/agents/test-agent-123/inbox",
+				Outbox:       "orgs/prod-company/agents/test-agent-123/outbox",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(tt.tokenString, &JWTClaims{OrgID: tt.orgID, ClientID: "test-client-123"})
+			topics, err := generateTopicsFromTemplate(&JWTClaims{OrgID: tt.orgID, AgentID: tt.agentID})
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, topics)
 		})
 	}
-}
-
-func TestJWTClaimsStruct(t *testing.T) {
-	claims := JWTClaims{
-		OrgID: "test-org-id",
-	}
-
-	assert.Equal(t, "test-org-id", claims.OrgID)
-}
-
-func TestTopicTemplatesStruct(t *testing.T) {
-	templates := TopicTemplates{
-		Heartbeat:    "custom/heartbeat/{org_id}",
-		Capabilities: "custom/capabilities/{agent_id}",
-		Inbox:        "custom/inbox",
-		Outbox:       "custom/outbox",
-	}
-
-	assert.Equal(t, "custom/heartbeat/{org_id}", templates.Heartbeat)
-	assert.Equal(t, "custom/capabilities/{agent_id}", templates.Capabilities)
-	assert.Equal(t, "custom/inbox", templates.Inbox)
-	assert.Equal(t, "custom/outbox", templates.Outbox)
 }

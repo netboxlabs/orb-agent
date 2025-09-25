@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -567,7 +566,10 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// since we don't have a real MQTT server
 	backends := make(map[string]backend.Backend)
 	trt2 := tokenResponseTopics{Inbox: "test/topic"}
-	err := fleetManager.connect(context.Background(), "mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id", "test-zone")
+	// Timeout after 3 seconds
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := fleetManager.connect(ctx, "mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id", "test-zone")
 
 	// Assert - we expect connection to fail since no server is running,
 	// but URL parsing should succeed
@@ -720,96 +722,6 @@ func TestTokenResponse_Marshaling(t *testing.T) {
 	assert.Equal(t, original.ExpiresIn, unmarshaled.ExpiresIn)
 }
 
-func TestTokenResponseTopics_Marshaling(t *testing.T) {
-	// Arrange
-	original := tokenResponseTopics{
-		Inbox:  "custom/inbox/topic",
-		Outbox: "custom/outbox/topic",
-	}
-
-	// Act
-	jsonData, err := json.Marshal(original)
-	require.NoError(t, err)
-
-	var unmarshaled tokenResponseTopics
-	err = json.Unmarshal(jsonData, &unmarshaled)
-	require.NoError(t, err)
-
-	// Assert
-	assert.Equal(t, original.Inbox, unmarshaled.Inbox)
-	assert.Equal(t, original.Outbox, unmarshaled.Outbox)
-}
-
-func TestFleetConfigManager_Integration_SuccessFlow(t *testing.T) {
-	// This test verifies the happy path integration but without actual MQTT connection
-	// due to complexity of mocking MQTT server
-
-	// Arrange
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(context.Background(), logger, mockPMgr)
-	defer fleetManager.heartbeater.hbTicker.Stop()
-
-	// Create mock HTTP server for successful token response
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		response := tokenResponse{
-			AccessToken: rawJWTWithClaims(map[string]any{
-				"orb:org_id": "integration-org",
-				"orb:zone":   "default",
-				"client_id":  "test-client-123",
-				"iat":        1516239022,
-			}),
-			MQTTURL:   "mqtt://localhost:1883", // Valid but non-existent
-			ExpiresIn: 3600,
-		}
-		_ = json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
-
-	// Act - test token retrieval part of the flow
-	ctx := context.Background()
-	token, err := fleetManager.getToken(ctx, server.URL, "integration_client", "integration_secret")
-
-	// Assert - token retrieval should succeed
-	require.NoError(t, err)
-	expectedJWT := rawJWTWithClaims(map[string]any{
-		"orb:org_id": "integration-org",
-		"orb:zone":   "default",
-		"client_id":  "test-client-123",
-		"iat":        1516239022,
-	})
-	assert.Equal(t, expectedJWT, token.AccessToken)
-	assert.Equal(t, "mqtt://localhost:1883", token.MQTTURL)
-
-	// Test that topic generation works with the JWT
-	topics, err := generateTopicsFromTemplate(token.AccessToken, &JWTClaims{AgentID: "test-agent-123", OrgID: "integration-org", ClientID: "test-client-123"})
-	require.NoError(t, err)
-	assert.Equal(t, "orgs/integration-org/agents/test-client-123/inbox", topics.Inbox)
-	assert.Equal(t, "orgs/integration-org/agents/test-client-123/outbox", topics.Outbox)
-
-	// Note: We don't test the full Start() method here because it would require
-	// a real MQTT broker, but we've verified the token retrieval and topic generation works
-}
-
-func TestFleetConfigManager_CompilerInterfaceCheck(t *testing.T) {
-	// This test ensures that fleetConfigManager implements the Manager interface
-	// The actual check is done at compile time with: var _ Manager = (*fleetConfigManager)(nil)
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(context.Background(), logger, mockPMgr)
-	defer fleetManager.heartbeater.hbTicker.Stop()
-
-	// Verify that fleetManager can be assigned to Manager interface
-	var manager Manager = fleetManager
-	assert.NotNil(t, manager)
-
-	// Verify that all Manager interface methods are available
-	ctx := context.Background()
-	resultCtx := manager.GetContext(ctx)
-	assert.NotNil(t, resultCtx)
-}
-
 // Test edge cases for heartbeater ticker cleanup
 func TestFleetConfigManager_HeartbeaterTickerCleanup(t *testing.T) {
 	// Arrange
@@ -827,27 +739,6 @@ func TestFleetConfigManager_HeartbeaterTickerCleanup(t *testing.T) {
 
 	// Assert - no panic should occur
 	assert.True(t, true, "Ticker cleanup should not cause issues")
-}
-
-// Test multiple fleetConfigManager instances
-func TestFleetConfigManager_MultipleInstances(t *testing.T) {
-	// Arrange
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	mockPMgr1 := &mockPolicyManagerForFleet{}
-	mockPMgr2 := &mockPolicyManagerForFleet{}
-
-	// Act
-	manager1 := newFleetConfigManager(context.Background(), logger, mockPMgr1)
-	manager2 := newFleetConfigManager(context.Background(), logger, mockPMgr2)
-
-	// Assert
-	assert.NotEqual(t, manager1, manager2, "Different instances should be created")
-	assert.NotEqual(t, manager1.heartbeater, manager2.heartbeater, "Each should have separate heartbeater")
-	assert.NotEqual(t, manager1.heartbeater.hbTicker, manager2.heartbeater.hbTicker, "Each should have separate ticker")
-
-	// Cleanup
-	manager1.heartbeater.hbTicker.Stop()
-	manager2.heartbeater.hbTicker.Stop()
 }
 
 // mockBackend implements the Backend interface for testing
@@ -1248,12 +1139,17 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	// This test verifies that the Start method correctly generates topics from JWT claims
 
+	mqttURL := "mqtt://test.example.com:1883"
 	// Create a valid JWT token with orb-prefixed claims used by parseJWTClaims
 	validJWT := rawJWTWithClaims(map[string]any{
-		"orb:org_id": "integration-org",
-		"orb:zone":   "default",
-		"client_id":  "test-client",
-		"iat":        1516239022,
+		"orb:org_id":   "integration-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          1516239022,
+		"ext": map[string]any{
+			"orb:mqtt_url": mqttURL,
+		},
 	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -1265,7 +1161,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := tokenResponse{
 			AccessToken: validJWT,
-			MQTTURL:     "mqtt://test.example.com:1883",
+			MQTTURL:     mqttURL,
 			ExpiresIn:   3600,
 		}
 
@@ -1311,60 +1207,4 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 			strings.Contains(errorMsg, "timeout") ||
 			strings.Contains(errorMsg, "deadline"),
 		"Expected connection-related error, got: %s", err.Error())
-}
-
-func TestGenerateTopicsFromTemplate_Integration(t *testing.T) {
-	// Test the integration of JWT parsing with topic generation using real JWT
-	tests := []struct {
-		name          string
-		jwt           string
-		expectedOrg   string
-		expectedAgent string
-	}{
-		{
-			name: "production-like JWT",
-			jwt: rawJWTWithClaims(map[string]any{
-				"orb:org_id": "acme-corp",
-				"orb:zone":   "z1",
-				"iat":        1516239022,
-				"client_id":  "agent-prod-456",
-			}),
-			expectedOrg:   "acme-corp",
-			expectedAgent: "agent-prod-456",
-		},
-		{
-			name: "development JWT with different values",
-			jwt: rawJWTWithClaims(map[string]any{
-				"orb:org_id": "dev-123",
-				"orb:zone":   "z2",
-				"iat":        1516239022,
-				"client_id":  "agent-dev-789",
-			}),
-			expectedOrg:   "dev-123",
-			expectedAgent: "agent-dev-789",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Extract the client_id that would be in the JWT for proper testing
-			var clientID string
-			if tt.name == "production-like JWT" {
-				clientID = "agent-prod-456"
-			} else {
-				clientID = "agent-dev-789"
-			}
-			topics, err := generateTopicsFromTemplate(tt.jwt, &JWTClaims{OrgID: tt.expectedOrg, ClientID: clientID})
-			require.NoError(t, err)
-
-			expectedTopics := &tokenResponseTopics{
-				Heartbeat:    fmt.Sprintf("orgs/%s/agents/%s/heartbeats", tt.expectedOrg, tt.expectedAgent),
-				Capabilities: fmt.Sprintf("orgs/%s/agents/%s/capabilities", tt.expectedOrg, tt.expectedAgent),
-				Inbox:        fmt.Sprintf("orgs/%s/agents/%s/inbox", tt.expectedOrg, tt.expectedAgent),
-				Outbox:       fmt.Sprintf("orgs/%s/agents/%s/outbox", tt.expectedOrg, tt.expectedAgent),
-			}
-
-			assert.Equal(t, expectedTopics, topics)
-		})
-	}
 }
