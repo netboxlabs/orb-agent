@@ -7,26 +7,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultTopicTemplates(t *testing.T) {
-	templates := DefaultTopicTemplates()
-
-	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/heartbeat", templates.Heartbeat)
-	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/capabilities", templates.Capabilities)
-	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/inbox", templates.Inbox)
-	assert.Equal(t, "/orgs/{org_id}/agents/{agent_id}/outbox", templates.Outbox)
-}
-
 func TestFillTopicTemplate(t *testing.T) {
 	tests := []struct {
 		name     string
 		template string
-		claims   *TopicClaims
+		claims   *JWTClaims
 		expected string
 	}{
 		{
 			name:     "basic substitution",
 			template: "/orgs/{org_id}/agents/{agent_id}/test",
-			claims: &TopicClaims{
+			claims: &JWTClaims{
 				OrgID:   "org123",
 				AgentID: "agent-456",
 			},
@@ -35,7 +26,7 @@ func TestFillTopicTemplate(t *testing.T) {
 		{
 			name:     "multiple occurrences",
 			template: "{org_id}/data/{org_id}/{agent_id}",
-			claims: &TopicClaims{
+			claims: &JWTClaims{
 				OrgID:   "company1",
 				AgentID: "agent-789",
 			},
@@ -44,7 +35,7 @@ func TestFillTopicTemplate(t *testing.T) {
 		{
 			name:     "no placeholders",
 			template: "static/topic/name",
-			claims: &TopicClaims{
+			claims: &JWTClaims{
 				OrgID:   "org123",
 				AgentID: "agent-456",
 			},
@@ -53,7 +44,7 @@ func TestFillTopicTemplate(t *testing.T) {
 		{
 			name:     "empty claims",
 			template: "/orgs/{org_id}/agents/{agent_id}/test",
-			claims: &TopicClaims{
+			claims: &JWTClaims{
 				OrgID:   "",
 				AgentID: "",
 			},
@@ -88,30 +79,65 @@ func TestParseJWTClaims(t *testing.T) {
 		},
 		{
 			name: "valid JWT with org_id",
-			// This is a sample JWT with the claims we need (created using jwt.io)
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":"test-org","agent_id":"test-agent-123","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJ0ZXN0LW9yZyIsImFnZW50X2lkIjoidGVzdC1hZ2VudC0xMjMiLCJpYXQiOjE1MTYyMzkwMjJ9.8U8W8j_2ZwV2GvO3QcI6LJl2a8XGrHPDYS9hM2y4k2I",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"orb:org_id":   "test-org",
+				"orb:zone":     "default",
+				"orb:agent_id": "test-agent",
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"ext": map[string]any{
+					"orb:mqtt_url": "mqtt://test.example.com:1883",
+				},
+			}),
 			expected: &JWTClaims{
-				OrgID: "test-org",
+				OrgID:    "test-org",
+				Zone:     "default",
+				ClientID: "test-client",
+				AgentID:  "test-agent",
+				MqttURL:  "mqtt://test.example.com:1883",
 			},
 		},
 		{
 			name: "JWT missing org_id",
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"agent_id":"test-agent-123","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZ2VudF9pZCI6InRlc3QtYWdlbnQtMTIzIiwiaWF0IjoxNTE2MjM5MDIyfQ.QZ3K8j9QqgV2HvP4RdJ7MKm3b9YHsIPEZT0iN3z5l3J",
-			expectedErr: "org_id claim not found",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"orb:agent_id": "test-agent",
+				"orb:zone":     "default",
+			}),
+			expectedErr: "orb:org_id claim not found",
 		},
 		{
 			name: "JWT with non-string org_id",
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":123,"agent_id":"test-agent-123","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOjEyMywiYWdlbnRfaWQiOiJ0ZXN0LWFnZW50LTEyMyIsImlhdCI6MTUxNjIzOTAyMn0.Vh9X8l2LwO6PvR5QfK9NMn4c0ZIsJGF1aU3oO4z6m5K",
-			expectedErr: "org_id claim not found or not a string",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"orb:org_id":   123,
+				"orb:zone":     "default",
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"orb:agent_id": "test-agent",
+			}),
+			expectedErr: "orb:org_id claim not found or not a string",
+		},
+		{
+			name: "JWT missing agent_id",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"client_id":  "test-client",
+				"iat":        1516239022,
+				"orb:org_id": "test-org",
+				"orb:zone":   "default",
+			}),
+			expectedErr: "orb:agent_id claim not found",
+		},
+		{
+			name: "JWT with non-string agent_id",
+			tokenString: rawJWTWithClaims(map[string]any{
+				"orb:agent_id": 123,
+				"orb:zone":     "default",
+				"client_id":    "test-client",
+				"iat":          1516239022,
+				"orb:org_id":   "test-org",
+			}),
+			expectedErr: "orb:agent_id claim not found or not a string",
 		},
 	}
 
@@ -133,82 +159,41 @@ func TestParseJWTClaims(t *testing.T) {
 
 func TestGenerateTopicsFromTemplate(t *testing.T) {
 	tests := []struct {
-		name        string
-		tokenString string
-		expectedErr string
-		expected    *tokenResponseTopics
+		name     string
+		orgID    string
+		agentID  string
+		expected *tokenResponseTopics
 	}{
 		{
-			name:        "empty token",
-			tokenString: "",
-			expectedErr: "failed to parse JWT claims",
-		},
-		{
-			name:        "invalid token",
-			tokenString: "invalid.token",
-			expectedErr: "failed to parse JWT claims",
-		},
-		{
-			name: "valid token generates correct topics",
-			// Valid JWT with org_id="test-org" and agent_id="test-agent-123"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJ0ZXN0LW9yZyIsImFnZW50X2lkIjoidGVzdC1hZ2VudC0xMjMiLCJpYXQiOjE1MTYyMzkwMjJ9.8U8W8j_2ZwV2GvO3QcI6LJl2a8XGrHPDYS9hM2y4k2I",
+			name:    "valid token generates correct topics",
+			orgID:   "test-org",
+			agentID: "test-client-123",
 			expected: &tokenResponseTopics{
-				Heartbeat:    "/orgs/test-org/agents/test-agent-123/heartbeat",
-				Capabilities: "/orgs/test-org/agents/test-agent-123/capabilities",
-				Inbox:        "/orgs/test-org/agents/test-agent-123/inbox",
-				Outbox:       "/orgs/test-org/agents/test-agent-123/outbox",
+				Heartbeat:    "orgs/test-org/agents/test-client-123/heartbeats",
+				Capabilities: "orgs/test-org/agents/test-client-123/capabilities",
+				Inbox:        "orgs/test-org/agents/test-client-123/inbox",
+				Outbox:       "orgs/test-org/agents/test-client-123/outbox",
 			},
 		},
 		{
-			name: "different org and agent values",
-			// JWT with org_id="prod-company" and agent_id="agent-456"
-			// Header: {"alg":"HS256","typ":"JWT"}
-			// Payload: {"org_id":"prod-company","agent_id":"agent-456","iat":1516239022}
-			// Secret: "your-256-bit-secret"
-			tokenString: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJvcmdfaWQiOiJwcm9kLWNvbXBhbnkiLCJhZ2VudF9pZCI6ImFnZW50LTQ1NiIsImlhdCI6MTUxNjIzOTAyMn0.KJ2NtX5zY8R9LwP3QfM6NOn5d1aJsHGE2bV4oQ6z7mL",
+			name:    "different org and agent values",
+			orgID:   "prod-company",
+			agentID: "test-agent-123",
 			expected: &tokenResponseTopics{
-				Heartbeat:    "/orgs/prod-company/agents/test-agent-123/heartbeat",
-				Capabilities: "/orgs/prod-company/agents/test-agent-123/capabilities",
-				Inbox:        "/orgs/prod-company/agents/test-agent-123/inbox",
-				Outbox:       "/orgs/prod-company/agents/test-agent-123/outbox",
+				Heartbeat:    "orgs/prod-company/agents/test-agent-123/heartbeats",
+				Capabilities: "orgs/prod-company/agents/test-agent-123/capabilities",
+				Inbox:        "orgs/prod-company/agents/test-agent-123/inbox",
+				Outbox:       "orgs/prod-company/agents/test-agent-123/outbox",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(tt.tokenString, "test-agent-123")
+			topics, err := generateTopicsFromTemplate(&JWTClaims{OrgID: tt.orgID, AgentID: tt.agentID})
 
-			if tt.expectedErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.expectedErr)
-				assert.Nil(t, topics)
-			} else {
-				require.NoError(t, err)
-				assert.Equal(t, tt.expected, topics)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, topics)
 		})
 	}
-}
-
-func TestJWTClaimsStruct(t *testing.T) {
-	claims := JWTClaims{
-		OrgID: "test-org-id",
-	}
-
-	assert.Equal(t, "test-org-id", claims.OrgID)
-}
-
-func TestTopicTemplatesStruct(t *testing.T) {
-	templates := TopicTemplates{
-		Heartbeat:    "custom/heartbeat/{org_id}",
-		Capabilities: "custom/capabilities/{agent_id}",
-		Inbox:        "custom/inbox",
-		Outbox:       "custom/outbox",
-	}
-
-	assert.Equal(t, "custom/heartbeat/{org_id}", templates.Heartbeat)
-	assert.Equal(t, "custom/capabilities/{agent_id}", templates.Capabilities)
-	assert.Equal(t, "custom/inbox", templates.Inbox)
-	assert.Equal(t, "custom/outbox", templates.Outbox)
 }
