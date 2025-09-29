@@ -1,5 +1,4 @@
-// otel_test.go
-package otel_test
+package opentelemetryinfinity_test
 
 import (
 	"context"
@@ -16,7 +15,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
-	"github.com/netboxlabs/orb-agent/agent/backend/otel"
+	"github.com/netboxlabs/orb-agent/agent/backend/opentelemetryinfinity"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -117,11 +116,11 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 		return mockCmd
 	}
 
-	assert.True(t, otel.Register(), "Failed to register OpenTelemetry backend")
+	assert.True(t, opentelemetryinfinity.Register(), "Failed to register OpenTelemetry backend")
 
-	assert.True(t, backend.HaveBackend("otel"), "Failed to get OpenTelemetry backend")
+	assert.True(t, backend.HaveBackend("opentelemetry_infinity"), "Failed to get OpenTelemetry backend")
 
-	be := backend.GetBackend("otel")
+	be := backend.GetBackend("opentelemetry_infinity")
 
 	// Configure backend
 	err = be.Configure(logger, repo, map[string]any{
@@ -183,11 +182,11 @@ func TestOpenTelemetryBackendCompleted(t *testing.T) {
 		return mockCmd
 	}
 
-	assert.True(t, otel.Register(), "Failed to register Opentelemetry backend")
+	assert.True(t, opentelemetryinfinity.Register(), "Failed to register Opentelemetry backend")
 
-	assert.True(t, backend.HaveBackend("otel"), "Failed to get Opentelemetry backend")
+	assert.True(t, backend.HaveBackend("opentelemetry_infinity"), "Failed to get Opentelemetry backend")
 
-	be := backend.GetBackend("otel")
+	be := backend.GetBackend("opentelemetry_infinity")
 
 	// Configure backend with invalid parameters
 	err := be.Configure(slog.Default(), nil, map[string]any{

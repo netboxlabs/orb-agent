@@ -94,7 +94,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	} else {
 		commonConfig = config.BackendCommons{}
 	}
-	commonConfig.Otel.AgentLabels = labels
+	commonConfig.Otlp.AgentLabels = labels
 	a.backendsCommon = commonConfig
 	delete(cfgBackends, "common")
 

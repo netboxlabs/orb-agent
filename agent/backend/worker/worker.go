@@ -108,8 +108,8 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 		d.diodeDryRunOutputDir = dryRunOutputDir
 	}
 
-	if common.Otel.Grpc != "" {
-		d.diodeOtelEndpoint = common.Otel.Grpc
+	if common.Otlp.Grpc != "" {
+		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("orb-worker using OTLP metrics endpoint",
 			slog.String("endpoint", d.diodeOtelEndpoint))
 	}

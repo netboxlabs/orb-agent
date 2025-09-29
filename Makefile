@@ -43,6 +43,10 @@ agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -o ${BUILD_DIR}/orb-agent cmd/main.go
 
+.PHONY: test
+test:
+	@go test -race ./...
+
 .PHONY: test-coverage
 test-coverage:
 	@mkdir -p .coverage
