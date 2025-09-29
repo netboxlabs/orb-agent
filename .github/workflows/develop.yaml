@@ -1,6 +1,12 @@
 name: Orb Agent - develop
 on:
   workflow_dispatch:
+    inputs:
+      docker_tag:
+        description: 'Docker tag to use for the image'
+        required: false
+        default: 'develop'
+        type: string
   push:
     branches: [ develop ]
     paths:
@@ -55,6 +61,6 @@ jobs:
             push: true
             cache-from: type=gha
             cache-to: type=gha,mode=max
-            tags: netboxlabs/orb-agent:develop
+            tags: netboxlabs/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
             build-args: |
               GO_VERSION=${{ env.GO_VERSION }}  
