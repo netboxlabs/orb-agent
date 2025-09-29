@@ -61,6 +61,6 @@ jobs:
             push: true
             cache-from: type=gha
             cache-to: type=gha,mode=max
-            tags: netboxlabs/orb-agent:${{ github.event.inputs.docker_tag }}
+            tags: netboxlabs/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
             build-args: |
               GO_VERSION=${{ env.GO_VERSION }}  
