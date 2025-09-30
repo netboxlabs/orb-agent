@@ -106,9 +106,20 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	ctx := context.Background()
 
-	fleetManager.logger.Info("starting fleet config manager", "token_url", cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, "client_id", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, "client_secret", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
+	fleetManager.logger.Info("starting fleet config manager", "token_url",
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, "client_id",
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, "client_secret",
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	// call the token url to get the token
-	token, err := fleetManager.getToken(ctx, cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
+	timeout := 30 * time.Second
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout != nil && *cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout > 0 {
+		timeout = time.Duration(*cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout) * time.Second
+	}
+	token, err := fleetManager.getToken(ctx,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.SkipTLS, timeout,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
 	if err != nil {
 		return err
 	}
@@ -330,7 +341,7 @@ type tokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL string, clientID string, clientSecret string) (*tokenResponse, error) {
+func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL string, skipTLS bool, timeout time.Duration, clientID string, clientSecret string) (*tokenResponse, error) {
 	// Input validation
 	if tokenURL == "" {
 		return nil, fmt.Errorf("token URL cannot be empty")
@@ -367,9 +378,9 @@ func (fleetManager *fleetConfigManager) getToken(ctx context.Context, tokenURL s
 
 	// HTTP client with configurable timeout and TLS settings
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second, // TODO: make configurable
+		Timeout: timeout,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // TODO: make configurable
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: skipTLS},
 		},
 	}
 

@@ -446,7 +446,7 @@ func TestFleetConfigManager_GetToken_Success(t *testing.T) {
 
 	// Act
 	ctx := context.Background()
-	token, err := fleetManager.getToken(ctx, server.URL, "test_client_id", "test_client_secret")
+	token, err := fleetManager.getToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
 
 	// Assert
 	require.NoError(t, err)
@@ -472,7 +472,7 @@ func TestFleetConfigManager_GetToken_HTTPError(t *testing.T) {
 
 	// Act
 	ctx := context.Background()
-	token, err := fleetManager.getToken(ctx, server.URL, "invalid_client", "invalid_secret")
+	token, err := fleetManager.getToken(ctx, server.URL, true, 60*time.Second, "invalid_client", "invalid_secret")
 
 	// Assert
 	assert.Error(t, err)
@@ -496,7 +496,7 @@ func TestFleetConfigManager_GetToken_InvalidJSON(t *testing.T) {
 
 	// Act
 	ctx := context.Background()
-	token, err := fleetManager.getToken(ctx, server.URL, "test_client", "test_secret")
+	token, err := fleetManager.getToken(ctx, server.URL, true, 60*time.Second, "test_client", "test_secret")
 
 	// Assert
 	assert.Error(t, err)
@@ -513,7 +513,7 @@ func TestFleetConfigManager_GetToken_NetworkError(t *testing.T) {
 
 	// Act with invalid URL
 	ctx := context.Background()
-	token, err := fleetManager.getToken(ctx, "http://invalid.nonexistent.url:99999", "test", "test")
+	token, err := fleetManager.getToken(ctx, "http://invalid.nonexistent.url:99999", false, 60*time.Second, "test", "test")
 
 	// Assert
 	assert.Error(t, err)
@@ -530,7 +530,7 @@ func TestFleetConfigManager_GetToken_InvalidURL(t *testing.T) {
 
 	// Act with malformed URL
 	ctx := context.Background()
-	token, err := fleetManager.getToken(ctx, "://invalid-url", "test", "test")
+	token, err := fleetManager.getToken(ctx, "://invalid-url", false, 60*time.Second, "test", "test")
 
 	// Assert
 	assert.Error(t, err)
@@ -1177,6 +1177,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 				Sources: config.Sources{
 					Fleet: config.FleetManager{
 						TokenURL:     server.URL,
+						SkipTLS:      true,
 						ClientID:     "test_client_id",
 						ClientSecret: "test_client_secret",
 						AgentID:      "test-agent-123",

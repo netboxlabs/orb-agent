@@ -37,6 +37,8 @@ type GitManager struct {
 type FleetManager struct {
 	URL          string `yaml:"url"`
 	TokenURL     string `yaml:"token_url"`
+	Timeout      *int   `yaml:"timeout,omitempty"`
+	SkipTLS      bool   `yaml:"skip_tls"`
 	ClientID     string `yaml:"client_id"`
 	ClientSecret string `yaml:"client_secret"`
 	AgentID      string `yaml:"agent_id"`
