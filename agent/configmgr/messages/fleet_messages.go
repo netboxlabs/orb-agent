@@ -84,6 +84,27 @@ const CurrentCapabilitiesSchemaVersion = "1.0"
 type Capabilities struct {
 	SchemaVersion string                 `json:"schema_version"`
 	OrbAgent      OrbAgentInfo           `json:"orb_agent"`
-	AgentTags     map[string]string      `json:"agent_tags"`
+	AgentLabels   map[string]string      `json:"agent_labels"`
 	Backends      map[string]BackendInfo `json:"backends"`
 }
+
+// GroupMemberships represents the group memberships of an agent
+type GroupMemberships struct {
+	FullList bool              `json:"full_list"`
+	Groups   []GroupMembership `json:"groups"`
+}
+
+// GroupMembership represents a group membership of an agent
+type GroupMembership struct {
+	GroupID string `json:"group_id"`
+	Name    string `json:"name"`
+}
+
+type RPC struct {
+	SchemaVersion string `json:"schema_version"`
+	Func          string `json:"func"`
+	Payload       any    `json:"payload"`
+}
+
+// SendGroupMembershipsRequest represents a request to send group memberships to the fleet manager
+type SendGroupMembershipsRequest struct{}

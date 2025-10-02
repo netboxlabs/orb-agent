@@ -39,8 +39,6 @@ type FleetManager struct {
 	TokenURL     string `yaml:"token_url"`
 	ClientID     string `yaml:"client_id"`
 	ClientSecret string `yaml:"client_secret"`
-	AgentID      string `yaml:"agent_id"`
-	MQTTURL      string `yaml:"mqtt_url,omitempty"`
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.

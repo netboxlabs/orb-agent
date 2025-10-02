@@ -2,7 +2,6 @@ package configmgr
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
@@ -69,31 +68,4 @@ func parseJWTClaims(tokenString string) (*JWTClaims, error) {
 	}
 
 	return jwtClaims, nil
-}
-
-// fillTopicTemplate replaces placeholders in a topic template with actual values
-func fillTopicTemplate(template string, claims *JWTClaims) string {
-	result := template
-	result = strings.ReplaceAll(result, "{org_id}", claims.OrgID)
-	result = strings.ReplaceAll(result, "{agent_id}", claims.AgentID)
-	return result
-}
-
-const (
-	heartbeatTemplate    = "orgs/{org_id}/agents/{agent_id}/heartbeats"
-	capabilitiesTemplate = "orgs/{org_id}/agents/{agent_id}/capabilities"
-	inboxTemplate        = "orgs/{org_id}/agents/{agent_id}/inbox"
-	outboxTemplate       = "orgs/{org_id}/agents/{agent_id}/outbox"
-)
-
-// generateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
-func generateTopicsFromTemplate(jwtClaims *JWTClaims) (*tokenResponseTopics, error) {
-	topics := &tokenResponseTopics{
-		Heartbeat:    fillTopicTemplate(heartbeatTemplate, jwtClaims),
-		Capabilities: fillTopicTemplate(capabilitiesTemplate, jwtClaims),
-		Inbox:        fillTopicTemplate(inboxTemplate, jwtClaims),
-		Outbox:       fillTopicTemplate(outboxTemplate, jwtClaims),
-	}
-
-	return topics, nil
 }

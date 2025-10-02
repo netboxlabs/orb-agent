@@ -669,9 +669,9 @@ func TestFleetConfigManager_DispatchToHandlers(t *testing.T) {
 	payload := []byte(`{"test": "data"}`)
 
 	// This should not panic since it's currently empty implementation
-	fleetManager.dispatchToHandlers("config", payload)
-	fleetManager.dispatchToHandlers("policy", payload)
-	fleetManager.dispatchToHandlers("unknown", payload)
+	fleetManager.dispatchToHandlers("config", payload, "test-org")
+	fleetManager.dispatchToHandlers("policy", payload, "test-org")
+	fleetManager.dispatchToHandlers("unknown", payload, "test-org")
 
 	// Assert - reaching this point means no panic occurred
 	assert.True(t, true, "dispatchToHandlers should handle all message types without panic")
