@@ -232,6 +232,14 @@ func getAuthProtocol(authProtocol string) (gosnmp.SnmpV3AuthProtocol, error) {
 		return gosnmp.MD5, nil
 	case "SHA":
 		return gosnmp.SHA, nil
+	case "SHA224":
+		return gosnmp.SHA224, nil
+	case "SHA256":
+		return gosnmp.SHA256, nil
+	case "SHA384":
+		return gosnmp.SHA384, nil
+	case "SHA512":
+		return gosnmp.SHA512, nil
 	}
 	return gosnmp.NoAuth, fmt.Errorf("unsupported authentication protocol: %s", authProtocol)
 }
@@ -244,6 +252,14 @@ func getPrivProtocol(privProtocol string) (gosnmp.SnmpV3PrivProtocol, error) {
 		return gosnmp.DES, nil
 	case "AES":
 		return gosnmp.AES, nil
+	case "AES192":
+		return gosnmp.AES192, nil
+	case "AES256":
+		return gosnmp.AES256, nil
+	case "AES192C":
+		return gosnmp.AES192C, nil
+	case "AES256C":
+		return gosnmp.AES256C, nil
 	}
 	return gosnmp.NoPriv, fmt.Errorf("unsupported privacy protocol: %s", privProtocol)
 }
