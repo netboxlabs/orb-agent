@@ -79,7 +79,9 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	if d.apiHost, prs = config["host"].(string); !prs {
 		d.apiHost = defaultAPIHost
 	}
-	if d.apiPort, prs = config["port"].(string); !prs {
+	if port, prs := config["port"]; prs {
+		d.apiPort = fmt.Sprintf("%v", port)
+	} else {
 		d.apiPort = defaultAPIPort
 	}
 
