@@ -88,7 +88,7 @@ func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc,
 	}
 }
 
-func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
+func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
 	// The passed ctx represents the lifecycle of the fleet configuration
 	// manager.  All child goroutines (heartbeat, MQTT, etc.) inherit from it so
 	// that a single cancellation propagates everywhere.
@@ -98,7 +98,7 @@ func newFleetConfigManager(ctx context.Context, logger *slog.Logger, pMgr policy
 		heartbeater: &heartbeater{
 			logger:       logger,
 			hbTicker:     time.NewTicker(heartbeatFreq),
-			heartbeatCtx: ctx,
+			heartbeatCtx: context.Background(),
 		},
 	}
 }
