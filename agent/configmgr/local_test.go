@@ -1,7 +1,6 @@
 package configmgr_test
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"testing"
@@ -51,7 +50,7 @@ func TestLocalConfigManager(t *testing.T) {
 		})).Return()
 
 		// Create and start the manager
-		mgr := configmgr.New(context.Background(), logger, pMgr, cfg.Active)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		err := mgr.Start(testConfig, backends)
 
 		// Verify
@@ -70,7 +69,7 @@ func TestLocalConfigManager(t *testing.T) {
 		backends := map[string]backend.Backend{}
 
 		// Create the manager
-		mgr := configmgr.New(context.Background(), logger, pMgr, cfg.Active)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		err := mgr.Start(testConfig, backends)
 
 		// Should return an error
@@ -99,7 +98,7 @@ func TestLocalConfigManager(t *testing.T) {
 		backends := map[string]backend.Backend{}
 
 		// Create the manager
-		mgr := configmgr.New(context.Background(), logger, pMgr, cfg.Active)
+		mgr := configmgr.New(logger, pMgr, cfg.Active)
 		err := mgr.Start(testConfig, backends)
 
 		// Should return an error
