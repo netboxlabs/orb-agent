@@ -100,6 +100,7 @@ type GroupMembership struct {
 	Name    string `json:"name"`
 }
 
+// RPC represents a request to or from the fleet manager
 type RPC struct {
 	SchemaVersion string `json:"schema_version"`
 	Func          string `json:"func"`

@@ -548,7 +548,7 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
 	trt := tokenResponseTopics{Inbox: "test/topic"}
-	err := fleetManager.connect(context.Background(), "://invalid-url", "test_token", trt, backends, "test-agent-id", "test-zone")
+	err := fleetManager.connect(context.Background(), "://invalid-url", "test_token", trt, backends, "test-agent-id", "test-zone", map[string]string{})
 
 	// Assert
 	assert.Error(t, err)
@@ -569,7 +569,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// Timeout after 3 seconds
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	err := fleetManager.connect(ctx, "mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id", "test-zone")
+	err := fleetManager.connect(ctx, "mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id", "test-zone", map[string]string{})
 
 	// Assert - we expect connection to fail since no server is running,
 	// but URL parsing should succeed
@@ -666,12 +666,17 @@ func TestFleetConfigManager_DispatchToHandlers(t *testing.T) {
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	// Act - currently this method is a TODO, so it should not panic
-	payload := []byte(`{"test": "data"}`)
+	payload := map[string]any{"test": "data"}
+	rpc := messages.RPC{
+		// SchemaVersion: messages.CurrentRPCSchemaVersion,
+		Func:    "config",
+		Payload: payload,
+	}
 
 	// This should not panic since it's currently empty implementation
-	fleetManager.dispatchToHandlers("config", payload, "test-org")
-	fleetManager.dispatchToHandlers("policy", payload, "test-org")
-	fleetManager.dispatchToHandlers("unknown", payload, "test-org")
+	fleetManager.dispatchToHandlers("config", rpc, "test-org")
+	fleetManager.dispatchToHandlers("policy", rpc, "test-org")
+	fleetManager.dispatchToHandlers("unknown", rpc, "test-org")
 
 	// Assert - reaching this point means no panic occurred
 	assert.True(t, true, "dispatchToHandlers should handle all message types without panic")
@@ -838,9 +843,10 @@ func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
 	}
 
 	ctx := context.Background()
+	labels := map[string]string{}
 
 	// Act
-	fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -894,6 +900,8 @@ func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
 		"backend2": mockBackend2,
 	}
 
+	labels := map[string]string{}
+
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -903,7 +911,7 @@ func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -943,6 +951,8 @@ func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing
 		"backend2": mockBackend2,
 	}
 
+	labels := map[string]string{}
+
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -952,7 +962,7 @@ func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing
 	ctx := context.Background()
 
 	// Act
-	fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -985,6 +995,8 @@ func TestFleetConfigManager_SendCapabilities_PublishError(t *testing.T) {
 		"backend1": mockBackend1,
 	}
 
+	labels := map[string]string{}
+
 	publishError := errors.New("publish failed")
 	publishFunc := func(_ context.Context, _ []byte) error {
 		return publishError
@@ -993,7 +1005,7 @@ func TestFleetConfigManager_SendCapabilities_PublishError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	assert.Equal(t, publishError, publishFunc(ctx, []byte{}))
@@ -1009,7 +1021,7 @@ func TestFleetConfigManager_SendCapabilities_EmptyBackends(t *testing.T) {
 	defer fleetManager.heartbeater.hbTicker.Stop()
 
 	backends := map[string]backend.Backend{} // Empty backends
-
+	labels := map[string]string{}
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -1019,7 +1031,7 @@ func TestFleetConfigManager_SendCapabilities_EmptyBackends(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -1044,6 +1056,8 @@ func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
 	mockBackend1 := &mockBackend{}
 	mockBackend2 := &mockBackend{}
 
+	labels := map[string]string{}
+
 	mockBackend1.On("Version").Return("", errors.New("version error"))
 	mockBackend2.On("Version").Return("1.0.0", nil)
 	mockBackend2.On("GetCapabilities").Return(map[string]any(nil), errors.New("capabilities error"))
@@ -1062,7 +1076,7 @@ func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -1099,6 +1113,8 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 		"test_backend": mockBackend1,
 	}
 
+	labels := map[string]string{}
+
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -1108,7 +1124,7 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 	ctx := context.Background()
 
 	// Act
-	fleetManager.sendCapabilities(ctx, backends, publishFunc)
+	fleetManager.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -1179,8 +1195,6 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 						TokenURL:     server.URL,
 						ClientID:     "test_client_id",
 						ClientSecret: "test_client_secret",
-						AgentID:      "test-agent-123",
-						MQTTURL:      "mqtt://fallback.example.com:1883",
 					},
 				},
 			},
