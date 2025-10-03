@@ -1,0 +1,18 @@
+version: 1.0
+orb:
+  config_manager:
+    active: fleet
+    sources:
+      orb:
+        token_url: "http://0.0.0.0:8080/auth/token"
+        client_id: "${FLEET_CLIENT_ID}"
+        client_secret: "${FLEET_CLIENT_SECRET}"
+        agent_id: "my-fleet-agent-001"
+  backends:
+    network_discovery:
+    common:
+      diode:
+        target: "grpc://your-diode-server:8080/diode"
+        client_id: "${DIODE_CLIENT_ID}"
+        client_secret: "${DIODE_CLIENT_SECRET}"
+        agent_name: "orb-agent-fleet"

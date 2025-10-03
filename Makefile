@@ -16,9 +16,7 @@ COMMIT_HASH = $(shell git rev-parse --short HEAD)
 OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
 OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
 
-all: platform
-
-.PHONY: all agent agent_bin
+.PHONY: agent agent_bin
 
 clean:
 	rm -rf ${BUILD_DIR}
@@ -66,6 +64,16 @@ fix-lint:
 
 agent:
 	docker build --no-cache \
+	  --build-arg GOARCH=$(GOARCH) \
+	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
+	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
+	  -f agent/docker/Dockerfile .
+
+agent_fast:
+	docker build \
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
