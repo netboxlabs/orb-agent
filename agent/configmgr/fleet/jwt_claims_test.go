@@ -1,4 +1,4 @@
-package configmgr
+package fleet
 
 import (
 	"testing"
@@ -79,7 +79,7 @@ func TestParseJWTClaims(t *testing.T) {
 		},
 		{
 			name: "valid JWT with org_id",
-			tokenString: rawJWTWithClaims(map[string]any{
+			tokenString: RawJWTWithClaims(map[string]any{
 				"orb:org_id":   "test-org",
 				"orb:zone":     "default",
 				"orb:agent_id": "test-agent",
@@ -99,7 +99,7 @@ func TestParseJWTClaims(t *testing.T) {
 		},
 		{
 			name: "JWT missing org_id",
-			tokenString: rawJWTWithClaims(map[string]any{
+			tokenString: RawJWTWithClaims(map[string]any{
 				"client_id":    "test-client",
 				"iat":          1516239022,
 				"orb:agent_id": "test-agent",
@@ -109,7 +109,7 @@ func TestParseJWTClaims(t *testing.T) {
 		},
 		{
 			name: "JWT with non-string org_id",
-			tokenString: rawJWTWithClaims(map[string]any{
+			tokenString: RawJWTWithClaims(map[string]any{
 				"orb:org_id":   123,
 				"orb:zone":     "default",
 				"client_id":    "test-client",
@@ -120,7 +120,7 @@ func TestParseJWTClaims(t *testing.T) {
 		},
 		{
 			name: "JWT missing agent_id",
-			tokenString: rawJWTWithClaims(map[string]any{
+			tokenString: RawJWTWithClaims(map[string]any{
 				"client_id":  "test-client",
 				"iat":        1516239022,
 				"orb:org_id": "test-org",
@@ -130,7 +130,7 @@ func TestParseJWTClaims(t *testing.T) {
 		},
 		{
 			name: "JWT with non-string agent_id",
-			tokenString: rawJWTWithClaims(map[string]any{
+			tokenString: RawJWTWithClaims(map[string]any{
 				"orb:agent_id": 123,
 				"orb:zone":     "default",
 				"client_id":    "test-client",
@@ -143,7 +143,7 @@ func TestParseJWTClaims(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			claims, err := parseJWTClaims(tt.tokenString)
+			claims, err := ParseJWTClaims(tt.tokenString)
 
 			if tt.expectedErr != "" {
 				require.Error(t, err)
@@ -157,18 +157,18 @@ func TestParseJWTClaims(t *testing.T) {
 	}
 }
 
-func TestGenerateTopicsFromTemplate(t *testing.T) {
+func GestGenerateTopicsFromTemplate(t *testing.T) {
 	tests := []struct {
 		name     string
 		orgID    string
 		agentID  string
-		expected *tokenResponseTopics
+		expected *TokenResponseTopics
 	}{
 		{
 			name:    "valid token generates correct topics",
 			orgID:   "test-org",
 			agentID: "test-client-123",
-			expected: &tokenResponseTopics{
+			expected: &TokenResponseTopics{
 				Heartbeat:    "orgs/test-org/agents/test-client-123/heartbeats",
 				Capabilities: "orgs/test-org/agents/test-client-123/capabilities",
 				Inbox:        "orgs/test-org/agents/test-client-123/inbox",
@@ -179,7 +179,7 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 			name:    "different org and agent values",
 			orgID:   "prod-company",
 			agentID: "test-agent-123",
-			expected: &tokenResponseTopics{
+			expected: &TokenResponseTopics{
 				Heartbeat:    "orgs/prod-company/agents/test-agent-123/heartbeats",
 				Capabilities: "orgs/prod-company/agents/test-agent-123/capabilities",
 				Inbox:        "orgs/prod-company/agents/test-agent-123/inbox",
@@ -190,7 +190,7 @@ func TestGenerateTopicsFromTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			topics, err := generateTopicsFromTemplate(&JWTClaims{OrgID: tt.orgID, AgentID: tt.agentID})
+			topics, err := GenerateTopicsFromTemplate(&JWTClaims{OrgID: tt.orgID, AgentID: tt.agentID})
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, topics)

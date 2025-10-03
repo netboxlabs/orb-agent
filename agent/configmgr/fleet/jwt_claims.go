@@ -1,4 +1,4 @@
-package configmgr
+package fleet
 
 import (
 	"fmt"
@@ -16,8 +16,8 @@ type JWTClaims struct {
 	MqttURL  string
 }
 
-// parseJWTClaims extracts org_id claim from a JWT token
-func parseJWTClaims(tokenString string) (*JWTClaims, error) {
+// ParseJWTClaims extracts org_id claim from a JWT token
+func ParseJWTClaims(tokenString string) (*JWTClaims, error) {
 	if tokenString == "" {
 		return nil, fmt.Errorf("empty token string")
 	}
