@@ -106,10 +106,10 @@ func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *f
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	ctx := context.Background()
 
-	fleetManager.logger.Info("starting fleet config manager", "token_url",
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, "client_id",
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, "client_secret",
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
+	fleetManager.logger.Info("starting fleet config manager",
+		"token_url", cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
+		"client_id", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID)
+
 	// call the token url to get the token
 	timeout := 30 * time.Second
 	if cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout != nil && *cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout > 0 {
