@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/eclipse/paho.golang/paho"
+
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 )
 

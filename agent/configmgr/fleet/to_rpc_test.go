@@ -8,10 +8,11 @@ import (
 	"os"
 	"testing"
 
-	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 )
 
 func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
