@@ -57,7 +57,7 @@ func (m *mockPolicyManager) RemovePolicy(policyID string, policyName string, beN
 func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -127,7 +127,7 @@ func TestMessageHandlers_handleGroupMemberships_Success(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -166,7 +166,7 @@ func TestMessageHandlers_handleGroupMemberships_InvalidPayload(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -197,7 +197,7 @@ func TestMessageHandlers_handleGroupMemberships_EmptyGroups(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -232,7 +232,7 @@ func TestMessageHandlers_handleGroupMemberships_JSONMarshalError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -304,7 +304,7 @@ func TestMessageHandlers_handleGroupMemberships_ComplexPayload(t *testing.T) {
 	// Test with a more complex payload structure
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -359,7 +359,7 @@ func TestMessageHandlers_handleGroupMemberships_SendsAgentPoliciesRequest(t *tes
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -432,7 +432,7 @@ func TestNewMessageHandlers(t *testing.T) {
 	mockPMgr := &mockPolicyManager{}
 
 	// Act
-	handlers := NewMessageHandlers(logger, mockPMgr)
+	handlers := NewMessaging(logger, mockPMgr)
 
 	// Assert
 	assert.NotNil(t, handlers)

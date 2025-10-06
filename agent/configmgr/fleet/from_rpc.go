@@ -3,29 +3,28 @@ package fleet
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
-// MessageHandlers handles the messages from the MQTT broker
-type MessageHandlers struct {
+// Messaging handles the messages from the MQTT broker
+type Messaging struct {
 	logger *slog.Logger
 	pMgr   policymgr.PolicyManager
 }
 
-// NewMessageHandlers creates a new MessageHandlers
-func NewMessageHandlers(logger *slog.Logger, pMgr policymgr.PolicyManager) *MessageHandlers {
-	return &MessageHandlers{
+// NewMessaging creates a new Messaging
+func NewMessaging(logger *slog.Logger, pMgr policymgr.PolicyManager) *Messaging {
+	return &Messaging{
 		logger: logger,
 		pMgr:   pMgr,
 	}
 }
 
 // DispatchToHandlers dispatches the message to the appropriate handler
-func (handlers *MessageHandlers) DispatchToHandlers(messageType string, rpc messages.RPC, orgID string, agentID string, subscribeToTopic func(topic string) error, publishToTopic func(ctx context.Context, topic string, payload []byte) error) {
+func (handlers *Messaging) DispatchToHandlers(messageType string, rpc messages.RPC, orgID string, agentID string, subscribeToTopic func(topic string) error, publishToTopic func(ctx context.Context, topic string, payload []byte) error) {
 	switch messageType {
 	case "group_membership":
 		handlers.handleGroupMemberships(rpc, orgID, agentID, subscribeToTopic, publishToTopic)
@@ -34,7 +33,7 @@ func (handlers *MessageHandlers) DispatchToHandlers(messageType string, rpc mess
 	}
 }
 
-func (handlers *MessageHandlers) handleGroupMemberships(rpc messages.RPC, orgID string, agentID string, subscribeFunc func(topic string) error, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
+func (handlers *Messaging) handleGroupMemberships(rpc messages.RPC, orgID string, agentID string, subscribeFunc func(topic string) error, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
 	handlers.logger.Debug("handling group memberships", "payload", rpc.Payload)
 	payloadJSON, err := json.Marshal(rpc.Payload)
 	if err != nil {
@@ -61,29 +60,6 @@ func (handlers *MessageHandlers) handleGroupMemberships(rpc messages.RPC, orgID 
 	if err != nil {
 		handlers.logger.Error("failed to send agent policies request", "error", err)
 	}
-}
-
-func (handlers *MessageHandlers) sendAgentPoliciesRequest(agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) error {
-	handlers.logger.Debug("sending agent policies request")
-	payload := messages.SendAgentPoliciesRequest{}
-
-	data := messages.RPC{
-		// SchemaVersion: fleet.CurrentRPCSchemaVersion,
-		Func:    "agent_policies_req",
-		Payload: payload,
-	}
-
-	body, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-
-	err = publishFunc(context.Background(), fmt.Sprintf("agents/%s/outbox", agentID), body)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // func (a *orbAgent) handleAgentPolicies(ctx context.Context, rpc []fleet.AgentPolicyRPCPayload, fullList bool) {

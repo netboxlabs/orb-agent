@@ -22,7 +22,7 @@ type MQTTConnection struct {
 	logger            *slog.Logger
 	connectionManager *autopaho.ConnectionManager
 	heartbeater       *heartbeater
-	handlers          *MessageHandlers
+	messaging         *Messaging
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -31,7 +31,7 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager) *MQTTC
 		connectionManager: nil,
 		logger:            logger,
 		heartbeater:       newHeartbeater(logger),
-		handlers:          NewMessageHandlers(logger, pMgr),
+		messaging:         NewMessaging(logger, pMgr),
 	}
 }
 
@@ -90,7 +90,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 				return nil
 			}, clientID)
 
-			go connection.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
+			go connection.messaging.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Capabilities,
 					Payload: payload,
@@ -112,7 +112,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 
 			// TODO: this is a hack to work around the race condition of capabilities not being processed by the time we request group memberships
 			time.Sleep(10 * time.Second)
-			go connection.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
+			go connection.messaging.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Outbox,
 					Payload: payload,
@@ -143,7 +143,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 						return true, nil
 					}
 
-					connection.handlers.DispatchToHandlers(
+					connection.messaging.DispatchToHandlers(
 						rpc.Func,
 						rpc,
 						orgID,
