@@ -48,7 +48,11 @@ func TestServerConfigureAndStart(t *testing.T) {
 	assert.NoError(t, err, "metrics.SetupMetricsExport should not return an error")
 
 	srv := server.NewServer("localhost", 8080, logger, policyManager, "1.0.0")
-	srv.Start()
+	serverErrCh := srv.Start()
+	t.Cleanup(func() {
+		srv.Stop()
+		<-serverErrCh
+	})
 
 	// Check /status endpoint
 	w := httptest.NewRecorder()
@@ -61,8 +65,6 @@ func TestServerConfigureAndStart(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"version": "1.0.0"`)
 	assert.Contains(t, w.Body.String(), `"start_time":`)
 	assert.Contains(t, w.Body.String(), `"up_time_seconds": 0`)
-
-	srv.Stop()
 }
 
 func TestServerGetCapabilities(t *testing.T) {

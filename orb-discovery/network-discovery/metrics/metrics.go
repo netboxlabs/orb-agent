@@ -176,3 +176,11 @@ func GetActivePolicies() metric.Int64UpDownCounter {
 func ResetMeter() {
 	meter = nil
 }
+
+// Shutdown gracefully shuts down the metrics exporter
+func Shutdown(ctx context.Context) error {
+	if meterProvider != nil {
+		return meterProvider.Shutdown(ctx)
+	}
+	return nil
+}

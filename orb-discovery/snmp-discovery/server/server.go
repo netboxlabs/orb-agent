@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -29,12 +31,13 @@ type Capabilities struct {
 
 // Server represents the snmp-discovery server
 type Server struct {
-	router  *gin.Engine
-	manager *policy.Manager
-	stat    config.Status
-	logger  *slog.Logger
-	host    string
-	port    int
+	router     *gin.Engine
+	manager    *policy.Manager
+	stat       config.Status
+	logger     *slog.Logger
+	host       string
+	port       int
+	httpServer *http.Server
 }
 
 func init() {
@@ -89,6 +92,10 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		host:   host,
 		port:   port,
 	}
+	server.httpServer = &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", host, port),
+		Handler: server.router,
+	}
 
 	// Add metrics middleware
 	server.router.Use(metricsMiddleware())
@@ -110,14 +117,20 @@ func (s *Server) Router() *gin.Engine {
 }
 
 // Start starts the snmp-discovery server
-func (s *Server) Start() {
+func (s *Server) Start() <-chan error {
+	errCh := make(chan error, 1)
 	go func() {
-		serv := fmt.Sprintf("%s:%d", s.host, s.port)
-		s.logger.Info("starting snmp-discovery server at: " + serv)
-		if err := s.router.Run(serv); err != nil {
-			s.logger.Error("shutting down the server", "error", err)
+		s.logger.Info("starting snmp-discovery server", "address", s.httpServer.Addr)
+		if err := s.httpServer.ListenAndServe(); err != nil {
+			if errors.Is(err, http.ErrServerClosed) {
+				close(errCh)
+				return
+			}
+			errCh <- err
 		}
+		close(errCh)
 	}()
+	return errCh
 }
 
 func (s *Server) getStatus(c *gin.Context) {
@@ -193,6 +206,13 @@ func (s *Server) deletePolicy(c *gin.Context) {
 
 // Stop stops the snmp-discovery server
 func (s *Server) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.httpServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		s.logger.Error("shutting down HTTP server", "error", err)
+	}
+
 	if err := s.manager.Stop(); err != nil {
 		s.logger.Error("stopping policy manager", "error", err)
 	}

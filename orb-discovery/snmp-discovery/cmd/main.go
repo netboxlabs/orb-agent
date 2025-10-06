@@ -132,7 +132,18 @@ func main() {
 		}
 	}()
 
-	server.Start()
+	serverErrCh := server.Start()
+
+	go func() {
+		if err, ok := <-serverErrCh; ok && err != nil {
+			logger.Error("snmp-discovery server encountered an error", "error", err)
+			server.Stop()
+			if shutdownErr := metrics.Shutdown(ctx); shutdownErr != nil {
+				logger.Error("failed to shutdown metrics", "error", shutdownErr)
+			}
+			cancelFunc()
+		}
+	}()
 
 	<-done
 }
