@@ -14,6 +14,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // MQTTConnection manages the MQTT connection
@@ -21,19 +22,21 @@ type MQTTConnection struct {
 	logger            *slog.Logger
 	connectionManager *autopaho.ConnectionManager
 	heartbeater       *heartbeater
+	handlers          *MessageHandlers
 }
 
 // NewMQTTConnection creates a new MQTTConnection
-func NewMQTTConnection(logger *slog.Logger) *MQTTConnection {
+func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager) *MQTTConnection {
 	return &MQTTConnection{
 		connectionManager: nil,
 		logger:            logger,
 		heartbeater:       newHeartbeater(logger),
+		handlers:          NewMessageHandlers(logger, pMgr),
 	}
 }
 
 // Connect connects to the MQTT broker
-func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, token string, topics TokenResponseTopics, backends map[string]backend.Backend, clientID, zone string, labels map[string]string) error {
+func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, token, agentID string, topics TokenResponseTopics, backends map[string]backend.Backend, clientID, zone string, labels map[string]string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
@@ -140,7 +143,14 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 						return true, nil
 					}
 
-					connection.dispatchToHandlers(rpc.Func, rpc, orgID)
+					connection.handlers.DispatchToHandlers(
+						rpc.Func,
+						rpc,
+						orgID,
+						agentID,
+						connection.subscribeToTopic,
+						connection.publishToTopic,
+					)
 
 					return true, nil
 				},
@@ -174,6 +184,29 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 	}
 
 	connection.logger.Info("MQTT connection manager started successfully")
+	return nil
+}
+
+func (connection *MQTTConnection) subscribeToTopic(topic string) error {
+	_, err := connection.connectionManager.Subscribe(context.Background(), &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{
+			{Topic: topic, QoS: 1},
+		},
+	})
+	return err
+}
+
+func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic string, payload []byte) error {
+	_, err := connection.connectionManager.Publish(ctx, &paho.Publish{
+		Topic:   topic,
+		Payload: payload,
+		QoS:     1,
+		Retain:  false,
+	})
+	if err != nil {
+		connection.logger.Error("failed to publish to topic", "topic", topic, "error", err)
+		return err
+	}
 	return nil
 }
 

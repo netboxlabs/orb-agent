@@ -109,3 +109,6 @@ type RPC struct {
 
 // SendGroupMembershipsRequest represents a request to send group memberships to the fleet manager
 type SendGroupMembershipsRequest struct{}
+
+// SendAgentPoliciesRequest represents a request to send agent policies to the fleet manager
+type SendAgentPoliciesRequest struct{}

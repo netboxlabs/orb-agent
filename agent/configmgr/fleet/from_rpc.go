@@ -3,43 +3,132 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 
-	"github.com/eclipse/paho.golang/paho"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
-func (connection *MQTTConnection) dispatchToHandlers(messageType string, rpc messages.RPC, orgID string) {
-	switch messageType {
-	case "group_membership":
-		connection.handleGroupMemberships(rpc, orgID)
-	default:
-		connection.logger.Debug("unknown message type", "message_type", messageType)
+// MessageHandlers handles the messages from the MQTT broker
+type MessageHandlers struct {
+	logger *slog.Logger
+	pMgr   policymgr.PolicyManager
+}
+
+// NewMessageHandlers creates a new MessageHandlers
+func NewMessageHandlers(logger *slog.Logger, pMgr policymgr.PolicyManager) *MessageHandlers {
+	return &MessageHandlers{
+		logger: logger,
+		pMgr:   pMgr,
 	}
 }
 
-func (connection *MQTTConnection) handleGroupMemberships(rpc messages.RPC, orgID string) {
-	connection.logger.Debug("handling group memberships", "payload", rpc.Payload)
+// DispatchToHandlers dispatches the message to the appropriate handler
+func (handlers *MessageHandlers) DispatchToHandlers(messageType string, rpc messages.RPC, orgID string, agentID string, subscribeToTopic func(topic string) error, publishToTopic func(ctx context.Context, topic string, payload []byte) error) {
+	switch messageType {
+	case "group_membership":
+		handlers.handleGroupMemberships(rpc, orgID, agentID, subscribeToTopic, publishToTopic)
+	default:
+		handlers.logger.Debug("unknown message type", "message_type", messageType)
+	}
+}
+
+func (handlers *MessageHandlers) handleGroupMemberships(rpc messages.RPC, orgID string, agentID string, subscribeFunc func(topic string) error, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
+	handlers.logger.Debug("handling group memberships", "payload", rpc.Payload)
 	payloadJSON, err := json.Marshal(rpc.Payload)
 	if err != nil {
-		connection.logger.Error("failed to marshal payload", "error", err)
+		handlers.logger.Error("failed to marshal payload", "error", err)
 		return
 	}
 	groupMeberships := messages.GroupMemberships{}
 	if err := json.Unmarshal(payloadJSON, &groupMeberships); err != nil {
-		connection.logger.Error("failed to unmarshal payload", "error", err)
+		handlers.logger.Error("failed to unmarshal payload", "error", err)
 		return
 	}
 
 	for _, group := range groupMeberships.Groups {
-		connection.logger.Info("subscribing to group", "group", group)
-		_, err := connection.connectionManager.Subscribe(context.Background(), &paho.Subscribe{
-			Subscriptions: []paho.SubscribeOptions{
-				{Topic: groupTopic(orgID, group.GroupID), QoS: 1},
-			},
-		})
+		handlers.logger.Info("subscribing to group", "group", group)
+		topic := groupTopic(orgID, group.GroupID)
+		err := subscribeFunc(topic)
 		if err != nil {
-			connection.logger.Error("failed to subscribe to group", "error", err)
+			handlers.logger.Error("failed to subscribe to group", "error", err)
+		} else {
+			handlers.logger.Info("subscribed to group topic for group ID", "group_id", group.GroupID)
 		}
-		connection.logger.Info("subscribed to group topic for group ID", "group_id", group.GroupID)
+	}
+	err = handlers.sendAgentPoliciesRequest(agentID, publishFunc)
+	if err != nil {
+		handlers.logger.Error("failed to send agent policies request", "error", err)
 	}
 }
+
+func (handlers *MessageHandlers) sendAgentPoliciesRequest(agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) error {
+	handlers.logger.Debug("sending agent policies request")
+	payload := messages.SendAgentPoliciesRequest{}
+
+	data := messages.RPC{
+		// SchemaVersion: fleet.CurrentRPCSchemaVersion,
+		Func:    "agent_policies_req",
+		Payload: payload,
+	}
+
+	body, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	err = publishFunc(context.Background(), fmt.Sprintf("agents/%s/outbox", agentID), body)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// func (a *orbAgent) handleAgentPolicies(ctx context.Context, rpc []fleet.AgentPolicyRPCPayload, fullList bool) {
+// 	ctx, _ = a.extendContext("handleAgentPolicies")
+// 	if fullList {
+// 		policies, err := a.policyManager.GetRepo().GetAll()
+// 		if err != nil {
+// 			a.logger.Error("failed to retrieve policies on handle subscriptions")
+// 			return
+// 		}
+// 		// Create a map with all the old policies
+// 		policyRemove := map[string]bool{}
+// 		for _, p := range policies {
+// 			policyRemove[p.ID] = true
+// 		}
+// 		for _, payload := range rpc {
+// 			if ok := policyRemove[payload.ID]; ok {
+// 				policyRemove[payload.ID] = false
+// 			}
+// 		}
+// 		// Remove only the policy which should be removed
+// 		for k, v := range policyRemove {
+// 			if v == true {
+// 				policy, err := a.policyManager.GetRepo().Get(k)
+// 				if err != nil {
+// 					a.logger.Warn("failed to retrieve policy", zap.String("policy_id", k), zap.Error(err))
+// 					continue
+// 				}
+// 				err = a.policyManager.RemovePolicy(policy.ID, policy.Name, policy.Backend)
+// 				if err != nil {
+// 					a.logger.Warn("failed to remove a policy, ignoring", zap.String("policy_id", policy.ID), zap.String("policy_name", policy.Name), zap.Error(err))
+// 					continue
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	for _, payload := range rpc {
+// 		if payload.Action != "sanitize" {
+// 			a.policyManager.ManagePolicy(payload)
+// 		}
+// 	}
+
+// 	// heart beat with new policy status after application
+// 	if a.heartbeatCtx == nil {
+// 		a.logonWithHeartbeat()
+// 	}
+// }
