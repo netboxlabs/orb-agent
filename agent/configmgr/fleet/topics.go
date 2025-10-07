@@ -1,4 +1,4 @@
-package configmgr
+package fleet
 
 import (
 	"strings"
@@ -21,16 +21,22 @@ const (
 	groupsTemplate = "orgs/{org_id}/groups/{group_id}"
 )
 
-// generateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
-func generateTopicsFromTemplate(jwtClaims *JWTClaims) (*tokenResponseTopics, error) {
-	topics := &tokenResponseTopics{
+// TokenResponseTopics are the topics extracted from the JWT claims
+type TokenResponseTopics struct {
+	Heartbeat    string `json:"heartbeat"`
+	Capabilities string `json:"capabilities"`
+	Inbox        string `json:"inbox"`
+	Outbox       string `json:"outbox"`
+}
+
+// GenerateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
+func GenerateTopicsFromTemplate(jwtClaims *JWTClaims) (*TokenResponseTopics, error) {
+	return &TokenResponseTopics{
 		Heartbeat:    fillTopicTemplate(heartbeatTemplate, jwtClaims),
 		Capabilities: fillTopicTemplate(capabilitiesTemplate, jwtClaims),
 		Inbox:        fillTopicTemplate(inboxTemplate, jwtClaims),
 		Outbox:       fillTopicTemplate(outboxTemplate, jwtClaims),
-	}
-
-	return topics, nil
+	}, nil
 }
 
 func groupTopic(orgID, groupID string) string {
