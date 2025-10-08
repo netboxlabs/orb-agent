@@ -84,9 +84,9 @@ func (messaging *Messaging) sendAgentPoliciesRequest(ctx context.Context, orgID 
 		return err
 	}
 
-	messaging.logger.Debug("sending agent policies request", "value", string(body))
-	messaging.logger.Debug("sending agent policies request to topic", "topic", fmt.Sprintf("orgs/%s/agents/%s/outbox", orgID, agentID))
-	err = publishFunc(ctx, fmt.Sprintf("orgs/%s/agents/%s/outbox", orgID, agentID), body)
+	topic := fmt.Sprintf("orgs/%s/agents/%s/outbox", orgID, agentID)
+	messaging.logger.Debug("sending agent policies request", "value", string(body), "topic", topic)
+	err = publishFunc(ctx, topic, body)
 	if err != nil {
 		return err
 	}
