@@ -220,6 +220,13 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	var version string
 	var readinessErr error
 	for backoff := range readinessBackoff {
+		if status := d.proc.Status(); status.Complete {
+			err := d.proc.Stop()
+			if err != nil {
+				d.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("worker process ended unexpectedly, check log")
+		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("worker readiness ok, got version ",
