@@ -31,10 +31,9 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 		messaging.logger.Error("failed to unmarshal RPC", "error", err)
 		return err
 	}
-	// if rpc.SchemaVersion != messages.CurrentRPCSchemaVersion {
-	// 	messaging.logger.Error("error decoding RPC message from core", "error", messages.ErrSchemaVersion)
-	// 	return messages.ErrSchemaVersion
-	// }
+
+	// TODO: add schema version check later
+
 	if rpc.Func == "" || rpc.Payload == nil {
 		messaging.logger.Error("error decoding RPC message from core", "error", messages.ErrSchemaMalformed)
 		return messages.ErrSchemaMalformed
