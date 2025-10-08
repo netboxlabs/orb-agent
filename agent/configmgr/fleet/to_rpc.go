@@ -10,26 +10,26 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
-func (handler *Messaging) sendGroupMembershipsRequest(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
+func (messaging *Messaging) sendGroupMembershipsRequest(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
 	body, err := json.Marshal(messages.RPC{
 		// SchemaVersion: messages.CurrentRPCSchemaVersion, // TODO: add schema version check later
 		Func:    "group_membership_req",
 		Payload: messages.SendGroupMembershipsRequest{},
 	})
 	if err != nil {
-		handler.logger.Error("backend failed to marshal capabilities, skipping", "error", err)
+		messaging.logger.Error("backend failed to marshal capabilities, skipping", "error", err)
 		return
 	}
 
-	handler.logger.Info("sending group memberships request", "value", string(body))
+	messaging.logger.Info("sending group memberships request", "value", string(body))
 	err = publishFunc(ctx, body)
 	if err != nil {
-		handler.logger.Error("error sending group memberships request", "error", err)
+		messaging.logger.Error("error sending group memberships request", "error", err)
 	}
-	handler.logger.Info("group memberships request sent", "value", string(body))
+	messaging.logger.Info("group memberships request sent", "value", string(body))
 }
 
-func (handler *Messaging) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, labels map[string]string, publishFunc func(ctx context.Context, payload []byte) error) {
+func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, labels map[string]string, publishFunc func(ctx context.Context, payload []byte) error) {
 	capabilities := messages.Capabilities{
 		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
 		AgentLabels:   labels,
@@ -42,12 +42,12 @@ func (handler *Messaging) sendCapabilities(ctx context.Context, backends map[str
 	for name, be := range backends {
 		ver, err := be.Version()
 		if err != nil {
-			handler.logger.Error("backend failed to retrieve version, skipping", "backend", name, "error", err)
+			messaging.logger.Error("backend failed to retrieve version, skipping", "backend", name, "error", err)
 			continue
 		}
 		cp, err := be.GetCapabilities()
 		if err != nil {
-			handler.logger.Error("backend failed to retrieve capabilities, skipping", "backend", name, "error", err)
+			messaging.logger.Error("backend failed to retrieve capabilities, skipping", "backend", name, "error", err)
 			continue
 		}
 		capabilities.Backends[name] = messages.BackendInfo{
@@ -58,25 +58,25 @@ func (handler *Messaging) sendCapabilities(ctx context.Context, backends map[str
 
 	body, err := json.Marshal(capabilities)
 	if err != nil {
-		handler.logger.Error("backend failed to marshal capabilities, skipping", "error", err)
+		messaging.logger.Error("backend failed to marshal capabilities, skipping", "error", err)
 		return
 	}
 
-	handler.logger.Info("sending capabilities", "value", string(body))
+	messaging.logger.Info("sending capabilities", "value", string(body))
 	err = publishFunc(ctx, body)
 	if err != nil {
-		handler.logger.Error("error sending capabilities", "error", err)
+		messaging.logger.Error("error sending capabilities", "error", err)
 	}
 }
 
-func (handlers *Messaging) sendAgentPoliciesRequest(agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) error {
-	handlers.logger.Debug("sending agent policies request")
+func (messaging *Messaging) sendAgentPoliciesRequest(agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) error {
+	messaging.logger.Debug("sending agent policies request")
 	payload := messages.SendAgentPoliciesRequest{}
 
 	data := messages.RPC{
-		// SchemaVersion: fleet.CurrentRPCSchemaVersion,
-		Func:    "agent_policies_req",
-		Payload: payload,
+		SchemaVersion: messages.CurrentRPCSchemaVersion,
+		Func:          "agent_policies_req",
+		Payload:       payload,
 	}
 
 	body, err := json.Marshal(data)

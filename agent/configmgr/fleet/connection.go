@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -13,7 +12,6 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -137,20 +135,17 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 					connection.logger.Info("received MQTT message", "topic", pr.Packet.Topic)
 
 					orgID := strings.Split(pr.Packet.Topic, "/")[1]
-					var rpc messages.RPC
-					if err := json.Unmarshal(pr.Packet.Payload, &rpc); err != nil {
-						connection.logger.Error("failed to unmarshal RPC", "error", err)
-						return true, nil
-					}
 
-					connection.messaging.DispatchToHandlers(
-						rpc.Func,
-						rpc,
+					err = connection.messaging.DispatchToHandlers(
+						pr.Packet.Payload,
 						orgID,
 						agentID,
 						connection.subscribeToTopic,
 						connection.publishToTopic,
 					)
+					if err != nil {
+						connection.logger.Error("failed to dispatch to handlers", "error", err)
+					}
 
 					return true, nil
 				},

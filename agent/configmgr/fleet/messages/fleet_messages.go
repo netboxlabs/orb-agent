@@ -1,11 +1,21 @@
 package messages
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
 const CurrentHeartbeatSchemaVersion = "1.0"
 
-// Heartbeat represents a periodic message sent by an agent to indicate it's alive and active
+var (
+	// ErrSchemaVersion a message was received indicating a version we don't support
+	ErrSchemaVersion = errors.New("unsupported schema version")
+	// ErrSchemaMalformed a message contained a schema we couldn't parse
+	ErrSchemaMalformed = errors.New("schema malformed")
+	// ErrPayloadTooBig a message contained a payload that was abnormally large
+	ErrPayloadTooBig = errors.New("payload too big")
+)
 
 // State represents the current state of an agent in the system
 type State int
@@ -112,3 +122,86 @@ type SendGroupMembershipsRequest struct{}
 
 // SendAgentPoliciesRequest represents a request to send agent policies to the fleet manager
 type SendAgentPoliciesRequest struct{}
+
+// ##########################################
+
+const CurrentRPCSchemaVersion = "1.0"
+
+const GroupMembershipRPCFunc = "group_membership"
+
+type GroupMembershipRPC struct {
+	SchemaVersion string                    `json:"schema_version"`
+	Func          string                    `json:"func"`
+	Payload       GroupMembershipRPCPayload `json:"payload"`
+}
+
+type GroupMembershipData struct {
+	GroupID   string `json:"group_id"`
+	Name      string `json:"name"`
+	ChannelID string `json:"channel_id"`
+}
+
+type GroupMembershipRPCPayload struct {
+	Groups   []GroupMembershipData `json:"groups"`
+	FullList bool                  `json:"full_list"`
+}
+
+const AgentPolicyRPCFunc = "agent_policy"
+
+type AgentPolicyRPC struct {
+	SchemaVersion string                  `json:"schema_version"`
+	Func          string                  `json:"func"`
+	Payload       []AgentPolicyRPCPayload `json:"payload"`
+	FullList      bool                    `json:"full_list"`
+}
+
+type AgentPolicyRPCPayload struct {
+	Action       string `json:"action"`
+	ID           string `json:"id"`
+	DatasetID    string `json:"dataset_id"`
+	AgentGroupID string `json:"agent_group_id"`
+	Name         string `json:"name"`
+	Backend      string `json:"backend"`
+	Format       string `json:"format"`
+	Version      int32  `json:"version"`
+	Data         any    `json:"data"`
+}
+
+const GroupRemovedRPCFunc = "group_removed"
+
+type GroupRemovedRPC struct {
+	SchemaVersion string                 `json:"schema_version"`
+	Func          string                 `json:"func"`
+	Payload       GroupRemovedRPCPayload `json:"payload"`
+}
+
+type GroupRemovedRPCPayload struct {
+	AgentGroupID string   `json:"agent_group_id"`
+	ChannelID    string   `json:"channel_id"`
+	Datasets     []string `json:"datasets"`
+}
+
+const DatasetRemovedRPCFunc = "dataset_removed"
+
+type DatasetRemovedRPC struct {
+	SchemaVersion string                   `json:"schema_version"`
+	Func          string                   `json:"func"`
+	Payload       DatasetRemovedRPCPayload `json:"payload"`
+}
+
+type DatasetRemovedRPCPayload struct {
+	DatasetID string `json:"dataset_id"`
+	PolicyID  string `json:"policy_id"`
+}
+
+const GroupMembershipReqRPCFunc = "group_membership_req"
+
+type GroupMembershipReqRPCPayload struct {
+	// empty
+}
+
+const AgentPoliciesReqRPCFunc = "agent_policies_req"
+
+type AgentPoliciesReqRPCPayload struct {
+	// empty
+}

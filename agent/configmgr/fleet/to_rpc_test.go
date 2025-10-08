@@ -56,11 +56,11 @@ func (m *mockPolicyManagerForToRPC) RemovePolicy(policyID string, policyName str
 	return args.Error(0)
 }
 
-func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
+func TestMessaging_SendCapabilities_Success(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	messaging := NewMessaging(logger, mockPMgr)
 
 	// Create mock backends
 	mockBackend1 := &mockBackend{}
@@ -95,7 +95,7 @@ func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
 	labels := map[string]string{}
 
 	// Act
-	connection.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -128,11 +128,11 @@ func TestFleetConfigManager_SendCapabilities_Success(t *testing.T) {
 	mockBackend2.AssertExpectations(t)
 }
 
-func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
+func TestMessaging_SendCapabilities_BackendVersionError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	messaging := NewMessaging(logger, mockPMgr)
 
 	// Create mock backends - one succeeds, one fails on version
 	mockBackend1 := &mockBackend{}
@@ -159,7 +159,7 @@ func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	connection.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -177,11 +177,11 @@ func TestFleetConfigManager_SendCapabilities_BackendVersionError(t *testing.T) {
 	mockBackend2.AssertExpectations(t)
 }
 
-func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing.T) {
+func TestMessaging_SendCapabilities_BackendCapabilitiesError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	messaging := NewMessaging(logger, mockPMgr)
 
 	// Create mock backends - one succeeds, one fails on capabilities
 	mockBackend1 := &mockBackend{}
@@ -209,7 +209,7 @@ func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing
 	ctx := context.Background()
 
 	// Act
-	connection.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -227,11 +227,11 @@ func TestFleetConfigManager_SendCapabilities_BackendCapabilitiesError(t *testing
 	mockBackend2.AssertExpectations(t)
 }
 
-func TestFleetConfigManager_SendCapabilities_PublishError(t *testing.T) {
+func TestMessaging_SendCapabilities_PublishError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	messaging := NewMessaging(logger, mockPMgr)
 
 	mockBackend1 := &mockBackend{}
 	mockBackend1.On("Version").Return("1.0.0", nil)
@@ -251,7 +251,7 @@ func TestFleetConfigManager_SendCapabilities_PublishError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	connection.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	assert.Equal(t, publishError, publishFunc(ctx, []byte{}))
@@ -259,11 +259,11 @@ func TestFleetConfigManager_SendCapabilities_PublishError(t *testing.T) {
 	mockBackend1.AssertExpectations(t)
 }
 
-func TestFleetConfigManager_SendCapabilities_EmptyBackends(t *testing.T) {
+func TestMessaging_SendCapabilities_EmptyBackends(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	messaging := NewMessaging(logger, mockPMgr)
 
 	backends := map[string]backend.Backend{} // Empty backends
 	labels := map[string]string{}
@@ -276,7 +276,7 @@ func TestFleetConfigManager_SendCapabilities_EmptyBackends(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	connection.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -290,11 +290,11 @@ func TestFleetConfigManager_SendCapabilities_EmptyBackends(t *testing.T) {
 	assert.Empty(t, capabilities.Backends)
 }
 
-func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
+func TestMessaging_SendCapabilities_AllBackendsFail(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	messaging := NewMessaging(logger, mockPMgr)
 
 	// All backends fail
 	mockBackend1 := &mockBackend{}
@@ -320,7 +320,7 @@ func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	connection.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -336,11 +336,11 @@ func TestFleetConfigManager_SendCapabilities_AllBackendsFail(t *testing.T) {
 	mockBackend2.AssertExpectations(t)
 }
 
-func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T) {
+func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	messaging := NewMessaging(logger, mockPMgr)
 
 	mockBackend1 := &mockBackend{}
 	mockBackend1.On("Version").Return("test-version", nil)
@@ -367,7 +367,7 @@ func TestFleetConfigManager_SendCapabilities_CapabilitiesStructure(t *testing.T)
 	ctx := context.Background()
 
 	// Act
-	connection.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)

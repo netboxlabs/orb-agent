@@ -437,5 +437,5 @@ func TestNewMessageHandlers(t *testing.T) {
 	// Assert
 	assert.NotNil(t, handlers)
 	assert.Equal(t, logger, handlers.logger)
-	assert.Equal(t, mockPMgr, handlers.pMgr)
+	assert.Equal(t, mockPMgr, handlers.policyManager)
 }
