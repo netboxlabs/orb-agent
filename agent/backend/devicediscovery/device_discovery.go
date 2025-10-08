@@ -220,7 +220,6 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	var version string
 	var readinessErr error
 	for backoff := range readinessBackoff {
-
 		if status := d.proc.Status(); status.Complete {
 			err := d.proc.Stop()
 			if err != nil {
@@ -228,7 +227,6 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 			}
 			return errors.New("device-discovery process ended unexpectedly, check log")
 		}
-
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("device-discovery readiness ok, got version ",

@@ -234,6 +234,13 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	var version string
 	var readinessErr error
 	for backoff := 1; backoff <= readinessBackoff; backoff++ {
+		if status := d.proc.Status(); status.Complete {
+			err := d.proc.Stop()
+			if err != nil {
+				d.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("snmp-discovery process ended unexpectedly, check log")
+		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("snmp-discovery readiness ok, got version ",

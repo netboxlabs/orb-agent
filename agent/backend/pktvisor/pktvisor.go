@@ -193,11 +193,15 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	var readinessError error
 	for backoff := range readinessBackoff {
-		status := p.proc.Status()
-		p.logger.Info("status", slog.Any("status", status))
+		if status := p.proc.Status(); status.Complete {
+			err := p.proc.Stop()
+			if err != nil {
+				p.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("pktvisor process ended unexpectedly, check log")
+		}
 		var appMetrics AppInfo
 		url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
-		p.logger.Info("pktvisor readiness check", slog.String("url", url))
 		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
 			http.NoBody, "application/json", readinessTimeout, "error")
 		if readinessError == nil {

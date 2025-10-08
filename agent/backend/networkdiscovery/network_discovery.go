@@ -218,7 +218,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	}()
 
 	// wait for simple startup errors
-	time.Sleep(4 * time.Second)
+	time.Sleep(time.Second)
 
 	status := d.proc.Status()
 
