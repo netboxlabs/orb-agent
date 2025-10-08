@@ -95,7 +95,7 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		fleetManager.logger.Error("token request failed",
 			"status_code", resp.StatusCode,
 			"response", string(body),
