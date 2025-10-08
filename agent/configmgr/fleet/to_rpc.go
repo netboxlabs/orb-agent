@@ -69,7 +69,7 @@ func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[s
 	}
 }
 
-func (messaging *Messaging) sendAgentPoliciesRequest(agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) error {
+func (messaging *Messaging) sendAgentPoliciesRequest(ctx context.Context, orgID string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) error {
 	messaging.logger.Debug("sending agent policies request")
 	payload := messages.SendAgentPoliciesRequest{}
 
@@ -84,7 +84,9 @@ func (messaging *Messaging) sendAgentPoliciesRequest(agentID string, publishFunc
 		return err
 	}
 
-	err = publishFunc(context.Background(), fmt.Sprintf("agents/%s/outbox", agentID), body)
+	messaging.logger.Debug("sending agent policies request", "value", string(body))
+	messaging.logger.Debug("sending agent policies request to topic", "topic", fmt.Sprintf("orgs/%s/agents/%s/outbox", orgID, agentID))
+	err = publishFunc(ctx, fmt.Sprintf("orgs/%s/agents/%s/outbox", orgID, agentID), body)
 	if err != nil {
 		return err
 	}

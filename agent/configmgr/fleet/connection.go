@@ -136,7 +136,10 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 
 					orgID := strings.Split(pr.Packet.Topic, "/")[1]
 
+					// Use a fresh context for async message handling, not the Connect() context
+					// which may be canceled or have a short timeout
 					err = connection.messaging.DispatchToHandlers(
+						context.Background(),
 						pr.Packet.Payload,
 						orgID,
 						agentID,
@@ -192,10 +195,11 @@ func (connection *MQTTConnection) subscribeToTopic(topic string) error {
 }
 
 func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic string, payload []byte) error {
+	connection.logger.Debug("publishing to topic", "topic", topic, "payload", string(payload))
 	_, err := connection.connectionManager.Publish(ctx, &paho.Publish{
 		Topic:   topic,
 		Payload: payload,
-		QoS:     1,
+		QoS:     0,
 		Retain:  false,
 	})
 	if err != nil {

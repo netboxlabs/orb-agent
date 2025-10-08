@@ -25,7 +25,7 @@ func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager) *M
 }
 
 // DispatchToHandlers dispatches the message to the appropriate handler
-func (messaging *Messaging) DispatchToHandlers(payload []byte, orgID string, agentID string, subscribeToTopic func(topic string) error, publishToTopic func(ctx context.Context, topic string, payload []byte) error) error {
+func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []byte, orgID string, agentID string, subscribeToTopic func(topic string) error, publishToTopic func(ctx context.Context, topic string, payload []byte) error) error {
 	var rpc messages.RPC
 	if err := json.Unmarshal(payload, &rpc); err != nil {
 		messaging.logger.Error("failed to unmarshal RPC", "error", err)
@@ -47,7 +47,7 @@ func (messaging *Messaging) DispatchToHandlers(payload []byte, orgID string, age
 			messaging.logger.Error("failed to unmarshal payload", "error", err)
 			return err
 		}
-		messaging.handleGroupMemberships(groupMemberships.Payload, orgID, agentID, subscribeToTopic, publishToTopic)
+		messaging.handleGroupMemberships(ctx, groupMemberships.Payload, orgID, agentID, subscribeToTopic, publishToTopic)
 	case messages.AgentPolicyRPCFunc:
 		agentPolicies := messages.AgentPolicyRPC{}
 		if err := json.Unmarshal(payload, &agentPolicies); err != nil {
@@ -61,14 +61,14 @@ func (messaging *Messaging) DispatchToHandlers(payload []byte, orgID string, age
 	return nil
 }
 
-func (messaging *Messaging) handleGroupMemberships(groupMemberships messages.GroupMembershipRPCPayload, orgID string, agentID string, subscribeFunc func(topic string) error, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
+func (messaging *Messaging) handleGroupMemberships(ctx context.Context, groupMemberships messages.GroupMembershipRPCPayload, orgID string, agentID string, subscribeFunc func(topic string) error, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
 	messaging.logger.Debug("handling group memberships", "payload", groupMemberships)
 
-	if groupMemberships.FullList {
-		// TODO: handle when this is the full list. We'll need to
-		// - unsubscribe from all group topics not included in this request
-		// - subscribe to all group topics
-	}
+	// if groupMemberships.FullList {
+	// 	// TODO: handle when this is the full list. We'll need to
+	// 	// - unsubscribe from all group topics not included in this request
+	// 	// - subscribe to all group topics
+	// }
 	for _, group := range groupMemberships.Groups {
 		messaging.logger.Info("subscribing to group", "group", group)
 		topic := groupTopic(orgID, group.GroupID)
@@ -79,7 +79,7 @@ func (messaging *Messaging) handleGroupMemberships(groupMemberships messages.Gro
 			messaging.logger.Info("subscribed to group topic for group ID", "group_id", group.GroupID)
 		}
 	}
-	err := messaging.sendAgentPoliciesRequest(agentID, publishFunc)
+	err := messaging.sendAgentPoliciesRequest(ctx, orgID, agentID, publishFunc)
 	if err != nil {
 		messaging.logger.Error("failed to send agent policies request", "error", err)
 	}
@@ -104,7 +104,7 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 		}
 		// Remove only the policy which should be removed
 		for k, v := range policyRemove {
-			if v == true {
+			if v {
 				policy, err := messaging.policyManager.GetRepo().Get(k)
 				if err != nil {
 					messaging.logger.Warn("failed to retrieve policy", "policy_id", k, "error", err)

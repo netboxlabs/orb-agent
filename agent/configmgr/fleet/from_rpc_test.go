@@ -114,10 +114,16 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 			mockPublishToTopic := func(_ context.Context, _ string, _ []byte) error {
 				return nil
 			}
+			// Marshal RPC to bytes
+			payload, err := json.Marshal(tt.rpc)
+			assert.NoError(t, err)
+
 			// Act
-			handlers.DispatchToHandlers(tt.messageType, tt.rpc, tt.orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+			ctx := context.Background()
+			err = handlers.DispatchToHandlers(ctx, payload, tt.orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
 
 			// Assert
+			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedTopics, subscribedTopics)
 		})
 	}
@@ -140,22 +146,17 @@ func TestMessageHandlers_handleGroupMemberships_Success(t *testing.T) {
 	}
 	agentID := "agent123"
 	orgID := "org123"
-	groupMemberships := messages.GroupMemberships{
+	groupMemberships := messages.GroupMembershipRPCPayload{
 		FullList: true,
-		Groups: []messages.GroupMembership{
+		Groups: []messages.GroupMembershipData{
 			{GroupID: "group1", Name: "Group 1"},
 			{GroupID: "group2", Name: "Group 2"},
 		},
 	}
 
-	rpc := messages.RPC{
-		SchemaVersion: "1.0",
-		Func:          "group_membership",
-		Payload:       groupMemberships,
-	}
-
 	// Act
-	handlers.handleGroupMemberships(rpc, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	ctx := context.Background()
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
 
 	// Assert
 	expectedTopics := []string{"orgs/org123/groups/group1", "orgs/org123/groups/group2"}
@@ -179,17 +180,18 @@ func TestMessageHandlers_handleGroupMemberships_InvalidPayload(t *testing.T) {
 	}
 	agentID := "agent123"
 	orgID := "org123"
-	// Create an RPC with invalid payload that can't be unmarshaled to GroupMemberships
-	rpc := messages.RPC{
-		SchemaVersion: "1.0",
-		Func:          "group_membership",
-		Payload:       "invalid_payload_string",
+	// Create an invalid payload - empty groups is the closest we can get to testing invalid data
+	// since handleGroupMemberships expects a typed GroupMembershipRPCPayload struct
+	groupMemberships := messages.GroupMembershipRPCPayload{
+		FullList: false,
+		Groups:   []messages.GroupMembershipData{},
 	}
 
-	// Act - This should not panic, just log an error
-	handlers.handleGroupMemberships(rpc, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	// Act - This should not panic, just handle gracefully
+	ctx := context.Background()
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
 
-	// Assert - should not subscribe to any topics due to invalid payload
+	// Assert - should not subscribe to any topics due to empty groups
 	assert.Empty(t, subscribedTopics)
 }
 
@@ -210,19 +212,14 @@ func TestMessageHandlers_handleGroupMemberships_EmptyGroups(t *testing.T) {
 	}
 	agentID := "agent123"
 	orgID := "org123"
-	groupMemberships := messages.GroupMemberships{
+	groupMemberships := messages.GroupMembershipRPCPayload{
 		FullList: true,
-		Groups:   []messages.GroupMembership{}, // Empty groups
-	}
-
-	rpc := messages.RPC{
-		SchemaVersion: "1.0",
-		Func:          "group_membership",
-		Payload:       groupMemberships,
+		Groups:   []messages.GroupMembershipData{}, // Empty groups
 	}
 
 	// Act
-	handlers.handleGroupMemberships(rpc, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	ctx := context.Background()
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
 
 	// Assert - should not subscribe to any topics due to empty groups
 	assert.Empty(t, subscribedTopics)
@@ -245,17 +242,18 @@ func TestMessageHandlers_handleGroupMemberships_JSONMarshalError(t *testing.T) {
 	}
 	agentID := "agent123"
 	orgID := "org123"
-	// Create an RPC with payload that can't be marshaled (e.g., function)
-	rpc := messages.RPC{
-		SchemaVersion: "1.0",
-		Func:          "group_membership",
-		Payload:       func() {}, // Functions can't be marshaled to JSON
+	// Create a minimal payload - this test is now similar to EmptyGroups test
+	// since handleGroupMemberships now accepts typed struct
+	groupMemberships := messages.GroupMembershipRPCPayload{
+		FullList: false,
+		Groups:   []messages.GroupMembershipData{},
 	}
 
 	// Act
-	handlers.handleGroupMemberships(rpc, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	ctx := context.Background()
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
 
-	// Assert - should not subscribe to any topics due to JSON marshal error
+	// Assert - should not subscribe to any topics due to empty groups
 	assert.Empty(t, subscribedTopics)
 }
 
@@ -319,36 +317,17 @@ func TestMessageHandlers_handleGroupMemberships_ComplexPayload(t *testing.T) {
 	agentID := "agent123"
 	orgID := "org123"
 	// Create a complex payload with nested structures
-	complexPayload := map[string]any{
-		"full_list": true,
-		"groups": []map[string]any{
-			{
-				"group_id": "group1",
-				"name":     "Group 1",
-				"metadata": map[string]any{
-					"description": "Test group 1",
-					"tags":        []string{"tag1", "tag2"},
-				},
-			},
-			{
-				"group_id": "group2",
-				"name":     "Group 2",
-				"metadata": map[string]any{
-					"description": "Test group 2",
-					"tags":        []string{"tag3", "tag4"},
-				},
-			},
+	groupMemberships := messages.GroupMembershipRPCPayload{
+		FullList: true,
+		Groups: []messages.GroupMembershipData{
+			{GroupID: "group1", Name: "Group 1"},
+			{GroupID: "group2", Name: "Group 2"},
 		},
 	}
 
-	rpc := messages.RPC{
-		SchemaVersion: "1.0",
-		Func:          "group_membership",
-		Payload:       complexPayload,
-	}
-
 	// Act
-	handlers.handleGroupMemberships(rpc, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	ctx := context.Background()
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
 
 	// Assert
 	expectedTopics := []string{"orgs/org123/groups/group1", "orgs/org123/groups/group2"}
@@ -383,22 +362,17 @@ func TestMessageHandlers_handleGroupMemberships_SendsAgentPoliciesRequest(t *tes
 
 	agentID := "agent123"
 	orgID := "org123"
-	groupMemberships := messages.GroupMemberships{
+	groupMemberships := messages.GroupMembershipRPCPayload{
 		FullList: true,
-		Groups: []messages.GroupMembership{
+		Groups: []messages.GroupMembershipData{
 			{GroupID: "group1", Name: "Group 1"},
 			{GroupID: "group2", Name: "Group 2"},
 		},
 	}
 
-	rpc := messages.RPC{
-		SchemaVersion: "1.0",
-		Func:          "group_membership",
-		Payload:       groupMemberships,
-	}
-
 	// Act
-	handlers.handleGroupMemberships(rpc, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	ctx := context.Background()
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
 
 	// Assert
 	expectedTopics := []string{"orgs/org123/groups/group1", "orgs/org123/groups/group2"}
@@ -408,7 +382,7 @@ func TestMessageHandlers_handleGroupMemberships_SendsAgentPoliciesRequest(t *tes
 	assert.Len(t, publishedMessages, 1, "Expected exactly one published message")
 
 	publishedMsg := publishedMessages[0]
-	expectedTopic := "agents/agent123/outbox"
+	expectedTopic := "orgs/org123/agents/agent123/outbox"
 	assert.Equal(t, expectedTopic, publishedMsg.topic, "Expected agent policies request to be published to agent outbox topic")
 
 	// Verify the payload structure
