@@ -186,7 +186,6 @@ type GroupRemovedRPC struct {
 // GroupRemovedRPCPayload is the payload for group removed RPC messages
 type GroupRemovedRPCPayload struct {
 	AgentGroupID string   `json:"agent_group_id"`
-	ChannelID    string   `json:"channel_id"`
 	Datasets     []string `json:"datasets"`
 }
 

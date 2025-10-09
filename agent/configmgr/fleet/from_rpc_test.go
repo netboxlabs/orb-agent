@@ -54,10 +54,58 @@ func (m *mockPolicyManager) RemovePolicy(policyID string, policyName string, beN
 	return args.Error(0)
 }
 
+// mockPolicyRepo implements the PolicyRepo interface for testing
+type mockPolicyRepo struct {
+	mock.Mock
+}
+
+func (m *mockPolicyRepo) Exists(policyID string) bool {
+	args := m.Called(policyID)
+	return args.Bool(0)
+}
+
+func (m *mockPolicyRepo) Get(policyID string) (policies.PolicyData, error) {
+	args := m.Called(policyID)
+	return args.Get(0).(policies.PolicyData), args.Error(1)
+}
+
+func (m *mockPolicyRepo) Remove(policyID string) error {
+	args := m.Called(policyID)
+	return args.Error(0)
+}
+
+func (m *mockPolicyRepo) Update(data policies.PolicyData) error {
+	args := m.Called(data)
+	return args.Error(0)
+}
+
+func (m *mockPolicyRepo) GetAll() ([]policies.PolicyData, error) {
+	// Return empty slice for basic mocking
+	return []policies.PolicyData{}, nil
+}
+
+func (m *mockPolicyRepo) GetByName(policyName string) (policies.PolicyData, error) {
+	args := m.Called(policyName)
+	return args.Get(0).(policies.PolicyData), args.Error(1)
+}
+
+func (m *mockPolicyRepo) EnsureDataset(policyID string, datasetID string) error {
+	args := m.Called(policyID, datasetID)
+	return args.Error(0)
+}
+
+func (m *mockPolicyRepo) RemoveDataset(policyID string, datasetID string) (bool, error) {
+	args := m.Called(policyID, datasetID)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockPolicyRepo) EnsureGroupID(policyID string, agentGroupID string) error {
+	args := m.Called(policyID, agentGroupID)
+	return args.Error(0)
+}
+
 func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	mockPMgr := &mockPolicyManager{}
-	handlers := NewMessaging(logger, mockPMgr)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -67,12 +115,15 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		messageType    string
-		rpc            messages.RPC
-		orgID          string
-		expectedTopics []string
-		expectedError  bool
+		name                  string
+		messageType           string
+		rpc                   messages.RPC
+		orgID                 string
+		expectedTopics        []string
+		expectedUnsubscribe   []string
+		setupMocks            func(*mockPolicyManager)
+		expectedError         bool
+		expectedPolicyMgrCall bool
 	}{
 		{
 			name:        "group_membership message type",
@@ -90,7 +141,59 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 			},
 			orgID:          "org123",
 			expectedTopics: []string{"orgs/org123/groups/group1", "orgs/org123/groups/group2"},
-			expectedError:  false,
+			setupMocks: func(_ *mockPolicyManager) {
+				// No policy manager calls expected for group membership
+			},
+			expectedError:         false,
+			expectedPolicyMgrCall: false,
+		},
+		{
+			name:        "agent_policy message type",
+			messageType: "agent_policy",
+			rpc: messages.RPC{
+				SchemaVersion: "1.0",
+				Func:          "agent_policy",
+				Payload: []any{
+					map[string]any{
+						"action":         "apply",
+						"id":             "policy1",
+						"dataset_id":     "dataset1",
+						"agent_group_id": "group1",
+						"name":           "Test Policy",
+						"backend":        "pktvisor",
+						"format":         "yaml",
+						"version":        int32(1),
+						"data":           map[string]any{},
+					},
+				},
+			},
+			orgID:          "org123",
+			expectedTopics: []string{},
+			setupMocks: func(m *mockPolicyManager) {
+				m.On("ManagePolicy", mock.Anything).Return()
+			},
+			expectedError:         false,
+			expectedPolicyMgrCall: true,
+		},
+		{
+			name:        "group_removed message type",
+			messageType: "group_removed",
+			rpc: messages.RPC{
+				SchemaVersion: "1.0",
+				Func:          "group_removed",
+				Payload: map[string]any{
+					"agent_group_id": "group1",
+					"datasets":       []any{"dataset1", "dataset2"},
+				},
+			},
+			orgID:               "org123",
+			expectedTopics:      []string{},
+			expectedUnsubscribe: []string{"group1"},
+			setupMocks: func(m *mockPolicyManager) {
+				m.On("GetRepo").Return(&mockPolicyRepo{})
+			},
+			expectedError:         false,
+			expectedPolicyMgrCall: true,
 		},
 		{
 			name:        "unknown message type",
@@ -102,7 +205,11 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 			},
 			orgID:          "org123",
 			expectedTopics: []string{},
-			expectedError:  false,
+			setupMocks: func(_ *mockPolicyManager) {
+				// No policy manager calls expected
+			},
+			expectedError:         false,
+			expectedPolicyMgrCall: false,
 		},
 	}
 
@@ -110,8 +217,21 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Reset subscribed topics for each test
 			subscribedTopics = []string{}
+			unsubscribedTopics := []string{}
+
+			// Create a fresh mock policy manager for each test
+			mockPMgr := &mockPolicyManager{}
+			if tt.setupMocks != nil {
+				tt.setupMocks(mockPMgr)
+			}
+			handlers := NewMessaging(logger, mockPMgr)
+
 			agentID := "agent123"
 			mockPublishToTopic := func(_ context.Context, _ string, _ []byte) error {
+				return nil
+			}
+			mockUnsubscribeFromTopic := func(topic string) error {
+				unsubscribedTopics = append(unsubscribedTopics, topic)
 				return nil
 			}
 			// Marshal RPC to bytes
@@ -120,11 +240,21 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 
 			// Act
 			ctx := context.Background()
-			err = handlers.DispatchToHandlers(ctx, payload, tt.orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+			err = handlers.DispatchToHandlers(ctx, payload, tt.orgID, agentID, TopicActions{
+				Subscribe:   mockSubscribeToTopic,
+				Publish:     mockPublishToTopic,
+				Unsubscribe: mockUnsubscribeFromTopic,
+			})
 
 			// Assert
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedTopics, subscribedTopics)
+			if tt.expectedUnsubscribe != nil {
+				assert.Equal(t, tt.expectedUnsubscribe, unsubscribedTopics)
+			}
+			if tt.expectedPolicyMgrCall {
+				mockPMgr.AssertExpectations(t)
+			}
 		})
 	}
 }

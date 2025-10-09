@@ -33,6 +33,13 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager) *MQTTC
 	}
 }
 
+// TopicActions are the actions to take on a topic
+type TopicActions struct {
+	Subscribe   func(topic string) error
+	Publish     func(ctx context.Context, topic string, payload []byte) error
+	Unsubscribe func(topic string) error
+}
+
 // Connect connects to the MQTT broker
 func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, token, agentID string, topics TokenResponseTopics, backends map[string]backend.Backend, clientID, zone string, labels map[string]string) error {
 	// Parse the ORB URL
@@ -143,8 +150,11 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 						pr.Packet.Payload,
 						orgID,
 						agentID,
-						connection.subscribeToTopic,
-						connection.publishToTopic,
+						TopicActions{
+							Subscribe:   connection.subscribeToTopic,
+							Publish:     connection.publishToTopic,
+							Unsubscribe: connection.unsubscribeFromTopic,
+						},
 					)
 					if err != nil {
 						connection.logger.Error("failed to dispatch to handlers", "error", err)
@@ -190,6 +200,13 @@ func (connection *MQTTConnection) subscribeToTopic(topic string) error {
 		Subscriptions: []paho.SubscribeOptions{
 			{Topic: topic, QoS: 1},
 		},
+	})
+	return err
+}
+
+func (connection *MQTTConnection) unsubscribeFromTopic(topic string) error {
+	_, err := connection.connectionManager.Unsubscribe(context.Background(), &paho.Unsubscribe{
+		Topics: []string{topic},
 	})
 	return err
 }
