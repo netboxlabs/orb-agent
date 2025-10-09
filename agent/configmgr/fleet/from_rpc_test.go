@@ -80,8 +80,11 @@ func (m *mockPolicyRepo) Update(data policies.PolicyData) error {
 }
 
 func (m *mockPolicyRepo) GetAll() ([]policies.PolicyData, error) {
-	// Return empty slice for basic mocking
-	return []policies.PolicyData{}, nil
+	args := m.Called()
+	if args.Get(0) == nil {
+		return []policies.PolicyData{}, args.Error(1)
+	}
+	return args.Get(0).([]policies.PolicyData), args.Error(1)
 }
 
 func (m *mockPolicyRepo) GetByName(policyName string) (policies.PolicyData, error) {
@@ -190,7 +193,9 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 			expectedTopics:      []string{},
 			expectedUnsubscribe: []string{"group1"},
 			setupMocks: func(m *mockPolicyManager) {
-				m.On("GetRepo").Return(&mockPolicyRepo{})
+				mockRepo := &mockPolicyRepo{}
+				mockRepo.On("GetAll").Return([]policies.PolicyData{}, nil)
+				m.On("GetRepo").Return(mockRepo)
 			},
 			expectedError:         false,
 			expectedPolicyMgrCall: true,
@@ -542,4 +547,428 @@ func TestNewMessageHandlers(t *testing.T) {
 	assert.NotNil(t, handlers)
 	assert.Equal(t, logger, handlers.logger)
 	assert.Equal(t, mockPMgr, handlers.policyManager)
+}
+
+// Test handleAgentPolicies with fullList=false
+func TestMessageHandlers_handleAgentPolicies_NotFullList(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Setup mock expectations
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		return p.ID == "policy1" && p.Action == "apply"
+	})).Return()
+
+	// Create policy payload
+	policies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "apply",
+			ID:           "policy1",
+			DatasetID:    "dataset1",
+			AgentGroupID: "group1",
+			Name:         "Test Policy",
+			Backend:      "pktvisor",
+			Format:       "yaml",
+			Version:      1,
+			Data:         map[string]any{},
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(policies, false)
+
+	// Assert
+	mockPMgr.AssertExpectations(t)
+}
+
+// Test handleAgentPolicies with fullList=true and policies to remove
+func TestMessageHandlers_handleAgentPolicies_FullList_RemovesOldPolicies(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	mockRepo := &mockPolicyRepo{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Setup existing policies in repo
+	existingPolicies := []policies.PolicyData{
+		{
+			ID:      "policy1",
+			Name:    "Old Policy 1",
+			Backend: "pktvisor",
+		},
+		{
+			ID:      "policy2",
+			Name:    "Old Policy 2",
+			Backend: "pktvisor",
+		},
+	}
+
+	// Setup mock expectations
+	mockPMgr.On("GetRepo").Return(mockRepo)
+	mockRepo.On("GetAll").Return(existingPolicies, nil)
+
+	// Expect policy2 to be retrieved for removal
+	mockRepo.On("Get", "policy2").Return(policies.PolicyData{
+		ID:      "policy2",
+		Name:    "Old Policy 2",
+		Backend: "pktvisor",
+	}, nil)
+
+	// Expect policy2 to be removed (not in new list)
+	mockPMgr.On("RemovePolicy", "policy2", "Old Policy 2", "pktvisor").Return(nil)
+
+	// Expect policy1 to be applied (in new list)
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		return p.ID == "policy1" && p.Action == "apply"
+	})).Return()
+
+	// Create new policy list (only policy1, so policy2 should be removed)
+	newPolicies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "apply",
+			ID:           "policy1",
+			DatasetID:    "dataset1",
+			AgentGroupID: "group1",
+			Name:         "Updated Policy 1",
+			Backend:      "pktvisor",
+			Format:       "yaml",
+			Version:      2,
+			Data:         map[string]any{},
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(newPolicies, true)
+
+	// Assert
+	mockPMgr.AssertExpectations(t)
+	mockRepo.AssertExpectations(t)
+}
+
+// Test handleAgentPolicies with sanitize action
+func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Create policy payload with sanitize action
+	policies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "sanitize",
+			ID:           "policy1",
+			DatasetID:    "dataset1",
+			AgentGroupID: "group1",
+			Name:         "Test Policy",
+			Backend:      "pktvisor",
+			Format:       "yaml",
+			Version:      1,
+			Data:         map[string]any{},
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(policies, false)
+
+	// Assert - ManagePolicy should NOT be called for sanitize action
+	mockPMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
+}
+
+// Test handleAgentPolicies with fullList=true but GetAll fails
+func TestMessageHandlers_handleAgentPolicies_FullList_GetAllFails(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	mockRepo := &mockPolicyRepo{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Setup mock expectations - GetAll fails
+	mockPMgr.On("GetRepo").Return(mockRepo)
+	mockRepo.On("GetAll").Return([]policies.PolicyData{}, assert.AnError)
+
+	// Create new policy list
+	newPolicies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "apply",
+			ID:           "policy1",
+			DatasetID:    "dataset1",
+			AgentGroupID: "group1",
+			Name:         "Test Policy",
+			Backend:      "pktvisor",
+			Format:       "yaml",
+			Version:      1,
+			Data:         map[string]any{},
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(newPolicies, true)
+
+	// Assert - should return early, not call ManagePolicy
+	mockPMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
+	mockPMgr.AssertNotCalled(t, "RemovePolicy", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Test handleAgentGroupRemoval with policy that has no remaining groups
+func TestMessageHandlers_handleAgentGroupRemoval_RemovesPolicyWhenNoGroupsRemain(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	mockRepo := &mockPolicyRepo{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	unsubscribedTopics := []string{}
+	mockUnsubscribeFromTopic := func(topic string) error {
+		unsubscribedTopics = append(unsubscribedTopics, topic)
+		return nil
+	}
+
+	// Setup existing policies with only the group being removed
+	existingPolicies := []policies.PolicyData{
+		{
+			ID:       "policy1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			GroupIDs: map[string]bool{"group1": true}, // Only this group
+		},
+	}
+
+	// Setup mock expectations
+	mockPMgr.On("GetRepo").Return(mockRepo)
+	mockRepo.On("GetAll").Return(existingPolicies, nil)
+	mockPMgr.On("RemovePolicy", "policy1", "Test Policy", "pktvisor").Return(nil)
+
+	// Create group removal payload
+	groupRemoval := messages.GroupRemovedRPCPayload{
+		AgentGroupID: "group1",
+		Datasets:     []string{"dataset1"},
+	}
+
+	// Act
+	handlers.handleAgentGroupRemoval(groupRemoval, mockUnsubscribeFromTopic)
+
+	// Assert
+	assert.Equal(t, []string{"group1"}, unsubscribedTopics)
+	mockPMgr.AssertExpectations(t)
+}
+
+// Test handleAgentGroupRemoval with policy that has remaining groups
+func TestMessageHandlers_handleAgentGroupRemoval_RemovesDatasetsWhenGroupsRemain(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	mockRepo := &mockPolicyRepo{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	unsubscribedTopics := []string{}
+	mockUnsubscribeFromTopic := func(topic string) error {
+		unsubscribedTopics = append(unsubscribedTopics, topic)
+		return nil
+	}
+
+	// Setup backend registry for testing
+	// Note: This test assumes backend.HaveBackend and backend.GetBackend work
+	// In real scenario, you'd need to register a backend first
+
+	// Setup existing policies with multiple groups
+	existingPolicies := []policies.PolicyData{
+		{
+			ID:      "policy1",
+			Name:    "Test Policy",
+			Backend: "pktvisor",
+			GroupIDs: map[string]bool{
+				"group1": true,
+				"group2": true, // Has another group
+			},
+		},
+	}
+
+	// Setup mock expectations
+	mockPMgr.On("GetRepo").Return(mockRepo)
+	mockRepo.On("GetAll").Return(existingPolicies, nil)
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", mock.Anything).Return()
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset2", mock.Anything).Return()
+
+	// Create group removal payload
+	groupRemoval := messages.GroupRemovedRPCPayload{
+		AgentGroupID: "group1",
+		Datasets:     []string{"dataset1", "dataset2"},
+	}
+
+	// Act
+	handlers.handleAgentGroupRemoval(groupRemoval, mockUnsubscribeFromTopic)
+
+	// Assert
+	assert.Equal(t, []string{"group1"}, unsubscribedTopics)
+	// Should NOT call RemovePolicy since group2 remains
+	mockPMgr.AssertNotCalled(t, "RemovePolicy", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// Test handleAgentGroupRemoval when unsubscribe fails
+func TestMessageHandlers_handleAgentGroupRemoval_UnsubscribeFails(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	mockUnsubscribeFromTopic := func(_ string) error {
+		return assert.AnError
+	}
+
+	// Create group removal payload
+	groupRemoval := messages.GroupRemovedRPCPayload{
+		AgentGroupID: "group1",
+		Datasets:     []string{"dataset1"},
+	}
+
+	// Act
+	handlers.handleAgentGroupRemoval(groupRemoval, mockUnsubscribeFromTopic)
+
+	// Assert - should return early without calling GetRepo
+	mockPMgr.AssertNotCalled(t, "GetRepo")
+}
+
+// Test DispatchToHandlers with invalid JSON
+func TestMessageHandlers_DispatchToHandlers_InvalidJSON(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	invalidPayload := []byte("invalid json {")
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, invalidPayload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
+}
+
+// Test DispatchToHandlers with missing Func field
+func TestMessageHandlers_DispatchToHandlers_MissingFunc(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Create RPC with empty Func
+	rpc := messages.RPC{
+		SchemaVersion: "1.0",
+		Func:          "", // Empty func
+		Payload:       map[string]any{},
+	}
+	payload, _ := json.Marshal(rpc)
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, payload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
+	assert.Equal(t, messages.ErrSchemaMalformed, err)
+}
+
+// Test DispatchToHandlers with nil Payload
+func TestMessageHandlers_DispatchToHandlers_NilPayload(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Create RPC with nil Payload
+	rpc := messages.RPC{
+		SchemaVersion: "1.0",
+		Func:          "test_func",
+		Payload:       nil, // Nil payload
+	}
+	payload, _ := json.Marshal(rpc)
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, payload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
+	assert.Equal(t, messages.ErrSchemaMalformed, err)
+}
+
+// Test DispatchToHandlers with malformed group_membership payload
+func TestMessageHandlers_DispatchToHandlers_MalformedGroupMembershipPayload(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Create malformed payload - using string instead of proper structure
+	malformedPayload := []byte(`{"schema_version":"1.0","func":"group_membership","payload":"not_a_valid_structure"}`)
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, malformedPayload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
+}
+
+// Test DispatchToHandlers with malformed agent_policy payload
+func TestMessageHandlers_DispatchToHandlers_MalformedAgentPolicyPayload(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Create malformed payload
+	malformedPayload := []byte(`{"schema_version":"1.0","func":"agent_policy","payload":"not_an_array"}`)
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, malformedPayload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
+}
+
+// Test DispatchToHandlers with malformed group_removed payload
+func TestMessageHandlers_DispatchToHandlers_MalformedGroupRemovedPayload(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	handlers := NewMessaging(logger, mockPMgr)
+
+	// Create malformed payload
+	malformedPayload := []byte(`{"schema_version":"1.0","func":"group_removed","payload":"not_a_structure"}`)
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, malformedPayload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
 }
