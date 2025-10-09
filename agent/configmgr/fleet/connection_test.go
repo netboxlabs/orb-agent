@@ -9,19 +9,61 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
+
+// mockPolicyManagerForFleet implements the PolicyManager interface for fleet testing
+type mockPolicyManagerForFleet struct {
+	mock.Mock
+}
+
+func (m *mockPolicyManagerForFleet) ManagePolicy(payload config.PolicyPayload) {
+	m.Called(payload)
+}
+
+func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
+	m.Called(policyID, datasetID, be)
+}
+
+func (m *mockPolicyManagerForFleet) GetPolicyState() ([]policies.PolicyData, error) {
+	args := m.Called()
+	return args.Get(0).([]policies.PolicyData), args.Error(1)
+}
+
+func (m *mockPolicyManagerForFleet) GetRepo() policies.PolicyRepo {
+	args := m.Called()
+	return args.Get(0).(policies.PolicyRepo)
+}
+
+func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(be backend.Backend) error {
+	args := m.Called(be)
+	return args.Error(0)
+}
+
+func (m *mockPolicyManagerForFleet) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+	args := m.Called(be, permanently)
+	return args.Error(0)
+}
+
+func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName string, beName string) error {
+	args := m.Called(policyID, policyName, beName)
+	return args.Error(0)
+}
 
 func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	connection := NewMQTTConnection(logger)
+	mockPMgr := &mockPolicyManagerForFleet{}
+	connection := NewMQTTConnection(logger, mockPMgr)
 
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
 	trt := TokenResponseTopics{Inbox: "test/topic"}
-	err := connection.Connect(context.Background(), "://invalid-url", "test_token", trt, backends, "test-agent-id", "test-zone", map[string]string{})
+	err := connection.Connect(context.Background(), "://invalid-url", "test_token", "test-agent-id", trt, backends, "test-agent-id", "test-zone", map[string]string{})
 
 	// Assert
 	assert.Error(t, err)
@@ -31,7 +73,8 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	connection := NewMQTTConnection(logger)
+	mockPMgr := &mockPolicyManagerForFleet{}
+	connection := NewMQTTConnection(logger, mockPMgr)
 
 	// Act with valid URL but don't expect successful connection
 	// since we don't have a real MQTT server
@@ -40,7 +83,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// Timeout after 3 seconds
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	err := connection.Connect(ctx, "mqtt://localhost:1883", "test_token", trt2, backends, "test-agent-id", "test-zone", map[string]string{})
+	err := connection.Connect(ctx, "mqtt://localhost:1883", "test_token", "test-agent-id", trt2, backends, "test-agent-id", "test-zone", map[string]string{})
 
 	// Assert - we expect connection to fail since no server is running,
 	// but URL parsing should succeed

@@ -1,11 +1,21 @@
 package messages
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
 const CurrentHeartbeatSchemaVersion = "1.0"
 
-// Heartbeat represents a periodic message sent by an agent to indicate it's alive and active
+var (
+	// ErrSchemaVersion a message was received indicating a version we don't support
+	ErrSchemaVersion = errors.New("unsupported schema version")
+	// ErrSchemaMalformed a message contained a schema we couldn't parse
+	ErrSchemaMalformed = errors.New("schema malformed")
+	// ErrPayloadTooBig a message contained a payload that was abnormally large
+	ErrPayloadTooBig = errors.New("payload too big")
+)
 
 // State represents the current state of an agent in the system
 type State int
@@ -109,3 +119,105 @@ type RPC struct {
 
 // SendGroupMembershipsRequest represents a request to send group memberships to the fleet manager
 type SendGroupMembershipsRequest struct{}
+
+// SendAgentPoliciesRequest represents a request to send agent policies to the fleet manager
+type SendAgentPoliciesRequest struct{}
+
+// CurrentRPCSchemaVersion defines the current version of the RPC schema
+const CurrentRPCSchemaVersion = "1.0"
+
+// GroupMembershipRPCFunc is the function name for group membership RPC calls
+const GroupMembershipRPCFunc = "group_membership"
+
+// GroupMembershipRPC represents an RPC message for group membership operations
+type GroupMembershipRPC struct {
+	SchemaVersion string                    `json:"schema_version"`
+	Func          string                    `json:"func"`
+	Payload       GroupMembershipRPCPayload `json:"payload"`
+}
+
+// GroupMembershipData contains information about a single group membership
+type GroupMembershipData struct {
+	GroupID   string `json:"group_id"`
+	Name      string `json:"name"`
+	ChannelID string `json:"channel_id"`
+}
+
+// GroupMembershipRPCPayload is the payload for group membership RPC messages
+type GroupMembershipRPCPayload struct {
+	Groups   []GroupMembershipData `json:"groups"`
+	FullList bool                  `json:"full_list"`
+}
+
+// AgentPolicyRPCFunc is the function name for agent policy RPC calls
+const AgentPolicyRPCFunc = "agent_policy"
+
+// AgentPolicyRPC represents an RPC message for agent policy operations
+type AgentPolicyRPC struct {
+	SchemaVersion string                  `json:"schema_version"`
+	Func          string                  `json:"func"`
+	Payload       []AgentPolicyRPCPayload `json:"payload"`
+	FullList      bool                    `json:"full_list"`
+}
+
+// AgentPolicyRPCPayload is the payload for agent policy RPC messages
+type AgentPolicyRPCPayload struct {
+	Action       string `json:"action"`
+	ID           string `json:"id"`
+	DatasetID    string `json:"dataset_id"`
+	AgentGroupID string `json:"agent_group_id"`
+	Name         string `json:"name"`
+	Backend      string `json:"backend"`
+	Format       string `json:"format"`
+	Version      int32  `json:"version"`
+	Data         any    `json:"data"`
+}
+
+// GroupRemovedRPCFunc is the function name for group removed RPC calls
+const GroupRemovedRPCFunc = "group_removed"
+
+// GroupRemovedRPC represents an RPC message for group removal operations
+type GroupRemovedRPC struct {
+	SchemaVersion string                 `json:"schema_version"`
+	Func          string                 `json:"func"`
+	Payload       GroupRemovedRPCPayload `json:"payload"`
+}
+
+// GroupRemovedRPCPayload is the payload for group removed RPC messages
+type GroupRemovedRPCPayload struct {
+	AgentGroupID string   `json:"agent_group_id"`
+	ChannelID    string   `json:"channel_id"`
+	Datasets     []string `json:"datasets"`
+}
+
+// DatasetRemovedRPCFunc is the function name for dataset removed RPC calls
+const DatasetRemovedRPCFunc = "dataset_removed"
+
+// DatasetRemovedRPC represents an RPC message for dataset removal operations
+type DatasetRemovedRPC struct {
+	SchemaVersion string                   `json:"schema_version"`
+	Func          string                   `json:"func"`
+	Payload       DatasetRemovedRPCPayload `json:"payload"`
+}
+
+// DatasetRemovedRPCPayload is the payload for dataset removed RPC messages
+type DatasetRemovedRPCPayload struct {
+	DatasetID string `json:"dataset_id"`
+	PolicyID  string `json:"policy_id"`
+}
+
+// GroupMembershipReqRPCFunc is the function name for group membership request RPC calls
+const GroupMembershipReqRPCFunc = "group_membership_req"
+
+// GroupMembershipReqRPCPayload is the payload for group membership request RPC messages
+type GroupMembershipReqRPCPayload struct {
+	// empty
+}
+
+// AgentPoliciesReqRPCFunc is the function name for agent policies request RPC calls
+const AgentPoliciesReqRPCFunc = "agent_policies_req"
+
+// AgentPoliciesReqRPCPayload is the payload for agent policies request RPC messages
+type AgentPoliciesReqRPCPayload struct {
+	// empty
+}

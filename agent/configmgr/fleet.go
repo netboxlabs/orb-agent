@@ -17,7 +17,6 @@ var _ Manager = (*fleetConfigManager)(nil)
 
 type fleetConfigManager struct {
 	logger           *slog.Logger
-	pMgr             policymgr.PolicyManager
 	connection       *fleet.MQTTConnection
 	authTokenManager *fleet.AuthTokenManager
 }
@@ -25,8 +24,7 @@ type fleetConfigManager struct {
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
 	return &fleetConfigManager{
 		logger:           logger,
-		pMgr:             pMgr,
-		connection:       fleet.NewMQTTConnection(logger),
+		connection:       fleet.NewMQTTConnection(logger, pMgr),
 		authTokenManager: fleet.NewAuthTokenManager(logger),
 	}
 }
@@ -70,7 +68,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		"outbox_topic", topics.Outbox)
 
 	// use the generated topics to connect over MQTT v5
-	err = fleetManager.connection.Connect(ctx, jwtClaims.MqttURL, token.AccessToken, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims.Zone, cfg.OrbAgent.Labels)
+	err = fleetManager.connection.Connect(ctx, jwtClaims.MqttURL, token.AccessToken, jwtClaims.AgentID, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims.Zone, cfg.OrbAgent.Labels)
 	if err != nil {
 		return err
 	}

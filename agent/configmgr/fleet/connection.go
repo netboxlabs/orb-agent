@@ -2,7 +2,6 @@ package fleet
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -13,7 +12,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // MQTTConnection manages the MQTT connection
@@ -21,19 +20,21 @@ type MQTTConnection struct {
 	logger            *slog.Logger
 	connectionManager *autopaho.ConnectionManager
 	heartbeater       *heartbeater
+	messaging         *Messaging
 }
 
 // NewMQTTConnection creates a new MQTTConnection
-func NewMQTTConnection(logger *slog.Logger) *MQTTConnection {
+func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager) *MQTTConnection {
 	return &MQTTConnection{
 		connectionManager: nil,
 		logger:            logger,
 		heartbeater:       newHeartbeater(logger),
+		messaging:         NewMessaging(logger, pMgr),
 	}
 }
 
 // Connect connects to the MQTT broker
-func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, token string, topics TokenResponseTopics, backends map[string]backend.Backend, clientID, zone string, labels map[string]string) error {
+func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, token, agentID string, topics TokenResponseTopics, backends map[string]backend.Backend, clientID, zone string, labels map[string]string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(fleetMQTTURL)
 	if err != nil {
@@ -87,7 +88,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 				return nil
 			}, clientID)
 
-			go connection.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
+			go connection.messaging.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Capabilities,
 					Payload: payload,
@@ -109,7 +110,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 
 			// TODO: this is a hack to work around the race condition of capabilities not being processed by the time we request group memberships
 			time.Sleep(10 * time.Second)
-			go connection.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
+			go connection.messaging.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Outbox,
 					Payload: payload,
@@ -134,13 +135,20 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 					connection.logger.Info("received MQTT message", "topic", pr.Packet.Topic)
 
 					orgID := strings.Split(pr.Packet.Topic, "/")[1]
-					var rpc messages.RPC
-					if err := json.Unmarshal(pr.Packet.Payload, &rpc); err != nil {
-						connection.logger.Error("failed to unmarshal RPC", "error", err)
-						return true, nil
-					}
 
-					connection.dispatchToHandlers(rpc.Func, rpc, orgID)
+					// Use a fresh context for async message handling, not the Connect() context
+					// which may be canceled or have a short timeout
+					err = connection.messaging.DispatchToHandlers(
+						context.Background(),
+						pr.Packet.Payload,
+						orgID,
+						agentID,
+						connection.subscribeToTopic,
+						connection.publishToTopic,
+					)
+					if err != nil {
+						connection.logger.Error("failed to dispatch to handlers", "error", err)
+					}
 
 					return true, nil
 				},
@@ -174,6 +182,30 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 	}
 
 	connection.logger.Info("MQTT connection manager started successfully")
+	return nil
+}
+
+func (connection *MQTTConnection) subscribeToTopic(topic string) error {
+	_, err := connection.connectionManager.Subscribe(context.Background(), &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{
+			{Topic: topic, QoS: 1},
+		},
+	})
+	return err
+}
+
+func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic string, payload []byte) error {
+	connection.logger.Debug("publishing to topic", "topic", topic, "payload", string(payload))
+	_, err := connection.connectionManager.Publish(ctx, &paho.Publish{
+		Topic:   topic,
+		Payload: payload,
+		QoS:     0,
+		Retain:  false,
+	})
+	if err != nil {
+		connection.logger.Error("failed to publish to topic", "topic", topic, "error", err)
+		return err
+	}
 	return nil
 }
 
