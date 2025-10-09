@@ -73,10 +73,11 @@ func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	if o.apiHost, prs = config["host"].(string); !prs {
 		o.apiHost = defaultAPIHost
 	}
-	if o.apiPort, prs = config["port"].(string); !prs {
+	if port, prs := config["port"]; prs {
+		o.apiPort = fmt.Sprintf("%v", port)
+	} else {
 		o.apiPort = defaultAPIPort
 	}
-
 	o.agentLabels = common.Otlp.AgentLabels
 
 	return nil
@@ -168,10 +169,17 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	var version string
 	var readinessErr error
 	for backoff := range readinessBackoff {
+		if status := o.proc.Status(); status.Complete {
+			err := o.proc.Stop()
+			if err != nil {
+				o.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("opentelemetry infinity process ended unexpectedly, check log")
+		}
 		version, readinessErr = o.Version()
 		if readinessErr == nil {
 			o.logger.Info("opentelemetry infinity readiness ok, got version ",
-				slog.String("device_discovery_version", version))
+				slog.String("opentelemetry_infinity_version", version))
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second

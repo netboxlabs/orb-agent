@@ -8,10 +8,13 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
@@ -20,200 +23,30 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
-type StatusResponse struct {
-	StartTime string  `json:"start_time"`
-	Version   string  `json:"version"`
-	UpTime    float64 `json:"up_time"`
-}
-
 func TestWorkerBackendStart(t *testing.T) {
-	// Create server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if r.URL.Path == "/api/v1/status" {
-			response := StatusResponse{
-				Version:   "1.3.4",
-				StartTime: "2023-10-01T12:00:00Z",
-				UpTime:    123.456,
-			}
-			w.WriteHeader(http.StatusOK)
-			err := json.NewEncoder(w).Encode(response)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		} else if r.URL.Path == "/api/v1/capabilities" {
-			capabilities := map[string]any{
-				"capability": true,
-			}
-			w.WriteHeader(http.StatusOK)
-			err := json.NewEncoder(w).Encode(capabilities)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		} else if strings.Contains(r.URL.Path, "/api/v1/policies") {
-			switch r.Method {
-			case http.MethodPost:
-				w.WriteHeader(http.StatusOK)
-				response := map[string]any{
-					"status":  "success",
-					"message": "Policy applied successfully",
-				}
-				err := json.NewEncoder(w).Encode(response)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-			case http.MethodDelete:
-				w.WriteHeader(http.StatusOK)
-				response := map[string]any{
-					"status":  "success",
-					"message": "Policy removed successfully",
-				}
-				err := json.NewEncoder(w).Encode(response)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-			}
-		} else {
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	// Parse server URL
-	serverURL, err := url.Parse(server.URL)
-	assert.NoError(t, err)
-
-	// Create logger
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-
-	// Create a mock repository
-	repo, err := policies.NewMemRepo()
-	assert.NoError(t, err)
-
-	// Create a mock command
-	mockCmd := &mocks.MockCmd{}
-	mocks.SetupSuccessfulProcess(mockCmd, 12345)
-
-	// Save original function and restore after test
-	originalNewCmdOptions := backend.NewCmdOptions
-	defer func() {
-		backend.NewCmdOptions = originalNewCmdOptions
-	}()
-
-	// Override NewCmdOptions to return our mock
-	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
-		// Assert that the correct parameters were passed
-		assert.Equal(t, "orb-worker", name, "Expected command name to be orb-worker")
-		assert.Contains(t, args, "--port", "Expected args to contain port")
-		assert.Contains(t, args, "--host", "Expected args to contain host")
-		assert.False(t, options.Buffered, "Expected buffered to be false")
-		assert.True(t, options.Streaming, "Expected streaming to be true")
-		return mockCmd
-	}
-
-	assert.True(t, worker.Register(), "Failed to register Worker backend")
-
-	assert.True(t, backend.HaveBackend("worker"), "Failed to get Worker backend")
-
-	be := backend.GetBackend("worker")
-
-	// Configure backend
-	err = be.Configure(logger, repo, map[string]any{
-		"host": serverURL.Hostname(),
-		"port": serverURL.Port(),
-	}, config.BackendCommons{})
-	assert.NoError(t, err)
-
-	assert.Equal(t, backend.Unknown, be.GetInitialState())
-
-	// Start the backend
-	ctx, cancel := context.WithCancel(context.Background())
-	err = be.Start(ctx, cancel)
-
-	// Assert successful start
-	assert.NoError(t, err)
-
-	// Get Running status
-	status, _, err := be.GetRunningStatus()
-	assert.NoError(t, err)
-	assert.Equal(t, backend.Running, status, "Expected backend to be running")
-
-	// Get capabilities
-	capabilities, err := be.GetCapabilities()
-	assert.NoError(t, err)
-	assert.Equal(t, capabilities["capability"], true, "Expected capability to be true")
-
-	data := policies.PolicyData{
-		ID:   "dummy-policy-id",
-		Name: "dummy-policy-name",
-		Data: map[string]any{"key": "value"},
-	}
-	// Apply policy
-	err = be.ApplyPolicy(data, false)
-	assert.NoError(t, err)
-
-	// Update policy
-	err = be.ApplyPolicy(data, true)
-	assert.NoError(t, err)
-
-	// Assert restart
-	err = be.FullReset(ctx)
-	assert.NoError(t, err)
-
-	// Verify expectations
-	mockCmd.AssertExpectations(t)
-}
-
-func TestWorkerBackendCompleted(t *testing.T) {
-	// Create a mock command that simulates a failure
-	mockCmd := &mocks.MockCmd{}
-	mocks.SetupCompletedProcess(mockCmd, 0, nil)
-	// Save original function and restore after test
-	originalNewCmdOptions := backend.NewCmdOptions
-	defer func() {
-		backend.NewCmdOptions = originalNewCmdOptions
-	}()
-
-	// Override NewCmdOptions to return our mock
-	backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, _ ...string) backend.Commander {
-		return mockCmd
-	}
-
-	assert.True(t, worker.Register(), "Failed to register Worker backend")
-
-	assert.True(t, backend.HaveBackend("worker"), "Failed to get Worker backend")
-
-	be := backend.GetBackend("worker")
-
-	// Configure backend with invalid parameters
-	err := be.Configure(slog.Default(), nil, map[string]any{
-		"host": "invalid-host",
-	}, config.BackendCommons{})
-	assert.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	err = be.Start(ctx, cancel)
-
-	assert.Error(t, err)
-}
-
-func TestWorkerBackendDryRun(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/api/v1/status":
-			response := StatusResponse{Version: "1.3.4", StartTime: "2023-10-01T12:00:00Z", UpTime: 123.456}
-			_ = json.NewEncoder(w).Encode(response)
+			response := map[string]any{
+				"version":      "1.3.4",
+				"start_time":   "2023-10-01T12:00:00Z",
+				"up_time":      123.456,
+				"up_time_min":  123.456,
+				"up_time_secs": 123.456,
+			}
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(response))
 		case r.URL.Path == "/api/v1/capabilities":
-			capabilities := map[string]any{"capability": true}
-			_ = json.NewEncoder(w).Encode(capabilities)
-		case strings.HasPrefix(r.URL.Path, "/api/v1/policies"):
-			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"capability": true}))
+		case strings.Contains(r.URL.Path, "/api/v1/policies"):
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"status":  "success",
+				"message": "Policy operation successful",
+			}))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -221,65 +54,232 @@ func TestWorkerBackendDryRun(t *testing.T) {
 	defer server.Close()
 
 	serverURL, err := url.Parse(server.URL)
-	assert.NoError(t, err)
+	require.NoError(t, err)
+
+	createExecutable(t, "orb-worker")
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
 	repo, err := policies.NewMemRepo()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupSuccessfulProcess(mockCmd, 12345)
 
-	originalNewCmdOptions := backend.NewCmdOptions
-	defer func() {
-		backend.NewCmdOptions = originalNewCmdOptions
-	}()
-
-	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
+	overrideNewCmdOptions(t, mockCmd, func(options backend.CmdOptions, name string, args []string) {
 		assert.Equal(t, "orb-worker", name, "Expected command name to be orb-worker")
-		assert.Contains(t, args, "--dry-run")
-		assert.Contains(t, args, "--dry-run-output-dir")
-		assert.NotContains(t, args, "--host")
-		assert.NotContains(t, args, "--port")
 		assert.False(t, options.Buffered, "Expected buffered to be false")
 		assert.True(t, options.Streaming, "Expected streaming to be true")
-		return mockCmd
-	}
+		assert.Contains(t, args, "--host", "Expected args to contain host flag")
+		assert.Contains(t, args, serverURL.Hostname(), "Expected args to contain host value")
+		assert.Contains(t, args, "--port", "Expected args to contain port flag")
+		assert.Contains(t, args, serverURL.Port(), "Expected args to contain port value")
+		assert.Contains(t, args, "--diode-target", "Expected args to contain diode target flag")
+		assert.Contains(t, args, "worker-target", "Expected args to contain diode target value")
+		assert.Contains(t, args, "--diode-client-id", "Expected args to contain diode client id flag")
+		assert.Contains(t, args, "worker-client", "Expected args to contain diode client id value")
+		assert.Contains(t, args, "--diode-client-secret", "Expected args to contain diode client secret flag")
+		assert.Contains(t, args, "worker-secret", "Expected args to contain diode client secret value")
+		assert.Contains(t, args, "--diode-app-name-prefix", "Expected args to contain diode app name prefix flag")
+		assert.Contains(t, args, "worker-agent", "Expected args to contain diode app name prefix value")
+		assert.Contains(t, args, "--otel-endpoint", "Expected args to contain otel endpoint flag")
+		assert.Contains(t, args, "collector:4317", "Expected args to contain otel endpoint value")
+	})
 
-	assert.True(t, worker.Register())
+	assert.True(t, worker.Register(), "Failed to register Worker backend")
+	assert.True(t, backend.HaveBackend("worker"), "Failed to get Worker backend")
+
 	be := backend.GetBackend("worker")
 
-	beCommons := config.BackendCommons{
-		Diode: struct {
-			Target          string `yaml:"target"`
-			ClientID        string `yaml:"client_id"`
-			ClientSecret    string `yaml:"client_secret"`
-			AgentName       string `yaml:"agent_name"`
-			DryRun          bool   `yaml:"dry_run"`
-			DryRunOutputDir string `yaml:"dry_run_output_dir"`
-		}{
-			DryRun:          true,
-			DryRunOutputDir: "/tmp/dry-run-output",
+	assert.Equal(t, backend.Unknown, be.GetInitialState())
+
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = "collector:4317"
+	commons.Diode.Target = "default-target"
+	commons.Diode.ClientID = "default-client"
+	commons.Diode.ClientSecret = "default-secret"
+	commons.Diode.AgentName = "default-agent"
+	commons.Diode.DryRunOutputDir = "/tmp/default"
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host":               serverURL.Hostname(),
+		"port":               serverURL.Port(),
+		"target":             "worker-target",
+		"client_id":          "worker-client",
+		"client_secret":      "worker-secret",
+		"agent_name":         "worker-agent",
+		"dry_run":            false,
+		"dry_run_output_dir": "/tmp/worker",
+	}, commons)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, be.Start(ctx, cancel))
+
+	startTime := be.GetStartTime()
+	assert.False(t, startTime.IsZero(), "Expected start time to be set")
+
+	status, _, err := be.GetRunningStatus()
+	require.NoError(t, err)
+	assert.Equal(t, backend.Running, status, "Expected backend to be running")
+
+	capabilities, err := be.GetCapabilities()
+	require.NoError(t, err)
+	assert.Equal(t, true, capabilities["capability"], "Expected capability to be true")
+
+	version, err := be.Version()
+	require.NoError(t, err)
+	assert.Equal(t, "1.3.4", version, "Expected version to match response")
+
+	data := policies.PolicyData{
+		ID:   "dummy-policy-id",
+		Name: "dummy-policy-name",
+		Data: map[string]any{"key": "value"},
+	}
+	require.NoError(t, be.ApplyPolicy(data, false))
+
+	updatedData := policies.PolicyData{
+		ID:   data.ID,
+		Name: "dummy-policy-updated",
+		Data: map[string]any{"key": "value"},
+		PreviousPolicyData: &policies.PolicyData{
+			Name: data.Name,
 		},
 	}
+	require.NoError(t, be.ApplyPolicy(updatedData, true))
+
+	require.NoError(t, be.FullReset(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
+func TestWorkerGetRunningStatusAPIFailure(t *testing.T) {
+	var statusCalls atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.URL.Path == "/api/v1/status":
+			if statusCalls.Add(1) == 1 {
+				response := map[string]any{
+					"version":     "1.3.4",
+					"start_time":  "2023-10-01T12:00:00Z",
+					"up_time_min": 1.5,
+				}
+				w.WriteHeader(http.StatusOK)
+				require.NoError(t, json.NewEncoder(w).Encode(response))
+				return
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, err := w.Write([]byte(`{"detail":"unavailable"}`))
+			require.NoError(t, err)
+		case strings.Contains(r.URL.Path, "/api/v1/policies"):
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"status":  "success",
+				"message": "Policy operation successful",
+			}))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte(`{}`))
+			require.NoError(t, err)
+		}
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "orb-worker")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 54321)
+
+	overrideNewCmdOptions(t, mockCmd, nil)
+
+	assert.True(t, worker.Register(), "Failed to register Worker backend")
+
+	be := backend.GetBackend("worker")
 
 	err = be.Configure(logger, repo, map[string]any{
 		"host": serverURL.Hostname(),
 		"port": serverURL.Port(),
-	}, beCommons)
-	assert.NoError(t, err)
+	}, config.BackendCommons{})
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	err = be.Start(ctx, cancel)
-	assert.NoError(t, err)
+	defer cancel()
 
-	assert.False(t, be.GetStartTime().IsZero())
+	require.NoError(t, be.Start(ctx, cancel))
 
-	err = be.RemovePolicy(policies.PolicyData{ID: "1", Name: "policy", Data: map[string]any{"k": "v"}})
-	assert.NoError(t, err)
-
-	err = be.Stop(context.WithValue(context.Background(), config.ContextKey("routine"), "test"))
-	assert.NoError(t, err)
+	status, message, err := be.GetRunningStatus()
+	assert.Equal(t, backend.BackendError, status, "Expected backend to report API failure")
+	assert.Equal(t, "process running, REST API unavailable", message)
+	assert.Error(t, err)
+	require.NoError(t, be.Stop(ctx))
 
 	mockCmd.AssertExpectations(t)
+}
+
+func TestWorkerBackendCompleted(t *testing.T) {
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupCompletedProcess(mockCmd, 0, nil)
+
+	overrideNewCmdOptions(t, mockCmd, nil)
+
+	assert.True(t, worker.Register(), "Failed to register Worker backend")
+	assert.True(t, backend.HaveBackend("worker"), "Failed to get Worker backend")
+
+	be := backend.GetBackend("worker")
+
+	require.NoError(t, be.Configure(slog.Default(), nil, map[string]any{
+		"host": "invalid-host",
+	}, config.BackendCommons{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := be.Start(ctx, cancel)
+	assert.Error(t, err)
+
+	mockCmd.AssertExpectations(t)
+}
+
+func createExecutable(t *testing.T, name string) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	binaryPath := path.Join(tempDir, name)
+
+	file, err := os.Create(binaryPath)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, os.Chmod(binaryPath, 0o755))
+
+	originalPath := os.Getenv("PATH")
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+originalPath)
+}
+
+func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(options backend.CmdOptions, name string, args []string)) {
+	t.Helper()
+
+	original := backend.NewCmdOptions
+	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
+		if assertFn != nil {
+			assertFn(options, name, args)
+		}
+		return cmd
+	}
+
+	t.Cleanup(func() {
+		backend.NewCmdOptions = original
+	})
 }

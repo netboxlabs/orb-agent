@@ -79,7 +79,9 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 	if d.apiHost, prs = config["host"].(string); !prs {
 		d.apiHost = defaultAPIHost
 	}
-	if d.apiPort, prs = config["port"].(string); !prs {
+	if port, prs := config["port"]; prs {
+		d.apiPort = fmt.Sprintf("%v", port)
+	} else {
 		d.apiPort = defaultAPIPort
 	}
 
@@ -238,6 +240,13 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	var version string
 	var readinessErr error
 	for backoff := range readinessBackoff {
+		if status := d.proc.Status(); status.Complete {
+			err := d.proc.Stop()
+			if err != nil {
+				d.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("network-discovery process ended unexpectedly, check log")
+		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("network-discovery readiness ok, got version ",

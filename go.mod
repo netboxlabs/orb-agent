@@ -4,7 +4,6 @@ go 1.24.4
 
 require (
 	github.com/eclipse/paho.golang v0.22.0
-	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/go-cmd/cmd v1.4.3
 	github.com/go-co-op/gocron/v2 v2.15.0
 	github.com/go-git/go-git/v5 v5.14.0
@@ -99,7 +98,6 @@ require (
 	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/exp v0.0.0-20250531010427-b6e5de432a8b // indirect
 	golang.org/x/net v0.41.0 // indirect
-	golang.org/x/sync v0.15.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
 	golang.org/x/time v0.11.0 // indirect
