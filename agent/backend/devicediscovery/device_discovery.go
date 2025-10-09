@@ -78,7 +78,9 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	if d.apiHost, prs = config["host"].(string); !prs {
 		d.apiHost = defaultAPIHost
 	}
-	if d.apiPort, prs = config["port"].(string); !prs {
+	if port, prs := config["port"]; prs {
+		d.apiPort = fmt.Sprintf("%v", port)
+	} else {
 		d.apiPort = defaultAPIPort
 	}
 
@@ -218,6 +220,13 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	var version string
 	var readinessErr error
 	for backoff := range readinessBackoff {
+		if status := d.proc.Status(); status.Complete {
+			err := d.proc.Stop()
+			if err != nil {
+				d.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("device-discovery process ended unexpectedly, check log")
+		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("device-discovery readiness ok, got version ",

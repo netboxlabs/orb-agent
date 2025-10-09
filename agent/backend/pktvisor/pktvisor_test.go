@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,190 +30,217 @@ type StatusResponse struct {
 }
 
 func TestPktvisorBackendStart(t *testing.T) {
-	// Create server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if r.URL.Path == "/api/v1/metrics/app" {
+		switch {
+		case r.URL.Path == "/api/v1/metrics/app":
 			var response pktvisor.AppInfo
 			response.App.Version = "1.2.3"
 			response.App.UpTimeMin = 42.5
 			w.WriteHeader(http.StatusOK)
-			err := json.NewEncoder(w).Encode(response)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		} else if r.URL.Path == "/api/v1/taps" {
-			capabilities := map[string]any{
-				"iface": "eth0",
-			}
+			require.NoError(t, json.NewEncoder(w).Encode(response))
+		case r.URL.Path == "/api/v1/taps":
 			w.WriteHeader(http.StatusOK)
-			err := json.NewEncoder(w).Encode(capabilities)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		} else if strings.Contains(r.URL.Path, "/api/v1/policies") {
-			switch r.Method {
-			case http.MethodPost:
-				w.WriteHeader(http.StatusOK)
-				response := map[string]any{
-					"status":  "success",
-					"message": "Policy applied successfully",
-				}
-				err := json.NewEncoder(w).Encode(response)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-			case http.MethodDelete:
-				w.WriteHeader(http.StatusOK)
-				response := map[string]any{
-					"status":  "success",
-					"message": "Policy removed successfully",
-				}
-				err := json.NewEncoder(w).Encode(response)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-			}
-		} else {
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"iface": "eth0"}))
+		case strings.Contains(r.URL.Path, "/api/v1/policies"):
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"status":  "success",
+				"message": "Policy operation successful",
+			}))
+		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer server.Close()
 
-	// Create a temporary directory and file for the test
-	tempDir := t.TempDir()
-	binaryPath := path.Join(tempDir, "pktvisord")
-	dummyBinary, err := os.Create(binaryPath)
-	require.NoError(t, err)
-	err = dummyBinary.Close()
-	require.NoError(t, err)
-
-	// Make the binary executable
-	err = os.Chmod(binaryPath, 0o755)
-	require.NoError(t, err)
-
-	// Add our temp directory to the PATH
-	err = os.Setenv("PATH", tempDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	require.NoError(t, err)
-
-	// Parse server URL
 	serverURL, err := url.Parse(server.URL)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Create logger
+	createExecutable(t, "pktvisord")
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
-	// Create a mock repository
 	repo, err := policies.NewMemRepo()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// Create a mock command
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupSuccessfulProcess(mockCmd, 12345)
 
-	// Save original function and restore after test
-	originalNewCmdOptions := backend.NewCmdOptions
-	defer func() {
-		backend.NewCmdOptions = originalNewCmdOptions
-	}()
-
-	// Override NewCmdOptions to return our mock
-	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
-		// Assert that the correct parameters were passed
+	overrideNewCmdOptions(t, mockCmd, func(options backend.CmdOptions, name string, args []string) {
 		assert.Equal(t, "pktvisord", name, "Expected command name to be pktvisord")
-		assert.Contains(t, args, "--admin-api", "Expected args to contain admin-api")
 		assert.False(t, options.Buffered, "Expected buffered to be false")
 		assert.True(t, options.Streaming, "Expected streaming to be true")
-		return mockCmd
-	}
+		assert.Contains(t, args, "--admin-api", "Expected args to contain admin-api flag")
+		assert.Contains(t, args, "--config", "Expected args to contain config flag")
+		assert.Contains(t, args, "--otel", "Expected args to contain otel flag")
+		assert.Contains(t, args, "--otel-host", "Expected args to contain otel host flag")
+		assert.Contains(t, args, serverURL.Hostname(), "Expected args to contain otel host value")
+		assert.Contains(t, args, "--otel-port", "Expected args to contain otel port flag")
+		assert.Contains(t, args, serverURL.Port(), "Expected args to contain otel port value")
+	})
 
 	assert.True(t, pktvisor.Register(), "Failed to register Pktvisor backend")
-
 	assert.True(t, backend.HaveBackend("pktvisor"), "Failed to get Pktvisor backend")
 
 	be := backend.GetBackend("pktvisor")
 
 	assert.Equal(t, backend.Unknown, be.GetInitialState())
 
-	// Configure backend
+	commons := config.BackendCommons{}
+	commons.Otlp.HTTP = server.URL
+	commons.Otlp.AgentLabels = map[string]string{"env": "test"}
+
 	err = be.Configure(logger, repo, map[string]any{
 		"host": serverURL.Hostname(),
 		"port": serverURL.Port(),
-	}, config.BackendCommons{})
-	assert.NoError(t, err)
+	}, commons)
+	require.NoError(t, err)
 
-	// Start the backend
-	ctx, cancel := context.WithCancel(context.Background())
+	baseCtx := context.WithValue(context.Background(), config.ContextKey("agent_id"), "test-agent")
+	ctx, cancel := context.WithCancel(baseCtx)
+	defer cancel()
+
 	err = be.Start(ctx, cancel)
+	require.NoError(t, err)
 
-	// Assert successful start
-	assert.NoError(t, err)
+	startTime := be.GetStartTime()
+	assert.False(t, startTime.IsZero(), "Expected start time to be set")
 
-	// Get Running status
 	status, _, err := be.GetRunningStatus()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, backend.Running, status, "Expected backend to be running")
 
-	// Get capabilities
 	capabilities, err := be.GetCapabilities()
-	assert.NoError(t, err)
-	assert.Equal(t, map[string]any{"iface": "eth0"}, capabilities["taps"], "Expected taps")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"iface": "eth0"}, capabilities["taps"], "Expected taps to match response")
+
+	version, err := be.Version()
+	require.NoError(t, err)
+	assert.Equal(t, "1.2.3", version, "Expected version to match response")
 
 	data := policies.PolicyData{
 		ID:   "dummy-policy-id",
 		Name: "dummy-policy-name",
 		Data: map[string]any{"key": "value"},
 	}
-	// Apply policy
-	err = be.ApplyPolicy(data, false)
-	assert.NoError(t, err)
+	require.NoError(t, be.ApplyPolicy(data, false))
 
-	// Update policy
-	err = be.ApplyPolicy(data, true)
-	assert.NoError(t, err)
+	updatedData := policies.PolicyData{
+		ID:   data.ID,
+		Name: "dummy-policy-updated",
+		Data: map[string]any{"key": "value"},
+		PreviousPolicyData: &policies.PolicyData{
+			Name: data.Name,
+		},
+	}
+	require.NoError(t, be.ApplyPolicy(updatedData, true))
 
-	// Assert restart
-	err = be.FullReset(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, be.FullReset(ctx))
 
-	// Verify expectations
 	mockCmd.AssertExpectations(t)
 }
 
-func TestPktvisorBackendCompleted(t *testing.T) {
-	// Create a mock command that simulates a failure
-	mockCmd := &mocks.MockCmd{}
-	mocks.SetupCompletedProcess(mockCmd, 0, nil)
-	// Save original function and restore after test
-	originalNewCmdOptions := backend.NewCmdOptions
-	defer func() {
-		backend.NewCmdOptions = originalNewCmdOptions
-	}()
+func TestPktvisorGetRunningStatusAPIFailure(t *testing.T) {
+	var metricsCalls atomic.Int32
 
-	// Override NewCmdOptions to return our mock
-	backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, _ ...string) backend.Commander {
-		return mockCmd
-	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.URL.Path == "/api/v1/metrics/app":
+			if metricsCalls.Add(1) == 1 {
+				var response pktvisor.AppInfo
+				response.App.Version = "1.2.3"
+				response.App.UpTimeMin = 1.5
+				w.WriteHeader(http.StatusOK)
+				require.NoError(t, json.NewEncoder(w).Encode(response))
+				return
+			}
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, err := w.Write([]byte(`{"error":"unavailable"}`))
+			require.NoError(t, err)
+		case strings.Contains(r.URL.Path, "/api/v1/policies"):
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"status":  "success",
+				"message": "Policy operation successful",
+			}))
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte(`{}`))
+			require.NoError(t, err)
+		}
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "pktvisord")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 54321)
+
+	overrideNewCmdOptions(t, mockCmd, nil)
 
 	assert.True(t, pktvisor.Register(), "Failed to register Pktvisor backend")
 
-	assert.True(t, backend.HaveBackend("pktvisor"), "Failed to get Pktvisor backend")
-
 	be := backend.GetBackend("pktvisor")
 
-	// Configure backend with invalid parameters
-	err := be.Configure(slog.Default(), nil, map[string]any{
-		"host": "invalid-host",
+	err = be.Configure(logger, repo, map[string]any{
+		"host": serverURL.Hostname(),
+		"port": serverURL.Port(),
 	}, config.BackendCommons{})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	err = be.Start(ctx, cancel)
+	defer cancel()
 
+	require.NoError(t, be.Start(ctx, cancel))
+
+	status, message, err := be.GetRunningStatus()
+	assert.Equal(t, backend.BackendError, status, "Expected backend to report API failure")
+	assert.Equal(t, "process running, REST API unavailable", message)
 	assert.Error(t, err)
+	require.NoError(t, be.Stop(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
+func createExecutable(t *testing.T, name string) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	binaryPath := path.Join(tempDir, name)
+
+	file, err := os.Create(binaryPath)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	require.NoError(t, os.Chmod(binaryPath, 0o755))
+
+	originalPath := os.Getenv("PATH")
+	t.Setenv("PATH", tempDir+string(os.PathListSeparator)+originalPath)
+}
+
+func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(options backend.CmdOptions, name string, args []string)) {
+	t.Helper()
+
+	original := backend.NewCmdOptions
+	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {
+		if assertFn != nil {
+			assertFn(options, name, args)
+		}
+		return cmd
+	}
+
+	t.Cleanup(func() {
+		backend.NewCmdOptions = original
+	})
 }
