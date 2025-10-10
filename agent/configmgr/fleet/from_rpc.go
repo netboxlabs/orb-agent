@@ -62,6 +62,14 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			return err
 		}
 		messaging.handleAgentGroupRemoval(groupRemoved.Payload, topicActions.Unsubscribe)
+
+	case messages.DatasetRemovedRPCFunc:
+		var r messages.DatasetRemovedRPC
+		if err := json.Unmarshal(payload, &r); err != nil {
+			messaging.logger.Error("error decoding dataset removal message from core", "error", messages.ErrSchemaMalformed)
+			return err
+		}
+		messaging.handleDatasetRemoval(r.Payload)
 	default:
 		messaging.logger.Debug("unknown rpc function", "func", rpc.Func)
 	}
@@ -165,4 +173,18 @@ func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPC
 			}
 		}
 	}
+}
+
+func (messaging *Messaging) handleDatasetRemoval(rpc messages.DatasetRemovedRPCPayload) {
+	policy, err := messaging.policyManager.GetRepo().Get(rpc.PolicyID)
+	if err != nil {
+		messaging.logger.Error("failed to retrieve policy", "policy_id", rpc.PolicyID, "error", err)
+		return
+	}
+	if !backend.HaveBackend(policy.Backend) {
+		messaging.logger.Error("policy backend not found", "policy_id", rpc.PolicyID, "policy_backend", policy.Backend)
+		return
+	}
+	be := backend.GetBackend(policy.Backend)
+	messaging.policyManager.RemovePolicyDataset(rpc.PolicyID, rpc.DatasetID, be)
 }
