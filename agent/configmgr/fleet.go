@@ -19,13 +19,16 @@ type fleetConfigManager struct {
 	logger           *slog.Logger
 	connection       *fleet.MQTTConnection
 	authTokenManager *fleet.AuthTokenManager
+	resetChan        chan struct{}
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager) *fleetConfigManager {
+	resetChan := make(chan struct{}, 1)
 	return &fleetConfigManager{
 		logger:           logger,
-		connection:       fleet.NewMQTTConnection(logger, pMgr),
+		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan),
 		authTokenManager: fleet.NewAuthTokenManager(logger),
+		resetChan:        resetChan,
 	}
 }
 
@@ -72,6 +75,29 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	if err != nil {
 		return err
 	}
+
+	// Start goroutine to handle agent reset requests
+	go func() {
+		for range fleetManager.resetChan {
+			fleetManager.logger.Info("agent reset requested, reconnecting MQTT connection")
+
+			// Disconnect first
+			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
+			err := fleetManager.connection.Disconnect(disconnectCtx, topics.Heartbeat)
+			cancel()
+			if err != nil {
+				fleetManager.logger.Error("failed to disconnect during reset", "error", err)
+			}
+
+			// Reconnect
+			connectCtx := context.Background()
+			err = fleetManager.connection.Connect(connectCtx, jwtClaims.MqttURL, token.AccessToken, jwtClaims.AgentID, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims.Zone, cfg.OrbAgent.Labels)
+			if err != nil {
+				fleetManager.logger.Error("failed to reconnect during reset", "error", err)
+			}
+		}
+	}()
+
 	return nil
 }
 

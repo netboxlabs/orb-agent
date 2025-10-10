@@ -58,7 +58,8 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan)
 
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
@@ -74,7 +75,8 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	connection := NewMQTTConnection(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan)
 
 	// Act with valid URL but don't expect successful connection
 	// since we don't have a real MQTT server

@@ -21,15 +21,17 @@ type MQTTConnection struct {
 	connectionManager *autopaho.ConnectionManager
 	heartbeater       *heartbeater
 	messaging         *Messaging
+	resetChan         chan struct{}
 }
 
 // NewMQTTConnection creates a new MQTTConnection
-func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager) *MQTTConnection {
+func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}) *MQTTConnection {
 	return &MQTTConnection{
 		connectionManager: nil,
 		logger:            logger,
 		heartbeater:       newHeartbeater(logger),
-		messaging:         NewMessaging(logger, pMgr),
+		messaging:         NewMessaging(logger, pMgr, resetChan),
+		resetChan:         resetChan,
 	}
 }
 
@@ -72,30 +74,9 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 			}
 
 			// start heartbeat loop bound to the same connection-level context
-			go connection.heartbeater.sendHeartbeats(ctx, func() {}, func(ctx context.Context, payload []byte) error {
-				publishResponse, err := cm.Publish(ctx, &paho.Publish{
-					Topic:   topics.Heartbeat,
-					Payload: payload,
-					QoS:     0,
-					Retain:  false,
-				})
-				if err != nil {
-					connection.logger.Error("failed to publish heartbeat", "error", err)
-					// TODO: reconnect?
-					return err
-				}
-				if publishResponse.ReasonCode != 0 {
-					connection.logger.Debug("failed to publish heartbeat", "reason_code", publishResponse.ReasonCode, "topic", topics.Heartbeat)
-					return fmt.Errorf("reason code indicates failure: %d", publishResponse.ReasonCode)
-				}
-				connection.logger.Debug("heartbeat sent",
-					"topic", topics.Heartbeat,
-					"payload", string(payload),
-				)
-				return nil
-			}, clientID)
+			go connection.heartbeater.sendHeartbeats(ctx, func() {}, topics.Heartbeat, clientID, connection.publishToTopic)
 
-			go connection.messaging.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
+			connection.messaging.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Capabilities,
 					Payload: payload,
@@ -115,8 +96,6 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 				return nil
 			})
 
-			// TODO: this is a hack to work around the race condition of capabilities not being processed by the time we request group memberships
-			time.Sleep(10 * time.Second)
 			go connection.messaging.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Outbox,
@@ -195,6 +174,12 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 	return nil
 }
 
+// Disconnect disconnects from the MQTT broker
+func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
+	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+	return connection.connectionManager.Disconnect(ctx)
+}
+
 func (connection *MQTTConnection) subscribeToTopic(topic string) error {
 	_, err := connection.connectionManager.Subscribe(context.Background(), &paho.Subscribe{
 		Subscriptions: []paho.SubscribeOptions{
@@ -224,10 +209,4 @@ func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic stri
 		return err
 	}
 	return nil
-}
-
-// Disconnect disconnects from the MQTT broker
-func (connection *MQTTConnection) Disconnect(ctx context.Context) error {
-	connection.heartbeater.stop()
-	return connection.connectionManager.Disconnect(ctx)
 }

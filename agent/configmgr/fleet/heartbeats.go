@@ -27,15 +27,16 @@ func newHeartbeater(logger *slog.Logger) *heartbeater {
 	}
 }
 
-func (hb *heartbeater) stop() {
+func (hb *heartbeater) stop(heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
 	hb.hbTicker.Stop()
+	hb.sendSingleHeartbeat(hb.heartbeatCtx, heartbeatTopic, publishFunc, "", time.Now(), messages.HeartbeatState(messages.Offline))
 }
 
-func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error, _ string, _ time.Time, _ messages.HeartbeatState) {
+func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error, _ string, _ time.Time, _ messages.HeartbeatState) {
 	hbData := messages.Heartbeat{
 		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
 		TimeStamp:     time.Now().UTC(),
-		State:         1,
+		State:         messages.State(messages.Online),
 	}
 
 	body, err := json.Marshal(hbData)
@@ -44,7 +45,7 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func
 		return
 	}
 
-	if err := publishFunc(ctx, body); err != nil {
+	if err := publishFunc(ctx, heartbeatTopic, body); err != nil {
 		hb.logger.Error("error sending heartbeat", "error", err)
 	} else {
 		hb.logger.Debug("heartbeat sent", "payload", string(body))
@@ -55,23 +56,23 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, publishFunc func
 // supplied context is cancelled.  The cancelFunc parameter is ignored by the
 // implementation but is accepted for backward-compatibility with unit tests
 // that expect to pass it.
-func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, publishFunc func(ctx context.Context, payload []byte) error, agentID string) {
+func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
 	// Update our internal reference so other methods that read hb.heartbeatCtx
 	// (if any) remain accurate.
 	hb.heartbeatCtx = ctx
 
 	hb.logger.Debug("start heartbeats routine")
-	hb.sendSingleHeartbeat(ctx, publishFunc, agentID, time.Now(), messages.Online)
+	hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Online)
 
 	for {
 		select {
 		case <-ctx.Done():
 			hb.logger.Debug("context done, stopping heartbeats routine")
-			hb.sendSingleHeartbeat(ctx, publishFunc, agentID, time.Now(), messages.Offline)
+			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Offline)
 			hb.heartbeatCtx = nil
 			return
 		case t := <-hb.hbTicker.C:
-			hb.sendSingleHeartbeat(ctx, publishFunc, agentID, t, messages.Online)
+			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, t, messages.Online)
 		}
 	}
 }

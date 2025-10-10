@@ -60,7 +60,8 @@ func TestMessaging_SendCapabilities_Success(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	messaging := NewMessaging(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	messaging := NewMessaging(logger, mockPMgr, resetChan)
 
 	// Create mock backends
 	mockBackend1 := &mockBackend{}
@@ -132,7 +133,8 @@ func TestMessaging_SendCapabilities_BackendVersionError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	messaging := NewMessaging(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	messaging := NewMessaging(logger, mockPMgr, resetChan)
 
 	// Create mock backends - one succeeds, one fails on version
 	mockBackend1 := &mockBackend{}
@@ -181,7 +183,8 @@ func TestMessaging_SendCapabilities_BackendCapabilitiesError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	messaging := NewMessaging(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	messaging := NewMessaging(logger, mockPMgr, resetChan)
 
 	// Create mock backends - one succeeds, one fails on capabilities
 	mockBackend1 := &mockBackend{}
@@ -231,7 +234,8 @@ func TestMessaging_SendCapabilities_PublishError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	messaging := NewMessaging(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	messaging := NewMessaging(logger, mockPMgr, resetChan)
 
 	mockBackend1 := &mockBackend{}
 	mockBackend1.On("Version").Return("1.0.0", nil)
@@ -263,7 +267,8 @@ func TestMessaging_SendCapabilities_EmptyBackends(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	messaging := NewMessaging(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	messaging := NewMessaging(logger, mockPMgr, resetChan)
 
 	backends := map[string]backend.Backend{} // Empty backends
 	labels := map[string]string{}
@@ -294,7 +299,8 @@ func TestMessaging_SendCapabilities_AllBackendsFail(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	messaging := NewMessaging(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	messaging := NewMessaging(logger, mockPMgr, resetChan)
 
 	// All backends fail
 	mockBackend1 := &mockBackend{}
@@ -340,7 +346,8 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForToRPC{}
-	messaging := NewMessaging(logger, mockPMgr)
+	resetChan := make(chan struct{}, 1)
+	messaging := NewMessaging(logger, mockPMgr, resetChan)
 
 	mockBackend1 := &mockBackend{}
 	mockBackend1.On("Version").Return("test-version", nil)
