@@ -260,17 +260,6 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 			if tt.expectedPolicyMgrCall {
 				mockPMgr.AssertExpectations(t)
 			}
-			// Marshal RPC to bytes
-			payload, err := json.Marshal(tt.rpc)
-			assert.NoError(t, err)
-
-			// Act
-			ctx := context.Background()
-			err = handlers.DispatchToHandlers(ctx, payload, tt.orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
-
-			// Assert
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedTopics, subscribedTopics)
 		})
 	}
 }
