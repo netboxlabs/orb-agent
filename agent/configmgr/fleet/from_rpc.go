@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
@@ -25,7 +26,7 @@ func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager) *M
 }
 
 // DispatchToHandlers dispatches the message to the appropriate handler
-func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []byte, orgID string, agentID string, subscribeToTopic func(topic string) error, publishToTopic func(ctx context.Context, topic string, payload []byte) error) error {
+func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []byte, orgID string, agentID string, topicActions TopicActions) error {
 	var rpc messages.RPC
 	if err := json.Unmarshal(payload, &rpc); err != nil {
 		messaging.logger.Error("failed to unmarshal RPC", "error", err)
@@ -46,7 +47,7 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			messaging.logger.Error("failed to unmarshal payload", "error", err)
 			return err
 		}
-		messaging.handleGroupMemberships(ctx, groupMemberships.Payload, orgID, agentID, subscribeToTopic, publishToTopic)
+		messaging.handleGroupMemberships(ctx, groupMemberships.Payload, orgID, agentID, topicActions.Subscribe, topicActions.Publish)
 	case messages.AgentPolicyRPCFunc:
 		agentPolicies := messages.AgentPolicyRPC{}
 		if err := json.Unmarshal(payload, &agentPolicies); err != nil {
@@ -54,6 +55,13 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			return err
 		}
 		messaging.handleAgentPolicies(agentPolicies.Payload, agentPolicies.FullList)
+	case messages.GroupRemovedRPCFunc:
+		groupRemoved := messages.GroupRemovedRPC{}
+		if err := json.Unmarshal(payload, &groupRemoved); err != nil {
+			messaging.logger.Error("failed to unmarshal payload", "error", err)
+			return err
+		}
+		messaging.handleAgentGroupRemoval(groupRemoved.Payload, topicActions.Unsubscribe)
 	default:
 		messaging.logger.Debug("unknown rpc function", "func", rpc.Func)
 	}
@@ -124,4 +132,37 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 		}
 	}
 	messaging.logger.Info("successfully processed agent policies", "count", len(rpc))
+}
+
+func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPCPayload, unsubscribeFromTopic func(topic string) error) {
+	err := unsubscribeFromTopic(rpc.AgentGroupID)
+	if err != nil {
+		messaging.logger.Error("failed to unsubscribe from group topic", "error", err)
+		return
+	}
+
+	policies, err := messaging.policyManager.GetRepo().GetAll()
+	if err != nil {
+		return
+	}
+
+	for _, policy := range policies {
+		delete(policy.GroupIDs, rpc.AgentGroupID)
+
+		if len(policy.GroupIDs) == 0 {
+			messaging.logger.Info("policy no longer used by any group, removing", "policy_id", policy.ID, "policy_name", policy.Name)
+
+			err = messaging.policyManager.RemovePolicy(policy.ID, policy.Name, policy.Backend)
+			if err != nil {
+				messaging.logger.Warn("failed to remove a policy, ignoring", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
+				continue
+			}
+		} else {
+			for _, datasetID := range rpc.Datasets {
+				if backend.HaveBackend(policy.Backend) {
+					messaging.policyManager.RemovePolicyDataset(policy.ID, datasetID, backend.GetBackend(policy.Backend))
+				}
+			}
+		}
+	}
 }
