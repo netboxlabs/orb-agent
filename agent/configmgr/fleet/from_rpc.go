@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -15,13 +16,15 @@ import (
 type Messaging struct {
 	logger        *slog.Logger
 	policyManager policymgr.PolicyManager
+	resetChan     chan struct{}
 }
 
 // NewMessaging creates a new Messaging
-func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager) *Messaging {
+func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager, resetChan chan struct{}) *Messaging {
 	return &Messaging{
 		logger:        logger,
 		policyManager: policyManager,
+		resetChan:     resetChan,
 	}
 }
 
@@ -70,6 +73,20 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			return err
 		}
 		messaging.handleDatasetRemoval(r.Payload)
+	case messages.AgentStopRPCFunc:
+		var r messages.AgentStopRPC
+		if err := json.Unmarshal(payload, &r); err != nil {
+			messaging.logger.Error("error decoding agent stop message from core", "error", messages.ErrSchemaMalformed)
+			return err
+		}
+		messaging.handleAgentStop(r.Payload)
+	case messages.AgentResetRPCFunc:
+		var r messages.AgentResetRPC
+		if err := json.Unmarshal(payload, &r); err != nil {
+			messaging.logger.Error("error decoding agent reset message from core", "error", messages.ErrSchemaMalformed)
+			return err
+		}
+		messaging.handleAgentReset(ctx, r.Payload)
 	default:
 		messaging.logger.Debug("unknown rpc function", "func", rpc.Func)
 	}
@@ -176,6 +193,7 @@ func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPC
 }
 
 func (messaging *Messaging) handleDatasetRemoval(rpc messages.DatasetRemovedRPCPayload) {
+	messaging.logger.Info("handling dataset removal", "dataset_id", rpc.DatasetID, "policy_id", rpc.PolicyID)
 	policy, err := messaging.policyManager.GetRepo().Get(rpc.PolicyID)
 	if err != nil {
 		messaging.logger.Error("failed to retrieve policy", "policy_id", rpc.PolicyID, "error", err)
@@ -187,4 +205,28 @@ func (messaging *Messaging) handleDatasetRemoval(rpc messages.DatasetRemovedRPCP
 	}
 	be := backend.GetBackend(policy.Backend)
 	messaging.policyManager.RemovePolicyDataset(rpc.PolicyID, rpc.DatasetID, be)
+}
+
+func (messaging *Messaging) handleAgentReset(ctx context.Context, payload messages.AgentResetRPCPayload) {
+	messaging.logger.Info("handling agent reset", "reason", payload.Reason, "full_reset", payload.FullReset)
+	if payload.FullReset {
+		err := backend.RestartAll(ctx)
+		if err != nil {
+			messaging.logger.Error("RestartAll failure", "error", err)
+		}
+		// Send reset message to channel
+		select {
+		case messaging.resetChan <- struct{}{}:
+			messaging.logger.Info("sent reset signal to channel")
+		default:
+			messaging.logger.Warn("reset channel is full, skipping reset signal")
+		}
+	}
+	// TODO backend specific restart
+	// a.RestartBackend()
+}
+
+func (messaging *Messaging) handleAgentStop(payload messages.AgentStopRPCPayload) {
+	messaging.logger.Error("handling agent stop", "reason", payload.Reason)
+	os.Exit(0)
 }

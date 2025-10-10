@@ -220,3 +220,34 @@ const AgentPoliciesReqRPCFunc = "agent_policies_req"
 type AgentPoliciesReqRPCPayload struct {
 	// empty
 }
+
+// AgentStopRPCFunc is the function name for agent stop RPC calls
+const AgentStopRPCFunc = "agent_stop"
+
+// AgentStopRPCPayload is the payload for agent stop RPC messages
+type AgentStopRPCPayload struct {
+	Reason string `json:"reason"`
+}
+
+// AgentStopRPC represents an RPC message for agent stop operations
+type AgentStopRPC struct {
+	SchemaVersion string              `json:"schema_version"`
+	Func          string              `json:"func"`
+	Payload       AgentStopRPCPayload `json:"payload"`
+}
+
+// AgentResetRPCFunc is the function name for agent reset RPC calls
+const AgentResetRPCFunc = "agent_reset"
+
+// AgentResetRPCPayload is the payload for agent reset RPC messages
+type AgentResetRPCPayload struct {
+	FullReset bool   `json:"full_reset"`
+	Reason    string `json:"reason"`
+}
+
+// AgentResetRPC represents an RPC message for agent reset operations
+type AgentResetRPC struct {
+	SchemaVersion string               `json:"schema_version"`
+	Func          string               `json:"func"`
+	Payload       AgentResetRPCPayload `json:"payload"`
+}

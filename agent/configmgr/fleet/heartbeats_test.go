@@ -22,8 +22,8 @@ type mockPublishFunc struct {
 	mock.Mock
 }
 
-func (m *mockPublishFunc) Publish(ctx context.Context, payload []byte) error {
-	args := m.Called(ctx, payload)
+func (m *mockPublishFunc) Publish(ctx context.Context, topic string, payload []byte) error {
+	args := m.Called(ctx, topic, payload)
 	return args.Error(0)
 }
 
@@ -60,17 +60,18 @@ func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx := context.Background()
 	testTime := time.Now()
+	testTopic := "test/heartbeat"
 
 	// We don't assert exact bytes; validate the marshalled heartbeat content
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil)
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil)
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
 
 	// Assert: ensure one publish happened with a valid heartbeat payload
 	calls := mockPublish.Calls
 	require.Len(t, calls, 1)
-	payload, ok := calls[0].Arguments.Get(1).([]byte)
+	payload, ok := calls[0].Arguments.Get(2).([]byte)
 	require.True(t, ok)
 
 	var hbMsg messages.Heartbeat
@@ -88,13 +89,14 @@ func TestHeartbeater_SendSingleHeartbeat_PublishError(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx := context.Background()
 	testTime := time.Now()
+	testTopic := "test/heartbeat"
 	publishError := errors.New("publish failed")
 
 	// Set up mock expectations - publish function returns error
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(publishError)
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(publishError)
 
 	// Act - should not panic despite publish error
-	hb.sendSingleHeartbeat(ctx, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
 
 	// Assert
 	mockPublish.AssertExpectations(t)
@@ -106,7 +108,8 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	defer hb.hbTicker.Stop()
 
 	var capturedPayload []byte
-	publishFunc := func(_ context.Context, payload []byte) error {
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
 		capturedPayload = payload
 		return nil
 	}
@@ -115,7 +118,7 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -137,15 +140,16 @@ func TestHeartbeater_SendHeartbeats_InitialHeartbeat(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	testTopic := "test/heartbeat"
 
 	// Set up expectations for initial heartbeat (Online state)
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Once()
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Once()
 
 	// Set up expectations for final heartbeat (Offline state) when context is cancelled
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Once()
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Once()
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
 
 	// Give some time for initial heartbeat
 	time.Sleep(10 * time.Millisecond)
@@ -168,12 +172,13 @@ func TestHeartbeater_SendHeartbeats_PeriodicHeartbeats(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	testTopic := "test/heartbeat"
 
 	// We expect at least 3 heartbeats: initial + at least 2 periodic + final
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Times(4)
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Times(4)
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
 
 	// Wait for some periodic heartbeats (ticker is 50ms in test)
 	time.Sleep(120 * time.Millisecond)
@@ -196,20 +201,21 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	testTopic := "test/heartbeat"
 
 	// Use a channel to signal when the goroutine has finished
 	done := make(chan bool, 1)
 
-	publishFunc := func(ctx context.Context, payload []byte) error {
-		return mockPublish.Publish(ctx, payload)
+	publishFunc := func(ctx context.Context, topic string, payload []byte) error {
+		return mockPublish.Publish(ctx, topic, payload)
 	}
 
 	// Expect initial heartbeat (Online) and final heartbeat (Offline)
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Twice()
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Twice()
 
 	// Act
 	go func() {
-		hb.sendHeartbeats(ctx, cancel, publishFunc, "test-agent-id")
+		hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", publishFunc)
 		done <- true
 	}()
 
@@ -237,15 +243,16 @@ func TestHeartbeater_SendHeartbeats_PublishErrors(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	testTopic := "test/heartbeat"
 
 	publishError := errors.New("network error")
 
 	// Mock publish function to return errors - should not stop the heartbeat loop
 	// Expect initial + periodic + final heartbeat (all with errors)
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(publishError).Times(4)
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(publishError).Times(4)
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
 
 	// Wait for some heartbeats with errors
 	time.Sleep(120 * time.Millisecond)
@@ -268,12 +275,13 @@ func TestHeartbeater_SendHeartbeats_ConcurrentCancellation(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	testTopic := "test/heartbeat"
 
 	// Allow any number of publish calls since timing can vary
-	mockPublish.On("Publish", ctx, mock.AnythingOfType("[]uint8")).Return(nil).Maybe()
+	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Maybe()
 
 	// Act - start heartbeats
-	go hb.sendHeartbeats(ctx, cancel, mockPublish.Publish, "test-agent-id")
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
 
 	// Cancel immediately in a separate goroutine
 	go func() {
@@ -296,11 +304,12 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 
 	var capturedPayloads [][]byte
 	var mutex sync.Mutex
+	testTopic := "test/heartbeat"
 
 	// Use a channel to signal when the goroutine has finished
 	done := make(chan bool, 1)
 
-	publishFunc := func(_ context.Context, payload []byte) error {
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
 		// Store a copy of the payload with proper synchronization
 		payloadCopy := make([]byte, len(payload))
 		copy(payloadCopy, payload)
@@ -317,7 +326,7 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 
 	// Act
 	go func() {
-		hb.sendHeartbeats(ctx, cancel, publishFunc, "test-agent-id")
+		hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", publishFunc)
 		done <- true
 	}()
 
@@ -363,4 +372,77 @@ func TestFleetConfigManager_HeartbeaterTickerCleanup(t *testing.T) {
 
 	// Assert - no panic should occur
 	assert.True(t, true, "Ticker cleanup should not cause issues")
+}
+
+func TestHeartbeater_Stop_Success(t *testing.T) {
+	// Arrange
+	hb := createTestHeartbeater()
+	defer hb.hbTicker.Stop()
+
+	mockPublish := &mockPublishFunc{}
+	testTopic := "test/heartbeat"
+
+	// Expect one heartbeat to be sent with Offline state
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Once()
+
+	// Act
+	hb.stop(testTopic, mockPublish.Publish)
+
+	// Assert
+	mockPublish.AssertExpectations(t)
+
+	// Verify the ticker was stopped
+	select {
+	case <-hb.hbTicker.C:
+		t.Error("Ticker should be stopped but channel is still active")
+	case <-time.After(100 * time.Millisecond):
+		// Expected - ticker is stopped
+	}
+}
+
+func TestHeartbeater_Stop_PublishError(t *testing.T) {
+	// Arrange
+	hb := createTestHeartbeater()
+	defer hb.hbTicker.Stop()
+
+	mockPublish := &mockPublishFunc{}
+	testTopic := "test/heartbeat"
+	publishError := errors.New("publish failed")
+
+	// Set up mock expectations - publish function returns error
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(publishError).Once()
+
+	// Act - should not panic despite publish error
+	hb.stop(testTopic, mockPublish.Publish)
+
+	// Assert
+	mockPublish.AssertExpectations(t)
+}
+
+func TestHeartbeater_Stop_HeartbeatContent(t *testing.T) {
+	// Arrange
+	hb := createTestHeartbeater()
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	// Act
+	hb.stop(testTopic, publishFunc)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, heartbeat.SchemaVersion)
+	// The stop method sends an Offline heartbeat, but the implementation currently sends Online (1)
+	assert.Equal(t, messages.State(1), heartbeat.State)
+	assert.False(t, heartbeat.TimeStamp.IsZero())
 }

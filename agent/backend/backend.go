@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -86,4 +87,19 @@ func HaveBackend(name string) bool {
 // GetBackend returns a registered backend
 func GetBackend(name string) Backend {
 	return registry[name]
+}
+
+// RestartAll restarts all backends
+func RestartAll(ctx context.Context) error {
+	errs := make([]error, 0)
+	for _, be := range registry {
+		err := be.FullReset(ctx)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
 }
