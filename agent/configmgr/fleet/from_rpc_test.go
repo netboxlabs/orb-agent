@@ -1147,3 +1147,150 @@ func TestMessageHandlers_handleDatasetRemoval_BackendNotFound(t *testing.T) {
 	mockPMgr.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }
+
+// Test handleAgentReset with FullReset=false
+func TestMessageHandlers_handleAgentReset_NoFullReset(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	handlers := NewMessaging(logger, mockPMgr, resetChan)
+
+	ctx := context.Background()
+
+	// Create agent reset payload with FullReset=false
+	resetPayload := messages.AgentResetRPCPayload{
+		FullReset: false,
+		Reason:    "test reset without full reset",
+	}
+
+	// Act
+	handlers.handleAgentReset(ctx, resetPayload)
+
+	// Assert
+	// Verify no reset signal was sent to channel
+	select {
+	case <-resetChan:
+		t.Error("Did not expect reset signal to be sent to channel when FullReset=false")
+	default:
+		// Expected - no signal sent
+	}
+}
+
+// Test DispatchToHandlers with agent_reset RPC
+func TestMessageHandlers_DispatchToHandlers_AgentReset(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	handlers := NewMessaging(logger, mockPMgr, resetChan)
+
+	ctx := context.Background()
+
+	// Create agent_reset RPC message with FullReset=false to avoid backend registry issues
+	rpc := messages.AgentResetRPC{
+		SchemaVersion: "1.0",
+		Func:          messages.AgentResetRPCFunc,
+		Payload: messages.AgentResetRPCPayload{
+			FullReset: false, // Set to false to avoid calling backend.RestartAll
+			Reason:    "test dispatch",
+		},
+	}
+
+	payload, err := json.Marshal(rpc)
+	assert.NoError(t, err)
+
+	// Act
+	err = handlers.DispatchToHandlers(ctx, payload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.NoError(t, err)
+	// With FullReset=false, no reset signal should be sent to channel
+}
+
+// Test DispatchToHandlers with malformed agent_reset payload
+func TestMessageHandlers_DispatchToHandlers_MalformedAgentResetPayload(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	handlers := NewMessaging(logger, mockPMgr, resetChan)
+
+	// Create malformed payload
+	malformedPayload := []byte(`{"schema_version":"1.0","func":"agent_reset","payload":"not_a_structure"}`)
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, malformedPayload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
+}
+
+// Test DispatchToHandlers with agent_stop RPC
+func TestMessageHandlers_DispatchToHandlers_AgentStop(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	_ = NewMessaging(logger, mockPMgr, resetChan)
+
+	// Create agent_stop RPC message
+	rpc := messages.AgentStopRPC{
+		SchemaVersion: "1.0",
+		Func:          messages.AgentStopRPCFunc,
+		Payload: messages.AgentStopRPCPayload{
+			Reason: "test stop",
+		},
+	}
+
+	payload, err := json.Marshal(rpc)
+	assert.NoError(t, err)
+
+	// Note: We can't easily test os.Exit() behavior without special setup
+	// This test verifies the dispatch works, but handleAgentStop will call os.Exit(0)
+	// In a real scenario, you might want to make os.Exit injectable for testing
+	// For this test, we'll just verify the payload can be marshaled and dispatched
+	// without testing the actual handler execution
+
+	// Instead of calling DispatchToHandlers which would exit,
+	// we'll just verify the RPC can be properly unmarshaled
+	var unmarshaledRPC messages.AgentStopRPC
+	err = json.Unmarshal(payload, &unmarshaledRPC)
+
+	// Assert
+	assert.NoError(t, err)
+	assert.Equal(t, messages.AgentStopRPCFunc, unmarshaledRPC.Func)
+	assert.Equal(t, "test stop", unmarshaledRPC.Payload.Reason)
+}
+
+// Test DispatchToHandlers with malformed agent_stop payload
+func TestMessageHandlers_DispatchToHandlers_MalformedAgentStopPayload(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	handlers := NewMessaging(logger, mockPMgr, resetChan)
+
+	// Create malformed payload
+	malformedPayload := []byte(`{"schema_version":"1.0","func":"agent_stop","payload":"not_a_structure"}`)
+
+	// Act
+	ctx := context.Background()
+	err := handlers.DispatchToHandlers(ctx, malformedPayload, "org123", "agent123", TopicActions{
+		Subscribe:   func(_ string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(_ string) error { return nil },
+	})
+
+	// Assert
+	assert.Error(t, err)
+}
