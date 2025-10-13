@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 )
 
@@ -34,6 +35,17 @@ func createTestHeartbeater() *heartbeater {
 		logger:       logger,
 		hbTicker:     time.NewTicker(50 * time.Millisecond), // Short interval for testing
 		heartbeatCtx: context.Background(),
+		backendState: &mockBackendState{},
+	}
+}
+
+func createTestHeartbeaterWithBackendState(backendState *mockBackendState) *heartbeater {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	return &heartbeater{
+		logger:       logger,
+		hbTicker:     time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx: context.Background(),
+		backendState: backendState,
 	}
 }
 
@@ -54,7 +66,8 @@ func TestNewHeartbeater_HeartbeaterInitialization(t *testing.T) {
 
 func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	// Arrange
-	hb := createTestHeartbeater()
+	backendState := &mockBackendState{}
+	hb := createTestHeartbeaterWithBackendState(backendState)
 	defer hb.hbTicker.Stop()
 
 	mockPublish := &mockPublishFunc{}
@@ -445,4 +458,194 @@ func TestHeartbeater_Stop_HeartbeatContent(t *testing.T) {
 	// The stop method sends an Offline heartbeat, but the implementation currently sends Online (1)
 	assert.Equal(t, messages.State(1), heartbeat.State)
 	assert.False(t, heartbeat.TimeStamp.IsZero())
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithBackendState(t *testing.T) {
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	backendState := &mockBackendState{
+		backendState: map[string]*backend.State{
+			"pktvisor": {
+				Status:            backend.Running,
+				RestartCount:      3,
+				LastError:         "connection timeout",
+				LastRestartTS:     testTime,
+				LastRestartReason: "policy update",
+			},
+			"snmp_discovery": {
+				Status:            backend.BackendError,
+				RestartCount:      1,
+				LastError:         "initialization failed",
+				LastRestartTS:     testTime.Add(-1 * time.Hour),
+				LastRestartReason: "startup",
+			},
+		},
+	}
+	// Arrange
+	hb := createTestHeartbeaterWithBackendState(backendState)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify backend state is populated
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Len(t, heartbeat.BackendState, 2)
+
+	// Check pktvisor backend state
+	pktvisorState, ok := heartbeat.BackendState["pktvisor"]
+	assert.True(t, ok)
+	assert.Equal(t, "running", pktvisorState.State)
+	assert.Equal(t, int64(3), pktvisorState.RestartCount)
+	assert.Equal(t, "connection timeout", pktvisorState.LastError)
+	assert.Equal(t, testTime, pktvisorState.LastRestartTS)
+	assert.Equal(t, "policy update", pktvisorState.LastRestartReason)
+
+	// Check snmp_discovery backend state
+	snmpState, ok := heartbeat.BackendState["snmp_discovery"]
+	assert.True(t, ok)
+	assert.Equal(t, "backend_error", snmpState.State)
+	assert.Equal(t, int64(1), snmpState.RestartCount)
+	assert.Equal(t, "initialization failed", snmpState.LastError)
+	assert.Equal(t, testTime.Add(-1*time.Hour), snmpState.LastRestartTS)
+	assert.Equal(t, "startup", snmpState.LastRestartReason)
+
+	// Verify policy and group states are empty maps
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Empty(t, heartbeat.PolicyState)
+	assert.NotNil(t, heartbeat.GroupState)
+	assert.Empty(t, heartbeat.GroupState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithoutBackendState(t *testing.T) {
+	// Arrange
+	hb := createTestHeartbeater()
+	defer hb.hbTicker.Stop()
+
+	// Do not set backend state function
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify backend state is empty but not nil
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Empty(t, heartbeat.BackendState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithEmptyBackendState(t *testing.T) {
+	// Arrange
+	hb := createTestHeartbeater()
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify backend state is empty
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Empty(t, heartbeat.BackendState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_BackendStateAllStatuses(t *testing.T) {
+	// Test all possible backend statuses
+	testCases := []struct {
+		name           string
+		status         backend.RunningStatus
+		expectedString string
+	}{
+		{"Unknown", backend.Unknown, "unknown"},
+		{"Running", backend.Running, "running"},
+		{"BackendError", backend.BackendError, "backend_error"},
+		{"AgentError", backend.AgentError, "agent_error"},
+		{"Offline", backend.Offline, "offline"},
+		{"Waiting", backend.Waiting, "waiting"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Arrange
+			backendState := &mockBackendState{
+				backendState: map[string]*backend.State{
+					"test-backend": {
+						Status:       tc.status,
+						RestartCount: 0,
+						LastError:    "",
+					},
+				},
+			}
+			hb := createTestHeartbeaterWithBackendState(backendState)
+			defer hb.hbTicker.Stop()
+
+			var capturedPayload []byte
+			testTopic := "test/heartbeat"
+			publishFunc := func(_ context.Context, _ string, payload []byte) error {
+				capturedPayload = payload
+				return nil
+			}
+
+			ctx := context.Background()
+			testTime := time.Now()
+
+			// Act
+			hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+			// Assert
+			require.NotNil(t, capturedPayload)
+
+			var heartbeat messages.Heartbeat
+			err := json.Unmarshal(capturedPayload, &heartbeat)
+			require.NoError(t, err)
+
+			assert.Len(t, heartbeat.BackendState, 1)
+			actualState := heartbeat.BackendState["test-backend"]
+			assert.Equal(t, tc.expectedString, actualState.State)
+		})
+	}
 }
