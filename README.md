@@ -130,6 +130,15 @@ The container needs sufficient permissions, to send `icmp` and `tcp` packets. Th
  docker run -u root -v ${PWD}:/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
+Or if using podman
+```sh
+podman run -d --privileged --net=host \
+  -v ${PWD}:/opt/orb/ \
+  -e DIODE_CLIENT_ID \
+  -e DIODE_CLIENT_SECRET \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
 ### Configuration samples
 You can find complete sample configurations [here](./docs/config_samples.md) of how to configure Orb agent to run network and device discoveries, as well as the relevant `docker run` commands.
 
