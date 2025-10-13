@@ -166,6 +166,27 @@ func TestManagerNew(t *testing.T) {
 		assert.Equal(t, ctx, resultCtx)
 	})
 
+	t.Run("FleetManager", func(t *testing.T) {
+		cfg := config.ManagerConfig{
+			Active: "fleet",
+			Sources: config.Sources{
+				Fleet: config.FleetManager{
+					TokenURL:     "https://example.com/token",
+					ClientID:     "test_client",
+					ClientSecret: "test_secret",
+				},
+			},
+		}
+
+		mockBackendState := &mockBackendState{}
+		mgr := configmgr.New(logger, pMgr, cfg.Active, mockBackendState)
+		assert.NotNil(t, mgr)
+		// Check we got the expected implementation
+		ctx := context.Background()
+		resultCtx := mgr.GetContext(ctx)
+		assert.Equal(t, ctx, resultCtx)
+	})
+
 	t.Run("DefaultToLocalManager", func(t *testing.T) {
 		cfg := config.ManagerConfig{
 			Active: "unknown",

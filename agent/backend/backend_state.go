@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -21,6 +22,7 @@ type BackendState interface {
 //nolint:revive // BackendStateManager is intentionally named to distinguish from the State struct
 type BackendStateManager struct {
 	backendState       map[string]*State
+	mu                 sync.RWMutex
 	ticker             *time.Ticker
 	logger             *slog.Logger
 	restartBackendChan chan string
@@ -38,13 +40,18 @@ func NewBackendStateManager(logger *slog.Logger, restartBackendChan chan string)
 
 // StartBackendMonitor starts monitoring a backend and manages its state
 func (manager *BackendStateManager) StartBackendMonitor(name string, be Backend) {
+	manager.mu.Lock()
 	manager.backendState[name] = &State{
 		Status:        be.GetInitialState(),
 		LastRestartTS: time.Now(),
 	}
+	manager.mu.Unlock()
+
 	go func() {
 		for range manager.ticker.C {
 			backendStatus, errMsg, err := be.GetRunningStatus()
+
+			manager.mu.Lock()
 			manager.backendState[name].Status = backendStatus
 			if backendStatus != Running {
 				if err != nil {
@@ -52,6 +59,8 @@ func (manager *BackendStateManager) StartBackendMonitor(name string, be Backend)
 				} else if errMsg != "" {
 					manager.backendState[name].LastError = errMsg
 				}
+				manager.mu.Unlock()
+
 				// status is not running so we have a current error
 				if time.Since(be.GetStartTime()) >= MinRestartTime {
 					manager.restartBackendChan <- name
@@ -62,6 +71,8 @@ func (manager *BackendStateManager) StartBackendMonitor(name string, be Backend)
 					remainingSecondsUntilRestart := MinRestartTime - time.Since(be.GetStartTime())
 					manager.logger.Info("waiting to attempt backend restart due to failed status", "remaining_secs", remainingSecondsUntilRestart)
 				}
+			} else {
+				manager.mu.Unlock()
 			}
 		}
 	}()
@@ -70,6 +81,8 @@ func (manager *BackendStateManager) StartBackendMonitor(name string, be Backend)
 // RegisterError registers an error for a backend and updates its state
 func (manager *BackendStateManager) RegisterError(name string, errMessage string) {
 	manager.logger.Error(errMessage, slog.String("backend", name))
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
 	manager.backendState[name] = &State{
 		Status:        BackendError,
 		LastError:     errMessage,
@@ -79,6 +92,8 @@ func (manager *BackendStateManager) RegisterError(name string, errMessage string
 
 // RegisterRestart registers a restart event for a backend
 func (manager *BackendStateManager) RegisterRestart(name string, reason string) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
 	manager.backendState[name].RestartCount++
 	manager.backendState[name].LastRestartTS = time.Now()
 	manager.backendState[name].LastRestartReason = reason
@@ -86,5 +101,15 @@ func (manager *BackendStateManager) RegisterRestart(name string, reason string) 
 
 // Get returns the current state of all backends
 func (manager *BackendStateManager) Get() map[string]*State {
-	return manager.backendState
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+
+	// Return a copy of the map to prevent external modification
+	result := make(map[string]*State, len(manager.backendState))
+	for k, v := range manager.backendState {
+		// Copy the state to prevent external modification
+		stateCopy := *v
+		result[k] = &stateCopy
+	}
+	return result
 }
