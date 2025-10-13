@@ -18,10 +18,10 @@ type heartbeater struct {
 	logger       *slog.Logger
 	hbTicker     *time.Ticker
 	heartbeatCtx context.Context
-	backendState backend.BackendState
+	backendState backend.StateRetriever
 }
 
-func newHeartbeater(logger *slog.Logger, backendState backend.BackendState) *heartbeater {
+func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever) *heartbeater {
 	return &heartbeater{
 		logger:       logger,
 		hbTicker:     time.NewTicker(heartbeatFreq),

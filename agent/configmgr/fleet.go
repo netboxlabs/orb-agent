@@ -20,10 +20,10 @@ type fleetConfigManager struct {
 	connection       *fleet.MQTTConnection
 	authTokenManager *fleet.AuthTokenManager
 	resetChan        chan struct{}
-	backendState     backend.BackendState
+	backendState     backend.StateRetriever
 }
 
-func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.BackendState) *fleetConfigManager {
+func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *fleetConfigManager {
 	resetChan := make(chan struct{}, 1)
 	return &fleetConfigManager{
 		logger:           logger,

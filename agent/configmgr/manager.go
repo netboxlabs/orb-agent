@@ -17,7 +17,7 @@ type Manager interface {
 
 // New creates a new instance of ConfigManager that is bound to the
 // supplied context.
-func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string, backendState backend.BackendState) Manager {
+func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string, backendState backend.StateRetriever) Manager {
 	switch active {
 	case "local":
 		return &localConfigManager{logger: logger, pMgr: pMgr}
