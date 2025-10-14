@@ -73,12 +73,14 @@ func createTestHeartbeater() *heartbeater {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
+	groupManager := newGroupManager()
 	return &heartbeater{
-		logger:        logger,
-		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
-		heartbeatCtx:  context.Background(),
-		backendState:  &mockBackendState{},
-		policyManager: mockPMgr,
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:   context.Background(),
+		backendState:   &mockBackendState{},
+		policyManager:  mockPMgr,
+		groupRetriever: &groupManager,
 	}
 }
 
@@ -86,23 +88,27 @@ func createTestHeartbeaterWithBackendState(backendState *mockBackendState) *hear
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
+	groupManager := newGroupManager()
 	return &heartbeater{
-		logger:        logger,
-		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
-		heartbeatCtx:  context.Background(),
-		backendState:  backendState,
-		policyManager: mockPMgr,
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:   context.Background(),
+		backendState:   backendState,
+		policyManager:  mockPMgr,
+		groupRetriever: &groupManager,
 	}
 }
 
 func createTestHeartbeaterWithPolicyManager(backendState *mockBackendState, policyManager *mockPolicyManagerForHeartbeat) *heartbeater {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	groupManager := newGroupManager()
 	return &heartbeater{
-		logger:        logger,
-		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
-		heartbeatCtx:  context.Background(),
-		backendState:  backendState,
-		policyManager: policyManager,
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:   context.Background(),
+		backendState:   backendState,
+		policyManager:  policyManager,
+		groupRetriever: &groupManager,
 	}
 }
 
@@ -1009,9 +1015,10 @@ func TestNewHeartbeater_WithPolicyManager(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	backendState := &mockBackendState{}
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	groupManager := newGroupManager()
 
 	// Act
-	hb := newHeartbeater(logger, backendState, mockPMgr)
+	hb := newHeartbeater(logger, backendState, mockPMgr, &groupManager)
 
 	// Assert
 	assert.NotNil(t, hb)
@@ -1021,6 +1028,380 @@ func TestNewHeartbeater_WithPolicyManager(t *testing.T) {
 	assert.NotNil(t, hb.backendState)
 	assert.NotNil(t, hb.policyManager)
 	assert.Equal(t, mockPMgr, hb.policyManager)
+	assert.NotNil(t, hb.groupRetriever)
+
+	// Clean up ticker
+	hb.hbTicker.Stop()
+}
+
+func createTestHeartbeaterWithGroupManager(groupManager *GroupManager) *heartbeater {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
+	return &heartbeater{
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:   context.Background(),
+		backendState:   &mockBackendState{},
+		policyManager:  mockPMgr,
+		groupRetriever: groupManager,
+	}
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithEmptyGroupState(t *testing.T) {
+	// Arrange
+	gm := newGroupManager()
+	hb := createTestHeartbeaterWithGroupManager(&gm)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify group state is empty but not nil
+	assert.NotNil(t, heartbeat.GroupState)
+	assert.Empty(t, heartbeat.GroupState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithGroupState(t *testing.T) {
+	// Arrange
+	gm := newGroupManager()
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-1",
+		Name:    "Test Group 1",
+	})
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-2",
+		Name:    "Test Group 2",
+	})
+	hb := createTestHeartbeaterWithGroupManager(&gm)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify group state is populated
+	assert.NotNil(t, heartbeat.GroupState)
+	assert.Len(t, heartbeat.GroupState, 2)
+
+	// Check group-1
+	group1, ok := heartbeat.GroupState["group-1"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Group 1", group1.GroupName)
+	assert.Equal(t, "group-1", group1.GroupID)
+
+	// Check group-2
+	group2, ok := heartbeat.GroupState["group-2"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Group 2", group2.GroupName)
+	assert.Equal(t, "group-2", group2.GroupID)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithCompleteState(t *testing.T) {
+	// Test heartbeat with backend, policy, and group states all populated
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Setup backend state
+	backendState := &mockBackendState{
+		backendState: map[string]*backend.State{
+			"pktvisor": {
+				Status:       backend.Running,
+				RestartCount: 1,
+				LastError:    "",
+			},
+		},
+	}
+
+	// Setup policy manager
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:       "policy-1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			Version:  1,
+			State:    policies.Running,
+			Datasets: map[string]bool{"dataset-1": true},
+		},
+	}, nil)
+
+	// Setup group manager
+	gm := newGroupManager()
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-1",
+		Name:    "Test Group 1",
+	})
+
+	// Create heartbeater with all components
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	hb := &heartbeater{
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond),
+		heartbeatCtx:   context.Background(),
+		backendState:   backendState,
+		policyManager:  mockPMgr,
+		groupRetriever: &gm,
+	}
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify all state sections are present
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Len(t, heartbeat.BackendState, 1)
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 1)
+	assert.NotNil(t, heartbeat.GroupState)
+	assert.Len(t, heartbeat.GroupState, 1)
+
+	// Verify backend state
+	backend, ok := heartbeat.BackendState["pktvisor"]
+	assert.True(t, ok)
+	assert.Equal(t, "running", backend.State)
+
+	// Verify policy state
+	policy, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Policy", policy.Name)
+
+	// Verify group state
+	group, ok := heartbeat.GroupState["group-1"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Group 1", group.GroupName)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoval(t *testing.T) {
+	// Arrange
+	gm := newGroupManager()
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-1",
+		Name:    "Test Group 1",
+	})
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-2",
+		Name:    "Test Group 2",
+	})
+	hb := createTestHeartbeaterWithGroupManager(&gm)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Send initial heartbeat with 2 groups
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat1 messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat1)
+	require.NoError(t, err)
+	assert.Len(t, heartbeat1.GroupState, 2)
+
+	// Remove one group
+	gm.Remove("group-1")
+
+	// Send second heartbeat after removal
+	capturedPayload = nil
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat2 messages.Heartbeat
+	err = json.Unmarshal(capturedPayload, &heartbeat2)
+	require.NoError(t, err)
+
+	// Assert - Should only have 1 group now
+	assert.Len(t, heartbeat2.GroupState, 1)
+	_, ok := heartbeat2.GroupState["group-1"]
+	assert.False(t, ok)
+	group2, ok := heartbeat2.GroupState["group-2"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Group 2", group2.GroupName)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoveAll(t *testing.T) {
+	// Arrange
+	gm := newGroupManager()
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-1",
+		Name:    "Test Group 1",
+	})
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-2",
+		Name:    "Test Group 2",
+	})
+	hb := createTestHeartbeaterWithGroupManager(&gm)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Send initial heartbeat with 2 groups
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat1 messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat1)
+	require.NoError(t, err)
+	assert.Len(t, heartbeat1.GroupState, 2)
+
+	// Remove all groups
+	gm.RemoveAll()
+
+	// Send second heartbeat after removal
+	capturedPayload = nil
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat2 messages.Heartbeat
+	err = json.Unmarshal(capturedPayload, &heartbeat2)
+	require.NoError(t, err)
+
+	// Assert - Should have no groups now
+	assert.NotNil(t, heartbeat2.GroupState)
+	assert.Empty(t, heartbeat2.GroupState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_DynamicGroupUpdates(t *testing.T) {
+	// Test that group state reflects dynamic updates
+	// Arrange
+	gm := newGroupManager()
+	hb := createTestHeartbeaterWithGroupManager(&gm)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Heartbeat 1: No groups
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	var hb1 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &hb1))
+	assert.Empty(t, hb1.GroupState)
+
+	// Add group
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Group 1"})
+
+	// Heartbeat 2: 1 group
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	var hb2 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &hb2))
+	assert.Len(t, hb2.GroupState, 1)
+
+	// Add another group
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Group 2"})
+
+	// Heartbeat 3: 2 groups
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	var hb3 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &hb3))
+	assert.Len(t, hb3.GroupState, 2)
+
+	// Remove one
+	gm.Remove("group-1")
+
+	// Heartbeat 4: 1 group
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	var hb4 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &hb4))
+	assert.Len(t, hb4.GroupState, 1)
+	_, ok := hb4.GroupState["group-2"]
+	assert.True(t, ok)
+}
+
+func TestNewHeartbeater_WithGroupManager(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	backendState := &mockBackendState{}
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	gm := newGroupManager()
+	gm.Add(messages.GroupMembershipData{
+		GroupID: "group-1",
+		Name:    "Test Group 1",
+	})
+
+	// Act
+	hb := newHeartbeater(logger, backendState, mockPMgr, &gm)
+
+	// Assert
+	assert.NotNil(t, hb)
+	assert.NotNil(t, hb.groupRetriever)
+
+	// Verify we can retrieve groups through the interface
+	groups := hb.groupRetriever.GetAll()
+	require.Len(t, groups, 1)
+	assert.Equal(t, "group-1", groups[0].GroupID)
 
 	// Clean up ticker
 	hb.hbTicker.Stop()

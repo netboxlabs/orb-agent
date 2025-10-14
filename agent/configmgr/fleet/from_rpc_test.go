@@ -260,7 +260,8 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 				tt.setupMocks(mockPMgr)
 			}
 			resetChan := make(chan struct{}, 1)
-			handlers := NewMessaging(logger, mockPMgr, resetChan)
+			groupManager := newGroupManager()
+			handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 			agentID := "agent123"
 			mockPublishToTopic := func(_ context.Context, _ string, _ []byte) error {
@@ -300,7 +301,8 @@ func TestMessageHandlers_handleGroupMemberships_Success(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -309,6 +311,9 @@ func TestMessageHandlers_handleGroupMemberships_Success(t *testing.T) {
 		return nil
 	}
 	mockPublishToTopic := func(_ context.Context, _ string, _ []byte) error {
+		return nil
+	}
+	mockUnsubscribeFromTopic := func(_ string) error {
 		return nil
 	}
 	agentID := "agent123"
@@ -323,7 +328,11 @@ func TestMessageHandlers_handleGroupMemberships_Success(t *testing.T) {
 
 	// Act
 	ctx := context.Background()
-	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, TopicActions{
+		Subscribe:   mockSubscribeToTopic,
+		Publish:     mockPublishToTopic,
+		Unsubscribe: mockUnsubscribeFromTopic,
+	})
 
 	// Assert
 	expectedTopics := []string{"orgs/org123/groups/group1", "orgs/org123/groups/group2"}
@@ -335,7 +344,8 @@ func TestMessageHandlers_handleGroupMemberships_InvalidPayload(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -346,6 +356,9 @@ func TestMessageHandlers_handleGroupMemberships_InvalidPayload(t *testing.T) {
 	mockPublishToTopic := func(_ context.Context, _ string, _ []byte) error {
 		return nil
 	}
+	mockUnsubscribeFromTopic := func(_ string) error {
+		return nil
+	}
 	agentID := "agent123"
 	orgID := "org123"
 	// Create an invalid payload - empty groups is the closest we can get to testing invalid data
@@ -354,10 +367,13 @@ func TestMessageHandlers_handleGroupMemberships_InvalidPayload(t *testing.T) {
 		FullList: false,
 		Groups:   []messages.GroupMembershipData{},
 	}
-
 	// Act - This should not panic, just handle gracefully
 	ctx := context.Background()
-	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, TopicActions{
+		Subscribe:   mockSubscribeToTopic,
+		Publish:     mockPublishToTopic,
+		Unsubscribe: mockUnsubscribeFromTopic,
+	})
 
 	// Assert - should not subscribe to any topics due to empty groups
 	assert.Empty(t, subscribedTopics)
@@ -368,7 +384,8 @@ func TestMessageHandlers_handleGroupMemberships_EmptyGroups(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -385,10 +402,16 @@ func TestMessageHandlers_handleGroupMemberships_EmptyGroups(t *testing.T) {
 		FullList: true,
 		Groups:   []messages.GroupMembershipData{}, // Empty groups
 	}
-
+	mockUnsubscribeFromTopic := func(_ string) error {
+		return nil
+	}
 	// Act
 	ctx := context.Background()
-	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, TopicActions{
+		Subscribe:   mockSubscribeToTopic,
+		Publish:     mockPublishToTopic,
+		Unsubscribe: mockUnsubscribeFromTopic,
+	})
 
 	// Assert - should not subscribe to any topics due to empty groups
 	assert.Empty(t, subscribedTopics)
@@ -399,7 +422,8 @@ func TestMessageHandlers_handleGroupMemberships_JSONMarshalError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -418,10 +442,16 @@ func TestMessageHandlers_handleGroupMemberships_JSONMarshalError(t *testing.T) {
 		FullList: false,
 		Groups:   []messages.GroupMembershipData{},
 	}
-
+	mockUnsubscribeFromTopic := func(_ string) error {
+		return nil
+	}
 	// Act
 	ctx := context.Background()
-	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, TopicActions{
+		Subscribe:   mockSubscribeToTopic,
+		Publish:     mockPublishToTopic,
+		Unsubscribe: mockUnsubscribeFromTopic,
+	})
 
 	// Assert - should not subscribe to any topics due to empty groups
 	assert.Empty(t, subscribedTopics)
@@ -473,7 +503,8 @@ func TestMessageHandlers_handleGroupMemberships_ComplexPayload(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -482,6 +513,9 @@ func TestMessageHandlers_handleGroupMemberships_ComplexPayload(t *testing.T) {
 		return nil
 	}
 	mockPublishToTopic := func(_ context.Context, _ string, _ []byte) error {
+		return nil
+	}
+	mockUnsubscribeFromTopic := func(_ string) error {
 		return nil
 	}
 
@@ -498,7 +532,11 @@ func TestMessageHandlers_handleGroupMemberships_ComplexPayload(t *testing.T) {
 
 	// Act
 	ctx := context.Background()
-	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, TopicActions{
+		Subscribe:   mockSubscribeToTopic,
+		Publish:     mockPublishToTopic,
+		Unsubscribe: mockUnsubscribeFromTopic,
+	})
 
 	// Assert
 	expectedTopics := []string{"orgs/org123/groups/group1", "orgs/org123/groups/group2"}
@@ -510,7 +548,8 @@ func TestMessageHandlers_handleGroupMemberships_SendsAgentPoliciesRequest(t *tes
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Mock subscribeToTopic function
 	subscribedTopics := []string{}
@@ -531,6 +570,9 @@ func TestMessageHandlers_handleGroupMemberships_SendsAgentPoliciesRequest(t *tes
 		}{topic, payload})
 		return nil
 	}
+	mockUnsubscribeFromTopic := func(_ string) error {
+		return nil
+	}
 
 	agentID := "agent123"
 	orgID := "org123"
@@ -544,7 +586,11 @@ func TestMessageHandlers_handleGroupMemberships_SendsAgentPoliciesRequest(t *tes
 
 	// Act
 	ctx := context.Background()
-	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, mockSubscribeToTopic, mockPublishToTopic)
+	handlers.handleGroupMemberships(ctx, groupMemberships, orgID, agentID, TopicActions{
+		Subscribe:   mockSubscribeToTopic,
+		Publish:     mockPublishToTopic,
+		Unsubscribe: mockUnsubscribeFromTopic,
+	})
 
 	// Assert
 	expectedTopics := []string{"orgs/org123/groups/group1", "orgs/org123/groups/group2"}
@@ -579,7 +625,8 @@ func TestNewMessageHandlers(t *testing.T) {
 
 	// Act
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Assert
 	assert.NotNil(t, handlers)
@@ -593,7 +640,8 @@ func TestMessageHandlers_handleAgentPolicies_NotFullList(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Setup mock expectations
 	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
@@ -629,7 +677,8 @@ func TestMessageHandlers_handleAgentPolicies_FullList_RemovesOldPolicies(t *test
 	mockPMgr := &mockPolicyManager{}
 	mockRepo := &mockPolicyRepo{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Setup existing policies in repo
 	existingPolicies := []policies.PolicyData{
@@ -693,7 +742,8 @@ func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create policy payload with sanitize action
 	policies := []messages.AgentPolicyRPCPayload{
@@ -724,7 +774,8 @@ func TestMessageHandlers_handleAgentPolicies_FullList_GetAllFails(t *testing.T) 
 	mockPMgr := &mockPolicyManager{}
 	mockRepo := &mockPolicyRepo{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Setup mock expectations - GetAll fails
 	mockPMgr.On("GetRepo").Return(mockRepo)
@@ -760,7 +811,8 @@ func TestMessageHandlers_handleAgentGroupRemoval_RemovesPolicyWhenNoGroupsRemain
 	mockPMgr := &mockPolicyManager{}
 	mockRepo := &mockPolicyRepo{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	unsubscribedTopics := []string{}
 	mockUnsubscribeFromTopic := func(topic string) error {
@@ -804,7 +856,8 @@ func TestMessageHandlers_handleAgentGroupRemoval_RemovesDatasetsWhenGroupsRemain
 	mockPMgr := &mockPolicyManager{}
 	mockRepo := &mockPolicyRepo{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	unsubscribedTopics := []string{}
 	mockUnsubscribeFromTopic := func(topic string) error {
@@ -856,7 +909,8 @@ func TestMessageHandlers_handleAgentGroupRemoval_UnsubscribeFails(t *testing.T) 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	mockUnsubscribeFromTopic := func(_ string) error {
 		return assert.AnError
@@ -881,7 +935,8 @@ func TestMessageHandlers_DispatchToHandlers_InvalidJSON(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	invalidPayload := []byte("invalid json {")
 
@@ -903,7 +958,8 @@ func TestMessageHandlers_DispatchToHandlers_MissingFunc(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create RPC with empty Func
 	rpc := messages.RPC{
@@ -932,7 +988,8 @@ func TestMessageHandlers_DispatchToHandlers_NilPayload(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create RPC with nil Payload
 	rpc := messages.RPC{
@@ -961,7 +1018,8 @@ func TestMessageHandlers_DispatchToHandlers_MalformedGroupMembershipPayload(t *t
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create malformed payload - using string instead of proper structure
 	malformedPayload := []byte(`{"schema_version":"1.0","func":"group_membership","payload":"not_a_valid_structure"}`)
@@ -984,7 +1042,8 @@ func TestMessageHandlers_DispatchToHandlers_MalformedAgentPolicyPayload(t *testi
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create malformed payload
 	malformedPayload := []byte(`{"schema_version":"1.0","func":"agent_policy","payload":"not_an_array"}`)
@@ -1007,7 +1066,8 @@ func TestMessageHandlers_DispatchToHandlers_MalformedGroupRemovedPayload(t *test
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create malformed payload
 	malformedPayload := []byte(`{"schema_version":"1.0","func":"group_removed","payload":"not_a_structure"}`)
@@ -1030,7 +1090,8 @@ func TestMessageHandlers_DispatchToHandlers_MalformedDatasetRemovedPayload(t *te
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create malformed payload
 	malformedPayload := []byte(`{"schema_version":"1.0","func":"dataset_removed","payload":"not_a_structure"}`)
@@ -1054,7 +1115,8 @@ func TestMessageHandlers_handleDatasetRemoval_Success(t *testing.T) {
 	mockPMgr := &mockPolicyManager{}
 	mockRepo := &mockPolicyRepo{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Register a mock backend for testing
 	mockBe := &mockBackend{}
@@ -1095,7 +1157,8 @@ func TestMessageHandlers_handleDatasetRemoval_PolicyRetrievalFails(t *testing.T)
 	mockPMgr := &mockPolicyManager{}
 	mockRepo := &mockPolicyRepo{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Setup mock expectations - Get fails
 	mockPMgr.On("GetRepo").Return(mockRepo)
@@ -1123,7 +1186,8 @@ func TestMessageHandlers_handleDatasetRemoval_BackendNotFound(t *testing.T) {
 	mockPMgr := &mockPolicyManager{}
 	mockRepo := &mockPolicyRepo{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Setup mock expectations - policy exists but with nonexistent backend
 	mockPMgr.On("GetRepo").Return(mockRepo)
@@ -1154,7 +1218,8 @@ func TestMessageHandlers_handleAgentReset_NoFullReset(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	ctx := context.Background()
 
@@ -1183,7 +1248,8 @@ func TestMessageHandlers_DispatchToHandlers_AgentReset(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	ctx := context.Background()
 
@@ -1218,7 +1284,8 @@ func TestMessageHandlers_DispatchToHandlers_MalformedAgentResetPayload(t *testin
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create malformed payload
 	malformedPayload := []byte(`{"schema_version":"1.0","func":"agent_reset","payload":"not_a_structure"}`)
@@ -1241,7 +1308,8 @@ func TestMessageHandlers_DispatchToHandlers_AgentStop(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	_ = NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	_ = NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create agent_stop RPC message
 	rpc := messages.AgentStopRPC{
@@ -1278,7 +1346,8 @@ func TestMessageHandlers_DispatchToHandlers_MalformedAgentStopPayload(t *testing
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
 	resetChan := make(chan struct{}, 1)
-	handlers := NewMessaging(logger, mockPMgr, resetChan)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 	// Create malformed payload
 	malformedPayload := []byte(`{"schema_version":"1.0","func":"agent_stop","payload":"not_a_structure"}`)
