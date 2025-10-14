@@ -19,11 +19,11 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
-const routineKey config.ContextKey = "routine"
-
-const otlpShutdownTimeout = 5 * time.Second
-
-const restartBackendChanSize = 5
+const (
+	routineKey             config.ContextKey = "routine"
+	otlpShutdownTimeout                      = 5 * time.Second
+	restartBackendChanSize                   = 5
+)
 
 // Agent is the interface that all agents must implement
 type Agent interface {
@@ -111,7 +111,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	a.backendsCommon = commonConfig
 	delete(cfgBackends, "common")
 
-	if a.backendsCommon.Otlp.Grpc != "" && a.config.OrbAgent.TelemetryLogs {
+	if a.backendsCommon.Otlp.Grpc != "" {
 		a.logger, otlpShutdown, err = telemetry.BuildOTLPLogExporter(agentCtx, a.logger, a.backendsCommon)
 		if err != nil {
 			a.logger.Error("failed to create OTLP log exporter", slog.Any("error", err))
@@ -164,7 +164,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 
 		go a.waitForRestartRequests()
 	}
-	return
+	return nil
 }
 
 func (a *orbAgent) waitForRestartRequests() {

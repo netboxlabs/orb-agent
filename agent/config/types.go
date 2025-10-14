@@ -104,8 +104,7 @@ type OrbAgent struct {
 	Debug          struct {
 		Enable bool `yaml:"enable"`
 	} `yaml:"debug"`
-	ConfigFile    string `yaml:"config_file"`
-	TelemetryLogs bool   `yaml:"telemetry_logs"`
+	ConfigFile string `yaml:"config_file"`
 }
 
 // Config represents the overall configuration
