@@ -29,7 +29,7 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 	return &MQTTConnection{
 		connectionManager: nil,
 		logger:            logger,
-		heartbeater:       newHeartbeater(logger, backendState),
+		heartbeater:       newHeartbeater(logger, backendState, pMgr),
 		messaging:         NewMessaging(logger, pMgr, resetChan),
 		resetChan:         resetChan,
 	}

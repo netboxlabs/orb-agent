@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -207,12 +206,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 	err := be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
 		a.logger.Warn("policy failed to apply", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name), slog.Any("error", err))
-		switch {
-		case strings.Contains(err.Error(), "422"):
-			pd.State = policies.NoTapMatch
-		default:
-			pd.State = policies.FailedToApply
-		}
+		pd.State = policies.FailedToApply
 		pd.BackendErr = err.Error()
 	} else {
 		a.logger.Info("policy applied successfully", slog.String("policy_id", payload.ID), slog.String("policy_name", payload.Name))

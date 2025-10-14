@@ -2,7 +2,6 @@ package policies
 
 import (
 	"database/sql/driver"
-	"time"
 )
 
 // PolicyData represents a policy
@@ -16,8 +15,6 @@ type PolicyData struct {
 	Data               any
 	State              PolicyState
 	BackendErr         string
-	LastScrapeBytes    int64
-	LastScrapeTS       time.Time
 	PreviousPolicyData *PolicyData
 }
 
