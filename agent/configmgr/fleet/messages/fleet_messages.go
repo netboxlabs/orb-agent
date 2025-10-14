@@ -136,9 +136,8 @@ type GroupMembershipRPC struct {
 
 // GroupMembershipData contains information about a single group membership
 type GroupMembershipData struct {
-	GroupID   string `json:"group_id"`
-	Name      string `json:"name"`
-	ChannelID string `json:"channel_id"`
+	GroupID string `json:"group_id"`
+	Name    string `json:"name"`
 }
 
 // GroupMembershipRPCPayload is the payload for group membership RPC messages

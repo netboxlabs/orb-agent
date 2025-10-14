@@ -97,6 +97,8 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 				return nil
 			})
 
+			// Wait for capabilities to be handled
+			time.Sleep(10 * time.Second)
 			go connection.messaging.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   topics.Outbox,

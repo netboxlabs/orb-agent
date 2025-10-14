@@ -13,9 +13,8 @@ func TestGroupManager_Add_SingleGroup(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
 	group := messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	}
 
 	// Act
@@ -26,26 +25,22 @@ func TestGroupManager_Add_SingleGroup(t *testing.T) {
 	require.Len(t, groups, 1)
 	assert.Equal(t, "group-1", groups[0].GroupID)
 	assert.Equal(t, "Test Group 1", groups[0].Name)
-	assert.Equal(t, "channel-1", groups[0].ChannelID)
 }
 
 func TestGroupManager_Add_Groups(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
 	group1 := messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	}
 	group2 := messages.GroupMembershipData{
-		GroupID:   "group-2",
-		Name:      "Test Group 2",
-		ChannelID: "channel-2",
+		GroupID: "group-2",
+		Name:    "Test Group 2",
 	}
 	group3 := messages.GroupMembershipData{
-		GroupID:   "group-3",
-		Name:      "Test Group 3",
-		ChannelID: "channel-3",
+		GroupID: "group-3",
+		Name:    "Test Group 3",
 	}
 
 	// Act
@@ -65,14 +60,12 @@ func TestGroupManager_Add_DuplicateGroups(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
 	group1 := messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	}
 	group2 := messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	}
 
 	// Act
