@@ -1083,14 +1083,12 @@ func TestHeartbeater_SendSingleHeartbeat_WithGroupState(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	})
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-2",
-		Name:      "Test Group 2",
-		ChannelID: "channel-2",
+		GroupID: "group-2",
+		Name:    "Test Group 2",
 	})
 	hb := createTestHeartbeaterWithGroupManager(&gm)
 	defer hb.hbTicker.Stop()
@@ -1164,9 +1162,8 @@ func TestHeartbeater_SendSingleHeartbeat_WithCompleteState(t *testing.T) {
 	// Setup group manager
 	gm := newGroupManager()
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	})
 
 	// Create heartbeater with all components
@@ -1230,14 +1227,12 @@ func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoval(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	})
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-2",
-		Name:      "Test Group 2",
-		ChannelID: "channel-2",
+		GroupID: "group-2",
+		Name:    "Test Group 2",
 	})
 	hb := createTestHeartbeaterWithGroupManager(&gm)
 	defer hb.hbTicker.Stop()
@@ -1286,14 +1281,12 @@ func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoveAll(t *testing.T) 
 	// Arrange
 	gm := newGroupManager()
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	})
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-2",
-		Name:      "Test Group 2",
-		ChannelID: "channel-2",
+		GroupID: "group-2",
+		Name:    "Test Group 2",
 	})
 	hb := createTestHeartbeaterWithGroupManager(&gm)
 	defer hb.hbTicker.Stop()
@@ -1358,7 +1351,7 @@ func TestHeartbeater_SendSingleHeartbeat_DynamicGroupUpdates(t *testing.T) {
 	assert.Empty(t, hb1.GroupState)
 
 	// Add group
-	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Group 1", ChannelID: "channel-1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Group 1"})
 
 	// Heartbeat 2: 1 group
 	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
@@ -1367,7 +1360,7 @@ func TestHeartbeater_SendSingleHeartbeat_DynamicGroupUpdates(t *testing.T) {
 	assert.Len(t, hb2.GroupState, 1)
 
 	// Add another group
-	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Group 2", ChannelID: "channel-2"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Group 2"})
 
 	// Heartbeat 3: 2 groups
 	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
@@ -1394,9 +1387,8 @@ func TestNewHeartbeater_WithGroupManager(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
 	gm := newGroupManager()
 	gm.Add(messages.GroupMembershipData{
-		GroupID:   "group-1",
-		Name:      "Test Group 1",
-		ChannelID: "channel-1",
+		GroupID: "group-1",
+		Name:    "Test Group 1",
 	})
 
 	// Act

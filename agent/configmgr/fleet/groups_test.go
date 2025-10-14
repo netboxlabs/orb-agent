@@ -94,9 +94,9 @@ func TestGroupManager_GetAll_EmptyGroups(t *testing.T) {
 func TestGroupManager_RemoveAll_Success(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
-	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1", ChannelID: "channel-1"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2", ChannelID: "channel-2"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3", ChannelID: "channel-3"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3"})
 
 	// Verify groups were added
 	require.Len(t, gm.GetAll(), 3)
@@ -113,9 +113,9 @@ func TestGroupManager_RemoveAll_Success(t *testing.T) {
 func TestGroupManager_Remove_SingleGroup(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
-	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1", ChannelID: "channel-1"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2", ChannelID: "channel-2"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3", ChannelID: "channel-3"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3"})
 
 	// Act
 	gm.Remove("group-2")
@@ -130,9 +130,9 @@ func TestGroupManager_Remove_SingleGroup(t *testing.T) {
 func TestGroupManager_Remove_FirstGroup(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
-	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1", ChannelID: "channel-1"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2", ChannelID: "channel-2"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3", ChannelID: "channel-3"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3"})
 
 	// Act
 	gm.Remove("group-1")
@@ -147,9 +147,9 @@ func TestGroupManager_Remove_FirstGroup(t *testing.T) {
 func TestGroupManager_Remove_LastGroup(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
-	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1", ChannelID: "channel-1"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2", ChannelID: "channel-2"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3", ChannelID: "channel-3"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-3", Name: "Test Group 3"})
 
 	// Act
 	gm.Remove("group-3")
@@ -164,8 +164,8 @@ func TestGroupManager_Remove_LastGroup(t *testing.T) {
 func TestGroupManager_Remove_NonExistentGroup(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
-	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1", ChannelID: "channel-1"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2", ChannelID: "channel-2"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2"})
 
 	// Act - Remove non-existent group should not panic
 	gm.Remove("group-999")
@@ -180,8 +180,8 @@ func TestGroupManager_Remove_NonExistentGroup(t *testing.T) {
 func TestGroupManager_GroupRetrieverInterface(t *testing.T) {
 	// Arrange
 	gm := newGroupManager()
-	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1", ChannelID: "channel-1"})
-	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2", ChannelID: "channel-2"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2"})
 
 	// Act - Use as GroupRetriever interface
 	var retriever GroupRetriever = &gm
