@@ -18,7 +18,6 @@ func TestPolicyStateString(t *testing.T) {
 		{policies.Running, "running"},
 		{policies.FailedToApply, "failed_to_apply"},
 		{policies.Offline, "offline"},
-		{policies.NoTapMatch, "no_tap_match"},
 	}
 
 	for _, tc := range testCases {
@@ -35,7 +34,6 @@ func TestPolicyStateScan(t *testing.T) {
 		{[]byte("running"), policies.Running},
 		{[]byte("failed_to_apply"), policies.FailedToApply},
 		{[]byte("offline"), policies.Offline},
-		{[]byte("no_tap_match"), policies.NoTapMatch},
 	}
 
 	for _, tc := range testCases {
@@ -56,7 +54,6 @@ func TestPolicyStateValue(t *testing.T) {
 		{policies.Running, "running"},
 		{policies.FailedToApply, "failed_to_apply"},
 		{policies.Offline, "offline"},
-		{policies.NoTapMatch, "no_tap_match"},
 	}
 
 	for _, tc := range testCases {
