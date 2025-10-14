@@ -20,6 +20,8 @@ import (
 
 const routineKey config.ContextKey = "routine"
 
+const restartBackendChanSize = 5
+
 // Agent is the interface that all agents must implement
 type Agent interface {
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
@@ -32,14 +34,15 @@ type orbAgent struct {
 	logger         *slog.Logger
 	config         config.Config
 	backends       map[string]backend.Backend
-	backendState   map[string]*backend.State
 	backendsCommon config.BackendCommons
 	ctx            context.Context
 	cancelFunction context.CancelFunc
 
-	policyManager  policymgr.PolicyManager
-	configManager  configmgr.Manager
-	secretsManager secretsmgr.Manager
+	policyManager       policymgr.PolicyManager
+	configManager       configmgr.Manager
+	secretsManager      secretsmgr.Manager
+	backendStateManager backend.StateManager
+	restartBackendChan  chan string
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -57,17 +60,22 @@ func New(logger *slog.Logger, c config.Config) (Agent, error) {
 		return nil, err
 	}
 
+	restartBackendChan := make(chan string, restartBackendChanSize)
+
+	backendStateManager := backend.NewStateManager(c.OrbAgent.ConfigManager.Active, logger, restartBackendChan)
 	// Pass a background context to the config manager at construction time. The
 	// manager keeps its own copy and later derives child contexts from the
 	// runtime context supplied in Agent.Start.
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active)
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager)
 
 	return &orbAgent{
-		logger:         logger,
-		config:         c,
-		policyManager:  pm,
-		configManager:  cm,
-		secretsManager: sm,
+		logger:              logger,
+		config:              c,
+		policyManager:       pm,
+		configManager:       cm,
+		secretsManager:      sm,
+		backendStateManager: backendStateManager,
+		restartBackendChan:  restartBackendChan,
 	}, nil
 }
 
@@ -78,7 +86,6 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	}
 	a.ctx = agentCtx
 	a.backends = make(map[string]backend.Backend, len(cfgBackends))
-	a.backendState = make(map[string]*backend.State)
 
 	var commonConfig config.BackendCommons
 	if v, prs := cfgBackends["common"]; prs {
@@ -119,29 +126,33 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 		backendCtx := context.WithValue(agentCtx, routineKey, name)
 		backendCtx = a.configManager.GetContext(backendCtx)
 		a.backends[name] = be
-		initialState := be.GetInitialState()
-		a.backendState[name] = &backend.State{
-			Status:        initialState,
-			LastRestartTS: time.Now(),
-		}
 		// Create a cancellable context for the backend and ensure we pass both
 		// the context and its cancel function to Start, matching the Backend
 		// interface.
 		runCtx, cancel := context.WithCancel(backendCtx)
 		if err := be.Start(runCtx, cancel); err != nil {
 			var errMessage string
-			if initialState == backend.BackendError {
+			if be.GetInitialState() == backend.BackendError {
 				errMessage = err.Error()
 			}
-			a.backendState[name] = &backend.State{
-				Status:        initialState,
-				LastError:     errMessage,
-				LastRestartTS: time.Now(),
-			}
+			a.backendStateManager.RegisterError(name, errMessage)
 			return err
 		}
+		a.backendStateManager.StartBackendMonitor(name, be)
+
+		go a.waitForRestartRequests()
 	}
 	return nil
+}
+
+func (a *orbAgent) waitForRestartRequests() {
+	for name := range a.restartBackendChan {
+		a.logger.Info("restarting backend", slog.String("backend", name))
+		err := a.RestartBackend(a.ctx, name, "restart requested by fleet")
+		if err != nil {
+			a.logger.Error("failed to restart backend", slog.String("backend", name), slog.Any("error", err))
+		}
+	}
 }
 
 func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
@@ -198,9 +209,7 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 
 	be := a.backends[name]
 	a.logger.Info("restarting backend", slog.String("backend", name), slog.String("reason", reason))
-	a.backendState[name].RestartCount++
-	a.backendState[name].LastRestartTS = time.Now()
-	a.backendState[name].LastRestartReason = reason
+	a.backendStateManager.RegisterRestart(name, reason)
 	a.logger.Info("removing policies", slog.String("backend", name))
 	if err := a.policyManager.RemoveBackendPolicies(be, true); err != nil {
 		a.logger.Error("failed to remove policies", slog.String("backend", name), slog.Any("error", err))
@@ -219,8 +228,7 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	a.logger.Info("resetting backend", slog.String("backend", name))
 
 	if err := be.FullReset(ctx); err != nil {
-		a.backendState[name].LastError = fmt.Sprintf("failed to reset backend: %v", err)
-		a.logger.Error("failed to reset backend", slog.String("backend", name), slog.Any("error", err))
+		a.backendStateManager.RegisterError(name, fmt.Sprintf("failed to reset backend: %v", err))
 	}
 
 	return nil

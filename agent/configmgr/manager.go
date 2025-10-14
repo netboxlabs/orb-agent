@@ -17,14 +17,14 @@ type Manager interface {
 
 // New creates a new instance of ConfigManager that is bound to the
 // supplied context.
-func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string) Manager {
+func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string, backendState backend.StateRetriever) Manager {
 	switch active {
 	case "local":
 		return &localConfigManager{logger: logger, pMgr: pMgr}
 	case "git":
 		return &gitConfigManager{logger: logger, pMgr: pMgr}
 	case "fleet":
-		return newFleetConfigManager(logger, pMgr)
+		return newFleetConfigManager(logger, pMgr, backendState)
 	default:
 		return &localConfigManager{logger: logger, pMgr: pMgr}
 	}

@@ -103,7 +103,7 @@ backend1:
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	// Instantiate the gitConfigManager.
-	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active)
+	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active, &mockBackendState{})
 
 	// Call Start
 	backends := map[string]backend.Backend{
