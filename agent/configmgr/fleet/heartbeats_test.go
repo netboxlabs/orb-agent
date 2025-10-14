@@ -73,12 +73,14 @@ func createTestHeartbeater() *heartbeater {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
+	groupManager := newGroupManager()
 	return &heartbeater{
-		logger:        logger,
-		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
-		heartbeatCtx:  context.Background(),
-		backendState:  &mockBackendState{},
-		policyManager: mockPMgr,
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:   context.Background(),
+		backendState:   &mockBackendState{},
+		policyManager:  mockPMgr,
+		groupRetriever: &groupManager,
 	}
 }
 
@@ -86,23 +88,27 @@ func createTestHeartbeaterWithBackendState(backendState *mockBackendState) *hear
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
+	groupManager := newGroupManager()
 	return &heartbeater{
-		logger:        logger,
-		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
-		heartbeatCtx:  context.Background(),
-		backendState:  backendState,
-		policyManager: mockPMgr,
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:   context.Background(),
+		backendState:   backendState,
+		policyManager:  mockPMgr,
+		groupRetriever: &groupManager,
 	}
 }
 
 func createTestHeartbeaterWithPolicyManager(backendState *mockBackendState, policyManager *mockPolicyManagerForHeartbeat) *heartbeater {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	groupManager := newGroupManager()
 	return &heartbeater{
-		logger:        logger,
-		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
-		heartbeatCtx:  context.Background(),
-		backendState:  backendState,
-		policyManager: policyManager,
+		logger:         logger,
+		hbTicker:       time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:   context.Background(),
+		backendState:   backendState,
+		policyManager:  policyManager,
+		groupRetriever: &groupManager,
 	}
 }
 
@@ -1009,9 +1015,10 @@ func TestNewHeartbeater_WithPolicyManager(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	backendState := &mockBackendState{}
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	groupManager := newGroupManager()
 
 	// Act
-	hb := newHeartbeater(logger, backendState, mockPMgr)
+	hb := newHeartbeater(logger, backendState, mockPMgr, &groupManager)
 
 	// Assert
 	assert.NotNil(t, hb)
@@ -1021,6 +1028,7 @@ func TestNewHeartbeater_WithPolicyManager(t *testing.T) {
 	assert.NotNil(t, hb.backendState)
 	assert.NotNil(t, hb.policyManager)
 	assert.Equal(t, mockPMgr, hb.policyManager)
+	assert.NotNil(t, hb.groupRetriever)
 
 	// Clean up ticker
 	hb.hbTicker.Stop()

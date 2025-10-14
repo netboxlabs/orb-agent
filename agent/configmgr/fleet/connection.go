@@ -26,11 +26,12 @@ type MQTTConnection struct {
 
 // NewMQTTConnection creates a new MQTTConnection
 func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}, backendState backend.StateRetriever) *MQTTConnection {
+	groupManager := newGroupManager()
 	return &MQTTConnection{
 		connectionManager: nil,
 		logger:            logger,
-		heartbeater:       newHeartbeater(logger, backendState, pMgr),
-		messaging:         NewMessaging(logger, pMgr, resetChan),
+		heartbeater:       newHeartbeater(logger, backendState, pMgr, &groupManager),
+		messaging:         NewMessaging(logger, pMgr, resetChan, &groupManager),
 		resetChan:         resetChan,
 	}
 }

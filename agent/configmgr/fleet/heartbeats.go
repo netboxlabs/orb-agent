@@ -16,20 +16,22 @@ const (
 )
 
 type heartbeater struct {
-	logger        *slog.Logger
-	hbTicker      *time.Ticker
-	heartbeatCtx  context.Context
-	backendState  backend.StateRetriever
-	policyManager policymgr.PolicyManager
+	logger         *slog.Logger
+	hbTicker       *time.Ticker
+	heartbeatCtx   context.Context
+	backendState   backend.StateRetriever
+	policyManager  policymgr.PolicyManager
+	groupRetriever GroupRetriever
 }
 
-func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager) *heartbeater {
+func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager, groupRetriever GroupRetriever) *heartbeater {
 	return &heartbeater{
-		logger:        logger,
-		hbTicker:      time.NewTicker(heartbeatFreq),
-		heartbeatCtx:  context.Background(),
-		backendState:  backendState,
-		policyManager: policyManager,
+		logger:         logger,
+		hbTicker:       time.NewTicker(heartbeatFreq),
+		heartbeatCtx:   context.Background(),
+		backendState:   backendState,
+		policyManager:  policyManager,
+		groupRetriever: groupRetriever,
 	}
 }
 
@@ -45,7 +47,7 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 		State:         messages.State(messages.Online),
 		BackendState:  hb.getBackendState(),
 		PolicyState:   hb.getPolicyState(),
-		GroupState:    make(map[string]messages.GroupStateInfo),
+		GroupState:    hb.getGroupState(),
 	}
 
 	body, err := json.Marshal(hbData)
@@ -95,6 +97,17 @@ func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
 		}
 	}
 	return ps
+}
+
+func (hb *heartbeater) getGroupState() map[string]messages.GroupStateInfo {
+	gs := make(map[string]messages.GroupStateInfo)
+	for _, group := range hb.groupRetriever.GetAll() {
+		gs[group.GroupID] = messages.GroupStateInfo{
+			GroupName: group.Name,
+			GroupID:   group.GroupID,
+		}
+	}
+	return gs
 }
 
 // sendHeartbeats starts a goroutine that periodically issues heartbeats until the

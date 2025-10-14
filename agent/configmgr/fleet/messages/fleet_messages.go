@@ -42,8 +42,8 @@ type PolicyStateInfo struct {
 
 // GroupStateInfo contains state information for a group
 type GroupStateInfo struct {
-	GroupName    string `json:"name"`
-	GroupChannel string `json:"channel"`
+	GroupName string `json:"name"`
+	GroupID   string `json:"id"`
 }
 
 // Heartbeat represents an agent heartbeat message
