@@ -10,6 +10,9 @@ import (
 // MinRestartTime is the minimum time to wait between restarts
 const MinRestartTime = 5 * time.Minute
 
+// BackendMonitorInterval is the interval at which to monitor backends
+const BackendMonitorInterval = 10 * time.Second
+
 // StateRetriever provides an interface for accessing backend state information
 type StateRetriever interface {
 	Get() map[string]*State
@@ -28,7 +31,7 @@ type StateManager struct {
 func NewStateManager(logger *slog.Logger, restartBackendChan chan string) *StateManager {
 	return &StateManager{
 		backendState:       make(map[string]*State),
-		ticker:             time.NewTicker(10 * time.Second),
+		ticker:             time.NewTicker(BackendMonitorInterval),
 		logger:             logger,
 		restartBackendChan: restartBackendChan,
 	}
