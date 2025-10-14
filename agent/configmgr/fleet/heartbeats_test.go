@@ -14,7 +14,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 // mockPublishFunc is a testify mock for the publish function
@@ -27,13 +30,79 @@ func (m *mockPublishFunc) Publish(ctx context.Context, topic string, payload []b
 	return args.Error(0)
 }
 
+// mockPolicyManagerForHeartbeat implements the PolicyManager interface for heartbeat testing
+type mockPolicyManagerForHeartbeat struct {
+	mock.Mock
+}
+
+func (m *mockPolicyManagerForHeartbeat) ManagePolicy(payload config.PolicyPayload) {
+	m.Called(payload)
+}
+
+func (m *mockPolicyManagerForHeartbeat) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
+	m.Called(policyID, datasetID, be)
+}
+
+func (m *mockPolicyManagerForHeartbeat) GetPolicyState() ([]policies.PolicyData, error) {
+	args := m.Called()
+	return args.Get(0).([]policies.PolicyData), args.Error(1)
+}
+
+func (m *mockPolicyManagerForHeartbeat) GetRepo() policies.PolicyRepo {
+	args := m.Called()
+	return args.Get(0).(policies.PolicyRepo)
+}
+
+func (m *mockPolicyManagerForHeartbeat) ApplyBackendPolicies(be backend.Backend) error {
+	args := m.Called(be)
+	return args.Error(0)
+}
+
+func (m *mockPolicyManagerForHeartbeat) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+	args := m.Called(be, permanently)
+	return args.Error(0)
+}
+
+func (m *mockPolicyManagerForHeartbeat) RemovePolicy(policyID string, policyName string, beName string) error {
+	args := m.Called(policyID, policyName, beName)
+	return args.Error(0)
+}
+
 // Test helper to create a heartbeater instance for testing
 func createTestHeartbeater() *heartbeater {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
 	return &heartbeater{
-		logger:       logger,
-		hbTicker:     time.NewTicker(50 * time.Millisecond), // Short interval for testing
-		heartbeatCtx: context.Background(),
+		logger:        logger,
+		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:  context.Background(),
+		backendState:  &mockBackendState{},
+		policyManager: mockPMgr,
+	}
+}
+
+func createTestHeartbeaterWithBackendState(backendState *mockBackendState) *heartbeater {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
+	return &heartbeater{
+		logger:        logger,
+		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:  context.Background(),
+		backendState:  backendState,
+		policyManager: mockPMgr,
+	}
+}
+
+func createTestHeartbeaterWithPolicyManager(backendState *mockBackendState, policyManager *mockPolicyManagerForHeartbeat) *heartbeater {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	return &heartbeater{
+		logger:        logger,
+		hbTicker:      time.NewTicker(50 * time.Millisecond), // Short interval for testing
+		heartbeatCtx:  context.Background(),
+		backendState:  backendState,
+		policyManager: policyManager,
 	}
 }
 
@@ -54,7 +123,8 @@ func TestNewHeartbeater_HeartbeaterInitialization(t *testing.T) {
 
 func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	// Arrange
-	hb := createTestHeartbeater()
+	backendState := &mockBackendState{}
+	hb := createTestHeartbeaterWithBackendState(backendState)
 	defer hb.hbTicker.Stop()
 
 	mockPublish := &mockPublishFunc{}
@@ -445,4 +515,513 @@ func TestHeartbeater_Stop_HeartbeatContent(t *testing.T) {
 	// The stop method sends an Offline heartbeat, but the implementation currently sends Online (1)
 	assert.Equal(t, messages.State(1), heartbeat.State)
 	assert.False(t, heartbeat.TimeStamp.IsZero())
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithBackendState(t *testing.T) {
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	backendState := &mockBackendState{
+		backendState: map[string]*backend.State{
+			"pktvisor": {
+				Status:            backend.Running,
+				RestartCount:      3,
+				LastError:         "connection timeout",
+				LastRestartTS:     testTime,
+				LastRestartReason: "policy update",
+			},
+			"snmp_discovery": {
+				Status:            backend.BackendError,
+				RestartCount:      1,
+				LastError:         "initialization failed",
+				LastRestartTS:     testTime.Add(-1 * time.Hour),
+				LastRestartReason: "startup",
+			},
+		},
+	}
+	// Arrange
+	hb := createTestHeartbeaterWithBackendState(backendState)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify backend state is populated
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Len(t, heartbeat.BackendState, 2)
+
+	// Check pktvisor backend state
+	pktvisorState, ok := heartbeat.BackendState["pktvisor"]
+	assert.True(t, ok)
+	assert.Equal(t, "running", pktvisorState.State)
+	assert.Equal(t, int64(3), pktvisorState.RestartCount)
+	assert.Equal(t, "connection timeout", pktvisorState.LastError)
+	assert.Equal(t, testTime, pktvisorState.LastRestartTS)
+	assert.Equal(t, "policy update", pktvisorState.LastRestartReason)
+
+	// Check snmp_discovery backend state
+	snmpState, ok := heartbeat.BackendState["snmp_discovery"]
+	assert.True(t, ok)
+	assert.Equal(t, "backend_error", snmpState.State)
+	assert.Equal(t, int64(1), snmpState.RestartCount)
+	assert.Equal(t, "initialization failed", snmpState.LastError)
+	assert.Equal(t, testTime.Add(-1*time.Hour), snmpState.LastRestartTS)
+	assert.Equal(t, "startup", snmpState.LastRestartReason)
+
+	// Verify policy and group states are present (may be empty based on mock)
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.NotNil(t, heartbeat.GroupState)
+	assert.Empty(t, heartbeat.GroupState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithoutBackendState(t *testing.T) {
+	// Arrange
+	hb := createTestHeartbeater()
+	defer hb.hbTicker.Stop()
+
+	// Do not set backend state function
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify backend state is empty but not nil
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Empty(t, heartbeat.BackendState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithEmptyBackendState(t *testing.T) {
+	// Arrange
+	hb := createTestHeartbeater()
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify backend state is empty
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Empty(t, heartbeat.BackendState)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_BackendStateAllStatuses(t *testing.T) {
+	// Test all possible backend statuses
+	testCases := []struct {
+		name           string
+		status         backend.RunningStatus
+		expectedString string
+	}{
+		{"Unknown", backend.Unknown, "unknown"},
+		{"Running", backend.Running, "running"},
+		{"BackendError", backend.BackendError, "backend_error"},
+		{"AgentError", backend.AgentError, "agent_error"},
+		{"Offline", backend.Offline, "offline"},
+		{"Waiting", backend.Waiting, "waiting"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Arrange
+			backendState := &mockBackendState{
+				backendState: map[string]*backend.State{
+					"test-backend": {
+						Status:       tc.status,
+						RestartCount: 0,
+						LastError:    "",
+					},
+				},
+			}
+			hb := createTestHeartbeaterWithBackendState(backendState)
+			defer hb.hbTicker.Stop()
+
+			var capturedPayload []byte
+			testTopic := "test/heartbeat"
+			publishFunc := func(_ context.Context, _ string, payload []byte) error {
+				capturedPayload = payload
+				return nil
+			}
+
+			ctx := context.Background()
+			testTime := time.Now()
+
+			// Act
+			hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+			// Assert
+			require.NotNil(t, capturedPayload)
+
+			var heartbeat messages.Heartbeat
+			err := json.Unmarshal(capturedPayload, &heartbeat)
+			require.NoError(t, err)
+
+			assert.Len(t, heartbeat.BackendState, 1)
+			actualState := heartbeat.BackendState["test-backend"]
+			assert.Equal(t, tc.expectedString, actualState.State)
+		})
+	}
+}
+
+func TestHeartbeater_GetPolicyState_Success(t *testing.T) {
+	// Arrange
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:         "policy-1",
+			Name:       "Test Policy 1",
+			Backend:    "pktvisor",
+			Version:    1,
+			State:      policies.Running,
+			BackendErr: "",
+			Datasets:   map[string]bool{"dataset-1": true, "dataset-2": true},
+		},
+		{
+			ID:         "policy-2",
+			Name:       "Test Policy 2",
+			Backend:    "snmp_discovery",
+			Version:    2,
+			State:      policies.FailedToApply,
+			BackendErr: "connection timeout",
+			Datasets:   map[string]bool{"dataset-3": true},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	// Act
+	policyState := hb.getPolicyState()
+
+	// Assert
+	assert.Len(t, policyState, 2)
+
+	// Verify policy-1
+	policy1, ok := policyState["policy-1"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Policy 1", policy1.Name)
+	assert.Equal(t, "pktvisor", policy1.Backend)
+	assert.Equal(t, int32(1), policy1.Version)
+	assert.Equal(t, "running", policy1.State)
+	assert.Equal(t, "", policy1.Error)
+	assert.Len(t, policy1.Datasets, 2)
+	assert.Contains(t, policy1.Datasets, "dataset-1")
+	assert.Contains(t, policy1.Datasets, "dataset-2")
+
+	// Verify policy-2
+	policy2, ok := policyState["policy-2"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Policy 2", policy2.Name)
+	assert.Equal(t, "snmp_discovery", policy2.Backend)
+	assert.Equal(t, int32(2), policy2.Version)
+	assert.Equal(t, "failed_to_apply", policy2.State)
+	assert.Equal(t, "connection timeout", policy2.Error)
+	assert.Len(t, policy2.Datasets, 1)
+	assert.Contains(t, policy2.Datasets, "dataset-3")
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_GetPolicyState_Error(t *testing.T) {
+	// Arrange
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	expectedErr := errors.New("failed to retrieve policy state")
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, expectedErr)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	// Act
+	policyState := hb.getPolicyState()
+
+	// Assert - should return empty map on error
+	assert.NotNil(t, policyState)
+	assert.Empty(t, policyState)
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_GetPolicyState_EmptyPolicies(t *testing.T) {
+	// Arrange
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	// Act
+	policyState := hb.getPolicyState()
+
+	// Assert
+	assert.NotNil(t, policyState)
+	assert.Empty(t, policyState)
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_GetPolicyState_AllPolicyStates(t *testing.T) {
+	// Test all possible policy states
+	testCases := []struct {
+		name           string
+		state          policies.PolicyState
+		expectedString string
+	}{
+		{"Unknown", policies.Unknown, "unknown"},
+		{"Running", policies.Running, "running"},
+		{"FailedToApply", policies.FailedToApply, "failed_to_apply"},
+		{"Offline", policies.Offline, "offline"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Arrange
+			mockPMgr := &mockPolicyManagerForHeartbeat{}
+			mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+				{
+					ID:       "test-policy",
+					Name:     "Test Policy",
+					Backend:  "pktvisor",
+					Version:  1,
+					State:    tc.state,
+					Datasets: map[string]bool{"dataset-1": true},
+				},
+			}, nil)
+
+			hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+			defer hb.hbTicker.Stop()
+
+			// Act
+			policyState := hb.getPolicyState()
+
+			// Assert
+			assert.Len(t, policyState, 1)
+			actualState := policyState["test-policy"]
+			assert.Equal(t, tc.expectedString, actualState.State)
+			mockPMgr.AssertExpectations(t)
+		})
+	}
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithPolicyState(t *testing.T) {
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:         "policy-1",
+			Name:       "Test Policy 1",
+			Backend:    "pktvisor",
+			Version:    1,
+			State:      policies.Running,
+			BackendErr: "",
+			Datasets:   map[string]bool{"dataset-1": true, "dataset-2": true},
+		},
+		{
+			ID:         "policy-2",
+			Name:       "Test Policy 2",
+			Backend:    "snmp_discovery",
+			Version:    3,
+			State:      policies.FailedToApply,
+			BackendErr: "no interface match",
+			Datasets:   map[string]bool{"dataset-3": true},
+		},
+	}, nil)
+
+	backendState := &mockBackendState{
+		backendState: map[string]*backend.State{
+			"pktvisor": {
+				Status:       backend.Running,
+				RestartCount: 0,
+				LastError:    "",
+			},
+		},
+	}
+
+	hb := createTestHeartbeaterWithPolicyManager(backendState, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state is populated
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 2)
+
+	// Check policy-1
+	policy1, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Policy 1", policy1.Name)
+	assert.Equal(t, "pktvisor", policy1.Backend)
+	assert.Equal(t, int32(1), policy1.Version)
+	assert.Equal(t, "running", policy1.State)
+	assert.Equal(t, "", policy1.Error)
+	assert.Len(t, policy1.Datasets, 2)
+	assert.Contains(t, policy1.Datasets, "dataset-1")
+	assert.Contains(t, policy1.Datasets, "dataset-2")
+
+	// Check policy-2
+	policy2, ok := heartbeat.PolicyState["policy-2"]
+	assert.True(t, ok)
+	assert.Equal(t, "Test Policy 2", policy2.Name)
+	assert.Equal(t, "snmp_discovery", policy2.Backend)
+	assert.Equal(t, int32(3), policy2.Version)
+	assert.Equal(t, "failed_to_apply", policy2.State)
+	assert.Equal(t, "no interface match", policy2.Error)
+	assert.Len(t, policy2.Datasets, 1)
+	assert.Contains(t, policy2.Datasets, "dataset-3")
+
+	// Verify backend state is also present
+	assert.NotNil(t, heartbeat.BackendState)
+	assert.Len(t, heartbeat.BackendState, 1)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithPolicyStateError(t *testing.T) {
+	// Arrange
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, errors.New("policy manager error"))
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act - should not panic despite policy state error
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state is empty but not nil
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Empty(t, heartbeat.PolicyState)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithEmptyPolicyState(t *testing.T) {
+	// Arrange
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+	testTime := time.Now()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state is empty
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Empty(t, heartbeat.PolicyState)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestNewHeartbeater_WithPolicyManager(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	backendState := &mockBackendState{}
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+
+	// Act
+	hb := newHeartbeater(logger, backendState, mockPMgr)
+
+	// Assert
+	assert.NotNil(t, hb)
+	assert.NotNil(t, hb.logger)
+	assert.NotNil(t, hb.hbTicker)
+	assert.NotNil(t, hb.heartbeatCtx)
+	assert.NotNil(t, hb.backendState)
+	assert.NotNil(t, hb.policyManager)
+	assert.Equal(t, mockPMgr, hb.policyManager)
+
+	// Clean up ticker
+	hb.hbTicker.Stop()
 }

@@ -119,6 +119,14 @@ func (m *mockBackend) RemovePolicy(policy policies.PolicyData) error {
 	return args.Error(0)
 }
 
+type mockBackendState struct {
+	mock.Mock
+}
+
+func (m *mockBackendState) Get() map[string]*backend.State {
+	return m.Called().Get(0).(map[string]*backend.State)
+}
+
 // Test the manager.New function
 func TestManagerNew(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -132,7 +140,7 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active)
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -150,7 +158,28 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active)
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		assert.NotNil(t, mgr)
+		// Check we got the expected implementation
+		ctx := context.Background()
+		resultCtx := mgr.GetContext(ctx)
+		assert.Equal(t, ctx, resultCtx)
+	})
+
+	t.Run("FleetManager", func(t *testing.T) {
+		cfg := config.ManagerConfig{
+			Active: "fleet",
+			Sources: config.Sources{
+				Fleet: config.FleetManager{
+					TokenURL:     "https://example.com/token",
+					ClientID:     "test_client",
+					ClientSecret: "test_secret",
+				},
+			},
+		}
+
+		mockBackendState := &mockBackendState{}
+		mgr := configmgr.New(logger, pMgr, cfg.Active, mockBackendState)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -163,7 +192,7 @@ func TestManagerNew(t *testing.T) {
 			Active: "unknown",
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active)
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
 		assert.NotNil(t, mgr)
 		// Check we got the local implementation
 		ctx := context.Background()

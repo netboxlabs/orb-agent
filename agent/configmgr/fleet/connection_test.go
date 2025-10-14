@@ -54,12 +54,23 @@ func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName str
 	return args.Error(0)
 }
 
+type mockBackendState struct {
+	backendState map[string]*backend.State
+}
+
+func (m *mockBackendState) Get() map[string]*backend.State {
+	if m.backendState == nil {
+		return map[string]*backend.State{}
+	}
+	return m.backendState
+}
+
 func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, &mockBackendState{})
 
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
@@ -76,7 +87,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, &mockBackendState{})
 
 	// Act with valid URL but don't expect successful connection
 	// since we don't have a real MQTT server

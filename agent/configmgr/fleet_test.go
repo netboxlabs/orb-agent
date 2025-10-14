@@ -58,11 +58,19 @@ func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName str
 	return args.Error(0)
 }
 
+type mockBackendState struct {
+	mock.Mock
+}
+
+func (m *mockBackendState) Get() map[string]*backend.State {
+	return m.Called().Get(0).(map[string]*backend.State)
+}
+
 func TestFleetConfigManager_Start_TokenError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
 
 	// Create config with invalid token URL
 	cfg := config.Config{
@@ -92,7 +100,7 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
 
 	// Create mock HTTP server for token endpoint
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -132,7 +140,7 @@ func TestFleetConfigManager_GetContext(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
 
 	originalCtx := context.Background()
 	type contextKey string
@@ -167,7 +175,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
 
 	// Create mock HTTP server that returns a JWT token
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

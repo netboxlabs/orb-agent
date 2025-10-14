@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 const (
@@ -14,16 +16,20 @@ const (
 )
 
 type heartbeater struct {
-	logger       *slog.Logger
-	hbTicker     *time.Ticker
-	heartbeatCtx context.Context
+	logger        *slog.Logger
+	hbTicker      *time.Ticker
+	heartbeatCtx  context.Context
+	backendState  backend.StateRetriever
+	policyManager policymgr.PolicyManager
 }
 
-func newHeartbeater(logger *slog.Logger) *heartbeater {
+func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager) *heartbeater {
 	return &heartbeater{
-		logger:       logger,
-		hbTicker:     time.NewTicker(heartbeatFreq),
-		heartbeatCtx: context.Background(),
+		logger:        logger,
+		hbTicker:      time.NewTicker(heartbeatFreq),
+		heartbeatCtx:  context.Background(),
+		backendState:  backendState,
+		policyManager: policyManager,
 	}
 }
 
@@ -37,6 +43,9 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
 		TimeStamp:     time.Now().UTC(),
 		State:         messages.State(messages.Online),
+		BackendState:  hb.getBackendState(),
+		PolicyState:   hb.getPolicyState(),
+		GroupState:    make(map[string]messages.GroupStateInfo),
 	}
 
 	body, err := json.Marshal(hbData)
@@ -50,6 +59,42 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 	} else {
 		hb.logger.Debug("heartbeat sent", "payload", string(body))
 	}
+}
+
+func (hb *heartbeater) getBackendState() map[string]messages.BackendStateInfo {
+	bes := make(map[string]messages.BackendStateInfo)
+	backendStates := hb.backendState.Get()
+	for name, state := range backendStates {
+		bes[name] = messages.BackendStateInfo{
+			State:             state.Status.String(),
+			Error:             state.LastError,
+			RestartCount:      state.RestartCount,
+			LastError:         state.LastError,
+			LastRestartTS:     state.LastRestartTS,
+			LastRestartReason: state.LastRestartReason,
+		}
+	}
+	return bes
+}
+
+func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
+	policyStates, err := hb.policyManager.GetPolicyState()
+	if err != nil {
+		hb.logger.Error("error getting policy state", "error", err)
+		return make(map[string]messages.PolicyStateInfo)
+	}
+	ps := make(map[string]messages.PolicyStateInfo)
+	for _, policyState := range policyStates {
+		ps[policyState.ID] = messages.PolicyStateInfo{
+			Name:     policyState.Name,
+			Datasets: policyState.GetDatasetIDs(),
+			State:    policyState.State.String(),
+			Error:    policyState.BackendErr,
+			Version:  policyState.Version,
+			Backend:  policyState.Backend,
+		}
+	}
+	return ps
 }
 
 // sendHeartbeats starts a goroutine that periodically issues heartbeats until the
