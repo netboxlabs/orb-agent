@@ -18,8 +18,16 @@ type StateRetriever interface {
 	Get() map[string]*State
 }
 
+// StateManager provides an interface for managing backend state information
+type StateManager interface {
+	StateRetriever
+	StartBackendMonitor(name string, be Backend)
+	RegisterError(name string, errMessage string)
+	RegisterRestart(name string, reason string)
+}
+
 // StateManager manages the state and monitoring of backends
-type StateManager struct {
+type stateManager struct {
 	backendState       map[string]*State
 	mu                 sync.RWMutex
 	ticker             *time.Ticker
@@ -28,17 +36,38 @@ type StateManager struct {
 }
 
 // NewStateManager creates a new StateManager with the given logger and restart channel
-func NewStateManager(logger *slog.Logger, restartBackendChan chan string) *StateManager {
-	return &StateManager{
-		backendState:       make(map[string]*State),
-		ticker:             time.NewTicker(BackendMonitorInterval),
-		logger:             logger,
-		restartBackendChan: restartBackendChan,
+func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackendChan chan string) StateManager {
+	if configMgrSupportsStateMonitoring(activeConfigMgr) {
+		return &stateManager{
+			backendState:       make(map[string]*State),
+			ticker:             time.NewTicker(BackendMonitorInterval),
+			logger:             logger,
+			restartBackendChan: restartBackendChan,
+		}
 	}
+	return nullStateManager{}
 }
 
+func configMgrSupportsStateMonitoring(activeConfigMgr string) bool {
+	return activeConfigMgr == "fleet"
+}
+
+type nullStateManager struct{}
+
+var _ StateManager = nullStateManager{}
+
+func (n nullStateManager) Get() map[string]*State {
+	return make(map[string]*State)
+}
+
+func (n nullStateManager) StartBackendMonitor(_ string, _ Backend) {}
+
+func (n nullStateManager) RegisterError(_ string, _ string) {}
+
+func (n nullStateManager) RegisterRestart(_ string, _ string) {}
+
 // StartBackendMonitor starts monitoring a backend and manages its state
-func (manager *StateManager) StartBackendMonitor(name string, be Backend) {
+func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 	manager.mu.Lock()
 	manager.backendState[name] = &State{
 		Status:        be.GetInitialState(),
@@ -75,7 +104,7 @@ func (manager *StateManager) StartBackendMonitor(name string, be Backend) {
 }
 
 // RegisterError registers an error for a backend and updates its state
-func (manager *StateManager) RegisterError(name string, errMessage string) {
+func (manager *stateManager) RegisterError(name string, errMessage string) {
 	manager.logger.Error(errMessage, slog.String("backend", name))
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
@@ -87,7 +116,7 @@ func (manager *StateManager) RegisterError(name string, errMessage string) {
 }
 
 // RegisterRestart registers a restart event for a backend
-func (manager *StateManager) RegisterRestart(name string, reason string) {
+func (manager *stateManager) RegisterRestart(name string, reason string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.backendState[name].RestartCount++
@@ -96,7 +125,7 @@ func (manager *StateManager) RegisterRestart(name string, reason string) {
 }
 
 // Get returns the current state of all backends
-func (manager *StateManager) Get() map[string]*State {
+func (manager *stateManager) Get() map[string]*State {
 	manager.mu.RLock()
 	defer manager.mu.RUnlock()
 

@@ -41,7 +41,7 @@ type orbAgent struct {
 	policyManager       policymgr.PolicyManager
 	configManager       configmgr.Manager
 	secretsManager      secretsmgr.Manager
-	backendStateManager *backend.StateManager
+	backendStateManager backend.StateManager
 	restartBackendChan  chan string
 }
 
@@ -62,7 +62,7 @@ func New(logger *slog.Logger, c config.Config) (Agent, error) {
 
 	restartBackendChan := make(chan string, restartBackendChanSize)
 
-	backendStateManager := backend.NewStateManager(logger, restartBackendChan)
+	backendStateManager := backend.NewStateManager(c.OrbAgent.ConfigManager.Active, logger, restartBackendChan)
 	// Pass a background context to the config manager at construction time. The
 	// manager keeps its own copy and later derives child contexts from the
 	// runtime context supplied in Agent.Start.

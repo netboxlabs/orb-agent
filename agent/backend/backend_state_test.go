@@ -19,7 +19,7 @@ func TestNewBackendStateManager_Initialization(t *testing.T) {
 	restartChan := make(chan string, 5)
 
 	// Act
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Assert
 	assert.NotNil(t, manager)
@@ -31,7 +31,7 @@ func TestBackendStateManager_RegisterError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	backendName := "test-backend"
 	errorMsg := "test error message"
@@ -51,7 +51,7 @@ func TestBackendStateManager_RegisterRestart(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	backendName := "test-backend"
 
@@ -83,7 +83,7 @@ func TestBackendStateManager_RegisterRestart_MultipleRestarts(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	backendName := "test-backend"
 
@@ -111,7 +111,7 @@ func TestBackendStateManager_Get_EmptyState(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Act
 	state := manager.Get()
@@ -125,7 +125,7 @@ func TestBackendStateManager_Get_WithMultipleBackends(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Add multiple backends
 	manager.RegisterError("backend1", "error1")
@@ -146,7 +146,7 @@ func TestBackendStateManager_StartBackendMonitor_InitialState(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	mockBe := &mockBackend{}
 	mockBe.On("GetInitialState").Return(backend.Running)
@@ -173,7 +173,7 @@ func TestBackendStateManager_StartBackendMonitor_StatusUpdate_Running(t *testing
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	mockBe := &mockBackend{}
 	mockBe.On("GetInitialState").Return(backend.Running)
@@ -211,7 +211,7 @@ func TestBackendStateManager_StartBackendMonitor_StatusUpdate_Error(t *testing.T
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Backend that started long enough ago to allow restart
 	startTime := time.Now().Add(-10 * time.Minute)
@@ -244,7 +244,7 @@ func TestBackendStateManager_StartBackendMonitor_StatusUpdate_ErrorWithException
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Backend that started long enough ago to allow restart
 	startTime := time.Now().Add(-10 * time.Minute)
@@ -278,7 +278,7 @@ func TestBackendStateManager_StartBackendMonitor_ErrorBeforeMinRestartTime(t *te
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Backend that started recently (less than MinRestartTime ago)
 	startTime := time.Now().Add(-1 * time.Minute)
@@ -307,7 +307,7 @@ func TestBackendStateManager_StartBackendMonitor_MultipleBackends(t *testing.T) 
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 10)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	mockBe1 := &mockBackend{}
 	mockBe1.On("GetInitialState").Return(backend.Running)
@@ -347,7 +347,7 @@ func TestBackendStateManager_Interface_Implementation(t *testing.T) {
 	// Verify that BackendStateManager implements BackendState interface
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Should be assignable to BackendState interface
 	var _ backend.StateRetriever = manager
@@ -361,7 +361,7 @@ func TestBackendStateManager_RegisterError_OverwritesExistingState(t *testing.T)
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	backendName := "test-backend"
 
@@ -400,7 +400,7 @@ func TestBackendStateManager_ConcurrentAccess(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 50)
-	manager := backend.NewStateManager(logger, restartChan)
+	manager := backend.NewStateManager("fleet", logger, restartChan)
 
 	// Act - Simulate concurrent operations
 	done := make(chan bool)
