@@ -96,12 +96,12 @@ type BackendCommons struct {
 
 // OrbAgent represents the configuration for the Orb agent
 type OrbAgent struct {
-	Backends      map[string]any    `yaml:"backends"`
-	Policies      map[string]any    `yaml:"policies"`
-	Labels        map[string]string `yaml:"labels"`
-	ConfigManager ManagerConfig     `yaml:"config_manager"`
-	SecretsManger ManagerSecrets    `yaml:"secrets_manager"`
-	Debug         struct {
+	Backends       map[string]any    `yaml:"backends"`
+	Policies       map[string]any    `yaml:"policies"`
+	Labels         map[string]string `yaml:"labels"`
+	ConfigManager  ManagerConfig     `yaml:"config_manager"`
+	SecretsManager ManagerSecrets    `yaml:"secrets_manager"`
+	Debug          struct {
 		Enable bool `yaml:"enable"`
 	} `yaml:"debug"`
 	ConfigFile string `yaml:"config_file"`
