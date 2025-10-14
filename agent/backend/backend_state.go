@@ -45,9 +45,8 @@ func (manager *StateManager) StartBackendMonitor(name string, be Backend) {
 
 	go func() {
 		for range manager.ticker.C {
-			backendStatus, errMsg, err := be.GetRunningStatus()
-
 			manager.mu.Lock()
+			backendStatus, errMsg, err := be.GetRunningStatus()
 			manager.backendState[name].Status = backendStatus
 			if backendStatus != Running {
 				if err != nil {
@@ -55,7 +54,6 @@ func (manager *StateManager) StartBackendMonitor(name string, be Backend) {
 				} else if errMsg != "" {
 					manager.backendState[name].LastError = errMsg
 				}
-				manager.mu.Unlock()
 
 				// status is not running so we have a current error
 				if time.Since(be.GetStartTime()) >= MinRestartTime {
@@ -67,9 +65,8 @@ func (manager *StateManager) StartBackendMonitor(name string, be Backend) {
 					remainingSecondsUntilRestart := MinRestartTime - time.Since(be.GetStartTime())
 					manager.logger.Info("waiting to attempt backend restart due to failed status", "remaining_secs", remainingSecondsUntilRestart)
 				}
-			} else {
-				manager.mu.Unlock()
 			}
+			manager.mu.Unlock()
 		}
 	}()
 }
