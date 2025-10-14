@@ -8,6 +8,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 const (
@@ -15,18 +16,20 @@ const (
 )
 
 type heartbeater struct {
-	logger       *slog.Logger
-	hbTicker     *time.Ticker
-	heartbeatCtx context.Context
-	backendState backend.StateRetriever
+	logger        *slog.Logger
+	hbTicker      *time.Ticker
+	heartbeatCtx  context.Context
+	backendState  backend.StateRetriever
+	policyManager policymgr.PolicyManager
 }
 
-func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever) *heartbeater {
+func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager) *heartbeater {
 	return &heartbeater{
-		logger:       logger,
-		hbTicker:     time.NewTicker(heartbeatFreq),
-		heartbeatCtx: context.Background(),
-		backendState: backendState,
+		logger:        logger,
+		hbTicker:      time.NewTicker(heartbeatFreq),
+		heartbeatCtx:  context.Background(),
+		backendState:  backendState,
+		policyManager: policyManager,
 	}
 }
 
@@ -41,7 +44,7 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 		TimeStamp:     time.Now().UTC(),
 		State:         messages.State(messages.Online),
 		BackendState:  hb.getBackendState(),
-		PolicyState:   make(map[string]messages.PolicyStateInfo),
+		PolicyState:   hb.getPolicyState(),
 		GroupState:    make(map[string]messages.GroupStateInfo),
 	}
 
@@ -72,6 +75,26 @@ func (hb *heartbeater) getBackendState() map[string]messages.BackendStateInfo {
 		}
 	}
 	return bes
+}
+
+func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
+	policyStates, err := hb.policyManager.GetPolicyState()
+	if err != nil {
+		hb.logger.Error("error getting policy state", "error", err)
+		return make(map[string]messages.PolicyStateInfo)
+	}
+	ps := make(map[string]messages.PolicyStateInfo)
+	for _, policyState := range policyStates {
+		ps[policyState.ID] = messages.PolicyStateInfo{
+			Name:     policyState.Name,
+			Datasets: policyState.GetDatasetIDs(),
+			State:    policyState.State.String(),
+			Error:    policyState.BackendErr,
+			Version:  policyState.Version,
+			Backend:  policyState.Backend,
+		}
+	}
+	return ps
 }
 
 // sendHeartbeats starts a goroutine that periodically issues heartbeats until the
