@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
@@ -159,6 +161,21 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 
 	for _, payload := range rpc {
 		if payload.Action != "sanitize" {
+			// If the policy data is in YAML format and is a string, unmarshal it to a structured object
+			if payload.Format == "yaml" {
+				if dataStr, ok := payload.Data.(string); ok && dataStr != "" {
+					var structuredData map[string]any
+					if err := yaml.Unmarshal([]byte(dataStr), &structuredData); err != nil {
+						messaging.logger.Warn("failed to unmarshal YAML policy data",
+							"policy_id", payload.ID,
+							"policy_name", payload.Name,
+							"error", err)
+						// Continue with original data - let the backend handle the error
+					} else {
+						payload.Data = structuredData
+					}
+				}
+			}
 			messaging.policyManager.ManagePolicy(config.PolicyPayload(payload))
 		}
 	}
