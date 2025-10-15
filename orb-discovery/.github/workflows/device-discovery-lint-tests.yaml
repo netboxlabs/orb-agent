@@ -51,6 +51,7 @@ jobs:
 
     - name: Pytest coverage comment
       uses: MishaKav/pytest-coverage-comment@81882822c5b22af01f91bd3eacb1cefb6ad73dc2 #v1.1.53
+      if: github.event.pull_request.head.repo.full_name == github.repository
       with:
         pytest-coverage-path: ${{ env.BE_DIR }}/pytest-coverage.txt
         junitxml-path: ${{ env.BE_DIR }}/pytest.xml
