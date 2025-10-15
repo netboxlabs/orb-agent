@@ -22,7 +22,6 @@ const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
 	readinessBackoff    = 10
-	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	defaultExec         = "orb-worker"

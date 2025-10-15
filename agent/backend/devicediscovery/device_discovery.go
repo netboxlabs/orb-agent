@@ -22,7 +22,6 @@ const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
 	readinessBackoff    = 10
-	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	defaultExec         = "device-discovery"
@@ -71,7 +70,7 @@ func Register() bool {
 func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger
+	d.logger = logger.With(slog.String("backend", "device_discovery"))
 	d.policyRepo = repo
 
 	var prs bool
@@ -186,13 +185,13 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 					stdout = nil
 					continue
 				}
-				d.logger.Info("device-discovery stdout", slog.String("log", line))
+				d.logger.Info(line)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				d.logger.Info("device-discovery stderr", slog.String("log", line))
+				d.logger.Error(line)
 			}
 		}
 	}()
