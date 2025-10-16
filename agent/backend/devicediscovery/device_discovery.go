@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -185,13 +186,13 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 					stdout = nil
 					continue
 				}
-				d.logger.Info(line)
+				d.logDeviceDiscoveryOutput(line, slog.LevelInfo)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				d.logger.Error(line)
+				d.logDeviceDiscoveryOutput(line, slog.LevelError)
 			}
 		}
 	}()
@@ -248,6 +249,30 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	}
 
 	return nil
+}
+
+func (d *deviceDiscoveryBackend) logDeviceDiscoveryOutput(line string, fallback slog.Level) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return
+	}
+
+	msg := trimmed
+	attrs := []slog.Attr(nil)
+	level := fallback
+
+	if parsedMsg, parsedAttrs, parsedLevel, ok := normalizeDeviceDiscoveryLine(trimmed, fallback); ok {
+		msg = parsedMsg
+		attrs = parsedAttrs
+		level = parsedLevel
+	}
+
+	ctx := d.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	d.logger.LogAttrs(ctx, level, msg, attrs...)
 }
 
 func (d *deviceDiscoveryBackend) Stop(ctx context.Context) error {
@@ -366,4 +391,68 @@ func (d *deviceDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 		return err
 	}
 	return nil
+}
+
+func normalizeDeviceDiscoveryLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
+	firstColon := strings.Index(line, ":")
+	if firstColon <= 0 {
+		return "", nil, fallback, false
+	}
+
+	levelCandidate := strings.TrimSpace(line[:firstColon])
+	level, ok := parseDeviceDiscoveryLevel(levelCandidate)
+	if !ok {
+		return "", nil, fallback, false
+	}
+
+	remainder := strings.TrimSpace(line[firstColon+1:])
+	if remainder == "" {
+		return strings.TrimSpace(line), nil, level, true
+	}
+
+	var attrs []slog.Attr
+	message := remainder
+
+	if secondColon := strings.Index(remainder, ":"); secondColon >= 0 {
+		moduleCandidate := strings.TrimSpace(remainder[:secondColon])
+		rest := strings.TrimSpace(remainder[secondColon+1:])
+
+		if moduleCandidate != "" && !strings.ContainsAny(moduleCandidate, " \t") {
+			attrs = append(attrs, slog.String("module", moduleCandidate))
+			if rest != "" {
+				message = rest
+			} else {
+				message = remainder
+			}
+		}
+	}
+
+	if message == "" {
+		message = strings.TrimSpace(line)
+	}
+
+	if message == "" {
+		return "", nil, level, false
+	}
+
+	return message, attrs, level, true
+}
+
+func parseDeviceDiscoveryLevel(value string) (slog.Level, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "trace":
+		return slog.LevelDebug, true
+	case "debug":
+		return slog.LevelDebug, true
+	case "info":
+		return slog.LevelInfo, true
+	case "warn", "warning":
+		return slog.LevelWarn, true
+	case "error", "err", "exception":
+		return slog.LevelError, true
+	case "critical", "fatal":
+		return slog.LevelError, true
+	default:
+		return 0, false
+	}
 }
