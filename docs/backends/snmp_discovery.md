@@ -2,15 +2,15 @@
 The SNMP discovery backend leverages SNMP (Simple Network Management Protocol) to connect to network devices and collect network information.
 
 ## Diode Entities
-The SNMP discovery backend uses [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) to ingest the following entities:
+The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) to ingest the following entities:
 
-* [Device](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#device)
-* [Interface](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#interface)
-* [IP Address](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#ip-address)
-* [Mac Address](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#mac-address)
-* [Platform](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#platform)
-* [Manufacturer](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#manufacturer)
-* [Site](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#site)
+* [Device](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [Interface](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [IP Address](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [Mac Address](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [Platform](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [Manufacturer](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [Site](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
 
 ## Configuration
 The `snmp_discovery` backend does not require any special configuration in the backends section. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.

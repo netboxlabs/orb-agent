@@ -68,7 +68,7 @@ Only the `network_discovery`, `device_discovery`, `worker` and `snmp_discovery` 
 - [Worker](./docs/backends/worker.md)
 - [SNMP Discovery](./docs/backends/snmp_discovery.md)
 
-### Observability Backends
+#### Observability Backends
 Observability backends focus on collecting and exporting rich telemetry from network traffic or probes so you can feed metrics into your monitoring stack.
 
 - [pktvisor](./docs/backends/pktvisor.md)
