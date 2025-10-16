@@ -1363,3 +1363,232 @@ func TestMessageHandlers_DispatchToHandlers_MalformedAgentStopPayload(t *testing
 	// Assert
 	assert.Error(t, err)
 }
+
+// Test handleAgentPolicies with YAML string data
+func TestMessageHandlers_handleAgentPolicies_YAMLStringData(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+
+	// Setup mock expectations - verify that the data is converted to a map
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		if p.ID != "policy1" || p.Action != "manage" {
+			return false
+		}
+		// Verify that Data is now a map, not a string
+		dataMap, ok := p.Data.(map[string]any)
+		if !ok {
+			return false
+		}
+		// Verify the structure of the unmarshaled YAML
+		scope, ok := dataMap["scope"].(map[string]any)
+		if !ok {
+			return false
+		}
+		targets, ok := scope["targets"].([]any)
+		return ok && len(targets) == 1 && targets[0] == "192.168.12.190/32"
+	})).Return()
+
+	// Create policy payload with YAML string data
+	yamlString := "scope:\n  targets: [192.168.12.190/32]\n"
+	policies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "manage",
+			ID:           "policy1",
+			DatasetID:    "dataset1",
+			AgentGroupID: "group1",
+			Name:         "Network Discovery Policy",
+			Backend:      "network-discovery",
+			Format:       "yaml",
+			Version:      1,
+			Data:         yamlString,
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(policies, false)
+
+	// Assert
+	mockPMgr.AssertExpectations(t)
+}
+
+// Test handleAgentPolicies with structured data (backwards compatibility)
+func TestMessageHandlers_handleAgentPolicies_StructuredData(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+
+	// Setup mock expectations - verify that structured data is passed through unchanged
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		if p.ID != "policy2" || p.Action != "manage" {
+			return false
+		}
+		// Verify that Data remains as a map
+		dataMap, ok := p.Data.(map[string]any)
+		if !ok {
+			return false
+		}
+		scope, ok := dataMap["scope"].(map[string]any)
+		if !ok {
+			return false
+		}
+		targets, ok := scope["targets"].([]any)
+		return ok && len(targets) == 1 && targets[0] == "192.168.1.1/32"
+	})).Return()
+
+	// Create policy payload with already structured data
+	structuredData := map[string]any{
+		"scope": map[string]any{
+			"targets": []any{"192.168.1.1/32"},
+		},
+	}
+	policies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "manage",
+			ID:           "policy2",
+			DatasetID:    "dataset2",
+			AgentGroupID: "group1",
+			Name:         "Device Discovery Policy",
+			Backend:      "device-discovery",
+			Format:       "yaml",
+			Version:      1,
+			Data:         structuredData,
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(policies, false)
+
+	// Assert
+	mockPMgr.AssertExpectations(t)
+}
+
+// Test handleAgentPolicies with empty YAML string
+func TestMessageHandlers_handleAgentPolicies_EmptyYAMLString(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+
+	// Setup mock expectations - empty string should be passed through
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		if p.ID != "policy3" {
+			return false
+		}
+		// Empty string should remain as empty string
+		_, ok := p.Data.(string)
+		return ok
+	})).Return()
+
+	// Create policy payload with empty YAML string
+	policies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "manage",
+			ID:           "policy3",
+			DatasetID:    "dataset3",
+			AgentGroupID: "group1",
+			Name:         "Empty Policy",
+			Backend:      "worker",
+			Format:       "yaml",
+			Version:      1,
+			Data:         "",
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(policies, false)
+
+	// Assert
+	mockPMgr.AssertExpectations(t)
+}
+
+// Test handleAgentPolicies with invalid YAML string
+func TestMessageHandlers_handleAgentPolicies_InvalidYAMLString(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+
+	// Setup mock expectations - invalid YAML should be passed through as-is
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		if p.ID != "policy4" {
+			return false
+		}
+		// Invalid YAML should remain as string (unmarshal fails, original data used)
+		_, ok := p.Data.(string)
+		return ok
+	})).Return()
+
+	// Create policy payload with invalid YAML string
+	invalidYAML := "this is not valid YAML: [[[{"
+	policies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "manage",
+			ID:           "policy4",
+			DatasetID:    "dataset4",
+			AgentGroupID: "group1",
+			Name:         "Invalid YAML Policy",
+			Backend:      "pktvisor",
+			Format:       "yaml",
+			Version:      1,
+			Data:         invalidYAML,
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(policies, false)
+
+	// Assert
+	mockPMgr.AssertExpectations(t)
+}
+
+// Test handleAgentPolicies with non-yaml format
+func TestMessageHandlers_handleAgentPolicies_NonYAMLFormat(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+
+	// Setup mock expectations - non-yaml format should pass data through unchanged
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		if p.ID != "policy5" {
+			return false
+		}
+		// Data should remain as string since format is not yaml
+		_, ok := p.Data.(string)
+		return ok
+	})).Return()
+
+	// Create policy payload with non-yaml format
+	policies := []messages.AgentPolicyRPCPayload{
+		{
+			Action:       "manage",
+			ID:           "policy5",
+			DatasetID:    "dataset5",
+			AgentGroupID: "group1",
+			Name:         "JSON Policy",
+			Backend:      "pktvisor",
+			Format:       "json",
+			Version:      1,
+			Data:         "{\"key\": \"value\"}",
+		},
+	}
+
+	// Act
+	handlers.handleAgentPolicies(policies, false)
+
+	// Assert
+	mockPMgr.AssertExpectations(t)
+}
