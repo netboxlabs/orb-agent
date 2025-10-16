@@ -3,7 +3,6 @@ package opentelemetryinfinity
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -66,7 +65,7 @@ func Register() bool {
 func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	o.logger = logger
+	o.logger = logger.With(slog.String("backend", "opentelemetry_infinity"))
 	o.policyRepo = repo
 
 	var prs bool
@@ -135,13 +134,13 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 					stdout = nil
 					continue
 				}
-				o.logCollectorLine("stdout", line)
+				o.logger.Info(line)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				o.logCollectorLine("stderr", line)
+				o.logger.Error(line)
 			}
 		}
 	}()
@@ -198,16 +197,6 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	}
 
 	return nil
-}
-
-func (o *openTelemetryBackend) logCollectorLine(stream, line string) {
-	logKey := fmt.Sprintf("opentelemetry infinity %s", stream)
-	raw := []byte(line)
-	if json.Valid(raw) {
-		o.logger.Info(logKey, slog.Any("log", json.RawMessage(raw)))
-		return
-	}
-	o.logger.Info(logKey, slog.String("log", line))
 }
 
 func (o *openTelemetryBackend) Stop(ctx context.Context) error {

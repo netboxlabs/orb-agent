@@ -22,7 +22,6 @@ const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
 	readinessBackoff    = 10
-	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	defaultExec         = "snmp-discovery"
@@ -72,7 +71,7 @@ func Register() bool {
 func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger
+	d.logger = logger.With(slog.String("backend", "snmp_discovery"))
 	d.policyRepo = repo
 
 	var prs bool
@@ -200,13 +199,13 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 					stdout = nil
 					continue
 				}
-				d.logger.Info("snmp-discovery stdout", slog.String("log", line))
+				d.logger.Info(line)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				d.logger.Info("snmp-discovery stderr", slog.String("log", line))
+				d.logger.Error(line)
 			}
 		}
 	}()

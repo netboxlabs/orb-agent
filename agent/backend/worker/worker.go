@@ -22,7 +22,6 @@ const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
 	readinessBackoff    = 10
-	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	defaultExec         = "orb-worker"
@@ -71,7 +70,7 @@ func Register() bool {
 func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger
+	d.logger = logger.With(slog.String("backend", "worker"))
 	d.policyRepo = repo
 
 	var prs bool
