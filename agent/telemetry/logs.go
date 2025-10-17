@@ -54,8 +54,15 @@ func (m multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (m multiHandler) Handle(ctx context.Context, record slog.Record) error {
-	lastIdx := len(m.handlers) - 1
-	for i, h := range m.handlers {
+	var enabled []slog.Handler
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, record.Level) {
+			enabled = append(enabled, h)
+		}
+	}
+
+	lastIdx := len(enabled) - 1
+	for i, h := range enabled {
 		r := record
 		if i < lastIdx {
 			r = record.Clone()
