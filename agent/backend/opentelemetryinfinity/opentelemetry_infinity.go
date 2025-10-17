@@ -3,10 +3,13 @@ package opentelemetryinfinity
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -134,13 +137,13 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 					stdout = nil
 					continue
 				}
-				o.logger.Info(line)
+				o.logOpenTelemetryInfinityOutput(line, slog.LevelInfo)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				o.logger.Error(line)
+				o.logOpenTelemetryInfinityOutput(line, slog.LevelError)
 			}
 		}
 	}()
@@ -313,4 +316,213 @@ func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 		return err
 	}
 	return nil
+}
+
+func (o *openTelemetryBackend) logOpenTelemetryInfinityOutput(line string, fallback slog.Level) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return
+	}
+
+	msg := trimmed
+	attrs := []slog.Attr(nil)
+	level := fallback
+
+	if parsedMsg, parsedAttrs, parsedLevel, ok := normalizeOpenTelemetryInfinityLine(trimmed, fallback); ok {
+		msg = parsedMsg
+		attrs = parsedAttrs
+		level = parsedLevel
+	}
+
+	ctx := o.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	o.logger.LogAttrs(ctx, level, msg, attrs...)
+}
+
+func normalizeOpenTelemetryInfinityLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
+	fields, ok := parseOpenTelemetryInfinityJSON(line)
+	if !ok {
+		return "", nil, fallback, false
+	}
+
+	msg, ok := extractMessage(fields)
+	if !ok {
+		return "", nil, fallback, false
+	}
+
+	level := fallback
+	if lvl, exists := fields["level"]; exists {
+		if parsed, ok := parseOpenTelemetryInfinityLevel(fmt.Sprint(lvl)); ok {
+			level = parsed
+		}
+	}
+	if severity, exists := fields["severity"]; exists {
+		if parsed, ok := parseOpenTelemetryInfinityLevel(fmt.Sprint(severity)); ok {
+			level = parsed
+		}
+	}
+
+	delete(fields, "msg")
+	delete(fields, "message")
+	delete(fields, "level")
+	delete(fields, "severity")
+	delete(fields, "timestamp")
+	delete(fields, "time")
+	delete(fields, "ts")
+
+	attrs := buildOpenTelemetryInfinityAttrs(fields)
+
+	return msg, attrs, level, true
+}
+
+func extractMessage(fields map[string]any) (string, bool) {
+	if raw, ok := fields["msg"]; ok {
+		if msg, ok := raw.(string); ok && strings.TrimSpace(msg) != "" {
+			return msg, true
+		}
+	}
+	if raw, ok := fields["message"]; ok {
+		if msg, ok := raw.(string); ok && strings.TrimSpace(msg) != "" {
+			return msg, true
+		}
+	}
+	return "", false
+}
+
+func parseOpenTelemetryInfinityJSON(line string) (map[string]any, bool) {
+	var data map[string]any
+	if err := json.Unmarshal([]byte(line), &data); err != nil {
+		return nil, false
+	}
+	if len(data) == 0 {
+		return nil, false
+	}
+	return data, true
+}
+
+func parseOpenTelemetryInfinityLevel(value string) (slog.Level, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return slog.LevelDebug, true
+	case "info", "information":
+		return slog.LevelInfo, true
+	case "warn", "warning":
+		return slog.LevelWarn, true
+	case "error", "err":
+		return slog.LevelError, true
+	case "fatal":
+		return slog.LevelError, true
+	default:
+		return 0, false
+	}
+}
+
+func buildOpenTelemetryInfinityAttrs(fields map[string]any) []slog.Attr {
+	if len(fields) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		if strings.EqualFold(trimmed, "resource") {
+			continue
+		}
+		keys = append(keys, key)
+	}
+
+	if len(keys) == 0 {
+		return nil
+	}
+
+	sort.Strings(keys)
+
+	attrs := make([]slog.Attr, 0, len(keys))
+	for _, key := range keys {
+		attr, ok := convertOpenTelemetryInfinityAttr(key, fields[key])
+		if !ok {
+			continue
+		}
+		attrs = append(attrs, attr)
+	}
+	return attrs
+}
+
+func convertOpenTelemetryInfinityAttr(key string, value any) (slog.Attr, bool) {
+	switch v := value.(type) {
+	case map[string]any:
+		nested := buildOpenTelemetryInfinityAttrs(v)
+		if len(nested) == 0 {
+			return slog.Attr{}, false
+		}
+		return openTelemetryInfinityGroupAttr(key, nested), true
+	case []any:
+		return slog.Any(key, normalizeOpenTelemetryInfinitySlice(v)), true
+	case string:
+		return slog.String(key, v), true
+	case float64:
+		if float64(int64(v)) == v {
+			return slog.Int64(key, int64(v)), true
+		}
+		return slog.Float64(key, v), true
+	case bool:
+		return slog.Bool(key, v), true
+	case nil:
+		return slog.Any(key, nil), true
+	default:
+		return slog.Any(key, v), true
+	}
+}
+
+func normalizeOpenTelemetryInfinitySlice(values []any) []any {
+	if len(values) == 0 {
+		return values
+	}
+
+	normalized := make([]any, len(values))
+	for i, value := range values {
+		normalized[i] = normalizeOpenTelemetryInfinityValue(value)
+	}
+	return normalized
+}
+
+func normalizeOpenTelemetryInfinityValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		nested := make(map[string]any, len(v))
+		for key, val := range v {
+			if strings.TrimSpace(key) == "" {
+				continue
+			}
+			nested[key] = normalizeOpenTelemetryInfinityValue(val)
+		}
+		return nested
+	case []any:
+		return normalizeOpenTelemetryInfinitySlice(v)
+	case float64:
+		if float64(int64(v)) == v {
+			return int64(v)
+		}
+		return v
+	default:
+		return v
+	}
+}
+
+func openTelemetryInfinityGroupAttr(key string, attrs []slog.Attr) slog.Attr {
+	if len(attrs) == 0 {
+		return slog.Any(key, map[string]any{})
+	}
+
+	args := make([]any, len(attrs))
+	for i, attr := range attrs {
+		args[i] = attr
+	}
+	return slog.Group(key, args...)
 }
