@@ -1,0 +1,27 @@
+orb:
+  config_manager:
+    active: fleet
+    sources:
+      orb:
+        token_url: ${FLEET_AUTH_URL}
+        client_id: ${FLEET_CLIENT_ID}
+        client_secret: ${FLEET_CLIENT_SECRET}
+  backends:
+    network_discovery:
+    device_discovery:
+    snmp_discovery:
+    opentelemetry_infinity:
+    pktvisor:
+      taps:
+        default:
+          input_type: pcap
+          config:
+            iface: auto
+    common:
+      diode:
+        target: ${DIODE_TARGET}
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+      otlp:
+        http: http://localhost:4318
+        grpc: http://localhost:4317

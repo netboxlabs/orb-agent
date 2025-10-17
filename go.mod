@@ -8,6 +8,7 @@ require (
 	github.com/go-co-op/gocron/v2 v2.15.0
 	github.com/go-git/go-git/v5 v5.14.0
 	github.com/go-jose/go-jose/v4 v4.1.1
+	github.com/joho/godotenv v1.5.1
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/vault/api v1.20.0
 	github.com/hashicorp/vault/api/auth/approle v0.10.0
