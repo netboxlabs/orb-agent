@@ -43,12 +43,22 @@ type TopicActions struct {
 	Unsubscribe func(topic string) error
 }
 
+// ConnectionDetails contains the details needed to connect to the MQTT broker
+type ConnectionDetails struct {
+	MQTTURL  string
+	Token    string
+	AgentID  string
+	Topics   TokenResponseTopics
+	ClientID string
+	Zone     string
+}
+
 // Connect connects to the MQTT broker
-func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, token, agentID string, topics TokenResponseTopics, backends map[string]backend.Backend, clientID, zone string, labels map[string]string) error {
+func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string) error {
 	// Parse the ORB URL
-	serverURL, err := url.Parse(fleetMQTTURL)
+	serverURL, err := url.Parse(details.MQTTURL)
 	if err != nil {
-		connection.logger.Error("failed to parse MQTT URL", "url", fleetMQTTURL, "error", err)
+		connection.logger.Error("failed to parse MQTT URL", "url", details.MQTTURL, "error", err)
 		return err
 	}
 
@@ -65,21 +75,21 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 
 			_, err := cm.Subscribe(context.Background(), &paho.Subscribe{
 				Subscriptions: []paho.SubscribeOptions{
-					{Topic: topics.Inbox, QoS: 1},
+					{Topic: details.Topics.Inbox, QoS: 1},
 				},
 			})
 			if err != nil {
-				connection.logger.Error("failed to subscribe", "topic", topics.Inbox, "error", err)
+				connection.logger.Error("failed to subscribe", "topic", details.Topics.Inbox, "error", err)
 			} else {
-				connection.logger.Info("successfully subscribed", "topic", topics.Inbox)
+				connection.logger.Info("successfully subscribed", "topic", details.Topics.Inbox)
 			}
 
 			// start heartbeat loop bound to the same connection-level context
-			go connection.heartbeater.sendHeartbeats(ctx, func() {}, topics.Heartbeat, clientID, connection.publishToTopic)
+			go connection.heartbeater.sendHeartbeats(ctx, func() {}, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic)
 
 			connection.messaging.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
-					Topic:   topics.Capabilities,
+					Topic:   details.Topics.Capabilities,
 					Payload: payload,
 					QoS:     1,
 					Retain:  false,
@@ -91,7 +101,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 				}
 
 				connection.logger.Debug("capabilities sent",
-					"topic", topics.Capabilities,
+					"topic", details.Topics.Capabilities,
 					"payload", string(payload),
 				)
 				return nil
@@ -101,7 +111,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 			time.Sleep(10 * time.Second)
 			go connection.messaging.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
-					Topic:   topics.Outbox,
+					Topic:   details.Topics.Outbox,
 					Payload: payload,
 					QoS:     1,
 					Retain:  false,
@@ -117,7 +127,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 			connection.logger.Error("MQTT connection error", "error", err)
 		},
 		ClientConfig: paho.ClientConfig{
-			ClientID: clientID,
+			ClientID: details.ClientID,
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
 				func(pr paho.PublishReceived) (bool, error) {
 					// Log any published messages to subscribed topics
@@ -131,7 +141,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 						context.Background(),
 						pr.Packet.Payload,
 						orgID,
-						agentID,
+						details.AgentID,
 						TopicActions{
 							Subscribe:   connection.subscribeToTopic,
 							Publish:     connection.publishToTopic,
@@ -149,10 +159,10 @@ func (connection *MQTTConnection) Connect(ctx context.Context, fleetMQTTURL, tok
 	}
 
 	// Set authentication if token is provided
-	if token != "" {
-		connection.logger.Info("setting MQTT authentication", "client_id", clientID, "zone", zone)
-		cfg.ConnectUsername = fmt.Sprintf("%s:%s", zone, clientID)
-		cfg.ConnectPassword = []byte(token)
+	if details.Token != "" {
+		connection.logger.Info("setting MQTT authentication", "client_id", details.ClientID, "zone", details.Zone)
+		cfg.ConnectUsername = fmt.Sprintf("%s:%s", details.Zone, details.ClientID)
+		cfg.ConnectPassword = []byte(details.Token)
 	}
 
 	// Create and start the connection manager using the long-lived context.

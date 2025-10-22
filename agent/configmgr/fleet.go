@@ -72,8 +72,15 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		"inbox_topic", topics.Inbox,
 		"outbox_topic", topics.Outbox)
 
-	// use the generated topics to connect over MQTT v5
-	err = fleetManager.connection.Connect(ctx, jwtClaims.MqttURL, token.AccessToken, jwtClaims.AgentID, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims.Zone, cfg.OrbAgent.Labels)
+	connectionDetails := fleet.ConnectionDetails{
+		MQTTURL:  jwtClaims.MqttURL,
+		Token:    token.AccessToken,
+		AgentID:  jwtClaims.AgentID,
+		Topics:   *topics,
+		ClientID: cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
+		Zone:     jwtClaims.Zone,
+	}
+	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels)
 	if err != nil {
 		return err
 	}
@@ -93,7 +100,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 
 			// Reconnect
 			connectCtx := context.Background()
-			err = fleetManager.connection.Connect(connectCtx, jwtClaims.MqttURL, token.AccessToken, jwtClaims.AgentID, *topics, backends, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, jwtClaims.Zone, cfg.OrbAgent.Labels)
+			err = fleetManager.connection.Connect(connectCtx, connectionDetails, backends, cfg.OrbAgent.Labels)
 			if err != nil {
 				fleetManager.logger.Error("failed to reconnect during reset", "error", err)
 			}

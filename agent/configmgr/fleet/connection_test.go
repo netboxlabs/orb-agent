@@ -75,7 +75,12 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
 	trt := TokenResponseTopics{Inbox: "test/topic"}
-	err := connection.Connect(context.Background(), "://invalid-url", "test_token", "test-agent-id", trt, backends, "test-agent-id", "test-zone", map[string]string{})
+	err := connection.Connect(
+		context.Background(),
+		ConnectionDetails{MQTTURL: "://invalid-url", Token: "test_token", AgentID: "test-agent-id", Topics: trt, ClientID: "test-agent-id", Zone: "test-zone"},
+		backends,
+		map[string]string{},
+	)
 
 	// Assert
 	assert.Error(t, err)
@@ -96,7 +101,11 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// Timeout after 3 seconds
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	err := connection.Connect(ctx, "mqtt://localhost:1883", "test_token", "test-agent-id", trt2, backends, "test-agent-id", "test-zone", map[string]string{})
+	err := connection.Connect(ctx,
+		ConnectionDetails{MQTTURL: "mqtt://localhost:1883", Token: "test_token", AgentID: "test-agent-id", Topics: trt2, ClientID: "test-agent-id", Zone: "test-zone"},
+		backends,
+		map[string]string{},
+	)
 
 	// Assert - we expect connection to fail since no server is running,
 	// but URL parsing should succeed

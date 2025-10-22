@@ -94,6 +94,7 @@ type Capabilities struct {
 	OrbAgent      OrbAgentInfo           `json:"orb_agent"`
 	AgentLabels   map[string]string      `json:"agent_labels"`
 	Backends      map[string]BackendInfo `json:"backends"`
+	AgentConfig   string                 `json:"agent_config"`
 }
 
 // GroupMemberships represents the group memberships of an agent

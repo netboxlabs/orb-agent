@@ -30,15 +30,7 @@ func (messaging *Messaging) sendGroupMembershipsRequest(ctx context.Context, pub
 }
 
 func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, labels map[string]string, publishFunc func(ctx context.Context, payload []byte) error) {
-	capabilities := messages.Capabilities{
-		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
-		AgentLabels:   labels,
-		OrbAgent: messages.OrbAgentInfo{
-			Version: version.GetBuildVersion(),
-		},
-	}
-
-	capabilities.Backends = make(map[string]messages.BackendInfo)
+	backendsInfo := make(map[string]messages.BackendInfo)
 	for name, be := range backends {
 		ver, err := be.Version()
 		if err != nil {
@@ -50,10 +42,27 @@ func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[s
 			messaging.logger.Error("backend failed to retrieve capabilities, skipping", "backend", name, "error", err)
 			continue
 		}
-		capabilities.Backends[name] = messages.BackendInfo{
+		backendsInfo[name] = messages.BackendInfo{
 			Version: ver,
 			Data:    cp,
 		}
+	}
+
+	// agentConfig, err := os.ReadFile(config.ConfigFile)
+	// if err != nil {
+	// 	messaging.logger.Error("failed to read agent config", "error", err)
+	// 	return
+	// }
+	agentConfig := ""
+
+	capabilities := messages.Capabilities{
+		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
+		AgentLabels:   labels,
+		OrbAgent: messages.OrbAgentInfo{
+			Version: version.GetBuildVersion(),
+		},
+		Backends:    backendsInfo,
+		AgentConfig: agentConfig,
 	}
 
 	body, err := json.Marshal(capabilities)
