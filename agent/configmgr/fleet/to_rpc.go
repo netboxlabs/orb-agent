@@ -29,7 +29,7 @@ func (messaging *Messaging) sendGroupMembershipsRequest(ctx context.Context, pub
 	messaging.logger.Info("group memberships request sent", "value", string(body))
 }
 
-func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, labels map[string]string, publishFunc func(ctx context.Context, payload []byte) error) {
+func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, labels map[string]string, config string, publishFunc func(ctx context.Context, payload []byte) error) {
 	backendsInfo := make(map[string]messages.BackendInfo)
 	for name, be := range backends {
 		ver, err := be.Version()
@@ -48,13 +48,6 @@ func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[s
 		}
 	}
 
-	// agentConfig, err := os.ReadFile(config.ConfigFile)
-	// if err != nil {
-	// 	messaging.logger.Error("failed to read agent config", "error", err)
-	// 	return
-	// }
-	agentConfig := ""
-
 	capabilities := messages.Capabilities{
 		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
 		AgentLabels:   labels,
@@ -62,7 +55,7 @@ func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[s
 			Version: version.GetBuildVersion(),
 		},
 		Backends:    backendsInfo,
-		AgentConfig: agentConfig,
+		AgentConfig: config,
 	}
 
 	body, err := json.Marshal(capabilities)

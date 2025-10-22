@@ -95,9 +95,21 @@ func TestMessaging_SendCapabilities_Success(t *testing.T) {
 
 	ctx := context.Background()
 	labels := map[string]string{}
+	config := `orb:
+	config_manager:
+	  active: local
+	backends:
+	  common:
+		diode:
+		  target: grpc://192.168.0.100:8080/diode
+		  client_id: ${DIODE_CLIENT_ID}
+		  client_secret: ${DIODE_CLIENT_SECRET}
+		  agent_name: agent01
+	  snmp_discovery:
+	`
 
 	// Act
-	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, config, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -124,6 +136,8 @@ func TestMessaging_SendCapabilities_Success(t *testing.T) {
 	assert.Equal(t, "2.0.0", backend2Info.Version)
 	assert.Equal(t, "mqtt", backend2Info.Data["protocol"])
 	assert.Equal(t, "tls", backend2Info.Data["encryption"])
+
+	assert.Equal(t, config, capabilities.AgentConfig)
 
 	// Verify all mock expectations were met
 	mockBackend1.AssertExpectations(t)
@@ -154,6 +168,19 @@ func TestMessaging_SendCapabilities_BackendVersionError(t *testing.T) {
 
 	labels := map[string]string{}
 
+	config := `orb:
+	config_manager:
+	  active: local
+	backends:
+	  common:
+		diode:
+		  target: grpc://192.168.0.100:8080/diode
+		  client_id: ${DIODE_CLIENT_ID}
+		  client_secret: ${DIODE_CLIENT_SECRET}
+		  agent_name: agent01
+	  snmp_discovery:
+	`
+
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -163,7 +190,7 @@ func TestMessaging_SendCapabilities_BackendVersionError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, config, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -206,6 +233,18 @@ func TestMessaging_SendCapabilities_BackendCapabilitiesError(t *testing.T) {
 
 	labels := map[string]string{}
 
+	config := `orb:
+	config_manager:
+	  active: local
+	backends:
+	  common:
+		diode:
+		  target: grpc://192.168.0.100:8080/diode
+		  client_id: ${DIODE_CLIENT_ID}
+		  client_secret: ${DIODE_CLIENT_SECRET}
+		  agent_name: agent01
+	  snmp_discovery:
+	`
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -215,7 +254,7 @@ func TestMessaging_SendCapabilities_BackendCapabilitiesError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, config, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -251,6 +290,18 @@ func TestMessaging_SendCapabilities_PublishError(t *testing.T) {
 
 	labels := map[string]string{}
 
+	config := `orb:
+	config_manager:
+	  active: local
+	backends:
+	  common:
+		diode:
+		  target: grpc://192.168.0.100:8080/diode
+		  client_id: ${DIODE_CLIENT_ID}
+		  client_secret: ${DIODE_CLIENT_SECRET}
+		  agent_name: agent01
+	  snmp_discovery:
+	`
 	publishError := errors.New("publish failed")
 	publishFunc := func(_ context.Context, _ []byte) error {
 		return publishError
@@ -259,7 +310,7 @@ func TestMessaging_SendCapabilities_PublishError(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, config, publishFunc)
 
 	// Assert
 	assert.Equal(t, publishError, publishFunc(ctx, []byte{}))
@@ -277,6 +328,19 @@ func TestMessaging_SendCapabilities_EmptyBackends(t *testing.T) {
 
 	backends := map[string]backend.Backend{} // Empty backends
 	labels := map[string]string{}
+
+	config := `orb:
+	config_manager:
+	  active: local
+	backends:
+	  common:
+		diode:
+		  target: grpc://192.168.0.100:8080/diode
+		  client_id: ${DIODE_CLIENT_ID}
+		  client_secret: ${DIODE_CLIENT_SECRET}
+		  agent_name: agent01
+	  snmp_discovery:
+	`
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -286,7 +350,7 @@ func TestMessaging_SendCapabilities_EmptyBackends(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, config, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -323,6 +387,7 @@ func TestMessaging_SendCapabilities_AllBackendsFail(t *testing.T) {
 		"backend2": mockBackend2,
 	}
 
+	config := ""
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -332,7 +397,7 @@ func TestMessaging_SendCapabilities_AllBackendsFail(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, config, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -372,6 +437,7 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 
 	labels := map[string]string{}
 
+	config := ""
 	var capturedPayload []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
 		capturedPayload = payload
@@ -381,7 +447,7 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	messaging.sendCapabilities(ctx, backends, labels, publishFunc)
+	messaging.sendCapabilities(ctx, backends, labels, config, publishFunc)
 
 	// Assert
 	require.NotNil(t, capturedPayload)

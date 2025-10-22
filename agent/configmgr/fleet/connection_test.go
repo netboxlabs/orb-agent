@@ -80,6 +80,7 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 		ConnectionDetails{MQTTURL: "://invalid-url", Token: "test_token", AgentID: "test-agent-id", Topics: trt, ClientID: "test-agent-id", Zone: "test-zone"},
 		backends,
 		map[string]string{},
+		"",
 	)
 
 	// Assert
@@ -105,6 +106,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 		ConnectionDetails{MQTTURL: "mqtt://localhost:1883", Token: "test_token", AgentID: "test-agent-id", Topics: trt2, ClientID: "test-agent-id", Zone: "test-zone"},
 		backends,
 		map[string]string{},
+		"",
 	)
 
 	// Assert - we expect connection to fail since no server is running,

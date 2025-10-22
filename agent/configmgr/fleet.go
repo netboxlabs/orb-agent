@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
@@ -80,7 +82,11 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		ClientID: cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
 		Zone:     jwtClaims.Zone,
 	}
-	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels)
+	configYaml, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal agent config: %w", err)
+	}
+	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 	if err != nil {
 		return err
 	}
@@ -100,7 +106,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 
 			// Reconnect
 			connectCtx := context.Background()
-			err = fleetManager.connection.Connect(connectCtx, connectionDetails, backends, cfg.OrbAgent.Labels)
+			err = fleetManager.connection.Connect(connectCtx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 			if err != nil {
 				fleetManager.logger.Error("failed to reconnect during reset", "error", err)
 			}

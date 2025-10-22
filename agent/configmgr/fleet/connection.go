@@ -54,7 +54,7 @@ type ConnectionDetails struct {
 }
 
 // Connect connects to the MQTT broker
-func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string) error {
+func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
 	if err != nil {
@@ -87,7 +87,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			// start heartbeat loop bound to the same connection-level context
 			go connection.heartbeater.sendHeartbeats(ctx, func() {}, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic)
 
-			connection.messaging.sendCapabilities(ctx, backends, labels, func(ctx context.Context, payload []byte) error {
+			connection.messaging.sendCapabilities(ctx, backends, labels, configFile, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
 					Topic:   details.Topics.Capabilities,
 					Payload: payload,
