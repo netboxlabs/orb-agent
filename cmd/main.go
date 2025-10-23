@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
@@ -67,40 +66,9 @@ func loadConfig(path string, configData *config.Config) error {
 	return nil
 }
 
-func loadEnvFile(path string) (bool, error) {
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("failed to access environment file %s: %w", path, err)
-	}
-
-	if err := godotenv.Load(path); err != nil {
-		return false, fmt.Errorf("failed to load environment file %s: %w", path, err)
-	}
-
-	return true, nil
-}
-
 // Run starts the agent
-func Run(cmd *cobra.Command, _ []string) {
+func Run(_ *cobra.Command, _ []string) {
 	var configData config.Config
-
-	defaultEnvFile := cmd.Flag("env-file").DefValue
-	envLoaded := false
-	if envFile != "" {
-		var err error
-		envLoaded, err = loadEnvFile(envFile)
-		if err != nil {
-			cobra.CheckErr(err)
-		}
-	}
-
-	if !envLoaded && envFile != defaultEnvFile {
-		if _, err := loadEnvFile(defaultEnvFile); err != nil {
-			cobra.CheckErr(err)
-		}
-	}
 
 	// Override with user-provided config files
 	for _, conf := range cfgFiles {
@@ -182,7 +150,6 @@ func main() {
 	}
 
 	runCmd.Flags().StringSliceVarP(&cfgFiles, "config", "c", []string{}, "Path to config files (may be specified multiple times)")
-	runCmd.Flags().StringVarP(&envFile, "env-file", "e", "/opt/orb/.env", "Path to environment file to load (falls back to /opt/orb/.env if not found)")
 	runCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "Enable verbose (debug level) output")
 
 	rootCmd.AddCommand(runCmd)
