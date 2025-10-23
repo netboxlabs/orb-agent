@@ -266,6 +266,13 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				case "name":
 					interfaceEntity.Name = &value.Value
 					fieldFound = true
+				case "description":
+					description := strings.TrimRight(value.Value, " \t\n\r")
+					if len(description) > 200 {
+						description = description[:197] + "..."
+					}
+					interfaceEntity.Description = &description
+					fieldFound = true
 				case "type":
 					defaultType := ""
 					if defaults != nil && defaults.Interface.Type != "" {

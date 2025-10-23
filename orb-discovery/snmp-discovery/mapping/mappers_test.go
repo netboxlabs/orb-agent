@@ -388,6 +388,13 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					Value:  "1",
 					Type:   mapping.Integer,
 				},
+				"1.3.6.1.2.1.31.1.1.1.18.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.18.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.18",
+					Value:  "uplink interface",
+					Type:   mapping.OctetString,
+				},
 			},
 			mappingEntry: &mapping.Entry{
 				OID:    "1.3.6.1.2.1.2.2.1.1",
@@ -424,6 +431,11 @@ func TestInterfaceMapper_Map(t *testing.T) {
 						Entity: "interface",
 						Field:  "adminStatus",
 					},
+					{
+						OID:    "1.3.6.1.2.1.31.1.1.1.18",
+						Entity: "interface",
+						Field:  "description",
+					},
 				},
 			},
 			defaults: nil,
@@ -433,6 +445,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 				Mtu:               int64Ptr(1500),
 				PrimaryMacAddress: &diode.MACAddress{MacAddress: mapping.StringPtr("00:11:22:33:44:55")},
 				Enabled:           boolPtr(true),
+				Description:       mapping.StringPtr("uplink interface"),
 			},
 			expectError: false,
 		},
