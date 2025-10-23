@@ -16,7 +16,14 @@ import (
 
 // AuthTokenManager manages auth tokens
 type AuthTokenManager struct {
-	logger *slog.Logger
+	logger         *slog.Logger
+	tokenURL       string
+	skipTLS        bool
+	timeout        time.Duration
+	clientID       string
+	clientSecret   string
+	lastToken      *TokenResponse
+	tokenExpiresAt time.Time
 }
 
 // NewAuthTokenManager creates a new AuthTokenManager
@@ -45,6 +52,13 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 	if clientSecret == "" {
 		return nil, fmt.Errorf("client secret cannot be empty")
 	}
+
+	// Store credentials for future refresh
+	fleetManager.tokenURL = tokenURL
+	fleetManager.skipTLS = skipTLS
+	fleetManager.timeout = timeout
+	fleetManager.clientID = clientID
+	fleetManager.clientSecret = clientSecret
 
 	fleetManager.logger.Debug("requesting access token", "token_url", tokenURL, "client_id", clientID)
 
@@ -121,5 +135,29 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 		"expires_in", TokenResponse.ExpiresIn,
 		"mqtt_url", TokenResponse.MQTTURL)
 
+	// Store token and calculate expiration time (with 5-minute buffer)
+	fleetManager.lastToken = &TokenResponse
+	if TokenResponse.ExpiresIn > 0 {
+		fleetManager.tokenExpiresAt = time.Now().Add(time.Duration(TokenResponse.ExpiresIn)*time.Second - 5*time.Minute)
+	}
+
 	return &TokenResponse, nil
+}
+
+// RefreshToken refreshes the auth token using stored credentials
+func (fleetManager *AuthTokenManager) RefreshToken(ctx context.Context) (*TokenResponse, error) {
+	if fleetManager.tokenURL == "" {
+		return nil, fmt.Errorf("cannot refresh token: credentials not initialized")
+	}
+
+	fleetManager.logger.Info("refreshing JWT token")
+	return fleetManager.GetToken(ctx, fleetManager.tokenURL, fleetManager.skipTLS, fleetManager.timeout, fleetManager.clientID, fleetManager.clientSecret)
+}
+
+// IsTokenExpired checks if the current token is expired or will expire soon
+func (fleetManager *AuthTokenManager) IsTokenExpired() bool {
+	if fleetManager.lastToken == nil {
+		return true
+	}
+	return time.Now().After(fleetManager.tokenExpiresAt)
 }

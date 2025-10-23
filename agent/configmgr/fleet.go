@@ -20,22 +20,30 @@ import (
 var _ Manager = (*fleetConfigManager)(nil)
 
 type fleetConfigManager struct {
-	logger           *slog.Logger
-	connection       *fleet.MQTTConnection
-	authTokenManager *fleet.AuthTokenManager
-	resetChan        chan struct{}
-	backendState     backend.StateRetriever
-	policyManager    policymgr.PolicyManager
-	otlpBridge       *otlpbridge.BridgeServer
+	logger            *slog.Logger
+	connection        *fleet.MQTTConnection
+	authTokenManager  *fleet.AuthTokenManager
+	resetChan         chan struct{}
+	reconnectChan     chan struct{}
+	backendState      backend.StateRetriever
+	policyManager     policymgr.PolicyManager
+	otlpBridge        *otlpbridge.BridgeServer
+	config            config.Config
+	backends          map[string]backend.Backend
+	labels            map[string]string
+	configYaml        string
+	connectionDetails fleet.ConnectionDetails
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *fleetConfigManager {
 	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
 	return &fleetConfigManager{
 		logger:           logger,
-		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan, backendState),
+		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan, reconnectChan, backendState),
 		authTokenManager: fleet.NewAuthTokenManager(logger),
 		resetChan:        resetChan,
+		reconnectChan:    reconnectChan,
 		backendState:     backendState,
 		policyManager:    pMgr,
 	}
@@ -106,6 +114,14 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	if err != nil {
 		return fmt.Errorf("failed to convert config to safe string: %w", err)
 	}
+
+	// Store connection state for reconnection
+	fleetManager.config = cfg
+	fleetManager.backends = backends
+	fleetManager.labels = cfg.OrbAgent.Labels
+	fleetManager.configYaml = string(configYaml)
+	fleetManager.connectionDetails = connectionDetails
+
 	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 	if err != nil {
 		return err
@@ -158,6 +174,65 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
 	})
 
+	// Start goroutine to handle reconnect requests (JWT refresh)
+	go func() {
+		for range fleetManager.reconnectChan {
+			fleetManager.logger.Info("JWT refresh and reconnection requested")
+			if err := fleetManager.refreshAndReconnect(ctx, timeout); err != nil {
+				fleetManager.logger.Error("failed to refresh and reconnect", "error", err)
+			}
+		}
+	}()
+
+	return nil
+}
+
+// refreshAndReconnect refreshes the JWT token and reconnects to MQTT
+func (fleetManager *fleetConfigManager) refreshAndReconnect(ctx context.Context, timeout time.Duration) error {
+	// Refresh JWT token
+	token, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	// Parse new JWT claims
+	jwtClaims, err := fleet.ParseJWTClaims(token.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
+	// Regenerate topics
+	topics, err := fleet.GenerateTopicsFromTemplate(jwtClaims)
+	if err != nil {
+		return fmt.Errorf("failed to generate topics: %w", err)
+	}
+
+	fleetManager.logger.Info("refreshed JWT and generated new topics",
+		"heartbeat_topic", topics.Heartbeat,
+		"capabilities_topic", topics.Capabilities,
+		"inbox_topic", topics.Inbox,
+		"outbox_topic", topics.Outbox)
+
+	// Update connection details
+	newConnectionDetails := fleet.ConnectionDetails{
+		MQTTURL:  jwtClaims.MqttURL,
+		Token:    token.AccessToken,
+		AgentID:  jwtClaims.AgentID,
+		Topics:   *topics,
+		ClientID: fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
+		Zone:     jwtClaims.Zone,
+	}
+
+	// Store updated connection details
+	fleetManager.connectionDetails = newConnectionDetails
+
+	// Reconnect with new token
+	err = fleetManager.connection.Reconnect(ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)
+	if err != nil {
+		return fmt.Errorf("failed to reconnect: %w", err)
+	}
+
+	fleetManager.logger.Info("successfully refreshed JWT and reconnected")
 	return nil
 }
 
