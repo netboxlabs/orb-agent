@@ -29,7 +29,6 @@ const (
 var (
 	cfgFiles []string
 	debug    bool
-	envFile  string
 )
 
 func init() {
