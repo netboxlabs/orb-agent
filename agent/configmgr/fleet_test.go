@@ -227,3 +227,115 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 			strings.Contains(errorMsg, "deadline"),
 		"Expected connection-related error, got: %s", err.Error())
 }
+
+func TestFleetConfigManager_configToSafeString(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	tests := []struct {
+		name         string
+		clientSecret string
+		wantSecret   string
+		wantErr      bool
+		checkInYAML  bool
+	}{
+		{
+			name:         "sanitizes non-empty client secret",
+			clientSecret: "my-super-secret-password",
+			wantSecret:   "******",
+			wantErr:      false,
+			checkInYAML:  true,
+		},
+		{
+			name:         "empty client secret remains empty",
+			clientSecret: "",
+			wantSecret:   "",
+			wantErr:      false,
+			checkInYAML:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Arrange
+			cfg := config.Config{
+				Version: 1.0,
+				OrbAgent: config.OrbAgent{
+					ConfigManager: config.ManagerConfig{
+						Active: "orb",
+						Sources: config.Sources{
+							Fleet: config.FleetManager{
+								TokenURL:     "https://example.com/token",
+								ClientID:     "test-client-id",
+								ClientSecret: tt.clientSecret,
+								SkipTLS:      false,
+							},
+						},
+					},
+				},
+			}
+
+			// Act
+			result, err := fleetManager.configToSafeString(cfg)
+
+			// Assert
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.NotEmpty(t, result)
+
+			// Verify the original secret is not in the output
+			if tt.clientSecret != "" {
+				assert.NotContains(t, result, tt.clientSecret, "original secret should not be in output")
+			}
+
+			// Verify the expected secret is in the YAML output
+			if tt.checkInYAML {
+				assert.Contains(t, result, tt.wantSecret, "sanitized secret should be in output")
+				// YAML can use either single or double quotes, so check for either
+				assert.True(t,
+					strings.Contains(result, "client_secret: '******'") ||
+						strings.Contains(result, "client_secret: \"******\"") ||
+						strings.Contains(result, "client_secret: ******"),
+					"client_secret should be masked in YAML output")
+			}
+		})
+	}
+}
+
+func TestFleetConfigManager_configToSafeString_DoesNotModifyOriginal(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Arrange
+	originalSecret := "my-secret-password"
+	cfg := config.Config{
+		Version: 1.0,
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     "https://example.com/token",
+						ClientID:     "test-client-id",
+						ClientSecret: originalSecret,
+					},
+				},
+			},
+		},
+	}
+
+	// Act
+	_, err := fleetManager.configToSafeString(cfg)
+
+	// Assert
+	require.NoError(t, err)
+	// The original config should not be modified (we're modifying a copy)
+	// Note: Due to Go's pass-by-value semantics, the original is preserved
+	assert.Equal(t, originalSecret, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret,
+		"original config should not be modified")
+}

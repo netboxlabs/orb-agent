@@ -82,9 +82,9 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		ClientID: cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
 		Zone:     jwtClaims.Zone,
 	}
-	configYaml, err := yaml.Marshal(cfg)
+	configYaml, err := fleetManager.configToSafeString(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal agent config: %w", err)
+		return fmt.Errorf("failed to convert config to safe string: %w", err)
 	}
 	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 	if err != nil {
@@ -114,6 +114,18 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	}()
 
 	return nil
+}
+
+func (fleetManager *fleetConfigManager) configToSafeString(cfg config.Config) (string, error) {
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret != "" {
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret = "******"
+	}
+
+	configYaml, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal agent config: %w", err)
+	}
+	return string(configYaml), nil
 }
 
 func (fleetManager *fleetConfigManager) GetContext(ctx context.Context) context.Context {
