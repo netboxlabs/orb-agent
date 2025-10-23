@@ -236,6 +236,108 @@ def test_translate_data(
     assert entities[0].device.platform.name == "custom"
     assert entities[0].device.role.name == "switch"
 
+
+def test_translate_data_creates_missing_interface(sample_device_info, sample_defaults):
+    """Ensure translate_data creates interfaces referenced only by IP data."""
+    interfaces = {
+        "GigabitEthernet0/0": {
+            "is_enabled": True,
+            "mtu": 1500,
+            "mac_address": "00:1C:58:29:4A:71",
+            "speed": 1000,
+            "description": "Uplink Interface",
+        }
+    }
+    interfaces_ip = {
+        "Loopback0": {"ipv4": {"198.51.100.1": {"prefix_length": 32}}},
+    }
+    data = {
+        "device": sample_device_info,
+        "interface": interfaces,
+        "interface_ip": interfaces_ip,
+        "driver": "ios",
+    }
+
+    entities = list(translate_data(data))
+
+    loopback_interface = next(
+        entity.interface
+        for entity in entities
+        if entity.WhichOneof("entity") == "interface"
+        and entity.interface.name == "Loopback0"
+    )
+    loopback_ip = next(
+        entity.ip_address
+        for entity in entities
+        if entity.WhichOneof("entity") == "ip_address"
+    )
+
+    assert len(entities) == 5
+    assert (
+        sum(1 for entity in entities if entity.WhichOneof("entity") == "interface") == 2
+    )
+    assert loopback_interface.name == "Loopback0"
+    assert loopback_ip.address == "198.51.100.1/32"
+    assert loopback_ip.assigned_object_interface.name == "Loopback0"
+
+
+def test_translate_data_creates_missing_subinterface_with_parent(
+    sample_device_info, sample_defaults
+):
+    """Ensure translate_data creates subinterfaces and assigns parent relationships."""
+    interfaces = {
+        "ethernet-1/1": {
+            "is_enabled": True,
+            "mtu": 1500,
+            "mac_address": "00:1C:58:29:4A:71",
+            "speed": 1000,
+            "description": "Parent Interface",
+        },
+        "ethernet-1/10": {
+            "is_enabled": True,
+            "mtu": 1500,
+            "mac_address": "00:1C:58:29:4A:72",
+            "speed": 1000,
+            "description": "Interface",
+        }
+    }
+    interfaces_ip = {
+        "ethernet-1/1.0": {"ipv4": {"10.0.0.1": {"prefix_length": 30}}},
+    }
+    data = {
+        "device": sample_device_info,
+        "interface": interfaces,
+        "interface_ip": interfaces_ip,
+        "driver": "ios",
+    }
+
+    entities = list(translate_data(data))
+
+    subinterface = next(
+        entity.interface
+        for entity in entities
+        if entity.WhichOneof("entity") == "interface"
+        and entity.interface.name == "ethernet-1/1.0"
+    )
+    parent_interface = next(
+        entity.interface
+        for entity in entities
+        if entity.WhichOneof("entity") == "interface"
+        and entity.interface.name == "ethernet-1/1"
+    )
+    ip_entity = next(
+        entity.ip_address
+        for entity in entities
+        if entity.WhichOneof("entity") == "ip_address"
+    )
+
+    assert subinterface.parent.name == "ethernet-1/1"
+    assert subinterface.parent.name == parent_interface.name
+    assert subinterface.type == "virtual"
+    assert parent_interface.type == "other"
+    assert ip_entity.address == "10.0.0.1/30"
+    assert ip_entity.assigned_object_interface.name == "ethernet-1/1.0"
+
 def test_translate_data_handles_none_defaults_and_options(
     sample_device_info, sample_interface_info, sample_interfaces_ip
 ):

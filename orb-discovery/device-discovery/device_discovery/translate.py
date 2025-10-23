@@ -89,7 +89,11 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
 
 
 def translate_interface(
-    device: Device, if_name: str, interface_info: dict, defaults: Defaults
+    device: Device,
+    if_name: str,
+    interface_info: dict,
+    defaults: Defaults,
+    parent: Interface | None = None,
 ) -> Interface:
     """
     Translate interface information from NAPALM format to Diode SDK Interface entity.
@@ -100,6 +104,7 @@ def translate_interface(
         if_name (str): The name of the interface.
         interface_info (dict): Dictionary containing interface information.
         defaults (Defaults): Default configuration.
+        parent (Interface | None): Parent interface, if any.
 
     Returns:
     -------
@@ -120,23 +125,30 @@ def translate_interface(
         else None
     )
 
+    interface_type = defaults.if_type
+    if parent is not None:
+        interface_type = "virtual"
+
     interface = Interface(
         device=device,
         name=if_name,
         enabled=interface_info.get("is_enabled"),
         primary_mac_address=mac_address,
         description=description,
+        parent=parent,
         tags=tags,
-        type=defaults.if_type,
+        type=interface_type,
     )
 
     # Convert napalm interface speed from Mbps to Netbox Kbps
-    speed = int(interface_info.get("speed")) * 1000
-    if speed > 0 and not int32_overflows(speed):
-        interface.speed = speed
+    speed = interface_info.get("speed")
+    if speed is not None:
+        speed_kbps = int(speed) * 1000
+        if speed_kbps > 0 and not int32_overflows(speed_kbps):
+            interface.speed = speed_kbps
 
     mtu = interface_info.get("mtu")
-    if mtu > 0 and not int32_overflows(mtu):
+    if mtu is not None and mtu > 0 and not int32_overflows(mtu):
         interface.mtu = mtu
 
     return interface
@@ -275,6 +287,60 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
     return vlan
 
 
+def extract_parent_interface_name(interface_name: str) -> str | None:
+    """Return the parent interface name if the supplied name represents a subinterface."""
+    for separator in (".", ":"):
+        if separator in interface_name:
+            parent, child = interface_name.rsplit(separator, 1)
+            if parent and child:
+                return parent
+    return None
+
+
+def build_interface_entities(
+    device: Device,
+    interfaces: dict,
+    interfaces_ip: dict,
+    defaults: Defaults,
+) -> list[Entity]:
+    """Create interface entities from interface definitions and IP data."""
+    interface_entities: dict[str, Interface] = {}
+    entities: list[Entity] = []
+    defined_interface_names = set(interfaces.keys())
+
+    def interface_sort_key(name: str) -> tuple[int, str]:
+        separator_score = name.count(".") + name.count(":")
+        return (separator_score, name)
+
+    def resolve_parent(name: str) -> Interface | None:
+        parent_name = extract_parent_interface_name(name)
+        if not parent_name or parent_name not in defined_interface_names:
+            return None
+        return interface_entities.get(parent_name)
+
+    for if_name, interface_info in sorted(
+        interfaces.items(), key=lambda item: interface_sort_key(item[0])
+    ):
+        parent = resolve_parent(if_name)
+        interface = translate_interface(
+            device, if_name, interface_info, defaults, parent=parent
+        )
+        interface_entities[if_name] = interface
+        entities.append(Entity(interface=interface))
+        entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
+
+    for if_name in sorted(interfaces_ip.keys(), key=interface_sort_key):
+        if if_name in interface_entities:
+            continue
+        parent = resolve_parent(if_name)
+        interface = translate_interface(device, if_name, {}, defaults, parent=parent)
+        interface_entities[if_name] = interface
+        entities.append(Entity(interface=interface))
+        entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
+
+    return entities
+
+
 def translate_data(data: dict) -> Iterable[Entity]:
     """
     Translate data from NAPALM format to Diode SDK entities.
@@ -294,8 +360,8 @@ def translate_data(data: dict) -> Iterable[Entity]:
     options = data.get("options") or Options()
 
     device_info = data.get("device", {})
-    interfaces = data.get("interface", {})
-    interfaces_ip = data.get("interface_ip", {})
+    interfaces = data.get("interface") or {}
+    interfaces_ip = data.get("interface_ip") or {}
     if device_info:
         if options.platform_omit_version:
             device_info["platform"] = data.get("driver")
@@ -306,10 +372,10 @@ def translate_data(data: dict) -> Iterable[Entity]:
         device = translate_device(device_info, defaults)
         entities.append(Entity(device=device))
 
-        for if_name, interface_info in interfaces.items():
-            interface = translate_interface(device, if_name, interface_info, defaults)
-            entities.append(Entity(interface=interface))
-            entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
+        interface_related_entities = build_interface_entities(
+            device, interfaces, interfaces_ip, defaults
+        )
+        entities.extend(interface_related_entities)
 
     if data.get("vlan"):
         for vid, vlan_info in data.get("vlan").items():
