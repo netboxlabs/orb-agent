@@ -19,9 +19,7 @@ orb:
             iface: auto
     common:
       diode:
-        target: ${DIODE_TARGET}
-        client_id: ${DIODE_CLIENT_ID}
-        client_secret: ${DIODE_CLIENT_SECRET}
+        dry_run: true
       otlp:
-        http: http://localhost:4318
-        grpc: http://localhost:4317
+        http: http://localhost:4320
+        grpc: http://localhost:4321

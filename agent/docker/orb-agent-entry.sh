@@ -35,6 +35,39 @@ if [ -f "asn.mmdb.gz" ]; then
 fi
 
 ## Agent Configuration ##
+DEFAULT_CONFIG_PATH="/opt/orb/default_config.yaml"
+agent_args=("$@")
+
+if [ -n "${FLEET_CLIENT_ID}" ] && [ -n "${FLEET_CLIENT_SECRET}" ]; then
+  # Use packaged default config when fleet credentials are provided without an explicit config file.
+  config_specified=false
+  for arg in "${agent_args[@]}"; do
+    case "${arg}" in
+      --config|--config=*|-c|-c=*)
+        config_specified=true
+        break
+        ;;
+    esac
+  done
+
+  if [ "${config_specified}" = false ]; then
+    if [ ${#agent_args[@]} -eq 0 ]; then
+      agent_args=(run -c "${DEFAULT_CONFIG_PATH}")
+    else
+      run_specified=false
+      for arg in "${agent_args[@]}"; do
+        if [ "${arg}" = "run" ]; then
+          run_specified=true
+          break
+        fi
+      done
+      if [ "${run_specified}" = true ]; then
+        agent_args+=("--config" "${DEFAULT_CONFIG_PATH}")
+      fi
+    fi
+  fi
+fi
+
 trap agentstop1 SIGINT
 trap agentstop2 SIGTERM
 
@@ -44,7 +77,7 @@ do
   # pid file dont exist
   if [ ! -f "/var/run/orb-agent.pid"  ]; then
     # running orb-agent in background
-    nohup /run-agent.sh "$@" &
+    nohup /run-agent.sh "${agent_args[@]}" &
     sleep 2
     if [ -d "/nohup.out" ]; then
        tail -f /nohup.out &
