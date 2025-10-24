@@ -10,16 +10,6 @@ orb:
     network_discovery:
     device_discovery:
     snmp_discovery:
-    opentelemetry_infinity:
-    pktvisor:
-      taps:
-        default:
-          input_type: pcap
-          config:
-            iface: auto
     common:
       diode:
         dry_run: true
-      otlp:
-        http: http://localhost:4320
-        grpc: http://localhost:4321
