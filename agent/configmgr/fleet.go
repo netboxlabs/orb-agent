@@ -39,6 +39,20 @@ func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, ba
 func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	ctx := context.Background()
 
+	var err error
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, err = config.ResolveEnv(cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL)
+	if err != nil {
+		return err
+	}
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID, err = config.ResolveEnv(cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID)
+	if err != nil {
+		return err
+	}
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret, err = config.ResolveEnv(cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
+	if err != nil {
+		return err
+	}
+
 	fleetManager.logger.Info("starting fleet config manager",
 		"token_url", cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
 		"client_id", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID)

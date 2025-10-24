@@ -53,6 +53,7 @@ RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
 COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
+COPY --from=builder /src/orb-agent/agent/docker/default_config.yaml /opt/orb/default_config.yaml
 
 RUN chmod a+x /run-agent.sh
 
