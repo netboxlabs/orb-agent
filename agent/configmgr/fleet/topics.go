@@ -17,6 +17,7 @@ const (
 	capabilitiesTemplate = "orgs/{org_id}/agents/{agent_id}/capabilities"
 	inboxTemplate        = "orgs/{org_id}/agents/{agent_id}/inbox"
 	outboxTemplate       = "orgs/{org_id}/agents/{agent_id}/outbox"
+	otlpTemplate         = "orgs/{org_id}/agents/{agent_id}/otlp"
 
 	groupsTemplate = "orgs/{org_id}/groups/{group_id}"
 )
@@ -27,6 +28,7 @@ type TokenResponseTopics struct {
 	Capabilities string `json:"capabilities"`
 	Inbox        string `json:"inbox"`
 	Outbox       string `json:"outbox"`
+	OTLP         string `json:"otlp"`
 }
 
 // GenerateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
@@ -36,6 +38,7 @@ func GenerateTopicsFromTemplate(jwtClaims *JWTClaims) (*TokenResponseTopics, err
 		Capabilities: fillTopicTemplate(capabilitiesTemplate, jwtClaims),
 		Inbox:        fillTopicTemplate(inboxTemplate, jwtClaims),
 		Outbox:       fillTopicTemplate(outboxTemplate, jwtClaims),
+		OTLP:         fillTopicTemplate(otlpTemplate, jwtClaims),
 	}, nil
 }
 

@@ -8,6 +8,7 @@ import (
 // ProtobufEncoder marshals protobuf messages using binary wire format.
 type ProtobufEncoder struct{}
 
+// Marshal encodes a protobuf message using binary wire format.
 func (ProtobufEncoder) Marshal(msg ProtoMessage) ([]byte, error) {
 	// Convert to the modern proto.Message to leverage proto.Marshal
 	if m, ok := msg.(proto.Message); ok {
@@ -22,10 +23,12 @@ type JSONEncoder struct {
 	opts protojson.MarshalOptions
 }
 
+// NewJSONEncoder creates a new JSONEncoder with standard options.
 func NewJSONEncoder() JSONEncoder {
 	return JSONEncoder{opts: protojson.MarshalOptions{EmitUnpopulated: true}}
 }
 
+// Marshal encodes a protobuf message as JSON.
 func (e JSONEncoder) Marshal(msg ProtoMessage) ([]byte, error) {
 	if m, ok := msg.(proto.Message); ok {
 		return e.opts.Marshal(m)

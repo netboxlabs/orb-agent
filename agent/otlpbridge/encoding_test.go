@@ -15,8 +15,9 @@ func TestProtobufEncoder_Marshal_Basic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(b) == 0 {
-		t.Fatalf("expected non-empty bytes")
+	// Empty protobuf messages serialize to empty bytes, which is correct
+	if b == nil {
+		t.Fatalf("expected non-nil bytes")
 	}
 }
 

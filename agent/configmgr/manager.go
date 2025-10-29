@@ -13,6 +13,7 @@ import (
 type Manager interface {
 	Start(cfg config.Config, backends map[string]backend.Backend) error
 	GetContext(ctx context.Context) context.Context
+	Stop(ctx context.Context) error
 }
 
 // New creates a new instance of ConfigManager that is bound to the

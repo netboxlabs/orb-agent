@@ -26,11 +26,6 @@ type ProtoMessage interface {
 
 // BridgeConfig holds runtime configuration for the OTLP → MQTT bridge.
 type BridgeConfig struct {
-	ListenAddr   string
-	MQTTURL      string
-	MQTTJWT      string
-	TracesTopic  string
-	MetricsTopic string
-	LogsTopic    string
-	Encoding     string // "protobuf" | "json"
+	ListenAddr string
+	Encoding   string // "protobuf" | "json"
 }

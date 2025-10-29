@@ -15,14 +15,12 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
-	"github.com/netboxlabs/orb-agent/agent/telemetry"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
 const (
 	routineKey             config.ContextKey = "routine"
-	otlpShutdownTimeout                      = 5 * time.Second
-	restartBackendChanSize                   = 5
+	restartBackendChanSize int               = 5
 )
 
 // Agent is the interface that all agents must implement
@@ -40,7 +38,6 @@ type orbAgent struct {
 	backendsCommon config.BackendCommons
 	ctx            context.Context
 	cancelFunction context.CancelFunc
-	otlpShutdown   func(context.Context) error
 
 	policyManager       policymgr.PolicyManager
 	configManager       configmgr.Manager
@@ -88,11 +85,8 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	if len(cfgBackends) == 0 {
 		return errors.New("no backends specified")
 	}
-	// Ensure any previous OTLP exporter is flushed before reconfiguring backends.
-	a.shutdownOTLP(agentCtx)
 	a.ctx = agentCtx
 	a.backends = make(map[string]backend.Backend, len(cfgBackends))
-	var otlpShutdown func(context.Context) error
 	var commonConfig config.BackendCommons
 	if v, prs := cfgBackends["common"]; prs {
 		bytes, err := yaml.Marshal(v)
@@ -110,22 +104,6 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	commonConfig.Otlp.AgentLabels = labels
 	a.backendsCommon = commonConfig
 	delete(cfgBackends, "common")
-
-	if a.backendsCommon.Otlp.Grpc != "" {
-		a.logger, otlpShutdown, err = telemetry.BuildOTLPLogExporter(agentCtx, a.logger, a.backendsCommon)
-		if err != nil {
-			a.logger.Error("failed to create OTLP log exporter", slog.Any("error", err))
-			return err
-		}
-		if otlpShutdown != nil {
-			a.otlpShutdown = otlpShutdown
-			defer func() {
-				if err != nil {
-					a.shutdownOTLP(agentCtx)
-				}
-			}()
-		}
-	}
 
 	for name, configurationEntry := range cfgBackends {
 		var cEntity map[string]any
@@ -220,29 +198,11 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			}
 		}
 	}
-	a.shutdownOTLP(ctx)
+	if err := a.configManager.Stop(ctx); err != nil {
+		a.logger.Error("error while stopping config manager", slog.Any("error", err))
+	}
 	a.logger.Debug("stopping agent with number of go routines and go calls", slog.Int("goroutines", runtime.NumGoroutine()), slog.Int64("gocalls", runtime.NumCgoCall()))
 	defer a.cancelFunction()
-}
-
-func (a *orbAgent) shutdownOTLP(ctx context.Context) {
-	shutdown := a.otlpShutdown
-	if shutdown == nil {
-		return
-	}
-	a.otlpShutdown = nil
-
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	shutdownCtx, cancel := context.WithTimeout(ctx, otlpShutdownTimeout)
-	defer cancel()
-
-	if err := shutdown(shutdownCtx); err != nil {
-		a.logger.Error("error while shutting down OTLP log exporter", slog.Any("error", err))
-		return
-	}
-	a.logger.Debug("shut down OTLP log exporter")
 }
 
 func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {
