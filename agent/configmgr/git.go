@@ -343,6 +343,10 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	if gc.config.URL == "" {
 		return errors.New("URL is required for Git Config Manager")
 	}
+	gc.config.URL, err = config.ResolveEnv(gc.config.URL)
+	if err != nil {
+		return err
+	}
 
 	switch gc.config.Auth {
 	case "basic":
