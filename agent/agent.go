@@ -211,7 +211,9 @@ func (a *orbAgent) Stop(ctx context.Context) {
 		a.logger.Error("error while stopping config manager", slog.Any("error", err))
 	}
 	a.logger.Debug("stopping agent with number of go routines and go calls", slog.Int("goroutines", runtime.NumGoroutine()), slog.Int64("gocalls", runtime.NumCgoCall()))
-	defer a.cancelFunction()
+	if a.cancelFunction != nil {
+		a.cancelFunction()
+	}
 }
 
 func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"

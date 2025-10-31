@@ -18,11 +18,11 @@ type mockConfigManager struct {
 	stopCalled bool
 }
 
-func (m *mockConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
+func (m *mockConfigManager) Start(_ config.Config, _ map[string]backend.Backend) error {
 	return nil
 }
 func (m *mockConfigManager) GetContext(ctx context.Context) context.Context { return ctx }
-func (m *mockConfigManager) Stop(ctx context.Context) error                 { m.stopCalled = true; return nil }
+func (m *mockConfigManager) Stop(_ context.Context) error                   { m.stopCalled = true; return nil }
 
 func TestSetCommonConfigOverrides_FleetOverridesWhenEmpty(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
