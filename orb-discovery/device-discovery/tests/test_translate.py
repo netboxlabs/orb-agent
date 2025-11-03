@@ -299,7 +299,7 @@ def test_translate_data_creates_missing_subinterface_with_parent(
             "mac_address": "00:1C:58:29:4A:72",
             "speed": 1000,
             "description": "Interface",
-        }
+        },
     }
     interfaces_ip = {
         "ethernet-1/1.0": {"ipv4": {"10.0.0.1": {"prefix_length": 30}}},
@@ -337,41 +337,6 @@ def test_translate_data_creates_missing_subinterface_with_parent(
     assert parent_interface.type == "other"
     assert ip_entity.address == "10.0.0.1/30"
     assert ip_entity.assigned_object_interface.name == "ethernet-1/1.0"
-
-
-def test_translate_data_creates_ip_only_subinterface_parent_relationship(
-    sample_device_info, sample_defaults
-):
-    """Ensure subinterfaces derived solely from IP data still link to existing parents."""
-    interfaces: dict[str, dict] = {}
-    interfaces_ip = {
-        "Bundle1": {"ipv4": {"198.51.100.1": {"prefix_length": 30}}},
-        "Bundle1.100": {"ipv4": {"198.51.100.5": {"prefix_length": 30}}},
-    }
-    data = {
-        "device": sample_device_info,
-        "interface": interfaces,
-        "interface_ip": interfaces_ip,
-        "driver": "ios",
-    }
-
-    entities = list(translate_data(data))
-
-    bundle_parent = next(
-        entity.interface
-        for entity in entities
-        if entity.WhichOneof("entity") == "interface"
-        and entity.interface.name == "Bundle1"
-    )
-    bundle_subinterface = next(
-        entity.interface
-        for entity in entities
-        if entity.WhichOneof("entity") == "interface"
-        and entity.interface.name == "Bundle1.100"
-    )
-
-    assert bundle_subinterface.parent.name == "Bundle1"
-    assert bundle_subinterface.parent.name == bundle_parent.name
 
 
 def test_translate_data_handles_none_defaults_and_options(

@@ -184,8 +184,8 @@ class PolicyRunner:
             try:
                 data["vlan"] = device.get_vlans()
             except Exception as e:
-                logger.error(
-                    f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}"
+                logger.warning(
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}. Continuing without VLAN data."
                 )
             Client().ingest(scope.hostname, data)
             discovery_success = get_metric("discovery_success")
