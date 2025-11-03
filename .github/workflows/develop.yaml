@@ -1,6 +1,12 @@
 name: Orb Agent - develop
 on:
   workflow_dispatch:
+    inputs:
+      docker_tag:
+        description: 'Docker tag to use for the image'
+        required: false
+        default: 'develop'
+        type: string
   push:
     branches: [ develop ]
     paths:
@@ -18,8 +24,6 @@ env:
 jobs:
     build-and-push:
       runs-on: ubuntu-latest
-      strategy:
-        fail-fast: false
       steps:
         - name: Checkout
           uses: actions/checkout@v4
@@ -73,7 +77,7 @@ jobs:
             cache-from: type=gha
             cache-to: type=gha,mode=max
             tags: |
-              netboxlabs/orb-agent:develop
-              netboxlabs.jfrog.io/obs-builds/orb-agent:develop
+              netboxlabs/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
+              netboxlabs.jfrog.io/obs-builds/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
             build-args: |
               GO_VERSION=${{ env.GO_VERSION }}  

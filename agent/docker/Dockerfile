@@ -37,10 +37,6 @@ RUN \
 
 RUN mkdir -p /opt/orb
 
-COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
-COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
-COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
-
 COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/bin/pktvisord
 COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/bin/crashpad_handler
 COPY --from=pktvisor /geo-db /geo-db
@@ -53,6 +49,11 @@ COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/ne
 COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-discovery
 
 RUN pip3 install netboxlabs-device-discovery netboxlabs-orb-worker
+
+COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
+COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
+COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
+COPY --from=builder /src/orb-agent/agent/docker/default_config.yaml /opt/orb/default_config.yaml
 
 RUN chmod a+x /run-agent.sh
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -22,7 +23,6 @@ const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
 	readinessBackoff    = 10
-	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	defaultExec         = "orb-worker"
@@ -71,14 +71,16 @@ func Register() bool {
 func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger
+	d.logger = logger.With(slog.String("backend", "worker"))
 	d.policyRepo = repo
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
 		d.apiHost = defaultAPIHost
 	}
-	if d.apiPort, prs = config["port"].(string); !prs {
+	if port, prs := config["port"]; prs {
+		d.apiPort = fmt.Sprintf("%v", port)
+	} else {
 		d.apiPort = defaultAPIPort
 	}
 
@@ -108,8 +110,8 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 		d.diodeDryRunOutputDir = dryRunOutputDir
 	}
 
-	if common.Otel.Grpc != "" {
-		d.diodeOtelEndpoint = common.Otel.Grpc
+	if common.Otlp.Grpc != "" {
+		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("orb-worker using OTLP metrics endpoint",
 			slog.String("endpoint", d.diodeOtelEndpoint))
 	}
@@ -184,13 +186,13 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 					stdout = nil
 					continue
 				}
-				d.logger.Info("worker stdout", slog.String("log", line))
+				d.logWorkerOutput(line, slog.LevelInfo)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				d.logger.Info("worker stderr", slog.String("log", line))
+				d.logWorkerOutput(line, slog.LevelError)
 			}
 		}
 	}()
@@ -218,6 +220,13 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	var version string
 	var readinessErr error
 	for backoff := range readinessBackoff {
+		if status := d.proc.Status(); status.Complete {
+			err := d.proc.Stop()
+			if err != nil {
+				d.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("worker process ended unexpectedly, check log")
+		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("worker readiness ok, got version ",
@@ -275,6 +284,30 @@ func (d *workerBackend) FullReset(ctx context.Context) error {
 
 func (d *workerBackend) GetStartTime() time.Time {
 	return d.startTime
+}
+
+func (d *workerBackend) logWorkerOutput(line string, fallback slog.Level) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return
+	}
+
+	msg := trimmed
+	attrs := []slog.Attr(nil)
+	level := fallback
+
+	if parsedMsg, parsedAttrs, parsedLevel, ok := normalizeWorkerLine(trimmed, fallback); ok {
+		msg = parsedMsg
+		attrs = parsedAttrs
+		level = parsedLevel
+	}
+
+	ctx := d.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	d.logger.LogAttrs(ctx, level, msg, attrs...)
 }
 
 func (d *workerBackend) GetCapabilities() (map[string]any, error) {
@@ -359,4 +392,68 @@ func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
 		return err
 	}
 	return nil
+}
+
+func normalizeWorkerLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
+	firstColon := strings.Index(line, ":")
+	if firstColon <= 0 {
+		return "", nil, fallback, false
+	}
+
+	levelCandidate := strings.TrimSpace(line[:firstColon])
+	level, ok := parseWorkerLevel(levelCandidate)
+	if !ok {
+		return "", nil, fallback, false
+	}
+
+	remainder := strings.TrimSpace(line[firstColon+1:])
+	if remainder == "" {
+		return strings.TrimSpace(line), nil, level, true
+	}
+
+	var attrs []slog.Attr
+	message := remainder
+
+	if secondColon := strings.Index(remainder, ":"); secondColon >= 0 {
+		moduleCandidate := strings.TrimSpace(remainder[:secondColon])
+		rest := strings.TrimSpace(remainder[secondColon+1:])
+
+		if moduleCandidate != "" && !strings.ContainsAny(moduleCandidate, " \t") {
+			attrs = append(attrs, slog.String("module", moduleCandidate))
+			if rest != "" {
+				message = rest
+			} else {
+				message = remainder
+			}
+		}
+	}
+
+	if message == "" {
+		message = strings.TrimSpace(line)
+	}
+
+	if message == "" {
+		return "", nil, level, false
+	}
+
+	return message, attrs, level, true
+}
+
+func parseWorkerLevel(value string) (slog.Level, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "trace":
+		return slog.LevelDebug, true
+	case "debug":
+		return slog.LevelDebug, true
+	case "info":
+		return slog.LevelInfo, true
+	case "warn", "warning":
+		return slog.LevelWarn, true
+	case "error", "err", "exception":
+		return slog.LevelError, true
+	case "critical", "fatal":
+		return slog.LevelError, true
+	default:
+		return 0, false
+	}
 }

@@ -33,10 +33,21 @@ type GitManager struct {
 	SkipTLS    bool    `yaml:"skip_tls"`
 }
 
+// FleetManager represents the Orb ConfigManager configuration.
+type FleetManager struct {
+	URL          string `yaml:"url"`
+	TokenURL     string `yaml:"token_url"`
+	Timeout      *int   `yaml:"timeout,omitempty"`
+	SkipTLS      bool   `yaml:"skip_tls"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+}
+
 // Sources represents the configuration for manager sources, including cloud, local and git.
 type Sources struct {
 	Local LocalManager `yaml:"local"`
 	Git   GitManager   `yaml:"git"`
+	Fleet FleetManager `yaml:"orb"`
 }
 
 // ManagerConfig represents the configuration for the Config Manager
@@ -68,11 +79,11 @@ type ManagerSecrets struct {
 
 // BackendCommons represents common configuration for backends
 type BackendCommons struct {
-	Otel struct {
+	Otlp struct {
 		Grpc        string            `yaml:"grpc"`
 		HTTP        string            `yaml:"http"`
 		AgentLabels map[string]string `yaml:"agent_labels"`
-	} `yaml:"otel"`
+	} `yaml:"otlp"`
 	Diode struct {
 		Target          string `yaml:"target"`
 		ClientID        string `yaml:"client_id"`
@@ -85,12 +96,12 @@ type BackendCommons struct {
 
 // OrbAgent represents the configuration for the Orb agent
 type OrbAgent struct {
-	Backends      map[string]any    `yaml:"backends"`
-	Policies      map[string]any    `yaml:"policies"`
-	Labels        map[string]string `yaml:"labels"`
-	ConfigManager ManagerConfig     `yaml:"config_manager"`
-	SecretsManger ManagerSecrets    `yaml:"secrets_manager"`
-	Debug         struct {
+	Backends       map[string]any    `yaml:"backends"`
+	Policies       map[string]any    `yaml:"policies"`
+	Labels         map[string]string `yaml:"labels"`
+	ConfigManager  ManagerConfig     `yaml:"config_manager"`
+	SecretsManager ManagerSecrets    `yaml:"secrets_manager"`
+	Debug          struct {
 		Enable bool `yaml:"enable"`
 	} `yaml:"debug"`
 	ConfigFile string `yaml:"config_file"`

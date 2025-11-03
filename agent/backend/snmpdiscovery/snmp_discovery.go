@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -22,7 +24,6 @@ const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
 	readinessBackoff    = 10
-	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	defaultExec         = "snmp-discovery"
@@ -72,14 +73,16 @@ func Register() bool {
 func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger
+	d.logger = logger.With(slog.String("backend", "snmp_discovery"))
 	d.policyRepo = repo
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
 		d.apiHost = defaultAPIHost
 	}
-	if d.apiPort, prs = config["port"].(string); !prs {
+	if port, prs := config["port"]; prs {
+		d.apiPort = fmt.Sprintf("%v", port)
+	} else {
 		d.apiPort = defaultAPIPort
 	}
 
@@ -114,8 +117,8 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.diodeLogLevel = "debug"
 	}
 
-	if common.Otel.Grpc != "" {
-		d.diodeOtelEndpoint = common.Otel.Grpc
+	if common.Otlp.Grpc != "" {
+		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("snmp-discovery using OTLP metrics endpoint",
 			slog.String("endpoint", d.diodeOtelEndpoint))
 	}
@@ -198,13 +201,13 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 					stdout = nil
 					continue
 				}
-				d.logger.Info("snmp-discovery stdout", slog.String("log", line))
+				d.logSnmpDiscoveryOutput(line, slog.LevelInfo)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				d.logger.Info("snmp-discovery stderr", slog.String("log", line))
+				d.logSnmpDiscoveryOutput(line, slog.LevelError)
 			}
 		}
 	}()
@@ -232,6 +235,13 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	var version string
 	var readinessErr error
 	for backoff := 1; backoff <= readinessBackoff; backoff++ {
+		if status := d.proc.Status(); status.Complete {
+			err := d.proc.Stop()
+			if err != nil {
+				d.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("snmp-discovery process ended unexpectedly, check log")
+		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("snmp-discovery readiness ok, got version ",
@@ -354,6 +364,188 @@ func (d *snmpDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	}
 
 	return nil
+}
+
+func (d *snmpDiscoveryBackend) logSnmpDiscoveryOutput(line string, fallback slog.Level) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return
+	}
+
+	msg := trimmed
+	attrs := []slog.Attr(nil)
+	level := fallback
+
+	if parsedMsg, parsedAttrs, parsedLevel, ok := normalizeSnmpDiscoveryLine(trimmed, fallback); ok {
+		msg = parsedMsg
+		attrs = parsedAttrs
+		level = parsedLevel
+	}
+
+	ctx := d.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	d.logger.LogAttrs(ctx, level, msg, attrs...)
+}
+
+func normalizeSnmpDiscoveryLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
+	fields, ok := parseSnmpDiscoveryLogfmt(line)
+	if !ok {
+		return "", nil, fallback, false
+	}
+
+	msg, ok := fields["msg"]
+	if !ok || strings.TrimSpace(msg) == "" {
+		return "", nil, fallback, false
+	}
+
+	level := fallback
+	if lvlValue, exists := fields["level"]; exists {
+		if parsedLevel, levelOK := parseSnmpDiscoveryLevel(lvlValue); levelOK {
+			level = parsedLevel
+		}
+	}
+
+	delete(fields, "msg")
+	delete(fields, "level")
+	delete(fields, "time")
+
+	if len(fields) == 0 {
+		return msg, nil, level, true
+	}
+
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+
+	if len(keys) == 0 {
+		return msg, nil, level, true
+	}
+
+	sort.Strings(keys)
+
+	attrs := make([]slog.Attr, 0, len(keys))
+	for _, key := range keys {
+		attrs = append(attrs, slog.String(key, fields[key]))
+	}
+
+	return msg, attrs, level, true
+}
+
+func parseSnmpDiscoveryLevel(value string) (slog.Level, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "debug":
+		return slog.LevelDebug, true
+	case "info":
+		return slog.LevelInfo, true
+	case "warn", "warning":
+		return slog.LevelWarn, true
+	case "error", "err":
+		return slog.LevelError, true
+	default:
+		return 0, false
+	}
+}
+
+func parseSnmpDiscoveryLogfmt(line string) (map[string]string, bool) {
+	result := make(map[string]string)
+	runes := []rune(line)
+	length := len(runes)
+	index := 0
+
+	for index < length {
+		for index < length && runes[index] == ' ' {
+			index++
+		}
+		if index >= length {
+			break
+		}
+
+		keyStart := index
+		for index < length && runes[index] != '=' && runes[index] != ' ' {
+			index++
+		}
+		if index >= length || runes[index] != '=' {
+			return nil, false
+		}
+
+		key := strings.TrimSpace(string(runes[keyStart:index]))
+		index++ // skip '='
+
+		value, nextIndex, ok := readSnmpLogfmtValue(runes, index)
+		if !ok {
+			return nil, false
+		}
+
+		result[key] = value
+		index = nextIndex
+	}
+
+	if len(result) == 0 {
+		return nil, false
+	}
+
+	return result, true
+}
+
+func readSnmpLogfmtValue(runes []rune, start int) (string, int, bool) {
+	length := len(runes)
+	if start >= length {
+		return "", start, true
+	}
+
+	switch runes[start] {
+	case '"', '\'':
+		return readSnmpQuotedValue(runes, start)
+	default:
+		return readSnmpUnquotedValue(runes, start)
+	}
+}
+
+func readSnmpQuotedValue(runes []rune, start int) (string, int, bool) {
+	length := len(runes)
+	quote := runes[start]
+	index := start + 1
+	var builder strings.Builder
+
+	for index < length {
+		char := runes[index]
+		if char == '\\' && index+1 < length {
+			builder.WriteRune(runes[index+1])
+			index += 2
+			continue
+		}
+		if char == quote {
+			index++
+			for index < length && runes[index] == ' ' {
+				index++
+			}
+			return builder.String(), index, true
+		}
+		builder.WriteRune(char)
+		index++
+	}
+
+	return "", length, false
+}
+
+func readSnmpUnquotedValue(runes []rune, start int) (string, int, bool) {
+	length := len(runes)
+	index := start
+	for index < length && runes[index] != ' ' {
+		index++
+	}
+	value := string(runes[start:index])
+	for index < length && runes[index] == ' ' {
+		index++
+	}
+	return value, index, true
 }
 
 func (d *snmpDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {

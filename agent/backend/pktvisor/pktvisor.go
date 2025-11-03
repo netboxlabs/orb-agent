@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -29,7 +30,6 @@ const (
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	versionTimeout      = 2
-	scrapeTimeout       = 5
 	tapsTimeout         = 5
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "10853"
@@ -160,13 +160,13 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 					stdout = nil
 					continue
 				}
-				p.logger.Info("pktvisor stdout", slog.String("log", line))
+				p.logPktvisorOutput(line, slog.LevelInfo)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				p.logger.Info("pktvisor stderr", slog.String("log", line))
+				p.logPktvisorOutput(line, slog.LevelError)
 			}
 		}
 	}()
@@ -193,6 +193,13 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	var readinessError error
 	for backoff := range readinessBackoff {
+		if status := p.proc.Status(); status.Complete {
+			err := p.proc.Stop()
+			if err != nil {
+				p.logger.Error("proc.Stop error", slog.Any("error", err))
+			}
+			return errors.New("pktvisor process ended unexpectedly, check log")
+		}
 		var appMetrics AppInfo
 		url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
 		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
@@ -220,6 +227,90 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	return nil
 }
 
+func (p *pktvisorBackend) logPktvisorOutput(line string, level slog.Level) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+
+	msg, attrs := normalizePktvisorLine(line)
+	if msg == "" {
+		msg = line
+	}
+
+	ctx := p.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	p.logger.LogAttrs(ctx, level, msg, attrs...)
+}
+
+func normalizePktvisorLine(line string) (string, []slog.Attr) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return "", nil
+	}
+
+	cleaned := stripPktvisorPrefix(trimmed)
+	if cleaned == "" {
+		cleaned = trimmed
+	}
+
+	msg := cleaned
+	attrs := make([]slog.Attr, 0, 2)
+
+	if entity, name, rest, ok := parsePktvisorEntity(cleaned); ok {
+		attrs = append(attrs, slog.String(entity, name))
+		if rest != "" {
+			msg = fmt.Sprintf("%s %s", entity, rest)
+		} else {
+			msg = entity
+		}
+	}
+
+	return msg, attrs
+}
+
+func stripPktvisorPrefix(line string) string {
+	trimmed := strings.TrimSpace(line)
+	for strings.HasPrefix(trimmed, "[") {
+		closeIdx := strings.Index(trimmed, "]")
+		if closeIdx == -1 {
+			break
+		}
+		trimmed = strings.TrimSpace(trimmed[closeIdx+1:])
+	}
+	return trimmed
+}
+
+func parsePktvisorEntity(line string) (entity, name, rest string, ok bool) {
+	for _, candidate := range []string{"tap", "policy"} {
+		prefix := candidate + " ["
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+
+		remainder := line[len(prefix):]
+		closeIdx := strings.Index(remainder, "]")
+		if closeIdx == -1 {
+			return "", "", "", false
+		}
+
+		name = remainder[:closeIdx]
+		rest = strings.TrimSpace(remainder[closeIdx+1:])
+		rest = strings.TrimPrefix(rest, ":")
+		rest = strings.TrimSpace(rest)
+
+		if name != "" {
+			return candidate, name, rest, true
+		}
+
+		return "", "", "", false
+	}
+
+	return "", "", "", false
+}
+
 func (p *pktvisorBackend) Stop(ctx context.Context) error {
 	p.logger.Info("routine call to stop pktvisor", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
 	defer p.cancelFunc()
@@ -238,13 +329,13 @@ func (p *pktvisorBackend) Stop(ctx context.Context) error {
 func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	p.logger = logger
+	p.logger = logger.With(slog.String("backend", "pktvisor"))
 	p.policyRepo = repo
 
 	p.binary = defaultBinary
 	p.adminAPIHost = defaultAPIHost
 	p.adminAPIPort = defaultAPIPort
-	p.agentLabels = common.Otel.AgentLabels
+	p.agentLabels = common.Otlp.AgentLabels
 
 	// Create temp config file
 	tmpDir := os.TempDir()
@@ -266,9 +357,7 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 			}
 			configSection[key] = value
 		case "port":
-			if v, ok := value.(string); ok {
-				p.adminAPIPort = v
-			}
+			p.adminAPIPort = fmt.Sprintf("%v", value)
 			configSection[key] = value
 		case "taps":
 			visorConfig["taps"] = value
@@ -303,18 +392,18 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 
 	p.configFile = tmpFile.Name()
 
-	if common.Otel.HTTP != "" {
-		uri, err := url.Parse(common.Otel.HTTP)
+	if common.Otlp.HTTP != "" {
+		uri, err := url.Parse(common.Otlp.HTTP)
 		if err != nil {
-			return fmt.Errorf("failed to parse otel receiver http url: %w", err)
+			return fmt.Errorf("failed to parse otlp receiver http url: %w", err)
 		}
 		p.otelReceiverHost = uri.Hostname()
 		port, err := strconv.Atoi(uri.Port())
 		if err != nil {
-			return fmt.Errorf("failed to parse otel receiver port: %w", err)
+			return fmt.Errorf("failed to parse otlp receiver port: %w", err)
 		}
 		p.otelReceiverPort = port
-		p.logger.Info("configured otel receiver host", slog.String("host", p.otelReceiverHost),
+		p.logger.Info("configured otlp receiver host", slog.String("host", p.otelReceiverHost),
 			slog.Int("port", p.otelReceiverPort))
 	}
 

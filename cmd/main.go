@@ -14,7 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
-	"github.com/netboxlabs/orb-agent/agent/backend/otel"
+	"github.com/netboxlabs/orb-agent/agent/backend/opentelemetryinfinity"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/backend/snmpdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/worker"
@@ -34,7 +34,7 @@ var (
 func init() {
 	devicediscovery.Register()
 	networkdiscovery.Register()
-	otel.Register()
+	opentelemetryinfinity.Register()
 	snmpdiscovery.Register()
 	pktvisor.Register()
 	worker.Register()

@@ -60,11 +60,19 @@ orb:
     network_discovery:
     ...
 ```
+
+#### Discovery Backends
 Only the `network_discovery`, `device_discovery`, `worker` and `snmp_discovery` backends are currently supported. They do not require any special configuration.
 - [Device Discovery](./docs/backends/device_discovery.md) 
 - [Network Discovery](./docs/backends/network_discovery.md)
 - [Worker](./docs/backends/worker.md)
 - [SNMP Discovery](./docs/backends/snmp_discovery.md)
+
+#### Observability Backends
+Observability backends focus on collecting and exporting rich telemetry from network traffic or probes so you can feed metrics into your monitoring stack.
+
+- [pktvisor](./docs/backends/pktvisor.md)
+- [OpenTelemetry Infinity](./docs/backends/opentelemetry_infinity.md)
 
 #### Common
 A special `common` subsection under `backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings and OpenTelemetry configuration to all backends.
@@ -80,7 +88,7 @@ A special `common` subsection under `backends` defines configuration settings th
           agent_name: agent01
           dry_run: false
           dry_run_output_dir: /opt/orb
-        otel:
+        otlp:
           grpc: "grpc://otel-collector:4317"
           agent_labels:
             environment: "production"
@@ -120,6 +128,15 @@ The container needs sufficient permissions, to send `icmp` and `tcp` packets. Th
 
 ```sh
  docker run -u root -v ${PWD}:/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+Or if using podman
+```sh
+podman run -d --privileged --net=host \
+  -v ${PWD}:/opt/orb/ \
+  -e DIODE_CLIENT_ID \
+  -e DIODE_CLIENT_SECRET \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
 ### Configuration samples

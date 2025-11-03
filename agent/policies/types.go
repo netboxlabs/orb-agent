@@ -2,7 +2,6 @@ package policies
 
 import (
 	"database/sql/driver"
-	"time"
 )
 
 // PolicyData represents a policy
@@ -16,8 +15,6 @@ type PolicyData struct {
 	Data               any
 	State              PolicyState
 	BackendErr         string
-	LastScrapeBytes    int64
-	LastScrapeTS       time.Time
 	PreviousPolicyData *PolicyData
 }
 
@@ -39,7 +36,6 @@ const (
 	Running
 	FailedToApply
 	Offline
-	NoTapMatch
 )
 
 // PolicyState represents the state of a policy
@@ -50,7 +46,6 @@ var policyStateMap = [...]string{
 	"running",
 	"failed_to_apply",
 	"offline",
-	"no_tap_match",
 }
 
 var policyStateRevMap = map[string]PolicyState{
@@ -58,7 +53,6 @@ var policyStateRevMap = map[string]PolicyState{
 	"running":         Running,
 	"failed_to_apply": FailedToApply,
 	"offline":         Offline,
-	"no_tap_match":    NoTapMatch,
 }
 
 func (s PolicyState) String() string {

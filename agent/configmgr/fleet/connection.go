@@ -1,0 +1,225 @@
+package fleet
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
+
+	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
+)
+
+// MQTTConnection manages the MQTT connection
+type MQTTConnection struct {
+	logger            *slog.Logger
+	connectionManager *autopaho.ConnectionManager
+	heartbeater       *heartbeater
+	messaging         *Messaging
+	resetChan         chan struct{}
+}
+
+// NewMQTTConnection creates a new MQTTConnection
+func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}, backendState backend.StateRetriever) *MQTTConnection {
+	groupManager := newGroupManager()
+	return &MQTTConnection{
+		connectionManager: nil,
+		logger:            logger,
+		heartbeater:       newHeartbeater(logger, backendState, pMgr, &groupManager),
+		messaging:         NewMessaging(logger, pMgr, resetChan, &groupManager),
+		resetChan:         resetChan,
+	}
+}
+
+// TopicActions are the actions to take on a topic
+type TopicActions struct {
+	Subscribe   func(topic string) error
+	Publish     func(ctx context.Context, topic string, payload []byte) error
+	Unsubscribe func(topic string) error
+}
+
+// ConnectionDetails contains the details needed to connect to the MQTT broker
+type ConnectionDetails struct {
+	MQTTURL  string
+	Token    string
+	AgentID  string
+	Topics   TokenResponseTopics
+	ClientID string
+	Zone     string
+}
+
+// Connect connects to the MQTT broker
+func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
+	// Parse the ORB URL
+	serverURL, err := url.Parse(details.MQTTURL)
+	if err != nil {
+		connection.logger.Error("failed to parse MQTT URL", "url", details.MQTTURL, "error", err)
+		return err
+	}
+
+	cfg := autopaho.ClientConfig{
+		ServerUrls:                    []*url.URL{serverURL},
+		KeepAlive:                     30,
+		CleanStartOnInitialConnection: true,
+		ConnectTimeout:                10 * time.Second,
+		ReconnectBackoff: func(_ int) time.Duration {
+			return 10 * time.Second
+		},
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
+			connection.logger.Info("MQTT connection established", "server", serverURL.String())
+
+			_, err := cm.Subscribe(context.Background(), &paho.Subscribe{
+				Subscriptions: []paho.SubscribeOptions{
+					{Topic: details.Topics.Inbox, QoS: 1},
+				},
+			})
+			if err != nil {
+				connection.logger.Error("failed to subscribe", "topic", details.Topics.Inbox, "error", err)
+			} else {
+				connection.logger.Info("successfully subscribed", "topic", details.Topics.Inbox)
+			}
+
+			// start heartbeat loop bound to the same connection-level context
+			go connection.heartbeater.sendHeartbeats(ctx, func() {}, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic)
+
+			connection.messaging.sendCapabilities(ctx, backends, labels, configFile, func(ctx context.Context, payload []byte) error {
+				_, err := cm.Publish(ctx, &paho.Publish{
+					Topic:   details.Topics.Capabilities,
+					Payload: payload,
+					QoS:     1,
+					Retain:  false,
+				})
+				if err != nil {
+					// TODO: reconnect?
+					connection.logger.Error("failed to publish capabilities", "error", err)
+					return err
+				}
+
+				connection.logger.Debug("capabilities sent",
+					"topic", details.Topics.Capabilities,
+					"payload", string(payload),
+				)
+				return nil
+			})
+
+			// Wait for capabilities to be handled
+			time.Sleep(10 * time.Second)
+			go connection.messaging.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
+				_, err := cm.Publish(ctx, &paho.Publish{
+					Topic:   details.Topics.Outbox,
+					Payload: payload,
+					QoS:     1,
+					Retain:  false,
+				})
+				if err != nil {
+					connection.logger.Error("failed to publish group memberships request", "error", err)
+					return err
+				}
+				return nil
+			})
+		},
+		OnConnectError: func(err error) {
+			connection.logger.Error("MQTT connection error", "error", err)
+		},
+		ClientConfig: paho.ClientConfig{
+			ClientID: details.ClientID,
+			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
+				func(pr paho.PublishReceived) (bool, error) {
+					// Log any published messages to subscribed topics
+					connection.logger.Info("received MQTT message", "topic", pr.Packet.Topic)
+
+					orgID := strings.Split(pr.Packet.Topic, "/")[1]
+
+					// Use a fresh context for async message handling, not the Connect() context
+					// which may be canceled or have a short timeout
+					err = connection.messaging.DispatchToHandlers(
+						context.Background(),
+						pr.Packet.Payload,
+						orgID,
+						details.AgentID,
+						TopicActions{
+							Subscribe:   connection.subscribeToTopic,
+							Publish:     connection.publishToTopic,
+							Unsubscribe: connection.unsubscribeFromTopic,
+						},
+					)
+					if err != nil {
+						connection.logger.Error("failed to dispatch to handlers", "error", err)
+					}
+
+					return true, nil
+				},
+			},
+		},
+	}
+
+	// Set authentication if token is provided
+	if details.Token != "" {
+		connection.logger.Info("setting MQTT authentication", "client_id", details.ClientID, "zone", details.Zone)
+		cfg.ConnectUsername = fmt.Sprintf("%s:%s", details.Zone, details.ClientID)
+		cfg.ConnectPassword = []byte(details.Token)
+	}
+
+	// Create and start the connection manager using the long-lived context.
+	connection.connectionManager, err = autopaho.NewConnection(ctx, cfg)
+	if err != nil {
+		connection.logger.Error("failed to create MQTT connection", "error", err)
+		return err
+	}
+
+	// Wait for the initial connection; bound this operation with a timeout that
+	// is still cancellable from the parent.
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	err = connection.connectionManager.AwaitConnection(waitCtx)
+	if err != nil {
+		connection.logger.Error("failed to establish initial MQTT connection", "error", err)
+		return err
+	}
+
+	connection.logger.Info("MQTT connection manager started successfully")
+	return nil
+}
+
+// Disconnect disconnects from the MQTT broker
+func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
+	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+	return connection.connectionManager.Disconnect(ctx)
+}
+
+func (connection *MQTTConnection) subscribeToTopic(topic string) error {
+	_, err := connection.connectionManager.Subscribe(context.Background(), &paho.Subscribe{
+		Subscriptions: []paho.SubscribeOptions{
+			{Topic: topic, QoS: 1},
+		},
+	})
+	return err
+}
+
+func (connection *MQTTConnection) unsubscribeFromTopic(topic string) error {
+	_, err := connection.connectionManager.Unsubscribe(context.Background(), &paho.Unsubscribe{
+		Topics: []string{topic},
+	})
+	return err
+}
+
+func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic string, payload []byte) error {
+	connection.logger.Debug("publishing to topic", "topic", topic, "payload", string(payload))
+	_, err := connection.connectionManager.Publish(ctx, &paho.Publish{
+		Topic:   topic,
+		Payload: payload,
+		QoS:     0,
+		Retain:  false,
+	})
+	if err != nil {
+		connection.logger.Error("failed to publish to topic", "topic", topic, "error", err)
+		return err
+	}
+	return nil
+}
