@@ -123,6 +123,16 @@ def test_translate_device_with_overrides(sample_device_info, sample_override_def
     assert device.device_type.manufacturer.name == "Cisco"
 
 
+def test_translate_device_serial_list(sample_device_info, sample_defaults):
+    """Ensure device translation handles list serial numbers."""
+    sample_device_info["serial_number"] = ["123456789", "987654321"]
+    device = translate_device(sample_device_info, sample_defaults)
+    assert device.serial == "123456789"
+    sample_device_info["serial_number"] = []
+    device = translate_device(sample_device_info, sample_defaults)
+    assert device.serial == ""
+
+
 def test_translate_interface(
     sample_device_info, sample_interface_info, sample_defaults
 ):

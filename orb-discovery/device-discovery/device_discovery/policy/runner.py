@@ -245,8 +245,9 @@ class PolicyRunner:
             discovery_failure = get_metric("discovery_failure")
             if discovery_failure:
                 discovery_failure.add(1, {"policy": self.name})
-            logger.error(f"Policy {self.name}, Hostname {sanitized_hostname}: {e}")
-
+            logger.error(
+                f"Policy {self.name}, Hostname {sanitized_hostname}: {e}", exc_info=True
+            )
             # Still record discovery duration on failure
             discovery_latency = get_metric("discovery_latency")
             if discovery_latency:

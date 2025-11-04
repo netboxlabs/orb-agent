@@ -71,12 +71,29 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
     if defaults.location:
         location = Location(name=defaults.location, site=defaults.site)
 
+    serial_number = device_info.get("serial_number")
+    if isinstance(serial_number, list | tuple):
+        if not serial_number:
+            serial_number = None
+        else:
+            string_values = [
+                value
+                for value in serial_number
+                if isinstance(value, str | bytes) and value
+            ]
+            if string_values:
+                serial_number = string_values[0]
+            else:
+                serial_number = str(serial_number[0])
+    elif serial_number is not None and not isinstance(serial_number, str | bytes):
+        serial_number = str(serial_number)
+
     device = Device(
         name=device_info.get("hostname"),
         device_type=DeviceType(model=model, manufacturer=manufacturer),
         platform=Platform(name=platform, manufacturer=manufacturer),
         role=defaults.role,
-        serial=device_info.get("serial_number"),
+        serial=serial_number,
         status="active",
         site=defaults.site,
         tags=tags,
