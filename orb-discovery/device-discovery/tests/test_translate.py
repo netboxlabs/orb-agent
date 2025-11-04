@@ -386,6 +386,12 @@ def test_translate_vlan(sample_defaults):
     assert vlan is None
 
 
+def test_translate_vlan_with_none_id(sample_defaults):
+    """Ensure translate_vlan returns None for invalid None VLAN IDs."""
+    vlan = translate_vlan(None, "Invalid VLAN", sample_defaults)
+    assert vlan is None
+
+
 def test_translate_vlan_with_defaults(sample_defaults):
     """Ensure VLAN translation includes default values."""
     sample_defaults.vlan = VlanParameters(

@@ -264,7 +264,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
     """
     try:
         vid_int = int(vid)
-    except ValueError:
+    except (ValueError, TypeError):
         return None
     tags = list(defaults.tags) if defaults.tags else []
     comments = None
