@@ -203,7 +203,31 @@ func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, b
 }
 
 func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) {
-	err := be.ApplyPolicy(*pd, updatePolicy)
+	state, detail, err := be.GetRunningStatus()
+	if state != backend.Running || err != nil {
+		pd.State = policies.FailedToApply
+		switch {
+		case err != nil:
+			pd.BackendErr = err.Error()
+		case detail != "":
+			pd.BackendErr = detail
+		default:
+			pd.BackendErr = fmt.Sprintf("backend state: %s", state)
+		}
+
+		a.logger.Warn(
+			"backend is not ready to apply policy",
+			"backend", pd.Backend,
+			"policy_id", payload.ID,
+			"policy_name", payload.Name,
+			"backend_state", state.String(),
+			"detail", detail,
+			"error", err,
+		)
+		return
+	}
+
+	err = be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
 		a.logger.Warn("policy failed to apply", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend, "error", err)
