@@ -45,7 +45,7 @@ func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url 
 	status, _, err := GetRunningStatus(proc)
 	if status != Running {
 		logger.Warn("skipping REST API request because process is not running or is unresponsive",
-			slog.String("backend", backendName), slog.String("url", url), slog.String("method", method), slog.Any("error", err))
+			"backend", backendName, "url", url, "method", method, "error", err)
 		return err
 	}
 
@@ -63,7 +63,7 @@ func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url 
 
 	defer func() {
 		if err := res.Body.Close(); err != nil {
-			logger.Error("failed to close response body", slog.Any("error", err))
+			logger.Error("failed to close response body", "error", err)
 		}
 	}()
 

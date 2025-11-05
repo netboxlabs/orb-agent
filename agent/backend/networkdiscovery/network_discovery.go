@@ -73,7 +73,7 @@ func Register() bool {
 func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger.With(slog.String("backend", "network_discovery"))
+	d.logger = logger.With("backend", "network_discovery")
 	d.policyRepo = repo
 
 	var prs bool
@@ -120,7 +120,7 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("network-discovery using OTLP metrics endpoint",
-			slog.String("endpoint", d.diodeOtelEndpoint))
+			"endpoint", d.diodeOtelEndpoint)
 	}
 
 	return nil
@@ -163,16 +163,16 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	if d.diodeLogLevel != "" {
 		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
 		d.logger.Info("network-discovery using log level",
-			slog.String("log_level", d.diodeLogLevel))
+			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {
 		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 		d.logger.Info("network-discovery using OTLP metrics endpoint",
-			slog.String("endpoint", d.diodeOtelEndpoint))
+			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("network-discovery startup", slog.Any("arguments", pvOptions))
+	d.logger.Info("network-discovery startup", "arguments", pvOptions)
 
 	if !d.diodeDryRun {
 		// Find and replace the masked client secret with the actual value
@@ -224,19 +224,19 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	status := d.proc.Status()
 
 	if status.Error != nil {
-		d.logger.Error("network-discovery startup error", slog.Any("error", status.Error))
+		d.logger.Error("network-discovery startup error", "error", status.Error)
 		return status.Error
 	}
 
 	if status.Complete {
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", slog.Any("error", err))
+			d.logger.Error("proc.Stop error", "error", err)
 		}
 		return errors.New("network-discovery startup error, check log")
 	}
 
-	d.logger.Info("network-discovery process started", slog.Int("pid", status.PID))
+	d.logger.Info("network-discovery process started", "pid", status.PID)
 
 	var version string
 	var readinessErr error
@@ -244,27 +244,27 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		if status := d.proc.Status(); status.Complete {
 			err := d.proc.Stop()
 			if err != nil {
-				d.logger.Error("proc.Stop error", slog.Any("error", err))
+				d.logger.Error("proc.Stop error", "error", err)
 			}
 			return errors.New("network-discovery process ended unexpectedly, check log")
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("network-discovery readiness ok, got version ",
-				slog.String("network_discovery_version", version))
+				"network_discovery_version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
 		d.logger.Info("network-discovery is not ready, trying again with backoff",
-			slog.String("backoff backoffDuration", backoffDuration.String()))
+			"backoff backoffDuration", backoffDuration.String())
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessErr != nil {
-		d.logger.Error("network-discovery error on readiness", slog.Any("error", readinessErr))
+		d.logger.Error("network-discovery error on readiness", "error", readinessErr)
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", slog.Any("error", err))
+			d.logger.Error("proc.Stop error", "error", err)
 		}
 		return readinessErr
 	}
@@ -297,15 +297,15 @@ func (d *networkDiscoveryBackend) logNetworkDiscoveryOutput(line string, fallbac
 }
 
 func (d *networkDiscoveryBackend) Stop(ctx context.Context) error {
-	d.logger.Info("routine call to stop network-discovery", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	d.logger.Info("routine call to stop network-discovery", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
 	err := d.proc.Stop()
 	finalStatus := <-d.statusChan
 	if err != nil {
-		d.logger.Error("network-discovery shutdown error", slog.Any("error", err))
+		d.logger.Error("network-discovery shutdown error", "error", err)
 	}
-	d.logger.Info("network-discovery process stopped", slog.Int("pid", finalStatus.PID),
-		slog.Int("exit_code", finalStatus.Exit))
+	d.logger.Info("network-discovery process stopped", "pid", finalStatus.PID,
+		"exit_code", finalStatus.Exit)
 	return nil
 }
 
@@ -313,7 +313,7 @@ func (d *networkDiscoveryBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
-			d.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
+			d.logger.Error("failed to stop backend on restart procedure", "error", err)
 			return err
 		}
 	}
@@ -321,7 +321,7 @@ func (d *networkDiscoveryBackend) FullReset(ctx context.Context) error {
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "network-discovery"))
 	// start it
 	if err := d.Start(backendCtx, cancelFunc); err != nil {
-		d.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
+		d.logger.Error("failed to start backend on restart procedure", "error", err)
 		return err
 	}
 	return nil
@@ -365,12 +365,12 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := d.RemovePolicy(data); err != nil {
-			d.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
-				slog.String("policy_name", data.Name), slog.Any("error", err))
+			d.logger.Warn("policy failed to remove", "policy_id", data.ID,
+				"policy_name", data.Name, "error", err)
 		}
 	}
 
-	d.logger.Debug("network-discovery policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
+	d.logger.Debug("network-discovery policy apply", "policy_id", data.ID, "data", data.Data)
 
 	fullPolicy := map[string]any{
 		"policies": map[string]any{
@@ -380,7 +380,7 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
-		d.logger.Warn("policy yaml marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		d.logger.Warn("policy yaml marshal failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -389,7 +389,7 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 	err = backend.CommonRequest("network-discovery", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
-		d.logger.Warn("policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		d.logger.Warn("policy application failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -397,7 +397,7 @@ func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePo
 }
 
 func (d *networkDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
-	d.logger.Debug("network-discovery policy remove", slog.String("policy_id", data.ID))
+	d.logger.Debug("network-discovery policy remove", "policy_id", data.ID)
 	var resp any
 	name := data.Name
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy

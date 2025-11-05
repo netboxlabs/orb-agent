@@ -71,7 +71,7 @@ func Register() bool {
 func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger.With(slog.String("backend", "worker"))
+	d.logger = logger.With("backend", "worker")
 	d.policyRepo = repo
 
 	var prs bool
@@ -113,7 +113,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("orb-worker using OTLP metrics endpoint",
-			slog.String("endpoint", d.diodeOtelEndpoint))
+			"endpoint", d.diodeOtelEndpoint)
 	}
 
 	return nil
@@ -157,7 +157,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("worker startup", slog.Any("arguments", pvOptions))
+	d.logger.Info("worker startup", "arguments", pvOptions)
 
 	if !d.diodeDryRun && len(pvOptions) > 9 {
 		pvOptions[9] = d.diodeClientSecret
@@ -203,19 +203,19 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	status := d.proc.Status()
 
 	if status.Error != nil {
-		d.logger.Error("worker startup error", slog.Any("error", status.Error))
+		d.logger.Error("worker startup error", "error", status.Error)
 		return status.Error
 	}
 
 	if status.Complete {
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", slog.Any("error", err))
+			d.logger.Error("proc.Stop error", "error", err)
 		}
 		return errors.New("worker startup error, check log")
 	}
 
-	d.logger.Info("worker process started", slog.Int("pid", status.PID))
+	d.logger.Info("worker process started", "pid", status.PID)
 
 	var version string
 	var readinessErr error
@@ -223,27 +223,27 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		if status := d.proc.Status(); status.Complete {
 			err := d.proc.Stop()
 			if err != nil {
-				d.logger.Error("proc.Stop error", slog.Any("error", err))
+				d.logger.Error("proc.Stop error", "error", err)
 			}
 			return errors.New("worker process ended unexpectedly, check log")
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("worker readiness ok, got version ",
-				slog.String("worker_version", version))
+				"worker_version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
 		d.logger.Info("worker is not ready, trying again with backoff",
-			slog.String("backoff backoffDuration", backoffDuration.String()))
+			"backoff backoffDuration", backoffDuration.String())
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessErr != nil {
-		d.logger.Error("worker error on readiness", slog.Any("error", readinessErr))
+		d.logger.Error("worker error on readiness", "error", readinessErr)
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", slog.Any("error", err))
+			d.logger.Error("proc.Stop error", "error", err)
 		}
 		return readinessErr
 	}
@@ -252,15 +252,15 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 }
 
 func (d *workerBackend) Stop(ctx context.Context) error {
-	d.logger.Info("routine call to stop worker", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	d.logger.Info("routine call to stop worker", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
 	err := d.proc.Stop()
 	finalStatus := <-d.statusChan
 	if err != nil {
-		d.logger.Error("worker shutdown error", slog.Any("error", err))
+		d.logger.Error("worker shutdown error", "error", err)
 	}
-	d.logger.Info("worker process stopped", slog.Int("pid", finalStatus.PID),
-		slog.Int("exit_code", finalStatus.Exit))
+	d.logger.Info("worker process stopped", "pid", finalStatus.PID,
+		"exit_code", finalStatus.Exit)
 	return nil
 }
 
@@ -268,7 +268,7 @@ func (d *workerBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
-			d.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
+			d.logger.Error("failed to stop backend on restart procedure", "error", err)
 			return err
 		}
 	}
@@ -276,7 +276,7 @@ func (d *workerBackend) FullReset(ctx context.Context) error {
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "worker"))
 	// start it
 	if err := d.Start(backendCtx, cancelFunc); err != nil {
-		d.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
+		d.logger.Error("failed to start backend on restart procedure", "error", err)
 		return err
 	}
 	return nil
@@ -344,12 +344,12 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := d.RemovePolicy(data); err != nil {
-			d.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
-				slog.String("policy_name", data.Name), slog.Any("error", err))
+			d.logger.Warn("policy failed to remove", "policy_id", data.ID,
+				"policy_name", data.Name, "error", err)
 		}
 	}
 
-	d.logger.Debug("worker policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
+	d.logger.Debug("worker policy apply", "policy_id", data.ID, "data", data.Data)
 
 	fullPolicy := map[string]any{
 		"policies": map[string]any{
@@ -359,7 +359,7 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
-		d.logger.Warn("policy yaml marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		d.logger.Warn("policy yaml marshal failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -368,7 +368,7 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 	err = backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
-		d.logger.Warn("policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		d.logger.Warn("policy application failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -376,7 +376,7 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 }
 
 func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
-	d.logger.Debug("worker policy remove", slog.String("policy_id", data.ID))
+	d.logger.Debug("worker policy remove", "policy_id", data.ID)
 	var resp any
 	var name string
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy

@@ -92,12 +92,12 @@ func Run(_ *cobra.Command, _ []string) {
 		cobra.CheckErr(fmt.Errorf("no config file specified, use --config or -c flag to provide config files"))
 	}
 
-	logger.Info("backends loaded", slog.Any("backends", configData.OrbAgent.Backends))
+	logger.Info("backends loaded", "backends", configData.OrbAgent.Backends)
 
 	// new agent
 	a, err := agent.New(logger, configData)
 	if err != nil {
-		logger.Error("agent start up error", slog.Any("error", err))
+		logger.Error("agent start up error", "error", err)
 		os.Exit(1)
 	}
 
@@ -123,7 +123,7 @@ func Run(_ *cobra.Command, _ []string) {
 	// start agent
 	err = a.Start(rootCtx, cancelFunc)
 	if err != nil {
-		logger.Error("agent startup error", slog.Any("error", err))
+		logger.Error("agent startup error", "error", err)
 		os.Exit(1)
 	}
 
