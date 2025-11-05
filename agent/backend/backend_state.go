@@ -105,7 +105,7 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 
 // RegisterError registers an error for a backend and updates its state
 func (manager *stateManager) RegisterError(name string, errMessage string) {
-	manager.logger.Error(errMessage, slog.String("backend", name))
+	manager.logger.Error(errMessage, "backend", name)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.backendState[name] = &State{
