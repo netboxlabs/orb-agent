@@ -118,3 +118,79 @@ backend1:
 	err = gc.Start(cfg, backends)
 	require.NoError(t, err)
 }
+
+// TestGitStartNoMatchingPolicies ensures Start returns an error when no selector entries match agent labels.
+func TestGitStartNoMatchingPolicies(t *testing.T) {
+	remoteDir, err := os.MkdirTemp("", "fake-remote-nomatch")
+	require.NoError(t, err)
+	defer func() {
+		if err := os.RemoveAll(remoteDir); err != nil {
+			require.NoError(t, err, "failed to remove temp dir")
+		}
+	}()
+
+	remoteRepo, err := gitv5.PlainInit(remoteDir, false)
+	require.NoError(t, err)
+
+	selectorContent := `
+test_selector:
+  selector:
+    env: prod
+  policies:
+    test_policy:
+      enabled: true
+      path: "policy.yaml"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(remoteDir, "selector.yaml"), []byte(selectorContent), 0o644))
+
+	policyContent := `
+backend1:
+  test_policy:
+    key: "value"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(remoteDir, "policy.yaml"), []byte(policyContent), 0o644))
+
+	worktree, err := remoteRepo.Worktree()
+	require.NoError(t, err)
+	_, err = worktree.Add("selector.yaml")
+	require.NoError(t, err)
+	_, err = worktree.Add("policy.yaml")
+	require.NoError(t, err)
+	_, err = worktree.Commit("initial commit", &gitv5.CommitOptions{
+		Author: &object.Signature{
+			Name:  "tester",
+			Email: "tester@example.com",
+			When:  time.Now(),
+		},
+	})
+	require.NoError(t, err)
+
+	repoURL := "file://" + remoteDir
+	pMgr := new(mockPolicyManager)
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Labels: map[string]string{"env": "dev"},
+			ConfigManager: config.ManagerConfig{
+				Active: "git",
+				Sources: config.Sources{
+					Git: config.GitManager{
+						URL:  repoURL,
+						Auth: "none",
+					},
+				},
+			},
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active, &mockBackendState{})
+
+	backends := map[string]backend.Backend{
+		"backend1": &mockBackend{name: "backend1"},
+	}
+
+	err = gc.Start(cfg, backends)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no policies match the selector")
+	pMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
+}
