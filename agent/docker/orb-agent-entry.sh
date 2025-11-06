@@ -16,15 +16,21 @@ agentstop2 () {
 }
 
 if [ "${INSTALL_DRIVERS_PATH}" != '' ]; then
-  cd $(dirname "$(realpath "$INSTALL_DRIVERS_PATH")")
+  cd "$(dirname "$(realpath "${INSTALL_DRIVERS_PATH}")")"
   echo "Installing additional drivers"
-  pip3 install -r ${INSTALL_DRIVERS_PATH}
+  pip3 install -r "${INSTALL_DRIVERS_PATH}" || {
+    echo "Failed to install additional drivers from ${INSTALL_DRIVERS_PATH}" >&2
+    exit 1
+  }
 fi
 
 if [ "${INSTALL_WORKERS_PATH}" != '' ]; then
-  cd $(dirname "$(realpath "$INSTALL_WORKERS_PATH")")
+  cd "$(dirname "$(realpath "${INSTALL_WORKERS_PATH}")")"
   echo "Installing custom orb workers"
-  pip3 install -r ${INSTALL_WORKERS_PATH}
+  pip3 install -r "${INSTALL_WORKERS_PATH}" || {
+    echo "Failed to install custom orb workers from ${INSTALL_WORKERS_PATH}" >&2
+    exit 1
+  }
 fi
 
 # check geodb folder and extract db
