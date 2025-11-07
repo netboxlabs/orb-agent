@@ -92,7 +92,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
 		"outbox_topic", topics.Outbox,
-		"otlp_topic", topics.OTLP)
+		"otlp_topic", topics.Ingest)
 
 	connectionDetails := fleet.ConnectionDetails{
 		MQTTURL:  jwtClaims.MqttURL,
@@ -154,8 +154,8 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		// Create publisher adapter and bind to bridge
 		pub := otlpbridge.NewCMAdapterPublisher(cm)
 		fleetManager.otlpBridge.SetPublisher(pub)
-		fleetManager.otlpBridge.SetTopic(topics.OTLP)
-		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.OTLP))
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
 	})
 
 	return nil

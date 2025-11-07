@@ -18,18 +18,18 @@ import (
 
 // BridgeServer holds the lifecycle for the OTLP → MQTT bridge server.
 type BridgeServer struct {
-	cfg       BridgeConfig
-	enc       Encoder
-	grpcSrv   *grpc.Server
-	listener  net.Listener
-	closeOnce sync.Once
+	cfg              BridgeConfig
+	enc              Encoder
+	ingestGRPCServer *grpc.Server
+	listener         net.Listener
+	closeOnce        sync.Once
 
 	// Shared runtime state
-	mu         sync.RWMutex
-	publisher  Publisher
-	topic      string
-	policyRepo policies.PolicyRepo
-	logger     *slog.Logger
+	mu          sync.RWMutex
+	publisher   Publisher
+	ingestTopic string
+	policyRepo  policies.PolicyRepo
+	logger      *slog.Logger
 }
 
 // NewBridgeServer builds a BridgeServer but does not start it.
@@ -59,11 +59,11 @@ func (s *BridgeServer) SetPublisher(pub Publisher) {
 	s.publisher = pub
 }
 
-// SetTopic sets the topic for publishing.
-func (s *BridgeServer) SetTopic(topic string) {
+// SetIngestTopic sets the topic for publishing.
+func (s *BridgeServer) SetIngestTopic(topic string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.topic = topic
+	s.ingestTopic = topic
 }
 
 // GetPublisher returns the current publisher (for handlers).
@@ -73,11 +73,11 @@ func (s *BridgeServer) GetPublisher() Publisher {
 	return s.publisher
 }
 
-// GetTopic returns the current topic (for handlers).
-func (s *BridgeServer) GetTopic() string {
+// GetIngestTopic returns the current topic (for handlers).
+func (s *BridgeServer) GetIngestTopic() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.topic
+	return s.ingestTopic
 }
 
 // GetPolicyRepo returns the policy repo (for handlers).
@@ -96,15 +96,15 @@ func (s *BridgeServer) Start(_ context.Context) error {
 	}
 	s.listener = lis
 
-	s.grpcSrv = grpc.NewServer()
+	s.ingestGRPCServer = grpc.NewServer()
 
 	// Register services with the bridge
-	collectortrace.RegisterTraceServiceServer(s.grpcSrv, &traceServer{bridge: s})
-	collectormetrics.RegisterMetricsServiceServer(s.grpcSrv, &metricsServer{bridge: s})
-	collectorlogs.RegisterLogsServiceServer(s.grpcSrv, &logsServer{bridge: s})
+	collectortrace.RegisterTraceServiceServer(s.ingestGRPCServer, &traceServer{bridge: s})
+	collectormetrics.RegisterMetricsServiceServer(s.ingestGRPCServer, &metricsServer{bridge: s})
+	collectorlogs.RegisterLogsServiceServer(s.ingestGRPCServer, &logsServer{bridge: s})
 
 	go func() {
-		err := s.grpcSrv.Serve(lis)
+		err := s.ingestGRPCServer.Serve(lis)
 		if err != nil {
 			s.logger.Error("failed to serve gRPC server", "error", err)
 		} else {
@@ -118,8 +118,8 @@ func (s *BridgeServer) Start(_ context.Context) error {
 func (s *BridgeServer) Stop(_ context.Context) error {
 	var err error
 	s.closeOnce.Do(func() {
-		if s.grpcSrv != nil {
-			s.grpcSrv.GracefulStop()
+		if s.ingestGRPCServer != nil {
+			s.ingestGRPCServer.GracefulStop()
 		}
 		if s.listener != nil {
 			_ = s.listener.Close()

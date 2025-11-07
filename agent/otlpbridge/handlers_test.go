@@ -26,7 +26,7 @@ func TestTraceHandler_Export_Publishes(t *testing.T) {
 		enc: ProtobufEncoder{},
 	}
 	bridge.SetPublisher(fp)
-	bridge.SetTopic("traces")
+	bridge.SetIngestTopic("traces")
 	s := &traceServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectortrace.ExportTraceServiceRequest{})
 	if err != nil {
@@ -45,7 +45,7 @@ func TestMetricsHandler_Export_Publishes(t *testing.T) {
 		enc: ProtobufEncoder{},
 	}
 	bridge.SetPublisher(fp)
-	bridge.SetTopic("metrics")
+	bridge.SetIngestTopic("metrics")
 	s := &metricsServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectormetrics.ExportMetricsServiceRequest{})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestLogsHandler_Export_Publishes(t *testing.T) {
 		enc: ProtobufEncoder{},
 	}
 	bridge.SetPublisher(fp)
-	bridge.SetTopic("logs")
+	bridge.SetIngestTopic("logs")
 	s := &logsServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectorlogs.ExportLogsServiceRequest{})
 	if err != nil {

@@ -22,7 +22,7 @@ func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTrac
 	if pub == nil {
 		return nil, fmt.Errorf("publisher not yet initialized")
 	}
-	topic := s.bridge.GetTopic()
+	topic := s.bridge.GetIngestTopic()
 	if topic == "" {
 		return nil, fmt.Errorf("topic not yet initialized")
 	}
@@ -48,7 +48,7 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 	if pub == nil {
 		return nil, fmt.Errorf("publisher not yet initialized")
 	}
-	topic := s.bridge.GetTopic()
+	topic := s.bridge.GetIngestTopic()
 	if topic == "" {
 		return nil, fmt.Errorf("topic not yet initialized")
 	}
@@ -74,7 +74,7 @@ func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsSe
 	if pub == nil {
 		return nil, fmt.Errorf("publisher not yet initialized")
 	}
-	topic := s.bridge.GetTopic()
+	topic := s.bridge.GetIngestTopic()
 	if topic == "" {
 		return nil, fmt.Errorf("topic not yet initialized")
 	}

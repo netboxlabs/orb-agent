@@ -108,7 +108,6 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	a.backendsCommon = commonConfig
 	delete(cfgBackends, "common")
 
-	a.setCommonConfigOverrides()
 	var otlpShutdown func(context.Context) error
 	if a.backendsCommon.Otlp.Grpc != "" {
 		a.logger, otlpShutdown, err = telemetry.BuildOTLPLogExporter(agentCtx, a.logger, a.backendsCommon)
@@ -164,13 +163,6 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 		go a.waitForRestartRequests()
 	}
 	return nil
-}
-
-func (a *orbAgent) setCommonConfigOverrides() {
-	if a.backendsCommon.Otlp.Grpc == "" && a.config.OrbAgent.ConfigManager.Active == "fleet" {
-		a.backendsCommon.Otlp.Grpc = "grpc://localhost:4317"
-		a.logger.Info("overriding OTLP address to use OTLP MQTTbridge", slog.String("grpc", a.backendsCommon.Otlp.Grpc))
-	}
 }
 
 func (a *orbAgent) waitForRestartRequests() {
