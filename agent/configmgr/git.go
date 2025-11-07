@@ -211,6 +211,8 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 }
 
 func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]backend.Backend) {
+	gc.logger.Debug("Running scheduled Git Config Manager task")
+
 	// Fetch latest updates from remote
 	err := gc.repo.Fetch(&gitv5.FetchOptions{
 		RemoteName:      "origin",
@@ -469,8 +471,10 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 	if matchingPolicies == nil {
-		gc.logger.Info("No matching selector found. No policies will be applied.")
-		return nil
+		if gc.config.Schedule == nil {
+			return errors.New("no policies match the selector; skipping policy application")
+		}
+		gc.logger.Info("No matching policies were found; scheduler will retry policy application", "schedule", *gc.config.Schedule)
 	}
 
 	// Read all policies
