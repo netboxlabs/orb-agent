@@ -64,7 +64,7 @@ func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []s
 		}
 		defer func() {
 			if err := reader.Close(); err != nil {
-				gc.logger.Error("failed to close file", slog.Any("error", err))
+				gc.logger.Error("failed to close file", "error", err)
 			}
 		}()
 
@@ -108,7 +108,7 @@ func (gc *gitConfigManager) removePolicies(policiesByPath map[policyPath]policyD
 
 	appliedPolicies, err := gc.pMgr.GetRepo().GetAll()
 	if err != nil {
-		gc.logger.Error("failed to get applied policies", slog.Any("error", err))
+		gc.logger.Error("failed to get applied policies", "error", err)
 		return
 	}
 
@@ -117,7 +117,7 @@ func (gc *gitConfigManager) removePolicies(policiesByPath map[policyPath]policyD
 		key := policyKey{Backend: policy.Backend, Name: policy.Name}
 		if _, exists := definedPolicies[key]; !exists {
 			if err := gc.pMgr.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
-				gc.logger.Error("failed to remove policy", slog.Any("error", err))
+				gc.logger.Error("failed to remove policy", "error", err)
 			}
 		}
 	}
@@ -154,7 +154,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 	}
 	defer func() {
 		if err := reader.Close(); err != nil {
-			gc.logger.Error("failed to close file", slog.Any("error", err))
+			gc.logger.Error("failed to close file", "error", err)
 		}
 	}()
 
@@ -187,14 +187,14 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 			}
 		}
 		if matches {
-			gc.logger.Info("Selector matched", slog.String("selector", selectorName))
+			gc.logger.Info("Selector matched", "selector", selectorName)
 			for pName, policy := range entry.Policies {
 				if policy.Enabled != nil && !*policy.Enabled {
 					continue
 				}
 				if _, exists := policyPathsSet[policy.Path]; exists {
-					gc.logger.Warn("Policy path already exists", slog.String("selector", selectorName),
-						slog.String("policy", pName), slog.String("path", policy.Path))
+					gc.logger.Warn("Policy path already exists", "selector", selectorName,
+						"policy", pName, "path", policy.Path)
 				}
 				policyPathsSet[policy.Path] = struct{}{}
 			}
@@ -219,14 +219,14 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 		RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
 	})
 	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
-		gc.logger.Error("Failed to fetch latest changes", slog.Any("error", err))
+		gc.logger.Error("Failed to fetch latest changes", "error", err)
 		return
 	}
 
 	// Get the latest reference (HEAD)
 	ref, err := gc.repo.Reference(plumbing.ReferenceName("refs/heads/"+gc.config.Branch), true)
 	if err != nil {
-		gc.logger.Error("Failed to get latest branch reference", slog.Any("error", err))
+		gc.logger.Error("Failed to get latest branch reference", "error", err)
 		return
 	}
 
@@ -239,13 +239,13 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	// Get the latest commit
 	commit, err := gc.repo.CommitObject(ref.Hash())
 	if err != nil {
-		gc.logger.Error("Failed to get commit object", slog.Any("error", err))
+		gc.logger.Error("Failed to get commit object", "error", err)
 		return
 	}
 
 	tree, err := commit.Tree()
 	if err != nil {
-		gc.logger.Error("Failed to get commit tree", slog.Any("error", err))
+		gc.logger.Error("Failed to get commit tree", "error", err)
 		return
 	}
 
@@ -261,20 +261,20 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	// Get the last commit's tree
 	oldCommit, err := gc.repo.CommitObject(gc.lastRef)
 	if err != nil {
-		gc.logger.Error("Failed to get old commit object", slog.Any("error", err))
+		gc.logger.Error("Failed to get old commit object", "error", err)
 		return
 	}
 
 	oldTree, err := oldCommit.Tree()
 	if err != nil {
-		gc.logger.Error("Failed to get old commit tree", slog.Any("error", err))
+		gc.logger.Error("Failed to get old commit tree", "error", err)
 		return
 	}
 
 	// Check for file changes
 	changes, err := oldTree.Diff(tree)
 	if err != nil {
-		gc.logger.Error("Failed to get diff", slog.Any("error", err))
+		gc.logger.Error("Failed to get diff", "error", err)
 		return
 	}
 
@@ -283,7 +283,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 
 	matchingPolicies, err := gc.processSelector(selectorFile, cfg)
 	if err != nil {
-		gc.logger.Error("Failed to process selector", slog.Any("error", err))
+		gc.logger.Error("Failed to process selector", "error", err)
 		return
 	}
 
@@ -302,7 +302,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 
 	policiesByPath, err := gc.readPolicies(tree, matchingPolicies)
 	if err != nil {
-		gc.logger.Error("Failed to read policies", slog.Any("error", err))
+		gc.logger.Error("Failed to read policies", "error", err)
 		return
 	}
 
@@ -316,7 +316,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 		}
 		policies := policiesByPath[policyPath(policy)]
 		if err = gc.applyPolicies(policies, backends); err != nil {
-			gc.logger.Error("failed to apply policies", slog.Any("error", err))
+			gc.logger.Error("failed to apply policies", "error", err)
 		}
 	}
 
@@ -328,7 +328,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 		for path, policies := range policiesByPath {
 			if change.To.Name == string(path) {
 				if err = gc.applyPolicies(policies, backends); err != nil {
-					gc.logger.Error("Failed to apply policies", slog.Any("error", err))
+					gc.logger.Error("Failed to apply policies", "error", err)
 				}
 			}
 		}
@@ -342,6 +342,10 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 
 	if gc.config.URL == "" {
 		return errors.New("URL is required for Git Config Manager")
+	}
+	gc.config.URL, err = config.ResolveEnv(gc.config.URL)
+	if err != nil {
+		return err
 	}
 
 	switch gc.config.Auth {
@@ -408,7 +412,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		for _, ref := range refs {
 			if ref.Name().IsBranch() {
 				branchName = ref.Name().Short()
-				gc.logger.Info("detected default branch", slog.String("branch", branchName))
+				gc.logger.Info("detected default branch", "branch", branchName)
 				break
 			}
 		}
@@ -418,7 +422,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		}
 	}
 
-	gc.logger.Info("cloning repository", slog.String("url", gc.config.URL), slog.String("branch", branchName))
+	gc.logger.Info("cloning repository", "url", gc.config.URL, "branch", branchName)
 
 	// Now clone the repository with the determined branch
 	gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{

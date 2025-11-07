@@ -1,0 +1,15 @@
+orb:
+  config_manager:
+    active: fleet
+    sources:
+      orb:
+        token_url: ${FLEET_AUTH_URL}
+        client_id: ${FLEET_CLIENT_ID}
+        client_secret: ${FLEET_CLIENT_SECRET}
+  backends:
+    network_discovery:
+    device_discovery:
+    snmp_discovery:
+    common:
+      diode:
+        dry_run: true
