@@ -21,8 +21,8 @@ import (
 
 const (
 	routineKey             config.ContextKey = "routine"
-	otlpShutdownTimeout                      = 5 * time.Second
-	restartBackendChanSize                   = 5
+	otlpShutdownTimeout    time.Duration     = 5 * time.Second
+	restartBackendChanSize int               = 5
 )
 
 // Agent is the interface that all agents must implement
@@ -88,11 +88,8 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	if len(cfgBackends) == 0 {
 		return errors.New("no backends specified")
 	}
-	// Ensure any previous OTLP exporter is flushed before reconfiguring backends.
-	a.shutdownOTLP(agentCtx)
 	a.ctx = agentCtx
 	a.backends = make(map[string]backend.Backend, len(cfgBackends))
-	var otlpShutdown func(context.Context) error
 	var commonConfig config.BackendCommons
 	if v, prs := cfgBackends["common"]; prs {
 		bytes, err := yaml.Marshal(v)
@@ -111,6 +108,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	a.backendsCommon = commonConfig
 	delete(cfgBackends, "common")
 
+	var otlpShutdown func(context.Context) error
 	if a.backendsCommon.Otlp.Grpc != "" {
 		a.logger, otlpShutdown, err = telemetry.BuildOTLPLogExporter(agentCtx, a.logger, a.backendsCommon)
 		if err != nil {
@@ -220,9 +218,20 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			}
 		}
 	}
+	if err := a.configManager.Stop(ctx); err != nil {
+		a.logger.Error("error while stopping config manager", slog.Any("error", err))
+	}
+	a.logger.Debug("stopping agent with number of go routines and go calls", slog.Int("goroutines", runtime.NumGoroutine()), slog.Int64("gocalls", runtime.NumCgoCall()))
+	if a.cancelFunction != nil {
+		a.cancelFunction()
+	}
 	a.shutdownOTLP(ctx)
 	a.logger.Debug("stopping agent with number of go routines and go calls", "goroutines", runtime.NumGoroutine(), "gocalls", runtime.NumCgoCall())
-	defer a.cancelFunction()
+	defer func() {
+		if a.cancelFunction != nil {
+			a.cancelFunction()
+		}
+	}()
 }
 
 func (a *orbAgent) shutdownOTLP(ctx context.Context) {

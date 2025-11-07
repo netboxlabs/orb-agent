@@ -511,6 +511,12 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 	return nil
 }
 
+// GetContext returns a context for git config manager (no-op for now).
 func (gc *gitConfigManager) GetContext(ctx context.Context) context.Context {
 	return ctx
+}
+
+// Stop is a no-op for git config manager.
+func (gc *gitConfigManager) Stop(_ context.Context) error {
+	return nil
 }

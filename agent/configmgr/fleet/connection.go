@@ -22,6 +22,8 @@ type MQTTConnection struct {
 	heartbeater       *heartbeater
 	messaging         *Messaging
 	resetChan         chan struct{}
+	onReadyHooks      []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	connectionTopics  TokenResponseTopics
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -33,7 +35,13 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		heartbeater:       newHeartbeater(logger, backendState, pMgr, &groupManager),
 		messaging:         NewMessaging(logger, pMgr, resetChan, &groupManager),
 		resetChan:         resetChan,
+		onReadyHooks:      make([]func(cm *autopaho.ConnectionManager, topics TokenResponseTopics), 0),
 	}
+}
+
+// AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
+func (connection *MQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
+	connection.onReadyHooks = append(connection.onReadyHooks, fn)
 }
 
 // TopicActions are the actions to take on a topic
@@ -62,6 +70,9 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		return err
 	}
 
+	// Store topics for hook callbacks
+	connection.connectionTopics = details.Topics
+
 	cfg := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{serverURL},
 		KeepAlive:                     30,
@@ -82,6 +93,13 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 				connection.logger.Error("failed to subscribe", "topic", details.Topics.Inbox, "error", err)
 			} else {
 				connection.logger.Info("successfully subscribed", "topic", details.Topics.Inbox)
+			}
+
+			// Call onReady hooks
+			for _, hook := range connection.onReadyHooks {
+				go func(h func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
+					h(cm, connection.connectionTopics)
+				}(hook)
 			}
 
 			// start heartbeat loop bound to the same connection-level context

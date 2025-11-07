@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/eclipse/paho.golang/autopaho"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
+	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -23,6 +25,8 @@ type fleetConfigManager struct {
 	authTokenManager *fleet.AuthTokenManager
 	resetChan        chan struct{}
 	backendState     backend.StateRetriever
+	policyManager    policymgr.PolicyManager
+	otlpBridge       *otlpbridge.BridgeServer
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *fleetConfigManager {
@@ -33,6 +37,7 @@ func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, ba
 		authTokenManager: fleet.NewAuthTokenManager(logger),
 		resetChan:        resetChan,
 		backendState:     backendState,
+		policyManager:    pMgr,
 	}
 }
 
@@ -86,7 +91,8 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		"heartbeat_topic", topics.Heartbeat,
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
-		"outbox_topic", topics.Outbox)
+		"outbox_topic", topics.Outbox,
+		"otlp_topic", topics.Ingest)
 
 	connectionDetails := fleet.ConnectionDetails{
 		MQTTURL:  jwtClaims.MqttURL,
@@ -127,6 +133,31 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
+	// Register MQTTOnReadyHook to initialize the OTLP bridge
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
+		bridgeConfig := otlpbridge.BridgeConfig{
+			ListenAddr: ":4317",
+			Encoding:   "protobuf",
+		}
+		var err error
+		fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+		if err != nil {
+			fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
+			return
+		}
+		if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+			fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
+			return
+		}
+
+		// Create publisher adapter and bind to bridge
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
+	})
+
 	return nil
 }
 
@@ -145,4 +176,15 @@ func (fleetManager *fleetConfigManager) configToSafeString(cfg config.Config) (s
 func (fleetManager *fleetConfigManager) GetContext(ctx context.Context) context.Context {
 	// Empty implementation for now - just return the context as-is
 	return ctx
+}
+
+// Stop gracefully shuts down the OTLP bridge.
+func (fleetManager *fleetConfigManager) Stop(ctx context.Context) error {
+	if fleetManager.otlpBridge != nil {
+		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
+			fleetManager.logger.Error("error while stopping OTLP bridge", slog.Any("error", err))
+			return err
+		}
+	}
+	return nil
 }
