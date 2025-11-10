@@ -50,14 +50,11 @@ RUN \
     apt install --yes --no-install-recommends nmap openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip to latest version (25.3) with fewer vulnerabilities
-RUN python -m pip install --upgrade --no-cache-dir pip==25.3 && \
-    rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
-
 RUN mkdir -p /opt/orb
 
-# Copy Python site-packages from builder
+# Copy Python site-packages and binaries from builder (includes pip 25.3 and package executables)
 COPY --from=python-builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
+COPY --from=python-builder /usr/local/bin /usr/local/bin
 
 # Copy binaries from other stages
 COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/bin/pktvisord
