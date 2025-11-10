@@ -33,7 +33,7 @@ type GitManager struct {
 	SkipTLS    bool    `yaml:"skip_tls"`
 }
 
-// FleetManager represents the Orb ConfigManager configuration.
+// FleetManager represents the Fleet ConfigManager configuration.
 type FleetManager struct {
 	URL          string `yaml:"url"`
 	TokenURL     string `yaml:"token_url"`
@@ -47,7 +47,7 @@ type FleetManager struct {
 type Sources struct {
 	Local LocalManager `yaml:"local"`
 	Git   GitManager   `yaml:"git"`
-	Fleet FleetManager `yaml:"orb"`
+	Fleet FleetManager `yaml:"fleet"`
 }
 
 // ManagerConfig represents the configuration for the Config Manager
