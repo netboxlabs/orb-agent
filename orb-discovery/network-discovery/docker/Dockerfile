@@ -13,9 +13,9 @@ ARG TARGETOS TARGETARCH
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/network-discovery ./cmd/main.go
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -trimpath -o /build/network-discovery ./cmd/main.go
 
-FROM alpine:3.20
+FROM alpine:3.22
 
 RUN apk update && apk add --no-cache nmap
 

@@ -8,7 +8,7 @@ COPY .. .
 
 ARG TARGETOS TARGETARCH
 
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /build/snmp-discovery ./cmd/main.go
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -trimpath -o /build/snmp-discovery ./cmd/main.go
 
 FROM alpine:3.22
 
