@@ -88,7 +88,8 @@ agent_selector_2:
 agent_selector_matches_all:
   selector:
   policies:
-    path: folder4/policy4.yaml
+    policy4:
+      path: folder4/policy4.yaml
 ```
 
 ### policy.yaml
