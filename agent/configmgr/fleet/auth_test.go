@@ -269,7 +269,7 @@ func TestAuthTokenManager_GetTokenExpiryTime(t *testing.T) {
 	assert.WithinDuration(t, futureExpiry.Add(-5*time.Minute), expiryTime, 1*time.Second)
 }
 
-func TestAuthTokenManager_IsTokenExpired(t *testing.T) {
+func TestAuthTokenManager_IsTokenExpired_ExpiredCases(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	authTokenManager := NewAuthTokenManager(logger)
@@ -302,6 +302,12 @@ func TestAuthTokenManager_IsTokenExpired(t *testing.T) {
 	// Wait a moment to ensure time has passed
 	time.Sleep(2 * time.Second)
 	assert.True(t, authTokenManager.IsTokenExpired())
+}
+
+func TestAuthTokenManager_IsTokenExpired_ValidToken(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	authTokenManager := NewAuthTokenManager(logger)
 
 	// Test with valid token
 	futureExpiry := time.Now().Add(1 * time.Hour)
@@ -321,11 +327,11 @@ func TestAuthTokenManager_IsTokenExpired(t *testing.T) {
 	}))
 	defer serverValid.Close()
 
-	authTokenManager2 := NewAuthTokenManager(logger)
-	_, err = authTokenManager2.GetToken(ctx, serverValid.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
+	ctx := context.Background()
+	_, err := authTokenManager.GetToken(ctx, serverValid.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
 	require.NoError(t, err)
 
-	assert.False(t, authTokenManager2.IsTokenExpired())
+	assert.False(t, authTokenManager.IsTokenExpired())
 }
 
 func TestAuthTokenManager_IsTokenExpiringSoon(t *testing.T) {
