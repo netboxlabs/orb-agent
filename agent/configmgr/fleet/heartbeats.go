@@ -37,10 +37,10 @@ func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, po
 
 func (hb *heartbeater) stop(heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
 	hb.hbTicker.Stop()
-	hb.sendSingleHeartbeat(hb.heartbeatCtx, heartbeatTopic, publishFunc, "", time.Now(), messages.HeartbeatState(messages.Offline))
+	hb.sendSingleHeartbeat(hb.heartbeatCtx, heartbeatTopic, publishFunc, "", time.Now(), messages.HeartbeatState(messages.Offline), nil)
 }
 
-func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error, _ string, _ time.Time, _ messages.HeartbeatState) {
+func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error, _ string, _ time.Time, _ messages.HeartbeatState, onFailure func()) {
 	hbData := messages.Heartbeat{
 		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
 		TimeStamp:     time.Now().UTC(),
@@ -58,6 +58,9 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 
 	if err := publishFunc(ctx, heartbeatTopic, body); err != nil {
 		hb.logger.Error("error sending heartbeat", "error", err)
+		if onFailure != nil {
+			onFailure()
+		}
 	} else {
 		hb.logger.Debug("heartbeat sent", "payload", string(body))
 	}
@@ -114,23 +117,23 @@ func (hb *heartbeater) getGroupState() map[string]messages.GroupStateInfo {
 // supplied context is cancelled.  The cancelFunc parameter is ignored by the
 // implementation but is accepted for backward-compatibility with unit tests
 // that expect to pass it.
-func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
+func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error, onFailure func()) {
 	// Update our internal reference so other methods that read hb.heartbeatCtx
 	// (if any) remain accurate.
 	hb.heartbeatCtx = ctx
 
 	hb.logger.Debug("start heartbeats routine")
-	hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Online)
+	hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Online, onFailure)
 
 	for {
 		select {
 		case <-ctx.Done():
 			hb.logger.Debug("context done, stopping heartbeats routine")
-			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Offline)
+			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Offline, nil)
 			hb.heartbeatCtx = nil
 			return
 		case t := <-hb.hbTicker.C:
-			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, t, messages.Online)
+			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, t, messages.Online, onFailure)
 		}
 	}
 }

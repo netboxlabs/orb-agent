@@ -32,7 +32,8 @@ func (noopBackendState) Get() map[string]*backend.State { return map[string]*bac
 func TestAddOnReadyHook_RegistersHook(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reset := make(chan struct{}, 1)
-	conn := NewMQTTConnection(logger, noopPM{}, reset, noopBackendState{})
+	reconnect := make(chan struct{}, 1)
+	conn := NewMQTTConnection(logger, noopPM{}, reset, reconnect, noopBackendState{})
 
 	if len(conn.onReadyHooks) != 0 {
 		t.Fatalf("expected 0 hooks initially, got %d", len(conn.onReadyHooks))
@@ -48,7 +49,8 @@ func TestAddOnReadyHook_RegistersHook(t *testing.T) {
 func TestConnect_StoresTopicsBeforeConnecting(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reset := make(chan struct{}, 1)
-	conn := NewMQTTConnection(logger, noopPM{}, reset, noopBackendState{})
+	reconnect := make(chan struct{}, 1)
+	conn := NewMQTTConnection(logger, noopPM{}, reset, reconnect, noopBackendState{})
 
 	details := ConnectionDetails{
 		MQTTURL:  "mqtt://localhost:1883",

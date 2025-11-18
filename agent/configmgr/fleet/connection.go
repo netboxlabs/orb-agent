@@ -17,17 +17,21 @@ import (
 
 // MQTTConnection manages the MQTT connection
 type MQTTConnection struct {
-	logger            *slog.Logger
-	connectionManager *autopaho.ConnectionManager
-	heartbeater       *heartbeater
-	messaging         *Messaging
-	resetChan         chan struct{}
-	onReadyHooks      []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
-	connectionTopics  TokenResponseTopics
+	logger                   *slog.Logger
+	connectionManager        *autopaho.ConnectionManager
+	heartbeater              *heartbeater
+	messaging                *Messaging
+	resetChan                chan struct{}
+	onReadyHooks             []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	connectionTopics         TokenResponseTopics
+	reconnectChan            chan struct{}
+	capabilitiesFailCount    int
+	groupMembershipFailCount int
+	heartbeatFailCount       int
 }
 
 // NewMQTTConnection creates a new MQTTConnection
-func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}, backendState backend.StateRetriever) *MQTTConnection {
+func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}, reconnectChan chan struct{}, backendState backend.StateRetriever) *MQTTConnection {
 	groupManager := newGroupManager()
 	return &MQTTConnection{
 		connectionManager: nil,
@@ -36,6 +40,7 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		messaging:         NewMessaging(logger, pMgr, resetChan, &groupManager),
 		resetChan:         resetChan,
 		onReadyHooks:      make([]func(cm *autopaho.ConnectionManager, topics TokenResponseTopics), 0),
+		reconnectChan:     reconnectChan,
 	}
 }
 
@@ -103,7 +108,23 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			}
 
 			// start heartbeat loop bound to the same connection-level context
-			go connection.heartbeater.sendHeartbeats(ctx, func() {}, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic)
+			go connection.heartbeater.sendHeartbeats(ctx, func() {}, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
+				// Track heartbeat failures
+				connection.heartbeatFailCount++
+				connection.logger.Error("heartbeat publish failed",
+					"fail_count", connection.heartbeatFailCount)
+
+				// After 5 consecutive failures, trigger reconnect
+				if connection.heartbeatFailCount >= 5 {
+					connection.logger.Warn("heartbeat publish failed 5 times, triggering JWT refresh and reconnect")
+					select {
+					case connection.reconnectChan <- struct{}{}:
+					default:
+						connection.logger.Debug("reconnect already in progress")
+					}
+					connection.heartbeatFailCount = 0
+				}
+			})
 
 			connection.messaging.sendCapabilities(ctx, backends, labels, configFile, func(ctx context.Context, payload []byte) error {
 				_, err := cm.Publish(ctx, &paho.Publish{
@@ -113,11 +134,26 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 					Retain:  false,
 				})
 				if err != nil {
-					// TODO: reconnect?
-					connection.logger.Error("failed to publish capabilities", "error", err)
+					connection.capabilitiesFailCount++
+					connection.logger.Error("failed to publish capabilities",
+						"error", err,
+						"fail_count", connection.capabilitiesFailCount)
+
+					// After 1 retry (2 failures), trigger reconnect
+					if connection.capabilitiesFailCount >= 2 {
+						connection.logger.Warn("capabilities publish failed twice, triggering JWT refresh and reconnect")
+						select {
+						case connection.reconnectChan <- struct{}{}:
+						default:
+							connection.logger.Debug("reconnect already in progress")
+						}
+						connection.capabilitiesFailCount = 0
+					}
 					return err
 				}
 
+				// Reset counter on success
+				connection.capabilitiesFailCount = 0
 				connection.logger.Debug("capabilities sent",
 					"topic", details.Topics.Capabilities,
 					"payload", string(payload),
@@ -135,9 +171,26 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 					Retain:  false,
 				})
 				if err != nil {
-					connection.logger.Error("failed to publish group memberships request", "error", err)
+					connection.groupMembershipFailCount++
+					connection.logger.Error("failed to publish group memberships request",
+						"error", err,
+						"fail_count", connection.groupMembershipFailCount)
+
+					// After 1 retry (2 failures), trigger reconnect
+					if connection.groupMembershipFailCount >= 2 {
+						connection.logger.Warn("group membership publish failed twice, triggering JWT refresh and reconnect")
+						select {
+						case connection.reconnectChan <- struct{}{}:
+						default:
+							connection.logger.Debug("reconnect already in progress")
+						}
+						connection.groupMembershipFailCount = 0
+					}
 					return err
 				}
+
+				// Reset counter on success
+				connection.groupMembershipFailCount = 0
 				return nil
 			})
 		},
@@ -205,6 +258,37 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 	return nil
 }
 
+// Reconnect reconnects to the MQTT broker with new connection details (e.g., refreshed JWT)
+func (connection *MQTTConnection) Reconnect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error {
+	connection.logger.Info("reconnecting to MQTT broker with refreshed credentials")
+
+	// Disconnect the existing connection
+	if connection.connectionManager != nil {
+		disconnectCtx, cancel := context.WithTimeout(ctx, timeout)
+		connection.heartbeater.stop(details.Topics.Heartbeat, connection.publishToTopic)
+		err := connection.connectionManager.Disconnect(disconnectCtx)
+		cancel()
+		if err != nil {
+			connection.logger.Error("failed to disconnect during reconnect", "error", err)
+			// Continue anyway to try to establish new connection
+		}
+	}
+
+	// Reset failure counters
+	connection.capabilitiesFailCount = 0
+	connection.groupMembershipFailCount = 0
+	connection.heartbeatFailCount = 0
+
+	// Connect with new details
+	err := connection.Connect(ctx, details, backends, labels, configFile)
+	if err != nil {
+		return fmt.Errorf("failed to connect during reconnect: %w", err)
+	}
+
+	connection.logger.Info("successfully reconnected to MQTT broker")
+	return nil
+}
+
 // Disconnect disconnects from the MQTT broker
 func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
 	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
@@ -239,5 +323,8 @@ func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic stri
 		connection.logger.Error("failed to publish to topic", "topic", topic, "error", err)
 		return err
 	}
+	// Reset heartbeat failure counter on successful publish
+	// (heartbeats use this function, so successful publish means connection is ok)
+	connection.heartbeatFailCount = 0
 	return nil
 }
