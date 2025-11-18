@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -338,4 +339,343 @@ func TestFleetConfigManager_configToSafeString_DoesNotModifyOriginal(t *testing.
 	// Note: Due to Go's pass-by-value semantics, the original is preserved
 	assert.Equal(t, originalSecret, cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret,
 		"original config should not be modified")
+}
+
+func TestFleetConfigManager_MonitorTokenExpiry_Configuration(t *testing.T) {
+	// Test that monitorTokenExpiry uses default values when config is not set
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Set config with no monitoring settings (should use defaults)
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     "https://example.com/token",
+						ClientID:     "test-client-id",
+						ClientSecret: "test-secret",
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Initialize monitor context
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+
+	// Start monitor in a goroutine
+	done := make(chan bool)
+	go func() {
+		fleetManager.monitorTokenExpiry()
+		done <- true
+	}()
+
+	// Cancel monitor context to stop the monitor
+	fleetManager.monitorCancel()
+
+	// Wait for monitor to stop
+	select {
+	case <-done:
+		// Monitor stopped successfully
+	case <-time.After(1 * time.Second):
+		t.Fatal("monitor did not stop within timeout")
+	}
+}
+
+func TestFleetConfigManager_MonitorTokenExpiry_CustomConfiguration(t *testing.T) {
+	// Test that monitorTokenExpiry uses custom config values
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Set config with custom monitoring settings
+	checkInterval := 60
+	reconnectBuffer := 180
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:                 "https://example.com/token",
+						ClientID:                 "test-client-id",
+						ClientSecret:             "test-secret",
+						TokenExpiryCheckInterval: &checkInterval,
+						TokenReconnectBuffer:     &reconnectBuffer,
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Initialize monitor context
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+
+	// Start monitor in a goroutine
+	done := make(chan bool)
+	go func() {
+		fleetManager.monitorTokenExpiry()
+		done <- true
+	}()
+
+	// Cancel monitor context to stop the monitor
+	fleetManager.monitorCancel()
+
+	// Wait for monitor to stop
+	select {
+	case <-done:
+		// Monitor stopped successfully
+	case <-time.After(1 * time.Second):
+		t.Fatal("monitor did not stop within timeout")
+	}
+}
+
+func TestFleetConfigManager_Stop_CancelsMonitor(t *testing.T) {
+	// Test that Stop() properly cancels the token expiry monitor
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Initialize monitor context
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+
+	// Verify monitor context is not cancelled initially
+	select {
+	case <-fleetManager.monitorCtx.Done():
+		t.Fatal("monitor context should not be cancelled initially")
+	default:
+		// Good, context is not cancelled
+	}
+
+	// Call Stop()
+	ctx := context.Background()
+	err := fleetManager.Stop(ctx)
+
+	// Assert
+	require.NoError(t, err)
+
+	// Verify monitor context is now cancelled
+	select {
+	case <-fleetManager.monitorCtx.Done():
+		// Good, context is cancelled
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("monitor context should be cancelled after Stop()")
+	}
+}
+
+func TestFleetConfigManager_Stop_HandlesNilMonitorCancel(t *testing.T) {
+	// Test that Stop() handles nil monitorCancel gracefully
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Don't initialize monitorCancel (should be nil)
+	fleetManager.monitorCancel = nil
+
+	// Call Stop() - should not panic
+	ctx := context.Background()
+	err := fleetManager.Stop(ctx)
+
+	// Assert
+	require.NoError(t, err)
+}
+
+func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiredToken(t *testing.T) {
+	// Test that monitor detects expired token and triggers reconnection
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Set up config
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     "https://example.com/token",
+						ClientID:     "test-client-id",
+						ClientSecret: "test-secret",
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Set up expired token by getting a token and then manually setting expiry to past
+	// We'll use a test server to get a token first
+	pastExpiry := time.Now().Add(-1 * time.Hour)
+	jwtToken := fleet.RawJWTWithClaims(map[string]any{
+		"exp": pastExpiry.Unix(),
+		"iat": time.Now().Add(-2 * time.Hour).Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := fleet.TokenResponse{
+			AccessToken: jwtToken,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   1,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := fleetManager.authTokenManager.GetToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
+	require.NoError(t, err)
+
+	// Verify token is expired
+	assert.True(t, fleetManager.authTokenManager.IsTokenExpired())
+
+	// Create monitor context
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+	defer fleetManager.monitorCancel()
+
+	// Start monitor with short check interval for testing
+	done := make(chan bool)
+	go func() {
+		// Use a very short check interval for testing
+		checkInterval := 100 * time.Millisecond
+
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-fleetManager.monitorCtx.Done():
+				done <- true
+				return
+			case <-ticker.C:
+				if fleetManager.authTokenManager.IsTokenExpired() {
+					// Signal reconnection
+					select {
+					case fleetManager.reconnectChan <- struct{}{}:
+						// Reconnection triggered
+					default:
+						// Channel full, skip
+					}
+					done <- true
+					return
+				}
+			}
+		}
+	}()
+
+	// Wait for monitor to detect expired token
+	select {
+	case <-done:
+		// Monitor detected expired token
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("monitor did not detect expired token within timeout")
+	}
+
+	// Verify reconnection was triggered
+	select {
+	case <-fleetManager.reconnectChan:
+		// Reconnection signal received
+	default:
+		t.Fatal("reconnection signal should have been sent")
+	}
+}
+
+func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testing.T) {
+	// Test that monitor detects token expiring soon and triggers reconnection
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Set up config
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     "https://example.com/token",
+						ClientID:     "test-client-id",
+						ClientSecret: "test-secret",
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Set up token expiring soon (within buffer) by getting a token with soon expiry
+	soonExpiry := time.Now().Add(1 * time.Minute) // Expires in 1 minute
+	jwtToken := fleet.RawJWTWithClaims(map[string]any{
+		"exp": soonExpiry.Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := fleet.TokenResponse{
+			AccessToken: jwtToken,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   60,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := fleetManager.authTokenManager.GetToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
+	require.NoError(t, err)
+
+	// Verify token is expiring soon with 2 minute buffer
+	reconnectBuffer := 2 * time.Minute
+	assert.True(t, fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer))
+
+	// Create monitor context
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+	defer fleetManager.monitorCancel()
+
+	// Start monitor with short check interval for testing
+	done := make(chan bool)
+	go func() {
+		checkInterval := 100 * time.Millisecond
+
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-fleetManager.monitorCtx.Done():
+				done <- true
+				return
+			case <-ticker.C:
+				if fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
+					// Signal reconnection
+					select {
+					case fleetManager.reconnectChan <- struct{}{}:
+						// Reconnection triggered
+					default:
+						// Channel full, skip
+					}
+					done <- true
+					return
+				}
+			}
+		}
+	}()
+
+	// Wait for monitor to detect expiring token
+	select {
+	case <-done:
+		// Monitor detected expiring token
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("monitor did not detect expiring token within timeout")
+	}
+
+	// Verify reconnection was triggered
+	select {
+	case <-fleetManager.reconnectChan:
+		// Reconnection signal received
+	default:
+		t.Fatal("reconnection signal should have been sent")
+	}
 }

@@ -33,6 +33,8 @@ type fleetConfigManager struct {
 	labels            map[string]string
 	configYaml        string
 	connectionDetails fleet.ConnectionDetails
+	monitorCtx        context.Context
+	monitorCancel     context.CancelFunc
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *fleetConfigManager {
@@ -184,6 +186,10 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
+	// Start background goroutine to monitor token expiry and trigger proactive reconnection
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+	go fleetManager.monitorTokenExpiry()
+
 	return nil
 }
 
@@ -253,8 +259,73 @@ func (fleetManager *fleetConfigManager) GetContext(ctx context.Context) context.
 	return ctx
 }
 
-// Stop gracefully shuts down the OTLP bridge.
+// monitorTokenExpiry periodically checks token expiry and triggers reconnection before token expires
+func (fleetManager *fleetConfigManager) monitorTokenExpiry() {
+	// Check interval: default 30 seconds, configurable via config
+	checkInterval := 30 * time.Second
+	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval > 0 {
+		checkInterval = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval) * time.Second
+	}
+
+	// Reconnect buffer: default 2 minutes before expiry, configurable via config
+	reconnectBuffer := 2 * time.Minute
+	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer > 0 {
+		reconnectBuffer = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer) * time.Second
+	}
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	fleetManager.logger.Info("starting token expiry monitor",
+		"check_interval", checkInterval,
+		"reconnect_buffer", reconnectBuffer)
+
+	for {
+		select {
+		case <-fleetManager.monitorCtx.Done():
+			fleetManager.logger.Info("token expiry monitor stopped")
+			return
+		case <-ticker.C:
+			// Check if token is expired or expiring soon
+			if fleetManager.authTokenManager.IsTokenExpired() {
+				fleetManager.logger.Warn("JWT token has expired, triggering reconnection",
+					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime())
+				select {
+				case fleetManager.reconnectChan <- struct{}{}:
+					fleetManager.logger.Debug("reconnection signal sent due to expired token")
+				default:
+					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
+				}
+			} else if fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
+				fleetManager.logger.Warn("JWT token expiring soon, triggering proactive reconnection",
+					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
+					"reconnect_buffer", reconnectBuffer)
+				select {
+				case fleetManager.reconnectChan <- struct{}{}:
+					fleetManager.logger.Debug("reconnection signal sent due to imminent token expiry")
+				default:
+					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
+				}
+			} else {
+				expiryTime := fleetManager.authTokenManager.GetTokenExpiryTime()
+				if !expiryTime.IsZero() {
+					timeUntilExpiry := time.Until(expiryTime)
+					fleetManager.logger.Debug("token expiry check passed",
+						"expiry_time", expiryTime,
+						"time_until_expiry", timeUntilExpiry)
+				}
+			}
+		}
+	}
+}
+
+// Stop gracefully shuts down the OTLP bridge and token expiry monitor.
 func (fleetManager *fleetConfigManager) Stop(ctx context.Context) error {
+	// Stop token expiry monitor
+	if fleetManager.monitorCancel != nil {
+		fleetManager.monitorCancel()
+	}
+
 	if fleetManager.otlpBridge != nil {
 		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
 			fleetManager.logger.Error("error while stopping OTLP bridge", slog.Any("error", err))
