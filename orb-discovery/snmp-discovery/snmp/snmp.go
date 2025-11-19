@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -10,6 +11,21 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 )
+
+// SlogAdapter adapts slog.Logger to implement gosnmp.LoggerInterface
+type SlogAdapter struct {
+	logger *slog.Logger
+}
+
+// Print implements gosnmp.LoggerInterface by logging at Debug level
+func (s *SlogAdapter) Print(v ...interface{}) {
+	s.logger.Debug(fmt.Sprint(v...))
+}
+
+// Printf implements gosnmp.LoggerInterface by logging at Debug level
+func (s *SlogAdapter) Printf(format string, v ...interface{}) {
+	s.logger.Debug(fmt.Sprintf(format, v...))
+}
 
 // Host is a struct that represents an SNMP host
 type Host struct {
@@ -39,7 +55,7 @@ func NewHost(host string, port uint16, retries int, timeout time.Duration, authe
 func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) {
 	s.logger.Info("Scanning", "host", s.address)
 
-	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.timeout, s.authentication)
+	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.timeout, s.authentication, s.logger)
 	if err != nil {
 		return nil, err
 	}
@@ -167,10 +183,16 @@ const (
 )
 
 // ClientFactory is a function that creates a new SNMPClient
-type ClientFactory func(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication) (Walker, error)
+type ClientFactory func(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (Walker, error)
 
 // NewClient creates a new SNMPClient for the given target host
-func NewClient(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication) (Walker, error) {
+func NewClient(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (Walker, error) {
+	// Check if debug logging is enabled
+	var gosnmpLogger gosnmp.Logger
+	if logger.Enabled(context.Background(), slog.LevelDebug) {
+		gosnmpLogger = gosnmp.NewLogger(&SlogAdapter{logger})
+	}
+
 	switch authentication.ProtocolVersion {
 	case ProtocolVersion1:
 		return &Client{
@@ -181,6 +203,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Version:   gosnmp.Version1,
 				Timeout:   timeout,
 				Retries:   retries,
+				Logger:    gosnmpLogger,
 			},
 		}, nil
 	case ProtocolVersion2c:
@@ -192,6 +215,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Version:   gosnmp.Version2c,
 				Timeout:   timeout,
 				Retries:   retries,
+				Logger:    gosnmpLogger,
 			},
 		}, nil
 	case ProtocolVersion3:
@@ -211,6 +235,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Timeout:       timeout,
 				Retries:       retries,
 				SecurityModel: gosnmp.UserSecurityModel,
+				Logger:        gosnmpLogger,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,
 					AuthenticationProtocol:   authProtocol,

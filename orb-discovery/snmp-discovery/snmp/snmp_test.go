@@ -78,8 +78,8 @@ func TestSNMPHost(t *testing.T) {
 
 	t.Run("Successfully walks a host", func(t *testing.T) {
 		// Setup
-		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
-			fakeWalker, _ := snmp.NewFakeSNMPWalker("192.168.1.1", 161, 3, 1*time.Second, nil)
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
+			fakeWalker, _ := snmp.NewFakeSNMPWalker("192.168.1.1", 161, 3, 1*time.Second, nil, logger)
 			return fakeWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
@@ -110,7 +110,7 @@ func TestSNMPHost(t *testing.T) {
 			interfaceSpeedOID + ".1": {Value: 1000000, Type: gosnmp.Integer, IdentifierSize: 1},
 		}, nil)
 
-		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 			return mockWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
@@ -136,7 +136,7 @@ func TestSNMPHost(t *testing.T) {
 			ipAddressObjectID: {Value: "192.168.1.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
 		}, nil)
 
-		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 			return mockWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
@@ -158,7 +158,7 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker := &MockSNMP{}
 		mockWalker.On("Connect").Return(assert.AnError)
 		mockWalker.On("Close").Return(nil)
-		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 			return mockWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
@@ -178,7 +178,7 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
 		mockWalker.On("Walk", mock.Anything, mock.Anything).Return(make(map[string]snmp.PDU), assert.AnError)
-		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 			return mockWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
@@ -207,7 +207,7 @@ func TestSNMPHost(t *testing.T) {
 			interfaceSpeedOID + ".1": {Value: "invalid", Type: gosnmp.Asn1BER(255), IdentifierSize: 1}, // Invalid type
 		}, nil)
 
-		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 			return mockWalker, nil
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
@@ -232,7 +232,7 @@ func TestSNMPHost(t *testing.T) {
 		mockWalker.On("Connect").Return(nil)
 		mockWalker.On("Close").Return(nil)
 		mockWalker.On("Walk", mock.Anything, mock.Anything).Return(nil, assert.AnError)
-		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication) (snmp.Walker, error) {
+		snmpClientFactory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 			return nil, fmt.Errorf("error creating client")
 		}
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
@@ -434,7 +434,8 @@ func TestNewClient(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			client, err := snmp.NewClient("192.168.1.1", 161, 3, 1*time.Second, tc.auth)
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			client, err := snmp.NewClient("192.168.1.1", 161, 3, 1*time.Second, tc.auth, logger)
 
 			if tc.expectError {
 				assert.Error(t, err)

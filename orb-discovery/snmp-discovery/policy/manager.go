@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
@@ -193,7 +194,12 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 			m.logger.Info("Loaded device lookup extensions", "directory", policy.Config.LookupExtensionsDir)
 		}
 
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, snmp.NewClient, &m.mappingConfig, m.manufacturers, deviceLookup)
+		// Create logger-aware ClientFactory wrapper
+		clientFactory := func(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
+			return snmp.NewClient(host, port, retries, timeout, authentication, logger)
+		}
+
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, clientFactory, &m.mappingConfig, m.manufacturers, deviceLookup)
 		if err != nil {
 			return err
 		}
