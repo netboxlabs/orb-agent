@@ -115,6 +115,8 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.diodeLogLevel = logLevel
 	} else if debug, prs := config["debug"].(bool); prs && debug {
 		d.diodeLogLevel = "debug"
+	} else if logger.Enabled(context.Background(), slog.LevelDebug) {
+		d.diodeLogLevel = "debug"
 	}
 
 	if common.Otlp.Grpc != "" {
