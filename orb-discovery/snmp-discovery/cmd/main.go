@@ -51,7 +51,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if !*dryRun && (*diodeTarget == "" || *diodeClientID == "" || *diodeClientSecret == "") {
+	if !*dryRun && (*diodeTarget == "") {
 		fmt.Fprintf(os.Stderr, "Usage of snmp-discovery:\n")
 		flag.PrintDefaults()
 		os.Exit(1)
@@ -62,6 +62,8 @@ func main() {
 		producerName = fmt.Sprintf("%s/%s", *diodeAppNamePrefix, AppName)
 	}
 
+	logger := config.NewLogger(*logLevel, *logFormat)
+
 	var client diode.Client
 	var err error
 	if *dryRun {
@@ -69,13 +71,20 @@ func main() {
 			producerName,
 			env.ResolveEnvOrExit(*dryRunOutputDir),
 		)
-	} else {
+	} else if *diodeClientID != "" || *diodeClientSecret != "" {
 		client, err = diode.NewClient(
 			env.ResolveEnvOrExit(*diodeTarget),
 			producerName,
 			version.GetBuildVersion(),
 			diode.WithClientID(env.ResolveEnvOrExit(*diodeClientID)),
 			diode.WithClientSecret(env.ResolveEnvOrExit(*diodeClientSecret)),
+		)
+	} else {
+		logger.Debug("Initializing OTLP client")
+		client, err = diode.NewOTLPClient(
+			env.ResolveEnvOrExit(*diodeTarget),
+			producerName,
+			version.GetBuildVersion(),
 		)
 	}
 	if err != nil {
@@ -84,7 +93,6 @@ func main() {
 	}
 
 	ctx := context.Background()
-	logger := config.NewLogger(*logLevel, *logFormat)
 
 	if otelEndpoint != nil && *otelEndpoint != "" {
 		if err := metrics.SetupMetricsExport(ctx, logger, *otelEndpoint, *otelExportPeriod); err != nil {

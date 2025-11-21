@@ -23,12 +23,12 @@ type MockDiodeClient struct {
 	mock.Mock
 }
 
-func (m *MockDiodeClient) Ingest(ctx context.Context, entities []diode.Entity) (*diodepb.IngestResponse, error) {
+func (m *MockDiodeClient) Ingest(ctx context.Context, entities []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
 	args := m.Called(ctx, entities)
 	return args.Get(0).(*diodepb.IngestResponse), args.Error(1)
 }
 
-func (m *MockDiodeClient) IngestProto(ctx context.Context, entities []*diodepb.Entity) (*diodepb.IngestResponse, error) {
+func (m *MockDiodeClient) IngestProto(ctx context.Context, entities []*diodepb.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
 	args := m.Called(ctx, entities)
 	return args.Get(0).(*diodepb.IngestResponse), args.Error(1)
 }

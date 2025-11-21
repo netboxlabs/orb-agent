@@ -415,7 +415,9 @@ func (r *Runner) run() {
 		entities = append(entities, ip)
 	}
 
-	resp, err := r.client.Ingest(r.ctx, entities)
+	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
+		"policy_name": policyName,
+	}))
 	if err != nil {
 		r.logger.Error("error ingesting entities", slog.Any("error", err), slog.String("policy", policyName))
 	} else if resp != nil && resp.Errors != nil {
