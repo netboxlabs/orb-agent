@@ -153,20 +153,24 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 
 	// Register MQTTOnReadyHook to initialize the OTLP bridge
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
-		fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
-		bridgeConfig := otlpbridge.BridgeConfig{
-			ListenAddr: ":4317",
-			Encoding:   "protobuf",
-		}
-		var err error
-		fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
-		if err != nil {
-			fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
-			return
-		}
-		if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
-			fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
-			return
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
+			bridgeConfig := otlpbridge.BridgeConfig{
+				ListenAddr: ":4317",
+				Encoding:   "protobuf",
+			}
+			var err error
+			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+			if err != nil {
+				fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
+				return
+			}
+			if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+				fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
+				return
+			}
+		} else {
+			fleetManager.logger.Info("OTLP bridge already initialized, skipping initialization")
 		}
 
 		// Create publisher adapter and bind to bridge
