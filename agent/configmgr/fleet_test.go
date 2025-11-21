@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -18,6 +19,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
+	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -41,7 +43,11 @@ func (m *mockPolicyManagerForFleet) GetPolicyState() ([]policies.PolicyData, err
 
 func (m *mockPolicyManagerForFleet) GetRepo() policies.PolicyRepo {
 	args := m.Called()
-	return args.Get(0).(policies.PolicyRepo)
+	val := args.Get(0)
+	if val == nil {
+		return nil
+	}
+	return val.(policies.PolicyRepo)
 }
 
 func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(be backend.Backend) error {
@@ -677,5 +683,138 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testi
 		// Reconnection signal received
 	default:
 		t.Fatal("reconnection signal should have been sent")
+	}
+}
+
+func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.T) {
+	// Test that OnReadyHook initializes the bridge when called the first time
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Verify bridge is nil initially
+	assert.Nil(t, fleetManager.otlpBridge, "bridge should be nil initially")
+
+	// Create the hook function (simulating what Start does)
+	var hookFunc func(*autopaho.ConnectionManager, fleet.TokenResponseTopics)
+	hookFunc = func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
+			bridgeConfig := otlpbridge.BridgeConfig{
+				ListenAddr: ":0", // Use ephemeral port for testing
+				Encoding:   "protobuf",
+			}
+			var err error
+			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+			if err != nil {
+				fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
+				return
+			}
+			if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+				fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
+				return
+			}
+		} else {
+			fleetManager.logger.Info("OTLP bridge already initialized, skipping initialization")
+		}
+
+		// Create publisher adapter and bind to bridge
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
+	}
+
+	// Register the hook
+	fleetManager.connection.AddOnReadyHook(hookFunc)
+
+	// Simulate first connection ready event
+	topics := fleet.TokenResponseTopics{
+		Ingest: "test/otlp/topic",
+	}
+
+	// Call the hook manually (simulating first connection)
+	hookFunc(nil, topics)
+
+	// Verify bridge was initialized
+	require.NotNil(t, fleetManager.otlpBridge, "bridge should be initialized after first hook call")
+	assert.Equal(t, "test/otlp/topic", fleetManager.otlpBridge.GetIngestTopic(), "bridge should have correct ingest topic")
+
+	// Cleanup
+	if fleetManager.otlpBridge != nil {
+		_ = fleetManager.otlpBridge.Stop(context.Background())
+	}
+}
+
+func TestFleetConfigManager_OnReadyHook_SkipsInitializationOnReconnect(t *testing.T) {
+	// Test that OnReadyHook skips initialization when bridge already exists (reconnection scenario)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Pre-initialize the bridge (simulating it was already created)
+	bridgeConfig := otlpbridge.BridgeConfig{
+		ListenAddr: ":0",
+		Encoding:   "protobuf",
+	}
+	bridge, err := otlpbridge.NewBridgeServer(bridgeConfig, nil, logger)
+	require.NoError(t, err)
+	err = bridge.Start(context.Background())
+	require.NoError(t, err)
+	fleetManager.otlpBridge = bridge
+
+	// Store the original bridge pointer to verify it's not recreated
+	originalBridge := fleetManager.otlpBridge
+
+	// Create the hook function
+	var hookFunc func(*autopaho.ConnectionManager, fleet.TokenResponseTopics)
+	hookFunc = func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
+			bridgeConfig := otlpbridge.BridgeConfig{
+				ListenAddr: ":0",
+				Encoding:   "protobuf",
+			}
+			var err error
+			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+			if err != nil {
+				fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
+				return
+			}
+			if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+				fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
+				return
+			}
+		} else {
+			fleetManager.logger.Info("OTLP bridge already initialized, skipping initialization")
+		}
+
+		// Create publisher adapter and bind to bridge
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
+	}
+
+	// Register the hook
+	fleetManager.connection.AddOnReadyHook(hookFunc)
+
+	// Simulate reconnection ready event
+	topics := fleet.TokenResponseTopics{
+		Ingest: "test/otlp/topic/reconnect",
+	}
+
+	// Call the hook manually (simulating reconnection)
+	hookFunc(nil, topics)
+
+	// Verify bridge was NOT recreated (same instance)
+	assert.Equal(t, originalBridge, fleetManager.otlpBridge, "bridge should not be recreated on reconnect")
+	assert.Equal(t, "test/otlp/topic/reconnect", fleetManager.otlpBridge.GetIngestTopic(), "bridge should have updated ingest topic")
+
+	// Cleanup
+	if fleetManager.otlpBridge != nil {
+		_ = fleetManager.otlpBridge.Stop(context.Background())
 	}
 }
