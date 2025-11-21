@@ -1,6 +1,6 @@
 module github.com/netboxlabs/orb-agent
 
-go 1.24.10
+go 1.25.4
 
 require (
 	github.com/eclipse/paho.golang v0.22.0
