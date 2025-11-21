@@ -697,7 +697,7 @@ func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.
 	assert.Nil(t, fleetManager.otlpBridge, "bridge should be nil initially")
 
 	// Create the hook function (simulating what Start does)
-	var hookFunc func(*autopaho.ConnectionManager, fleet.TokenResponseTopics) = func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+	hookFunc := func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
 			bridgeConfig := otlpbridge.BridgeConfig{
@@ -767,7 +767,7 @@ func TestFleetConfigManager_OnReadyHook_SkipsInitializationOnReconnect(t *testin
 	originalBridge := fleetManager.otlpBridge
 
 	// Create the hook function
-	var hookFunc func(*autopaho.ConnectionManager, fleet.TokenResponseTopics) = func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+	hookFunc := func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
 			bridgeConfig := otlpbridge.BridgeConfig{
