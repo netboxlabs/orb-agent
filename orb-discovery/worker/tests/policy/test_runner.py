@@ -16,7 +16,11 @@ from worker.policy.runner import PolicyRunner
 @pytest.fixture
 def policy_runner():
     """Fixture to create a PolicyRunner instance."""
-    return PolicyRunner()
+    runner = PolicyRunner()
+    runner.metadata = Metadata(
+        name="test_backend", app_name="test_app", app_version="1.0"
+    )
+    return runner
 
 
 @pytest.fixture
@@ -70,6 +74,15 @@ def mock_diode_client():
         mock_instance = MagicMock()
         mock_diode_client.return_value = mock_instance
         yield mock_diode_client
+
+
+@pytest.fixture
+def mock_diode_otlp_client():
+    """Fixture to mock the DiodeOTLPClient constructor."""
+    with patch("worker.policy.runner.DiodeOTLPClient") as mock_diode_otlp_client:
+        mock_instance = MagicMock()
+        mock_diode_otlp_client.return_value = mock_instance
+        yield mock_diode_otlp_client
 
 @pytest.fixture
 def mock_diode_dry_run_client():
@@ -138,6 +151,28 @@ def test_setup_policy_runner_with_one_time_run(
         assert mock_start.called
         assert policy_runner.status == Status.RUNNING
 
+
+def test_setup_policy_runner_uses_otlp_client(
+    policy_runner,
+    sample_policy,
+    mock_load_class,
+    mock_diode_client,
+    mock_diode_otlp_client,
+):
+    """Ensure setup falls back to DiodeOTLPClient when credentials are missing."""
+    otlp_config = DiodeConfig(target="http://localhost:8080", prefix="test-prefix")
+    with patch.object(policy_runner.scheduler, "start") as mock_start, patch.object(
+        policy_runner.scheduler, "add_job"
+    ) as mock_add_job:
+        policy_runner.setup("policy1", otlp_config, sample_policy)
+
+        mock_start.assert_called_once()
+        mock_add_job.assert_called_once()
+
+    mock_load_class.assert_called_once()
+    assert not mock_diode_client.called
+    mock_diode_otlp_client.assert_called_once()
+
 def test_setup_policy_runner_dry_run(
     policy_runner,
     sample_diode_dry_run_config,
@@ -183,6 +218,29 @@ def test_run_success(policy_runner, sample_policy, mock_diode_client, mock_backe
     # Check that entities were passed correctly
     call_args = mock_diode_client.ingest.call_args[1]['entities']
     assert len(call_args) == 3
+
+
+def test_run_passes_metadata_to_ingest(
+    policy_runner, sample_policy, mock_diode_client, mock_backend
+):
+    """Ensure run forwards policy/backend metadata to the Diode client."""
+    policy_runner.name = "policy-meta"
+    policy_runner.metadata = Metadata(
+        name="custom_backend", app_name="custom", app_version="0.1"
+    )
+
+    entity = ingester_pb2.Entity()
+    entity.device.name = "device-1"
+    mock_backend.run.return_value = [entity]
+    mock_diode_client.ingest.return_value.errors = []
+
+    policy_runner.run(mock_diode_client, mock_backend, sample_policy)
+
+    _, kwargs = mock_diode_client.ingest.call_args
+    assert kwargs["metadata"] == {
+        "policy_name": "policy-meta",
+        "worker_backend": "custom_backend",
+    }
 
 
 def test_run_ingestion_errors(

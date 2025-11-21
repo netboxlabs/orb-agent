@@ -60,6 +60,12 @@ def sample_data():
 
 
 @pytest.fixture
+def sample_metadata():
+    """Sample metadata for testing ingestion."""
+    return {"policy_name": "test-policy", "hostname": "router1"}
+
+
+@pytest.fixture
 def mock_version_semver():
     """Mock the version_semver function."""
     with patch("device_discovery.client.version_semver", return_value="0.0.0") as mock:
@@ -70,6 +76,13 @@ def mock_version_semver():
 def mock_diode_client_class():
     """Mock the DiodeClient class."""
     with patch("device_discovery.client.DiodeClient") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_diode_otlp_client_class():
+    """Mock the DiodeOTLPClient class."""
+    with patch("device_discovery.client.DiodeOTLPClient") as mock:
         yield mock
 
 
@@ -92,7 +105,7 @@ def test_init_client(mock_diode_client_class, mock_version_semver):
     )
 
 
-def test_ingest_success(mock_diode_client_class, sample_data):
+def test_ingest_success(mock_diode_client_class, sample_data, sample_metadata):
     """Test successful data ingestion."""
     client = Client()
     client.init_client(
@@ -101,18 +114,20 @@ def test_ingest_success(mock_diode_client_class, sample_data):
 
     mock_diode_instance = mock_diode_client_class.return_value
     mock_diode_instance.ingest.return_value.errors = []
-    hostname = sample_data["device"]["hostname"]
-
+    metadata = sample_metadata
     with patch(
         "device_discovery.client.translate_data",
         return_value=translate_data(sample_data),
     ) as mock_translate_data:
-        client.ingest(hostname, sample_data)
+        client.ingest(metadata, sample_data)
         mock_translate_data.assert_called_once_with(sample_data)
-        mock_diode_instance.ingest.assert_called_once()
+        mock_diode_instance.ingest.assert_called_once_with(
+            entities=mock_translate_data.return_value,
+            metadata=metadata,
+        )
 
 
-def test_ingest_failure(mock_diode_client_class, sample_data):
+def test_ingest_failure(mock_diode_client_class, sample_data, sample_metadata):
     """Test data ingestion with errors."""
     client = Client()
     client.init_client(
@@ -124,25 +139,27 @@ def test_ingest_failure(mock_diode_client_class, sample_data):
 
     mock_diode_instance = mock_diode_client_class.return_value
     mock_diode_instance.ingest.return_value.errors = ["Error1", "Error2"]
-    hostname = sample_data["device"]["hostname"]
-
+    metadata = sample_metadata
     with patch(
         "device_discovery.client.translate_data",
         return_value=translate_data(sample_data),
     ) as mock_translate_data:
-        client.ingest(hostname, sample_data)
+        client.ingest(metadata, sample_data)
         mock_translate_data.assert_called_once_with(sample_data)
-        mock_diode_instance.ingest.assert_called_once()
+        mock_diode_instance.ingest.assert_called_once_with(
+            entities=mock_translate_data.return_value,
+            metadata=metadata,
+        )
 
     assert len(mock_diode_instance.ingest.return_value.errors) > 0
 
 
-def test_ingest_without_initialization():
+def test_ingest_without_initialization(sample_metadata):
     """Test ingestion without client initialization raises ValueError."""
     Client._instance = None  # Reset the Client singleton instance
     client = Client()
     with pytest.raises(ValueError, match="Diode client not initialized"):
-        client.ingest("", {})
+        client.ingest(sample_metadata, {})
 
 
 def test_client_dry_run(tmp_path, sample_data):
@@ -154,7 +171,8 @@ def test_client_dry_run(tmp_path, sample_data):
         dry_run_output_dir=tmp_path,
     )
     hostname = sample_data["device"]["hostname"]
-    client.ingest(hostname, sample_data)
+    metadata = {"policy_name": "dry-run-policy", "hostname": hostname}
+    client.ingest(metadata, sample_data)
     files = list(tmp_path.glob("prefix_device-discovery*.json"))
 
     assert len(files) == 1
@@ -174,8 +192,24 @@ def test_client_dry_run_stdout(capsys, sample_data):
     )
 
     hostname = sample_data["device"]["hostname"]
-    client.ingest(hostname, sample_data)
+    metadata = {"policy_name": "dry-run-policy", "hostname": hostname}
+    client.ingest(metadata, sample_data)
 
     captured = capsys.readouterr()
     assert sample_data["device"]["hostname"] in captured.out
     assert sample_data["interface"]["GigabitEthernet0/0"]["mac_address"] in captured.out
+
+
+def test_init_client_uses_otlp_when_credentials_missing(
+    mock_diode_client_class, mock_diode_otlp_client_class, mock_version_semver
+):
+    """Ensure init_client falls back to DiodeOTLPClient when credentials are not provided."""
+    client = Client()
+    client.init_client(prefix="prefix", target="https://example.com")
+
+    assert not mock_diode_client_class.called
+    mock_diode_otlp_client_class.assert_called_once_with(
+        target="https://example.com",
+        app_name="prefix/device-discovery",
+        app_version=mock_version_semver(),
+    )

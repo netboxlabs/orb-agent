@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from worker.main import main
+from worker.main import main, resolve_env_var
 
 
 @pytest.fixture
@@ -169,3 +169,16 @@ def test_main_missing_policy(mock_parse_args):
             main()
         except Exception as e:
             assert str(e) == "Test Exit"
+
+
+def test_resolve_env_var_expands_environment(monkeypatch):
+    """Ensure resolve_env_var expands placeholders using environment variables."""
+    monkeypatch.setenv("MY_ENDPOINT", "grpc://localhost:4317")
+    assert resolve_env_var("${MY_ENDPOINT}") == "grpc://localhost:4317"
+
+
+def test_resolve_env_var_returns_original(monkeypatch):
+    """Ensure resolve_env_var returns original string when expansion is not possible."""
+    monkeypatch.delenv("NOT_DEFINED", raising=False)
+    assert resolve_env_var("plain-value") == "plain-value"
+    assert resolve_env_var("${NOT_DEFINED}") == "${NOT_DEFINED}"

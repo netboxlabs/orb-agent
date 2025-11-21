@@ -155,7 +155,11 @@ def test_run_device_with_discovered_driver(policy_runner, sample_scopes, sample_
         # Verify driver discovery and ingestion
         mock_discover.assert_called_once_with(sample_scopes[0])
         mock_ingest.assert_called_once()
-        data = mock_ingest.call_args[0][1]
+        metadata_arg, data = mock_ingest.call_args[0]
+        assert metadata_arg == {
+            "policy_name": policy_runner.name,
+            "hostname": sample_scopes[0].hostname,
+        }
         assert data["driver"] == "ios"
         assert data["device"] == {"model": "SampleModel"}
         assert data["interface"] == {"eth0": "up"}

@@ -136,8 +136,6 @@ def main():
                 name
                 for name, val in [
                     ("--diode-target", args.diode_target),
-                    ("--diode-client-id", args.diode_client_id),
-                    ("--diode-client-secret", args.diode_client_secret),
                 ]
                 if not val
             ]

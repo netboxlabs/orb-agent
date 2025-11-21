@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
-from netboxlabs.diode.sdk import DiodeClient, DiodeDryRunClient
+from netboxlabs.diode.sdk import DiodeClient, DiodeDryRunClient, DiodeOTLPClient
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2
 
 from worker.backend import Backend, load_class
@@ -63,13 +63,20 @@ class PolicyRunner:
                 app_name=app_name,
                 output_dir=diode_config.dry_run_output_dir,
             )
-        else:
+        elif diode_config.client_id is not None and diode_config.client_secret is not None:
             client = DiodeClient(
                 target=diode_config.target,
                 app_name=app_name,
                 app_version=metadata.app_version,
                 client_id=diode_config.client_id,
                 client_secret=diode_config.client_secret,
+            )
+        else:
+            logger.debug("Initializing Diode OTLP client")
+            client = DiodeOTLPClient(
+                target=diode_config.target,
+                app_name=app_name,
+                app_version=metadata.app_version,
             )
 
         self.metadata = metadata
@@ -120,13 +127,17 @@ class PolicyRunner:
         exec_start_time = time.perf_counter()
         try:
             entities = backend.run(self.name, policy)
+            metadata = {
+                "policy_name": self.name,
+                "worker_backend": self.metadata.name,
+            }
 
             for chunk_num, entity_chunk in enumerate(self._create_message_chunks(entities), 1):
                 chunk_size_mb = self._estimate_message_size(entity_chunk) / (1024 * 1024)
                 logger.debug(
                     f"Ingesting chunk {chunk_num} with {len(entity_chunk)} entities (~{chunk_size_mb:.2f} MB)"
                 )
-                response = client.ingest(entities=entity_chunk)
+                response = client.ingest(entities=entity_chunk, metadata=metadata)
                 if response.errors:
                     raise RuntimeError(f"Chunk {chunk_num} ingestion failed: {response.errors}")
                 logger.debug(f"Chunk {chunk_num} ingested successfully")

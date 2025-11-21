@@ -136,8 +136,6 @@ def main():
                 name
                 for name, val in [
                     ("--diode-target", args.diode_target),
-                    ("--diode-client-id", args.diode_client_id),
-                    ("--diode-client-secret", args.diode_client_secret),
                 ]
                 if not val
             ]
@@ -174,7 +172,7 @@ def main():
         )
 
         try:
-            if not config.dry_run:
+            if not config.dry_run and client_id is not None and client_secret is not None:
                 DiodeClient(
                     target=config.target,
                     app_name="validate",

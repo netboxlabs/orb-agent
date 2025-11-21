@@ -4,8 +4,9 @@
 
 import logging
 import threading
+from typing import Any
 
-from netboxlabs.diode.sdk import DiodeClient, DiodeDryRunClient
+from netboxlabs.diode.sdk import DiodeClient, DiodeDryRunClient, DiodeOTLPClient
 
 from device_discovery.translate import translate_data
 from device_discovery.version import version_semver
@@ -82,7 +83,7 @@ class Client:
                     app_name=f"{prefix}/{APP_NAME}" if prefix else APP_NAME,
                     output_dir=dry_run_output_dir,
                 )
-            else:
+            elif client_id is not None and client_secret is not None:
                 self.diode_client = DiodeClient(
                     target=target,
                     app_name=f"{prefix}/{APP_NAME}" if prefix else APP_NAME,
@@ -90,14 +91,21 @@ class Client:
                     client_id=client_id,
                     client_secret=client_secret,
                 )
+            else:
+                logger.debug("Initializing Diode OTLP client")
+                self.diode_client = DiodeOTLPClient(
+                    target=target,
+                    app_name=f"{prefix}/{APP_NAME}" if prefix else APP_NAME,
+                    app_version=APP_VERSION,
+                )
 
-    def ingest(self, hostname: str, data: dict):
+    def ingest(self, metadata: dict[str, Any] | None, data: dict):
         """
         Ingest data using the Diode client after translating it.
 
         Args:
         ----
-            hostname (str): The device hostname.
+            metadata (dict[str, Any] | None): Metadata to attach to the ingestion request.
             data (dict): The data to be ingested.
 
         Raises:
@@ -109,9 +117,17 @@ class Client:
             raise ValueError("Diode client not initialized")
 
         with self._lock:
-            response = self.diode_client.ingest(translate_data(data))
+            translated_entities = translate_data(data)
+            request_metadata = metadata or {}
+            response = self.diode_client.ingest(
+                entities=translated_entities, metadata=request_metadata
+            )
+
+        hostname = request_metadata.get("hostname") or "unknown-host"
 
         if response.errors:
-            logger.error(f"ERROR ingestion failed for {hostname} : {response.errors}")
+            logger.error(
+                f"ERROR ingestion failed for {hostname} : {response.errors}"
+            )
         else:
             logger.info(f"Hostname {hostname}: Successful ingestion")

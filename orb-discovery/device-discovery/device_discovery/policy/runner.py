@@ -187,7 +187,8 @@ class PolicyRunner:
                 logger.warning(
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}. Continuing without VLAN data."
                 )
-            Client().ingest(scope.hostname, data)
+            metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
+            Client().ingest(metadata, data)
             discovery_success = get_metric("discovery_success")
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
