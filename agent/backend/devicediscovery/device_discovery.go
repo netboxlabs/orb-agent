@@ -28,6 +28,7 @@ const (
 	defaultExec         = "device-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8072"
+	maskedSecret        = "********"
 )
 
 type deviceDiscoveryBackend struct {
@@ -44,6 +45,7 @@ type deviceDiscoveryBackend struct {
 	diodeClientSecret    string
 	diodeAppNamePrefix   string
 	diodeOtelEndpoint    string
+	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 
@@ -73,6 +75,7 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 ) error {
 	d.logger = logger.With("backend", "device_discovery")
 	d.policyRepo = repo
+	d.diodeTargetFromOtel = false
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
@@ -115,6 +118,10 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 		d.logger.Info("device-discovery using OTLP metrics endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
+	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
+		d.diodeTarget = d.diodeOtelEndpoint
+		d.diodeTargetFromOtel = true
+	}
 
 	return nil
 }
@@ -135,22 +142,25 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	var pvOptions []string
+	pvOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = []string{
+		pvOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
-		}
+		}, pvOptions...)
 	} else {
-		pvOptions = []string{
+		opts := []string{
 			"--host", d.apiHost,
 			"--port", d.apiPort,
 			"--diode-target", d.diodeTarget,
-			"--diode-client-id", d.diodeClientID,
-			"--diode-client-secret", "********",
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		}
+		if !d.diodeTargetFromOtel {
+			opts = append(opts,
+				"--diode-client-id", d.diodeClientID,
+				"--diode-client-secret", maskedSecret,
+			)
+		}
+		pvOptions = append(opts, pvOptions...)
 	}
 
 	if d.diodeOtelEndpoint != "" {
@@ -159,8 +169,13 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 
 	d.logger.Info("device-discovery startup", "arguments", pvOptions)
 
-	if !d.diodeDryRun && len(pvOptions) > 9 {
-		pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun {
+		for i, arg := range pvOptions {
+			if arg == maskedSecret {
+				pvOptions[i] = d.diodeClientSecret
+				break
+			}
+		}
 	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
