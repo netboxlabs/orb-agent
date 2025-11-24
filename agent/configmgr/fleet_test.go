@@ -3,6 +3,7 @@ package configmgr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -107,15 +108,32 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	
+	// Create mock MQTT connection that returns a connection error immediately
+	mockConn := &fleet.MockMQTTConnection{
+		ConnectError: fmt.Errorf("mqtt connection failed: invalid URL"),
+	}
+	fleetManager := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
 
 	// Create mock HTTP server for token endpoint
+	// Use a valid JWT token so parsing succeeds and we reach the connection step
+	validJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          1516239022,
+		"ext": map[string]any{
+			"orb:mqtt_url": "mqtt://test.example.com:1883",
+		},
+	})
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		response := fleet.TokenResponse{
-			AccessToken: "test_access_token",
-			MQTTURL:     "://invalid-mqtt-url", // Invalid MQTT URL
+			AccessToken: validJWT,
+			MQTTURL:     "mqtt://test.example.com:1883",
 			ExpiresIn:   3600,
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
@@ -126,6 +144,7 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 				Sources: config.Sources{
 					Fleet: config.FleetManager{
 						TokenURL:     server.URL,
+						SkipTLS:      true, // Skip TLS verification for test server
 						ClientID:     "test_client",
 						ClientSecret: "test_secret",
 					},
@@ -141,6 +160,8 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 
 	// Assert
 	assert.Error(t, err)
+	// Verify the error is from the mock connection (no 30s wait)
+	assert.Contains(t, err.Error(), "mqtt connection failed")
 }
 
 func TestFleetConfigManager_GetContext(t *testing.T) {
@@ -182,7 +203,12 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	
+	// Create mock MQTT connection that returns a connection error
+	mockConn := &fleet.MockMQTTConnection{
+		ConnectError: fmt.Errorf("mqtt connection failed: connection refused"),
+	}
+	fleetManager := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
 
 	// Create mock HTTP server that returns a JWT token
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -216,22 +242,19 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	// Mock backends
 	backends := make(map[string]backend.Backend)
 
-	// Since we can't easily mock the MQTT connection in this test,
-	// we expect the Start method to fail at the MQTT connection step,
-	// but succeed in generating topics from JWT claims
+	// The Start method should succeed in generating topics from JWT claims,
+	// but fail at the MQTT connection step (which is mocked to return an error)
 	err := fleetManager.Start(cfg, backends)
 
-	// We expect an error because we can't actually connect to MQTT,
+	// We expect an error because the mock connection returns an error,
 	// but we want to verify that topic generation succeeded
 	// (The error should be related to MQTT connection, not JWT parsing)
 	require.Error(t, err)
-	// The error could be connection-related (mqtt, tcp, timeout, etc.)
+	// The error should be the mocked connection error
 	errorMsg := strings.ToLower(err.Error())
 	assert.True(t,
 		strings.Contains(errorMsg, "mqtt") ||
-			strings.Contains(errorMsg, "connection") ||
-			strings.Contains(errorMsg, "timeout") ||
-			strings.Contains(errorMsg, "deadline"),
+			strings.Contains(errorMsg, "connection"),
 		"Expected connection-related error, got: %s", err.Error())
 }
 
@@ -386,7 +409,7 @@ func TestFleetConfigManager_MonitorTokenExpiry_Configuration(t *testing.T) {
 	select {
 	case <-done:
 		// Monitor stopped successfully
-	case <-time.After(1 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("monitor did not stop within timeout")
 	}
 }
@@ -434,7 +457,7 @@ func TestFleetConfigManager_MonitorTokenExpiry_CustomConfiguration(t *testing.T)
 	select {
 	case <-done:
 		// Monitor stopped successfully
-	case <-time.After(1 * time.Second):
+	case <-time.After(100 * time.Millisecond):
 		t.Fatal("monitor did not stop within timeout")
 	}
 }
@@ -467,7 +490,7 @@ func TestFleetConfigManager_Stop_CancelsMonitor(t *testing.T) {
 	select {
 	case <-fleetManager.monitorCtx.Done():
 		// Good, context is cancelled
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(50 * time.Millisecond):
 		t.Fatal("monitor context should be cancelled after Stop()")
 	}
 }
@@ -572,10 +595,11 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiredToken(t *testing.T)
 	}()
 
 	// Wait for monitor to detect expired token
+	// Allow at least one ticker interval (100ms) plus buffer
 	select {
 	case <-done:
 		// Monitor detected expired token
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 		t.Fatal("monitor did not detect expired token within timeout")
 	}
 
@@ -670,10 +694,11 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testi
 	}()
 
 	// Wait for monitor to detect expiring token
+	// Allow at least one ticker interval (100ms) plus buffer
 	select {
 	case <-done:
 		// Monitor detected expiring token
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 		t.Fatal("monitor did not detect expiring token within timeout")
 	}
 

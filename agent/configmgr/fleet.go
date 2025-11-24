@@ -21,7 +21,7 @@ var _ Manager = (*fleetConfigManager)(nil)
 
 type fleetConfigManager struct {
 	logger            *slog.Logger
-	connection        *fleet.MQTTConnection
+	connection        fleet.MQTTConnector
 	authTokenManager  *fleet.AuthTokenManager
 	resetChan         chan struct{}
 	reconnectChan     chan struct{}
@@ -43,6 +43,21 @@ func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, ba
 	return &fleetConfigManager{
 		logger:           logger,
 		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan, reconnectChan, backendState),
+		authTokenManager: fleet.NewAuthTokenManager(logger),
+		resetChan:        resetChan,
+		reconnectChan:    reconnectChan,
+		backendState:     backendState,
+		policyManager:    pMgr,
+	}
+}
+
+// newFleetConfigManagerWithConnection creates a fleetConfigManager with a custom connection (for testing)
+func newFleetConfigManagerWithConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever, conn fleet.MQTTConnector) *fleetConfigManager {
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	return &fleetConfigManager{
+		logger:           logger,
+		connection:       conn, // Use provided connection instead of creating new one
 		authTokenManager: fleet.NewAuthTokenManager(logger),
 		resetChan:        resetChan,
 		reconnectChan:    reconnectChan,
