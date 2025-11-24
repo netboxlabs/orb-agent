@@ -53,15 +53,19 @@ func (m *mockPolicyManager) RemovePolicyDataset(_ string, _ string, _ backend.Ba
 func (m *mockPolicyManager) GetPolicyState() ([]policies.PolicyData, error) {
 	return nil, nil
 }
+
 func (m *mockPolicyManager) GetRepo() policies.PolicyRepo {
 	return m.repo
 }
+
 func (m *mockPolicyManager) ApplyBackendPolicies(_ backend.Backend) error {
 	return nil
 }
+
 func (m *mockPolicyManager) RemoveBackendPolicies(_ backend.Backend, _ bool) error {
 	return nil
 }
+
 func (m *mockPolicyManager) RemovePolicy(_ string, _ string, _ string) error {
 	return nil
 }
@@ -76,6 +80,7 @@ func (m *mockSecretsManager) RegisterUpdatePoliciesCallback(_ func(map[string]bo
 func (m *mockSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
 	return payload, nil
 }
+
 func (m *mockSecretsManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
 	return backends, configManager, nil
 }
