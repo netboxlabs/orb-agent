@@ -155,6 +155,73 @@ func TestWorkerBackendStart(t *testing.T) {
 	mockCmd.AssertExpectations(t)
 }
 
+func TestWorkerUsesOtelTargetWithoutCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"version": "1.0.0"}))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "orb-worker")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 4243)
+
+	otelEndpoint := "collector:4317"
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, name string, args []string) {
+		assert.Equal(t, "orb-worker", name)
+		assert.Contains(t, args, "--diode-target")
+		assert.Contains(t, args, otelEndpoint)
+		assert.NotContains(t, args, "--diode-client-id")
+		assert.NotContains(t, args, "--diode-client-secret")
+		assert.NotContains(t, args, "worker-client")
+		assert.NotContains(t, args, "worker-secret")
+		assert.NotContains(t, args, "********")
+	})
+
+	assert.True(t, worker.Register())
+	assert.True(t, backend.HaveBackend("worker"))
+
+	be := backend.GetBackend("worker")
+
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = otelEndpoint
+	commons.Diode.ClientID = "default-client"
+	commons.Diode.ClientSecret = "default-secret"
+	commons.Diode.AgentName = "worker-agent"
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host":          serverURL.Hostname(),
+		"port":          serverURL.Port(),
+		"client_id":     "worker-client",
+		"client_secret": "worker-secret",
+		"agent_name":    "worker-agent",
+	}, commons)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, be.Start(ctx, cancel))
+	require.NoError(t, be.Stop(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
 func TestWorkerGetRunningStatusAPIFailure(t *testing.T) {
 	var statusCalls atomic.Int32
 

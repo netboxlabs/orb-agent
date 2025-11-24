@@ -29,6 +29,7 @@ const (
 	defaultExec         = "snmp-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8070"
+	maskedSecret        = "********"
 )
 
 type snmpDiscoveryBackend struct {
@@ -45,6 +46,7 @@ type snmpDiscoveryBackend struct {
 	diodeClientSecret    string
 	diodeAppNamePrefix   string
 	diodeOtelEndpoint    string
+	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 	diodeLogLevel        string
@@ -75,6 +77,7 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 ) error {
 	d.logger = logger.With("backend", "snmp_discovery")
 	d.policyRepo = repo
+	d.diodeTargetFromOtel = false
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
@@ -124,6 +127,10 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.logger.Info("snmp-discovery using OTLP metrics endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
+	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
+		d.diodeTarget = d.diodeOtelEndpoint
+		d.diodeTargetFromOtel = true
+	}
 
 	return nil
 }
@@ -144,46 +151,55 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	var pvOptions []string
+	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = []string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
-		}
+		}, dOptions...)
 	} else {
-		pvOptions = []string{
+		opts := []string{
 			"--host", d.apiHost,
 			"--port", d.apiPort,
 			"--diode-target", d.diodeTarget,
-			"--diode-client-id", d.diodeClientID,
-			"--diode-client-secret", "********",
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		}
+		if !d.diodeTargetFromOtel {
+			opts = append(opts,
+				"--diode-client-id", d.diodeClientID,
+				"--diode-client-secret", maskedSecret,
+			)
+		}
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeLogLevel != "" {
-		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
+		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
 		d.logger.Info("snmp-discovery using log level",
 			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
-		d.logger.Info("snmp-discovery using OTLP metrics endpoint",
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		d.logger.Info("snmp-discovery using OTLP endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("snmp-discovery startup", "arguments", pvOptions)
+	d.logger.Info("snmp-discovery startup", "arguments", dOptions)
 
-	if !d.diodeDryRun && len(pvOptions) > 9 {
-		pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun {
+		// Swap the masked secret used for logging with the real value before execution
+		for i, arg := range dOptions {
+			if arg == maskedSecret {
+				dOptions[i] = d.diodeClientSecret
+				break
+			}
+		}
 	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd
