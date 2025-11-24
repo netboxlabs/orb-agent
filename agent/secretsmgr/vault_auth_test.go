@@ -51,9 +51,8 @@ func TestNewAuthentication(t *testing.T) {
 }
 
 func TestTokenAuth_Authenticate(t *testing.T) {
-	// Create test vault server
-	cluster, client := createTestVault(t)
-	defer cluster.Cleanup()
+	// Use shared test vault server
+	_, client := createTestVault(t)
 
 	ctx := context.Background()
 
