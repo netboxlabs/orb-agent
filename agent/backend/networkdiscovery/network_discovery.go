@@ -29,6 +29,7 @@ const (
 	defaultExec         = "network-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8073"
+	maskedSecret        = "********"
 )
 
 type networkDiscoveryBackend struct {
@@ -45,6 +46,7 @@ type networkDiscoveryBackend struct {
 	diodeClientSecret    string
 	diodeAppNamePrefix   string
 	diodeOtelEndpoint    string
+	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 	diodeLogLevel        string
@@ -75,6 +77,7 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 ) error {
 	d.logger = logger.With("backend", "network_discovery")
 	d.policyRepo = repo
+	d.diodeTargetFromOtel = false
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
@@ -121,8 +124,12 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
-		d.logger.Info("network-discovery using OTLP metrics endpoint",
+		d.logger.Info("network-discovery using OTLP endpoint",
 			"endpoint", d.diodeOtelEndpoint)
+	}
+	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
+		d.diodeTarget = d.diodeOtelEndpoint
+		d.diodeTargetFromOtel = true
 	}
 
 	return nil
@@ -144,43 +151,45 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	var pvOptions []string
+	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = []string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
-		}
+		}, dOptions...)
 	} else {
-		pvOptions = []string{
+		opts := []string{
 			"--host", d.apiHost,
 			"--port", d.apiPort,
 			"--diode-target", d.diodeTarget,
-			"--diode-client-id", d.diodeClientID,
-			"--diode-client-secret", "********",
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		}
+		if !d.diodeTargetFromOtel {
+			opts = append(opts,
+				"--diode-client-id", d.diodeClientID,
+				"--diode-client-secret", maskedSecret,
+			)
+		}
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeLogLevel != "" {
-		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
+		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
 		d.logger.Info("network-discovery using log level",
 			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 		d.logger.Info("network-discovery using OTLP metrics endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("network-discovery startup", "arguments", pvOptions)
+	d.logger.Info("network-discovery startup", "arguments", dOptions)
 
 	if !d.diodeDryRun {
-		// Find and replace the masked client secret with the actual value
-		for i, arg := range pvOptions {
-			if arg == "********" {
-				pvOptions[i] = d.diodeClientSecret
+		for i, arg := range dOptions {
+			if arg == maskedSecret {
+				dOptions[i] = d.diodeClientSecret
 				break
 			}
 		}
@@ -189,7 +198,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd

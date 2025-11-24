@@ -164,6 +164,73 @@ func TestSnmpDiscoveryBackendStart(t *testing.T) {
 	mockCmd.AssertExpectations(t)
 }
 
+func TestSnmpDiscoveryUsesOtelTargetWithoutCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(StatusResponse{Version: "1.0.0"}))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "snmp-discovery")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 4245)
+
+	otelEndpoint := "collector:4317"
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, name string, args []string) {
+		assert.Equal(t, "snmp-discovery", name)
+		assert.Contains(t, args, "--diode-target")
+		assert.Contains(t, args, otelEndpoint)
+		assert.NotContains(t, args, "--diode-client-id")
+		assert.NotContains(t, args, "--diode-client-secret")
+		assert.NotContains(t, args, "snmp-client")
+		assert.NotContains(t, args, "snmp-secret")
+		assert.NotContains(t, args, "********")
+	})
+
+	assert.True(t, snmpdiscovery.Register())
+	assert.True(t, backend.HaveBackend("snmp_discovery"))
+
+	be := backend.GetBackend("snmp_discovery")
+
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = otelEndpoint
+	commons.Diode.ClientID = "default-client"
+	commons.Diode.ClientSecret = "default-secret"
+	commons.Diode.AgentName = "snmp-agent"
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host":          serverURL.Hostname(),
+		"port":          serverURL.Port(),
+		"client_id":     "snmp-client",
+		"client_secret": "snmp-secret",
+		"agent_name":    "snmp-agent",
+	}, commons)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, be.Start(ctx, cancel))
+	require.NoError(t, be.Stop(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
 func TestSnmpDiscoveryBackendCompleted(t *testing.T) {
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupCompletedProcess(mockCmd, 0, nil)

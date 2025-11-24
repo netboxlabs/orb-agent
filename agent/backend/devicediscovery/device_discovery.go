@@ -28,6 +28,7 @@ const (
 	defaultExec         = "device-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8072"
+	maskedSecret        = "********"
 )
 
 type deviceDiscoveryBackend struct {
@@ -44,6 +45,7 @@ type deviceDiscoveryBackend struct {
 	diodeClientSecret    string
 	diodeAppNamePrefix   string
 	diodeOtelEndpoint    string
+	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 
@@ -73,6 +75,7 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 ) error {
 	d.logger = logger.With("backend", "device_discovery")
 	d.policyRepo = repo
+	d.diodeTargetFromOtel = false
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
@@ -112,8 +115,12 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
-		d.logger.Info("device-discovery using OTLP metrics endpoint",
+		d.logger.Info("device-discovery using OTLP endpoint",
 			"endpoint", d.diodeOtelEndpoint)
+	}
+	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
+		d.diodeTarget = d.diodeOtelEndpoint
+		d.diodeTargetFromOtel = true
 	}
 
 	return nil
@@ -135,38 +142,46 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	var pvOptions []string
+	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = []string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
-		}
+		}, dOptions...)
 	} else {
-		pvOptions = []string{
+		opts := []string{
 			"--host", d.apiHost,
 			"--port", d.apiPort,
 			"--diode-target", d.diodeTarget,
-			"--diode-client-id", d.diodeClientID,
-			"--diode-client-secret", "********",
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		}
+		if !d.diodeTargetFromOtel {
+			opts = append(opts,
+				"--diode-client-id", d.diodeClientID,
+				"--diode-client-secret", maskedSecret,
+			)
+		}
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("device-discovery startup", "arguments", pvOptions)
+	d.logger.Info("device-discovery startup", "arguments", dOptions)
 
-	if !d.diodeDryRun && len(pvOptions) > 9 {
-		pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun {
+		for i, arg := range dOptions {
+			if arg == maskedSecret {
+				dOptions[i] = d.diodeClientSecret
+				break
+			}
+		}
 	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd

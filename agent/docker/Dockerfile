@@ -2,7 +2,7 @@ ARG PKTVISOR_TAG=develop
 ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
 ARG SNMP_DISCOVERY_TAG=latest
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.25
 
 ########################################################################
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS builder

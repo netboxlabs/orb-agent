@@ -28,6 +28,7 @@ const (
 	defaultExec         = "orb-worker"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8071"
+	maskedSecret        = "********"
 )
 
 type workerBackend struct {
@@ -44,6 +45,7 @@ type workerBackend struct {
 	diodeClientSecret    string
 	diodeAppNamePrefix   string
 	diodeOtelEndpoint    string
+	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 
@@ -73,6 +75,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 ) error {
 	d.logger = logger.With("backend", "worker")
 	d.policyRepo = repo
+	d.diodeTargetFromOtel = false
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
@@ -112,8 +115,12 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
-		d.logger.Info("orb-worker using OTLP metrics endpoint",
+		d.logger.Info("orb-worker using OTLP endpoint",
 			"endpoint", d.diodeOtelEndpoint)
+	}
+	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
+		d.diodeTarget = d.diodeOtelEndpoint
+		d.diodeTargetFromOtel = true
 	}
 
 	return nil
@@ -135,38 +142,47 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	var pvOptions []string
+	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = []string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
-		}
+		}, dOptions...)
 	} else {
-		pvOptions = []string{
+		opts := []string{
 			"--host", d.apiHost,
 			"--port", d.apiPort,
 			"--diode-target", d.diodeTarget,
-			"--diode-client-id", d.diodeClientID,
-			"--diode-client-secret", "********",
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		}
+		if !d.diodeTargetFromOtel {
+			opts = append(opts,
+				"--diode-client-id", d.diodeClientID,
+				"--diode-client-secret", maskedSecret,
+			)
+		}
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("worker startup", "arguments", pvOptions)
+	d.logger.Info("worker startup", "arguments", dOptions)
 
-	if !d.diodeDryRun && len(pvOptions) > 9 {
-		pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun {
+		// Swap the masked secret used for logging with the real value before execution
+		for i, arg := range dOptions {
+			if arg == maskedSecret {
+				dOptions[i] = d.diodeClientSecret
+				break
+			}
+		}
 	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd
