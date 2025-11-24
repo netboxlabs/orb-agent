@@ -97,16 +97,19 @@ type MockMQTTConnection struct {
 	hooks           []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
 }
 
-func (m *MockMQTTConnection) Connect(_ context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
+// Connect connects to the MQTT broker
+func (m *MockMQTTConnection) Connect(_ context.Context, _ ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string) error {
 	m.ConnectCalled = true
 	return m.ConnectError
 }
 
-func (m *MockMQTTConnection) Disconnect(_ context.Context, heartbeatTopic string) error {
+// Disconnect disconnects from the MQTT broker
+func (m *MockMQTTConnection) Disconnect(_ context.Context, _ string) error {
 	return m.DisconnectError
 }
 
-func (m *MockMQTTConnection) Reconnect(_ context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error {
+// Reconnect reconnects to the MQTT broker
+func (m *MockMQTTConnection) Reconnect(_ context.Context, _ ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string, _ time.Duration) error {
 	return m.ReconnectError
 }
 
