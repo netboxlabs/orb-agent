@@ -97,19 +97,20 @@ type MockMQTTConnection struct {
 	hooks           []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
 }
 
-func (m *MockMQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
+func (m *MockMQTTConnection) Connect(_ context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
 	m.ConnectCalled = true
 	return m.ConnectError
 }
 
-func (m *MockMQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
+func (m *MockMQTTConnection) Disconnect(_ context.Context, heartbeatTopic string) error {
 	return m.DisconnectError
 }
 
-func (m *MockMQTTConnection) Reconnect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error {
+func (m *MockMQTTConnection) Reconnect(_ context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error {
 	return m.ReconnectError
 }
 
+// AddOnReadyHook registers a hook function to be called when the MQTT connection is ready.
 func (m *MockMQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
 	m.hooks = append(m.hooks, fn)
 }

@@ -108,7 +108,7 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	
+
 	// Create mock MQTT connection that returns a connection error immediately
 	mockConn := &fleet.MockMQTTConnection{
 		ConnectError: fmt.Errorf("mqtt connection failed: invalid URL"),
@@ -203,7 +203,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	
+
 	// Create mock MQTT connection that returns a connection error
 	mockConn := &fleet.MockMQTTConnection{
 		ConnectError: fmt.Errorf("mqtt connection failed: connection refused"),
