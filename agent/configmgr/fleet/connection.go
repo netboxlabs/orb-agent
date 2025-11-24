@@ -66,6 +66,14 @@ type ConnectionDetails struct {
 	Zone     string
 }
 
+// MQTTConnector defines the interface for MQTT connection operations
+type MQTTConnector interface {
+	Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error
+	Disconnect(ctx context.Context, heartbeatTopic string) error
+	Reconnect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error
+	AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics))
+}
+
 // Connect connects to the MQTT broker
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
 	// Parse the ORB URL

@@ -47,6 +47,19 @@ agent_bin:
 test:
 	@go test -race ./...
 
+.PHONY: test-timed
+test-timed:
+	@echo "Running tests with timing measurement..."
+	@echo "=========================================="
+	@start=$$(date +%s); \
+	go test -count=1 ./...; \
+	exit_code=$$?; \
+	end=$$(date +%s); \
+	duration=$$((end - start)); \
+	echo "=========================================="; \
+	echo "Test execution completed in $$duration seconds"; \
+	exit $$exit_code
+
 .PHONY: test-coverage
 test-coverage:
 	@mkdir -p .coverage

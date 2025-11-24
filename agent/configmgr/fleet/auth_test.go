@@ -299,8 +299,7 @@ func TestAuthTokenManager_IsTokenExpired_ExpiredCases(t *testing.T) {
 	_, err := authTokenManager.GetToken(ctx, serverExpired.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
 	require.NoError(t, err)
 
-	// Wait a moment to ensure time has passed
-	time.Sleep(2 * time.Second)
+	// Token is already expired (pastExpiry is 1 hour ago), so no wait needed
 	assert.True(t, authTokenManager.IsTokenExpired())
 }
 
