@@ -115,7 +115,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
-		d.logger.Info("orb-worker using OTLP metrics endpoint",
+		d.logger.Info("orb-worker using OTLP endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
 	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
@@ -142,12 +142,12 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	pvOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
+	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = append([]string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-		}, pvOptions...)
+		}, dOptions...)
 	} else {
 		opts := []string{
 			"--host", d.apiHost,
@@ -160,20 +160,20 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 				"--diode-client-secret", maskedSecret,
 			)
 		}
-		pvOptions = append(opts, pvOptions...)
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("worker startup", "arguments", pvOptions)
+	d.logger.Info("worker startup", "arguments", dOptions)
 
 	if !d.diodeDryRun {
 		// Swap the masked secret used for logging with the real value before execution
-		for i, arg := range pvOptions {
+		for i, arg := range dOptions {
 			if arg == maskedSecret {
-				pvOptions[i] = d.diodeClientSecret
+				dOptions[i] = d.diodeClientSecret
 				break
 			}
 		}
@@ -182,7 +182,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd

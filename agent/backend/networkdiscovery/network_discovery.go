@@ -122,7 +122,7 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
-		d.logger.Info("network-discovery using OTLP metrics endpoint",
+		d.logger.Info("network-discovery using OTLP endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
 	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
@@ -149,12 +149,12 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	pvOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
+	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = append([]string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-		}, pvOptions...)
+		}, dOptions...)
 	} else {
 		opts := []string{
 			"--host", d.apiHost,
@@ -167,27 +167,27 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 				"--diode-client-secret", maskedSecret,
 			)
 		}
-		pvOptions = append(opts, pvOptions...)
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeLogLevel != "" {
-		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
+		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
 		d.logger.Info("network-discovery using log level",
 			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 		d.logger.Info("network-discovery using OTLP metrics endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("network-discovery startup", "arguments", pvOptions)
+	d.logger.Info("network-discovery startup", "arguments", dOptions)
 
 	if !d.diodeDryRun {
-		for i, arg := range pvOptions {
+		for i, arg := range dOptions {
 			if arg == maskedSecret {
-				pvOptions[i] = d.diodeClientSecret
+				dOptions[i] = d.diodeClientSecret
 				break
 			}
 		}
@@ -196,7 +196,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd

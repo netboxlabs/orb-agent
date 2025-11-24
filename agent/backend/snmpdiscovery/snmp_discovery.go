@@ -149,12 +149,12 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	pvOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
+	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
 	if d.diodeDryRun {
-		pvOptions = append([]string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-		}, pvOptions...)
+		}, dOptions...)
 	} else {
 		opts := []string{
 			"--host", d.apiHost,
@@ -167,28 +167,28 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 				"--diode-client-secret", maskedSecret,
 			)
 		}
-		pvOptions = append(opts, pvOptions...)
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeLogLevel != "" {
-		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
+		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
 		d.logger.Info("snmp-discovery using log level",
 			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
-		d.logger.Info("snmp-discovery using OTLP metrics endpoint",
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		d.logger.Info("snmp-discovery using OTLP endpoint",
 			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("snmp-discovery startup", "arguments", pvOptions)
+	d.logger.Info("snmp-discovery startup", "arguments", dOptions)
 
 	if !d.diodeDryRun {
 		// Swap the masked secret used for logging with the real value before execution
-		for i, arg := range pvOptions {
+		for i, arg := range dOptions {
 			if arg == maskedSecret {
-				pvOptions[i] = d.diodeClientSecret
+				dOptions[i] = d.diodeClientSecret
 				break
 			}
 		}
@@ -197,7 +197,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd
