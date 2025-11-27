@@ -174,60 +174,61 @@ orb:
         agent_name: agent01
     snmp_discovery:
   policies:
-    snmp_network_1:
-      config:
-        schedule: "0 */6 * * *" # Cron expression - every 6 hours
-        timeout: 300 # Timeout for policy in seconds (default 2 minutes)
-        snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds)
-        retries: 3 # Number of retries
-        defaults:
-          tags: ["snmp-discovery", "orb"]
-          site: "datacenter-01"
-          location: "rack-42"
-          role: "network"
-          ip_address:
-            description: "SNMP discovered IP"
-            role: "management"
-            tenant: "network-ops"
-            vrf: "management"
-          interface:
-            description: "Auto-discovered interface"
-            if_type: "ethernet"
-          device:
-            description: "SNMP discovered device"
-            comments: "Automatically discovered via SNMP"
-        # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing additional device data yaml files (see below)
-      scope:
-        targets:
-          - host: "192.168.1.1"
-          - host: "192.168.1.254"
-          - host: "10.0.0.1"
-            port: 162  # Non-standard SNMP port
-        authentication:
-          protocol_version: "SNMPv2c"
-          community: "public" # Also supports resolving values from environment variables eg ${SNMP_COMMUNITY}
-          # For SNMPv3, use these fields instead:
-          # security_level: "authPriv"
-          # username: "snmp-user" # Also supports resolving values from environment variables eg ${SNMP_USERNAME}
-          # auth_protocol: "SHA"
-          # auth_passphrase: "auth-password" # Also supports resolving values from environment variables eg ${SNMP_AUTH_PASSPHRASE}
-          # priv_protocol: "AES"
-          # priv_passphrase: "priv-password"# Also supports resolving values from environment variables eg ${SNMP_PRIV_PASSPHRASE}
-    discover_once: # will run only once
-      scope:
-        targets:
-          - host: "core-switch.example.com"
-            port: 161
-          - host: "192.168.100.50"
-            port: 161
-        authentication:
-          protocol_version: "SNMPv3"
-          security_level: "authPriv"
-          username: "monitoring"
-          auth_protocol: "SHA"
-          auth_passphrase: "secure-auth-pass"
-          priv_protocol: "AES" 
-          priv_passphrase: "secure-priv-pass"
+    snmp_discovery:
+      snmp_network_1:
+        config:
+          schedule: "0 */6 * * *" # Cron expression - every 6 hours
+          timeout: 300 # Timeout for policy in seconds (default 2 minutes)
+          snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds)
+          retries: 3 # Number of retries
+          defaults:
+            tags: ["snmp-discovery", "orb"]
+            site: "datacenter-01"
+            location: "rack-42"
+            role: "network"
+            ip_address:
+              description: "SNMP discovered IP"
+              role: "management"
+              tenant: "network-ops"
+              vrf: "management"
+            interface:
+              description: "Auto-discovered interface"
+              if_type: "ethernet"
+            device:
+              description: "SNMP discovered device"
+              comments: "Automatically discovered via SNMP"
+          # lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing additional device data yaml files (see below)
+        scope:
+          targets:
+            - host: "192.168.1.1"
+            - host: "192.168.1.254"
+            - host: "10.0.0.1"
+              port: 162  # Non-standard SNMP port
+          authentication:
+            protocol_version: "SNMPv2c"
+            community: "public" # Also supports resolving values from environment variables eg ${SNMP_COMMUNITY}
+            # For SNMPv3, use these fields instead:
+            # security_level: "authPriv"
+            # username: "snmp-user" # Also supports resolving values from environment variables eg ${SNMP_USERNAME}
+            # auth_protocol: "SHA"
+            # auth_passphrase: "auth-password" # Also supports resolving values from environment variables eg ${SNMP_AUTH_PASSPHRASE}
+            # priv_protocol: "AES"
+            # priv_passphrase: "priv-password"# Also supports resolving values from environment variables eg ${SNMP_PRIV_PASSPHRASE}
+      discover_once: # will run only once
+        scope:
+          targets:
+            - host: "core-switch.example.com"
+              port: 161
+            - host: "192.168.100.50"
+              port: 161
+          authentication:
+            protocol_version: "SNMPv3"
+            security_level: "authPriv"
+            username: "monitoring"
+            auth_protocol: "SHA"
+            auth_passphrase: "secure-auth-pass"
+            priv_protocol: "AES" 
+            priv_passphrase: "secure-priv-pass"
 ```
 
 **Note:** The following authentication fields support environment variable substitution using the `${VARNAME}` syntax:
