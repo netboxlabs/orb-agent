@@ -158,7 +158,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
 			bridgeConfig := otlpbridge.BridgeConfig{
 				ListenAddr: ":4317",
-				Encoding:   "protobuf",
+				Encoding:   "json",
 			}
 			var err error
 			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
