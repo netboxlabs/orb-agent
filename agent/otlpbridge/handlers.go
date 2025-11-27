@@ -21,23 +21,23 @@ type traceServer struct {
 	collectortrace.UnimplementedTraceServiceServer
 }
 
-func (s *traceServer) Export(_ context.Context, _ *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
-	// pub := s.bridge.GetPublisher()
-	// if pub == nil {
-	// 	return nil, fmt.Errorf("publisher not yet initialized")
-	// }
-	// topic := s.bridge.GetIngestTopic()
-	// if topic == "" {
-	// 	return nil, fmt.Errorf("topic not yet initialized")
-	// }
+func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
+	pub := s.bridge.GetPublisher()
+	if pub == nil {
+		return nil, fmt.Errorf("publisher not yet initialized")
+	}
+	topic := s.bridge.GetIngestTopic()
+	if topic == "" {
+		return nil, fmt.Errorf("topic not yet initialized")
+	}
 
-	// payload, err := s.bridge.enc.Marshal(req)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if err := pub.Publish(ctx, topic, payload); err != nil {
-	// 	return nil, err
-	// }
+	payload, err := s.bridge.enc.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := pub.Publish(ctx, topic, payload); err != nil {
+		return nil, err
+	}
 	return &collectortrace.ExportTraceServiceResponse{}, nil
 }
 
@@ -47,23 +47,23 @@ type metricsServer struct {
 	collectormetrics.UnimplementedMetricsServiceServer
 }
 
-func (s *metricsServer) Export(_ context.Context, _ *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
-	// pub := s.bridge.GetPublisher()
-	// if pub == nil {
-	// 	return nil, fmt.Errorf("publisher not yet initialized")
-	// }
-	// topic := s.bridge.GetIngestTopic()
-	// if topic == "" {
-	// 	return nil, fmt.Errorf("topic not yet initialized")
-	// }
+func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
+	pub := s.bridge.GetPublisher()
+	if pub == nil {
+		return nil, fmt.Errorf("publisher not yet initialized")
+	}
+	topic := s.bridge.GetIngestTopic()
+	if topic == "" {
+		return nil, fmt.Errorf("topic not yet initialized")
+	}
 
-	// payload, err := s.bridge.enc.Marshal(req)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if err := pub.Publish(ctx, topic, payload); err != nil {
-	// 	return nil, err
-	// }
+	payload, err := s.bridge.enc.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := pub.Publish(ctx, topic, payload); err != nil {
+		return nil, err
+	}
 	return &collectormetrics.ExportMetricsServiceResponse{}, nil
 }
 
