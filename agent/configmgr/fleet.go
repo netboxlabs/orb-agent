@@ -117,7 +117,8 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
 		"outbox_topic", topics.Outbox,
-		"otlp_topic", topics.Ingest)
+		"otlp_topic", topics.Ingest,
+		"telemetry_topic", topics.Telemetry)
 
 	connectionDetails := fleet.ConnectionDetails{
 		MQTTURL:  jwtClaims.MqttURL,
@@ -172,7 +173,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
 			bridgeConfig := otlpbridge.BridgeConfig{
 				ListenAddr: ":4317",
-				Encoding:   "protobuf",
+				Encoding:   "json",
 			}
 			var err error
 			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
@@ -192,7 +193,10 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		pub := otlpbridge.NewCMAdapterPublisher(cm)
 		fleetManager.otlpBridge.SetPublisher(pub)
 		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
-		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
 	})
 
 	// Start goroutine to handle reconnect requests (JWT refresh)

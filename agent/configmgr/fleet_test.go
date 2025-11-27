@@ -746,7 +746,10 @@ func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.
 		pub := otlpbridge.NewCMAdapterPublisher(cm)
 		fleetManager.otlpBridge.SetPublisher(pub)
 		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
-		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
 	}
 
 	// Register the hook
@@ -754,7 +757,8 @@ func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.
 
 	// Simulate first connection ready event
 	topics := fleet.TokenResponseTopics{
-		Ingest: "test/otlp/topic",
+		Ingest:    "test/otlp/topic",
+		Telemetry: "test/telemetry/topic",
 	}
 
 	// Call the hook manually (simulating first connection)
@@ -763,6 +767,7 @@ func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.
 	// Verify bridge was initialized
 	require.NotNil(t, fleetManager.otlpBridge, "bridge should be initialized after first hook call")
 	assert.Equal(t, "test/otlp/topic", fleetManager.otlpBridge.GetIngestTopic(), "bridge should have correct ingest topic")
+	assert.Equal(t, "test/telemetry/topic", fleetManager.otlpBridge.GetTelemetryTopic(), "bridge should have correct telemetry topic")
 
 	// Cleanup
 	if fleetManager.otlpBridge != nil {
@@ -816,7 +821,10 @@ func TestFleetConfigManager_OnReadyHook_SkipsInitializationOnReconnect(t *testin
 		pub := otlpbridge.NewCMAdapterPublisher(cm)
 		fleetManager.otlpBridge.SetPublisher(pub)
 		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
-		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT", slog.String("topic", topics.Ingest))
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
 	}
 
 	// Register the hook
@@ -824,7 +832,8 @@ func TestFleetConfigManager_OnReadyHook_SkipsInitializationOnReconnect(t *testin
 
 	// Simulate reconnection ready event
 	topics := fleet.TokenResponseTopics{
-		Ingest: "test/otlp/topic/reconnect",
+		Ingest:    "test/otlp/topic/reconnect",
+		Telemetry: "test/telemetry/topic/reconnect",
 	}
 
 	// Call the hook manually (simulating reconnection)
@@ -833,6 +842,7 @@ func TestFleetConfigManager_OnReadyHook_SkipsInitializationOnReconnect(t *testin
 	// Verify bridge was NOT recreated (same instance)
 	assert.Equal(t, originalBridge, fleetManager.otlpBridge, "bridge should not be recreated on reconnect")
 	assert.Equal(t, "test/otlp/topic/reconnect", fleetManager.otlpBridge.GetIngestTopic(), "bridge should have updated ingest topic")
+	assert.Equal(t, "test/telemetry/topic/reconnect", fleetManager.otlpBridge.GetTelemetryTopic(), "bridge should have updated telemetry topic")
 
 	// Cleanup
 	if fleetManager.otlpBridge != nil {

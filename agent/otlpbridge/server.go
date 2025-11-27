@@ -25,11 +25,12 @@ type BridgeServer struct {
 	closeOnce        sync.Once
 
 	// Shared runtime state
-	mu          sync.RWMutex
-	publisher   Publisher
-	ingestTopic string
-	policyRepo  policies.PolicyRepo
-	logger      *slog.Logger
+	mu             sync.RWMutex
+	publisher      Publisher
+	ingestTopic    string
+	telemetryTopic string
+	policyRepo     policies.PolicyRepo
+	logger         *slog.Logger
 }
 
 // NewBridgeServer builds a BridgeServer but does not start it.
@@ -78,6 +79,20 @@ func (s *BridgeServer) GetIngestTopic() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ingestTopic
+}
+
+// SetTelemetryTopic sets the telemetry topic for publishing.
+func (s *BridgeServer) SetTelemetryTopic(topic string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.telemetryTopic = topic
+}
+
+// GetTelemetryTopic returns the current telemetry topic (for handlers).
+func (s *BridgeServer) GetTelemetryTopic() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.telemetryTopic
 }
 
 // GetPolicyRepo returns the policy repo (for handlers).

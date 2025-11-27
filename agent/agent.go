@@ -197,6 +197,37 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
+	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
+		const otlpBridgeEndpoint = "grpc://localhost:4317"
+		if commonBackend, exists := a.config.OrbAgent.Backends["common"]; exists {
+			if commonMap, ok := commonBackend.(map[string]any); ok {
+				if otlpSection, ok := commonMap["otlp"].(map[string]any); ok {
+					grpcURL, _ := otlpSection["grpc"].(string)
+					if grpcURL != "" {
+						a.logger.Warn("Overriding OTLP gRPC URL for fleet config manager", "url", grpcURL)
+					}
+					otlpSection["grpc"] = otlpBridgeEndpoint
+					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
+
+				} else {
+					// otlp section doesn't exist, create it
+					commonMap["otlp"] = map[string]any{
+						"grpc": otlpBridgeEndpoint,
+					}
+					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
+				}
+			}
+		} else {
+			// common backend doesn't exist, create it with otlp config
+			a.config.OrbAgent.Backends["common"] = map[string]any{
+				"otlp": map[string]any{
+					"grpc": otlpBridgeEndpoint,
+				},
+			}
+			a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
+		}
+	}
+
 	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
 		return err
 	}

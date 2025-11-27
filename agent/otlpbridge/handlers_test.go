@@ -64,7 +64,7 @@ func TestLogsHandler_Export_Publishes(t *testing.T) {
 		enc: ProtobufEncoder{},
 	}
 	bridge.SetPublisher(fp)
-	bridge.SetIngestTopic("logs")
+	bridge.SetTelemetryTopic("logs")
 	s := &logsServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectorlogs.ExportLogsServiceRequest{})
 	if err != nil {

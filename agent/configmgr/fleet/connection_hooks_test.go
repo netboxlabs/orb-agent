@@ -56,7 +56,7 @@ func TestConnect_StoresTopicsBeforeConnecting(t *testing.T) {
 		MQTTURL:  "mqtt://localhost:1883",
 		Token:    "",
 		AgentID:  "agent-1",
-		Topics:   TokenResponseTopics{Inbox: "inbox/x", Heartbeat: "hb/x", Capabilities: "cap/x", Outbox: "out/x", Ingest: "otlp/x"},
+		Topics:   TokenResponseTopics{Inbox: "inbox/x", Heartbeat: "hb/x", Capabilities: "cap/x", Outbox: "out/x", Ingest: "otlp/x", Telemetry: "telemetry/x"},
 		ClientID: "client-1",
 		Zone:     "zone-a",
 	}
