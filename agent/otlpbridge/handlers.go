@@ -136,7 +136,7 @@ func (s *logsServer) publishToIngestTopic(ctx context.Context, req *collectorlog
 func (s *logsServer) publishToTelemetryTopic(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher) error {
 	topic := s.bridge.GetTelemetryTopic()
 	if topic == "" {
-		return fmt.Errorf("telemetrytopic not yet initialized")
+		return fmt.Errorf("telemetry topic not yet initialized")
 	}
 
 	return s.publish(ctx, req, pub, topic)

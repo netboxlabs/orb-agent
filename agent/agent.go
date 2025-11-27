@@ -207,14 +207,14 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 						a.logger.Warn("Overriding OTLP gRPC URL for fleet config manager", "url", grpcURL)
 					}
 					otlpSection["grpc"] = otlpBridgeEndpoint
-					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", "localhost:4317")
+					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
 
 				} else {
 					// otlp section doesn't exist, create it
 					commonMap["otlp"] = map[string]any{
 						"grpc": otlpBridgeEndpoint,
 					}
-					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", "localhost:4317")
+					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
 				}
 			}
 		} else {
@@ -224,7 +224,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 					"grpc": otlpBridgeEndpoint,
 				},
 			}
-			a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", "localhost:4317")
+			a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
 		}
 	}
 
