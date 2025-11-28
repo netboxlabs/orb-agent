@@ -280,7 +280,7 @@ func TestNetworkDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T)
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupSuccessfulProcess(mockCmd, 12349)
 
-	overrideNewCmdOptions(t, mockCmd, func(options backend.CmdOptions, name string, args []string) {
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, name string, args []string) {
 		assert.Equal(t, "network-discovery", name, "Expected command name to be network-discovery")
 		assert.Contains(t, args, "--dry-run", "Expected args to contain dry-run flag")
 		assert.Contains(t, args, "--dry-run-output-dir", "Expected args to contain dry-run-output-dir flag")

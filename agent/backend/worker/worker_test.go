@@ -345,7 +345,7 @@ func TestWorkerBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupSuccessfulProcess(mockCmd, 12346)
 
-	overrideNewCmdOptions(t, mockCmd, func(options backend.CmdOptions, name string, args []string) {
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, name string, args []string) {
 		assert.Equal(t, "orb-worker", name, "Expected command name to be orb-worker")
 		assert.Contains(t, args, "--dry-run", "Expected args to contain dry-run flag")
 		assert.Contains(t, args, "--dry-run-output-dir", "Expected args to contain dry-run-output-dir flag")
