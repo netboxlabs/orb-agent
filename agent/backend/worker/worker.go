@@ -142,7 +142,11 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	dOptions := []string{"--diode-app-name-prefix", d.diodeAppNamePrefix}
+	dOptions := []string{
+		"--diode-app-name-prefix", d.diodeAppNamePrefix,
+		"--host", d.apiHost,
+		"--port", d.apiPort,
+	}
 	if d.diodeDryRun {
 		dOptions = append([]string{
 			"--dry-run",
@@ -150,8 +154,6 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		}, dOptions...)
 	} else {
 		opts := []string{
-			"--host", d.apiHost,
-			"--port", d.apiPort,
 			"--diode-target", d.diodeTarget,
 		}
 		if !d.diodeTargetFromOtel {
