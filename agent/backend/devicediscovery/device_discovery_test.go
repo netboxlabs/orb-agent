@@ -252,6 +252,74 @@ func TestDeviceDiscoveryBackendCompleted(t *testing.T) {
 	mockCmd.AssertExpectations(t)
 }
 
+func TestDeviceDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(StatusResponse{Version: "1.0.0"}))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "device-discovery")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12348)
+
+	overrideNewCmdOptions(t, mockCmd, func(options backend.CmdOptions, name string, args []string) {
+		assert.Equal(t, "device-discovery", name, "Expected command name to be device-discovery")
+		assert.Contains(t, args, "--dry-run", "Expected args to contain dry-run flag")
+		assert.Contains(t, args, "--dry-run-output-dir", "Expected args to contain dry-run-output-dir flag")
+		assert.Contains(t, args, "/tmp/device-dry-run", "Expected args to contain dry-run-output-dir value")
+		assert.Contains(t, args, "--host", "Expected args to contain host flag even in dry-run mode")
+		assert.Contains(t, args, serverURL.Hostname(), "Expected args to contain host value even in dry-run mode")
+		assert.Contains(t, args, "--port", "Expected args to contain port flag even in dry-run mode")
+		assert.Contains(t, args, serverURL.Port(), "Expected args to contain port value even in dry-run mode")
+		assert.Contains(t, args, "--diode-app-name-prefix", "Expected args to contain diode app name prefix flag")
+		assert.Contains(t, args, "device-agent", "Expected args to contain diode app name prefix value")
+		assert.NotContains(t, args, "--diode-target", "Expected args to NOT contain diode target flag in dry-run mode")
+		assert.NotContains(t, args, "--diode-client-id", "Expected args to NOT contain diode client id flag in dry-run mode")
+		assert.NotContains(t, args, "--diode-client-secret", "Expected args to NOT contain diode client secret flag in dry-run mode")
+	})
+
+	assert.True(t, devicediscovery.Register(), "Failed to register DeviceDiscovery backend")
+	assert.True(t, backend.HaveBackend("device_discovery"), "Failed to get DeviceDiscovery backend")
+
+	be := backend.GetBackend("device_discovery")
+
+	commons := config.BackendCommons{}
+	commons.Diode.AgentName = "device-agent"
+	commons.Diode.DryRunOutputDir = "/tmp/device-dry-run"
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host":               serverURL.Hostname(),
+		"port":               serverURL.Port(),
+		"agent_name":         "device-agent",
+		"dry_run":            true,
+		"dry_run_output_dir": "/tmp/device-dry-run",
+	}, commons)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, be.Start(ctx, cancel))
+	require.NoError(t, be.Stop(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
 func createExecutable(t *testing.T, name string) {
 	t.Helper()
 
