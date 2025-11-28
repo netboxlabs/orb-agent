@@ -126,7 +126,8 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 
 	// Verify the config was modified by checking backendsCommon which is set in startBackends
 	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
+	// Default port is 4318
+	assert.Equal(t, "grpc://localhost:4318", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
 func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
@@ -165,7 +166,8 @@ func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
 
 	// Verify the config was modified by checking backendsCommon which is set in startBackends
 	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
+	// Default port is 4318
+	assert.Equal(t, "grpc://localhost:4318", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
 func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
@@ -200,7 +202,8 @@ func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
 
 	// Verify the config was modified by checking backendsCommon which is set in startBackends
 	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
+	// Default port is 4318
+	assert.Equal(t, "grpc://localhost:4318", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
 func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
@@ -243,4 +246,45 @@ func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
 	// Verify the config was NOT modified by checking backendsCommon which is set in startBackends
 	// For non-fleet config, the original value should remain
 	assert.Equal(t, originalGrpcURL, orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should remain unchanged for non-fleet config")
+}
+
+func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	customPort := 9999
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Backends: map[string]any{},
+			ConfigManager: config.ManagerConfig{
+				Active: "fleet",
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						OTLPBridgeGRPCPort: &customPort,
+					},
+				},
+			},
+			SecretsManager: config.ManagerSecrets{
+				Active: "",
+			},
+		},
+	}
+
+	agent, err := New(logger, cfg)
+	require.NoError(t, err)
+
+	orbAgent := agent.(*orbAgent)
+	orbAgent.secretsManager = &mockSecretsManager{}
+	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = orbAgent.Start(ctx, cancel)
+	require.Error(t, err) // Expected to fail when starting backends
+
+	// Verify the config was modified with the custom port
+	expectedURL := "grpc://localhost:9999"
+	assert.Equal(t, expectedURL, orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should use configured port")
 }

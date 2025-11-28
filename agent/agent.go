@@ -198,7 +198,12 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
-		const otlpBridgeEndpoint = "grpc://localhost:4317"
+		// Get gRPC port from config, defaulting to 4318 if not specified
+		grpcPort := 4318
+		if a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+			grpcPort = *a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+		}
+		otlpBridgeEndpoint := fmt.Sprintf("grpc://localhost:%d", grpcPort)
 		if commonBackend, exists := a.config.OrbAgent.Backends["common"]; exists {
 			if commonMap, ok := commonBackend.(map[string]any); ok {
 				if otlpSection, ok := commonMap["otlp"].(map[string]any); ok {

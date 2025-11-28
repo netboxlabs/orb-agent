@@ -171,8 +171,13 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
+			// Get gRPC port from config, defaulting to 4318 if not specified
+			grpcPort := 4318
+			if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+				grpcPort = *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+			}
 			bridgeConfig := otlpbridge.BridgeConfig{
-				ListenAddr: ":4317",
+				ListenAddr: fmt.Sprintf(":%d", grpcPort),
 				Encoding:   "json",
 			}
 			var err error
@@ -185,6 +190,7 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 				fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
 				return
 			}
+			fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
 		} else {
 			fleetManager.logger.Info("OTLP bridge already initialized, skipping initialization")
 		}
