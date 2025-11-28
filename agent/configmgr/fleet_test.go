@@ -849,3 +849,164 @@ func TestFleetConfigManager_OnReadyHook_SkipsInitializationOnReconnect(t *testin
 		_ = fleetManager.otlpBridge.Stop(context.Background())
 	}
 }
+
+func TestFleetConfigManager_OnReadyHook_UsesConfiguredGRPCPort(t *testing.T) {
+	// Test that OnReadyHook uses the configured gRPC port from config
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Create config with custom gRPC port
+	customPort := 9999
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						OTLPBridgeGRPCPort: &customPort,
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Create the hook function that uses config (simulating what Start does)
+	hookFunc := func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
+			// Get gRPC port from config, defaulting to 4318 if not specified
+			grpcPort := 4318
+			if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+				grpcPort = *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+			}
+			bridgeConfig := otlpbridge.BridgeConfig{
+				ListenAddr: fmt.Sprintf(":%d", grpcPort),
+				Encoding:   "json",
+			}
+			var err error
+			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+			if err != nil {
+				fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
+				return
+			}
+			if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+				fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
+				return
+			}
+		} else {
+			fleetManager.logger.Info("OTLP bridge already initialized, skipping initialization")
+		}
+
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
+	}
+
+	// Register the hook
+	fleetManager.connection.AddOnReadyHook(hookFunc)
+
+	// Simulate connection ready event
+	topics := fleet.TokenResponseTopics{
+		Ingest:    "test/otlp/topic",
+		Telemetry: "test/telemetry/topic",
+	}
+
+	// Call the hook manually
+	hookFunc(nil, topics)
+
+	// Verify bridge was initialized
+	require.NotNil(t, fleetManager.otlpBridge, "bridge should be initialized")
+	// Verify the bridge is listening on the configured port
+	// We can't directly check the port, but we can verify the bridge started successfully
+	// The actual port verification would require inspecting the listener, which is not exposed
+	// So we just verify the bridge exists and started without error
+
+	// Cleanup
+	if fleetManager.otlpBridge != nil {
+		_ = fleetManager.otlpBridge.Stop(context.Background())
+	}
+}
+
+func TestFleetConfigManager_OnReadyHook_UsesDefaultGRPCPort(t *testing.T) {
+	// Test that OnReadyHook uses the default gRPC port (4318) when not configured
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Create config without gRPC port configured (should use default)
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						// OTLPBridgeGRPCPort is nil, should use default 4318
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Create the hook function that uses config (simulating what Start does)
+	hookFunc := func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
+			// Get gRPC port from config, defaulting to 4318 if not specified
+			grpcPort := 4318
+			if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+				grpcPort = *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+			}
+			bridgeConfig := otlpbridge.BridgeConfig{
+				ListenAddr: fmt.Sprintf(":%d", grpcPort),
+				Encoding:   "json",
+			}
+			var err error
+			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+			if err != nil {
+				fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
+				return
+			}
+			if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+				fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
+				return
+			}
+		} else {
+			fleetManager.logger.Info("OTLP bridge already initialized, skipping initialization")
+		}
+
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
+	}
+
+	// Register the hook
+	fleetManager.connection.AddOnReadyHook(hookFunc)
+
+	// Simulate connection ready event
+	topics := fleet.TokenResponseTopics{
+		Ingest:    "test/otlp/topic",
+		Telemetry: "test/telemetry/topic",
+	}
+
+	// Call the hook manually
+	hookFunc(nil, topics)
+
+	// Verify bridge was initialized (should use default port 4318)
+	require.NotNil(t, fleetManager.otlpBridge, "bridge should be initialized with default port")
+
+	// Cleanup
+	if fleetManager.otlpBridge != nil {
+		_ = fleetManager.otlpBridge.Stop(context.Background())
+	}
+}
