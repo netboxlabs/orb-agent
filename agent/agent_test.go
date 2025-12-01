@@ -126,8 +126,8 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 
 	// Verify the config was modified by checking backendsCommon which is set in startBackends
 	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	// Default port is 4318
-	assert.Equal(t, "grpc://localhost:4318", orbAgent.backendsCommon.Otlp.Grpc)
+	// Default port is 4317
+	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
 func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
@@ -166,8 +166,8 @@ func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
 
 	// Verify the config was modified by checking backendsCommon which is set in startBackends
 	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	// Default port is 4318
-	assert.Equal(t, "grpc://localhost:4318", orbAgent.backendsCommon.Otlp.Grpc)
+	// Default port is 4317
+	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
 func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
@@ -202,8 +202,8 @@ func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
 
 	// Verify the config was modified by checking backendsCommon which is set in startBackends
 	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	// Default port is 4318
-	assert.Equal(t, "grpc://localhost:4318", orbAgent.backendsCommon.Otlp.Grpc)
+	// Default port is 4317
+	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
 func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
