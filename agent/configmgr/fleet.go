@@ -171,8 +171,8 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
-			// Get gRPC port from config, defaulting to 4318 if not specified
-			grpcPort := 4318
+			// Get gRPC port from config, defaulting to 4317 if not specified
+			grpcPort := 4317
 			if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
 				grpcPort = *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
 			}

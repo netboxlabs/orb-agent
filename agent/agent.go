@@ -198,8 +198,8 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
-		// Get gRPC port from config, defaulting to 4318 if not specified
-		grpcPort := 4318
+		// Get gRPC port from config, defaulting to 4317 if not specified
+		grpcPort := 4317
 		if a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
 			grpcPort = *a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
 		}

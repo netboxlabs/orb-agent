@@ -6,10 +6,9 @@ orb:
         token_url: ${FLEET_AUTH_URL}
         client_id: ${FLEET_CLIENT_ID}
         client_secret: ${FLEET_CLIENT_SECRET}
+        otlp_bridge_grpc_port: 4337
   backends:
     network_discovery:
     device_discovery:
     snmp_discovery:
-    common:
-      diode:
-        dry_run: true
+    worker:

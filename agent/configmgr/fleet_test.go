@@ -876,8 +876,8 @@ func TestFleetConfigManager_OnReadyHook_UsesConfiguredGRPCPort(t *testing.T) {
 	hookFunc := func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
-			// Get gRPC port from config, defaulting to 4318 if not specified
-			grpcPort := 4318
+			// Get gRPC port from config, defaulting to 4317 if not specified
+			grpcPort := 4317
 			if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
 				grpcPort = *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
 			}
@@ -934,7 +934,7 @@ func TestFleetConfigManager_OnReadyHook_UsesConfiguredGRPCPort(t *testing.T) {
 }
 
 func TestFleetConfigManager_OnReadyHook_UsesDefaultGRPCPort(t *testing.T) {
-	// Test that OnReadyHook uses the default gRPC port (4318) when not configured
+	// Test that OnReadyHook uses the default gRPC port (4317) when not configured
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
@@ -946,7 +946,7 @@ func TestFleetConfigManager_OnReadyHook_UsesDefaultGRPCPort(t *testing.T) {
 			ConfigManager: config.ManagerConfig{
 				Sources: config.Sources{
 					Fleet: config.FleetManager{
-						// OTLPBridgeGRPCPort is nil, should use default 4318
+						// OTLPBridgeGRPCPort is nil, should use default 4317
 					},
 				},
 			},
@@ -958,8 +958,8 @@ func TestFleetConfigManager_OnReadyHook_UsesDefaultGRPCPort(t *testing.T) {
 	hookFunc := func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
-			// Get gRPC port from config, defaulting to 4318 if not specified
-			grpcPort := 4318
+			// Get gRPC port from config, defaulting to 4317 if not specified
+			grpcPort := 4317
 			if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
 				grpcPort = *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
 			}
@@ -1002,7 +1002,7 @@ func TestFleetConfigManager_OnReadyHook_UsesDefaultGRPCPort(t *testing.T) {
 	// Call the hook manually
 	hookFunc(nil, topics)
 
-	// Verify bridge was initialized (should use default port 4318)
+	// Verify bridge was initialized (should use default port 4317)
 	require.NotNil(t, fleetManager.otlpBridge, "bridge should be initialized with default port")
 
 	// Cleanup
