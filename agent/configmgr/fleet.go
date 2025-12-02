@@ -140,6 +140,25 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	fleetManager.configYaml = string(configYaml)
 	fleetManager.connectionDetails = connectionDetails
 
+	// Start OTLP bridge server early, before MQTT connection
+	// This ensures port binding errors are detected immediately and propagate to fail the agent startup
+	grpcPort := 4317
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+	}
+	bridgeConfig := otlpbridge.BridgeConfig{
+		ListenAddr: fmt.Sprintf(":%d", grpcPort),
+		Encoding:   "json",
+	}
+	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+	if err != nil {
+		return fmt.Errorf("failed to create OTLP bridge: %w", err)
+	}
+	if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
+	}
+	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
+
 	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 	if err != nil {
 		return err
@@ -167,32 +186,12 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
-	// Register MQTTOnReadyHook to initialize the OTLP bridge
+	// Register MQTTOnReadyHook to bind publisher and topics to the OTLP bridge
+	// The bridge server is already started earlier in Start(), so we only need to bind MQTT here
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
-			fleetManager.logger.Info("MQTT connection ready, initializing OTLP bridge")
-			// Get gRPC port from config, defaulting to 4317 if not specified
-			grpcPort := 4317
-			if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
-				grpcPort = *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
-			}
-			bridgeConfig := otlpbridge.BridgeConfig{
-				ListenAddr: fmt.Sprintf(":%d", grpcPort),
-				Encoding:   "json",
-			}
-			var err error
-			fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
-			if err != nil {
-				fleetManager.logger.Error("failed to create OTLP bridge", slog.Any("error", err))
-				return
-			}
-			if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
-				fleetManager.logger.Error("failed to start OTLP bridge", slog.Any("error", err))
-				return
-			}
-			fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
-		} else {
-			fleetManager.logger.Info("OTLP bridge already initialized, skipping initialization")
+			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
+			return
 		}
 
 		// Create publisher adapter and bind to bridge
