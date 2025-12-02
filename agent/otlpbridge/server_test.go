@@ -21,7 +21,9 @@ func TestBridgeServer_Start_PortInUse(t *testing.T) {
 	testPort := 54322
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	// Create bridge server with the pre-occupied port
 	bridgeConfig := BridgeConfig{
@@ -75,7 +77,9 @@ func TestBridgeServer_Start_ErrorMessageFormat(t *testing.T) {
 	testPort := 54323
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	bridgeConfig := BridgeConfig{
 		ListenAddr: fmt.Sprintf(":%d", testPort),
@@ -97,4 +101,3 @@ func TestBridgeServer_Start_ErrorMessageFormat(t *testing.T) {
 		strings.Contains(errorMsg, "use") || strings.Contains(errorMsg, "bind"),
 		"error message should mention port in use or bind failure: %s", err.Error())
 }
-

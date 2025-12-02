@@ -1027,7 +1027,9 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	testPort := 54321
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	// Create mock HTTP server for token endpoint
 	validJWT := fleet.RawJWTWithClaims(map[string]any{
