@@ -67,6 +67,7 @@ The scope defines a list of targets to be scanned.
 | icmp_echo      | bool | no | Enables ICMP Echo discovery (-PE). Sends ICMP Echo Request (ping) probes to detect live hosts. |
 | icmp_timestamp | bool | no | Enables ICMP Timestamp discovery (-PP). Uses ICMP Timestamp Requests to discover hosts that respond to this type of probe. |
 | icmp_netmask   | bool | no | Enables ICMP Netmask discovery (-PM). Sends ICMP Address Mask Request packets to identify responsive hosts. |
+| skip_host      | bool | no | Enables skip host discovery (-Pn). This option skips the host discovery stage altogether. |
 
 ### Sample
 A sample policy including all parameters supported by the network discovery backend.
