@@ -53,6 +53,7 @@ type Scope struct {
 	ICMPEcho       *bool    `yaml:"icmp_echo,omitempty"`
 	ICMPTimestamp  *bool    `yaml:"icmp_timestamp,omitempty"`
 	ICMPNetMask    *bool    `yaml:"icmp_netmask,omitempty"`
+	SkipHost       *bool    `yaml:"skip_host,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy

@@ -205,6 +205,7 @@ func TestRunnerWithOptions(t *testing.T) {
 					ICMPEcho:      boolPtr(true),
 					ICMPTimestamp: boolPtr(true),
 					ICMPNetMask:   boolPtr(true),
+					SkipHost:      boolPtr(true),
 				},
 			},
 		},
