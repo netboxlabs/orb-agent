@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -78,6 +79,7 @@ func TestFleetConfigManager_Start_TokenError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
 	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
 
 	// Create config with invalid token URL
@@ -108,6 +110,7 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
 
 	// Create mock MQTT connection that returns a connection error immediately
 	mockConn := &fleet.MockMQTTConnection{
@@ -203,6 +206,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
 
 	// Create mock MQTT connection that returns a connection error
 	mockConn := &fleet.MockMQTTConnection{
@@ -223,16 +227,18 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create test config
+	// Create test config with ephemeral port (0) to avoid port conflicts
+	ephemeralPort := 0
 	cfg := config.Config{
 		OrbAgent: config.OrbAgent{
 			ConfigManager: config.ManagerConfig{
 				Sources: config.Sources{
 					Fleet: config.FleetManager{
-						TokenURL:     server.URL,
-						SkipTLS:      true,
-						ClientID:     "test_client_id",
-						ClientSecret: "test_client_secret",
+						TokenURL:           server.URL,
+						SkipTLS:            true,
+						ClientID:           "test_client_id",
+						ClientSecret:       "test_client_secret",
+						OTLPBridgeGRPCPort: &ephemeralPort,
 					},
 				},
 			},
@@ -1004,6 +1010,148 @@ func TestFleetConfigManager_OnReadyHook_UsesDefaultGRPCPort(t *testing.T) {
 
 	// Verify bridge was initialized (should use default port 4317)
 	require.NotNil(t, fleetManager.otlpBridge, "bridge should be initialized with default port")
+
+	// Cleanup
+	if fleetManager.otlpBridge != nil {
+		_ = fleetManager.otlpBridge.Stop(context.Background())
+	}
+}
+
+func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
+	// Test that Start() fails with a clear error when the OTLP bridge port is already in use
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+
+	// Pre-occupy a port with a test listener
+	testPort := 54321
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
+	require.NoError(t, err, "failed to create test listener")
+	defer func() {
+		_ = listener.Close()
+	}()
+
+	// Create mock HTTP server for token endpoint
+	validJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          1516239022,
+		"ext": map[string]any{
+			"orb:mqtt_url": "mqtt://test.example.com:1883",
+		},
+	})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := fleet.TokenResponse{
+			AccessToken: validJWT,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   3600,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Create config with the pre-occupied port
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:           server.URL,
+						SkipTLS:            true,
+						ClientID:           "test_client",
+						ClientSecret:       "test_secret",
+						OTLPBridgeGRPCPort: &testPort,
+					},
+				},
+			},
+		},
+	}
+
+	backends := make(map[string]backend.Backend)
+	// Use mock connection so we don't try to actually connect to MQTT
+	mockConn := &fleet.MockMQTTConnection{
+		ConnectError: fmt.Errorf("mqtt connection failed"),
+	}
+	fleetManager := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	// Act
+	err = fleetManager.Start(cfg, backends)
+
+	// Assert
+	require.Error(t, err, "Start() should fail when port is in use")
+	assert.Contains(t, err.Error(), "failed to start OTLP bridge", "error should mention OTLP bridge failure")
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d", testPort), "error should mention the port number")
+}
+
+func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
+	// Test that OTLP bridge starts before MQTT connection attempt
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+
+	// Create a mock MQTT connection that tracks when Connect() is called
+	mockConn := &fleet.MockMQTTConnection{
+		ConnectError: fmt.Errorf("mqtt connection failed"),
+	}
+	fleetManager := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	// Create mock HTTP server for token endpoint
+	validJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          1516239022,
+		"ext": map[string]any{
+			"orb:mqtt_url": "mqtt://test.example.com:1883",
+		},
+	})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := fleet.TokenResponse{
+			AccessToken: validJWT,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   3600,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Use ephemeral port (0) to avoid port conflicts with other tests
+	ephemeralPort := 0
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:           server.URL,
+						SkipTLS:            true,
+						ClientID:           "test_client",
+						ClientSecret:       "test_secret",
+						OTLPBridgeGRPCPort: &ephemeralPort,
+					},
+				},
+			},
+		},
+	}
+
+	backends := make(map[string]backend.Backend)
+
+	// Act
+	err := fleetManager.Start(cfg, backends)
+
+	// Assert
+	// Even though MQTT connection fails, we should verify that:
+	// 1. OTLP bridge was started (it should exist)
+	// 2. Connect() was called (indicating we got past bridge startup)
+	require.Error(t, err, "Start() should fail due to MQTT connection error")
+	assert.True(t, mockConn.ConnectCalled, "MQTT Connect() should have been called")
+	// The bridge should have been created and started before Connect() was called
+	// Since Connect() was called, the bridge must have started successfully
+	assert.NotNil(t, fleetManager.otlpBridge, "OTLP bridge should be initialized before MQTT connection")
 
 	// Cleanup
 	if fleetManager.otlpBridge != nil {

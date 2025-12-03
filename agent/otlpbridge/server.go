@@ -107,7 +107,7 @@ func (s *BridgeServer) GetPolicyRepo() policies.PolicyRepo {
 func (s *BridgeServer) Start(_ context.Context) error {
 	lis, err := net.Listen("tcp", s.cfg.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("failed to listen on %s: %w", s.cfg.ListenAddr, err)
+		return fmt.Errorf("failed to listen on %s (port may be in use by another service): %w", s.cfg.ListenAddr, err)
 	}
 	s.listener = lis
 
