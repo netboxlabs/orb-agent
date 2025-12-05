@@ -142,7 +142,7 @@ class PolicyRunner:
                     raise RuntimeError(f"Chunk {chunk_num} ingestion failed: {response.errors}")
                 logger.debug(f"Chunk {chunk_num} ingested successfully")
 
-            logger.info(f"Policy {self.name}: Successfully ingested {len(entities)} entities in {entity_chunk} chunks")
+            logger.info(f"Policy {self.name}: Successfully ingested {len(entities)} entities in {chunk_num} chunks")
             run_success = get_metric("backend_execution_success")
             if run_success:
                 run_success.add(
