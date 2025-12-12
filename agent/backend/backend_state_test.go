@@ -551,7 +551,7 @@ func TestBackendStateManager_PolicyStatusPolling(t *testing.T) {
 	// Wait a bit more to ensure the goroutine has finished updating the repo
 	// (policyMemRepo is not thread-safe, so we need to avoid concurrent access)
 	time.Sleep(50 * time.Millisecond)
-	
+
 	retrievedPolicy, err2 := repo.Get("policy-1")
 	require.NoError(t, err2)
 	require.Len(t, retrievedPolicy.Jobs, 1, "Expected jobs to be updated after ticker fires")
