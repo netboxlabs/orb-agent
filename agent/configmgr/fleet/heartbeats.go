@@ -8,6 +8,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -97,9 +98,27 @@ func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
 			Error:    policyState.BackendErr,
 			Version:  policyState.Version,
 			Backend:  policyState.Backend,
+			Jobs:     convertJobsToStateInfo(policyState.Jobs),
 		}
 	}
 	return ps
+}
+
+// convertJobsToStateInfo converts policies.JobData to messages.JobStateInfo
+func convertJobsToStateInfo(jobs []policies.JobData) []messages.JobStateInfo {
+	if len(jobs) == 0 {
+		return nil
+	}
+	jobInfos := make([]messages.JobStateInfo, len(jobs))
+	for i, job := range jobs {
+		jobInfos[i] = messages.JobStateInfo{
+			ID:        job.ID,
+			Status:    job.Status,
+			CreatedAt: job.CreatedAt,
+			UpdatedAt: job.UpdatedAt,
+		}
+	}
+	return jobInfos
 }
 
 func (hb *heartbeater) getGroupState() map[string]messages.GroupStateInfo {

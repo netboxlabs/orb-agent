@@ -1406,3 +1406,129 @@ func TestNewHeartbeater_WithGroupManager(t *testing.T) {
 	// Clean up ticker
 	hb.hbTicker.Stop()
 }
+
+func TestHeartbeater_GetPolicyState_WithJobs(t *testing.T) {
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:         "policy-1",
+			Name:       "Test Policy 1",
+			Backend:    "pktvisor",
+			Version:    1,
+			State:      policies.Running,
+			BackendErr: "",
+			Datasets:   map[string]bool{"dataset-1": true},
+			Jobs: []policies.JobData{
+				{
+					ID:        "job-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
+				},
+				{
+					ID:        "job-2",
+					Status:    "running",
+					CreatedAt: testTime.Add(10 * time.Minute),
+					UpdatedAt: testTime.Add(12 * time.Minute),
+				},
+			},
+		},
+		{
+			ID:         "policy-2",
+			Name:       "Test Policy 2",
+			Backend:    "snmp_discovery",
+			Version:    2,
+			State:      policies.Running,
+			BackendErr: "",
+			Datasets:   map[string]bool{"dataset-2": true},
+			Jobs:       []policies.JobData{}, // Empty jobs
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	// Act
+	policyState := hb.getPolicyState()
+
+	// Assert
+	assert.Len(t, policyState, 2)
+
+	// Verify policy-1 has jobs
+	policy1, ok := policyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy1.Jobs, 2)
+	assert.Equal(t, "job-1", policy1.Jobs[0].ID)
+	assert.Equal(t, "completed", policy1.Jobs[0].Status)
+	assert.Equal(t, testTime, policy1.Jobs[0].CreatedAt)
+	assert.Equal(t, "job-2", policy1.Jobs[1].ID)
+	assert.Equal(t, "running", policy1.Jobs[1].Status)
+
+	// Verify policy-2 has no jobs (nil or empty)
+	policy2, ok := policyState["policy-2"]
+	assert.True(t, ok)
+	assert.Nil(t, policy2.Jobs)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithJobs(t *testing.T) {
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:       "policy-1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			Version:  1,
+			State:    policies.Running,
+			Datasets: map[string]bool{"dataset-1": true},
+			Jobs: []policies.JobData{
+				{
+					ID:        "job-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state includes jobs
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 1)
+
+	policy, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy.Jobs, 1)
+	assert.Equal(t, "job-1", policy.Jobs[0].ID)
+	assert.Equal(t, "completed", policy.Jobs[0].Status)
+	assert.Equal(t, testTime, policy.Jobs[0].CreatedAt)
+
+	mockPMgr.AssertExpectations(t)
+}

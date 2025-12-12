@@ -2,7 +2,16 @@ package policies
 
 import (
 	"database/sql/driver"
+	"time"
 )
+
+// JobData represents job information for a policy
+type JobData struct {
+	ID        string    `json:"id"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
 // PolicyData represents a policy
 type PolicyData struct {
@@ -16,6 +25,7 @@ type PolicyData struct {
 	State              PolicyState
 	BackendErr         string
 	PreviousPolicyData *PolicyData
+	Jobs               []JobData
 }
 
 // GetDatasetIDs returns the dataset IDs

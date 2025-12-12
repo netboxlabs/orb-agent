@@ -30,6 +30,7 @@ const (
 	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
+	statusTimeout       = 5
 )
 
 type openTelemetryBackend struct {
@@ -316,6 +317,17 @@ func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 		return err
 	}
 	return nil
+}
+
+func (o *openTelemetryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
+	var resp backend.StatusResponse
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", o.apiProtocol, o.apiHost, o.apiPort)
+	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodGet,
+		http.NoBody, "application/json", statusTimeout, "message")
+	if err != nil {
+		return nil, err
+	}
+	return resp.Policies, nil
 }
 
 func (o *openTelemetryBackend) logOpenTelemetryInfinityOutput(line string, fallback slog.Level) {

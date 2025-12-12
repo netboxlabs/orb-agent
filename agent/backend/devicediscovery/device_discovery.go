@@ -25,6 +25,7 @@ const (
 	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
+	statusTimeout       = 5
 	defaultExec         = "device-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8072"
@@ -408,6 +409,17 @@ func (d *deviceDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 		return err
 	}
 	return nil
+}
+
+func (d *deviceDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
+	var resp backend.StatusResponse
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	err := backend.CommonRequest("device-discovery", d.proc, d.logger, url, &resp, http.MethodGet,
+		http.NoBody, "application/json", statusTimeout, "detail")
+	if err != nil {
+		return nil, err
+	}
+	return resp.Policies, nil
 }
 
 func normalizeDeviceDiscoveryLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
