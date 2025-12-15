@@ -63,7 +63,7 @@ Current supported defaults:
 | role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
 | if_type | str | Interface Type (defaults to 'other' if not specified) |
 | location | str | Device location |
-| tenant | str | Device tenant |
+| tenant | str/map | Device tenant |
 | description | str  | General description   |
 | comments   | str  | General comments       |
 | tags       | list | List of tags           |
@@ -79,6 +79,11 @@ Current supported defaults:
 | ├─ description | str  | Device description           |
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
+| tenant | map | Tenant-specific defaults              |
+| ├─ name | str | Tenant name                          |
+| ├─ group | str | Tenant group                        |
+| ├─ description | str  | Tenant description           |
+| ├─ tags       | list | Tenant tags                   |
 | interface    | map  | Interface-specific defaults    |
 | ├─ description | str  | Interface description        |
 | ├─ tags       | list | Interface tags               |
