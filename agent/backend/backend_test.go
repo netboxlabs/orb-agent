@@ -76,6 +76,14 @@ func (m *mockBackend) RemovePolicy(data policies.PolicyData) error {
 	return args.Error(0)
 }
 
+func (m *mockBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
+	args := m.Called()
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]backend.PolicyStatus), args.Error(1)
+}
+
 func TestRestartAll_NoBackends(t *testing.T) {
 	// This test assumes no backends are registered
 	// In a real scenario, we'd need to clear the registry first

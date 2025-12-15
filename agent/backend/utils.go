@@ -94,6 +94,9 @@ func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url 
 		if err != nil {
 			return fmt.Errorf("failed to read response body: %w", err)
 		}
+		if len(body) == 0 {
+			return nil // Empty body on 2xx is valid, leave payload as zero-value
+		}
 		if err = json.Unmarshal(body, &payload); err == nil {
 			return nil
 		}

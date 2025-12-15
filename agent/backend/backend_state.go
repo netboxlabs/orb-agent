@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 // MinRestartTime is the minimum time to wait between restarts
@@ -33,16 +35,18 @@ type stateManager struct {
 	ticker             *time.Ticker
 	logger             *slog.Logger
 	restartBackendChan chan string
+	policyRepo         policies.PolicyRepo
 }
 
 // NewStateManager creates a new StateManager with the given logger and restart channel
-func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackendChan chan string) StateManager {
+func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackendChan chan string, policyRepo policies.PolicyRepo) StateManager {
 	if configMgrSupportsStateMonitoring(activeConfigMgr) {
 		return &stateManager{
 			backendState:       make(map[string]*State),
 			ticker:             time.NewTicker(BackendMonitorInterval),
 			logger:             logger,
 			restartBackendChan: restartBackendChan,
+			policyRepo:         policyRepo,
 		}
 	}
 	return nullStateManager{}
@@ -99,6 +103,21 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 				}
 			}
 			manager.mu.Unlock()
+
+			// Poll policy status if backend supports it
+			if provider, ok := be.(PolicyStatusProvider); ok && manager.policyRepo != nil {
+				statuses, err := provider.GetPolicyStatus()
+				if err != nil {
+					manager.logger.Debug("failed to get policy status", "backend", name, "error", err)
+				} else {
+					for _, ps := range statuses {
+						jobs := convertToJobData(ps.Jobs)
+						if err := manager.policyRepo.UpdateJobs(ps.Name, jobs); err != nil {
+							manager.logger.Debug("failed to update jobs for policy", "policy", ps.Name, "error", err)
+						}
+					}
+				}
+			}
 		}
 	}()
 }
@@ -137,4 +156,20 @@ func (manager *stateManager) Get() map[string]*State {
 		result[k] = &stateCopy
 	}
 	return result
+}
+
+// convertToJobData converts backend PolicyStatusJob to policies.JobData
+func convertToJobData(statusJobs []PolicyStatusJob) []policies.JobData {
+	jobs := make([]policies.JobData, len(statusJobs))
+	for i, sj := range statusJobs {
+		jobs[i] = policies.JobData{
+			ID:          sj.ID,
+			Status:      sj.Status,
+			Reason:      sj.Reason,
+			EntityCount: sj.EntityCount,
+			CreatedAt:   sj.CreatedAt,
+			UpdatedAt:   sj.UpdatedAt,
+		}
+	}
+	return jobs
 }

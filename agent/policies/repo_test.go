@@ -2,6 +2,7 @@ package policies_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -393,4 +394,147 @@ func TestUpdateRenamingPolicy(t *testing.T) {
 	// Verify we cannot get by old name
 	_, err = repo.GetByName("old-name")
 	assert.Error(t, err)
+}
+
+func TestUpdateJobs(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	// Create a policy
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Unknown,
+	}
+
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	// Update jobs for the policy
+	jobs := []policies.JobData{
+		{
+			ID:        "job-1",
+			Status:    "completed",
+			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+		},
+		{
+			ID:        "job-2",
+			Status:    "running",
+			CreatedAt: time.Date(2024, 1, 1, 0, 10, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 1, 0, 12, 0, 0, time.UTC),
+		},
+	}
+
+	err = repo.UpdateJobs("test-policy", jobs)
+	require.NoError(t, err)
+
+	// Verify jobs are updated
+	retrievedPD, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Len(t, retrievedPD.Jobs, 2)
+	assert.Equal(t, "job-1", retrievedPD.Jobs[0].ID)
+	assert.Equal(t, "completed", retrievedPD.Jobs[0].Status)
+	assert.Equal(t, "job-2", retrievedPD.Jobs[1].ID)
+	assert.Equal(t, "running", retrievedPD.Jobs[1].Status)
+
+	// Verify jobs are also returned via GetByName
+	retrievedPDByName, err := repo.GetByName("test-policy")
+	require.NoError(t, err)
+	assert.Len(t, retrievedPDByName.Jobs, 2)
+}
+
+func TestUpdateJobs_NonExistentPolicy(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	jobs := []policies.JobData{
+		{
+			ID:        "job-1",
+			Status:    "completed",
+			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+		},
+	}
+
+	err = repo.UpdateJobs("non-existent-policy", jobs)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "policy name not found")
+}
+
+func TestUpdateJobs_GetAllIncludesJobs(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	// Create policies
+	pd1 := policies.PolicyData{
+		ID:       "test-id-1",
+		Name:     "test-policy-1",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Unknown,
+	}
+
+	pd2 := policies.PolicyData{
+		ID:       "test-id-2",
+		Name:     "test-policy-2",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset2": true},
+		GroupIDs: map[string]bool{"group2": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Running,
+	}
+
+	err = repo.Update(pd1)
+	require.NoError(t, err)
+	err = repo.Update(pd2)
+	require.NoError(t, err)
+
+	// Update jobs for policy 1
+	jobs1 := []policies.JobData{
+		{
+			ID:        "job-1",
+			Status:    "completed",
+			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+		},
+	}
+	err = repo.UpdateJobs("test-policy-1", jobs1)
+	require.NoError(t, err)
+
+	// Get all policies
+	allPolicies, err := repo.GetAll()
+	require.NoError(t, err)
+
+	// Find policy 1 and verify jobs
+	var foundPolicy1 bool
+	for _, p := range allPolicies {
+		if p.ID == "test-id-1" {
+			foundPolicy1 = true
+			assert.Len(t, p.Jobs, 1)
+			assert.Equal(t, "job-1", p.Jobs[0].ID)
+			break
+		}
+	}
+	assert.True(t, foundPolicy1, "Policy 1 should be found in GetAll()")
+
+	// Verify policy 2 has no jobs
+	var foundPolicy2 bool
+	for _, p := range allPolicies {
+		if p.ID == "test-id-2" {
+			foundPolicy2 = true
+			assert.Empty(t, p.Jobs)
+			break
+		}
+	}
+	assert.True(t, foundPolicy2, "Policy 2 should be found in GetAll()")
 }

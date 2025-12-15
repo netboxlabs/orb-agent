@@ -10,6 +10,36 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
+// PolicyStatusJob represents a job in the backend status response
+type PolicyStatusJob struct {
+	ID          string    `json:"id"`
+	Status      string    `json:"status"`
+	Reason      string    `json:"reason"`
+	EntityCount *int64    `json:"entity_count,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// PolicyStatus represents policy status from backend status endpoint
+type PolicyStatus struct {
+	Name   string            `json:"name"`
+	Status string            `json:"status"`
+	Jobs   []PolicyStatusJob `json:"jobs"`
+}
+
+// StatusResponse represents the full status response from backend
+type StatusResponse struct {
+	Version       string         `json:"version"`
+	StartTime     time.Time      `json:"start_time"`
+	UpTimeSeconds float64        `json:"up_time_seconds"`
+	Policies      []PolicyStatus `json:"policies"`
+}
+
+// PolicyStatusProvider is an optional interface for backends that support policy status polling
+type PolicyStatusProvider interface {
+	GetPolicyStatus() ([]PolicyStatus, error)
+}
+
 // Running Status types
 const (
 	Unknown RunningStatus = iota

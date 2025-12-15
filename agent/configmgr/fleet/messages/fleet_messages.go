@@ -30,14 +30,25 @@ type BackendStateInfo struct {
 	LastRestartReason string    `json:"last_restart_reason,omitempty"`
 }
 
+// JobStateInfo contains state information for a job
+type JobStateInfo struct {
+	ID          string    `json:"id"`
+	Status      string    `json:"status"`
+	Reason      string    `json:"reason,omitempty"`
+	EntityCount *int64    `json:"entity_count,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // PolicyStateInfo contains state information for a policy
 type PolicyStateInfo struct {
-	Name     string   `json:"name"`
-	Datasets []string `json:"datasets,omitempty"`
-	State    string   `json:"state"`
-	Error    string   `json:"error,omitempty"`
-	Version  int32    `json:"version,omitempty"`
-	Backend  string   `json:"backend,omitempty"`
+	Name     string         `json:"name"`
+	Datasets []string       `json:"datasets,omitempty"`
+	State    string         `json:"state"`
+	Error    string         `json:"error,omitempty"`
+	Version  int32          `json:"version,omitempty"`
+	Backend  string         `json:"backend,omitempty"`
+	Jobs     []JobStateInfo `json:"jobs,omitempty"`
 }
 
 // GroupStateInfo contains state information for a group
