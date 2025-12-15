@@ -14,6 +14,7 @@ import (
 type PolicyStatusJob struct {
 	ID        string    `json:"id"`
 	Status    string    `json:"status"`
+	Reason    string    `json:"reason"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

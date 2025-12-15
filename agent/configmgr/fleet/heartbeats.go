@@ -114,6 +114,7 @@ func convertJobsToStateInfo(jobs []policies.JobData) []messages.JobStateInfo {
 		jobInfos[i] = messages.JobStateInfo{
 			ID:        job.ID,
 			Status:    job.Status,
+			Reason:    job.Reason,
 			CreatedAt: job.CreatedAt,
 			UpdatedAt: job.UpdatedAt,
 		}

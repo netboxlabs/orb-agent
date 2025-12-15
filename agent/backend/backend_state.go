@@ -165,6 +165,7 @@ func convertToJobData(statusJobs []PolicyStatusJob) []policies.JobData {
 		jobs[i] = policies.JobData{
 			ID:        sj.ID,
 			Status:    sj.Status,
+			Reason:    sj.Reason,
 			CreatedAt: sj.CreatedAt,
 			UpdatedAt: sj.UpdatedAt,
 		}
