@@ -76,6 +76,7 @@ jobs:
             push: true
             cache-from: type=gha
             cache-to: type=gha,mode=max
+            no-cache-filters: python-builder
             tags: |
               netboxlabs/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
               netboxlabs.jfrog.io/obs-builds/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
