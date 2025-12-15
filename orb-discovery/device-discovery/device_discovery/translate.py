@@ -5,6 +5,7 @@
 import ipaddress
 from collections.abc import Iterable
 
+from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import (
     VLAN,
     Device,
@@ -15,9 +16,11 @@ from netboxlabs.diode.sdk.ingester import (
     Location,
     Platform,
     Prefix,
+    Tenant,
+    TenantGroup,
 )
 
-from device_discovery.policy.models import Defaults, Options
+from device_discovery.policy.models import Defaults, Options, TenantParameters
 
 
 def int32_overflows(number: int) -> bool:
@@ -36,6 +39,26 @@ def int32_overflows(number: int) -> bool:
     INT32_MIN = -2147483648
     INT32_MAX = 2147483647
     return not (INT32_MIN <= number <= INT32_MAX)
+
+
+def translate_tenant(
+    tenant: str | TenantParameters | pb.Tenant | None,
+) -> pb.Tenant | None:
+    """Convert tenant input into a Diode Tenant message."""
+    if tenant is None or isinstance(tenant, pb.Tenant):
+        return tenant
+
+    if isinstance(tenant, TenantParameters):
+        tenant_group = TenantGroup(name=tenant.group) if tenant.group else None
+        return Tenant(
+            name=tenant.name,
+            group=tenant_group,
+            comments=tenant.comments,
+            description=tenant.description,
+            tags=tenant.tags,
+        )
+
+    return Tenant(name=tenant)
 
 
 def translate_device(device_info: dict, defaults: Defaults) -> Device:
@@ -98,7 +121,7 @@ def translate_device(device_info: dict, defaults: Defaults) -> Device:
         site=defaults.site,
         tags=tags,
         location=location,
-        tenant=defaults.tenant,
+        tenant=translate_tenant(defaults.tenant),
         description=description,
         comments=comments,
     )
@@ -214,7 +237,7 @@ def translate_interface_ips(
         ip_comments = defaults.ipaddress.comments
         ip_description = defaults.ipaddress.description
         ip_role = defaults.ipaddress.role
-        ip_tenant = defaults.ipaddress.tenant
+        ip_tenant = translate_tenant(defaults.ipaddress.tenant)
         ip_vrf = defaults.ipaddress.vrf
 
     if defaults.prefix:
@@ -222,7 +245,7 @@ def translate_interface_ips(
         prefix_comments = defaults.prefix.comments
         prefix_description = defaults.prefix.description
         prefix_role = defaults.prefix.role
-        prefix_tenant = defaults.prefix.tenant
+        prefix_tenant = translate_tenant(defaults.prefix.tenant)
         prefix_vrf = defaults.prefix.vrf
 
     ip_entities = []
@@ -295,7 +318,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
         comments = defaults.vlan.comments
         description = defaults.vlan.description
         group = defaults.vlan.group
-        tenant = defaults.vlan.tenant
+        tenant = translate_tenant(defaults.vlan.tenant)
         role = defaults.vlan.role
 
     clean_name = " ".join(vlan_name.strip().split())

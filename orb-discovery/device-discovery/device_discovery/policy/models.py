@@ -39,12 +39,17 @@ class DeviceParameters(ObjectParameters):
         default=None, description="Device platform override, optional"
     )
 
+class TenantParameters(ObjectParameters):
+    """Model for Tenant parameters."""
+
+    name : str
+    group: str | None = Field(default=None, description="Tenant group, optional")
 
 class VlanParameters(ObjectParameters):
     """Model for VLAN parameters."""
 
     group: str | None = Field(default=None, description="VLAN group, optional")
-    tenant: str | None = Field(default=None, description="VLAN tenant, optional")
+    tenant: str | TenantParameters | None = Field(default=None, description="VLAN tenant, optional")
     role: str | None = Field(default=None, description="VLAN role, optional")
 
 
@@ -52,7 +57,7 @@ class IpamParameters(ObjectParameters):
     """Model for IPAM parameters."""
 
     role: str | None = Field(default=None, description="IPAM role, optional")
-    tenant: str | None = Field(default=None, description="IPAM tenant, optional")
+    tenant: str | TenantParameters | None = Field(default=None, description="IPAM tenant, optional")
     vrf: str | None = Field(default=None, description="IPAM VRF, optional")
 
 
@@ -65,7 +70,7 @@ class Defaults(BaseModel):
     )
     if_type: str | None = Field(default="other", description="Interface type, optional")
     location: str | None = Field(default=None, description="Location name, optional")
-    tenant: str | None = Field(default=None, description="Tenant name, optional")
+    tenant: str | TenantParameters | None = Field(default=None, description="Tenant, optional")
     tags: list[str] | None = Field(default=None, description="Tags, optional")
     device: DeviceParameters | None = Field(
         default=None, description="Device parameters, optional"

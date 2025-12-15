@@ -10,6 +10,7 @@ from device_discovery.policy.models import (
     IpamParameters,
     ObjectParameters,
     Options,
+    TenantParameters,
     VlanParameters,
 )
 from device_discovery.translate import (
@@ -94,6 +95,18 @@ def sample_defaults():
 
 
 @pytest.fixture
+def sample_tenant_parameters():
+    """Sample tenant parameters for testing."""
+    return TenantParameters(
+        name="Tenant With Group",
+        group="Tenant Group",
+        description="Tenant description",
+        comments="Tenant comments",
+        tags=["tenant-tag"],
+    )
+
+
+@pytest.fixture
 def sample_override_defaults(sample_defaults):
     """Sample defaults with device overrides."""
     sample_defaults.device.model = "Catalyst"
@@ -121,6 +134,20 @@ def test_translate_device_with_overrides(sample_device_info, sample_override_def
     device = translate_device(sample_device_info, sample_override_defaults)
     assert device.device_type.model == "Catalyst"
     assert device.device_type.manufacturer.name == "Cisco"
+
+
+def test_translate_device_with_tenant_parameters(
+    sample_device_info, sample_defaults, sample_tenant_parameters
+):
+    """Ensure tenant parameters translate into Tenant entities."""
+    sample_defaults.tenant = sample_tenant_parameters
+    device = translate_device(sample_device_info, sample_defaults)
+
+    assert device.tenant.name == "Tenant With Group"
+    assert device.tenant.group.name == "Tenant Group"
+    assert device.tenant.description == "Tenant description"
+    assert device.tenant.comments == "Tenant comments"
+    assert len(device.tenant.tags) == 1
 
 
 def test_translate_device_serial_list(sample_device_info, sample_defaults):
@@ -209,6 +236,36 @@ def test_translate_interface_ips(
     assert ip_entities[1].ip_address.description == "ip test"
     assert len(ip_entities[0].prefix.tags) == 3
     assert len(ip_entities[1].ip_address.tags) == 3
+
+
+def test_translate_interface_ips_with_tenant_parameters(
+    sample_device_info,
+    sample_interface_info,
+    sample_interfaces_ip,
+    sample_defaults,
+    sample_tenant_parameters,
+):
+    """Ensure interface IP translation supports tenant parameters."""
+    sample_defaults.ipaddress.tenant = sample_tenant_parameters
+    sample_defaults.prefix.tenant = TenantParameters(
+        name="Prefix Tenant", group="Prefix Group"
+    )
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device,
+        "GigabitEthernet0/0/1",
+        sample_interface_info["GigabitEthernet0/0/1"],
+        sample_defaults,
+    )
+    ip_entities = list(
+        translate_interface_ips(interface, sample_interfaces_ip, sample_defaults)
+    )
+
+    assert len(ip_entities) == 2
+    assert ip_entities[0].prefix.tenant.name == "Prefix Tenant"
+    assert ip_entities[0].prefix.tenant.group.name == "Prefix Group"
+    assert ip_entities[1].ip_address.tenant.name == "Tenant With Group"
+    assert ip_entities[1].ip_address.tenant.group.name == "Tenant Group"
 
 
 def test_translate_data(
@@ -424,3 +481,17 @@ def test_translate_vlan_with_defaults(sample_defaults):
     assert vlan.tenant.name == "Default Tenant"
     assert vlan.role.name == "Default Role"
     assert len(vlan.tags) == 3
+
+
+def test_translate_vlan_with_tenant_parameters(
+    sample_defaults, sample_tenant_parameters
+):
+    """Ensure VLAN translation supports tenant parameter objects."""
+    sample_defaults.vlan = VlanParameters(
+        tenant=sample_tenant_parameters, description="Tenant VLAN"
+    )
+    vlan = translate_vlan("201", "Tenant VLAN", sample_defaults)
+
+    assert vlan.tenant.name == "Tenant With Group"
+    assert vlan.tenant.group.name == "Tenant Group"
+    assert vlan.description == "Tenant VLAN"
