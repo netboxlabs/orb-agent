@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -42,10 +43,11 @@ type Runner struct {
 	manufacturers data.ManufacturerRetriever
 	mappingConfig *config.Mapping
 	deviceLookup  data.DeviceRetriever
+	jobStore      *JobStore
 }
 
 // NewRunner returns a new policy runner
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory, mappingConfig *config.Mapping, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory, mappingConfig *config.Mapping, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever, jobStore *JobStore) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
@@ -59,6 +61,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		manufacturers: manufacturers,
 		mappingConfig: mappingConfig,
 		deviceLookup:  deviceLookup,
+		jobStore:      jobStore,
 	}
 
 	runner.task = gocron.NewTask(runner.run)
@@ -88,6 +91,10 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 // run runs the policy
 func (r *Runner) run() {
 	policyName := r.ctx.Value(policyKey).(string)
+
+	// Create job at start
+	job := r.jobStore.CreateJob(policyName)
+
 	// Track policy execution
 	if rMetric := metrics.GetPolicyExecutions(); rMetric != nil {
 		rMetric.Add(r.ctx, 1,
@@ -120,6 +127,8 @@ func (r *Runner) run() {
 
 	if len(entities) == 0 {
 		r.logger.Info("No entities to ingest", slog.Any("policy", r.ctx.Value(policyKey)))
+		// Update job status to completed even if no entities
+		r.jobStore.UpdateJob(policyName, job.ID, JobStatusCompleted, nil, 0)
 		return
 	}
 
@@ -127,13 +136,18 @@ func (r *Runner) run() {
 
 	resp, err := r.client.Ingest(ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
+		"job_id":      job.ID,
 	}))
 	if err != nil {
 		r.logger.Error("error ingesting entities", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.jobStore.UpdateJob(policyName, job.ID, JobStatusFailed, err, len(entities))
 	} else if resp != nil && resp.Errors != nil {
+		ingestErr := fmt.Errorf("ingestion errors: %v", resp.Errors)
 		r.logger.Error("error ingesting entities", slog.Any("error", resp.Errors), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.jobStore.UpdateJob(policyName, job.ID, JobStatusFailed, ingestErr, len(entities))
 	} else {
 		r.logger.Info("entities ingested successfully", slog.Any("policy", r.ctx.Value(policyKey)))
+		r.jobStore.UpdateJob(policyName, job.ID, JobStatusCompleted, nil, len(entities))
 	}
 }
 

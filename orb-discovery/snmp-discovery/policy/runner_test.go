@@ -97,9 +97,10 @@ func TestNewRunner(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
+	jobStore := policy.NewJobStore()
 
 	// Create new runner
-	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig, nil, nil)
+	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig, nil, nil, jobStore)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 }
 
@@ -173,6 +174,7 @@ func TestRunnerRun(t *testing.T) {
 				},
 			}
 			ctx := context.Background()
+			jobStore := policy.NewJobStore()
 
 			mappingConfig := config.Mapping{
 				Entries: []config.MappingEntry{
@@ -192,7 +194,7 @@ func TestRunnerRun(t *testing.T) {
 			}
 
 			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig, nil, nil)
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig, nil, nil, jobStore)
 			assert.NoError(t, err, "policy.NewRunner should not return an error")
 
 			// Use a channel to signal that Ingest was called
@@ -217,11 +219,18 @@ func TestRunnerRun(t *testing.T) {
 			err = runner.Stop()
 			assert.NoError(t, err, "Runner.Stop should not return an error")
 
-			// Verify metrics were recorded
+			// Verify job was created and updated
+			jobs := jobStore.GetJobsForPolicy("test-policy")
+			require.Len(t, jobs, 1, "Job should be created")
 			if tt.expectSuccess {
+				assert.Equal(t, policy.JobStatusCompleted, jobs[0].Status, "Job should be completed on success")
+				assert.Equal(t, 1, jobs[0].EntityCount, "Job should have entity count set")
 				assert.NotNil(t, metrics.GetDiscoverySuccess())
 			}
 			if tt.expectFailure {
+				assert.Equal(t, policy.JobStatusFailed, jobs[0].Status, "Job should be failed on error")
+				assert.NotEmpty(t, jobs[0].Reason, "Job should have error message")
+				assert.Equal(t, 1, jobs[0].EntityCount, "Job should have entity count set even on failure")
 				assert.NotNil(t, metrics.GetDiscoveryFailure())
 			}
 			assert.NotNil(t, metrics.GetDiscoveryAttempts())
@@ -235,6 +244,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockDiodeClient)
 	ctx := context.Background()
+	jobStore := policy.NewJobStore()
 
 	policyConfig := config.Policy{
 		Config: config.PolicyConfig{
@@ -283,7 +293,7 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	}
 
 	// Create runner
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig, nil, nil)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig, nil, nil, jobStore)
 	assert.NoError(t, err)
 
 	// Use a channel to signal that Ingest was called
@@ -324,6 +334,12 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	// Stop the process
 	err = runner.Stop()
 	assert.NoError(t, err, "Runner.Stop should not return an error")
+
+	// Verify job was created and completed
+	jobs := jobStore.GetJobsForPolicy("test-policy")
+	require.Len(t, jobs, 1, "Job should be created")
+	assert.Equal(t, policy.JobStatusCompleted, jobs[0].Status, "Job should be completed")
+	assert.Equal(t, 1, jobs[0].EntityCount, "Job should have entity count set")
 }
 
 func TestRunnerWalkError(t *testing.T) {
@@ -331,6 +347,7 @@ func TestRunnerWalkError(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockDiodeClient)
 	ctx := context.Background()
+	jobStore := policy.NewJobStore()
 
 	policyConfig := config.Policy{
 		Config: config.PolicyConfig{},
@@ -362,7 +379,7 @@ func TestRunnerWalkError(t *testing.T) {
 	}
 
 	// Create runner with the mock client factory
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory, &mappingConfig, nil, nil)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, mockClientFactory, &mappingConfig, nil, nil, jobStore)
 	assert.NoError(t, err)
 
 	// Set up a channel to detect if Ingest is called (it shouldn't be)
@@ -385,4 +402,10 @@ func TestRunnerWalkError(t *testing.T) {
 	// Stop the process
 	err = runner.Stop()
 	assert.NoError(t, err, "Runner.Stop should not return an error")
+
+	// Verify job was created even when no entities are ingested
+	jobs := jobStore.GetJobsForPolicy("test-policy")
+	require.Len(t, jobs, 1, "Job should be created even when walk fails")
+	assert.Equal(t, policy.JobStatusCompleted, jobs[0].Status, "Job should be completed when no entities to ingest")
+	assert.Equal(t, 0, jobs[0].EntityCount, "Job should have zero entity count when no entities discovered")
 }

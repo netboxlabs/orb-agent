@@ -67,6 +67,66 @@ func TestServerConfigureAndStart(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"version": "1.0.0"`)
 	assert.Contains(t, w.Body.String(), `"start_time":`)
 	assert.Contains(t, w.Body.String(), `"up_time_seconds": 0`)
+	assert.Contains(t, w.Body.String(), `"policies":`)
+}
+
+func TestServerGetStatusWithPolicies(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	client := new(MockClient)
+	policyManager, err := policy.NewManager(ctx, logger, client, nil)
+	require.NoError(t, err)
+
+	err = setupTestMeter(t)
+	require.NoError(t, err)
+
+	srv := server.NewServer("localhost", 8082, logger, policyManager, "1.0.0")
+
+	// Create a policy first
+	body := []byte(`
+    policies:
+      test-policy:
+        config:
+          lookup_extensions_dir: /tmp/lookup_extensions
+          defaults:
+            site: New York NY
+        scope:
+          targets: 
+            - host: 192.168.31.1
+          authentication:
+            protocol_version: SNMPv2c
+            community: public
+    `)
+
+	w := httptest.NewRecorder()
+	request, _ := http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-yaml")
+	srv.Router().ServeHTTP(w, request)
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	// Check /status endpoint
+	w = httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	srv.Router().ServeHTTP(w, c.Request)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	bodyStr := w.Body.String()
+
+	// Verify status fields
+	assert.Contains(t, bodyStr, `"version": "1.0.0"`)
+	assert.Contains(t, bodyStr, `"start_time":`)
+	assert.Contains(t, bodyStr, `"up_time_seconds":`)
+	assert.Contains(t, bodyStr, `"policies":`)
+
+	// Verify policy structure
+	assert.Contains(t, bodyStr, `"test-policy"`)
+	assert.Contains(t, bodyStr, `"name":`)
+	assert.Contains(t, bodyStr, `"status":`)
+	assert.Contains(t, bodyStr, `"jobs":`)
+
+	// Clean up
+	srv.Stop()
 }
 
 func TestServerGetCapabilities(t *testing.T) {

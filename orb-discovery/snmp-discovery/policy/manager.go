@@ -32,6 +32,7 @@ type Manager struct {
 	ctx           context.Context
 	mappingConfig config.Mapping
 	manufacturers data.ManufacturerRetriever
+	jobStore      *JobStore
 }
 
 // NewManager returns a new policy manager
@@ -49,6 +50,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client, m
 		mappingConfig: mappingConfig,
 		policies:      make(map[string]*Runner),
 		manufacturers: manufacturers,
+		jobStore:      NewJobStore(),
 	}, nil
 }
 
@@ -199,7 +201,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 			return snmp.NewClient(host, port, retries, timeout, authentication, logger)
 		}
 
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, clientFactory, &m.mappingConfig, m.manufacturers, deviceLookup)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, clientFactory, &m.mappingConfig, m.manufacturers, deviceLookup, m.jobStore)
 		if err != nil {
 			return err
 		}
@@ -258,4 +260,51 @@ func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
 	}
 
 	return nil
+}
+
+// Status represents the status of a policy with its jobs
+type Status struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // derived from latest job
+	Jobs   []*Job `json:"jobs"`
+}
+
+// GetPolicyStatuses returns all policies with their status and jobs
+func (m *Manager) GetPolicyStatuses() []Status {
+	allJobs := m.jobStore.GetAllPoliciesWithJobs()
+
+	var statuses []Status
+
+	// Get statuses for all policies that have runners
+	for name := range m.policies {
+		jobs := m.jobStore.GetJobsForPolicy(name)
+		status := "unknown"
+		if len(jobs) > 0 {
+			latestJob := jobs[len(jobs)-1]
+			status = string(latestJob.Status)
+		}
+		statuses = append(statuses, Status{
+			Name:   name,
+			Status: status,
+			Jobs:   jobs,
+		})
+	}
+
+	// Also include policies that have jobs but no active runner
+	for name, jobs := range allJobs {
+		if !m.HasPolicy(name) {
+			status := "unknown"
+			if len(jobs) > 0 {
+				latestJob := jobs[len(jobs)-1]
+				status = string(latestJob.Status)
+			}
+			statuses = append(statuses, Status{
+				Name:   name,
+				Status: status,
+				Jobs:   jobs,
+			})
+		}
+	}
+
+	return statuses
 }
