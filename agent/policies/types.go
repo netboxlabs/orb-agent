@@ -7,11 +7,12 @@ import (
 
 // JobData represents job information for a policy
 type JobData struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	Reason    string    `json:"reason,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Status      string    `json:"status"`
+	Reason      string    `json:"reason,omitempty"`
+	EntityCount *int64    `json:"entity_count,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // PolicyData represents a policy

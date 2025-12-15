@@ -1532,3 +1532,128 @@ func TestHeartbeater_SendSingleHeartbeat_WithJobs(t *testing.T) {
 
 	mockPMgr.AssertExpectations(t)
 }
+
+func TestHeartbeater_SendSingleHeartbeat_WithEntityCount(t *testing.T) {
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	entityCount := int64(100)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:       "policy-1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			Version:  1,
+			State:    policies.Running,
+			Datasets: map[string]bool{"dataset-1": true},
+			Jobs: []policies.JobData{
+				{
+					ID:          "job-1",
+					Status:      "completed",
+					EntityCount: &entityCount,
+					CreatedAt:   testTime,
+					UpdatedAt:   testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state includes jobs with entity_count
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 1)
+
+	policy, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy.Jobs, 1)
+	assert.Equal(t, "job-1", policy.Jobs[0].ID)
+	assert.Equal(t, "completed", policy.Jobs[0].Status)
+	assert.Equal(t, testTime, policy.Jobs[0].CreatedAt)
+	require.NotNil(t, policy.Jobs[0].EntityCount, "Expected entity_count to be included in heartbeat")
+	assert.Equal(t, int64(100), *policy.Jobs[0].EntityCount)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithoutEntityCount(t *testing.T) {
+	// Test that entity_count is optional in heartbeats
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:       "policy-1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			Version:  1,
+			State:    policies.Running,
+			Datasets: map[string]bool{"dataset-1": true},
+			Jobs: []policies.JobData{
+				{
+					ID:          "job-1",
+					Status:      "completed",
+					EntityCount: nil, // Explicitly nil
+					CreatedAt:   testTime,
+					UpdatedAt:   testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state includes jobs without entity_count
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 1)
+
+	policy, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy.Jobs, 1)
+	assert.Equal(t, "job-1", policy.Jobs[0].ID)
+	assert.Equal(t, "completed", policy.Jobs[0].Status)
+	assert.Equal(t, testTime, policy.Jobs[0].CreatedAt)
+	assert.Nil(t, policy.Jobs[0].EntityCount, "Expected entity_count to be nil when not provided")
+
+	mockPMgr.AssertExpectations(t)
+}

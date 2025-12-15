@@ -112,11 +112,12 @@ func convertJobsToStateInfo(jobs []policies.JobData) []messages.JobStateInfo {
 	jobInfos := make([]messages.JobStateInfo, len(jobs))
 	for i, job := range jobs {
 		jobInfos[i] = messages.JobStateInfo{
-			ID:        job.ID,
-			Status:    job.Status,
-			Reason:    job.Reason,
-			CreatedAt: job.CreatedAt,
-			UpdatedAt: job.UpdatedAt,
+			ID:          job.ID,
+			Status:      job.Status,
+			Reason:      job.Reason,
+			EntityCount: job.EntityCount,
+			CreatedAt:   job.CreatedAt,
+			UpdatedAt:   job.UpdatedAt,
 		}
 	}
 	return jobInfos

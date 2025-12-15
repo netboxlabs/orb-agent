@@ -561,6 +561,143 @@ func TestBackendStateManager_PolicyStatusPolling(t *testing.T) {
 	mockBe.AssertExpectations(t)
 }
 
+func TestBackendStateManager_PolicyStatusPolling_WithEntityCount(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	restartChan := make(chan string, 5)
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	// Create a policy
+	policy := policies.PolicyData{
+		ID:       "policy-1",
+		Name:     "test-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset-1": true},
+		GroupIDs: map[string]bool{"group-1": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Running,
+	}
+	err = repo.Update(policy)
+	require.NoError(t, err)
+
+	manager := backend.NewStateManager("fleet", logger, restartChan, repo)
+
+	// Create a mock backend that implements PolicyStatusProvider
+	mockBe := &mockBackend{}
+	mockBe.On("GetInitialState").Return(backend.Running)
+	mockBe.On("GetStartTime").Return(time.Now()).Maybe()
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+
+	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	entityCount := int64(42)
+	policyStatuses := []backend.PolicyStatus{
+		{
+			Name:   "test-policy",
+			Status: "completed",
+			Jobs: []backend.PolicyStatusJob{
+				{
+					ID:          "job-1",
+					Status:      "completed",
+					EntityCount: &entityCount,
+					CreatedAt:   testTime,
+					UpdatedAt:   testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}
+	mockBe.On("GetPolicyStatus").Return(policyStatuses, nil).Maybe()
+
+	backendName := "test-backend"
+
+	// Act
+	manager.StartBackendMonitor(backendName, mockBe)
+
+	// Wait for at least one ticker cycle
+	time.Sleep(backend.BackendMonitorInterval + 200*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+
+	// Assert - Verify entity_count was stored
+	retrievedPolicy, err2 := repo.Get("policy-1")
+	require.NoError(t, err2)
+	require.Len(t, retrievedPolicy.Jobs, 1, "Expected jobs to be updated after ticker fires")
+	assert.Equal(t, "job-1", retrievedPolicy.Jobs[0].ID)
+	assert.Equal(t, "completed", retrievedPolicy.Jobs[0].Status)
+	require.NotNil(t, retrievedPolicy.Jobs[0].EntityCount, "Expected entity_count to be stored")
+	assert.Equal(t, int64(42), *retrievedPolicy.Jobs[0].EntityCount)
+
+	mockBe.AssertExpectations(t)
+}
+
+func TestBackendStateManager_PolicyStatusPolling_WithoutEntityCount(t *testing.T) {
+	// Test that entity_count is optional and can be nil
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	restartChan := make(chan string, 5)
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	// Create a policy
+	policy := policies.PolicyData{
+		ID:       "policy-1",
+		Name:     "test-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset-1": true},
+		GroupIDs: map[string]bool{"group-1": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Running,
+	}
+	err = repo.Update(policy)
+	require.NoError(t, err)
+
+	manager := backend.NewStateManager("fleet", logger, restartChan, repo)
+
+	// Create a mock backend that implements PolicyStatusProvider
+	mockBe := &mockBackend{}
+	mockBe.On("GetInitialState").Return(backend.Running)
+	mockBe.On("GetStartTime").Return(time.Now()).Maybe()
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+
+	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	policyStatuses := []backend.PolicyStatus{
+		{
+			Name:   "test-policy",
+			Status: "completed",
+			Jobs: []backend.PolicyStatusJob{
+				{
+					ID:          "job-1",
+					Status:      "completed",
+					EntityCount: nil, // Explicitly nil
+					CreatedAt:   testTime,
+					UpdatedAt:   testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}
+	mockBe.On("GetPolicyStatus").Return(policyStatuses, nil).Maybe()
+
+	backendName := "test-backend"
+
+	// Act
+	manager.StartBackendMonitor(backendName, mockBe)
+
+	// Wait for at least one ticker cycle
+	time.Sleep(backend.BackendMonitorInterval + 200*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+
+	// Assert - Verify entity_count is nil when not provided
+	retrievedPolicy, err2 := repo.Get("policy-1")
+	require.NoError(t, err2)
+	require.Len(t, retrievedPolicy.Jobs, 1, "Expected jobs to be updated after ticker fires")
+	assert.Equal(t, "job-1", retrievedPolicy.Jobs[0].ID)
+	assert.Equal(t, "completed", retrievedPolicy.Jobs[0].Status)
+	assert.Nil(t, retrievedPolicy.Jobs[0].EntityCount, "Expected entity_count to be nil when not provided")
+
+	mockBe.AssertExpectations(t)
+}
+
 func TestBackendStateManager_PolicyStatusPolling_NonProviderBackend(t *testing.T) {
 	// Test that non-PolicyStatusProvider backends are skipped
 	// Arrange

@@ -12,11 +12,12 @@ import (
 
 // PolicyStatusJob represents a job in the backend status response
 type PolicyStatusJob struct {
-	ID        string    `json:"id"`
-	Status    string    `json:"status"`
-	Reason    string    `json:"reason"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Status      string    `json:"status"`
+	Reason      string    `json:"reason"`
+	EntityCount *int64    `json:"entity_count,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // PolicyStatus represents policy status from backend status endpoint

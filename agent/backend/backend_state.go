@@ -163,11 +163,12 @@ func convertToJobData(statusJobs []PolicyStatusJob) []policies.JobData {
 	jobs := make([]policies.JobData, len(statusJobs))
 	for i, sj := range statusJobs {
 		jobs[i] = policies.JobData{
-			ID:        sj.ID,
-			Status:    sj.Status,
-			Reason:    sj.Reason,
-			CreatedAt: sj.CreatedAt,
-			UpdatedAt: sj.UpdatedAt,
+			ID:          sj.ID,
+			Status:      sj.Status,
+			Reason:      sj.Reason,
+			EntityCount: sj.EntityCount,
+			CreatedAt:   sj.CreatedAt,
+			UpdatedAt:   sj.UpdatedAt,
 		}
 	}
 	return jobs
