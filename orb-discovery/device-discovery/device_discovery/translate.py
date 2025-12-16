@@ -418,6 +418,8 @@ def translate_data(data: dict) -> Iterable[Entity]:
             device_info["platform"] = (
                 f"{data.get('driver', '').upper()} {device_info.get('os_version')}"
             )
+            if len(device_info["platform"]) > 100:
+                device_info["platform"] = device_info.get('os_version')[:100]
         device = translate_device(device_info, defaults)
         entities.append(Entity(device=device))
 

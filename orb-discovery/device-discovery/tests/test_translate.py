@@ -304,6 +304,26 @@ def test_translate_data(
     assert entities[0].device.role.name == "switch"
 
 
+def test_translate_data_truncates_platform(sample_device_info, sample_defaults):
+    """Ensure overly long platform strings are truncated to 100 characters."""
+    long_os_version = "v" * 150
+    device_info = sample_device_info.copy()
+    device_info["os_version"] = long_os_version
+    data = {
+        "device": device_info,
+        "interface": {},
+        "interface_ip": {},
+        "driver": "ios",
+        "defaults": sample_defaults,
+    }
+
+    entities = list(translate_data(data))
+
+    assert len(entities) == 1
+    assert entities[0].device.platform.name == long_os_version[:100]
+    assert len(entities[0].device.platform.name) == 100
+
+
 def test_translate_data_creates_missing_interface(sample_device_info, sample_defaults):
     """Ensure translate_data creates interfaces referenced only by IP data."""
     interfaces = {
