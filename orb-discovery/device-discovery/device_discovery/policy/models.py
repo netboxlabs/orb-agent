@@ -95,6 +95,14 @@ class Options(BaseModel):
     platform_omit_version: bool | None = Field(
         default=False, description="Omit platform version, optional"
     )
+    port_scan_ports: list[int] | None = Field(
+        default=[22, 23, 80, 443, 830, 57400],
+        description="TCP ports to probe before discovery (e.g. [22,23,80,443])",
+    )
+    port_scan_timeout: float | None = Field(
+        default=0.5,
+        description="TCP port probe timeout in seconds",
+    )
 
 
 class Config(BaseModel):

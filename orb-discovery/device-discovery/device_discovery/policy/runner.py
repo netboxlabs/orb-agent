@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from napalm import get_network_driver
@@ -16,6 +17,10 @@ from device_discovery.client import Client
 from device_discovery.discovery import discover_device_driver, supported_drivers
 from device_discovery.metrics import get_metric
 from device_discovery.policy.models import Config, Defaults, Napalm, Options, Status
+from device_discovery.policy.portscan import (
+    expand_hostnames,
+    find_reachable_hosts,
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -81,13 +86,27 @@ class PolicyRunner:
                 config.defaults = config.defaults.model_copy(
                     update=scope.override_defaults.model_dump(exclude_none=True)
                 )
-            self.scheduler.add_job(
-                self.run,
-                id=id,
-                trigger=trigger,
-                args=[id, scope, config],
-                misfire_grace_time=None,
-            )
+            hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
+
+            if parsed_as_range:
+                logger.info(
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: Expanded to {len(hostnames)} addresses"
+                )
+                self.scheduler.add_job(
+                    self.run_scan,
+                    id=id,
+                    trigger=DateTrigger(run_date=datetime.now() + timedelta(seconds=1)),
+                    args=[hostnames, trigger, scope, config],
+                    misfire_grace_time=None,
+                )
+            else:
+                self.scheduler.add_job(
+                    self.run,
+                    id=id,
+                    trigger=trigger,
+                    args=[id, scope, config],
+                    misfire_grace_time=None,
+                )
             if set_telemetry:
                 set_telemetry = False
                 self.scheduler.add_job(
@@ -192,6 +211,47 @@ class PolicyRunner:
             discovery_success = get_metric("discovery_success")
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
+
+    def run_scan(
+        self, hostnames: list[str], trigger: BaseTrigger, scope: Napalm, config: Config
+    ):
+        """
+        Scan hostnames for reachable ports and schedule discovery jobs.
+
+        Args:
+        ----
+            hostnames: Hostnames or addresses expanded from the policy scope.
+            trigger: Trigger used when scheduling discovery jobs for reachable hosts.
+            scope: Base scope data for the devices.
+            config: Configuration data containing defaults and options.
+
+        """
+        options = config.options or Options()
+        ports = options.port_scan_ports
+        timeout = options.port_scan_timeout
+        if not hostnames:
+            return
+
+        results = find_reachable_hosts(hostnames, ports, timeout)
+
+        for hostname in hostnames:
+            if results.get(hostname):
+                logger.info(
+                    f"Policy {self.name}, Hostname {hostname}: Reachable port found, scheduling discovery job"
+                )
+                id = str(uuid.uuid4())
+                self.scopes[id] = scope.model_copy(update={"hostname": hostname})
+                self.scheduler.add_job(
+                    self.run,
+                    id=id,
+                    trigger=trigger,
+                    args=[id, self.scopes[id], config],
+                    misfire_grace_time=None,
+                )
+            else:
+                logger.info(
+                    f"Policy {self.name}, Hostname {hostname}: No reachable port found, skipping discovery job"
+                )
 
     def run(self, id: str, scope: Napalm, config: Config):
         """

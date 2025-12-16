@@ -40,7 +40,7 @@ policies:
         site: New York NY
         role: Router
     scope:
-      - hostname: 192.168.0.32
+      - hostname: 192.168.0.32/30 #support range
         username: ${USER}
         password: admin
       - driver: eos

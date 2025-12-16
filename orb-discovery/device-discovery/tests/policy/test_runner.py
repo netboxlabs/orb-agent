@@ -2,9 +2,11 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Policy Manager Unit Tests."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
+from apscheduler.triggers.base import BaseTrigger
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from device_discovery.policy.models import Config, Defaults, Napalm, Options, Status
@@ -116,6 +118,34 @@ def test_setup_policy_runner_with_none_config(policy_runner, sample_scopes):
         assert policy_runner.status == Status.RUNNING
 
 
+def test_setup_policy_runner_expands_hostname_ranges(policy_runner, sample_config):
+    """Ranges schedule a port scan job instead of direct discovery."""
+    ranged_scope = Napalm(
+        driver="ios",
+        hostname="192.0.2.1-192.0.2.2",
+        username="admin",
+        password="password",
+        override_defaults=Defaults(role="Router"),
+    )
+
+    with (
+        patch.object(policy_runner.scheduler, "start"),
+        patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
+    ):
+        policy_runner.setup("policy1", sample_config, [ranged_scope])
+
+    assert mock_add_job.call_count == 2
+    first_call = mock_add_job.call_args_list[0]
+    assert first_call[0][0] == policy_runner.run_scan
+
+    hostnames, cron_trigger, passed_scope, copied_config = first_call[1]["args"]
+    assert hostnames == ["192.0.2.1", "192.0.2.2"]
+    assert isinstance(cron_trigger, CronTrigger)
+    assert isinstance(first_call[1]["trigger"], DateTrigger)
+    assert passed_scope.hostname == ranged_scope.hostname
+    assert copied_config.defaults.role == "Router"
+
+
 def test_setup_with_unsupported_driver_raises_error(policy_runner, sample_scopes):
     """Test setup raises error if driver is unsupported."""
     sample_scopes[0].driver = "unsupported_driver"
@@ -197,6 +227,60 @@ def test_run_device_with_error_in_job(policy_runner, sample_scopes, sample_confi
         # Run the device with an error to check error handling
         policy_runner.run("test_id", sample_scopes[0], sample_config)
         mock_logger_error.assert_called_once()
+
+
+def test_run_scan_schedules_reachable_hosts(monkeypatch):
+    """Reachable hosts should be scheduled for discovery with copied scope."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.scheduler = MagicMock()
+    scope = Napalm(
+        driver="ios", hostname="seed-host", username="admin", password="password"
+    )
+    config = Config(options=Options(port_scan_ports=[1, 2], port_scan_timeout=0.1))
+    trigger = MagicMock(spec=BaseTrigger)
+    reachability = {"host-a": True, "host-b": False}
+
+    with (
+        patch(
+            "device_discovery.policy.runner.find_reachable_hosts",
+            return_value=reachability,
+        ) as mock_reachable_hosts,
+        patch("uuid.uuid4", side_effect=["job-1"]),
+    ):
+        runner.run_scan(["host-a", "host-b"], trigger, scope, config)
+
+    runner.scheduler.add_job.assert_called_once()
+    scheduled_call = runner.scheduler.add_job.call_args
+    assert scheduled_call[0][0] == runner.run
+    assert scheduled_call[1]["args"][0] == "job-1"
+    assert scheduled_call[1]["args"][1].hostname == "host-a"
+    assert scheduled_call[1]["args"][2] == config
+    mock_reachable_hosts.assert_called_once_with(["host-a", "host-b"], [1, 2], 0.1)
+
+
+def test_run_scan_uses_default_port_scan_options(monkeypatch):
+    """Default port scan options are applied when none are provided."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.scheduler = MagicMock()
+    scope = Napalm(
+        driver="ios", hostname="seed-host", username="admin", password="password"
+    )
+    trigger = MagicMock(spec=BaseTrigger)
+    config = Config(options=None)
+
+    with patch(
+        "device_discovery.policy.runner.find_reachable_hosts",
+        return_value={"host-a": False},
+    ) as mock_reachable_hosts:
+        runner.run_scan(["host-a"], trigger, scope, config)
+
+    mock_reachable_hosts.assert_called_once()
+    _, ports, timeout = mock_reachable_hosts.call_args[0]
+    assert ports == [22, 23, 80, 443, 830, 57400]
+    assert timeout == 0.5
+    runner.scheduler.add_job.assert_not_called()
 
 
 def test_stop_policy_runner(policy_runner):
