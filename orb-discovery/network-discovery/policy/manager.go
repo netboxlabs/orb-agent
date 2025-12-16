@@ -17,6 +17,7 @@ type Manager struct {
 	client   diode.Client
 	logger   *slog.Logger
 	ctx      context.Context
+	jobStore *JobStore
 }
 
 // NewManager returns a new policy manager
@@ -26,6 +27,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) *
 		client:   client,
 		logger:   logger,
 		policies: make(map[string]*Runner),
+		jobStore: NewJobStore(),
 	}
 }
 
@@ -56,7 +58,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	}
 
 	if !m.HasPolicy(name) {
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, m.jobStore)
 		if err != nil {
 			return err
 		}
@@ -91,4 +93,52 @@ func (m *Manager) Stop() error {
 // GetCapabilities returns the capabilities of network-discovery
 func (m *Manager) GetCapabilities() []string {
 	return []string{"targets, ports, exclude_ports, timing, fast_mode, ping_scan, top_ports, scan_types, max_retries"}
+}
+
+// Status represents the status of a policy with its jobs
+type Status struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // derived from latest job
+	Jobs   []*Job `json:"jobs"`
+}
+
+// GetPolicyStatuses returns all policies with their status and jobs
+func (m *Manager) GetPolicyStatuses() []Status {
+	allJobs := m.jobStore.GetAllPoliciesWithJobs()
+
+	statuses := make([]Status, 0)
+
+	// Get statuses for all policies that have runners
+	for name := range m.policies {
+		jobs := m.jobStore.GetJobsForPolicy(name)
+		status := "unknown"
+		if len(jobs) > 0 {
+			latestJob := jobs[len(jobs)-1]
+			status = string(latestJob.Status)
+		}
+		statuses = append(statuses, Status{
+			Name:   name,
+			Status: status,
+			Jobs:   jobs,
+		})
+	}
+
+	// Also include policies that have jobs but no active runner
+	for name, jobs := range allJobs {
+		if !m.HasPolicy(name) {
+			status := "unknown"
+			if len(jobs) > 0 {
+				latestJob := jobs[len(jobs)-1]
+				status = string(latestJob.Status)
+			}
+
+			statuses = append(statuses, Status{
+				Name:   name,
+				Status: status,
+				Jobs:   jobs,
+			})
+		}
+	}
+
+	return statuses
 }

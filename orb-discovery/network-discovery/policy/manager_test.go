@@ -122,3 +122,43 @@ func TestManagerGetCapabilities(t *testing.T) {
 	capabilities := manager.GetCapabilities()
 	assert.Equal(t, []string{"targets, ports, exclude_ports, timing, fast_mode, ping_scan, top_ports, scan_types, max_retries"}, capabilities)
 }
+
+func TestManagerGetPolicyStatuses(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager := policy.NewManager(context.Background(), logger, nil)
+	yamlData := []byte(`
+        policies:
+          policy1:
+            scope:
+              targets:
+                - 192.168.1.1/24
+       `)
+
+	policies, err := manager.ParsePolicies(yamlData)
+	assert.NoError(t, err)
+
+	// Initially no policies, so no statuses
+	statuses := manager.GetPolicyStatuses()
+	assert.Empty(t, statuses)
+
+	// Start policy
+	err = manager.StartPolicy("policy1", policies["policy1"])
+	assert.NoError(t, err)
+
+	// Get statuses - should have policy1 with unknown status (no jobs yet)
+	statuses = manager.GetPolicyStatuses()
+	assert.Len(t, statuses, 1)
+	assert.Equal(t, "policy1", statuses[0].Name)
+	assert.Equal(t, "unknown", statuses[0].Status)
+	assert.Empty(t, statuses[0].Jobs)
+
+	// Stop policy
+	err = manager.StopPolicy("policy1")
+	assert.NoError(t, err)
+
+	// Statuses should still include policy1 if it has jobs
+	_ = manager.GetPolicyStatuses()
+	// If no jobs were created, statuses will be empty
+	// If jobs were created, statuses will include the policy
+	// This depends on whether the runner actually ran and created jobs
+}

@@ -29,6 +29,12 @@ type Capabilities struct {
 	Capabilities []string `json:"capabilities"`
 }
 
+// StatusResponse represents the status response including policies
+type StatusResponse struct {
+	config.Status
+	Policies []policy.Status `json:"policies"`
+}
+
 // Server represents the network-discovery server
 type Server struct {
 	router     *gin.Engine
@@ -127,7 +133,13 @@ func (s *Server) Start() <-chan error {
 
 func (s *Server) getStatus(c *gin.Context) {
 	s.stat.UpTimeSeconds = int64(math.Round(time.Since(s.stat.StartTime).Seconds()))
-	c.IndentedJSON(http.StatusOK, s.stat)
+
+	response := StatusResponse{
+		Status:   s.stat,
+		Policies: s.manager.GetPolicyStatuses(),
+	}
+
+	c.IndentedJSON(http.StatusOK, response)
 }
 
 func (s *Server) getCapabilities(c *gin.Context) {

@@ -18,6 +18,10 @@ lint:
 fix-lint:
 	@golangci-lint run ./... --config ../.github/golangci.yaml --fix
 
+.PHONY: test
+test:
+	@go test -race ./...
+
 .PHONY: test-coverage
 test-coverage:
 	@mkdir -p .coverage

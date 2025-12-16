@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -65,6 +66,7 @@ func TestServerConfigureAndStart(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"version": "1.0.0"`)
 	assert.Contains(t, w.Body.String(), `"start_time":`)
 	assert.Contains(t, w.Body.String(), `"up_time_seconds": 0`)
+	assert.Contains(t, w.Body.String(), `"policies"`)
 }
 
 func TestServerGetCapabilities(t *testing.T) {
@@ -225,4 +227,55 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
 			assert.Contains(t, w.Body.String(), tt.returnMessage)
 		})
 	}
+}
+
+func TestServerStatusWithPolicies(t *testing.T) {
+	ctx := context.Background()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	client := new(MockClient)
+	policyManager := policy.NewManager(ctx, logger, client)
+
+	srv := server.NewServer("localhost", 8073, logger, policyManager, "1.0.0")
+
+	// Check status before any policies
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	srv.Router().ServeHTTP(w, c.Request)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	bodyStr := w.Body.String()
+	assert.Contains(t, bodyStr, `"policies"`)
+	// Empty policies can be null or [] in JSON (with possible whitespace), check for either
+	assert.True(t, strings.Contains(bodyStr, `"policies":[]`) || strings.Contains(bodyStr, `"policies": []`) || strings.Contains(bodyStr, `"policies": null`) || strings.Contains(bodyStr, `"policies":null`),
+		"Policies should be empty array or null, got: "+bodyStr)
+
+	// Create a policy
+	body := []byte(`
+    policies:
+      test-policy:
+        scope:
+          targets: 
+            - 192.168.31.1/24
+    `)
+
+	w = httptest.NewRecorder()
+	request, _ := http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-yaml")
+	srv.Router().ServeHTTP(w, request)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	// Check status after policy creation
+	w = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(w)
+	c.Request, _ = http.NewRequest(http.MethodGet, "/api/v1/status", nil)
+	srv.Router().ServeHTTP(w, c.Request)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `"policies"`)
+	assert.Contains(t, w.Body.String(), `"name"`)
+	assert.Contains(t, w.Body.String(), `"status"`)
+	assert.Contains(t, w.Body.String(), `"jobs"`)
+	assert.Contains(t, w.Body.String(), `test-policy`)
 }
