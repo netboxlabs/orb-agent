@@ -111,9 +111,9 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 					manager.logger.Debug("failed to get policy status", "backend", name, "error", err)
 				} else {
 					for _, ps := range statuses {
-						jobs := convertToJobData(ps.Jobs)
-						if err := manager.policyRepo.UpdateJobs(ps.Name, jobs); err != nil {
-							manager.logger.Debug("failed to update jobs for policy", "policy", ps.Name, "error", err)
+						runs := convertToRunData(ps.Runs)
+						if err := manager.policyRepo.UpdateRuns(ps.Name, runs); err != nil {
+							manager.logger.Debug("failed to update runs for policy", "policy", ps.Name, "error", err)
 						}
 					}
 				}
@@ -158,18 +158,18 @@ func (manager *stateManager) Get() map[string]*State {
 	return result
 }
 
-// convertToJobData converts backend PolicyStatusJob to policies.JobData
-func convertToJobData(statusJobs []PolicyStatusJob) []policies.JobData {
-	jobs := make([]policies.JobData, len(statusJobs))
-	for i, sj := range statusJobs {
-		jobs[i] = policies.JobData{
-			ID:          sj.ID,
-			Status:      sj.Status,
-			Reason:      sj.Reason,
-			EntityCount: sj.EntityCount,
-			CreatedAt:   sj.CreatedAt,
-			UpdatedAt:   sj.UpdatedAt,
+// convertToRunData converts backend PolicyStatusRun to policies.RunData
+func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
+	runs := make([]policies.RunData, len(statusRuns))
+	for i, sr := range statusRuns {
+		runs[i] = policies.RunData{
+			ID:          sr.ID,
+			Status:      sr.Status,
+			Reason:      sr.Reason,
+			EntityCount: sr.EntityCount,
+			CreatedAt:   sr.CreatedAt,
+			UpdatedAt:   sr.UpdatedAt,
 		}
 	}
-	return jobs
+	return runs
 }

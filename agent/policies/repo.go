@@ -16,7 +16,7 @@ type PolicyRepo interface {
 	EnsureDataset(policyID string, datasetID string) error
 	RemoveDataset(policyID string, datasetID string) (bool, error)
 	EnsureGroupID(policyID string, agentGroupID string) error
-	UpdateJobs(policyName string, jobs []JobData) error
+	UpdateRuns(policyName string, runs []RunData) error
 }
 
 type policyMemRepo struct {
@@ -144,7 +144,7 @@ func (p *policyMemRepo) EnsureGroupID(policyID string, agentGroupID string) erro
 	return nil
 }
 
-func (p *policyMemRepo) UpdateJobs(policyName string, jobs []JobData) error {
+func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	policyID, ok := p.nameMap[policyName]
@@ -155,7 +155,7 @@ func (p *policyMemRepo) UpdateJobs(policyName string, jobs []JobData) error {
 	if !ok {
 		return errors.New("unknown policy ID")
 	}
-	policy.Jobs = jobs
+	policy.Runs = runs
 	p.db[policyID] = policy
 	return nil
 }

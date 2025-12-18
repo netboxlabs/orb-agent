@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// JobData represents job information for a policy
-type JobData struct {
+// RunData represents run information for a policy
+type RunData struct {
 	ID          string    `json:"id"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
@@ -27,7 +27,7 @@ type PolicyData struct {
 	State              PolicyState
 	BackendErr         string
 	PreviousPolicyData *PolicyData
-	Jobs               []JobData
+	Runs               []RunData
 }
 
 // GetDatasetIDs returns the dataset IDs

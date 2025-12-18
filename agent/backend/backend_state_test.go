@@ -526,9 +526,9 @@ func TestBackendStateManager_PolicyStatusPolling(t *testing.T) {
 		{
 			Name:   "test-policy",
 			Status: "completed",
-			Jobs: []backend.PolicyStatusJob{
+			Runs: []backend.PolicyStatusRun{
 				{
-					ID:        "job-1",
+					ID:        "run-1",
 					Status:    "completed",
 					CreatedAt: testTime,
 					UpdatedAt: testTime.Add(5 * time.Minute),
@@ -547,16 +547,16 @@ func TestBackendStateManager_PolicyStatusPolling(t *testing.T) {
 	// Add a small buffer to ensure the ticker has fired and the update has completed
 	time.Sleep(backend.BackendMonitorInterval + 200*time.Millisecond)
 
-	// Assert - Verify jobs were updated in the policy repo
+	// Assert - Verify runs were updated in the policy repo
 	// Wait a bit more to ensure the goroutine has finished updating the repo
 	// (policyMemRepo is not thread-safe, so we need to avoid concurrent access)
 	time.Sleep(50 * time.Millisecond)
 
 	retrievedPolicy, err2 := repo.Get("policy-1")
 	require.NoError(t, err2)
-	require.Len(t, retrievedPolicy.Jobs, 1, "Expected jobs to be updated after ticker fires")
-	assert.Equal(t, "job-1", retrievedPolicy.Jobs[0].ID)
-	assert.Equal(t, "completed", retrievedPolicy.Jobs[0].Status)
+	require.Len(t, retrievedPolicy.Runs, 1, "Expected runs to be updated after ticker fires")
+	assert.Equal(t, "run-1", retrievedPolicy.Runs[0].ID)
+	assert.Equal(t, "completed", retrievedPolicy.Runs[0].Status)
 
 	mockBe.AssertExpectations(t)
 }
@@ -596,9 +596,9 @@ func TestBackendStateManager_PolicyStatusPolling_WithEntityCount(t *testing.T) {
 		{
 			Name:   "test-policy",
 			Status: "completed",
-			Jobs: []backend.PolicyStatusJob{
+			Runs: []backend.PolicyStatusRun{
 				{
-					ID:          "job-1",
+					ID:          "run-1",
 					Status:      "completed",
 					EntityCount: &entityCount,
 					CreatedAt:   testTime,
@@ -621,11 +621,11 @@ func TestBackendStateManager_PolicyStatusPolling_WithEntityCount(t *testing.T) {
 	// Assert - Verify entity_count was stored
 	retrievedPolicy, err2 := repo.Get("policy-1")
 	require.NoError(t, err2)
-	require.Len(t, retrievedPolicy.Jobs, 1, "Expected jobs to be updated after ticker fires")
-	assert.Equal(t, "job-1", retrievedPolicy.Jobs[0].ID)
-	assert.Equal(t, "completed", retrievedPolicy.Jobs[0].Status)
-	require.NotNil(t, retrievedPolicy.Jobs[0].EntityCount, "Expected entity_count to be stored")
-	assert.Equal(t, int64(42), *retrievedPolicy.Jobs[0].EntityCount)
+	require.Len(t, retrievedPolicy.Runs, 1, "Expected runs to be updated after ticker fires")
+	assert.Equal(t, "run-1", retrievedPolicy.Runs[0].ID)
+	assert.Equal(t, "completed", retrievedPolicy.Runs[0].Status)
+	require.NotNil(t, retrievedPolicy.Runs[0].EntityCount, "Expected entity_count to be stored")
+	assert.Equal(t, int64(42), *retrievedPolicy.Runs[0].EntityCount)
 
 	mockBe.AssertExpectations(t)
 }
@@ -665,9 +665,9 @@ func TestBackendStateManager_PolicyStatusPolling_WithoutEntityCount(t *testing.T
 		{
 			Name:   "test-policy",
 			Status: "completed",
-			Jobs: []backend.PolicyStatusJob{
+			Runs: []backend.PolicyStatusRun{
 				{
-					ID:          "job-1",
+					ID:          "run-1",
 					Status:      "completed",
 					EntityCount: nil, // Explicitly nil
 					CreatedAt:   testTime,
@@ -690,10 +690,10 @@ func TestBackendStateManager_PolicyStatusPolling_WithoutEntityCount(t *testing.T
 	// Assert - Verify entity_count is nil when not provided
 	retrievedPolicy, err2 := repo.Get("policy-1")
 	require.NoError(t, err2)
-	require.Len(t, retrievedPolicy.Jobs, 1, "Expected jobs to be updated after ticker fires")
-	assert.Equal(t, "job-1", retrievedPolicy.Jobs[0].ID)
-	assert.Equal(t, "completed", retrievedPolicy.Jobs[0].Status)
-	assert.Nil(t, retrievedPolicy.Jobs[0].EntityCount, "Expected entity_count to be nil when not provided")
+	require.Len(t, retrievedPolicy.Runs, 1, "Expected runs to be updated after ticker fires")
+	assert.Equal(t, "run-1", retrievedPolicy.Runs[0].ID)
+	assert.Equal(t, "completed", retrievedPolicy.Runs[0].Status)
+	assert.Nil(t, retrievedPolicy.Runs[0].EntityCount, "Expected entity_count to be nil when not provided")
 
 	mockBe.AssertExpectations(t)
 }
