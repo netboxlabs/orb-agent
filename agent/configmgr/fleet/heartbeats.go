@@ -98,29 +98,29 @@ func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
 			Error:    policyState.BackendErr,
 			Version:  policyState.Version,
 			Backend:  policyState.Backend,
-			Jobs:     convertJobsToStateInfo(policyState.Jobs),
+			Runs:     convertRunsToStateInfo(policyState.Runs),
 		}
 	}
 	return ps
 }
 
-// convertJobsToStateInfo converts policies.JobData to messages.JobStateInfo
-func convertJobsToStateInfo(jobs []policies.JobData) []messages.JobStateInfo {
-	if len(jobs) == 0 {
+// convertRunsToStateInfo converts policies.RunData to messages.RunStateInfo
+func convertRunsToStateInfo(runs []policies.RunData) []messages.RunStateInfo {
+	if len(runs) == 0 {
 		return nil
 	}
-	jobInfos := make([]messages.JobStateInfo, len(jobs))
-	for i, job := range jobs {
-		jobInfos[i] = messages.JobStateInfo{
-			ID:          job.ID,
-			Status:      job.Status,
-			Reason:      job.Reason,
-			EntityCount: job.EntityCount,
-			CreatedAt:   job.CreatedAt,
-			UpdatedAt:   job.UpdatedAt,
+	runInfos := make([]messages.RunStateInfo, len(runs))
+	for i, run := range runs {
+		runInfos[i] = messages.RunStateInfo{
+			ID:          run.ID,
+			Status:      run.Status,
+			Reason:      run.Reason,
+			EntityCount: run.EntityCount,
+			CreatedAt:   run.CreatedAt,
+			UpdatedAt:   run.UpdatedAt,
 		}
 	}
-	return jobInfos
+	return runInfos
 }
 
 func (hb *heartbeater) getGroupState() map[string]messages.GroupStateInfo {

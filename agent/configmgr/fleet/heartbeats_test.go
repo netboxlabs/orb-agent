@@ -1407,7 +1407,7 @@ func TestNewHeartbeater_WithGroupManager(t *testing.T) {
 	hb.hbTicker.Stop()
 }
 
-func TestHeartbeater_GetPolicyState_WithJobs(t *testing.T) {
+func TestHeartbeater_GetPolicyState_WithRuns(t *testing.T) {
 	// Arrange
 	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
@@ -1420,15 +1420,15 @@ func TestHeartbeater_GetPolicyState_WithJobs(t *testing.T) {
 			State:      policies.Running,
 			BackendErr: "",
 			Datasets:   map[string]bool{"dataset-1": true},
-			Jobs: []policies.JobData{
+			Runs: []policies.RunData{
 				{
-					ID:        "job-1",
+					ID:        "run-1",
 					Status:    "completed",
 					CreatedAt: testTime,
 					UpdatedAt: testTime.Add(5 * time.Minute),
 				},
 				{
-					ID:        "job-2",
+					ID:        "run-2",
 					Status:    "running",
 					CreatedAt: testTime.Add(10 * time.Minute),
 					UpdatedAt: testTime.Add(12 * time.Minute),
@@ -1443,7 +1443,7 @@ func TestHeartbeater_GetPolicyState_WithJobs(t *testing.T) {
 			State:      policies.Running,
 			BackendErr: "",
 			Datasets:   map[string]bool{"dataset-2": true},
-			Jobs:       []policies.JobData{}, // Empty jobs
+			Runs:       []policies.RunData{}, // Empty runs
 		},
 	}, nil)
 
@@ -1456,25 +1456,25 @@ func TestHeartbeater_GetPolicyState_WithJobs(t *testing.T) {
 	// Assert
 	assert.Len(t, policyState, 2)
 
-	// Verify policy-1 has jobs
+	// Verify policy-1 has runs
 	policy1, ok := policyState["policy-1"]
 	assert.True(t, ok)
-	assert.Len(t, policy1.Jobs, 2)
-	assert.Equal(t, "job-1", policy1.Jobs[0].ID)
-	assert.Equal(t, "completed", policy1.Jobs[0].Status)
-	assert.Equal(t, testTime, policy1.Jobs[0].CreatedAt)
-	assert.Equal(t, "job-2", policy1.Jobs[1].ID)
-	assert.Equal(t, "running", policy1.Jobs[1].Status)
+	assert.Len(t, policy1.Runs, 2)
+	assert.Equal(t, "run-1", policy1.Runs[0].ID)
+	assert.Equal(t, "completed", policy1.Runs[0].Status)
+	assert.Equal(t, testTime, policy1.Runs[0].CreatedAt)
+	assert.Equal(t, "run-2", policy1.Runs[1].ID)
+	assert.Equal(t, "running", policy1.Runs[1].Status)
 
-	// Verify policy-2 has no jobs (nil or empty)
+	// Verify policy-2 has no runs (nil or empty)
 	policy2, ok := policyState["policy-2"]
 	assert.True(t, ok)
-	assert.Nil(t, policy2.Jobs)
+	assert.Nil(t, policy2.Runs)
 
 	mockPMgr.AssertExpectations(t)
 }
 
-func TestHeartbeater_SendSingleHeartbeat_WithJobs(t *testing.T) {
+func TestHeartbeater_SendSingleHeartbeat_WithRuns(t *testing.T) {
 	// Arrange
 	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
@@ -1486,9 +1486,9 @@ func TestHeartbeater_SendSingleHeartbeat_WithJobs(t *testing.T) {
 			Version:  1,
 			State:    policies.Running,
 			Datasets: map[string]bool{"dataset-1": true},
-			Jobs: []policies.JobData{
+			Runs: []policies.RunData{
 				{
-					ID:        "job-1",
+					ID:        "run-1",
 					Status:    "completed",
 					CreatedAt: testTime,
 					UpdatedAt: testTime.Add(5 * time.Minute),
@@ -1519,16 +1519,16 @@ func TestHeartbeater_SendSingleHeartbeat_WithJobs(t *testing.T) {
 	err := json.Unmarshal(capturedPayload, &heartbeat)
 	require.NoError(t, err)
 
-	// Verify policy state includes jobs
+	// Verify policy state includes runs
 	assert.NotNil(t, heartbeat.PolicyState)
 	assert.Len(t, heartbeat.PolicyState, 1)
 
 	policy, ok := heartbeat.PolicyState["policy-1"]
 	assert.True(t, ok)
-	assert.Len(t, policy.Jobs, 1)
-	assert.Equal(t, "job-1", policy.Jobs[0].ID)
-	assert.Equal(t, "completed", policy.Jobs[0].Status)
-	assert.Equal(t, testTime, policy.Jobs[0].CreatedAt)
+	assert.Len(t, policy.Runs, 1)
+	assert.Equal(t, "run-1", policy.Runs[0].ID)
+	assert.Equal(t, "completed", policy.Runs[0].Status)
+	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
 
 	mockPMgr.AssertExpectations(t)
 }
@@ -1546,9 +1546,9 @@ func TestHeartbeater_SendSingleHeartbeat_WithEntityCount(t *testing.T) {
 			Version:  1,
 			State:    policies.Running,
 			Datasets: map[string]bool{"dataset-1": true},
-			Jobs: []policies.JobData{
+			Runs: []policies.RunData{
 				{
-					ID:          "job-1",
+					ID:          "run-1",
 					Status:      "completed",
 					EntityCount: &entityCount,
 					CreatedAt:   testTime,
@@ -1580,18 +1580,18 @@ func TestHeartbeater_SendSingleHeartbeat_WithEntityCount(t *testing.T) {
 	err := json.Unmarshal(capturedPayload, &heartbeat)
 	require.NoError(t, err)
 
-	// Verify policy state includes jobs with entity_count
+	// Verify policy state includes runs with entity_count
 	assert.NotNil(t, heartbeat.PolicyState)
 	assert.Len(t, heartbeat.PolicyState, 1)
 
 	policy, ok := heartbeat.PolicyState["policy-1"]
 	assert.True(t, ok)
-	assert.Len(t, policy.Jobs, 1)
-	assert.Equal(t, "job-1", policy.Jobs[0].ID)
-	assert.Equal(t, "completed", policy.Jobs[0].Status)
-	assert.Equal(t, testTime, policy.Jobs[0].CreatedAt)
-	require.NotNil(t, policy.Jobs[0].EntityCount, "Expected entity_count to be included in heartbeat")
-	assert.Equal(t, int64(100), *policy.Jobs[0].EntityCount)
+	assert.Len(t, policy.Runs, 1)
+	assert.Equal(t, "run-1", policy.Runs[0].ID)
+	assert.Equal(t, "completed", policy.Runs[0].Status)
+	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
+	require.NotNil(t, policy.Runs[0].EntityCount, "Expected entity_count to be included in heartbeat")
+	assert.Equal(t, int64(100), *policy.Runs[0].EntityCount)
 
 	mockPMgr.AssertExpectations(t)
 }
@@ -1609,9 +1609,9 @@ func TestHeartbeater_SendSingleHeartbeat_WithoutEntityCount(t *testing.T) {
 			Version:  1,
 			State:    policies.Running,
 			Datasets: map[string]bool{"dataset-1": true},
-			Jobs: []policies.JobData{
+			Runs: []policies.RunData{
 				{
-					ID:          "job-1",
+					ID:          "run-1",
 					Status:      "completed",
 					EntityCount: nil, // Explicitly nil
 					CreatedAt:   testTime,
@@ -1643,17 +1643,17 @@ func TestHeartbeater_SendSingleHeartbeat_WithoutEntityCount(t *testing.T) {
 	err := json.Unmarshal(capturedPayload, &heartbeat)
 	require.NoError(t, err)
 
-	// Verify policy state includes jobs without entity_count
+	// Verify policy state includes runs without entity_count
 	assert.NotNil(t, heartbeat.PolicyState)
 	assert.Len(t, heartbeat.PolicyState, 1)
 
 	policy, ok := heartbeat.PolicyState["policy-1"]
 	assert.True(t, ok)
-	assert.Len(t, policy.Jobs, 1)
-	assert.Equal(t, "job-1", policy.Jobs[0].ID)
-	assert.Equal(t, "completed", policy.Jobs[0].Status)
-	assert.Equal(t, testTime, policy.Jobs[0].CreatedAt)
-	assert.Nil(t, policy.Jobs[0].EntityCount, "Expected entity_count to be nil when not provided")
+	assert.Len(t, policy.Runs, 1)
+	assert.Equal(t, "run-1", policy.Runs[0].ID)
+	assert.Equal(t, "completed", policy.Runs[0].Status)
+	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
+	assert.Nil(t, policy.Runs[0].EntityCount, "Expected entity_count to be nil when not provided")
 
 	mockPMgr.AssertExpectations(t)
 }

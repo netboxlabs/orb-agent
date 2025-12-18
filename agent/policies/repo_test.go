@@ -396,7 +396,7 @@ func TestUpdateRenamingPolicy(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestUpdateJobs(t *testing.T) {
+func TestUpdateRuns(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)
 
@@ -415,59 +415,59 @@ func TestUpdateJobs(t *testing.T) {
 	err = repo.Update(pd)
 	require.NoError(t, err)
 
-	// Update jobs for the policy
-	jobs := []policies.JobData{
+	// Update runs for the policy
+	runs := []policies.RunData{
 		{
-			ID:        "job-1",
+			ID:        "run-1",
 			Status:    "completed",
 			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
 		},
 		{
-			ID:        "job-2",
+			ID:        "run-2",
 			Status:    "running",
 			CreatedAt: time.Date(2024, 1, 1, 0, 10, 0, 0, time.UTC),
 			UpdatedAt: time.Date(2024, 1, 1, 0, 12, 0, 0, time.UTC),
 		},
 	}
 
-	err = repo.UpdateJobs("test-policy", jobs)
+	err = repo.UpdateRuns("test-policy", runs)
 	require.NoError(t, err)
 
-	// Verify jobs are updated
+	// Verify runs are updated
 	retrievedPD, err := repo.Get("test-id")
 	require.NoError(t, err)
-	assert.Len(t, retrievedPD.Jobs, 2)
-	assert.Equal(t, "job-1", retrievedPD.Jobs[0].ID)
-	assert.Equal(t, "completed", retrievedPD.Jobs[0].Status)
-	assert.Equal(t, "job-2", retrievedPD.Jobs[1].ID)
-	assert.Equal(t, "running", retrievedPD.Jobs[1].Status)
+	assert.Len(t, retrievedPD.Runs, 2)
+	assert.Equal(t, "run-1", retrievedPD.Runs[0].ID)
+	assert.Equal(t, "completed", retrievedPD.Runs[0].Status)
+	assert.Equal(t, "run-2", retrievedPD.Runs[1].ID)
+	assert.Equal(t, "running", retrievedPD.Runs[1].Status)
 
-	// Verify jobs are also returned via GetByName
+	// Verify runs are also returned via GetByName
 	retrievedPDByName, err := repo.GetByName("test-policy")
 	require.NoError(t, err)
-	assert.Len(t, retrievedPDByName.Jobs, 2)
+	assert.Len(t, retrievedPDByName.Runs, 2)
 }
 
-func TestUpdateJobs_NonExistentPolicy(t *testing.T) {
+func TestUpdateRuns_NonExistentPolicy(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)
 
-	jobs := []policies.JobData{
+	runs := []policies.RunData{
 		{
-			ID:        "job-1",
+			ID:        "run-1",
 			Status:    "completed",
 			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
 		},
 	}
 
-	err = repo.UpdateJobs("non-existent-policy", jobs)
+	err = repo.UpdateRuns("non-existent-policy", runs)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "policy name not found")
 }
 
-func TestUpdateJobs_GetAllIncludesJobs(t *testing.T) {
+func TestUpdateRuns_GetAllIncludesRuns(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)
 
@@ -499,40 +499,40 @@ func TestUpdateJobs_GetAllIncludesJobs(t *testing.T) {
 	err = repo.Update(pd2)
 	require.NoError(t, err)
 
-	// Update jobs for policy 1
-	jobs1 := []policies.JobData{
+	// Update runs for policy 1
+	runs1 := []policies.RunData{
 		{
-			ID:        "job-1",
+			ID:        "run-1",
 			Status:    "completed",
 			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
 		},
 	}
-	err = repo.UpdateJobs("test-policy-1", jobs1)
+	err = repo.UpdateRuns("test-policy-1", runs1)
 	require.NoError(t, err)
 
 	// Get all policies
 	allPolicies, err := repo.GetAll()
 	require.NoError(t, err)
 
-	// Find policy 1 and verify jobs
+	// Find policy 1 and verify runs
 	var foundPolicy1 bool
 	for _, p := range allPolicies {
 		if p.ID == "test-id-1" {
 			foundPolicy1 = true
-			assert.Len(t, p.Jobs, 1)
-			assert.Equal(t, "job-1", p.Jobs[0].ID)
+			assert.Len(t, p.Runs, 1)
+			assert.Equal(t, "run-1", p.Runs[0].ID)
 			break
 		}
 	}
 	assert.True(t, foundPolicy1, "Policy 1 should be found in GetAll()")
 
-	// Verify policy 2 has no jobs
+	// Verify policy 2 has no runs
 	var foundPolicy2 bool
 	for _, p := range allPolicies {
 		if p.ID == "test-id-2" {
 			foundPolicy2 = true
-			assert.Empty(t, p.Jobs)
+			assert.Empty(t, p.Runs)
 			break
 		}
 	}

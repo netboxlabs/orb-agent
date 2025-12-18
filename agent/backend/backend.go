@@ -10,8 +10,8 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
-// PolicyStatusJob represents a job in the backend status response
-type PolicyStatusJob struct {
+// PolicyStatusRun represents a run in the backend status response
+type PolicyStatusRun struct {
 	ID          string    `json:"id"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason"`
@@ -24,7 +24,7 @@ type PolicyStatusJob struct {
 type PolicyStatus struct {
 	Name   string            `json:"name"`
 	Status string            `json:"status"`
-	Jobs   []PolicyStatusJob `json:"jobs"`
+	Runs   []PolicyStatusRun `json:"runs"`
 }
 
 // StatusResponse represents the full status response from backend

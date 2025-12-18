@@ -30,8 +30,8 @@ type BackendStateInfo struct {
 	LastRestartReason string    `json:"last_restart_reason,omitempty"`
 }
 
-// JobStateInfo contains state information for a job
-type JobStateInfo struct {
+// RunStateInfo contains state information for a run
+type RunStateInfo struct {
 	ID          string    `json:"id"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
@@ -48,7 +48,7 @@ type PolicyStateInfo struct {
 	Error    string         `json:"error,omitempty"`
 	Version  int32          `json:"version,omitempty"`
 	Backend  string         `json:"backend,omitempty"`
-	Jobs     []JobStateInfo `json:"jobs,omitempty"`
+	Runs     []RunStateInfo `json:"runs,omitempty"`
 }
 
 // GroupStateInfo contains state information for a group

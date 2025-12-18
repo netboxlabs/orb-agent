@@ -107,8 +107,8 @@ func (m *mockPolicyRepo) EnsureGroupID(policyID string, agentGroupID string) err
 	return args.Error(0)
 }
 
-func (m *mockPolicyRepo) UpdateJobs(policyName string, jobs []policies.JobData) error {
-	args := m.Called(policyName, jobs)
+func (m *mockPolicyRepo) UpdateRuns(policyName string, runs []policies.RunData) error {
+	args := m.Called(policyName, runs)
 	return args.Error(0)
 }
 
