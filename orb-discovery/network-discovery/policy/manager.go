@@ -17,7 +17,7 @@ type Manager struct {
 	client   diode.Client
 	logger   *slog.Logger
 	ctx      context.Context
-	jobStore *JobStore
+	runStore *RunStore
 }
 
 // NewManager returns a new policy manager
@@ -27,7 +27,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client) *
 		client:   client,
 		logger:   logger,
 		policies: make(map[string]*Runner),
-		jobStore: NewJobStore(),
+		runStore: NewRunStore(),
 	}
 }
 
@@ -58,7 +58,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	}
 
 	if !m.HasPolicy(name) {
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, m.jobStore)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, m.runStore)
 		if err != nil {
 			return err
 		}
@@ -95,47 +95,47 @@ func (m *Manager) GetCapabilities() []string {
 	return []string{"targets, ports, exclude_ports, timing, fast_mode, ping_scan, top_ports, scan_types, max_retries"}
 }
 
-// Status represents the status of a policy with its jobs
+// Status represents the status of a policy with its runs
 type Status struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // derived from latest job
-	Jobs   []*Job `json:"jobs"`
+	Status string `json:"status"` // derived from latest run
+	Runs   []*Run `json:"runs"`
 }
 
-// GetPolicyStatuses returns all policies with their status and jobs
+// GetPolicyStatuses returns all policies with their status and runs
 func (m *Manager) GetPolicyStatuses() []Status {
-	allJobs := m.jobStore.GetAllPoliciesWithJobs()
+	allRuns := m.runStore.GetAllPoliciesWithRuns()
 
 	statuses := make([]Status, 0)
 
 	// Get statuses for all policies that have runners
 	for name := range m.policies {
-		jobs := m.jobStore.GetJobsForPolicy(name)
+		runs := m.runStore.GetRunsForPolicy(name)
 		status := "unknown"
-		if len(jobs) > 0 {
-			latestJob := jobs[len(jobs)-1]
-			status = string(latestJob.Status)
+		if len(runs) > 0 {
+			latestRun := runs[len(runs)-1]
+			status = string(latestRun.Status)
 		}
 		statuses = append(statuses, Status{
 			Name:   name,
 			Status: status,
-			Jobs:   jobs,
+			Runs:   runs,
 		})
 	}
 
-	// Also include policies that have jobs but no active runner
-	for name, jobs := range allJobs {
+	// Also include policies that have runs but no active runner
+	for name, runs := range allRuns {
 		if !m.HasPolicy(name) {
 			status := "unknown"
-			if len(jobs) > 0 {
-				latestJob := jobs[len(jobs)-1]
-				status = string(latestJob.Status)
+			if len(runs) > 0 {
+				latestRun := runs[len(runs)-1]
+				status = string(latestRun.Status)
 			}
 
 			statuses = append(statuses, Status{
 				Name:   name,
 				Status: status,
-				Jobs:   jobs,
+				Runs:   runs,
 			})
 		}
 	}

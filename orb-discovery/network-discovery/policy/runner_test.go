@@ -39,7 +39,7 @@ func (m *MockClient) Close() error {
 func TestNewRunner(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	mockClient := new(MockClient)
-	jobStore := policy.NewJobStore()
+	runStore := policy.NewRunStore()
 	cron := "0 0 * * *"
 	policyConfig := config.Policy{
 		Config: config.PolicyConfig{
@@ -52,7 +52,7 @@ func TestNewRunner(t *testing.T) {
 	ctx := context.Background()
 
 	// Create new runner
-	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, jobStore)
+	_, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, runStore)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 }
 
@@ -82,7 +82,7 @@ func TestRunnerRun(t *testing.T) {
 		t.Run(tt.desc, func(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 			mockClient := new(MockClient)
-			jobStore := policy.NewJobStore()
+			runStore := policy.NewRunStore()
 			policyConfig := config.Policy{
 				Config: config.PolicyConfig{
 					Schedule: nil,
@@ -102,7 +102,7 @@ func TestRunnerRun(t *testing.T) {
 			ctx := context.Background()
 
 			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, jobStore)
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, runStore)
 			assert.NoError(t, err, "policy.NewRunner should not return an error")
 
 			// Use a channel to signal that Ingest was called
@@ -123,19 +123,19 @@ func TestRunnerRun(t *testing.T) {
 				t.Fatal("Timeout: Ingest was not called")
 			}
 
-			// Wait a bit for job update to complete (job update happens after Ingest returns)
+			// Wait a bit for run update to complete (run update happens after Ingest returns)
 			time.Sleep(100 * time.Millisecond)
 
-			// Verify job was created and updated correctly
-			jobs := jobStore.GetJobsForPolicy("test-policy")
-			assert.NotEmpty(t, jobs, "Job should be created")
-			if len(jobs) > 0 {
-				latestJob := jobs[len(jobs)-1]
-				assert.NotEmpty(t, latestJob.ID, "Job ID should be set")
+			// Verify run was created and updated correctly
+			runs := runStore.GetRunsForPolicy("test-policy")
+			assert.NotEmpty(t, runs, "Run should be created")
+			if len(runs) > 0 {
+				latestRun := runs[len(runs)-1]
+				assert.NotEmpty(t, latestRun.ID, "Run ID should be set")
 				if tt.mockError != nil || len(tt.mockResponse.Errors) > 0 {
-					assert.Equal(t, policy.JobStatusFailed, latestJob.Status, "Job should be marked as failed")
+					assert.Equal(t, policy.RunStatusFailed, latestRun.Status, "Run should be marked as failed")
 				} else {
-					assert.Equal(t, policy.JobStatusCompleted, latestJob.Status, "Job should be marked as completed")
+					assert.Equal(t, policy.RunStatusCompleted, latestRun.Status, "Run should be marked as completed")
 				}
 			}
 
@@ -233,11 +233,11 @@ func TestRunnerWithOptions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			mockClient := new(MockClient)
-			jobStore := policy.NewJobStore()
+			runStore := policy.NewRunStore()
 			ctx := context.Background()
 
 			// Create runner
-			runner, err := policy.NewRunner(ctx, logger, "test-policy", tt.policy, mockClient, jobStore)
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", tt.policy, mockClient, runStore)
 			assert.NoError(t, err)
 
 			// Use a channel to signal that Ingest was called
@@ -250,22 +250,22 @@ func TestRunnerWithOptions(t *testing.T) {
 			// Start the process
 			runner.Start()
 
-			// Wait for Ingest to be called or for job to complete (success or failure)
+			// Wait for Ingest to be called or for run to complete (success or failure)
 			select {
 			case <-ingestCalled:
 				// Success - Ingest was called
 			case <-time.After(10 * time.Second):
-				// Check if job was created and marked as failed (scanner may have failed due to privileges)
-				jobs := jobStore.GetJobsForPolicy("test-policy")
-				if len(jobs) > 0 {
-					latestJob := jobs[len(jobs)-1]
-					if latestJob.Status == policy.JobStatusFailed {
+				// Check if run was created and marked as failed (scanner may have failed due to privileges)
+				runs := runStore.GetRunsForPolicy("test-policy")
+				if len(runs) > 0 {
+					latestRun := runs[len(runs)-1]
+					if latestRun.Status == policy.RunStatusFailed {
 						// Scanner failed (likely due to privilege requirements), which is acceptable
 						// Don't fail the test in this case
 						return
 					}
 				}
-				t.Fatal("Timeout: Ingest was not called and job was not marked as failed")
+				t.Fatal("Timeout: Ingest was not called and run was not marked as failed")
 			}
 
 			// Stop the process
@@ -278,7 +278,7 @@ func TestRunnerWithOptions(t *testing.T) {
 func TestRunnerMetrics(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockClient)
-	jobStore := policy.NewJobStore()
+	runStore := policy.NewRunStore()
 	ctx := context.Background()
 
 	// Initialize metrics
@@ -298,7 +298,7 @@ func TestRunnerMetrics(t *testing.T) {
 	}
 
 	// Create runner
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, jobStore)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, runStore)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 
 	// Use a channel to signal that Ingest was called
@@ -357,7 +357,7 @@ func TestRunnerMetrics(t *testing.T) {
 func TestRunnerNoHosts(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	mockClient := new(MockClient)
-	jobStore := policy.NewJobStore()
+	runStore := policy.NewRunStore()
 
 	// Set up policy with target and port configuration likely to result in no hosts found
 	policyConfig := config.Policy{
@@ -374,7 +374,7 @@ func TestRunnerNoHosts(t *testing.T) {
 	ctx := context.Background()
 
 	// Create runner
-	runner, err := policy.NewRunner(ctx, logger, "test-no-hosts", policyConfig, mockClient, jobStore)
+	runner, err := policy.NewRunner(ctx, logger, "test-no-hosts", policyConfig, mockClient, runStore)
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 
 	// Configure mock to verify Ingest is NOT called
@@ -393,21 +393,21 @@ func TestRunnerNoHosts(t *testing.T) {
 	// Check that Ingest was not called since no hosts should have been found
 	mockClient.AssertNotCalled(t, "Ingest", mock.Anything, mock.Anything)
 
-	// Verify job was created
-	// Note: If scanner fails, job will be marked as failed. If scanner succeeds but finds no hosts, job will be completed.
-	jobs := jobStore.GetJobsForPolicy("test-no-hosts")
-	if len(jobs) > 0 {
-		latestJob := jobs[len(jobs)-1]
-		// Job should be either completed (scan succeeded, no hosts) or failed (scan failed)
-		assert.True(t, latestJob.Status == policy.JobStatusCompleted || latestJob.Status == policy.JobStatusFailed,
-			"Job should be marked as completed or failed")
+	// Verify run was created
+	// Note: If scanner fails, run will be marked as failed. If scanner succeeds but finds no hosts, run will be completed.
+	runs := runStore.GetRunsForPolicy("test-no-hosts")
+	if len(runs) > 0 {
+		latestRun := runs[len(runs)-1]
+		// Run should be either completed (scan succeeded, no hosts) or failed (scan failed)
+		assert.True(t, latestRun.Status == policy.RunStatusCompleted || latestRun.Status == policy.RunStatusFailed,
+			"Run should be marked as completed or failed")
 	}
 }
 
 func TestRunnerWithNetworkMask(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	mockClient := new(MockClient)
-	jobStore := policy.NewJobStore()
+	runStore := policy.NewRunStore()
 	ctx := context.Background()
 
 	policyConfig := config.Policy{
@@ -422,7 +422,7 @@ func TestRunnerWithNetworkMask(t *testing.T) {
 	}
 
 	// Create runner
-	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, jobStore)
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, runStore)
 	assert.NoError(t, err)
 
 	// Use a channel to signal that Ingest was called

@@ -276,6 +276,6 @@ func TestServerStatusWithPolicies(t *testing.T) {
 	assert.Contains(t, w.Body.String(), `"policies"`)
 	assert.Contains(t, w.Body.String(), `"name"`)
 	assert.Contains(t, w.Body.String(), `"status"`)
-	assert.Contains(t, w.Body.String(), `"jobs"`)
+	assert.Contains(t, w.Body.String(), `"runs"`)
 	assert.Contains(t, w.Body.String(), `test-policy`)
 }

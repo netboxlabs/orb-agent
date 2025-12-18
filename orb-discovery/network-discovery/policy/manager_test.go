@@ -145,20 +145,20 @@ func TestManagerGetPolicyStatuses(t *testing.T) {
 	err = manager.StartPolicy("policy1", policies["policy1"])
 	assert.NoError(t, err)
 
-	// Get statuses - should have policy1 with unknown status (no jobs yet)
+	// Get statuses - should have policy1 with unknown status (no runs yet)
 	statuses = manager.GetPolicyStatuses()
 	assert.Len(t, statuses, 1)
 	assert.Equal(t, "policy1", statuses[0].Name)
 	assert.Equal(t, "unknown", statuses[0].Status)
-	assert.Empty(t, statuses[0].Jobs)
+	assert.Empty(t, statuses[0].Runs)
 
 	// Stop policy
 	err = manager.StopPolicy("policy1")
 	assert.NoError(t, err)
 
-	// Statuses should still include policy1 if it has jobs
+	// Statuses should still include policy1 if it has runs
 	_ = manager.GetPolicyStatuses()
-	// If no jobs were created, statuses will be empty
-	// If jobs were created, statuses will include the policy
-	// This depends on whether the runner actually ran and created jobs
+	// If no runs were created, statuses will be empty
+	// If runs were created, statuses will include the policy
+	// This depends on whether the runner actually ran and created runs
 }
