@@ -53,6 +53,8 @@ Current supported options:
 |  Key  | Type |  Description  |
 |:-----:|:----:|:-------------:|
 | platform_omit_version  | bool | If True, only the driver name will be used as the NetBox platform name (defaults to 'False' if not specified) |
+| port_scan_ports | list | TCP ports to probe before discovery if hostname is a IP Range or a Subnet (defaults to  [22,23,80,443,830,57400]) |
+| port_scan_timeout | float | TCP port probe timeout in seconds (defaults to 0.5) |
 
 #### Defaults
 Current supported defaults:
@@ -114,7 +116,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| hostname | string | yes  | Device hostname |
+| hostname | string | yes  | Device hostname. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10.  |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
 | driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
