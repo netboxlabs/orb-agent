@@ -113,6 +113,7 @@ func convertRunsToStateInfo(runs []policies.RunData) []messages.RunStateInfo {
 	for i, run := range runs {
 		runInfos[i] = messages.RunStateInfo{
 			ID:          run.ID,
+			PolicyID:    run.PolicyID,
 			Status:      run.Status,
 			Reason:      run.Reason,
 			EntityCount: run.EntityCount,
