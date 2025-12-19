@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -99,7 +98,7 @@ func main() {
 			logger.Error("failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("Metrics export configured", slog.String("endpoint", *otelEndpoint), slog.Int("period_seconds", *otelExportPeriod))
+		logger.Info("Metrics export configured", "endpoint", *otelEndpoint, "period_seconds", *otelExportPeriod)
 	}
 
 	manufacturers, err := data.NewManufacturerLookup()

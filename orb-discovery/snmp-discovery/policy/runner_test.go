@@ -104,6 +104,33 @@ func TestNewRunner(t *testing.T) {
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 }
 
+func TestNewRunnerInvalidSchedule(t *testing.T) {
+	setupTestMetrics(t)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	mockClient := new(MockDiodeClient)
+	cron := "invalid cron expression"
+	policyConfig := config.Policy{
+		Config: config.PolicyConfig{
+			Schedule: &cron,
+		},
+		Scope: config.Scope{
+			Targets: []config.Target{
+				{
+					Host: "localhost",
+					Port: 161,
+				},
+			},
+		},
+	}
+	mappingConfig := config.Mapping{}
+	ctx := context.Background()
+	jobStore := policy.NewJobStore()
+
+	runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &mappingConfig, nil, nil, jobStore)
+	assert.Error(t, err, "policy.NewRunner should return an error for invalid schedule")
+	assert.Nil(t, runner, "Runner should be nil when creation fails")
+}
+
 func TestRunnerRun(t *testing.T) {
 	setupTestMetrics(t)
 	tests := []*struct {

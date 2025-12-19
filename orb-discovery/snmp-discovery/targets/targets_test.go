@@ -22,6 +22,16 @@ func TestExpand(t *testing.T) {
 			want:   []string{"example.com"},
 		},
 		{
+			name:   "Hostname With Hyphen",
+			target: "my-hostname",
+			want:   []string{"my-hostname"},
+		},
+		{
+			name:   "Hostname Starting With IP And Hyphen",
+			target: "10.10.10.1-host",
+			want:   []string{"10.10.10.1-host"},
+		},
+		{
 			name:        "Invalid CIDR",
 			target:      "192.168.1.1/33",
 			shouldError: true,
@@ -38,7 +48,7 @@ func TestExpand(t *testing.T) {
 		},
 		{
 			name:        "Invalid Base IP",
-			target:      "invalid-100",
+			target:      "256.0.0.1-5",
 			shouldError: true,
 		},
 		{
@@ -55,6 +65,16 @@ func TestExpand(t *testing.T) {
 			name:        "IPv6 Range",
 			target:      "2001:db8::1-100",
 			shouldError: true,
+		},
+		{
+			name:   "Full IP Range",
+			target: "10.10.10.0-10.10.10.2",
+			want:   []string{"10.10.10.0", "10.10.10.1", "10.10.10.2"},
+		},
+		{
+			name:   "Full IP Range With CIDR Suffix",
+			target: "10.10.10.0/24-10.10.10.2/24",
+			want:   []string{"10.10.10.0", "10.10.10.1", "10.10.10.2"},
 		},
 	}
 
@@ -88,6 +108,11 @@ func TestExpandCIDR(t *testing.T) {
 			name: "Valid /30 CIDR",
 			cidr: "192.168.1.0/30",
 			want: 4,
+		},
+		{
+			name: "Valid /32 CIDR",
+			cidr: "192.168.1.1/32",
+			want: 1,
 		},
 		{
 			name:        "Invalid CIDR",
@@ -139,7 +164,7 @@ func TestExpandIPRange(t *testing.T) {
 		},
 		{
 			name:        "Invalid Base IP",
-			rangeStr:    "invalid-100",
+			rangeStr:    "256.0.0.1-5",
 			shouldError: true,
 		},
 		{
@@ -156,6 +181,16 @@ func TestExpandIPRange(t *testing.T) {
 			name:        "Non-numeric Range End",
 			rangeStr:    "192.168.0.0-ten",
 			shouldError: true,
+		},
+		{
+			name:     "Full IP Range",
+			rangeStr: "10.10.10.0-10.10.10.2",
+			want:     3,
+		},
+		{
+			name:     "Full IP Range With CIDR Suffix",
+			rangeStr: "10.10.10.0/24-10.10.10.2/24",
+			want:     3,
 		},
 	}
 

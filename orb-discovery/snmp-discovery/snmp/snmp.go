@@ -18,12 +18,12 @@ type SlogAdapter struct {
 }
 
 // Print implements gosnmp.LoggerInterface by logging at Debug level
-func (s *SlogAdapter) Print(v ...interface{}) {
+func (s *SlogAdapter) Print(v ...any) {
 	s.logger.Debug(fmt.Sprint(v...))
 }
 
 // Printf implements gosnmp.LoggerInterface by logging at Debug level
-func (s *SlogAdapter) Printf(format string, v ...interface{}) {
+func (s *SlogAdapter) Printf(format string, v ...any) {
 	s.logger.Debug(fmt.Sprintf(format, v...))
 }
 

@@ -32,7 +32,7 @@ const (
 type Runner struct {
 	scheduler     gocron.Scheduler
 	ctx           context.Context
-	task          gocron.Task
+	tasks         []gocron.Task
 	client        diode.Client
 	logger        *slog.Logger
 	timeout       time.Duration
@@ -64,16 +64,6 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		jobStore:      jobStore,
 	}
 
-	runner.task = gocron.NewTask(runner.run)
-	if policy.Config.Schedule != nil {
-		_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), runner.task, gocron.WithSingletonMode(gocron.LimitModeReschedule))
-	} else {
-		_, err = runner.scheduler.NewJob(gocron.OneTimeJob(
-			gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), runner.task, gocron.WithSingletonMode(gocron.LimitModeReschedule))
-	}
-	if err != nil {
-		return nil, err
-	}
 	runner.timeout = time.Duration(policy.Config.Timeout) * time.Second
 	if runner.timeout == 0 {
 		runner.timeout = defaultTimeout
@@ -85,11 +75,29 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	runner.ctx = context.WithValue(ctx, policyKey, name)
 	runner.scope = policy.Scope
 	runner.config = policy.Config
+
+	expandedTargets := runner.expandTargetRanges(runner.scope.Targets)
+
+	for _, target := range expandedTargets {
+		task := gocron.NewTask(runner.run, target)
+		if policy.Config.Schedule != nil {
+			_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), task,
+				gocron.WithSingletonMode(gocron.LimitModeReschedule))
+		} else {
+			_, err = runner.scheduler.NewJob(gocron.OneTimeJob(
+				gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), task,
+				gocron.WithSingletonMode(gocron.LimitModeReschedule))
+		}
+		if err != nil {
+			return nil, err
+		}
+		runner.tasks = append(runner.tasks, task)
+	}
 	return runner, nil
 }
 
 // run runs the policy
-func (r *Runner) run() {
+func (r *Runner) run(target config.Target) {
 	policyName := r.ctx.Value(policyKey).(string)
 
 	// Create job at start
@@ -117,16 +125,11 @@ func (r *Runner) run() {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	r.logger.Info("Starting SNMP crawl of targets", slog.Any("targetCount", len(r.scope.Targets)))
-
-	// Expand all targets
-	expandedTargets := r.expandTargetRanges(r.scope.Targets)
-
-	entities := r.queryTargets(expandedTargets)
-	r.logger.Info("SNMP crawl complete", slog.Any("policy", r.ctx.Value(policyKey)), slog.Any("entityCount", len(entities)))
+	entities := r.queryTarget(target)
+	r.logger.Info("SNMP crawl complete", "policy", policyName, "entityCount", len(entities))
 
 	if len(entities) == 0 {
-		r.logger.Info("No entities to ingest", slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Info("No entities to ingest", "policy", policyName)
 		// Update job status to completed even if no entities
 		r.jobStore.UpdateJob(policyName, job.ID, JobStatusCompleted, nil, 0)
 		return
@@ -139,84 +142,83 @@ func (r *Runner) run() {
 		"job_id":      job.ID,
 	}))
 	if err != nil {
-		r.logger.Error("error ingesting entities", slog.Any("error", err), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Error("error ingesting entities", "error", err, "policy", policyName)
 		r.jobStore.UpdateJob(policyName, job.ID, JobStatusFailed, err, len(entities))
 	} else if resp != nil && resp.Errors != nil {
 		ingestErr := fmt.Errorf("ingestion errors: %v", resp.Errors)
-		r.logger.Error("error ingesting entities", slog.Any("error", resp.Errors), slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Error("error ingesting entities", "error", resp.Errors, "policy", policyName)
 		r.jobStore.UpdateJob(policyName, job.ID, JobStatusFailed, ingestErr, len(entities))
 	} else {
-		r.logger.Info("entities ingested successfully", slog.Any("policy", r.ctx.Value(policyKey)))
+		r.logger.Info("entities ingested successfully", "policy", policyName)
 		r.jobStore.UpdateJob(policyName, job.ID, JobStatusCompleted, nil, len(entities))
 	}
 }
 
 func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
 	for _, entity := range entities {
-		r.logger.Debug("Entity for ingestion", slog.Any("entity", entity.ConvertToProtoMessage()))
+		r.logger.Debug("Entity for ingestion", "entity", entity.ConvertToProtoMessage())
 	}
 }
 
-func (r *Runner) queryTargets(expandedTargets []config.Target) []diode.Entity {
+func (r *Runner) queryTarget(target config.Target) []diode.Entity {
 	mappingConfig := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup)
 	objectIDs := mappingConfig.ObjectIDs()
-	r.logger.Info("Querying targets", slog.Any("targetCount", len(expandedTargets)), slog.Any("objectCount", len(objectIDs)))
+	r.logger.Info("Querying target", "target", target, "objectCount", len(objectIDs))
 
 	entities := make([]diode.Entity, 0)
 
-	for _, target := range expandedTargets {
-		mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, &r.config.Defaults)
-		policyName := r.ctx.Value(policyKey).(string)
-		// Track discovery attempt
-		if rMetric := metrics.GetDiscoveryAttempts(); rMetric != nil {
-			rMetric.Add(r.ctx, 1,
-				metric.WithAttributes(
-					attribute.String("policy", policyName)))
-		}
-
-		// Start timing the discovery
-		startTime := time.Now()
-
-		host := snmp.NewHost(target.Host, target.Port, r.config.Retries, r.snmpTimeout, &r.scope.Authentication, r.logger, r.ClientFactory)
-		oids, err := host.Walk(objectIDs)
-		if err != nil {
-			r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
-			// Track failed discovery
-			if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-				policyName := r.ctx.Value(policyKey).(string)
-				rMetric.Add(r.ctx, 1,
-					metric.WithAttributes(
-						attribute.String("policy", policyName),
-						attribute.String("error", err.Error()),
-					))
-			}
-			continue
-		}
-
-		// Track successful discovery
-		if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
-			rMetric.Add(r.ctx, 1,
-				metric.WithAttributes(
-					attribute.String("policy", policyName)))
-		}
-
-		// Record discovery latency
-		if rMetric := metrics.GetDiscoveryLatency(); rMetric != nil {
-			rMetric.Record(r.ctx, time.Since(startTime).Seconds(),
-				metric.WithAttributes(
-					attribute.String("policy", policyName)))
-		}
-
-		entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
-		entities = append(entities, entitiesForTarget...)
-
-		// Update discovered hosts gauge
-		if rMetric := metrics.GetDiscoveredHosts(); rMetric != nil {
-			rMetric.Record(r.ctx, int64(len(entitiesForTarget)),
-				metric.WithAttributes(
-					attribute.String("policy", policyName)))
-		}
+	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, &r.config.Defaults)
+	policyName := r.ctx.Value(policyKey).(string)
+	// Track discovery attempt
+	if rMetric := metrics.GetDiscoveryAttempts(); rMetric != nil {
+		rMetric.Add(r.ctx, 1,
+			metric.WithAttributes(
+				attribute.String("policy", policyName)))
 	}
+
+	// Start timing the discovery
+	startTime := time.Now()
+
+	host := snmp.NewHost(target.Host, target.Port, r.config.Retries, r.snmpTimeout, &r.scope.Authentication, r.logger, r.ClientFactory)
+	oids, err := host.Walk(objectIDs)
+	if err != nil {
+		r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
+		// Track failed discovery
+		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+			policyName := r.ctx.Value(policyKey).(string)
+			rMetric.Add(r.ctx, 1,
+				metric.WithAttributes(
+					attribute.String("policy", policyName),
+					attribute.String("error", err.Error()),
+				))
+		}
+		return entities
+	}
+
+	// Track successful discovery
+	if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
+		rMetric.Add(r.ctx, 1,
+			metric.WithAttributes(
+				attribute.String("policy", policyName)))
+	}
+
+	// Record discovery latency
+	if rMetric := metrics.GetDiscoveryLatency(); rMetric != nil {
+		rMetric.Record(r.ctx, time.Since(startTime).Seconds(),
+			metric.WithAttributes(
+				attribute.String("policy", policyName)))
+	}
+
+	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
+	entities = append(entities, entitiesForTarget...)
+
+	// Update discovered hosts gauge
+	if rMetric := metrics.GetDiscoveredHosts(); rMetric != nil {
+		rMetric.Record(r.ctx, int64(len(entitiesForTarget)),
+			metric.WithAttributes(
+				attribute.String("policy", policyName)))
+	}
+
 	return entities
 }
 
@@ -240,7 +242,7 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []config.
 
 // Start starts the policy runner
 func (r *Runner) Start() {
-	r.logger.Info("Starting policy runner", slog.Any("policy", r.ctx.Value(policyKey)))
+	r.logger.Info("Starting policy runner", "policy", r.ctx.Value(policyKey))
 	r.scheduler.Start()
 }
 
