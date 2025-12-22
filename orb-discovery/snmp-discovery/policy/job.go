@@ -22,6 +22,7 @@ const (
 // Job represents a single job execution
 type Job struct {
 	ID          string    `json:"id"`
+	PolicyID    string    `json:"policy_id"`
 	Status      JobStatus `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
 	EntityCount int       `json:"entity_count"`
@@ -52,6 +53,7 @@ func (js *JobStore) CreateJob(policyName string) *Job {
 	now := time.Now()
 	job := &Job{
 		ID:        uuid.New().String(),
+		PolicyID:  policyName,
 		Status:    JobStatusRunning,
 		CreatedAt: now,
 		UpdatedAt: now,

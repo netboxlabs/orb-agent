@@ -22,6 +22,7 @@ const (
 // Run represents a single run execution
 type Run struct {
 	ID          string    `json:"id"`
+	PolicyID    string    `json:"policy_id"`
 	Status      RunStatus `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
 	EntityCount int       `json:"entity_count"`
@@ -52,6 +53,7 @@ func (rs *RunStore) CreateRun(policyName string) *Run {
 	now := time.Now()
 	run := &Run{
 		ID:        uuid.New().String(),
+		PolicyID:  policyName,
 		Status:    RunStatusRunning,
 		CreatedAt: now,
 		UpdatedAt: now,

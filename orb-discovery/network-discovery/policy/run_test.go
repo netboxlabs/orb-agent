@@ -19,6 +19,7 @@ func TestRunStore_CreateRun(t *testing.T) {
 
 	// Verify run properties
 	assert.NotEmpty(t, run.ID)
+	assert.Equal(t, policyName, run.PolicyID)
 	assert.Equal(t, policy.RunStatusRunning, run.Status)
 	assert.Empty(t, run.Reason)
 	assert.Equal(t, 0, run.EntityCount)
@@ -30,6 +31,7 @@ func TestRunStore_CreateRun(t *testing.T) {
 	runs := store.GetRunsForPolicy(policyName)
 	require.Len(t, runs, 1)
 	assert.Equal(t, run.ID, runs[0].ID)
+	assert.Equal(t, policyName, runs[0].PolicyID)
 }
 
 func TestRunStore_UpdateRun(t *testing.T) {
@@ -157,6 +159,14 @@ func TestRunStore_GetAllPoliciesWithRuns(t *testing.T) {
 	assert.Len(t, allRuns, 2)
 	assert.Len(t, allRuns[policy1], 2)
 	assert.Len(t, allRuns[policy2], 1)
+
+	// Verify PolicyID is set correctly for each run
+	for _, run := range allRuns[policy1] {
+		assert.Equal(t, policy1, run.PolicyID)
+	}
+	for _, run := range allRuns[policy2] {
+		assert.Equal(t, policy2, run.PolicyID)
+	}
 }
 
 func TestRunStore_GetRunsForPolicy_Empty(t *testing.T) {
