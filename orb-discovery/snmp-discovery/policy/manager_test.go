@@ -590,31 +590,6 @@ func TestManagerApplyDefaults_Location(t *testing.T) {
 	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
 	assert.NoError(t, err)
 
-	t.Run("Empty Location gets set to undefined", func(t *testing.T) {
-		yamlData := []byte(`
-        policies:
-          policy1:
-            config:
-              defaults:
-                role: "existing-role"
-                site: "existing-site"
-                # location is intentionally omitted (empty)
-            scope:
-              targets:
-                - host: 192.168.1.1
-              authentication:
-                protocol_version: SNMPv2c
-                community: public
-       `)
-
-		policies, err := manager.ParsePolicies(yamlData)
-		assert.NoError(t, err)
-		assert.Contains(t, policies, "policy1")
-		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
-		assert.Equal(t, "existing-role", policies["policy1"].Config.Defaults.Role)
-		assert.Equal(t, "existing-site", policies["policy1"].Config.Defaults.Site)
-	})
-
 	t.Run("Existing Location value is preserved", func(t *testing.T) {
 		yamlData := []byte(`
         policies:
@@ -640,39 +615,14 @@ func TestManagerApplyDefaults_Location(t *testing.T) {
 		assert.Equal(t, "custom-site", policies["policy1"].Config.Defaults.Site)
 	})
 
-	t.Run("Empty string Location gets default value", func(t *testing.T) {
-		yamlData := []byte(`
-        policies:
-          policy1:
-            config:
-              defaults:
-                role: "existing-role"
-                site: "existing-site"
-                location: ""
-            scope:
-              targets:
-                - host: 192.168.1.1
-              authentication:
-                protocol_version: SNMPv2c
-                community: public
-       `)
-
-		policies, err := manager.ParsePolicies(yamlData)
-		assert.NoError(t, err)
-		assert.Contains(t, policies, "policy1")
-		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
-		assert.Equal(t, "existing-role", policies["policy1"].Config.Defaults.Role)
-		assert.Equal(t, "existing-site", policies["policy1"].Config.Defaults.Site)
-	})
-
-	t.Run("All defaults (Role, Site, Location) empty get default values", func(t *testing.T) {
+	t.Run("All defaults (Role, Site) empty get default values", func(t *testing.T) {
 		yamlData := []byte(`
         policies:
           policy1:
             config:
               defaults:
                 comments: "test"
-                # role, site, and location are intentionally omitted (empty)
+                # role and site are intentionally omitted (empty)
             scope:
               targets:
                 - host: 192.168.1.1
@@ -686,10 +636,9 @@ func TestManagerApplyDefaults_Location(t *testing.T) {
 		assert.Contains(t, policies, "policy1")
 		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
 		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
-		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
 	})
 
-	t.Run("All defaults (Role, Site, Location) as empty strings get default values", func(t *testing.T) {
+	t.Run("All defaults (Role, Site) as empty strings get default values", func(t *testing.T) {
 		yamlData := []byte(`
         policies:
           policy1:
@@ -711,7 +660,6 @@ func TestManagerApplyDefaults_Location(t *testing.T) {
 		assert.Contains(t, policies, "policy1")
 		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
 		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
-		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Location)
 	})
 }
 

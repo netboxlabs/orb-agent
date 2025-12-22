@@ -119,10 +119,6 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 	if policy.Config.Defaults.Site == "" {
 		policy.Config.Defaults.Site = "undefined"
 	}
-
-	if policy.Config.Defaults.Location == "" {
-		policy.Config.Defaults.Location = "undefined"
-	}
 }
 
 // validatePolicy validates the policy

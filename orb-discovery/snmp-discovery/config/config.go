@@ -74,6 +74,7 @@ type PolicyConfig struct {
 	Defaults            Defaults `yaml:"defaults"`
 	Timeout             int      `yaml:"timeout"`
 	SNMPTimeout         int      `yaml:"snmp_timeout"`
+	SNMPProbeTimeout    int      `yaml:"snmp_probe_timeout"`
 	Retries             int      `yaml:"retries"`
 	LookupExtensionsDir string   `yaml:"lookup_extensions_dir,omitempty"`
 }

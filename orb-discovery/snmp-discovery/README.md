@@ -40,6 +40,7 @@ policies:
       schedule: "0 */6 * * *" # Cron expression - every 6 hours
       timeout: 300 # Timeout for policy in seconds (default 2 minutes)
       snmp_timeout: 300 # Timeout for SNMP operations in seconds (default 5 seconds)
+      snmp_probe_timeout: 1 # Timeout for SNMP probe operations in seconds (default 1 second)
       retries: 3 # Number of retries
       defaults:
         tags: ["snmp-discovery", "orb"]
@@ -60,8 +61,8 @@ policies:
       lookup_extensions_dir: "/opt/orb/snmp-extensions" # (Optional) Specifies an override for the directory containing device data yaml files (see below). Defaults to `/etc/snmp-discovery/lookup-extensions
     scope:
       targets:
-        - host: "192.168.1.1"
-        - host: "192.168.1.254"
+        - host: "192.168.1.1/24" # subnet support
+        - host: "192.168.2.1-20" # range support
         - host: "10.0.0.1"
           port: 162  # Non-standard SNMP port
       authentication:
