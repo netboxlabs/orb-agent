@@ -449,6 +449,62 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestNewClientSecurityLevelMsgFlags(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	testCases := []struct {
+		name          string
+		securityLevel string
+		authProtocol  string
+		privProtocol  string
+		expectedFlag  gosnmp.SnmpV3MsgFlags
+	}{
+		{
+			name:          "noAuthNoPriv sets NoAuthNoPriv flags",
+			securityLevel: "noAuthNoPriv",
+			authProtocol:  "NoAuth",
+			privProtocol:  "NoPriv",
+			expectedFlag:  gosnmp.NoAuthNoPriv,
+		},
+		{
+			name:          "authNoPriv sets AuthNoPriv flags",
+			securityLevel: "authNoPriv",
+			authProtocol:  "SHA",
+			privProtocol:  "NoPriv",
+			expectedFlag:  gosnmp.AuthNoPriv,
+		},
+		{
+			name:          "authPriv sets AuthPriv flags",
+			securityLevel: "authPriv",
+			authProtocol:  "SHA",
+			privProtocol:  "AES",
+			expectedFlag:  gosnmp.AuthPriv,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			auth := &config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion3,
+				Username:        "testuser",
+				AuthProtocol:    tc.authProtocol,
+				AuthPassphrase:  "testpass",
+				PrivProtocol:    tc.privProtocol,
+				PrivPassphrase:  "testpass",
+				SecurityLevel:   tc.securityLevel,
+			}
+
+			client, err := snmp.NewClient("192.168.1.1", 161, 3, 1*time.Second, auth, logger)
+
+			assert.NoError(t, err)
+			typed, ok := client.(*snmp.Client)
+			assert.True(t, ok)
+			if ok {
+				assert.Equal(t, tc.expectedFlag, typed.MsgFlags)
+			}
+		})
+	}
+}
+
 func TestMapPDU(t *testing.T) {
 	testCases := []struct {
 		name          string

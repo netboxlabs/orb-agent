@@ -181,7 +181,6 @@ Be **AWARE** that executing a policy with only targets defined will use default 
 - **Protocol Version**: v2c (if not specified)
 - **Community**: "public" (if not specified for v1/v2c)
 - **Port**: 161 (standard SNMP port, if not specified)
-- **Security Level**: noAuthNoPriv (if not specified for v3)
 
 Always ensure proper authentication is configured for production environments to avoid security risks.
 

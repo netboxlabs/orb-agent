@@ -227,6 +227,15 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 		if err != nil {
 			return nil, err
 		}
+		msgFlags := gosnmp.NoAuthNoPriv
+		switch authentication.SecurityLevel {
+		case "noAuthNoPriv":
+			msgFlags = gosnmp.NoAuthNoPriv
+		case "authNoPriv":
+			msgFlags = gosnmp.AuthNoPriv
+		case "authPriv":
+			msgFlags = gosnmp.AuthPriv
+		}
 		return &Client{
 			&gosnmp.GoSNMP{
 				Target:        host,
@@ -234,6 +243,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Version:       gosnmp.Version3,
 				Timeout:       timeout,
 				Retries:       retries,
+				MsgFlags:      msgFlags,
 				SecurityModel: gosnmp.UserSecurityModel,
 				Logger:        gosnmpLogger,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
