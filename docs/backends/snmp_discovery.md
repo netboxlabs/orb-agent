@@ -51,6 +51,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | role | string | no | Default role for discovered devices |
 
 ##### Nested Defaults
+| Parameter | Type | Description |
+|:---------:|:----:|:-----------:|
 | device      | map  | Device-specific defaults        |
 | ├─ description | string  | Device description           |
 | ├─ comments   | string  | Device comments               |
@@ -75,7 +77,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | protocol_version | string | yes | SNMP protocol version ("SNMPv1", "SNMPv2c", or "SNMPv3") |
 | community | string | yes* | SNMP community string for v1/v2c authentication |
 | username | string | no | SNMPv3 username |
-| security_level | string | no | SNMPv3 security level ("NoAuthNoPriv", "AuthNoPriv", "AuthPriv") |
+| security_level | string | no | SNMPv3 security level ("noAuthNoPriv", "authNoPriv", "authPriv") |
 | auth_protocol | string | no | SNMPv3 authentication protocol ("SHA", "MD5") |
 | auth_passphrase | string | no | SNMPv3 authentication passphrase |
 | priv_protocol | string | no | SNMPv3 privacy protocol ("AES", "DES") |
