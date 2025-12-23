@@ -1306,6 +1306,111 @@ func TestInterfaceMapper_Map(t *testing.T) {
 	}
 }
 
+func TestInterfaceMapper_Map_ZeroSpeedAndMtu(t *testing.T) {
+	logger := slog.Default()
+
+	tests := []struct {
+		name         string
+		values       map[mapping.ObjectIDIndex]*mapping.ObjectIDValue
+		mappingEntry *mapping.Entry
+		assertFn     func(t *testing.T, iface *diode.Interface)
+	}{
+		{
+			name: "speed value of zero is accepted",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.5.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.5.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.5",
+					Value:  "0",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.5",
+						Entity: "interface",
+						Field:  "speed",
+					},
+				},
+			},
+			assertFn: func(t *testing.T, iface *diode.Interface) {
+				assert.Equal(t, mapping.StringPtr("eth0"), iface.Name)
+				zero := int64(0)
+				assert.Equal(t, &zero, iface.Speed)
+			},
+		},
+		{
+			name: "mtu value of zero is ignored",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.4.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.4.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.4",
+					Value:  "0",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.4",
+						Entity: "interface",
+						Field:  "mtu",
+					},
+				},
+			},
+			assertFn: func(t *testing.T, iface *diode.Interface) {
+				assert.Equal(t, mapping.StringPtr("eth0"), iface.Name)
+				assert.Nil(t, iface.Mtu)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := mapping.NewEntityRegistry(logger)
+			mapper := mapping.NewInterfaceMapper(logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, nil)
+			assert.NotNil(t, entity)
+			iface, ok := entity.(*diode.Interface)
+			assert.True(t, ok)
+			tt.assertFn(t, iface)
+		})
+	}
+}
+
 func TestInterfaceMapper_FormatMACAddress(t *testing.T) {
 	logger := slog.Default()
 	mapper := mapping.NewInterfaceMapper(logger)
