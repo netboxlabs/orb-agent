@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 // MinRestartTime is the minimum time to wait between restarts
@@ -33,16 +35,18 @@ type stateManager struct {
 	ticker             *time.Ticker
 	logger             *slog.Logger
 	restartBackendChan chan string
+	policyRepo         policies.PolicyRepo
 }
 
 // NewStateManager creates a new StateManager with the given logger and restart channel
-func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackendChan chan string) StateManager {
+func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackendChan chan string, policyRepo policies.PolicyRepo) StateManager {
 	if configMgrSupportsStateMonitoring(activeConfigMgr) {
 		return &stateManager{
 			backendState:       make(map[string]*State),
 			ticker:             time.NewTicker(BackendMonitorInterval),
 			logger:             logger,
 			restartBackendChan: restartBackendChan,
+			policyRepo:         policyRepo,
 		}
 	}
 	return nullStateManager{}
@@ -99,13 +103,28 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 				}
 			}
 			manager.mu.Unlock()
+
+			// Poll policy status if backend supports it
+			if provider, ok := be.(PolicyStatusProvider); ok && manager.policyRepo != nil {
+				statuses, err := provider.GetPolicyStatus()
+				if err != nil {
+					manager.logger.Debug("failed to get policy status", "backend", name, "error", err)
+				} else {
+					for _, ps := range statuses {
+						runs := convertToRunData(ps.Runs)
+						if err := manager.policyRepo.UpdateRuns(ps.Name, runs); err != nil {
+							manager.logger.Debug("failed to update runs for policy", "policy", ps.Name, "error", err)
+						}
+					}
+				}
+			}
 		}
 	}()
 }
 
 // RegisterError registers an error for a backend and updates its state
 func (manager *stateManager) RegisterError(name string, errMessage string) {
-	manager.logger.Error(errMessage, slog.String("backend", name))
+	manager.logger.Error(errMessage, "backend", name)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.backendState[name] = &State{
@@ -137,4 +156,20 @@ func (manager *stateManager) Get() map[string]*State {
 		result[k] = &stateCopy
 	}
 	return result
+}
+
+// convertToRunData converts backend PolicyStatusRun to policies.RunData
+func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
+	runs := make([]policies.RunData, len(statusRuns))
+	for i, sr := range statusRuns {
+		runs[i] = policies.RunData{
+			ID:          sr.ID,
+			Status:      sr.Status,
+			Reason:      sr.Reason,
+			EntityCount: sr.EntityCount,
+			CreatedAt:   sr.CreatedAt,
+			UpdatedAt:   sr.UpdatedAt,
+		}
+	}
+	return runs
 }

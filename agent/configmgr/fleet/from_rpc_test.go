@@ -107,6 +107,11 @@ func (m *mockPolicyRepo) EnsureGroupID(policyID string, agentGroupID string) err
 	return args.Error(0)
 }
 
+func (m *mockPolicyRepo) UpdateRuns(policyName string, runs []policies.RunData) error {
+	args := m.Called(policyName, runs)
+	return args.Error(0)
+}
+
 func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 

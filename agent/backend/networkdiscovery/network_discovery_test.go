@@ -164,6 +164,73 @@ func TestNetworkDiscoveryBackendStart(t *testing.T) {
 	mockCmd.AssertExpectations(t)
 }
 
+func TestNetworkDiscoveryUsesOtelTargetWithoutCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(StatusResponse{Version: "1.0.0"}))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "network-discovery")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 4244)
+
+	otelEndpoint := "collector:4317"
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, name string, args []string) {
+		assert.Equal(t, "network-discovery", name)
+		assert.Contains(t, args, "--diode-target")
+		assert.Contains(t, args, otelEndpoint)
+		assert.NotContains(t, args, "--diode-client-id")
+		assert.NotContains(t, args, "--diode-client-secret")
+		assert.NotContains(t, args, "network-client")
+		assert.NotContains(t, args, "network-secret")
+		assert.NotContains(t, args, "********")
+	})
+
+	assert.True(t, networkdiscovery.Register())
+	assert.True(t, backend.HaveBackend("network_discovery"))
+
+	be := backend.GetBackend("network_discovery")
+
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = otelEndpoint
+	commons.Diode.ClientID = "default-client"
+	commons.Diode.ClientSecret = "default-secret"
+	commons.Diode.AgentName = "network-agent"
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host":          serverURL.Hostname(),
+		"port":          serverURL.Port(),
+		"client_id":     "network-client",
+		"client_secret": "network-secret",
+		"agent_name":    "network-agent",
+	}, commons)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, be.Start(ctx, cancel))
+	require.NoError(t, be.Stop(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
 func TestNetworkDiscoveryBackendCompleted(t *testing.T) {
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupCompletedProcess(mockCmd, 0, nil)
@@ -184,6 +251,74 @@ func TestNetworkDiscoveryBackendCompleted(t *testing.T) {
 
 	err := be.Start(ctx, cancel)
 	assert.Error(t, err)
+
+	mockCmd.AssertExpectations(t)
+}
+
+func TestNetworkDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(StatusResponse{Version: "1.0.0"}))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "network-discovery")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12349)
+
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, name string, args []string) {
+		assert.Equal(t, "network-discovery", name, "Expected command name to be network-discovery")
+		assert.Contains(t, args, "--dry-run", "Expected args to contain dry-run flag")
+		assert.Contains(t, args, "--dry-run-output-dir", "Expected args to contain dry-run-output-dir flag")
+		assert.Contains(t, args, "/tmp/network-dry-run", "Expected args to contain dry-run-output-dir value")
+		assert.Contains(t, args, "--host", "Expected args to contain host flag even in dry-run mode")
+		assert.Contains(t, args, serverURL.Hostname(), "Expected args to contain host value even in dry-run mode")
+		assert.Contains(t, args, "--port", "Expected args to contain port flag even in dry-run mode")
+		assert.Contains(t, args, serverURL.Port(), "Expected args to contain port value even in dry-run mode")
+		assert.Contains(t, args, "--diode-app-name-prefix", "Expected args to contain diode app name prefix flag")
+		assert.Contains(t, args, "network-agent", "Expected args to contain diode app name prefix value")
+		assert.NotContains(t, args, "--diode-target", "Expected args to NOT contain diode target flag in dry-run mode")
+		assert.NotContains(t, args, "--diode-client-id", "Expected args to NOT contain diode client id flag in dry-run mode")
+		assert.NotContains(t, args, "--diode-client-secret", "Expected args to NOT contain diode client secret flag in dry-run mode")
+	})
+
+	assert.True(t, networkdiscovery.Register(), "Failed to register NetworkDiscovery backend")
+	assert.True(t, backend.HaveBackend("network_discovery"), "Failed to get NetworkDiscovery backend")
+
+	be := backend.GetBackend("network_discovery")
+
+	commons := config.BackendCommons{}
+	commons.Diode.AgentName = "network-agent"
+	commons.Diode.DryRunOutputDir = "/tmp/network-dry-run"
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host":               serverURL.Hostname(),
+		"port":               serverURL.Port(),
+		"agent_name":         "network-agent",
+		"dry_run":            true,
+		"dry_run_output_dir": "/tmp/network-dry-run",
+	}, commons)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, be.Start(ctx, cancel))
+	require.NoError(t, be.Stop(ctx))
 
 	mockCmd.AssertExpectations(t)
 }

@@ -33,21 +33,24 @@ type GitManager struct {
 	SkipTLS    bool    `yaml:"skip_tls"`
 }
 
-// FleetManager represents the Orb ConfigManager configuration.
+// FleetManager represents the Fleet ConfigManager configuration.
 type FleetManager struct {
-	URL          string `yaml:"url"`
-	TokenURL     string `yaml:"token_url"`
-	Timeout      *int   `yaml:"timeout,omitempty"`
-	SkipTLS      bool   `yaml:"skip_tls"`
-	ClientID     string `yaml:"client_id"`
-	ClientSecret string `yaml:"client_secret"`
+	URL                      string `yaml:"url"`
+	TokenURL                 string `yaml:"token_url"`
+	Timeout                  *int   `yaml:"timeout,omitempty"`
+	SkipTLS                  bool   `yaml:"skip_tls"`
+	ClientID                 string `yaml:"client_id"`
+	ClientSecret             string `yaml:"client_secret"`
+	TokenExpiryCheckInterval *int   `yaml:"token_expiry_check_interval,omitempty"` // Check interval in seconds (default: 30)
+	TokenReconnectBuffer     *int   `yaml:"token_reconnect_buffer,omitempty"`      // Reconnect buffer in seconds before expiry (default: 120)
+	OTLPBridgeGRPCPort       *int   `yaml:"otlp_bridge_grpc_port,omitempty"`       // GRPC port for the OTLP bridge (default: 4317)
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.
 type Sources struct {
 	Local LocalManager `yaml:"local"`
 	Git   GitManager   `yaml:"git"`
-	Fleet FleetManager `yaml:"orb"`
+	Fleet FleetManager `yaml:"fleet"`
 }
 
 // ManagerConfig represents the configuration for the Config Manager

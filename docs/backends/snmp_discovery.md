@@ -30,14 +30,14 @@ orb:
 ## Policy
 SNMP discovery policies are broken down into two subsections: `config` and `scope`.
 
-### Configuration Parameters
 
-#### Config Section
+### Config Section
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
 | schedule | cron format | no | Cron expression for scheduling (e.g., "*/5 * * * *") |
 | timeout | integer | no | Timeout for whole policy in seconds (defaults to 120) |
 | snmp_timeout | integer | no | Timeout for SNMP operations in seconds for SNMP operations (defaults to 5) |
+| snmp_probe_timeout | integer | no | Timeout for SNMP probe operations in seconds (defaults to 1) |
 | retries | integer | no | Number of retries for SNMP operations (defaults to 0) |
 | lookup_extensions_dir | string | no | Directory containing device model lookup files |
 | defaults | map | no | Default values for entities (description, comments, tags, etc.) |
@@ -49,34 +49,26 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | site | string | no | Default site name for discovered devices |
 | location | string | no | Default location for discovered devices |
 | role | string | no | Default role for discovered devices |
-| ip_address | map | no | Default values for discovered IP addresses |
-| interface | map | no | Default values for discovered interfaces |
-| device | map | no | Default values for discovered devices |
 
-#### IP Address Defaults Parameters
+##### Nested Defaults
+| Parameter | Type | Description |
+|:---------:|:----:|:-----------:|
+| device      | map  | Device-specific defaults        |
+| ├─ description | string  | Device description           |
+| ├─ comments   | string  | Device comments               |
+| interface    | map  | Interface-specific defaults    |
+| ├─ description | string  | Interface description        |
+| ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
+| ipaddress    | map  | IP address-specific defaults  |
+| ├─ role   | string  | IP address role                  |
+| ├─ vrf   | string  | IP address vrf                    |
+| ├─ tenant   | string  | IP address tenant              |
+| ├─ description | string  | IP address description      |
+
+### Scope Section
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| description | string | no | Description for discovered IP addresses |
-| role | string | no | Role for discovered IP addresses (e.g. "management") |
-| tenant | string | no | Tenant name for discovered IP addresses |
-| vrf | string | no | VRF name for discovered IP addresses |
-
-#### Interface Defaults Parameters
-| Parameter | Type | Required | Description |
-|:---------:|:----:|:--------:|:-----------:|
-| description | string | no | Description for discovered interfaces |
-| if_type | string | no | Interface type (e.g. "ethernet", "virtual") |
-
-#### Device Defaults Parameters
-| Parameter | Type | Required | Description |
-|:---------:|:----:|:--------:|:-----------:|
-| description | string | no | Description for discovered devices |
-| comments | string | no | Comments for discovered devices |
-
-#### Scope Section
-| Parameter | Type | Required | Description |
-|:---------:|:----:|:--------:|:-----------:|
-| targets | list | yes | List of SNMP targets to discover |
+| targets | list | yes | List of SNMP targets to discover. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10. |
 | authentication | map | yes | SNMP authentication settings |
 
 #### Authentication Parameters
@@ -85,7 +77,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | protocol_version | string | yes | SNMP protocol version ("SNMPv1", "SNMPv2c", or "SNMPv3") |
 | community | string | yes* | SNMP community string for v1/v2c authentication |
 | username | string | no | SNMPv3 username |
-| security_level | string | no | SNMPv3 security level ("NoAuthNoPriv", "AuthNoPriv", "AuthPriv") |
+| security_level | string | no | SNMPv3 security level ("noAuthNoPriv", "authNoPriv", "authPriv") |
 | auth_protocol | string | no | SNMPv3 authentication protocol ("SHA", "MD5") |
 | auth_passphrase | string | no | SNMPv3 authentication passphrase |
 | priv_protocol | string | no | SNMPv3 privacy protocol ("AES", "DES") |
@@ -121,8 +113,8 @@ config:
   lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing device data yaml files (see below)
 scope:
   targets:
-    - host: "192.168.1.1"
-    - host: "192.168.1.254"
+    - host: "192.168.1.1/24" # subnet support
+    - host: "192.168.2.2-10" #range support
     - host: "10.0.0.1"
       port: 162  # Non-standard SNMP port
   authentication:

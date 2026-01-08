@@ -46,6 +46,12 @@ func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backe
 	return nil
 }
 
+// GetContext returns a context for local config manager (no-op for now).
 func (lc *localConfigManager) GetContext(ctx context.Context) context.Context {
 	return ctx
+}
+
+// Stop is a no-op for local config manager.
+func (lc *localConfigManager) Stop(_ context.Context) error {
+	return nil
 }

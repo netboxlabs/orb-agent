@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -85,4 +86,41 @@ func (m *mockBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) e
 func (m *mockBackend) RemovePolicy(data policies.PolicyData) error {
 	args := m.Called(data)
 	return args.Error(0)
+}
+
+// MockMQTTConnection is a mock implementation of MQTTConnector for testing
+type MockMQTTConnection struct {
+	ConnectError    error
+	DisconnectError error
+	ReconnectError  error
+	ConnectCalled   bool
+	hooks           []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+}
+
+// Connect connects to the MQTT broker
+func (m *MockMQTTConnection) Connect(_ context.Context, _ ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string) error {
+	m.ConnectCalled = true
+	return m.ConnectError
+}
+
+// Disconnect disconnects from the MQTT broker
+func (m *MockMQTTConnection) Disconnect(_ context.Context, _ string) error {
+	return m.DisconnectError
+}
+
+// Reconnect reconnects to the MQTT broker
+func (m *MockMQTTConnection) Reconnect(_ context.Context, _ ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string, _ time.Duration) error {
+	return m.ReconnectError
+}
+
+// AddOnReadyHook registers a hook function to be called when the MQTT connection is ready.
+func (m *MockMQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
+	m.hooks = append(m.hooks, fn)
+}
+
+// TriggerOnReadyHook triggers all registered onReady hooks (for testing)
+func (m *MockMQTTConnection) TriggerOnReadyHook(cm *autopaho.ConnectionManager, topics TokenResponseTopics) {
+	for _, hook := range m.hooks {
+		hook(cm, topics)
+	}
 }

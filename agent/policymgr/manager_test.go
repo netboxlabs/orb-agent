@@ -136,6 +136,7 @@ func TestManagePolicy_ManageAction_NewPolicy(t *testing.T) {
 
 	// Configure mock backend
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -197,6 +198,7 @@ func TestManagePolicy_ManageAction_UpdatePolicy(t *testing.T) {
 
 	// Configure mock backend
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -256,6 +258,43 @@ func TestManagePolicy_ManageAction_UpdatePolicy(t *testing.T) {
 	assert.Equal(t, "Test Policy", state[0].PreviousPolicyData.Name)
 }
 
+func TestManagePolicy_BackendNotRunning(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Unknown, "backend not running", nil)
+	backend.Register("testbackend", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	payload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "policy1",
+		Name:      "Test Policy",
+		Backend:   "testbackend",
+		Version:   1,
+		Data:      map[string]any{"key": "value"},
+		DatasetID: "dataset1",
+	}
+
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
+
+	mgr.ManagePolicy(payload)
+
+	mockBe.AssertExpectations(t)
+	mockBe.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	secretsMgr.AssertExpectations(t)
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.FailedToApply, state[0].State)
+	assert.Equal(t, "backend not running", state[0].BackendErr)
+}
+
 func TestManagePolicy_ManageAction_BackendUnavailable(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := new(mockSecretsManager)
@@ -294,6 +333,7 @@ func TestManagePolicy_RemoveAction(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -343,6 +383,7 @@ func TestRemovePolicy(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -383,6 +424,7 @@ func TestRemoveBackendPolicies(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -444,6 +486,7 @@ func TestApplyBackendPolicies(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -499,6 +542,7 @@ func TestApplyBackendPolicies(t *testing.T) {
 
 	// Make policy2 fail
 	mockBe.ExpectedCalls = nil
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
 		return pd.ID == "policy1" || pd.ID == "policy3"
 	}), false).Return(nil).Times(2)
@@ -532,6 +576,7 @@ func TestPoliciesChanged(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -616,6 +661,7 @@ func TestRemovePolicyDataset(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("testbackend", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)

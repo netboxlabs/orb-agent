@@ -70,7 +70,8 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, &mockBackendState{})
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
 
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
@@ -93,14 +94,15 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, &mockBackendState{})
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
 
 	// Act with valid URL but don't expect successful connection
 	// since we don't have a real MQTT server
 	backends := make(map[string]backend.Backend)
 	trt2 := TokenResponseTopics{Inbox: "test/topic"}
-	// Timeout after 3 seconds
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Timeout after 100ms for faster test execution (connection will fail quickly)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	err := connection.Connect(ctx,
 		ConnectionDetails{MQTTURL: "mqtt://localhost:1883", Token: "test_token", AgentID: "test-agent-id", Topics: trt2, ClientID: "test-agent-id", Zone: "test-zone"},

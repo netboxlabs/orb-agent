@@ -173,6 +173,8 @@ func GestGenerateTopicsFromTemplate(t *testing.T) {
 				Capabilities: "orgs/test-org/agents/test-client-123/capabilities",
 				Inbox:        "orgs/test-org/agents/test-client-123/inbox",
 				Outbox:       "orgs/test-org/agents/test-client-123/outbox",
+				Ingest:       "orgs/test-org/agents/test-client-123/ingest",
+				Telemetry:    "orgs/test-org/agents/test-client-123/telemetry",
 			},
 		},
 		{
@@ -184,6 +186,8 @@ func GestGenerateTopicsFromTemplate(t *testing.T) {
 				Capabilities: "orgs/prod-company/agents/test-agent-123/capabilities",
 				Inbox:        "orgs/prod-company/agents/test-agent-123/inbox",
 				Outbox:       "orgs/prod-company/agents/test-agent-123/outbox",
+				Ingest:       "orgs/prod-company/agents/test-agent-123/ingest",
+				Telemetry:    "orgs/prod-company/agents/test-agent-123/telemetry",
 			},
 		},
 	}

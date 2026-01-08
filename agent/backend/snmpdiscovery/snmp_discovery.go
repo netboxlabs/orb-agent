@@ -26,9 +26,11 @@ const (
 	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
+	statusTimeout       = 5
 	defaultExec         = "snmp-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8070"
+	maskedSecret        = "********"
 )
 
 type snmpDiscoveryBackend struct {
@@ -45,6 +47,7 @@ type snmpDiscoveryBackend struct {
 	diodeClientSecret    string
 	diodeAppNamePrefix   string
 	diodeOtelEndpoint    string
+	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 	diodeLogLevel        string
@@ -73,8 +76,9 @@ func Register() bool {
 func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	d.logger = logger.With(slog.String("backend", "snmp_discovery"))
+	d.logger = logger.With("backend", "snmp_discovery")
 	d.policyRepo = repo
+	d.diodeTargetFromOtel = false
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
@@ -115,12 +119,18 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.diodeLogLevel = logLevel
 	} else if debug, prs := config["debug"].(bool); prs && debug {
 		d.diodeLogLevel = "debug"
+	} else if logger.Enabled(context.Background(), slog.LevelDebug) {
+		d.diodeLogLevel = "debug"
 	}
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
 		d.logger.Info("snmp-discovery using OTLP metrics endpoint",
-			slog.String("endpoint", d.diodeOtelEndpoint))
+			"endpoint", d.diodeOtelEndpoint)
+	}
+	if d.diodeTarget == "" && d.diodeOtelEndpoint != "" {
+		d.diodeTarget = d.diodeOtelEndpoint
+		d.diodeTargetFromOtel = true
 	}
 
 	return nil
@@ -142,46 +152,57 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	var pvOptions []string
+	dOptions := []string{
+		"--diode-app-name-prefix", d.diodeAppNamePrefix,
+		"--host", d.apiHost,
+		"--port", d.apiPort,
+	}
 	if d.diodeDryRun {
-		pvOptions = []string{
+		dOptions = append([]string{
 			"--dry-run",
 			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
-		}
+		}, dOptions...)
 	} else {
-		pvOptions = []string{
-			"--host", d.apiHost,
-			"--port", d.apiPort,
+		opts := []string{
 			"--diode-target", d.diodeTarget,
-			"--diode-client-id", d.diodeClientID,
-			"--diode-client-secret", "********",
-			"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		}
+		if !d.diodeTargetFromOtel {
+			opts = append(opts,
+				"--diode-client-id", d.diodeClientID,
+				"--diode-client-secret", maskedSecret,
+			)
+		}
+		dOptions = append(opts, dOptions...)
 	}
 
 	if d.diodeLogLevel != "" {
-		pvOptions = append(pvOptions, "--log-level", d.diodeLogLevel)
+		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
 		d.logger.Info("snmp-discovery using log level",
-			slog.String("log_level", d.diodeLogLevel))
+			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {
-		pvOptions = append(pvOptions, "--otel-endpoint", d.diodeOtelEndpoint)
-		d.logger.Info("snmp-discovery using OTLP metrics endpoint",
-			slog.String("endpoint", d.diodeOtelEndpoint))
+		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
+		d.logger.Info("snmp-discovery using OTLP endpoint",
+			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("snmp-discovery startup", slog.Any("arguments", pvOptions))
+	d.logger.Info("snmp-discovery startup", "arguments", dOptions)
 
-	if !d.diodeDryRun && len(pvOptions) > 9 {
-		pvOptions[9] = d.diodeClientSecret
+	if !d.diodeDryRun {
+		// Swap the masked secret used for logging with the real value before execution
+		for i, arg := range dOptions {
+			if arg == maskedSecret {
+				dOptions[i] = d.diodeClientSecret
+				break
+			}
+		}
 	}
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, pvOptions...)
+	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd
@@ -218,19 +239,19 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	status := d.proc.Status()
 
 	if status.Error != nil {
-		d.logger.Error("snmp-discovery startup error", slog.Any("error", status.Error))
+		d.logger.Error("snmp-discovery startup error", "error", status.Error)
 		return status.Error
 	}
 
 	if status.Complete {
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", slog.Any("error", err))
+			d.logger.Error("proc.Stop error", "error", err)
 		}
 		return errors.New("snmp-discovery startup error, check log")
 	}
 
-	d.logger.Info("snmp-discovery process started", slog.Int("pid", status.PID))
+	d.logger.Info("snmp-discovery process started", "pid", status.PID)
 
 	var version string
 	var readinessErr error
@@ -238,27 +259,27 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		if status := d.proc.Status(); status.Complete {
 			err := d.proc.Stop()
 			if err != nil {
-				d.logger.Error("proc.Stop error", slog.Any("error", err))
+				d.logger.Error("proc.Stop error", "error", err)
 			}
 			return errors.New("snmp-discovery process ended unexpectedly, check log")
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
 			d.logger.Info("snmp-discovery readiness ok, got version ",
-				slog.String("network_discovery_version", version))
+				"snmp_discovery_version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
 		d.logger.Info("snmp-discovery is not ready, trying again with backoff",
-			slog.String("backoff backoffDuration", backoffDuration.String()))
+			"backoff backoffDuration", backoffDuration.String())
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessErr != nil {
-		d.logger.Error("snmp-discovery error on readiness", slog.Any("error", readinessErr))
+		d.logger.Error("snmp-discovery error on readiness", "error", readinessErr)
 		err := d.proc.Stop()
 		if err != nil {
-			d.logger.Error("proc.Stop error", slog.Any("error", err))
+			d.logger.Error("proc.Stop error", "error", err)
 		}
 		return readinessErr
 	}
@@ -267,15 +288,15 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 }
 
 func (d *snmpDiscoveryBackend) Stop(ctx context.Context) error {
-	d.logger.Info("routine call to stop snmp-discovery", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	d.logger.Info("routine call to stop snmp-discovery", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
 	err := d.proc.Stop()
 	finalStatus := <-d.statusChan
 	if err != nil {
-		d.logger.Error("snmp-discovery shutdown error", slog.Any("error", err))
+		d.logger.Error("snmp-discovery shutdown error", "error", err)
 	}
-	d.logger.Info("snmp-discovery process stopped", slog.Int("pid", finalStatus.PID),
-		slog.Int("exit_code", finalStatus.Exit))
+	d.logger.Info("snmp-discovery process stopped", "pid", finalStatus.PID,
+		"exit_code", finalStatus.Exit)
 	return nil
 }
 
@@ -283,7 +304,7 @@ func (d *snmpDiscoveryBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
-			d.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
+			d.logger.Error("failed to stop backend on restart procedure", "error", err)
 			return err
 		}
 	}
@@ -291,7 +312,7 @@ func (d *snmpDiscoveryBackend) FullReset(ctx context.Context) error {
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "snmp-discovery"))
 	// start it
 	if err := d.Start(backendCtx, cancelFunc); err != nil {
-		d.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
+		d.logger.Error("failed to start backend on restart procedure", "error", err)
 		return err
 	}
 	return nil
@@ -335,12 +356,12 @@ func (d *snmpDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := d.RemovePolicy(data); err != nil {
-			d.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
-				slog.String("policy_name", data.Name), slog.Any("error", err))
+			d.logger.Warn("policy failed to remove", "policy_id", data.ID,
+				"policy_name", data.Name, "error", err)
 		}
 	}
 
-	d.logger.Debug("snmp-discovery policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
+	d.logger.Debug("snmp-discovery policy apply", "policy_id", data.ID, "data", data.Data)
 
 	fullPolicy := map[string]any{
 		"policies": map[string]any{
@@ -350,7 +371,7 @@ func (d *snmpDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
-		d.logger.Warn("policy yaml marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		d.logger.Warn("policy yaml marshal failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -359,7 +380,7 @@ func (d *snmpDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	err = backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
-		d.logger.Warn("policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		d.logger.Warn("policy application failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -549,7 +570,7 @@ func readSnmpUnquotedValue(runes []rune, start int) (string, int, bool) {
 }
 
 func (d *snmpDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
-	d.logger.Debug("snmp-discovery policy remove", slog.String("policy_id", data.ID))
+	d.logger.Debug("snmp-discovery policy remove", "policy_id", data.ID)
 	var resp any
 	name := data.Name
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
@@ -563,4 +584,15 @@ func (d *snmpDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 		return err
 	}
 	return nil
+}
+
+func (d *snmpDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
+	var resp backend.StatusResponse
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	err := backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &resp, http.MethodGet,
+		http.NoBody, "application/json", statusTimeout, "detail")
+	if err != nil {
+		return nil, err
+	}
+	return resp.Policies, nil
 }

@@ -2,7 +2,19 @@ package policies
 
 import (
 	"database/sql/driver"
+	"time"
 )
+
+// RunData represents run information for a policy
+type RunData struct {
+	ID          string    `json:"id"`
+	PolicyID    string    `json:"policy_id"`
+	Status      string    `json:"status"`
+	Reason      string    `json:"reason,omitempty"`
+	EntityCount *int64    `json:"entity_count,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
 
 // PolicyData represents a policy
 type PolicyData struct {
@@ -16,6 +28,7 @@ type PolicyData struct {
 	State              PolicyState
 	BackendErr         string
 	PreviousPolicyData *PolicyData
+	Runs               []RunData
 }
 
 // GetDatasetIDs returns the dataset IDs

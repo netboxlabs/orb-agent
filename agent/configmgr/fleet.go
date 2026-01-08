@@ -6,11 +6,13 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/eclipse/paho.golang/autopaho"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
+	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -18,21 +20,49 @@ import (
 var _ Manager = (*fleetConfigManager)(nil)
 
 type fleetConfigManager struct {
-	logger           *slog.Logger
-	connection       *fleet.MQTTConnection
-	authTokenManager *fleet.AuthTokenManager
-	resetChan        chan struct{}
-	backendState     backend.StateRetriever
+	logger            *slog.Logger
+	connection        fleet.MQTTConnector
+	authTokenManager  *fleet.AuthTokenManager
+	resetChan         chan struct{}
+	reconnectChan     chan struct{}
+	backendState      backend.StateRetriever
+	policyManager     policymgr.PolicyManager
+	otlpBridge        *otlpbridge.BridgeServer
+	config            config.Config
+	backends          map[string]backend.Backend
+	labels            map[string]string
+	configYaml        string
+	connectionDetails fleet.ConnectionDetails
+	monitorCtx        context.Context
+	monitorCancel     context.CancelFunc
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *fleetConfigManager {
 	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
 	return &fleetConfigManager{
 		logger:           logger,
-		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan, backendState),
+		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan, reconnectChan, backendState),
 		authTokenManager: fleet.NewAuthTokenManager(logger),
 		resetChan:        resetChan,
+		reconnectChan:    reconnectChan,
 		backendState:     backendState,
+		policyManager:    pMgr,
+	}
+}
+
+// newFleetConfigManagerWithConnection creates a fleetConfigManager with a custom connection (for testing)
+func newFleetConfigManagerWithConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever, conn fleet.MQTTConnector) *fleetConfigManager {
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	return &fleetConfigManager{
+		logger:           logger,
+		connection:       conn, // Use provided connection instead of creating new one
+		authTokenManager: fleet.NewAuthTokenManager(logger),
+		resetChan:        resetChan,
+		reconnectChan:    reconnectChan,
+		backendState:     backendState,
+		policyManager:    pMgr,
 	}
 }
 
@@ -86,7 +116,9 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		"heartbeat_topic", topics.Heartbeat,
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
-		"outbox_topic", topics.Outbox)
+		"outbox_topic", topics.Outbox,
+		"otlp_topic", topics.Ingest,
+		"telemetry_topic", topics.Telemetry)
 
 	connectionDetails := fleet.ConnectionDetails{
 		MQTTURL:  jwtClaims.MqttURL,
@@ -100,6 +132,33 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 	if err != nil {
 		return fmt.Errorf("failed to convert config to safe string: %w", err)
 	}
+
+	// Store connection state for reconnection
+	fleetManager.config = cfg
+	fleetManager.backends = backends
+	fleetManager.labels = cfg.OrbAgent.Labels
+	fleetManager.configYaml = string(configYaml)
+	fleetManager.connectionDetails = connectionDetails
+
+	// Start OTLP bridge server early, before MQTT connection
+	// This ensures port binding errors are detected immediately and propagate to fail the agent startup
+	grpcPort := 4317
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+	}
+	bridgeConfig := otlpbridge.BridgeConfig{
+		ListenAddr: fmt.Sprintf(":%d", grpcPort),
+		Encoding:   "json",
+	}
+	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+	if err != nil {
+		return fmt.Errorf("failed to create OTLP bridge: %w", err)
+	}
+	if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
+	}
+	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
+
 	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 	if err != nil {
 		return err
@@ -127,6 +186,87 @@ func (fleetManager *fleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
+	// Register MQTTOnReadyHook to bind publisher and topics to the OTLP bridge
+	// The bridge server is already started earlier in Start(), so we only need to bind MQTT here
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
+			return
+		}
+
+		// Create publisher adapter and bind to bridge
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
+	})
+
+	// Start goroutine to handle reconnect requests (JWT refresh)
+	go func() {
+		for range fleetManager.reconnectChan {
+			fleetManager.logger.Info("JWT refresh and reconnection requested")
+			if err := fleetManager.refreshAndReconnect(ctx, timeout); err != nil {
+				fleetManager.logger.Error("failed to refresh and reconnect", "error", err)
+			}
+		}
+	}()
+
+	// Start background goroutine to monitor token expiry and trigger proactive reconnection
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+	go fleetManager.monitorTokenExpiry()
+
+	return nil
+}
+
+// refreshAndReconnect refreshes the JWT token and reconnects to MQTT
+func (fleetManager *fleetConfigManager) refreshAndReconnect(ctx context.Context, timeout time.Duration) error {
+	// Refresh JWT token
+	token, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	// Parse new JWT claims
+	jwtClaims, err := fleet.ParseJWTClaims(token.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
+	// Regenerate topics
+	topics, err := fleet.GenerateTopicsFromTemplate(jwtClaims)
+	if err != nil {
+		return fmt.Errorf("failed to generate topics: %w", err)
+	}
+
+	fleetManager.logger.Info("refreshed JWT and generated new topics",
+		"heartbeat_topic", topics.Heartbeat,
+		"capabilities_topic", topics.Capabilities,
+		"inbox_topic", topics.Inbox,
+		"outbox_topic", topics.Outbox)
+
+	// Update connection details
+	newConnectionDetails := fleet.ConnectionDetails{
+		MQTTURL:  jwtClaims.MqttURL,
+		Token:    token.AccessToken,
+		AgentID:  jwtClaims.AgentID,
+		Topics:   *topics,
+		ClientID: fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
+		Zone:     jwtClaims.Zone,
+	}
+
+	// Store updated connection details
+	fleetManager.connectionDetails = newConnectionDetails
+
+	// Reconnect with new token
+	err = fleetManager.connection.Reconnect(ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)
+	if err != nil {
+		return fmt.Errorf("failed to reconnect: %w", err)
+	}
+
+	fleetManager.logger.Info("successfully refreshed JWT and reconnected")
 	return nil
 }
 
@@ -145,4 +285,80 @@ func (fleetManager *fleetConfigManager) configToSafeString(cfg config.Config) (s
 func (fleetManager *fleetConfigManager) GetContext(ctx context.Context) context.Context {
 	// Empty implementation for now - just return the context as-is
 	return ctx
+}
+
+// monitorTokenExpiry periodically checks token expiry and triggers reconnection before token expires
+func (fleetManager *fleetConfigManager) monitorTokenExpiry() {
+	// Check interval: default 30 seconds, configurable via config
+	checkInterval := 30 * time.Second
+	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval > 0 {
+		checkInterval = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval) * time.Second
+	}
+
+	// Reconnect buffer: default 2 minutes before expiry, configurable via config
+	reconnectBuffer := 2 * time.Minute
+	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer > 0 {
+		reconnectBuffer = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer) * time.Second
+	}
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	fleetManager.logger.Info("starting token expiry monitor",
+		"check_interval", checkInterval,
+		"reconnect_buffer", reconnectBuffer)
+
+	for {
+		select {
+		case <-fleetManager.monitorCtx.Done():
+			fleetManager.logger.Info("token expiry monitor stopped")
+			return
+		case <-ticker.C:
+			// Check if token is expired or expiring soon
+			if fleetManager.authTokenManager.IsTokenExpired() {
+				fleetManager.logger.Warn("JWT token has expired, triggering reconnection",
+					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime())
+				select {
+				case fleetManager.reconnectChan <- struct{}{}:
+					fleetManager.logger.Debug("reconnection signal sent due to expired token")
+				default:
+					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
+				}
+			} else if fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
+				fleetManager.logger.Warn("JWT token expiring soon, triggering proactive reconnection",
+					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
+					"reconnect_buffer", reconnectBuffer)
+				select {
+				case fleetManager.reconnectChan <- struct{}{}:
+					fleetManager.logger.Debug("reconnection signal sent due to imminent token expiry")
+				default:
+					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
+				}
+			} else {
+				expiryTime := fleetManager.authTokenManager.GetTokenExpiryTime()
+				if !expiryTime.IsZero() {
+					timeUntilExpiry := time.Until(expiryTime)
+					fleetManager.logger.Debug("token expiry check passed",
+						"expiry_time", expiryTime,
+						"time_until_expiry", timeUntilExpiry)
+				}
+			}
+		}
+	}
+}
+
+// Stop gracefully shuts down the OTLP bridge and token expiry monitor.
+func (fleetManager *fleetConfigManager) Stop(ctx context.Context) error {
+	// Stop token expiry monitor
+	if fleetManager.monitorCancel != nil {
+		fleetManager.monitorCancel()
+	}
+
+	if fleetManager.otlpBridge != nil {
+		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
+			fleetManager.logger.Error("error while stopping OTLP bridge", slog.Any("error", err))
+			return err
+		}
+	}
+	return nil
 }

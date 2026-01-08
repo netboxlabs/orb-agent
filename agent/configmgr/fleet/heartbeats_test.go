@@ -142,7 +142,7 @@ func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil)
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, mockPublish.Publish, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert: ensure one publish happened with a valid heartbeat payload
 	calls := mockPublish.Calls
@@ -172,7 +172,7 @@ func TestHeartbeater_SendSingleHeartbeat_PublishError(t *testing.T) {
 	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(publishError)
 
 	// Act - should not panic despite publish error
-	hb.sendSingleHeartbeat(ctx, testTopic, mockPublish.Publish, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, mockPublish.Publish, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	mockPublish.AssertExpectations(t)
@@ -194,7 +194,7 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -225,7 +225,7 @@ func TestHeartbeater_SendHeartbeats_InitialHeartbeat(t *testing.T) {
 	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Once()
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish, nil)
 
 	// Give some time for initial heartbeat
 	time.Sleep(10 * time.Millisecond)
@@ -254,7 +254,7 @@ func TestHeartbeater_SendHeartbeats_PeriodicHeartbeats(t *testing.T) {
 	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Times(4)
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish, nil)
 
 	// Wait for some periodic heartbeats (ticker is 50ms in test)
 	time.Sleep(120 * time.Millisecond)
@@ -291,7 +291,7 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 
 	// Act
 	go func() {
-		hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", publishFunc)
+		hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", publishFunc, nil)
 		done <- true
 	}()
 
@@ -328,7 +328,7 @@ func TestHeartbeater_SendHeartbeats_PublishErrors(t *testing.T) {
 	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(publishError).Times(4)
 
 	// Act
-	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish, nil)
 
 	// Wait for some heartbeats with errors
 	time.Sleep(120 * time.Millisecond)
@@ -357,7 +357,7 @@ func TestHeartbeater_SendHeartbeats_ConcurrentCancellation(t *testing.T) {
 	mockPublish.On("Publish", ctx, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Maybe()
 
 	// Act - start heartbeats
-	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish)
+	go hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", mockPublish.Publish, nil)
 
 	// Cancel immediately in a separate goroutine
 	go func() {
@@ -402,7 +402,7 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 
 	// Act
 	go func() {
-		hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", publishFunc)
+		hb.sendHeartbeats(ctx, cancel, testTopic, "test-agent-id", publishFunc, nil)
 		done <- true
 	}()
 
@@ -557,7 +557,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithBackendState(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -611,7 +611,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithoutBackendState(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -641,7 +641,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithEmptyBackendState(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -696,7 +696,7 @@ func TestHeartbeater_SendSingleHeartbeat_BackendStateAllStatuses(t *testing.T) {
 			testTime := time.Now()
 
 			// Act
-			hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+			hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 			// Assert
 			require.NotNil(t, capturedPayload)
@@ -897,7 +897,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithPolicyState(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -959,7 +959,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithPolicyStateError(t *testing.T) {
 	testTime := time.Now()
 
 	// Act - should not panic despite policy state error
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -994,7 +994,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithEmptyPolicyState(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -1065,7 +1065,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithEmptyGroupState(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -1104,7 +1104,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithGroupState(t *testing.T) {
 	testTime := time.Now()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -1188,7 +1188,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithCompleteState(t *testing.T) {
 	ctx := context.Background()
 
 	// Act
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 
 	// Assert
 	require.NotNil(t, capturedPayload)
@@ -1248,7 +1248,7 @@ func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoval(t *testing.T) {
 	testTime := time.Now()
 
 	// Send initial heartbeat with 2 groups
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	require.NotNil(t, capturedPayload)
 
 	var heartbeat1 messages.Heartbeat
@@ -1261,7 +1261,7 @@ func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoval(t *testing.T) {
 
 	// Send second heartbeat after removal
 	capturedPayload = nil
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	require.NotNil(t, capturedPayload)
 
 	var heartbeat2 messages.Heartbeat
@@ -1302,7 +1302,7 @@ func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoveAll(t *testing.T) 
 	testTime := time.Now()
 
 	// Send initial heartbeat with 2 groups
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	require.NotNil(t, capturedPayload)
 
 	var heartbeat1 messages.Heartbeat
@@ -1315,7 +1315,7 @@ func TestHeartbeater_SendSingleHeartbeat_GroupStateAfterRemoveAll(t *testing.T) 
 
 	// Send second heartbeat after removal
 	capturedPayload = nil
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	require.NotNil(t, capturedPayload)
 
 	var heartbeat2 messages.Heartbeat
@@ -1345,7 +1345,7 @@ func TestHeartbeater_SendSingleHeartbeat_DynamicGroupUpdates(t *testing.T) {
 	testTime := time.Now()
 
 	// Heartbeat 1: No groups
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	var hb1 messages.Heartbeat
 	require.NoError(t, json.Unmarshal(capturedPayload, &hb1))
 	assert.Empty(t, hb1.GroupState)
@@ -1354,7 +1354,7 @@ func TestHeartbeater_SendSingleHeartbeat_DynamicGroupUpdates(t *testing.T) {
 	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Group 1"})
 
 	// Heartbeat 2: 1 group
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	var hb2 messages.Heartbeat
 	require.NoError(t, json.Unmarshal(capturedPayload, &hb2))
 	assert.Len(t, hb2.GroupState, 1)
@@ -1363,7 +1363,7 @@ func TestHeartbeater_SendSingleHeartbeat_DynamicGroupUpdates(t *testing.T) {
 	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Group 2"})
 
 	// Heartbeat 3: 2 groups
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	var hb3 messages.Heartbeat
 	require.NoError(t, json.Unmarshal(capturedPayload, &hb3))
 	assert.Len(t, hb3.GroupState, 2)
@@ -1372,7 +1372,7 @@ func TestHeartbeater_SendSingleHeartbeat_DynamicGroupUpdates(t *testing.T) {
 	gm.Remove("group-1")
 
 	// Heartbeat 4: 1 group
-	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online)
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
 	var hb4 messages.Heartbeat
 	require.NoError(t, json.Unmarshal(capturedPayload, &hb4))
 	assert.Len(t, hb4.GroupState, 1)
@@ -1405,4 +1405,255 @@ func TestNewHeartbeater_WithGroupManager(t *testing.T) {
 
 	// Clean up ticker
 	hb.hbTicker.Stop()
+}
+
+func TestHeartbeater_GetPolicyState_WithRuns(t *testing.T) {
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:         "policy-1",
+			Name:       "Test Policy 1",
+			Backend:    "pktvisor",
+			Version:    1,
+			State:      policies.Running,
+			BackendErr: "",
+			Datasets:   map[string]bool{"dataset-1": true},
+			Runs: []policies.RunData{
+				{
+					ID:        "run-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
+				},
+				{
+					ID:        "run-2",
+					Status:    "running",
+					CreatedAt: testTime.Add(10 * time.Minute),
+					UpdatedAt: testTime.Add(12 * time.Minute),
+				},
+			},
+		},
+		{
+			ID:         "policy-2",
+			Name:       "Test Policy 2",
+			Backend:    "snmp_discovery",
+			Version:    2,
+			State:      policies.Running,
+			BackendErr: "",
+			Datasets:   map[string]bool{"dataset-2": true},
+			Runs:       []policies.RunData{}, // Empty runs
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	// Act
+	policyState := hb.getPolicyState()
+
+	// Assert
+	assert.Len(t, policyState, 2)
+
+	// Verify policy-1 has runs
+	policy1, ok := policyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy1.Runs, 2)
+	assert.Equal(t, "run-1", policy1.Runs[0].ID)
+	assert.Equal(t, "completed", policy1.Runs[0].Status)
+	assert.Equal(t, testTime, policy1.Runs[0].CreatedAt)
+	assert.Equal(t, "run-2", policy1.Runs[1].ID)
+	assert.Equal(t, "running", policy1.Runs[1].Status)
+
+	// Verify policy-2 has no runs (nil or empty)
+	policy2, ok := policyState["policy-2"]
+	assert.True(t, ok)
+	assert.Nil(t, policy2.Runs)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithRuns(t *testing.T) {
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:       "policy-1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			Version:  1,
+			State:    policies.Running,
+			Datasets: map[string]bool{"dataset-1": true},
+			Runs: []policies.RunData{
+				{
+					ID:        "run-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state includes runs
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 1)
+
+	policy, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy.Runs, 1)
+	assert.Equal(t, "run-1", policy.Runs[0].ID)
+	assert.Equal(t, "completed", policy.Runs[0].Status)
+	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithEntityCount(t *testing.T) {
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	entityCount := int64(100)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:       "policy-1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			Version:  1,
+			State:    policies.Running,
+			Datasets: map[string]bool{"dataset-1": true},
+			Runs: []policies.RunData{
+				{
+					ID:          "run-1",
+					Status:      "completed",
+					EntityCount: &entityCount,
+					CreatedAt:   testTime,
+					UpdatedAt:   testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state includes runs with entity_count
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 1)
+
+	policy, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy.Runs, 1)
+	assert.Equal(t, "run-1", policy.Runs[0].ID)
+	assert.Equal(t, "completed", policy.Runs[0].Status)
+	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
+	require.NotNil(t, policy.Runs[0].EntityCount, "Expected entity_count to be included in heartbeat")
+	assert.Equal(t, int64(100), *policy.Runs[0].EntityCount)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_WithoutEntityCount(t *testing.T) {
+	// Test that entity_count is optional in heartbeats
+	// Arrange
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:       "policy-1",
+			Name:     "Test Policy",
+			Backend:  "pktvisor",
+			Version:  1,
+			State:    policies.Running,
+			Datasets: map[string]bool{"dataset-1": true},
+			Runs: []policies.RunData{
+				{
+					ID:          "run-1",
+					Status:      "completed",
+					EntityCount: nil, // Explicitly nil
+					CreatedAt:   testTime,
+					UpdatedAt:   testTime.Add(5 * time.Minute),
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+	defer hb.hbTicker.Stop()
+
+	var capturedPayload []byte
+	testTopic := "test/heartbeat"
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	ctx := context.Background()
+
+	// Act
+	hb.sendSingleHeartbeat(ctx, testTopic, publishFunc, "test-agent-id", testTime, messages.Online, nil)
+
+	// Assert
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	err := json.Unmarshal(capturedPayload, &heartbeat)
+	require.NoError(t, err)
+
+	// Verify policy state includes runs without entity_count
+	assert.NotNil(t, heartbeat.PolicyState)
+	assert.Len(t, heartbeat.PolicyState, 1)
+
+	policy, ok := heartbeat.PolicyState["policy-1"]
+	assert.True(t, ok)
+	assert.Len(t, policy.Runs, 1)
+	assert.Equal(t, "run-1", policy.Runs[0].ID)
+	assert.Equal(t, "completed", policy.Runs[0].Status)
+	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
+	assert.Nil(t, policy.Runs[0].EntityCount, "Expected entity_count to be nil when not provided")
+
+	mockPMgr.AssertExpectations(t)
 }

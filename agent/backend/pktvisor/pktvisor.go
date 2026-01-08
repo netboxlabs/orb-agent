@@ -109,7 +109,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	_, err := exec.LookPath(p.binary)
 	if err != nil {
-		p.logger.Error("pktvisor startup error: binary not found", slog.Any("error", err))
+		p.logger.Error("pktvisor startup error: binary not found", "error", err)
 		return err
 	}
 
@@ -135,7 +135,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		pvOptions = append(pvOptions, "--cp-custom", ctx.Value("agent_id").(string))
 	}
 
-	p.logger.Info("pktvisor startup", slog.Any("arguments", pvOptions))
+	p.logger.Info("pktvisor startup", "arguments", pvOptions)
 
 	p.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
@@ -177,26 +177,26 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	status := p.proc.Status()
 
 	if status.Error != nil {
-		p.logger.Error("pktvisor startup error", slog.Any("error", status.Error))
+		p.logger.Error("pktvisor startup error", "error", status.Error)
 		return status.Error
 	}
 
 	if status.Complete {
 		err = p.proc.Stop()
 		if err != nil {
-			p.logger.Error("proc.Stop error", slog.Any("error", err))
+			p.logger.Error("proc.Stop error", "error", err)
 		}
 		return errors.New("pktvisor startup error, check log")
 	}
 
-	p.logger.Info("pktvisor process started", slog.Int("pid", status.PID))
+	p.logger.Info("pktvisor process started", "pid", status.PID)
 
 	var readinessError error
 	for backoff := range readinessBackoff {
 		if status := p.proc.Status(); status.Complete {
 			err := p.proc.Stop()
 			if err != nil {
-				p.logger.Error("proc.Stop error", slog.Any("error", err))
+				p.logger.Error("proc.Stop error", "error", err)
 			}
 			return errors.New("pktvisor process ended unexpectedly, check log")
 		}
@@ -206,20 +206,20 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 			http.NoBody, "application/json", readinessTimeout, "error")
 		if readinessError == nil {
 			p.logger.Info("pktvisor readiness ok, got version ",
-				slog.String("pktvisor_version", appMetrics.App.Version))
+				"pktvisor_version", appMetrics.App.Version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
 		p.logger.Info("pktvisor is not ready, trying again with backoff",
-			slog.String("backoff backoffDuration", backoffDuration.String()))
+			"backoff backoffDuration", backoffDuration.String())
 		time.Sleep(backoffDuration)
 	}
 
 	if readinessError != nil {
-		p.logger.Error("pktvisor error on readiness", slog.Any("error", readinessError))
+		p.logger.Error("pktvisor error on readiness", "error", readinessError)
 		err = p.proc.Stop()
 		if err != nil {
-			p.logger.Error("proc.Stop error", slog.Any("error", err))
+			p.logger.Error("proc.Stop error", "error", err)
 		}
 		return readinessError
 	}
@@ -312,16 +312,16 @@ func parsePktvisorEntity(line string) (entity, name, rest string, ok bool) {
 }
 
 func (p *pktvisorBackend) Stop(ctx context.Context) error {
-	p.logger.Info("routine call to stop pktvisor", slog.Any("routine", ctx.Value(config.ContextKey("routine"))))
+	p.logger.Info("routine call to stop pktvisor", "routine", ctx.Value(config.ContextKey("routine")))
 	defer p.cancelFunc()
 	err := p.proc.Stop()
 	finalStatus := <-p.statusChan
 	if err != nil {
-		p.logger.Error("pktvisor shutdown error", slog.Any("error", err))
+		p.logger.Error("pktvisor shutdown error", "error", err)
 	}
 
-	p.logger.Info("pktvisor process stopped", slog.Int("pid", finalStatus.PID),
-		slog.Int("exit_code", finalStatus.Exit))
+	p.logger.Info("pktvisor process stopped", "pid", finalStatus.PID,
+		"exit_code", finalStatus.Exit)
 	return nil
 }
 
@@ -329,7 +329,7 @@ func (p *pktvisorBackend) Stop(ctx context.Context) error {
 func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
-	p.logger = logger.With(slog.String("backend", "pktvisor"))
+	p.logger = logger.With("backend", "pktvisor")
 	p.policyRepo = repo
 
 	p.binary = defaultBinary
@@ -377,15 +377,15 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	yamlData, err := yaml.Marshal(fullConfig)
 	if err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", slog.String("file", tmpFile.Name()),
-				slog.Any("error", rerr))
+			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
+				"error", rerr)
 		}
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", slog.String("file", tmpFile.Name()),
-				slog.Any("error", rerr))
+			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
+				"error", rerr)
 		}
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
@@ -403,8 +403,8 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 			return fmt.Errorf("failed to parse otlp receiver port: %w", err)
 		}
 		p.otelReceiverPort = port
-		p.logger.Info("configured otlp receiver host", slog.String("host", p.otelReceiverHost),
-			slog.Int("port", p.otelReceiverPort))
+		p.logger.Info("configured otlp receiver host", "host", p.otelReceiverHost,
+			"port", p.otelReceiverPort)
 	}
 
 	return nil
@@ -427,7 +427,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(p.proc); state == backend.Running {
 		if err := p.Stop(ctx); err != nil {
-			p.logger.Error("failed to stop backend on restart procedure", slog.Any("error", err))
+			p.logger.Error("failed to stop backend on restart procedure", "error", err)
 			return err
 		}
 	}
@@ -437,7 +437,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 
 	// start it
 	if err := p.Start(backendCtx, cancelFunc); err != nil {
-		p.logger.Error("failed to start backend on restart procedure", slog.Any("error", err))
+		p.logger.Error("failed to start backend on restart procedure", "error", err)
 		return err
 	}
 
@@ -456,12 +456,12 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := p.RemovePolicy(data); err != nil {
-			p.logger.Warn("policy failed to remove", slog.String("policy_id", data.ID),
-				slog.String("policy_name", data.Name), slog.Any("error", err))
+			p.logger.Warn("policy failed to remove", "policy_id", data.ID,
+				"policy_name", data.Name, "error", err)
 		}
 	}
 
-	p.logger.Debug("pktvisor policy apply", slog.String("policy_id", data.ID), slog.Any("data", data.Data))
+	p.logger.Debug("pktvisor policy apply", "policy_id", data.ID, "data", data.Data)
 
 	fullPolicy := map[string]any{
 		"version": "1.0",
@@ -474,7 +474,7 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 
 	policyYaml, err := yaml.Marshal(fullPolicy)
 	if err != nil {
-		p.logger.Warn("yaml policy marshal failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		p.logger.Warn("yaml policy marshal failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -483,7 +483,7 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "error")
 	if err != nil {
-		p.logger.Warn("yaml policy application failure", slog.String("policy_id", data.ID), slog.String("policy_name", data.Name))
+		p.logger.Warn("yaml policy application failure", "policy_id", data.ID, "policy_name", data.Name)
 		return err
 	}
 
@@ -491,7 +491,7 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 }
 
 func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
-	p.logger.Debug("pktvisor policy remove", slog.String("policy_id", data.ID))
+	p.logger.Debug("pktvisor policy remove", "policy_id", data.ID)
 	var resp any
 	var name string
 	// Since we use Name for removing policies not IDs, if there is a change, we need to remove the previous name of the policy
