@@ -191,6 +191,17 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
+	// Bind fleet secrets manager to fleet config manager if both are fleet-based
+	// This needs to happen before SolveConfigSecrets so secrets can be resolved
+	if a.config.OrbAgent.ConfigManager.Active == "fleet" && a.config.OrbAgent.SecretsManager.Active == "fleet" {
+		if fleetCM, ok := a.configManager.(*configmgr.FleetConfigManager); ok {
+			if err := fleetCM.BindSecretsManager(a.secretsManager); err != nil {
+				a.logger.Error("error binding fleet secrets manager", "error", err)
+				return err
+			}
+		}
+	}
+
 	var err error
 	if a.config.OrbAgent.Backends,
 		a.config.OrbAgent.ConfigManager,

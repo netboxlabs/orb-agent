@@ -69,9 +69,15 @@ type VaultManager struct {
 	Schedule  *string        `yaml:"schedule,omitempty"`
 }
 
-// SecretsSources represents the configuration for manager sources, including vault.
+// FleetSecretsManager represents the configuration for the Fleet secrets manager
+type FleetSecretsManager struct {
+	Timeout *int `yaml:"timeout,omitempty"` // Request timeout in seconds
+}
+
+// SecretsSources represents the configuration for manager sources, including vault and fleet.
 type SecretsSources struct {
-	Vault VaultManager `yaml:"vault"`
+	Vault VaultManager        `yaml:"vault"`
+	Fleet FleetSecretsManager `yaml:"fleet"`
 }
 
 // ManagerSecrets represents the configuration for the Secrets Manager

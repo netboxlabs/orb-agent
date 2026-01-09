@@ -13,35 +13,44 @@ func fillTopicTemplate(template string, claims *JWTClaims) string {
 }
 
 const (
-	heartbeatTemplate    = "orgs/{org_id}/agents/{agent_id}/heartbeats"
-	capabilitiesTemplate = "orgs/{org_id}/agents/{agent_id}/capabilities"
-	inboxTemplate        = "orgs/{org_id}/agents/{agent_id}/inbox"
-	outboxTemplate       = "orgs/{org_id}/agents/{agent_id}/outbox"
-	ingestTemplate       = "orgs/{org_id}/agents/{agent_id}/ingest"
-	telemetryTemplate    = "orgs/{org_id}/agents/{agent_id}/telemetry"
+	heartbeatTemplate       = "orgs/{org_id}/agents/{agent_id}/heartbeats"
+	capabilitiesTemplate    = "orgs/{org_id}/agents/{agent_id}/capabilities"
+	inboxTemplate           = "orgs/{org_id}/agents/{agent_id}/inbox"
+	outboxTemplate          = "orgs/{org_id}/agents/{agent_id}/outbox"
+	ingestTemplate          = "orgs/{org_id}/agents/{agent_id}/ingest"
+	telemetryTemplate       = "orgs/{org_id}/agents/{agent_id}/telemetry"
+	secretsRequestTemplate  = "orgs/{org_id}/agents/{agent_id}/secrets/request"
+	secretsResponseTemplate = "orgs/{org_id}/agents/{agent_id}/secrets/response"
+	secretsUpdatedTemplate  = "orgs/{org_id}/agents/{agent_id}/secrets/updated"
 
 	groupsTemplate = "orgs/{org_id}/groups/{group_id}"
 )
 
 // TokenResponseTopics are the topics extracted from the JWT claims
 type TokenResponseTopics struct {
-	Heartbeat    string `json:"heartbeat"`
-	Capabilities string `json:"capabilities"`
-	Inbox        string `json:"inbox"`
-	Outbox       string `json:"outbox"`
-	Ingest       string `json:"ingest"`
-	Telemetry    string `json:"telemetry"`
+	Heartbeat       string `json:"heartbeat"`
+	Capabilities    string `json:"capabilities"`
+	Inbox           string `json:"inbox"`
+	Outbox          string `json:"outbox"`
+	Ingest          string `json:"ingest"`
+	Telemetry       string `json:"telemetry"`
+	SecretsRequest  string `json:"secrets_request"`
+	SecretsResponse string `json:"secrets_response"`
+	SecretsUpdated  string `json:"secrets_updated"`
 }
 
 // GenerateTopicsFromTemplate creates actual topic names from templates using JWT claims and config agent_id
 func GenerateTopicsFromTemplate(jwtClaims *JWTClaims) (*TokenResponseTopics, error) {
 	return &TokenResponseTopics{
-		Heartbeat:    fillTopicTemplate(heartbeatTemplate, jwtClaims),
-		Capabilities: fillTopicTemplate(capabilitiesTemplate, jwtClaims),
-		Inbox:        fillTopicTemplate(inboxTemplate, jwtClaims),
-		Outbox:       fillTopicTemplate(outboxTemplate, jwtClaims),
-		Ingest:       fillTopicTemplate(ingestTemplate, jwtClaims),
-		Telemetry:    fillTopicTemplate(telemetryTemplate, jwtClaims),
+		Heartbeat:       fillTopicTemplate(heartbeatTemplate, jwtClaims),
+		Capabilities:    fillTopicTemplate(capabilitiesTemplate, jwtClaims),
+		Inbox:           fillTopicTemplate(inboxTemplate, jwtClaims),
+		Outbox:          fillTopicTemplate(outboxTemplate, jwtClaims),
+		Ingest:          fillTopicTemplate(ingestTemplate, jwtClaims),
+		Telemetry:       fillTopicTemplate(telemetryTemplate, jwtClaims),
+		SecretsRequest:  fillTopicTemplate(secretsRequestTemplate, jwtClaims),
+		SecretsResponse: fillTopicTemplate(secretsResponseTemplate, jwtClaims),
+		SecretsUpdated:  fillTopicTemplate(secretsUpdatedTemplate, jwtClaims),
 	}, nil
 }
 

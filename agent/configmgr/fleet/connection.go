@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -15,6 +16,9 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
+// TopicMessageHandler handles messages for a specific topic
+type TopicMessageHandler func(topic string, payload []byte) error
+
 // MQTTConnection manages the MQTT connection
 type MQTTConnection struct {
 	logger                   *slog.Logger
@@ -23,11 +27,13 @@ type MQTTConnection struct {
 	messaging                *Messaging
 	resetChan                chan struct{}
 	onReadyHooks             []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	topicHandlers            map[string]TopicMessageHandler
 	connectionTopics         TokenResponseTopics
 	reconnectChan            chan struct{}
 	capabilitiesFailCount    int
 	groupMembershipFailCount int
 	heartbeatFailCount       int
+	mu                       sync.Mutex
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -40,6 +46,7 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		messaging:         NewMessaging(logger, pMgr, resetChan, &groupManager),
 		resetChan:         resetChan,
 		onReadyHooks:      make([]func(cm *autopaho.ConnectionManager, topics TokenResponseTopics), 0),
+		topicHandlers:     make(map[string]TopicMessageHandler),
 		reconnectChan:     reconnectChan,
 	}
 }
@@ -47,6 +54,13 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 // AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
 func (connection *MQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
 	connection.onReadyHooks = append(connection.onReadyHooks, fn)
+}
+
+// RegisterTopicHandler registers a handler for a specific topic
+func (connection *MQTTConnection) RegisterTopicHandler(topic string, handler TopicMessageHandler) {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	connection.topicHandlers[topic] = handler
 }
 
 // TopicActions are the actions to take on a topic
@@ -72,6 +86,7 @@ type MQTTConnector interface {
 	Disconnect(ctx context.Context, heartbeatTopic string) error
 	Reconnect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error
 	AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics))
+	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 }
 
 // Connect connects to the MQTT broker
@@ -211,6 +226,18 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 				func(pr paho.PublishReceived) (bool, error) {
 					// Log any published messages to subscribed topics
 					connection.logger.Info("received MQTT message", "topic", pr.Packet.Topic)
+
+					// Check if there's a topic-specific handler
+					connection.mu.Lock()
+					handler, hasHandler := connection.topicHandlers[pr.Packet.Topic]
+					connection.mu.Unlock()
+
+					if hasHandler {
+						if err := handler(pr.Packet.Topic, pr.Packet.Payload); err != nil {
+							connection.logger.Error("topic handler failed", "topic", pr.Packet.Topic, "error", err)
+						}
+						return true, nil
+					}
 
 					orgID := strings.Split(pr.Packet.Topic, "/")[1]
 
