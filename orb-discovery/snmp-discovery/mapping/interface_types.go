@@ -149,28 +149,71 @@ func isEthernetInterfaceType(ifType string) bool {
 }
 
 func getEthernetInterfaceType(speed *int64) string {
-	if *speed <= 100000 {
+	speedMbps := *speed / 1000
+
+	// 10 Mbps Ethernet
+	if speedMbps <= 10 {
+		return "10base-t"
+	}
+	// 100 Mbps FastEthernet
+	if speedMbps <= 100 {
 		return "100base-tx"
 	}
-	if *speed <= 1000000 {
+	// 1 Gbps GigabitEthernet
+	if speedMbps <= 1000 {
 		return "1000base-t"
 	}
-	if *speed <= 10000000 {
+	// 2.5 Gbps Ethernet
+	if speedMbps <= 2500 {
+		return "2.5gbase-t"
+	}
+	// 5 Gbps Ethernet
+	if speedMbps <= 5000 {
+		return "5gbase-t"
+	}
+	// 10 Gbps Ethernet
+	if speedMbps <= 10000 {
 		return "10gbase-t"
 	}
-	if *speed <= 25000000 {
+	// 25 Gbps Ethernet
+	if speedMbps <= 25000 {
 		return "25gbase-t"
 	}
-	return "100gbase-x"
+	// 40 Gbps Ethernet
+	if speedMbps <= 40000 {
+		return "40gbase-x-qsfpp"
+	}
+	// 50 Gbps Ethernet
+	if speedMbps <= 50000 {
+		return "50gbase-x-sfp56"
+	}
+	// 100 Gbps Ethernet
+	if speedMbps <= 100000 {
+		return "100gbase-x-qsfp28"
+	}
+	// 200 Gbps Ethernet
+	if speedMbps <= 200000 {
+		return "200gbase-x-qsfp56"
+	}
+	// 400 Gbps Ethernet
+	if speedMbps <= 400000 {
+		return "400gbase-x-qsfpdd"
+	}
+	// 800 Gbps Ethernet
+	if speedMbps <= 800000 {
+		return "800gbase-x-qsfpdd"
+	}
+	return ""
 }
 
 // GetNetboxType maps an SNMP ifType integer to a NetBox interface type
 func GetNetboxType(ifType, defaultInterfaceType string, speed *int64) string {
 	if isEthernetInterfaceType(ifType) {
 		if speed != nil && *speed > 0 {
-			return getEthernetInterfaceType(speed)
+			if eType := getEthernetInterfaceType(speed); eType != "" {
+				return eType
+			}
 		}
-		return "other"
 	}
 	if netboxType, found := InterfaceTypeMap[ifType]; found {
 		return netboxType

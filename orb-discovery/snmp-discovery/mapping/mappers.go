@@ -293,11 +293,37 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					}
 					bitsPerSecond := int64(speed)
 					kiloBitsPerSecond := bitsPerSecond / 1000
-					// Check if speed is within valid range (1 to 2147483647 inclusive)
+					// Check if speed is within valid range (0 to 2147483647 inclusive)
 					if kiloBitsPerSecond < minInterfaceSpeed || kiloBitsPerSecond > maxInterfaceSpeed {
-						m.logger.Warn("Interface speed is outside valid range (1-2147483647)", "speed", speed, "value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
+						m.logger.Warn("Interface speed is outside valid range (0-2147483647)", "speed", speed, "value",
+							value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
 						continue
 					}
+					if interfaceEntity.Speed != nil && *interfaceEntity.Speed > 0 {
+						m.logger.Debug("Interface speed already set, skipping", "existingSpeed", *interfaceEntity.Speed,
+							"newSpeed", kiloBitsPerSecond, "interfaceIndex", objectID)
+						continue
+					}
+					interfaceEntity.Speed = &kiloBitsPerSecond
+					fieldFound = true
+				case "highSpeed":
+					if value.Value == "" {
+						m.logger.Debug("highSpeed is empty", "value", value.Value)
+						continue
+					}
+					highSpeed, err := strconv.Atoi(value.Value)
+					if err != nil {
+						m.logger.Warn("Error converting highSpeed to int", "error", err, "value", value.Value)
+						continue
+					}
+					speedMbps := int64(highSpeed)
+					// Check if highSpeed is within valid range (0 to 2147483647 inclusive)
+					if speedMbps < minInterfaceSpeed || speedMbps > maxInterfaceSpeed {
+						m.logger.Warn("Interface highSpeed is outside valid range (0-2147483647)", "highSpeed",
+							highSpeed, "value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
+						continue
+					}
+					kiloBitsPerSecond := speedMbps * 1000
 					interfaceEntity.Speed = &kiloBitsPerSecond
 					fieldFound = true
 				case "mtu":
@@ -316,7 +342,8 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					}
 					// Check if MTU is within valid range (1 to 2147483647 inclusive) and not overflowing int32
 					if mtu < minInterfaceMTU || mtu > maxInterfaceMTU {
-						m.logger.Warn("Interface MTU is outside valid range (1-2147483647) or overflows int32", "mtu", mtu, "value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
+						m.logger.Warn("Interface MTU is outside valid range (1-2147483647) or overflows int32", "mtu", mtu,
+							"value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
 						continue
 					}
 					mtu64 := mtu

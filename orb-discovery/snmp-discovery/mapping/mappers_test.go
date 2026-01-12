@@ -593,7 +593,75 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			defaults: nil,
 			expectedEntity: &diode.Interface{
 				Speed: int64Ptr(10000),
-				Type:  mapping.StringPtr("100base-tx"),
+				Type:  mapping.StringPtr("10base-t"),
+			},
+			expectError: false,
+		},
+		{
+			name: "mapping with highSpeed value",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.31.1.1.1.15.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.15.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.15",
+					Value:  "10000",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.31.1.1.1.15",
+						Entity: "interface",
+						Field:  "highSpeed",
+					},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Speed: int64Ptr(10000000),
+			},
+			expectError: false,
+		},
+		{
+			name: "mapping with highSpeed preferred over speed",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.5.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.5.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.5",
+					Value:  "10000000",
+					Type:   mapping.Integer,
+				},
+				"1.3.6.1.2.1.31.1.1.1.15.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.15.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.15",
+					Value:  "10000",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.5",
+						Entity: "interface",
+						Field:  "speed",
+					},
+					{
+						OID:    "1.3.6.1.2.1.31.1.1.1.15",
+						Entity: "interface",
+						Field:  "highSpeed",
+					},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Speed: int64Ptr(10000000),
 			},
 			expectError: false,
 		},
@@ -793,7 +861,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 					OID:    "1.3.6.1.2.1.2.2.1.5.1",
 					Index:  "1",
 					Parent: "1.3.6.1.2.1.2.2.1.5",
-					Value:  "0",
+					Value:  "-1000",
 					Type:   mapping.Integer,
 				},
 			},
@@ -1357,6 +1425,46 @@ func TestInterfaceMapper_Map_ZeroSpeedAndMtu(t *testing.T) {
 			},
 		},
 		{
+			name: "negative speed is ignored",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.5.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.5.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.5",
+					Value:  "-1000",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.5",
+						Entity: "interface",
+						Field:  "speed",
+					},
+				},
+			},
+			assertFn: func(t *testing.T, iface *diode.Interface) {
+				assert.Equal(t, mapping.StringPtr("eth0"), iface.Name)
+				assert.Nil(t, iface.Speed)
+			},
+		},
+		{
 			name: "mtu value of zero is ignored",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.2.2.1.2.1": {
@@ -1394,6 +1502,84 @@ func TestInterfaceMapper_Map_ZeroSpeedAndMtu(t *testing.T) {
 			assertFn: func(t *testing.T, iface *diode.Interface) {
 				assert.Equal(t, mapping.StringPtr("eth0"), iface.Name)
 				assert.Nil(t, iface.Mtu)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := mapping.NewEntityRegistry(logger)
+			mapper := mapping.NewInterfaceMapper(logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, nil)
+			assert.NotNil(t, entity)
+			iface, ok := entity.(*diode.Interface)
+			assert.True(t, ok)
+			tt.assertFn(t, iface)
+		})
+	}
+}
+
+func TestInterfaceMapper_Map_HighSpeed(t *testing.T) {
+	logger := slog.Default()
+
+	tests := []struct {
+		name         string
+		values       map[mapping.ObjectIDIndex]*mapping.ObjectIDValue
+		mappingEntry *mapping.Entry
+		assertFn     func(t *testing.T, iface *diode.Interface)
+	}{
+		{
+			name: "highSpeed invalid value is ignored",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.31.1.1.1.15.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.15.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.15",
+					Value:  "invalid",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.31.1.1.1.15",
+						Entity: "interface",
+						Field:  "highSpeed",
+					},
+				},
+			},
+			assertFn: func(t *testing.T, iface *diode.Interface) {
+				assert.Nil(t, iface.Speed)
+			},
+		},
+		{
+			name: "highSpeed above maximum is ignored",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.31.1.1.1.15.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.15.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.15",
+					Value:  "2147483648",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.31.1.1.1.15",
+						Entity: "interface",
+						Field:  "highSpeed",
+					},
+				},
+			},
+			assertFn: func(t *testing.T, iface *diode.Interface) {
+				assert.Nil(t, iface.Speed)
 			},
 		},
 	}
