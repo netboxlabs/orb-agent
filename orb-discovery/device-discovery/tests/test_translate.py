@@ -4,6 +4,10 @@
 
 import pytest
 
+from device_discovery.interface import (
+    translate_interface,
+    translate_interface_ips,
+)
 from device_discovery.policy.models import (
     Defaults,
     DeviceParameters,
@@ -16,8 +20,6 @@ from device_discovery.policy.models import (
 from device_discovery.translate import (
     translate_data,
     translate_device,
-    translate_interface,
-    translate_interface_ips,
     translate_vlan,
 )
 
@@ -421,7 +423,8 @@ def test_translate_data_creates_missing_subinterface_with_parent(
     assert subinterface.parent.name == "ethernet-1/1"
     assert subinterface.parent.name == parent_interface.name
     assert subinterface.type == "virtual"
-    assert parent_interface.type == "other"
+    # Parent interface now matches built-in Nokia pattern (ethernet-\d+/\d+)
+    assert parent_interface.type == "1000base-t"
     assert ip_entity.address == "10.0.0.1/30"
     assert ip_entity.assigned_object_interface.name == "ethernet-1/1.0"
 
@@ -512,6 +515,73 @@ def test_translate_vlan_with_tenant_parameters(
     )
     vlan = translate_vlan("201", "Tenant VLAN", sample_defaults)
 
+    assert vlan.vid == 201
     assert vlan.tenant.name == "Tenant With Group"
     assert vlan.tenant.group.name == "Tenant Group"
     assert vlan.description == "Tenant VLAN"
+
+
+def test_translate_data_with_interface_patterns(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """Test full data translation with interface patterns."""
+    from device_discovery.policy.models import InterfacePattern
+
+    defaults = Defaults(
+        site="New York",
+        if_type="other",
+        interface_patterns=[
+            InterfacePattern(match="GigabitEthernet.*", type="1000base-t"),
+        ],
+    )
+
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+        "defaults": defaults,
+    }
+
+    entities = list(translate_data(data))
+
+    # Find interface entities
+    interface_entities = [
+        e for e in entities if e.WhichOneof("entity") == "interface"
+    ]
+
+    # Both GigabitEthernet interfaces should match the pattern
+    for interface_entity in interface_entities:
+        if interface_entity.interface.name.startswith("GigabitEthernet"):
+            assert interface_entity.interface.type == "1000base-t"
+
+
+def test_translate_data_with_builtin_patterns(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """Test full data translation with built-in patterns (zero configuration)."""
+    defaults = Defaults(
+        site="New York",
+        if_type="other",
+        # No interface_patterns specified - should use built-ins
+    )
+
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+        "defaults": defaults,
+    }
+
+    entities = list(translate_data(data))
+
+    # Find interface entities
+    interface_entities = [
+        e for e in entities if e.WhichOneof("entity") == "interface"
+    ]
+
+    # Both GigabitEthernet interfaces should match built-in pattern
+    for interface_entity in interface_entities:
+        if interface_entity.interface.name.startswith("GigabitEthernet"):
+            assert interface_entity.interface.type == "1000base-t"

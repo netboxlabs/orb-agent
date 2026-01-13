@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Device Discovery Policy Models."""
 
+import re
 from enum import Enum
 from typing import Any
 
@@ -16,6 +17,38 @@ class Status(Enum):
     RUNNING = "running"
     FINISHED = "finished"
     FAILED = "failed"
+
+
+class InterfacePattern(BaseModel):
+    """Model for interface type pattern matching."""
+
+    match: str = Field(description="Regular expression pattern to match interface names")
+    type: str = Field(description="Interface type to assign when pattern matches")
+
+    @field_validator("match")
+    @classmethod
+    def validate_regex(cls, value: str) -> str:
+        """
+        Validate the regex pattern at configuration load time.
+
+        Args:
+        ----
+            value: The regex pattern string.
+
+        Raises:
+        ------
+            ValueError: If the regex pattern is invalid.
+
+        Returns:
+        -------
+            str: The validated regex pattern.
+
+        """
+        try:
+            re.compile(value)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+        return value
 
 
 class ObjectParameters(BaseModel):
@@ -69,6 +102,10 @@ class Defaults(BaseModel):
         default="undefined", description="Device Role name, optional"
     )
     if_type: str | None = Field(default="other", description="Interface type, optional")
+    interface_patterns: list[InterfacePattern] | None = Field(
+        default=None,
+        description="Interface type patterns for name-based matching, optional"
+    )
     location: str | None = Field(default=None, description="Location name, optional")
     tenant: str | TenantParameters | None = Field(default=None, description="Tenant, optional")
     tags: list[str] | None = Field(default=None, description="Tags, optional")
