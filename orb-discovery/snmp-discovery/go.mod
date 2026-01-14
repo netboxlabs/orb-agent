@@ -7,7 +7,7 @@ require (
 	github.com/go-co-op/gocron/v2 v2.14.0
 	github.com/google/uuid v1.6.0
 	github.com/gosnmp/gosnmp v1.39.0
-	github.com/netboxlabs/diode-sdk-go v1.6.2
+	github.com/netboxlabs/diode-sdk-go v1.7.0
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.38.0

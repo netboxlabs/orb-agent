@@ -74,14 +74,12 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 			expected: []diode.Entity{
 				&diode.Interface{
-					Speed: &[]int64{1000000}[0],
-					Name:  diode.String("GigabitEthernet1/0/1"),
-					PrimaryMacAddress: &diode.MACAddress{
-						MacAddress: &[]string{"00:00:00:00:00:00"}[0],
-					},
-					Enabled: &[]bool{true}[0],
-					Type:    diode.String("other"),
-					Device:  &diode.Device{},
+					Speed:             &[]int64{1000000}[0],
+					Name:              diode.String("GigabitEthernet1/0/1"),
+					PrimaryMacAddress: nil, // all-zeros MAC address should be ignored
+					Enabled:           &[]bool{true}[0],
+					Type:              diode.String("other"),
+					Device:            &diode.Device{},
 				},
 				&diode.Interface{
 					Speed: &[]int64{1000000}[0],
@@ -153,14 +151,12 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 			expected: []diode.Entity{
 				&diode.Interface{
-					Speed: &[]int64{1000000}[0],
-					Name:  diode.String("GigabitEthernet1/0/1"),
-					PrimaryMacAddress: &diode.MACAddress{
-						MacAddress: diode.String("00:00:00:00:00:00"),
-					},
-					Enabled: &[]bool{true}[0],
-					Type:    diode.String("other"),
-					Device:  &diode.Device{},
+					Speed:             &[]int64{1000000}[0],
+					Name:              diode.String("GigabitEthernet1/0/1"),
+					PrimaryMacAddress: nil, // all-zeros MAC address should be ignored
+					Enabled:           &[]bool{true}[0],
+					Type:              diode.String("other"),
+					Device:            &diode.Device{},
 				},
 				&diode.IPAddress{
 					Address: diode.String("192.168.1.2/32"),

@@ -1631,6 +1631,12 @@ func TestInterfaceMapper_FormatMACAddress(t *testing.T) {
 			expected:    "",
 			expectError: true,
 		},
+		{
+			name:        "invalid all zeros MAC address (00:00:00:00:00:00)",
+			input:       "\x00\x00\x00\x00\x00\x00",
+			expected:    "",
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {

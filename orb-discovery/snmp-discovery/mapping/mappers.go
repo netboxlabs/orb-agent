@@ -352,7 +352,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				case "macAddress":
 					macAddress, err := m.FormatMACAddress(value.Value)
 					if err != nil {
-						m.logger.Warn("Error formatting mac address", "error", err, "value", value.Value)
+						m.logger.Debug("Error formatting mac address", "error", err, "value", value.Value)
 						continue
 					}
 					interfaceEntity.PrimaryMacAddress = &diode.MACAddress{
@@ -391,6 +391,18 @@ func (m *InterfaceMapper) FormatMACAddress(input string) (string, error) {
 	// Check for correct MAC address length
 	if len(bytes) != 6 {
 		return "", fmt.Errorf("invalid MAC address length: got %d bytes", len(bytes))
+	}
+
+	// Check if MAC address is all zeros (00:00:00:00:00:00)
+	allZeros := true
+	for _, b := range bytes {
+		if b != 0 {
+			allZeros = false
+			break
+		}
+	}
+	if allZeros {
+		return "", fmt.Errorf("invalid MAC address: 00:00:00:00:00:00 is not a valid hardware address")
 	}
 
 	// Format to colon-separated hex string

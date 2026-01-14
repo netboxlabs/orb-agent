@@ -310,7 +310,7 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 
 	assignedInterfaceIndices := m.getAssignedInterfaces(uniqueEntities)
 
-	// Build final entity list, excluding assigned interfaces to sending duplcates for ingestion
+	// Build final entity list, excluding assigned interfaces to sending duplicates for ingestion
 	entities := make([]diode.Entity, 0, len(uniqueEntities))
 	for entity := range uniqueEntities {
 		if diodeInterface, ok := entity.(*diode.Interface); ok {
