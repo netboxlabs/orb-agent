@@ -49,6 +49,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | site | string | no | Default site name for discovered devices |
 | location | string | no | Default location for discovered devices |
 | role | string | no | Default role for discovered devices |
+| interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./snmp_discovery_interface.md)) |
 
 ##### Nested Defaults
 | Parameter | Type | Description |
@@ -107,6 +108,11 @@ config:
     interface:
       description: "Auto-discovered interface"
       if_type: "ethernet"
+    interface_patterns:
+      - match: "^(GigabitEthernet|Gi).*"
+        type: "1000base-t"
+      - match: "^(TenGigE|Te).*"
+        type: "10gbase-x-sfpp"
     device:
       description: "SNMP discovered device"
       comments: "Automatically discovered via SNMP"

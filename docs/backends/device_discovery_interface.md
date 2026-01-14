@@ -1,8 +1,8 @@
-#### Interface Type Matching
+# Device Discovery - Interface Type Matching
 
 The device discovery backend uses an intelligent **five-tier priority system** to automatically determine interface types. This system provides zero-configuration support for common network equipment while allowing fine-grained customization through user-defined patterns.
 
-##### Priority Order
+## Priority Order
 
 Interface types are determined using the following priority order (first match wins):
 
@@ -29,7 +29,7 @@ Interface types are determined using the following priority order (first match w
    - If nothing else matches, uses `defaults.if_type`
    - Defaults to `other` if not specified
 
-##### User-Defined Interface Patterns
+## User-Defined Interface Patterns
 
 You can define custom interface patterns in the `defaults.interface_patterns` list. Each pattern consists of a regular expression match and a NetBox interface type.
 
@@ -63,7 +63,7 @@ interface_patterns:
 # User pattern wins even though built-in is more specific
 ```
 
-##### Built-In Patterns
+## Built-In Patterns
 
 When no user patterns are configured (or none match), the system automatically applies built-in patterns for common network equipment:
 
@@ -103,7 +103,7 @@ When no user patterns are configured (or none match), the system automatically a
 - `Port-channel*` → `lag` (Cisco)
 - `Bundle-Ether*` → `lag` (Cisco IOS-XR)
 
-##### Speed-Based Detection
+## Speed-Based Detection
 
 When no patterns match, the system uses interface speed (in Mbps from NAPALM) to determine the type:
 
@@ -124,7 +124,7 @@ When no patterns match, the system uses interface speed (in Mbps from NAPALM) to
 
 **Note:** Speed-based detection is **skipped** if any pattern (user or built-in) matches the interface name, even if the speed suggests a different type.
 
-##### Complete Matching Flow Example
+## Complete Matching Flow Example
 
 ```yaml
 defaults:
@@ -144,7 +144,7 @@ defaults:
 | `Ethernet1` | No | ✗ | ✗ | 25000 | `25gbase-x-sfp28` | Tier 4: Speed |
 | `UnknownInt0` | No | ✗ | ✗ | 0 | `other` | Tier 5: Default |
 
-##### Zero-Configuration Support
+## Zero-Configuration Support
 
 If no `interface_patterns` are configured, the system automatically applies built-in patterns to provide intelligent defaults for 80-90% of deployments:
 
