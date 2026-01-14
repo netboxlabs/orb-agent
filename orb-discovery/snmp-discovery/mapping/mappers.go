@@ -100,42 +100,88 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	ipAddress := diode.IPAddress{}
 
 	fieldFound := false
-	// for each value in the map, map it to the ip address entity
+	var extractedIP string // Store the IP address extracted from any field
+
+	extractIPFromIndex := func(value *ObjectIDValue, field string) {
+		if extractedIP != "" {
+			return
+		}
+		if value.Index != "" {
+			if ip := net.ParseIP(string(value.Index)); ip != nil && ip.To4() != nil {
+				extractedIP = ip.String()
+				m.logger.Debug("Extracted IP address", "field", field, "ip", extractedIP)
+			}
+		}
+	}
+
+	extractIPFromValueOrIndex := func(value *ObjectIDValue, field string) bool {
+		if extractedIP != "" {
+			return true // Already extracted
+		}
+		// Try to extract from value field first
+		if value.Value != "" {
+			if ip := net.ParseIP(value.Value); ip != nil && ip.To4() != nil {
+				extractedIP = ip.String()
+				m.logger.Debug("Extracted IP address", "field", field, "ip", extractedIP)
+				return true
+			}
+		}
+		// Fall back to extracting from index
+		extractIPFromIndex(value, field)
+		return extractedIP != ""
+	}
+
+	setOrUpdateAddress := func(newAddress string) {
+		ipAddress.Address = &newAddress
+	}
+
 	for objectID, value := range values {
 		m.logger.Debug("Mapping value to ipAddress entity", "objectID", objectID, "value", value)
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
 				switch propertyMappingEntry.Field {
 				case "address":
+					if !extractIPFromValueOrIndex(value, propertyMappingEntry.Field) {
+						m.logger.Warn("Could not extract valid IP address from any field")
+						continue
+					}
 					if ipAddress.Address != nil && strings.HasPrefix(*ipAddress.Address, "/") {
-						x := fmt.Sprintf("%s%s", string(value.Index), *ipAddress.Address)
-						ipAddress.Address = &x
+						// Prefix was processed first, prepend IP
+						setOrUpdateAddress(fmt.Sprintf("%s%s", extractedIP, *ipAddress.Address))
 					} else if ipAddress.Address == nil || *ipAddress.Address == "" {
-						x := fmt.Sprintf("%s/32", value.Index)
-						ipAddress.Address = &x
+						// No prefix yet, set IP with default /32
+						setOrUpdateAddress(fmt.Sprintf("%s/32", extractedIP))
 					}
 					fieldFound = true
-				case "address_prefixSize":
+				case "addressPrefixSize":
+					extractIPFromIndex(value, propertyMappingEntry.Field)
 					prefixLength, err := maskToPrefixSize(value.Value)
 					if err != nil {
 						m.logger.Warn("Error converting mask to prefix size", "error", err, "value", value.Value)
 						continue
 					}
 					if ipAddress.Address == nil || *ipAddress.Address == "" {
-						x := fmt.Sprintf("/%d", prefixLength)
-						ipAddress.Address = &x
+						// No address set yet
+						if extractedIP != "" {
+							// Use extracted IP with the prefix
+							setOrUpdateAddress(fmt.Sprintf("%s/%d", extractedIP, prefixLength))
+						} else {
+							// No IP available, store just the prefix (will be rejected by validation)
+							setOrUpdateAddress(fmt.Sprintf("/%d", prefixLength))
+						}
+						fieldFound = true
 					} else {
+						// Address already set, update the prefix
 						prefixParts := strings.Split(*ipAddress.Address, "/")
 						if len(prefixParts) >= 1 {
-							x := fmt.Sprintf("%s/%d", prefixParts[0], prefixLength)
-							ipAddress.Address = &x
+							setOrUpdateAddress(fmt.Sprintf("%s/%d", prefixParts[0], prefixLength))
 						} else {
-							x := fmt.Sprintf("%s/%d", *ipAddress.Address, prefixLength)
-							ipAddress.Address = &x
+							setOrUpdateAddress(fmt.Sprintf("%s/%d", *ipAddress.Address, prefixLength))
 						}
+						fieldFound = true
 					}
-					fieldFound = true
-				case "assigned_object":
+				case "assignedObject":
+					extractIPFromIndex(value, propertyMappingEntry.Field)
 					if propertyMappingEntry.Relationship != (config.Relationship{}) {
 						linkedEntity := entityRegistry.GetOrCreateEntity(EntityType(propertyMappingEntry.Relationship.Type), ObjectIDIndex(value.Value))
 						if linkedEntity == nil {
@@ -152,6 +198,15 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					m.logger.Warn("Unknown field", "field", mappingEntry.Field)
 				}
 			}
+		}
+	}
+
+	// Validate the final IP/CIDR before storage
+	if ipAddress.Address != nil && *ipAddress.Address != "" {
+		if !ValidateIPv4CIDR(*ipAddress.Address) {
+			m.logger.Warn("Invalid IP/CIDR format, skipping",
+				"address", *ipAddress.Address)
+			return &diode.IPAddress{} // Empty entity won't be added
 		}
 	}
 
@@ -189,6 +244,28 @@ func maskToPrefixSize(maskStr string) (int, error) {
 	ones, _ := mask.Size()
 
 	return ones, nil
+}
+
+// ValidateIPv4CIDR validates an IPv4 address in CIDR notation (e.g., "192.168.1.1/24").
+// Returns true if the format is valid, false otherwise.
+func ValidateIPv4CIDR(cidr string) bool {
+	ip, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+
+	// Verify it's IPv4 (not IPv6)
+	if ip.To4() == nil {
+		return false
+	}
+
+	// Verify prefix is in valid range (0-32 for IPv4)
+	ones, bits := ipNet.Mask.Size()
+	if bits != 32 || ones < 0 || ones > 32 {
+		return false
+	}
+
+	return true
 }
 
 // InterfaceMapper is a struct that maps interfaces to entities

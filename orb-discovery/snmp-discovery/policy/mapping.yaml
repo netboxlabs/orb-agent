@@ -41,10 +41,10 @@ entries:
         field: "address"
       - oid: ".1.3.6.1.2.1.4.20.1.3"
         entity: "ipAddress"
-        field: "address_prefixSize"
+        field: "addressPrefixSize"
       - oid: ".1.3.6.1.2.1.4.20.1.2"
         entity: "ipAddress"
-        field: "assigned_object"
+        field: "assignedObject"
         relationship:
           type: "interface"
           field: "_id"
