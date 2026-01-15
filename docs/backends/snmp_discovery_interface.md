@@ -1,6 +1,6 @@
 # SNMP Discovery - Interface Type Matching
 
-The SNMP discovery backend uses an intelligent **five-tier priority system** to automatically determine interface types. This system provides zero-configuration support for common network equipment while allowing fine-grained customization through user-defined patterns.
+The SNMP discovery backend uses an intelligent **six-tier priority system** to automatically determine interface types. This system provides zero-configuration support for common network equipment while allowing fine-grained customization through user-defined patterns.
 
 ## Deferred Type Resolution
 
@@ -18,7 +18,13 @@ This approach ensures pattern matching works correctly regardless of SNMP OID or
 
 Interface types are determined using the following priority order (first match wins):
 
-### 1. User-Defined Patterns (Highest Priority)
+### 0. Subinterface Detection (Highest Priority - Structural)
+- Subinterfaces are identified by name patterns containing `.` or `:` separators
+- If a subinterface is detected, it is ALWAYS assigned type `virtual`
+- Parent interface tracking is performed in a post-processing phase
+- This takes precedence over ALL other matching methods
+
+### 1. User-Defined Patterns (Highest Priority for Non-Subinterfaces)
 - Patterns configured in `defaults.interface_patterns` are checked first
 - If ANY user pattern matches, the most specific (longest) user match is used
 - User patterns ALWAYS take priority over all other methods
@@ -41,6 +47,78 @@ Interface types are determined using the following priority order (first match w
 ### 5. Default Fallback (Lowest Priority)
 - If nothing else matches, uses `defaults.if_type`
 - Defaults to `other` if not specified
+
+## Subinterface Detection and Parent Tracking
+
+SNMP discovery automatically detects subinterfaces based on naming conventions and tracks parent-child relationships.
+
+### What are Subinterfaces?
+
+Subinterfaces are logical interfaces created on top of physical interfaces, commonly used for:
+- VLAN tagging (802.1Q)
+- Multiple L3 networks on one physical interface
+- Traffic segregation and policy enforcement
+
+### Detection Mechanism
+
+Subinterfaces are identified by the presence of dot (`.`) or colon (`:`) separators in the interface name:
+- `GigabitEthernet0/0.100` → parent: `GigabitEthernet0/0`, subinterface: `.100`
+- `eth0.50` → parent: `eth0`, subinterface: `.50`
+- `ge-0/0/0:0` → parent: `ge-0/0/0`, subinterface: `:0`
+
+The separator must appear between non-empty parent and child parts. Interface names ending with separators (e.g., `eth0.`) or starting with separators (e.g., `.100`) are not considered subinterfaces.
+
+### Supported Vendor Formats
+
+| Vendor | Format | Example | Parent |
+|--------|--------|---------|--------|
+| Cisco IOS/IOS-XE | `Interface.subint` | `GigabitEthernet0/0.100` | `GigabitEthernet0/0` |
+| Cisco IOS-XR | `Interface.subint` | `TenGigE0/0/0/0.200` | `TenGigE0/0/0/0` |
+| Juniper | `interface:unit` | `ge-0/0/0:0` | `ge-0/0/0` |
+| Arista | `Ethernet.subint` | `Ethernet1.100` | `Ethernet1` |
+| Nokia SR OS | `ethernet.subint` | `ethernet-1/1/1.50` | `ethernet-1/1/1` |
+| Linux | `interface.vlan` | `eth0.100` | `eth0` |
+
+### Two-Phase Processing
+
+Subinterface resolution uses a two-phase approach to handle SNMP discovery ordering issues:
+
+**Phase 1: Mapping (During SNMP Walk)**
+- All interfaces are discovered and mapped
+- Subinterfaces are immediately assigned type `virtual` (Tier 0 priority)
+- Parent relationships are NOT resolved yet (parent names may not exist in registry)
+
+**Phase 2: Post-Processing (After All Interfaces Discovered)**
+- `ResolveSubinterfaceParents()` is called after mapping completes
+- Parent interface names are extracted from subinterface names
+- Parent interfaces are looked up by name in the entity registry
+- If parent is found, a reference is stored in the subinterface entity
+- If parent is not found (orphan), the subinterface still retains type `virtual`
+
+This two-phase approach is critical because SNMP walks return interfaces in arbitrary order - subinterfaces are often discovered BEFORE their parent interfaces.
+
+### Parent Interface Tracking
+
+When a parent interface is found, the subinterface entity stores a reference:
+
+```go
+subinterface.Parent = &diode.Interface{
+    Name: parent.Name,
+    Type: parent.Type,
+}
+```
+
+This reference can be used by downstream systems to understand interface hierarchy and relationships.
+
+### Orphan Handling
+
+If a parent interface is not found (e.g., parent administratively down, filtered, or not discoverable via SNMP):
+- The subinterface retains type `virtual`
+- No parent reference is set (`Parent` field is `nil`)
+- No errors are raised
+- The subinterface is still included in discovery results
+
+This graceful handling ensures discovery continues successfully even when parent interfaces are missing.
 
 ## User-Defined Interface Patterns
 
@@ -179,6 +257,9 @@ defaults:
 
 | Interface Name | SNMP ifType | User Match? | SNMP Mapping | Built-in Match? | Speed | Final Type | Reason |
 |----------------|-------------|-------------|--------------|-----------------|-------|------------|--------|
+| `GigabitEthernet0/0.100` | 6 | - | - | - | 1000 | `virtual` | Tier 0: Subinterface |
+| `eth0.50` | 6 | - | - | - | 1000 | `virtual` | Tier 0: Subinterface |
+| `ge-0/0/0:0` | 6 | - | - | - | 10000 | `virtual` | Tier 0: Subinterface |
 | `GigabitEthernet0/0` | 6 | `^Gi.*` ✓ | - | - | 1000 | `10gbase-x-sfpp` | Tier 1: User pattern |
 | `TenGigabitEthernet1/0/1` | 6 | ✗ | `1000base-t` | - | 10000 | `1000base-t` | Tier 2: SNMP ifType |
 | `Port-channel1` | 161 | ✗ | `lag` | - | 10000 | `lag` | Tier 2: SNMP ifType |
@@ -212,39 +293,3 @@ defaults:
 **Speed-Based Fallback:**
 - Generic interfaces with unknown ifType but speed data → Speed-based detection
 - Unknown interfaces without speed → `other` (defaults.if_type)
-
-## Implementation Notes
-
-### Deferred Type Resolution
-The SNMP mapper implements deferred type resolution to ensure pattern matching works correctly:
-
-```go
-// During field processing:
-case "type":
-    snmpIfType = value.Value  // Store for later resolution
-    fieldFound = true
-
-// After all fields are collected:
-if snmpIfType != "" {
-    interfaceType := ResolveInterfaceType(
-        interfaceName,     // Now available
-        snmpIfType,        // From SNMP ifType
-        interfaceSpeed,    // Now available
-        defaultType,       // From config
-        patternMatcher,    // User + built-in patterns
-        userPatternCount,  // Priority handling
-    )
-    interfaceEntity.Type = &interfaceType
-}
-```
-
-This ensures that regardless of SNMP OID ordering, the interface name and speed are always available when determining the interface type.
-
-### Testing
-Comprehensive tests verify deferred type resolution works correctly:
-- Pattern matching when name is processed after type (most common)
-- Pattern matching when name is processed before type
-- Built-in pattern matching with deferred resolution
-- SNMP ifType fallback when no patterns match
-
-See `snmp-discovery/mapping/mappers_deferred_type_test.go` for test cases.
