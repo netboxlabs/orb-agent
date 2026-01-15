@@ -271,7 +271,11 @@ func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
 }
 
 func (r *Runner) queryTarget(target config.Target) []diode.Entity {
-	mappingConfig := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup)
+	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, &r.config.Defaults)
+	if err != nil {
+		r.logger.Error("Error creating mapping config", "error", err)
+		return make([]diode.Entity, 0)
+	}
 	objectIDs := mappingConfig.ObjectIDs()
 	r.logger.Info("Querying target", "target", target, "objectCount", len(objectIDs))
 

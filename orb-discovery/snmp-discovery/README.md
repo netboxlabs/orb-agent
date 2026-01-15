@@ -58,6 +58,13 @@ policies:
         device:
           description: "SNMP discovered device"
           comments: "Automatically discovered via SNMP"
+        interface_patterns:  # (Optional) Custom interface type patterns
+          - match: "^mgmt-"
+            type: "1000base-t"
+          - match: "^uplink-"
+            type: "100gbase-x-qsfp28"
+          - match: "^Po\\d+"
+            type: "lag"
       lookup_extensions_dir: "/opt/orb/snmp-extensions" # (Optional) Specifies an override for the directory containing device data yaml files (see below). Defaults to `/etc/snmp-discovery/lookup-extensions
     scope:
       targets:
@@ -113,6 +120,110 @@ If the referenced environment variable is not set, the service will exit with an
         priv_protocol: "AES" 
         priv_passphrase: "secure-priv-pass"
 ```
+
+### Interface Type Pattern Matching
+
+SNMP discovery supports flexible interface type detection through a five-tier priority system that intelligently combines SNMP protocol data with pattern matching:
+
+#### Priority System
+
+1. **User-defined patterns** (highest priority) - Your custom pattern rules
+2. **SNMP ifType mapping** - Protocol-specific intelligence from SNMP data
+3. **Built-in patterns** - 46 vendor-agnostic patterns included by default
+4. **Speed-based detection** - Automatic detection for Ethernet interfaces based on speed
+5. **Default fallback** - Configured `if_type` or "other"
+
+This priority order ensures that user intent always wins, while still leveraging SNMP protocol data and providing intelligent fallbacks.
+
+#### Configuration
+
+Interface patterns are defined at the `defaults` level (not under `defaults.interface`). Patterns use Go regex syntax (RE2):
+
+```yaml
+defaults:
+  interface:
+    if_type: "other"  # Fallback type for unmatched interfaces
+  interface_patterns:  # At defaults level
+    - match: "^mgmt-"
+      type: "1000base-t"
+    - match: "^uplink-"
+      type: "100gbase-x-qsfp28"
+    - match: "^Po\\d+"
+      type: "lag"
+```
+
+#### Pattern Rules
+
+- **User patterns always win**: Your patterns override even SNMP ifType data
+- **Most specific match wins**: Within each priority tier, the longest matching pattern is used
+- **Case-sensitive**: Patterns are matched case-sensitively
+- **Regex syntax**: Uses Go's RE2 regex engine (see [syntax reference](https://github.com/google/re2/wiki/Syntax))
+- **Invalid patterns**: Will cause the policy to fail at load time with a clear error message
+
+#### Built-in Patterns
+
+The following vendor patterns are included automatically and cover 80-90% of common deployments:
+
+**Cisco IOS/IOS-XE:**
+- `HundredGig*`, `FortyGig*`, `TenGig*`, `GigabitEthernet*`, `FastEthernet*`
+- `TwentyFiveGig*`, `FiveGig*`, `TwoGig*`
+
+**Juniper JunOS:**
+- `ge-*`, `xe-*`, `et-*` (Gigabit, 10G, 40G/100G Ethernet)
+- `ae*`, `lo*` (Aggregated Ethernet, Loopback)
+
+**Cross-Vendor:**
+- LAG: `Port-channel*`, `Bundle-Ether*`, `ae*`
+- Virtual: `Loopback*`, `Vlan*`, `Tunnel*`, `irb`
+- Management: `Management*`, `mgmt*`, `fxp*`, `em*`
+
+**Linux/Cumulus:**
+- `eth*`, `ens*`, `enp*`, `swp*`
+
+See [interface_patterns.go](mapping/interface_patterns.go) for the complete list.
+
+#### Examples
+
+**Override management interface detection:**
+```yaml
+defaults:
+  interface_patterns:
+    - match: "^mgmt-eth"
+      type: "1000base-t"
+```
+
+**Identify uplink interfaces:**
+```yaml
+defaults:
+  interface_patterns:
+    - match: "^(uplink|trunk)-"
+      type: "100gbase-x-qsfp28"
+```
+
+**Custom naming convention:**
+```yaml
+defaults:
+  interface_patterns:
+    - match: "^CORE-"
+      type: "100gbase-x-qsfp28"
+    - match: "^ACCESS-"
+      type: "1000base-t"
+    - match: "^MGMT-"
+      type: "1000base-t"
+```
+
+#### How It Works
+
+For each interface, the system evaluates in order:
+
+1. **Check user patterns**: If any user pattern matches, use that type immediately
+2. **Check SNMP ifType**: If SNMP reports a known interface type (e.g., LAG, virtual), use it
+   - For Ethernet interfaces, if speed is available, use speed-based detection
+3. **Check built-in patterns**: Fall back to vendor patterns if no SNMP match
+4. **Use speed if Ethernet**: For unknown Ethernet types, infer from interface speed
+5. **Use default**: Fall back to `defaults.interface.if_type` or "other"
+
+This ensures maximum flexibility while maintaining intelligent defaults.
 
 ### Device Model Lookup
 The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values. This only needs to be set if additional or modified files are being provided instead of the ones that are included with orb-discovery and orb-agent.

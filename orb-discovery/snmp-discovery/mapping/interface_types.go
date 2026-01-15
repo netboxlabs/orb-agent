@@ -206,8 +206,28 @@ func getEthernetInterfaceType(speed *int64) string {
 	return ""
 }
 
-// GetNetboxType maps an SNMP ifType integer to a NetBox interface type
-func GetNetboxType(ifType, defaultInterfaceType string, speed *int64) string {
+// ResolveInterfaceType determines interface type using 5-tier priority system:
+// 1. User-defined patterns (highest priority)
+// 2. SNMP ifType mapping
+// 3. Built-in patterns
+// 4. Speed-based detection (for Ethernet)
+// 5. Default fallback
+func ResolveInterfaceType(
+	interfaceName string,
+	ifType string,
+	speed *int64,
+	defaultInterfaceType string,
+	patternMatcher *PatternMatcher,
+	userPatternCount int,
+) string {
+	// Tier 1: User-defined patterns (highest priority)
+	if patternMatcher != nil && userPatternCount > 0 {
+		if matchedType := patternMatcher.MatchInterfaceType(interfaceName, userPatternCount); matchedType != "" {
+			return matchedType
+		}
+	}
+
+	// Tier 2: SNMP ifType mapping (protocol-specific intelligence)
 	if isEthernetInterfaceType(ifType) {
 		if speed != nil && *speed > 0 {
 			if eType := getEthernetInterfaceType(speed); eType != "" {
@@ -218,8 +238,30 @@ func GetNetboxType(ifType, defaultInterfaceType string, speed *int64) string {
 	if netboxType, found := InterfaceTypeMap[ifType]; found {
 		return netboxType
 	}
+
+	// Tier 3: Built-in patterns (vendor defaults)
+	if patternMatcher != nil {
+		// Match only built-in patterns by passing empty string to check all patterns after user patterns
+		allPatterns := patternMatcher.compiledPatterns
+		if len(allPatterns) > userPatternCount {
+			builtinPatterns := allPatterns[userPatternCount:]
+			if matchedType := patternMatcher.findBestMatch(interfaceName, builtinPatterns); matchedType != "" {
+				return matchedType
+			}
+		}
+	}
+
+	// Tier 4: Speed-based detection (already checked in Tier 2 for Ethernet)
+
+	// Tier 5: Default fallback
 	if defaultInterfaceType != "" {
 		return defaultInterfaceType
 	}
 	return "other"
+}
+
+// GetNetboxType maps an SNMP ifType integer to a NetBox interface type
+// Maintained for backward compatibility - wraps ResolveInterfaceType
+func GetNetboxType(ifType, defaultInterfaceType string, speed *int64) string {
+	return ResolveInterfaceType("", ifType, speed, defaultInterfaceType, nil, 0)
 }

@@ -270,14 +270,33 @@ func ValidateIPv4CIDR(cidr string) bool {
 
 // InterfaceMapper is a struct that maps interfaces to entities
 type InterfaceMapper struct {
-	logger *slog.Logger
+	logger           *slog.Logger
+	patternMatcher   *PatternMatcher
+	userPatternCount int
 }
 
 // NewInterfaceMapper creates a new InterfaceMapper
-func NewInterfaceMapper(logger *slog.Logger) *InterfaceMapper {
-	return &InterfaceMapper{
-		logger: logger,
+func NewInterfaceMapper(logger *slog.Logger, patterns []config.InterfacePattern) (*InterfaceMapper, error) {
+	var patternMatcher *PatternMatcher
+	userPatternCount := len(patterns)
+
+	// Always merge patterns to include built-in defaults
+	mergedPatterns := MergePatterns(patterns, true)
+
+	// Create pattern matcher if we have any patterns (user or built-in)
+	if len(mergedPatterns) > 0 {
+		var err error
+		patternMatcher, err = NewPatternMatcher(mergedPatterns, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create pattern matcher: %w", err)
+		}
 	}
+
+	return &InterfaceMapper{
+		logger:           logger,
+		patternMatcher:   patternMatcher,
+		userPatternCount: userPatternCount,
+	}, nil
 }
 
 // applyDefaults applies default values to an interface entity
@@ -326,6 +345,8 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	interfaceEntity := entityRegistry.GetOrCreateEntity(InterfaceEntityType, getIndex(values)).(*diode.Interface)
 
 	fieldFound := false
+	var snmpIfType string // Store SNMP ifType for final type resolution
+
 	valueKeys := make([]ObjectIDIndex, 0, len(values))
 	for objectID := range values {
 		valueKeys = append(valueKeys, objectID)
@@ -351,12 +372,9 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					interfaceEntity.Description = &description
 					fieldFound = true
 				case "type":
-					defaultType := ""
-					if defaults != nil && defaults.Interface.Type != "" {
-						defaultType = defaults.Interface.Type
-					}
-					interfaceType := GetNetboxType(value.Value, defaultType, interfaceEntity.Speed)
-					interfaceEntity.Type = &interfaceType
+					// Store SNMP ifType but defer type resolution until after all fields are processed
+					// This ensures name and speed are available for pattern matching
+					snmpIfType = value.Value
 					fieldFound = true
 				case "speed":
 					if value.Value == "" {
@@ -445,6 +463,30 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				}
 			}
 		}
+	}
+
+	// Resolve interface type after all fields are collected
+	// This ensures name and speed are available for pattern matching
+	if snmpIfType != "" {
+		var interfaceName string
+		if interfaceEntity.Name != nil {
+			interfaceName = *interfaceEntity.Name
+		}
+
+		defaultType := ""
+		if defaults != nil && defaults.Interface.Type != "" {
+			defaultType = defaults.Interface.Type
+		}
+
+		interfaceType := ResolveInterfaceType(
+			interfaceName,
+			snmpIfType,
+			interfaceEntity.Speed,
+			defaultType,
+			m.patternMatcher,
+			m.userPatternCount,
+		)
+		interfaceEntity.Type = &interfaceType
 	}
 
 	// Apply defaults if available

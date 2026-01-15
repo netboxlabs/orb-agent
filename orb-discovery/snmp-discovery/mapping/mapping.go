@@ -156,14 +156,25 @@ type Config struct {
 }
 
 // NewConfig creates a new Config
-func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever) *Config {
+func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturers data.ManufacturerRetriever,
+	deviceLookup data.DeviceRetriever, defaults *config.Defaults,
+) (*Config, error) {
+	// Create InterfaceMapper with pattern support
+	var interfacePatterns []config.InterfacePattern
+	if defaults != nil {
+		interfacePatterns = defaults.InterfacePatterns
+	}
+
+	interfaceMapper, err := NewInterfaceMapper(logger, interfacePatterns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create interface mapper: %w", err)
+	}
+
 	entityMappers := map[string]orbToEntityMapper{
 		"ipAddress": &IPAddressMapper{
 			logger: logger,
 		},
-		"interface": &InterfaceMapper{
-			logger: logger,
-		},
+		"interface": interfaceMapper,
 		"device": &DeviceMapper{
 			logger:        logger,
 			manufacturers: manufacturers,
@@ -181,7 +192,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 	}
 	return &Config{
 		mapping: mapping,
-	}
+	}, nil
 }
 
 // NewObjectIDMapper creates a new ObjectIDMapper
