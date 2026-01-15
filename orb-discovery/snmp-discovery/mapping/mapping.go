@@ -60,6 +60,75 @@ func NewEntityRegistry(logger *slog.Logger) *EntityRegistry {
 	}
 }
 
+// GetInterfaceByName searches for an interface entity by its name field
+func (r *EntityRegistry) GetInterfaceByName(interfaceName string) *diode.Interface {
+	if r.entities[InterfaceEntityType] == nil {
+		return nil
+	}
+
+	// Search through all interface entities to find one with matching name
+	for _, entity := range r.entities[InterfaceEntityType] {
+		if iface, ok := entity.(*diode.Interface); ok {
+			if iface.Name != nil && *iface.Name == interfaceName {
+				return iface
+			}
+		}
+	}
+	return nil
+}
+
+// ResolveSubinterfaceParents resolves parent interface relationships for all subinterfaces
+// This must be called after all interfaces have been discovered and mapped
+func (r *EntityRegistry) ResolveSubinterfaceParents() {
+	if r.entities[InterfaceEntityType] == nil {
+		return
+	}
+
+	r.logger.Debug("Resolving parent interfaces for subinterfaces")
+	resolvedCount := 0
+	notFoundCount := 0
+
+	// Iterate through all interfaces to find subinterfaces
+	for _, entity := range r.entities[InterfaceEntityType] {
+		iface, ok := entity.(*diode.Interface)
+		if !ok || iface.Name == nil {
+			continue
+		}
+
+		// Check if this is a subinterface
+		parentName := ExtractParentInterfaceName(*iface.Name)
+		if parentName == "" {
+			continue // Not a subinterface
+		}
+
+		// Look up the parent interface by name
+		parent := r.GetInterfaceByName(parentName)
+		if parent != nil {
+			// Set the parent reference
+			iface.Parent = &diode.Interface{
+				Name:   parent.Name,
+				Type:   parent.Type,
+				Device: parent.Device,
+			}
+			r.logger.Debug("Resolved parent interface",
+				"subinterface", *iface.Name,
+				"parent", parentName)
+			resolvedCount++
+		} else {
+			r.logger.Debug("Parent interface not found",
+				"subinterface", *iface.Name,
+				"parent", parentName)
+			notFoundCount++
+		}
+	}
+
+	if resolvedCount > 0 {
+		r.logger.Info("Resolved subinterface parents",
+			"resolved", resolvedCount,
+			"not_found", notFoundCount)
+	}
+}
+
 // GetOrCreateEntity returns an entity from the EntityRegistry or creates a new one if it doesn't exist
 func (r *EntityRegistry) GetOrCreateEntity(entityType EntityType, index ObjectIDIndex) diode.Entity {
 	r.logger.Debug("Getting entity", "entityType", entityType, "index", index, "from", r.entities)
@@ -319,6 +388,9 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 
 	currentDevice := m.registry.GetOrCreateEntity(DeviceEntityType, CurrentDeviceIndex).(*diode.Device)
 
+	// Resolve parent interface relationships for subinterfaces now that all interfaces are discovered
+	m.registry.ResolveSubinterfaceParents()
+
 	assignedInterfaceIndices := m.getAssignedInterfaces(uniqueEntities)
 
 	// Build final entity list, excluding assigned interfaces to sending duplicates for ingestion
@@ -330,6 +402,9 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 				isAssigned = true
 			}
 			diodeInterface.Device = currentDevice
+			if diodeInterface.Parent != nil && diodeInterface.Parent.Device == nil {
+				diodeInterface.Parent.Device = currentDevice
+			}
 			if !isAssigned {
 				entities = append(entities, entity)
 			}

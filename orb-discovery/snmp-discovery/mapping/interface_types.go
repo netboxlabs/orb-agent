@@ -1,5 +1,27 @@
 package mapping
 
+import "strings"
+
+// ExtractParentInterfaceName returns the parent interface name if the supplied name
+// represents a subinterface, or an empty string if it's not a subinterface.
+// Subinterfaces are identified by the presence of dot (.) or colon (:) separators.
+// Examples: "eth0.100" -> "eth0", "GigabitEthernet0/0.100" -> "GigabitEthernet0/0",
+// "ge-0/0/0:0" -> "ge-0/0/0", "eth0" -> ""
+func ExtractParentInterfaceName(interfaceName string) string {
+	separators := []string{".", ":"}
+	for _, separator := range separators {
+		if idx := strings.LastIndex(interfaceName, separator); idx > 0 {
+			parent := interfaceName[:idx]
+			child := interfaceName[idx+1:]
+			// Both parent and child parts must be non-empty
+			if parent != "" && child != "" {
+				return parent
+			}
+		}
+	}
+	return ""
+}
+
 // InterfaceTypeMap maps SNMP ifType integer values to NetBox interface type strings
 var InterfaceTypeMap = map[string]string{
 	// Virtual Interfaces
@@ -206,8 +228,9 @@ func getEthernetInterfaceType(speed *int64) string {
 	return ""
 }
 
-// ResolveInterfaceType determines interface type using 5-tier priority system:
-// 1. User-defined patterns (highest priority)
+// ResolveInterfaceType determines interface type using 6-tier priority system:
+// 0. Subinterface detection (highest priority - structural)
+// 1. User-defined patterns
 // 2. SNMP ifType mapping
 // 3. Built-in patterns
 // 4. Speed-based detection (for Ethernet)
@@ -220,7 +243,13 @@ func ResolveInterfaceType(
 	patternMatcher *PatternMatcher,
 	userPatternCount int,
 ) string {
-	// Tier 1: User-defined patterns (highest priority)
+	// Tier 0: Subinterface detection (highest priority - structural)
+	// Subinterfaces are always virtual regardless of other attributes
+	if ExtractParentInterfaceName(interfaceName) != "" {
+		return "virtual"
+	}
+
+	// Tier 1: User-defined patterns (highest priority for non-subinterfaces)
 	if patternMatcher != nil && userPatternCount > 0 {
 		if matchedType := patternMatcher.MatchInterfaceType(interfaceName, userPatternCount); matchedType != "" {
 			return matchedType

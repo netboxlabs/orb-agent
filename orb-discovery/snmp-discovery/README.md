@@ -123,17 +123,18 @@ If the referenced environment variable is not set, the service will exit with an
 
 ### Interface Type Pattern Matching
 
-SNMP discovery supports flexible interface type detection through a five-tier priority system that intelligently combines SNMP protocol data with pattern matching:
+SNMP discovery supports flexible interface type detection through a six-tier priority system that intelligently combines SNMP protocol data with pattern matching:
 
 #### Priority System
 
-1. **User-defined patterns** (highest priority) - Your custom pattern rules
+0. **Subinterface detection** (highest priority - structural) - Automatic detection of logical interfaces
+1. **User-defined patterns** - Your custom pattern rules
 2. **SNMP ifType mapping** - Protocol-specific intelligence from SNMP data
 3. **Built-in patterns** - 46 vendor-agnostic patterns included by default
 4. **Speed-based detection** - Automatic detection for Ethernet interfaces based on speed
 5. **Default fallback** - Configured `if_type` or "other"
 
-This priority order ensures that user intent always wins, while still leveraging SNMP protocol data and providing intelligent fallbacks.
+This priority order ensures that structural relationships (subinterfaces) are always detected first, followed by user intent, while still leveraging SNMP protocol data and providing intelligent fallbacks.
 
 #### Configuration
 
@@ -216,6 +217,7 @@ defaults:
 
 For each interface, the system evaluates in order:
 
+0. **Check for subinterface**: If the interface name contains `.` or `:` separators, classify as "virtual" immediately (see [Subinterface Detection](#subinterface-detection))
 1. **Check user patterns**: If any user pattern matches, use that type immediately
 2. **Check SNMP ifType**: If SNMP reports a known interface type (e.g., LAG, virtual), use it
    - For Ethernet interfaces, if speed is available, use speed-based detection
@@ -224,6 +226,71 @@ For each interface, the system evaluates in order:
 5. **Use default**: Fall back to `defaults.interface.if_type` or "other"
 
 This ensures maximum flexibility while maintaining intelligent defaults.
+
+### Subinterface Detection
+
+SNMP discovery automatically detects and handles subinterfaces (also known as logical interfaces, VLAN interfaces, or sub-interfaces) across all major network vendors.
+
+#### How It Works
+
+Subinterfaces are identified by the presence of specific separators in the interface name:
+- **Dot (`.`)** separator - Common for Cisco, Juniper, Arista, Nokia
+- **Colon (`:`)** separator - Legacy Juniper style
+
+When a subinterface is detected:
+1. **Type is set to "virtual"** - Regardless of SNMP ifType or speed
+2. **Parent interface is tracked** - The parent-child relationship is maintained
+3. **Works across all vendors** - No vendor-specific configuration needed
+
+#### Supported Formats
+
+**Cisco IOS/IOS-XE:**
+```
+GigabitEthernet0/0.100      → Parent: GigabitEthernet0/0
+TenGigabitEthernet1/1/1.200 → Parent: TenGigabitEthernet1/1/1
+Port-channel1.100           → Parent: Port-channel1
+```
+
+**Juniper JunOS:**
+```
+ge-0/0/0.0    → Parent: ge-0/0/0
+xe-1/2/3.100  → Parent: xe-1/2/3
+ae0.100       → Parent: ae0
+ge-0/0/0:0    → Parent: ge-0/0/0  (legacy colon style)
+```
+
+**Arista EOS:**
+```
+Ethernet1/1.100 → Parent: Ethernet1/1
+```
+
+**Nokia SROS:**
+```
+1/1/1.100 → Parent: 1/1/1
+```
+
+**Generic/Linux:**
+```
+eth0.100   → Parent: eth0
+eth0:1     → Parent: eth0  (legacy alias style)
+```
+
+#### Priority System
+
+Subinterface detection operates at **Tier 0** (highest priority) in the interface type resolution system:
+
+0. **Subinterface detection** ← Always evaluated first
+1. User-defined patterns
+2. SNMP ifType mapping
+3. Built-in patterns
+4. Speed-based detection
+5. Default fallback
+
+This means subinterfaces **always** receive the "virtual" type, even if:
+- SNMP reports a different ifType
+- A user pattern would match the interface name
+- Speed-based detection would assign a different type
+
 
 ### Device Model Lookup
 The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values. This only needs to be set if additional or modified files are being provided instead of the ones that are included with orb-discovery and orb-agent.
