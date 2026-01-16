@@ -63,7 +63,8 @@ Current supported defaults:
 |:-----:|:----:|:-------------:|
 | site  | str | NetBox Site Name (defaults to 'undefined' if not specified) |
 | role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
-| if_type | str | Interface Type (defaults to 'other' if not specified) |
+| if_type | str | Default interface type when no pattern matches (defaults to 'other' if not specified) |
+| interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./device_discovery_interface.md)) |
 | location | str | Device location |
 | tenant | str/map | Device tenant |
 | description | str  | General description   |
@@ -111,6 +112,7 @@ Current supported defaults:
 | ├─ comments   | str  | VLAN comments              |
 | ├─ tags       | list | VLAN tags                  |
 
+
 ### Scope
 The scope defines a list of devices that can be accessed and pulled data. 
 
@@ -122,7 +124,6 @@ The scope defines a list of devices that can be accessed and pulled data.
 | driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
 | optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
-
 
 
 
@@ -139,6 +140,14 @@ orb:
           defaults:
             site: New York NY
             role: switch
+            if_type: other
+            interface_patterns:
+              - match: "^(GigabitEthernet|Gi).*"
+                type: "1000base-t"
+              - match: "^(TenGig|Te).*"
+                type: "10gbase-x-sfpp"
+              - match: "^Loopback.*"
+                type: "virtual"
             location: Row A
             tenant: NetBox Labs
             description: for all
