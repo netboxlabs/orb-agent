@@ -317,7 +317,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     - host: 192.168.31.1
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy-invalid : invalid policy : missing protocol version`,
+			returnMessage: `test-policy-invalid : invalid policy : target 192.168.31.1: no authentication configured and no policy-level fallback available`,
 		},
 		{
 			desc:        "unsupported protocol version",
@@ -335,7 +335,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     community: public
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : unsupported protocol version`,
+			returnMessage: `test-policy : invalid policy : policy-level: unsupported protocol version`,
 		},
 		{
 			desc:        "missing community",
@@ -352,7 +352,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     protocol_version: SNMPv2c
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing community`,
+			returnMessage: `test-policy : invalid policy : policy-level: missing community`,
 		},
 		{
 			desc:        "invalid security level",
@@ -375,7 +375,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     priv_protocol: DES
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : invalid security level`,
+			returnMessage: `test-policy : invalid policy : policy-level: invalid security level`,
 		},
 		{
 			desc:        "missing security level for SNMPv3",
@@ -397,7 +397,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     priv_protocol: DES
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : invalid security level`,
+			returnMessage: `test-policy : invalid policy : policy-level: invalid security level`,
 		},
 		{
 			desc:        "missing username for SNMPv3 with authNoPriv",
@@ -417,7 +417,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     auth_protocol: MD5
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing username`,
+			returnMessage: `test-policy : invalid policy : policy-level: missing username`,
 		},
 		{
 			desc:        "missing auth passphrase for SNMPv3 with authNoPriv",
@@ -437,7 +437,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     auth_protocol: MD5
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing auth passphrase`,
+			returnMessage: `test-policy : invalid policy : policy-level: missing auth passphrase`,
 		},
 		{
 			desc:        "missing auth protocol for SNMPv3 with authNoPriv",
@@ -457,7 +457,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     auth_passphrase: pass
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing auth protocol`,
+			returnMessage: `test-policy : invalid policy : policy-level: missing auth protocol`,
 		},
 		{
 			desc:        "missing priv passphrase for SNMPv3 with authPriv",
@@ -479,7 +479,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     priv_protocol: DES
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing priv passphrase`,
+			returnMessage: `test-policy : invalid policy : policy-level: missing priv passphrase`,
 		},
 		{
 			desc:        "missing priv protocol for SNMPv3 with authPriv",
@@ -501,7 +501,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     priv_protocol: DES
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing auth protocol`,
+			returnMessage: `test-policy : invalid policy : policy-level: missing auth protocol`,
 		},
 		{
 			desc:        "missing priv protocol for SNMPv3",
@@ -523,7 +523,7 @@ func TestServerCreateInvalidPolicy(t *testing.T) {
                     auth_protocol: MD5
             `),
 			returnCode:    http.StatusBadRequest,
-			returnMessage: `test-policy : invalid policy : missing priv protocol`,
+			returnMessage: `test-policy : invalid policy : policy-level: missing priv protocol`,
 		},
 	}
 	for _, tt := range tests {

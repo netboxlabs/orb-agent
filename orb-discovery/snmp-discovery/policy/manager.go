@@ -121,49 +121,81 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 	}
 }
 
+// validateAuthentication validates a single authentication configuration
+func (m *Manager) validateAuthentication(auth *config.Authentication, context string) error {
+	if auth == nil {
+		return fmt.Errorf("%s: authentication is nil", context)
+	}
+
+	if auth.ProtocolVersion == "" {
+		return fmt.Errorf("%s: missing protocol version", context)
+	}
+
+	if auth.ProtocolVersion != "SNMPv1" && auth.ProtocolVersion != "SNMPv2c" && auth.ProtocolVersion != "SNMPv3" {
+		return fmt.Errorf("%s: unsupported protocol version", context)
+	}
+
+	if auth.ProtocolVersion == "SNMPv2c" || auth.ProtocolVersion == "SNMPv1" {
+		if auth.Community == "" {
+			return fmt.Errorf("%s: missing community", context)
+		}
+	}
+
+	if auth.ProtocolVersion == "SNMPv3" {
+		if auth.SecurityLevel != "noAuthNoPriv" &&
+			auth.SecurityLevel != "authNoPriv" &&
+			auth.SecurityLevel != "authPriv" {
+			return fmt.Errorf("%s: invalid security level %s", context, auth.SecurityLevel)
+		}
+		if auth.SecurityLevel == "authNoPriv" || auth.SecurityLevel == "authPriv" {
+			if auth.Username == "" {
+				return fmt.Errorf("%s: missing username", context)
+			}
+
+			if auth.AuthPassphrase == "" {
+				return fmt.Errorf("%s: missing auth passphrase", context)
+			}
+
+			if auth.AuthProtocol == "" {
+				return fmt.Errorf("%s: missing auth protocol", context)
+			}
+		}
+		if auth.SecurityLevel == "authPriv" {
+			if auth.PrivPassphrase == "" {
+				return fmt.Errorf("%s: missing priv passphrase", context)
+			}
+
+			if auth.PrivProtocol == "" {
+				return fmt.Errorf("%s: missing priv protocol", context)
+			}
+		}
+	}
+
+	return nil
+}
+
 // validatePolicy validates the policy
 func (m *Manager) validatePolicy(policy config.Policy) error {
-	if policy.Scope.Authentication.ProtocolVersion == "" {
-		return fmt.Errorf("missing protocol version")
-	}
+	hasPolicyAuth := policy.Scope.Authentication.ProtocolVersion != ""
 
-	if policy.Scope.Authentication.ProtocolVersion != "SNMPv1" && policy.Scope.Authentication.ProtocolVersion != "SNMPv2c" && policy.Scope.Authentication.ProtocolVersion != "SNMPv3" {
-		return fmt.Errorf("unsupported protocol version")
-	}
-
-	if policy.Scope.Authentication.ProtocolVersion == "SNMPv2c" || policy.Scope.Authentication.ProtocolVersion == "SNMPv1" {
-		if policy.Scope.Authentication.Community == "" {
-			return fmt.Errorf("missing community")
+	// Validate policy-level auth if present
+	if hasPolicyAuth {
+		if err := m.validateAuthentication(&policy.Scope.Authentication, "policy-level"); err != nil {
+			return err
 		}
 	}
 
-	if policy.Scope.Authentication.ProtocolVersion == "SNMPv3" {
-		if policy.Scope.Authentication.SecurityLevel != "noAuthNoPriv" &&
-			policy.Scope.Authentication.SecurityLevel != "authNoPriv" &&
-			policy.Scope.Authentication.SecurityLevel != "authPriv" {
-			return fmt.Errorf("invalid security level %s", policy.Scope.Authentication.SecurityLevel)
-		}
-		if policy.Scope.Authentication.SecurityLevel == "authNoPriv" || policy.Scope.Authentication.SecurityLevel == "authPriv" {
-			if policy.Scope.Authentication.Username == "" {
-				return fmt.Errorf("missing username")
+	// Validate each target's authentication
+	for _, target := range policy.Scope.Targets {
+		if target.Authentication != nil {
+			// Target has its own auth - validate it
+			context := fmt.Sprintf("target %s", target.Host)
+			if err := m.validateAuthentication(target.Authentication, context); err != nil {
+				return err
 			}
-
-			if policy.Scope.Authentication.AuthPassphrase == "" {
-				return fmt.Errorf("missing auth passphrase")
-			}
-
-			if policy.Scope.Authentication.AuthProtocol == "" {
-				return fmt.Errorf("missing auth protocol")
-			}
-		}
-		if policy.Scope.Authentication.SecurityLevel == "authPriv" {
-			if policy.Scope.Authentication.PrivPassphrase == "" {
-				return fmt.Errorf("missing priv passphrase")
-			}
-
-			if policy.Scope.Authentication.PrivProtocol == "" {
-				return fmt.Errorf("missing priv protocol")
-			}
+		} else if !hasPolicyAuth {
+			// Target has no auth and there's no policy-level fallback
+			return fmt.Errorf("target %s: no authentication configured and no policy-level fallback available", target.Host)
 		}
 	}
 
@@ -234,9 +266,12 @@ func (m *Manager) GetCapabilities() []string {
 	return []string{"targets"}
 }
 
-// resolveAuthenticationEnvVars resolves environment variables in authentication configuration
-func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
-	auth := &policy.Scope.Authentication
+// resolveAuthenticationEnvVarsForAuth resolves environment variables for a single Authentication
+func (m *Manager) resolveAuthenticationEnvVarsForAuth(auth *config.Authentication, context string) error {
+	if auth == nil {
+		return nil
+	}
+
 	fields := []struct {
 		field *string
 		label string
@@ -246,13 +281,34 @@ func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
 		{&auth.AuthPassphrase, "auth_passphrase"},
 		{&auth.PrivPassphrase, "priv_passphrase"},
 	}
+
 	// Iterate over the fields and resolve environment variables
 	for _, f := range fields {
 		resolved, err := env.ResolveEnv(*f.field)
 		if err != nil {
-			return fmt.Errorf("failed to resolve %s environment variable: %w", f.label, err)
+			return fmt.Errorf("%s: failed to resolve %s environment variable: %w", context, f.label, err)
 		}
 		*f.field = resolved
+	}
+
+	return nil
+}
+
+// resolveAuthenticationEnvVars resolves environment variables in authentication configuration
+func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
+	// Resolve policy-level authentication
+	if err := m.resolveAuthenticationEnvVarsForAuth(&policy.Scope.Authentication, "policy-level"); err != nil {
+		return err
+	}
+
+	// Resolve target-level authentication
+	for i := range policy.Scope.Targets {
+		if policy.Scope.Targets[i].Authentication != nil {
+			context := fmt.Sprintf("target %s", policy.Scope.Targets[i].Host)
+			if err := m.resolveAuthenticationEnvVarsForAuth(policy.Scope.Targets[i].Authentication, context); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil

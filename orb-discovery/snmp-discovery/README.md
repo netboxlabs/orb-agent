@@ -104,21 +104,54 @@ authentication:
 ```
 
 If the referenced environment variable is not set, the service will exit with an error.
-  discover_once: # will run only once
+
+### Per-Target Authentication
+
+SNMP discovery supports both policy-level and per-target authentication, allowing you to use different credentials for different network devices.
+
+#### How It Works
+
+- **Target-level authentication**: Specify credentials directly on individual targets
+- **Policy-level authentication**: Define fallback credentials at the scope level
+- **Automatic fallback**: If a target doesn't have authentication, it uses the policy-level credentials
+
+#### Example Configuration
+
+```yaml
+policies:
+  mixed_credentials:
+    config:
+      defaults:
+        site: "datacenter-01"
     scope:
       targets:
-        - host: "core-switch.example.com"
+        # Target with its own SNMPv2c credentials
+        - host: "192.168.1.1"
           port: 161
-        - host: "192.168.100.50"
+          authentication:
+            protocol_version: "SNMPv2c"
+            community: "switch-community"
+
+        # Target with its own SNMPv3 credentials
+        - host: "core-router.example.com"
           port: 161
+          authentication:
+            protocol_version: "SNMPv3"
+            security_level: "authPriv"
+            username: "router-user"
+            auth_protocol: "SHA"
+            auth_passphrase: "${ROUTER_AUTH_PASS}"
+            priv_protocol: "AES"
+            priv_passphrase: "${ROUTER_PRIV_PASS}"
+
+        # Target without auth - uses policy-level fallback
+        - host: "192.168.1.100"
+          port: 161
+
+      # Policy-level authentication (fallback)
       authentication:
-        protocol_version: "v3"
-        security_level: "authPriv"
-        username: "monitoring"
-        auth_protocol: "SHA"
-        auth_passphrase: "secure-auth-pass"
-        priv_protocol: "AES" 
-        priv_passphrase: "secure-priv-pass"
+        protocol_version: "SNMPv2c"
+        community: "public"
 ```
 
 ### Interface Type Pattern Matching

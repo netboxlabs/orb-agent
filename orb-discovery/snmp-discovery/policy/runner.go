@@ -183,6 +183,18 @@ func (r *Runner) runScan(targets []config.Target) {
 	r.logger.Info("SNMP probe scan complete", "policy", policyName, "responsiveTargetCount", len(responsive))
 }
 
+// resolveTargetAuthentication returns the authentication to use for a target
+// Uses target-level auth if available, otherwise falls back to policy-level auth
+func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authentication {
+	if target.Authentication != nil {
+		r.logger.Debug("Using target-level authentication", "host", target.Host)
+		return target.Authentication
+	}
+
+	r.logger.Debug("Using policy-level authentication (fallback)", "host", target.Host)
+	return &r.scope.Authentication
+}
+
 func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	select {
 	case <-ctx.Done():
@@ -190,7 +202,9 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	default:
 	}
 
-	snmpClient, err := r.ClientFactory(target.Host, target.Port, 0, r.snmpProbeTimeout, &r.scope.Authentication, r.logger)
+	auth := r.resolveTargetAuthentication(target)
+
+	snmpClient, err := r.ClientFactory(target.Host, target.Port, 0, r.snmpProbeTimeout, auth, r.logger)
 	if err != nil {
 		return false
 	}
@@ -293,7 +307,9 @@ func (r *Runner) queryTarget(target config.Target) []diode.Entity {
 	// Start timing the discovery
 	startTime := time.Now()
 
-	host := snmp.NewHost(target.Host, target.Port, r.config.Retries, r.snmpTimeout, &r.scope.Authentication, r.logger, r.ClientFactory)
+	auth := r.resolveTargetAuthentication(target)
+
+	host := snmp.NewHost(target.Host, target.Port, r.config.Retries, r.snmpTimeout, auth, r.logger, r.ClientFactory)
 	oids, err := host.Walk(objectIDs)
 	if err != nil {
 		r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
@@ -347,7 +363,11 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) [][]confi
 
 		expandedTargets := make([]config.Target, len(ips))
 		for i := range ips {
-			expandedTargets[i] = config.Target{Host: ips[i], Port: target.Port}
+			expandedTargets[i] = config.Target{
+				Host:           ips[i],
+				Port:           target.Port,
+				Authentication: target.Authentication,
+			}
 		}
 		expandedMatrix = append(expandedMatrix, expandedTargets)
 	}

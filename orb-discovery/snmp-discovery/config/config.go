@@ -17,8 +17,9 @@ type Scope struct {
 
 // Target represents a target host to crawl
 type Target struct {
-	Host string `yaml:"host"`
-	Port uint16 `yaml:"port" default:"161"`
+	Host           string          `yaml:"host"`
+	Port           uint16          `yaml:"port" default:"161"`
+	Authentication *Authentication `yaml:"authentication,omitempty"`
 }
 
 // Authentication represents the authentication credentials for a target host

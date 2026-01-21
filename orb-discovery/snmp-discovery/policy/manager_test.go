@@ -107,7 +107,7 @@ func TestManagerParsePolicies(t *testing.T) {
 
 		_, err := manager.ParsePolicies(yamlData)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "policy1 : invalid policy : missing protocol version")
+		assert.Contains(t, err.Error(), `policy1 : invalid policy : target 192.168.1.1: no authentication configured`)
 	})
 
 	t.Run("Valid Policy - Explicit LookupExtensionsDir", func(t *testing.T) {
@@ -660,6 +660,279 @@ func TestManagerApplyDefaults_Location(t *testing.T) {
 		assert.Contains(t, policies, "policy1")
 		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Role)
 		assert.Equal(t, "undefined", policies["policy1"].Config.Defaults.Site)
+	})
+}
+
+func TestManagerParsePoliciesWithPerTargetAuth(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	assert.NoError(t, err)
+
+	t.Run("Valid Per-Target Auth - SNMPv2c", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  port: 161
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: target-community
+              authentication:
+                protocol_version: SNMPv2c
+                community: policy-community
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.NotNil(t, policies["policy1"].Scope.Targets[0].Authentication)
+		assert.Equal(t, "SNMPv2c", policies["policy1"].Scope.Targets[0].Authentication.ProtocolVersion)
+		assert.Equal(t, "target-community", policies["policy1"].Scope.Targets[0].Authentication.Community)
+		assert.Equal(t, "policy-community", policies["policy1"].Scope.Authentication.Community)
+	})
+
+	t.Run("Valid Per-Target Auth - SNMPv3", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    security_level: authPriv
+                    username: target-user
+                    auth_protocol: SHA
+                    auth_passphrase: target-auth-pass
+                    priv_protocol: AES
+                    priv_passphrase: target-priv-pass
+              authentication:
+                protocol_version: SNMPv2c
+                community: policy-community
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.NotNil(t, policies["policy1"].Scope.Targets[0].Authentication)
+		assert.Equal(t, "SNMPv3", policies["policy1"].Scope.Targets[0].Authentication.ProtocolVersion)
+		assert.Equal(t, "target-user", policies["policy1"].Scope.Targets[0].Authentication.Username)
+		assert.Equal(t, "target-auth-pass", policies["policy1"].Scope.Targets[0].Authentication.AuthPassphrase)
+		assert.Equal(t, "target-priv-pass", policies["policy1"].Scope.Targets[0].Authentication.PrivPassphrase)
+	})
+
+	t.Run("Mixed Configuration - Some Targets with Auth", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    security_level: authPriv
+                    username: target-user
+                    auth_protocol: SHA
+                    auth_passphrase: auth-pass
+                    priv_protocol: AES
+                    priv_passphrase: priv-pass
+                - host: 192.168.1.2
+              authentication:
+                protocol_version: SNMPv2c
+                community: fallback-community
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.NotNil(t, policies["policy1"].Scope.Targets[0].Authentication)
+		assert.Nil(t, policies["policy1"].Scope.Targets[1].Authentication)
+		assert.Equal(t, "fallback-community", policies["policy1"].Scope.Authentication.Community)
+	})
+
+	t.Run("Per-Target Auth Only - No Policy Auth", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: target-community
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.NotNil(t, policies["policy1"].Scope.Targets[0].Authentication)
+		assert.Equal(t, "target-community", policies["policy1"].Scope.Targets[0].Authentication.Community)
+	})
+
+	t.Run("Invalid - No Auth at All", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+       `)
+
+		_, err := manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no authentication configured")
+	})
+
+	t.Run("Invalid Target Auth - Missing Community", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv2c
+              authentication:
+                protocol_version: SNMPv2c
+                community: fallback
+       `)
+
+		_, err := manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "target 192.168.1.1")
+		assert.Contains(t, err.Error(), "missing community")
+	})
+
+	t.Run("Environment Variable Resolution for Target Auth", func(t *testing.T) {
+		err := os.Setenv("TARGET_COMMUNITY", "target-from-env")
+		require.NoError(t, err)
+		defer func() { _ = os.Unsetenv("TARGET_COMMUNITY") }()
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: ${TARGET_COMMUNITY}
+              authentication:
+                protocol_version: SNMPv2c
+                community: policy-community
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "target-from-env", policies["policy1"].Scope.Targets[0].Authentication.Community)
+		assert.Equal(t, "policy-community", policies["policy1"].Scope.Authentication.Community)
+	})
+
+	t.Run("Missing Environment Variable for Target Auth", func(t *testing.T) {
+		err := os.Unsetenv("MISSING_TARGET_COMMUNITY")
+		require.NoError(t, err)
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: ${MISSING_TARGET_COMMUNITY}
+              authentication:
+                protocol_version: SNMPv2c
+                community: policy-community
+       `)
+
+		_, err = manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "policy1 : failed to resolve environment variables")
+		assert.Contains(t, err.Error(), "target 192.168.1.1")
+		assert.Contains(t, err.Error(), "failed to resolve community environment variable")
+	})
+
+	t.Run("Multiple Targets with Different Protocols", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: v2c-community
+                - host: 192.168.1.2
+                  authentication:
+                    protocol_version: SNMPv3
+                    security_level: authNoPriv
+                    username: v3-user
+                    auth_protocol: SHA
+                    auth_passphrase: v3-pass
+              authentication:
+                protocol_version: SNMPv1
+                community: fallback-community
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "SNMPv2c", policies["policy1"].Scope.Targets[0].Authentication.ProtocolVersion)
+		assert.Equal(t, "SNMPv3", policies["policy1"].Scope.Targets[1].Authentication.ProtocolVersion)
+		assert.Equal(t, "SNMPv1", policies["policy1"].Scope.Authentication.ProtocolVersion)
+	})
+
+	t.Run("Invalid - Target Without Auth and No Policy Fallback", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                comments: test
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: target1-community
+                - host: 192.168.1.2
+       `)
+
+		_, err := manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "target 192.168.1.2")
+		assert.Contains(t, err.Error(), "no authentication configured and no policy-level fallback available")
 	})
 }
 
