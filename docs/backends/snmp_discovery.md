@@ -49,11 +49,11 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | site | string | no | Default site name for discovered devices |
 | location | string | no | Default location for discovered devices |
 | role | string | no | Default role for discovered devices |
-| interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./snmp_discovery_interface.md)) |
+| interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./snmp_discovery_interface.md)) |
 
 ##### Nested Defaults
 | Parameter | Type | Description |
-|:---------:|:----:|:-----------:|
+|---------|----|-----------|
 | device      | map  | Device-specific defaults        |
 | ├─ description | string  | Device description           |
 | ├─ comments   | string  | Device comments               |
@@ -77,9 +77,10 @@ Each target in the `targets` list can include:
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| host | string | yes | Target hostname or IP address |
+| host | string | yes | Target hostname,  IP address, subnets or IP ranges |
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
+| override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
@@ -134,6 +135,9 @@ scope:
     - host: "192.168.2.2-10" # range support
     - host: "10.0.0.1"
       port: 162  # Non-standard SNMP port
+      override_defaults:
+        role: "switch"
+        tags: ["custom"]
     - host: "10.0.0.10"
       port: 161
       authentication:  # Per-target authentication (optional)
