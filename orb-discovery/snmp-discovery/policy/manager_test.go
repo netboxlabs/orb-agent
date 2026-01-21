@@ -990,3 +990,288 @@ devices:
 	err = manager.StopPolicy("test-policy-with-devices")
 	assert.NoError(t, err)
 }
+
+func TestManagerParsePoliciesWithOverrideDefaults(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	assert.NoError(t, err)
+
+	t.Run("Valid Per-Target Override Defaults - Basic", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "New York"
+                role: "switch"
+                tags: ["network", "snmp"]
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  port: 161
+                  override_defaults:
+                    site: "New York/DC-A"
+                    role: "router"
+                    tags: ["core", "production"]
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.NotNil(t, policies["policy1"].Scope.Targets[0].OverrideDefaults)
+		assert.Equal(t, "New York/DC-A", policies["policy1"].Scope.Targets[0].OverrideDefaults.Site)
+		assert.Equal(t, "router", policies["policy1"].Scope.Targets[0].OverrideDefaults.Role)
+		assert.Equal(t, []string{"core", "production"}, policies["policy1"].Scope.Targets[0].OverrideDefaults.Tags)
+		// Verify policy defaults unchanged
+		assert.Equal(t, "New York", policies["policy1"].Config.Defaults.Site)
+		assert.Equal(t, "switch", policies["policy1"].Config.Defaults.Role)
+	})
+
+	t.Run("Valid Per-Target Override Defaults - Nested Structures", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "Default Site"
+                role: "switch"
+                device:
+                  description: "Policy Device"
+                  tags: ["policy"]
+                interface:
+                  if_type: "other"
+                  tags: ["policy-interface"]
+                ip_address:
+                  role: "anycast"
+                  tenant: "default-tenant"
+                  vrf: "default-vrf"
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  override_defaults:
+                    site: "Override Site"
+                    device:
+                      description: "Overridden Device"
+                      tags: ["overridden"]
+                    interface:
+                      if_type: "1000base-t"
+                      tags: ["override-interface"]
+                    ip_address:
+                      role: "loopback"
+                      tenant: "override-tenant"
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		overrides := policies["policy1"].Scope.Targets[0].OverrideDefaults
+		assert.NotNil(t, overrides)
+		assert.Equal(t, "Override Site", overrides.Site)
+		assert.Equal(t, "Overridden Device", overrides.Device.Description)
+		assert.Equal(t, []string{"overridden"}, overrides.Device.Tags)
+		assert.Equal(t, "1000base-t", overrides.Interface.Type)
+		assert.Equal(t, []string{"override-interface"}, overrides.Interface.Tags)
+		assert.Equal(t, "loopback", overrides.IPAddress.Role)
+		assert.Equal(t, "override-tenant", overrides.IPAddress.Tenant)
+	})
+
+	t.Run("Mixed Configuration - Some Targets with Overrides", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "Default Site"
+                role: "switch"
+                tags: ["default"]
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  override_defaults:
+                    site: "Override Site"
+                    role: "router"
+                - host: 192.168.1.2
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.NotNil(t, policies["policy1"].Scope.Targets[0].OverrideDefaults)
+		assert.Nil(t, policies["policy1"].Scope.Targets[1].OverrideDefaults)
+		assert.Equal(t, "Override Site", policies["policy1"].Scope.Targets[0].OverrideDefaults.Site)
+		assert.Equal(t, "Default Site", policies["policy1"].Config.Defaults.Site)
+	})
+
+	t.Run("Partial Override - Only Some Fields", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "Default Site"
+                role: "switch"
+                location: "Default Location"
+                tags: ["default"]
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  override_defaults:
+                    role: "router"
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		overrides := policies["policy1"].Scope.Targets[0].OverrideDefaults
+		assert.NotNil(t, overrides)
+		assert.Equal(t, "router", overrides.Role)
+		// Other fields should be empty in override (will be merged at runtime)
+		assert.Equal(t, "", overrides.Site)
+		assert.Equal(t, "", overrides.Location)
+	})
+
+	t.Run("Interface Patterns Override", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "Default Site"
+                interface_patterns:
+                  - match: "^Eth"
+                    type: "1000base-t"
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  override_defaults:
+                    interface_patterns:
+                      - match: "^GigabitEthernet"
+                        type: "10gbase-x-sfpp"
+                      - match: "^TenGigabitEthernet"
+                        type: "25gbase-x-sfp28"
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		overrides := policies["policy1"].Scope.Targets[0].OverrideDefaults
+		assert.NotNil(t, overrides)
+		assert.Len(t, overrides.InterfacePatterns, 2)
+		assert.Equal(t, "^GigabitEthernet", overrides.InterfacePatterns[0].Match)
+		assert.Equal(t, "10gbase-x-sfpp", overrides.InterfacePatterns[0].Type)
+		assert.Equal(t, "^TenGigabitEthernet", overrides.InterfacePatterns[1].Match)
+		assert.Equal(t, "25gbase-x-sfp28", overrides.InterfacePatterns[1].Type)
+	})
+
+	t.Run("Empty Override Defaults - Uses Policy Defaults", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "Default Site"
+                role: "switch"
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Nil(t, policies["policy1"].Scope.Targets[0].OverrideDefaults)
+		assert.Equal(t, "Default Site", policies["policy1"].Config.Defaults.Site)
+		assert.Equal(t, "switch", policies["policy1"].Config.Defaults.Role)
+	})
+
+	t.Run("Multiple Targets with Different Overrides", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "Default Site"
+                role: "switch"
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  override_defaults:
+                    site: "Site A"
+                    role: "router"
+                - host: 192.168.1.2
+                  override_defaults:
+                    site: "Site B"
+                    role: "firewall"
+                - host: 192.168.1.3
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "Site A", policies["policy1"].Scope.Targets[0].OverrideDefaults.Site)
+		assert.Equal(t, "router", policies["policy1"].Scope.Targets[0].OverrideDefaults.Role)
+		assert.Equal(t, "Site B", policies["policy1"].Scope.Targets[1].OverrideDefaults.Site)
+		assert.Equal(t, "firewall", policies["policy1"].Scope.Targets[1].OverrideDefaults.Role)
+		assert.Nil(t, policies["policy1"].Scope.Targets[2].OverrideDefaults)
+	})
+
+	t.Run("Override Defaults with Per-Target Auth", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults:
+                site: "Default Site"
+                role: "switch"
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    security_level: authPriv
+                    username: target-user
+                    auth_protocol: SHA
+                    auth_passphrase: auth-pass
+                    priv_protocol: AES
+                    priv_passphrase: priv-pass
+                  override_defaults:
+                    site: "Override Site"
+                    role: "router"
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		target := policies["policy1"].Scope.Targets[0]
+		assert.NotNil(t, target.Authentication)
+		assert.Equal(t, "SNMPv3", target.Authentication.ProtocolVersion)
+		assert.Equal(t, "target-user", target.Authentication.Username)
+		assert.NotNil(t, target.OverrideDefaults)
+		assert.Equal(t, "Override Site", target.OverrideDefaults.Site)
+		assert.Equal(t, "router", target.OverrideDefaults.Role)
+	})
+}

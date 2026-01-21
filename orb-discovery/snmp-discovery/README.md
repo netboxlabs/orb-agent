@@ -154,6 +154,54 @@ policies:
         community: "public"
 ```
 
+### Per-Target Override Defaults
+
+SNMP discovery supports per-target default overrides, allowing you to customize site, role, tags, and other entity defaults for individual targets while maintaining policy-wide defaults as fallbacks.
+
+#### Example Configuration
+
+```yaml
+policies:
+  multi_site:
+    config:
+      defaults:
+        site: "New York"
+        role: "switch"
+        tags: ["snmp", "network"]
+    scope:
+      targets:
+        # Uses policy defaults
+        - host: "192.168.1.1"
+
+        # Override site and role for this target
+        - host: "192.168.1.2"
+          override_defaults:
+            site: "New York/DC-A"
+            role: "router"
+            tags: ["core", "production"]
+
+        # Override nested defaults
+        - host: "192.168.1.3"
+          override_defaults:
+            site: "Boston"
+            device:
+              description: "Core Router"
+            interface:
+              if_type: "1000base-t"
+            ip_address:
+              role: "loopback"
+
+        # Works with IP ranges - all IPs inherit the override
+        - host: "192.168.2.0/24"
+          override_defaults:
+            site: "Chicago"
+            role: "access-switch"
+
+      authentication:
+        protocol_version: "SNMPv2c"
+        community: "public"
+```
+
 ### Interface Type Pattern Matching
 
 SNMP discovery supports flexible interface type detection through a six-tier priority system that intelligently combines SNMP protocol data with pattern matching:

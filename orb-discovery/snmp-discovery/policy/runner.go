@@ -195,6 +195,18 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 	return &r.scope.Authentication
 }
 
+// resolveTargetDefaults returns the defaults to use for a target
+// Merges target-level override defaults with policy-level defaults
+func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
+	if target.OverrideDefaults != nil {
+		r.logger.Debug("Merging target-level override defaults", "host", target.Host)
+		return config.MergeDefaults(&r.config.Defaults, target.OverrideDefaults)
+	}
+
+	r.logger.Debug("Using policy-level defaults", "host", target.Host)
+	return &r.config.Defaults
+}
+
 func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	select {
 	case <-ctx.Done():
@@ -285,7 +297,9 @@ func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
 }
 
 func (r *Runner) queryTarget(target config.Target) []diode.Entity {
-	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, &r.config.Defaults)
+	targetDefaults := r.resolveTargetDefaults(target)
+
+	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, targetDefaults)
 	if err != nil {
 		r.logger.Error("Error creating mapping config", "error", err)
 		return make([]diode.Entity, 0)
@@ -295,7 +309,7 @@ func (r *Runner) queryTarget(target config.Target) []diode.Entity {
 
 	entities := make([]diode.Entity, 0)
 
-	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, &r.config.Defaults)
+	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, targetDefaults)
 	policyName := r.ctx.Value(policyKey).(string)
 	// Track discovery attempt
 	if rMetric := metrics.GetDiscoveryAttempts(); rMetric != nil {
@@ -364,9 +378,10 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) [][]confi
 		expandedTargets := make([]config.Target, len(ips))
 		for i := range ips {
 			expandedTargets[i] = config.Target{
-				Host:           ips[i],
-				Port:           target.Port,
-				Authentication: target.Authentication,
+				Host:             ips[i],
+				Port:             target.Port,
+				Authentication:   target.Authentication,
+				OverrideDefaults: target.OverrideDefaults,
 			}
 		}
 		expandedMatrix = append(expandedMatrix, expandedTargets)
