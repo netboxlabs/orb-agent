@@ -117,6 +117,32 @@ orb:
        # see docs/backends/snmp.md
  ```
 
+## System Requirements
+
+### Quick Reference
+
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| **CPU** | 2 core | 4 cores |
+| **Memory** | 1.5 GB | 2 GB |
+| **Disk Space** | 1 GB | 2 GB |
+
+### Container Runtime
+
+| Runtime | Minimum Version | Recommended Version |
+|---------|-----------------|---------------------|
+| Docker Engine | 20.10 | 24.0+ |
+| Podman | 4.0 | 5.0+ |
+
+### Operating System
+
+| OS | Support | Notes |
+|----|---------|-------|
+| Linux (x86_64) | ✅ Full | Required for `--net=host` |
+| Linux (arm64) | ✅ Full | Tested on ARM64 |
+| macOS | ⚠️ Limited | No host networking support |
+| Windows | ⚠️ Limited | No host networking support |
+
 ## Running the agent
 
 To run `orb-agent`, use the following command from the directory where your created your `agent.yaml` file:
@@ -138,6 +164,8 @@ podman run -d --privileged --net=host \
   -e DIODE_CLIENT_SECRET \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
+
+**Note for rootless podman users:** If running podman without root/sudo privileges, network discovery requires specific configuration to avoid raw socket limitations. The command above requires `sudo` for full NMAP functionality. For rootless operation, see the [Network Discovery backend documentation](./docs/backends/network_discovery.md#rootless-podman-deployment) for TCP connect scan configuration.
 
 ### Configuration samples
 You can find complete sample configurations [here](./docs/config_samples.md) of how to configure Orb agent to run network and device discoveries, as well as the relevant `docker run` commands.
