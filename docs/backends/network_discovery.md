@@ -124,7 +124,7 @@ sudo podman run -d --privileged --net=host \
   -v /home/user/orb:/opt/orb \
   -e DIODE_CLIENT_ID \
   -e DIODE_CLIENT_SECRET \
-  netboxlabs/orb-agent:latest run -c /opt/orb/orb.yaml
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
 **Advantages:**
@@ -147,7 +147,7 @@ podman run -d --privileged --net=host \
   -v /home/user/orb:/opt/orb \
   -e DIODE_CLIENT_ID \
   -e DIODE_CLIENT_SECRET \
-  netboxlabs/orb-agent:latest run -c /opt/orb/orb.yaml
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
 **Required Configuration:**
