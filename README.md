@@ -123,7 +123,7 @@ orb:
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
-| **CPU** | 2 core | 4 cores |
+| **CPU** | 2 cores | 4 cores |
 | **Memory** | 1.5 GB | 2 GB |
 | **Disk Space** | 1 GB | 2 GB |
 
