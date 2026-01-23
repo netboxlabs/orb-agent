@@ -71,6 +71,101 @@ Run command:
 ```
 The relative path used by `pip install` should point to the directory containing the `.txt` file.
 
+## Device Discovery with Jumphost
+
+This example demonstrates discovering devices through a bastion host using SSH ProxyJump.
+
+**Scenario:**
+- Bastion host at 203.0.113.100
+- Network devices in 10.0.0.0/8 accessible only through bastion
+- Key-based authentication to bastion
+- Password authentication to network devices
+
+**Directory Structure:**
+```
+/local/orb/
+├── agent.yaml
+├── ssh-jumphost.conf
+└── keys/
+    └── bastion_key
+```
+
+**SSH Config** (`/local/orb/ssh-jumphost.conf`):
+```sshconfig
+Host bastion
+  HostName 203.0.113.100
+  User admin
+  IdentityFile /opt/orb/keys/bastion_key
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+
+Host 10.*
+  ProxyJump bastion
+  StrictHostKeyChecking no
+```
+
+**Agent Config** (`/local/orb/agent.yaml`):
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: bastion-agent
+    device_discovery:
+  policies:
+    device_discovery:
+      behind_bastion:
+        config:
+          schedule: "*/10 * * * *"
+          defaults:
+            site: Remote Site
+            role: switch
+        scope:
+          - driver: ios
+            hostname: 10.0.1.10
+            username: cisco
+            password: ${CISCO_PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-jumphost.conf
+          - driver: eos
+            hostname: 10.0.2.20
+            username: arista
+            password: ${ARISTA_PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-jumphost.conf
+```
+
+**Setup Commands:**
+```bash
+# Create directory structure
+mkdir -p /local/orb/keys
+
+# Generate SSH key for bastion
+ssh-keygen -t rsa -b 4096 -f /local/orb/keys/bastion_key -N ""
+chmod 600 /local/orb/keys/bastion_key
+
+# Copy public key to bastion host
+ssh-copy-id -i /local/orb/keys/bastion_key.pub admin@203.0.113.100
+
+# Create the SSH config and agent config files (content above)
+```
+
+**Run Command:**
+```bash
+docker run -v /local/orb:/opt/orb/ \
+  -e DIODE_CLIENT_ID="${DIODE_CLIENT_ID}" \
+  -e DIODE_CLIENT_SECRET="${DIODE_CLIENT_SECRET}" \
+  -e CISCO_PASS="${CISCO_PASS}" \
+  -e ARISTA_PASS="${ARISTA_PASS}" \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+For advanced scenarios including VRF-aware connections, multiple jumphosts, and performance optimization with Control Master, see the comprehensive [SSH Configuration and Jumphost Support](backends/device_discovery_ssh.md) guide.
 
 ## Network-discovery backend
 ```yaml
@@ -350,7 +445,7 @@ orb:
     device_discovery:
       policy_1:
         config:
-          schedule: "0 */6 * * *"
+          schedule: "*/10 * * * *"
         scope:
           - driver: ios
             hostname: "192.168.1.1"
