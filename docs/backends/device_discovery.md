@@ -122,10 +122,26 @@ The scope defines a list of devices that can be accessed and pulled data.
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
 | driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
-| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
+| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./device_discovery_ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
 
+### SSH Configuration and Jumphost Support
 
+For advanced SSH scenarios including bastion/jumphost connectivity, VRF-aware connections, and multi-hop SSH configurations, see the dedicated guide: [SSH Configuration and Jumphost Support](./device_discovery_ssh.md).
+
+The `ssh_config_file` optional argument allows you to specify a standard OpenSSH configuration file for connecting to devices through intermediate jump servers:
+
+```yaml
+scope:
+  - driver: ios
+    hostname: 192.168.10.5
+    username: admin
+    password: ${DEVICE_PASS}
+    optional_args:
+      ssh_config_file: /opt/orb/ssh-napalm.conf
+```
+
+See the [SSH Configuration guide](./device_discovery_ssh.md) for complete examples, security best practices, and troubleshooting.
 
 ### Sample
 A sample policy including all parameters supported by the device discovery backend.
