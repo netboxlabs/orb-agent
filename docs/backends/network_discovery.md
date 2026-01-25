@@ -105,7 +105,7 @@ Be **AWARE** that executing a policy with only targets defined is equivalent to 
 
 Network discovery can be run with podman in two modes: privileged (with sudo) or rootless (without sudo). The choice depends on your security requirements and the scan types you need.
 
-### Understanding the Limitation
+### Limitations
 
 NMAP's default behavior uses privileged network operations that require raw socket access:
 - **SYN scans** (`-sS`) require `CAP_NET_RAW` capability
