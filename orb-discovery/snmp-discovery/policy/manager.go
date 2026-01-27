@@ -32,7 +32,7 @@ type Manager struct {
 	ctx           context.Context
 	mappingConfig config.Mapping
 	manufacturers data.ManufacturerRetriever
-	jobStore      *JobStore
+	runStore      *RunStore
 }
 
 // NewManager returns a new policy manager
@@ -50,7 +50,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client, m
 		mappingConfig: mappingConfig,
 		policies:      make(map[string]*Runner),
 		manufacturers: manufacturers,
-		jobStore:      NewJobStore(),
+		runStore:      NewRunStore(),
 	}, nil
 }
 
@@ -229,7 +229,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 			return snmp.NewClient(host, port, retries, timeout, authentication, logger)
 		}
 
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, clientFactory, &m.mappingConfig, m.manufacturers, deviceLookup, m.jobStore)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, clientFactory, &m.mappingConfig, m.manufacturers, deviceLookup, m.runStore)
 		if err != nil {
 			return err
 		}
@@ -314,46 +314,60 @@ func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
 	return nil
 }
 
-// Status represents the status of a policy with its jobs
+// Status represents the status of a policy with its runs
 type Status struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // derived from latest job
-	Jobs   []*Job `json:"jobs"`
+	Status string `json:"status"` // derived from latest run
+	Runs   []*Run `json:"runs"`
 }
 
-// GetPolicyStatuses returns all policies with their status and jobs
+// findLatestRun returns the most recent run from a sorted list
+// Note: GetRunsForPolicy returns runs sorted by CreatedAt descending (newest first)
+func findLatestRun(runs []*Run) *Run {
+	if len(runs) == 0 {
+		return nil
+	}
+	// Runs are already sorted newest first by GetRunsForPolicy
+	return runs[0]
+}
+
+// GetPolicyStatuses returns all policies with their status and runs
 func (m *Manager) GetPolicyStatuses() []Status {
-	allJobs := m.jobStore.GetAllPoliciesWithJobs()
+	allRuns := m.runStore.GetAllPoliciesWithRuns()
 
 	var statuses []Status
 
 	// Get statuses for all policies that have runners
 	for name := range m.policies {
-		jobs := m.jobStore.GetJobsForPolicy(name)
+		runs := m.runStore.GetRunsForPolicy(name)
 		status := "unknown"
-		if len(jobs) > 0 {
-			latestJob := jobs[len(jobs)-1]
-			status = string(latestJob.Status)
+		if len(runs) > 0 {
+			latestRun := findLatestRun(runs)
+			if latestRun != nil {
+				status = string(latestRun.Status)
+			}
 		}
 		statuses = append(statuses, Status{
 			Name:   name,
 			Status: status,
-			Jobs:   jobs,
+			Runs:   runs,
 		})
 	}
 
-	// Also include policies that have jobs but no active runner
-	for name, jobs := range allJobs {
+	// Also include policies that have runs but no active runner
+	for name, runs := range allRuns {
 		if !m.HasPolicy(name) {
 			status := "unknown"
-			if len(jobs) > 0 {
-				latestJob := jobs[len(jobs)-1]
-				status = string(latestJob.Status)
+			if len(runs) > 0 {
+				latestRun := findLatestRun(runs)
+				if latestRun != nil {
+					status = string(latestRun.Status)
+				}
 			}
 			statuses = append(statuses, Status{
 				Name:   name,
 				Status: status,
-				Jobs:   jobs,
+				Runs:   runs,
 			})
 		}
 	}

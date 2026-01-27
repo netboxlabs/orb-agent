@@ -56,15 +56,19 @@ func TestExpandTargetRangesGroupsTargets(t *testing.T) {
 	expanded := runner.expandTargetRanges(configuredTargets)
 	require.Len(t, expanded, 2)
 
-	require.Len(t, expanded[0], 2)
-	assert.Equal(t, "192.168.1.1", expanded[0][0].Host)
-	assert.Equal(t, uint16(161), expanded[0][0].Port)
-	assert.Equal(t, "192.168.1.2", expanded[0][1].Host)
-	assert.Equal(t, uint16(161), expanded[0][1].Port)
+	// Check first group (192.168.1.1-2 expands to 2 targets)
+	assert.Equal(t, "192.168.1.1-2", expanded[0].originalTarget)
+	require.Len(t, expanded[0].targets, 2)
+	assert.Equal(t, "192.168.1.1", expanded[0].targets[0].Host)
+	assert.Equal(t, uint16(161), expanded[0].targets[0].Port)
+	assert.Equal(t, "192.168.1.2", expanded[0].targets[1].Host)
+	assert.Equal(t, uint16(161), expanded[0].targets[1].Port)
 
-	require.Len(t, expanded[1], 1)
-	assert.Equal(t, "example.com", expanded[1][0].Host)
-	assert.Equal(t, uint16(162), expanded[1][0].Port)
+	// Check second group (example.com expands to 1 target)
+	assert.Equal(t, "example.com", expanded[1].originalTarget)
+	require.Len(t, expanded[1].targets, 1)
+	assert.Equal(t, "example.com", expanded[1].targets[0].Host)
+	assert.Equal(t, uint16(162), expanded[1].targets[0].Port)
 }
 
 func TestProbeTargetCanceledContextSkipsClientFactory(t *testing.T) {
@@ -170,11 +174,14 @@ func TestRunScanSchedulesResponsiveTargets(t *testing.T) {
 	scheduler, err := gocron.NewScheduler()
 	require.NoError(t, err)
 
+	runStore := NewRunStore()
+
 	runner := &Runner{
 		scheduler: scheduler,
 		ctx:       context.WithValue(context.Background(), policyKey, "test-policy"),
 		timeout:   5 * time.Second,
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runStore:  runStore,
 	}
 
 	runner.ClientFactory = func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
@@ -184,12 +191,19 @@ func TestRunScanSchedulesResponsiveTargets(t *testing.T) {
 		return &testWalker{walkErr: errors.New("no response")}, nil
 	}
 
-	runner.runScan([]config.Target{
+	runner.runScanWithOriginal([]config.Target{
 		{Host: "good-1", Port: 161},
 		{Host: "bad-1", Port: 161},
 		{Host: "good-2", Port: 161},
-	})
+	}, "192.168.1.0/24")
 
 	assert.Len(t, runner.tasks, 2)
 	assert.Len(t, runner.scheduler.Jobs(), 2)
+
+	// Verify scan run was created
+	runs := runStore.GetRunsForTarget("test-policy", "192.168.1.0/24", 161)
+	require.Len(t, runs, 1, "Scan run should be created")
+	assert.Equal(t, "192.168.1.0/24", runs[0].Metadata["target"])
+	assert.Equal(t, "161", runs[0].Metadata["port"])
+	assert.Equal(t, RunStatusCompleted, runs[0].Status)
 }

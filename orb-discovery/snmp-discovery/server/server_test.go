@@ -123,7 +123,7 @@ func TestServerGetStatusWithPolicies(t *testing.T) {
 	assert.Contains(t, bodyStr, `"test-policy"`)
 	assert.Contains(t, bodyStr, `"name":`)
 	assert.Contains(t, bodyStr, `"status":`)
-	assert.Contains(t, bodyStr, `"jobs":`)
+	assert.Contains(t, bodyStr, `"runs":`)
 
 	// Clean up
 	srv.Stop()
