@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -21,13 +22,14 @@ const (
 
 // Run represents a single run execution
 type Run struct {
-	ID          string    `json:"id"`
-	PolicyID    string    `json:"policy_id"`
-	Status      RunStatus `json:"status"`
-	Reason      string    `json:"reason,omitempty"`
-	EntityCount int       `json:"entity_count"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string            `json:"id"`
+	PolicyID    string            `json:"policy_id"`
+	Status      RunStatus         `json:"status"`
+	Reason      string            `json:"reason,omitempty"`
+	EntityCount int               `json:"entity_count"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 // RunStore manages runs in memory
@@ -46,15 +48,27 @@ func NewRunStore() *RunStore {
 }
 
 // CreateRun creates a new run for the given policy and returns it
-func (rs *RunStore) CreateRun(policyName string) *Run {
+func (rs *RunStore) CreateRun(policyName string, targets []string) *Run {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
 	now := time.Now()
+
+	// Create metadata with targets if provided
+	var metadata map[string]string
+	if len(targets) > 0 {
+		targetsJSON, err := json.Marshal(targets)
+		if err == nil {
+			metadata = make(map[string]string)
+			metadata["targets"] = string(targetsJSON)
+		}
+	}
+
 	run := &Run{
 		ID:        uuid.New().String(),
 		PolicyID:  policyName,
 		Status:    RunStatusRunning,
+		Metadata:  metadata,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}

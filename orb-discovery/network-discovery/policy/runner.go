@@ -133,7 +133,7 @@ func (r *Runner) run() {
 	policyName := r.ctx.Value(policyKey).(string)
 
 	// Create run at start
-	run := r.runStore.CreateRun(policyName)
+	run := r.runStore.CreateRun(policyName, r.scope.Targets)
 
 	if rMetric := metrics.GetPolicyExecutions(); rMetric != nil {
 		rMetric.Add(r.ctx, 1,
