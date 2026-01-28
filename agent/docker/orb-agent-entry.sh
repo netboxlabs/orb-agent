@@ -96,7 +96,7 @@ do
     # pid file doesn't exist, start agent
     nohup /run-agent.sh "${agent_args[@]}" &
     sleep 2
-    if [ -d "/nohup.out" ]; then
+    if [ -f "/nohup.out" ]; then
        tail -f /nohup.out &
     fi
   fi

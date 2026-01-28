@@ -205,8 +205,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
 			http.NoBody, "application/json", readinessTimeout, "error")
 		if readinessError == nil {
-			p.logger.Info("pktvisor readiness ok, got version ",
-				"pktvisor_version", appMetrics.App.Version)
+			p.logger.Info("pktvisor readiness ok, got version", "version", appMetrics.App.Version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
@@ -314,17 +313,6 @@ func parsePktvisorEntity(line string) (entity, name, rest string, ok bool) {
 func (p *pktvisorBackend) Stop(ctx context.Context) error {
 	p.logger.Info("routine call to stop pktvisor", "routine", ctx.Value(config.ContextKey("routine")))
 	defer p.cancelFunc()
-
-	// Clean up temporary config file (but keep path for potential restart)
-	if p.configFile != "" {
-		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
-			p.logger.Warn("failed to remove pktvisor temp config file",
-				"file", p.configFile,
-				"error", err)
-		} else if err == nil {
-			p.logger.Debug("removed pktvisor temp config file", "file", p.configFile)
-		}
-	}
 
 	err := p.proc.Stop()
 	finalStatus := <-p.statusChan

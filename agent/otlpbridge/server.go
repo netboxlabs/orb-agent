@@ -106,7 +106,7 @@ func (s *BridgeServer) GetPolicyRepo() policies.PolicyRepo {
 
 // Start starts the gRPC server without establishing MQTT.
 // Publisher and topic should be set before OTLP data arrives.
-func (s *BridgeServer) Start(_ context.Context) error {
+func (s *BridgeServer) Start(ctx context.Context) error {
 	// Use ListenConfig to enable SO_REUSEADDR for faster port reuse after restart
 	lc := net.ListenConfig{
 		Control: func(_, _ string, c syscall.RawConn) error {
@@ -120,7 +120,7 @@ func (s *BridgeServer) Start(_ context.Context) error {
 			return sockOptErr
 		},
 	}
-	lis, err := lc.Listen(context.Background(), "tcp", s.cfg.ListenAddr)
+	lis, err := lc.Listen(ctx, "tcp", s.cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s (port may be in use by another service): %w", s.cfg.ListenAddr, err)
 	}
