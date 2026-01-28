@@ -215,15 +215,25 @@ func TestSensitiveData_EmptyStrings(t *testing.T) {
 	original := map[string]any{
 		"client_secret": "",
 		"password":      "",
+		"client_id":     "",
 	}
 
 	redacted := SensitiveData(original)
 
 	redactedMap := redacted.(map[string]any)
 
-	// Empty sensitive fields should be masked
-	if redactedMap["client_secret"] != MaskedSecret {
-		t.Errorf("Expected empty client_secret to be masked, got %v", redactedMap["client_secret"])
+	// Empty sensitive fields should remain empty (not masked)
+	// This allows distinguishing "no secret configured" from "secret configured (redacted)"
+	if redactedMap["client_secret"] != "" {
+		t.Errorf("Expected empty client_secret to remain empty, got %v", redactedMap["client_secret"])
+	}
+	if redactedMap["password"] != "" {
+		t.Errorf("Expected empty password to remain empty, got %v", redactedMap["password"])
+	}
+
+	// Non-sensitive empty fields should also remain empty
+	if redactedMap["client_id"] != "" {
+		t.Errorf("Expected empty client_id to remain empty, got %v", redactedMap["client_id"])
 	}
 }
 

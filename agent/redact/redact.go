@@ -100,9 +100,12 @@ func redactValue(val reflect.Value, fieldName string) any {
 
 	// Check if this field should be redacted
 	if fieldName != "" && isSensitiveField(fieldName) {
-		// Redact string values
+		// Redact non-empty string values (preserve empty strings for debugging)
 		if val.Kind() == reflect.String {
-			return MaskedSecret
+			if val.String() != "" {
+				return MaskedSecret
+			}
+			return "" // Preserve empty strings
 		}
 		// Redact slices/arrays of strings (e.g., url.Values which is map[string][]string)
 		if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
