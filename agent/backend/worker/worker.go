@@ -15,6 +15,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 var _ backend.Backend = (*workerBackend)(nil)
@@ -29,7 +30,6 @@ const (
 	defaultExec         = "orb-worker"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8071"
-	maskedSecret        = "********"
 )
 
 type workerBackend struct {
@@ -160,7 +160,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		if !d.diodeTargetFromOtel {
 			opts = append(opts,
 				"--diode-client-id", d.diodeClientID,
-				"--diode-client-secret", maskedSecret,
+				"--diode-client-secret", d.diodeClientSecret,
 			)
 		}
 		dOptions = append(opts, dOptions...)
@@ -170,17 +170,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("worker startup", "arguments", dOptions)
-
-	if !d.diodeDryRun {
-		// Swap the masked secret used for logging with the real value before execution
-		for i, arg := range dOptions {
-			if arg == maskedSecret {
-				dOptions[i] = d.diodeClientSecret
-				break
-			}
-		}
-	}
+	d.logger.Info("worker startup", "arguments", redact.Args(dOptions))
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,

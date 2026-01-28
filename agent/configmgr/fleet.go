@@ -14,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
 	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 // Compile-time check to ensure fleetConfigManager implements Manager interface
@@ -271,11 +272,8 @@ func (fleetManager *fleetConfigManager) refreshAndReconnect(ctx context.Context,
 }
 
 func (fleetManager *fleetConfigManager) configToSafeString(cfg config.Config) (string, error) {
-	if cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret != "" {
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret = "******"
-	}
-
-	configYaml, err := yaml.Marshal(cfg)
+	redacted := redact.SensitiveData(cfg)
+	configYaml, err := yaml.Marshal(redacted)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal agent config: %w", err)
 	}

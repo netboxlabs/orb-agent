@@ -14,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 	"github.com/netboxlabs/orb-agent/agent/telemetry"
 	"github.com/netboxlabs/orb-agent/agent/version"
@@ -183,7 +184,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	agentCtx := context.WithValue(ctx, routineKey, "agentRoutine")
 	a.cancelFunction = cancelFunc
 	a.logger.Info("agent started", "version", version.GetBuildVersion(), "routine", agentCtx.Value(routineKey))
-	a.logger.Info("requested backends", "values", a.config.OrbAgent.Backends)
+	a.logger.Info("requested backends", "values", redact.SensitiveData(a.config.OrbAgent.Backends))
 
 	if err := a.secretsManager.Start(ctx); err != nil {
 		a.logger.Error("error during start secrets manager", "error", err)
