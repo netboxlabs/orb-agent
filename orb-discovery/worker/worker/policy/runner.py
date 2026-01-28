@@ -20,6 +20,7 @@ from netboxlabs.diode.sdk import (
 from worker.backend import Backend, load_class
 from worker.metrics import get_metric
 from worker.models import DiodeConfig, Policy, Status
+from worker.policy.run import RunStatus, RunStore
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -36,8 +37,11 @@ class PolicyRunner:
         self.policy = None
         self.status = Status.NEW
         self.scheduler = BackgroundScheduler()
+        self.run_store = None
 
-    def setup(self, name: str, diode_config: DiodeConfig, policy: Policy):
+    def setup(
+        self, name: str, diode_config: DiodeConfig, policy: Policy, run_store: RunStore
+    ):
         """
         Set up the policy runner.
 
@@ -46,6 +50,7 @@ class PolicyRunner:
             name: Policy name.
             diode_config: Diode configuration data.
             policy: Policy configuration data.
+            run_store: RunStore instance for tracking runs.
 
         """
         self.name = name.replace("\r\n", "").replace("\n", "")
@@ -87,6 +92,7 @@ class PolicyRunner:
 
         self.metadata = metadata
         self.policy = policy
+        self.run_store = run_store
 
         self.scheduler.start()
 
@@ -133,9 +139,22 @@ class PolicyRunner:
         if policy_executions:
             policy_executions.add(1, {"policy": self.name})
 
+        # CREATE RUN AT START with metadata from backend setup
+        run_metadata = {
+            "name": self.metadata.name,
+            "app_name": self.metadata.app_name,
+            "app_version": self.metadata.app_version,
+        }
+        run = self.run_store.create_run(
+            policy_name=self.name,
+            metadata=run_metadata,
+        )
+
         exec_start_time = time.perf_counter()
+        entity_count = 0
         try:
             entities = backend.run(self.name, policy)
+            entity_count = len(entities)
             metadata = {
                 "policy_name": self.name,
                 "worker_backend": self.metadata.name,
@@ -149,16 +168,24 @@ class PolicyRunner:
                 for chunk in chunks:
                     response = client.ingest(entities=chunk, metadata=metadata)
                     if response.errors:
-                        raise RuntimeError(
-                            f"Chunk ingestion failed: {response.errors}"
-                        )
+                        raise RuntimeError(f"Chunk ingestion failed: {response.errors}")
             else:
                 response = client.ingest(entities=entities, metadata=metadata)
                 if response.errors:
                     raise RuntimeError(f"Entities ingestion failed: {response.errors}")
             logger.info(
-                f"Policy {self.name}: Successfully ingested {len(entities)} entities in {chunk_num} chunks"
+                f"Policy {self.name}: Successfully ingested {entity_count} entities in {chunk_num} chunks"
             )
+
+            # UPDATE RUN ON SUCCESS
+            self.run_store.update_run(
+                policy_name=self.name,
+                run_id=run.id,
+                status=RunStatus.COMPLETED,
+                error=None,
+                entity_count=entity_count,
+            )
+
             run_success = get_metric("backend_execution_success")
             if run_success:
                 run_success.add(
@@ -172,6 +199,16 @@ class PolicyRunner:
                 )
         except Exception as e:
             logger.error(f"Policy {self.name}: {e}")
+
+            # UPDATE RUN ON FAILURE
+            self.run_store.update_run(
+                policy_name=self.name,
+                run_id=run.id,
+                status=RunStatus.FAILED,
+                error=e,
+                entity_count=entity_count,
+            )
+
             run_failure = get_metric("backend_execution_failure")
             if run_failure:
                 run_failure.add(

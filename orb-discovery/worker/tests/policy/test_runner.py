@@ -10,6 +10,7 @@ from netboxlabs.diode.sdk.diode.v1 import ingester_pb2
 
 from worker.backend import Backend
 from worker.models import Config, DiodeConfig, Metadata, Policy, Status
+from worker.policy.run import RunStore
 from worker.policy.runner import PolicyRunner
 
 
@@ -41,6 +42,13 @@ def sample_diode_config():
         prefix="test",
     )
 
+
+@pytest.fixture
+def mock_run_store():
+    """Fixture for a mock RunStore."""
+    return MagicMock(spec=RunStore)
+
+
 @pytest.fixture
 def sample_diode_dry_run_config():
     """Fixture for a sample DiodeConfig object."""
@@ -50,6 +58,7 @@ def sample_diode_dry_run_config():
         dry_run=True,
         dry_run_output_dir="/tmp/dry_run",
     )
+
 
 @pytest.fixture
 def mock_load_class():
@@ -84,6 +93,7 @@ def mock_diode_otlp_client():
         mock_diode_otlp_client.return_value = mock_instance
         yield mock_diode_otlp_client
 
+
 @pytest.fixture
 def mock_diode_dry_run_client():
     """Fixture to mock the DiodeDryRunClient constructor."""
@@ -112,13 +122,16 @@ def test_setup_policy_runner_with_cron(
     sample_diode_config,
     mock_load_class,
     mock_diode_client,
+    mock_run_store,
 ):
     """Test setting up the PolicyRunner with a cron schedule."""
     with patch.object(policy_runner.scheduler, "start") as mock_start, patch.object(
         policy_runner.scheduler, "add_job"
     ) as mock_add_job:
 
-        policy_runner.setup("policy1", sample_diode_config, sample_policy)
+        policy_runner.setup(
+            "policy1", sample_diode_config, sample_policy, mock_run_store
+        )
 
         # Ensure scheduler starts and job is added
         mock_start.assert_called_once()
@@ -134,6 +147,7 @@ def test_setup_policy_runner_with_one_time_run(
     sample_policy,
     mock_load_class,
     mock_diode_client,
+    mock_run_store,
 ):
     """Test setting up the PolicyRunner with a one-time schedule."""
     one_time_config = Config(package="custom")
@@ -141,7 +155,9 @@ def test_setup_policy_runner_with_one_time_run(
         policy_runner.scheduler, "add_job"
     ) as mock_add_job:
         sample_policy.config = one_time_config
-        policy_runner.setup("policy1", sample_diode_config, sample_policy)
+        policy_runner.setup(
+            "policy1", sample_diode_config, sample_policy, mock_run_store
+        )
 
         # Verify that DateTrigger is used for one-time scheduling
         trigger = mock_add_job.call_args[1]["trigger"]
@@ -158,13 +174,14 @@ def test_setup_policy_runner_uses_otlp_client(
     mock_load_class,
     mock_diode_client,
     mock_diode_otlp_client,
+    mock_run_store,
 ):
     """Ensure setup falls back to DiodeOTLPClient when credentials are missing."""
     otlp_config = DiodeConfig(target="http://localhost:8080", prefix="test-prefix")
     with patch.object(policy_runner.scheduler, "start") as mock_start, patch.object(
         policy_runner.scheduler, "add_job"
     ) as mock_add_job:
-        policy_runner.setup("policy1", otlp_config, sample_policy)
+        policy_runner.setup("policy1", otlp_config, sample_policy, mock_run_store)
 
         mock_start.assert_called_once()
         mock_add_job.assert_called_once()
@@ -173,19 +190,23 @@ def test_setup_policy_runner_uses_otlp_client(
     assert not mock_diode_client.called
     mock_diode_otlp_client.assert_called_once()
 
+
 def test_setup_policy_runner_dry_run(
     policy_runner,
     sample_diode_dry_run_config,
     sample_policy,
     mock_load_class,
     mock_diode_dry_run_client,
+    mock_run_store,
 ):
     """Test setting up the PolicyRunner with dry run configuration."""
     with patch.object(policy_runner.scheduler, "start") as mock_start, patch.object(
         policy_runner.scheduler, "add_job"
     ) as mock_add_job:
 
-        policy_runner.setup("policy1", sample_diode_dry_run_config, sample_policy)
+        policy_runner.setup(
+            "policy1", sample_diode_dry_run_config, sample_policy, mock_run_store
+        )
 
         # Ensure scheduler starts and job is added
         mock_start.assert_called_once()
@@ -194,9 +215,13 @@ def test_setup_policy_runner_dry_run(
         mock_diode_dry_run_client.assert_called_once()
         assert policy_runner.status == Status.RUNNING
 
-def test_run_success(policy_runner, sample_policy, mock_diode_client, mock_backend):
+
+def test_run_success(
+    policy_runner, sample_policy, mock_diode_client, mock_backend, mock_run_store
+):
     """Test the run function for a successful execution."""
     policy_runner.name = "test_policy"
+    policy_runner.run_store = mock_run_store
 
     # Create mock entities
     entities = []
@@ -216,18 +241,19 @@ def test_run_success(policy_runner, sample_policy, mock_diode_client, mock_backe
     # Should call ingest once for the single chunk
     mock_diode_client.ingest.assert_called_once()
     # Check that entities were passed correctly
-    call_args = mock_diode_client.ingest.call_args[1]['entities']
+    call_args = mock_diode_client.ingest.call_args[1]["entities"]
     assert len(call_args) == 3
 
 
 def test_run_passes_metadata_to_ingest(
-    policy_runner, sample_policy, mock_diode_client, mock_backend
+    policy_runner, sample_policy, mock_diode_client, mock_backend, mock_run_store
 ):
     """Ensure run forwards policy/backend metadata to the Diode client."""
     policy_runner.name = "policy-meta"
     policy_runner.metadata = Metadata(
         name="custom_backend", app_name="custom", app_version="0.1"
     )
+    policy_runner.run_store = mock_run_store
 
     entity = ingester_pb2.Entity()
     entity.device.name = "device-1"
@@ -249,9 +275,11 @@ def test_run_ingestion_errors(
     mock_diode_client,
     mock_backend,
     caplog,
+    mock_run_store,
 ):
     """Test the run function when ingestion has errors."""
     policy_runner.name = "test_policy"
+    policy_runner.run_store = mock_run_store
 
     # Create mock entities
     entities = []
@@ -286,9 +314,11 @@ def test_run_backend_exception(
     mock_diode_client,
     mock_backend,
     caplog,
+    mock_run_store,
 ):
     """Test the run function when an exception is raised by the backend."""
     policy_runner.name = "test_policy"
+    policy_runner.run_store = mock_run_store
 
     # Simulate backend throwing an exception
     mock_backend.run.side_effect = Exception("Backend error")
@@ -314,7 +344,7 @@ def test_stop_policy_runner(policy_runner):
 
 
 def test_metrics_during_policy_lifecycle(
-    policy_runner, sample_policy, mock_diode_client, mock_backend
+    policy_runner, sample_policy, mock_diode_client, mock_backend, mock_run_store
 ):
     """Test that metrics are properly updated during the policy lifecycle."""
     # Create mock metrics
@@ -339,6 +369,7 @@ def test_metrics_during_policy_lifecycle(
         app_name="test_app",
         app_version="1.0",
     )
+    policy_runner.run_store = mock_run_store
 
     # Create mock entities
     entities = []
@@ -381,7 +412,7 @@ def test_metrics_during_policy_lifecycle(
 
 
 def test_metrics_during_failed_discovery(
-    policy_runner, sample_policy, mock_diode_client, mock_backend
+    policy_runner, sample_policy, mock_diode_client, mock_backend, mock_run_store
 ):
     """Test that metrics are properly updated when discovery fails."""
     mock_backend_execution_failure = MagicMock()
@@ -398,6 +429,7 @@ def test_metrics_during_failed_discovery(
         app_name="test_app",
         app_version="1.0",
     )
+    policy_runner.run_store = mock_run_store
 
     def mock_get_metric(name):
         return mock_metrics.get(name)
@@ -427,9 +459,12 @@ def test_metrics_during_failed_discovery(
         assert latency_kwargs["backend"] == "my_backend"
 
 
-def test_run_with_small_entities_no_chunking(policy_runner, sample_policy, mock_diode_client, mock_backend):
+def test_run_with_small_entities_no_chunking(
+    policy_runner, sample_policy, mock_diode_client, mock_backend, mock_run_store
+):
     """Test the run function with small entities that don't require chunking."""
     policy_runner.name = "test_policy"
+    policy_runner.run_store = mock_run_store
 
     # Create mock entities
     entities = []
@@ -442,20 +477,30 @@ def test_run_with_small_entities_no_chunking(policy_runner, sample_policy, mock_
     mock_diode_client.ingest.return_value.errors = []
 
     # Mock estimate_message_size to return small size (under 3.0 MB)
-    with patch("worker.policy.runner.estimate_message_size", return_value=1024 * 1024):  # 1MB
+    with patch(
+        "worker.policy.runner.estimate_message_size", return_value=1024 * 1024
+    ):  # 1MB
         policy_runner.run(mock_diode_client, mock_backend, sample_policy)
 
     # Should call ingest once (no chunking)
     mock_diode_client.ingest.assert_called_once()
 
     # Verify all entities were passed in single call
-    call_args = mock_diode_client.ingest.call_args[1]['entities']
+    call_args = mock_diode_client.ingest.call_args[1]["entities"]
     assert len(call_args) == 5
 
 
-def test_run_with_multiple_chunks(policy_runner, sample_policy, mock_diode_client, mock_backend, caplog):
+def test_run_with_multiple_chunks(
+    policy_runner,
+    sample_policy,
+    mock_diode_client,
+    mock_backend,
+    caplog,
+    mock_run_store,
+):
     """Test the run function with entities that require multiple chunks."""
     policy_runner.name = "test_policy"
+    policy_runner.run_store = mock_run_store
 
     # Create many mock entities to trigger chunking
     entities = []
@@ -468,8 +513,12 @@ def test_run_with_multiple_chunks(policy_runner, sample_policy, mock_diode_clien
     mock_diode_client.ingest.return_value.errors = []
 
     # Mock estimate_message_size to return large size (over 3.0 MB) and create_message_chunks
-    with patch("worker.policy.runner.estimate_message_size", return_value=5 * 1024 * 1024), \
-         patch("worker.policy.runner.create_message_chunks", return_value=[entities[:5], entities[5:]]) as mock_chunks:
+    with patch(
+        "worker.policy.runner.estimate_message_size", return_value=5 * 1024 * 1024
+    ), patch(
+        "worker.policy.runner.create_message_chunks",
+        return_value=[entities[:5], entities[5:]],
+    ) as mock_chunks:
 
         with caplog.at_level("INFO"):
             policy_runner.run(mock_diode_client, mock_backend, sample_policy)
@@ -484,9 +533,17 @@ def test_run_with_multiple_chunks(policy_runner, sample_policy, mock_diode_clien
         assert "Successfully ingested 10 entities in 2 chunks" in caplog.text
 
 
-def test_run_chunk_ingestion_error(policy_runner, sample_policy, mock_diode_client, mock_backend, caplog):
+def test_run_chunk_ingestion_error(
+    policy_runner,
+    sample_policy,
+    mock_diode_client,
+    mock_backend,
+    caplog,
+    mock_run_store,
+):
     """Test the run function when a chunk ingestion fails."""
     policy_runner.name = "test_policy"
+    policy_runner.run_store = mock_run_store
 
     # Create mock entities
     entities = []
@@ -505,8 +562,12 @@ def test_run_chunk_ingestion_error(policy_runner, sample_policy, mock_diode_clie
     mock_diode_client.ingest.side_effect = responses
 
     # Mock large size to trigger chunking and create_message_chunks
-    with patch("worker.policy.runner.estimate_message_size", return_value=5 * 1024 * 1024), \
-         patch("worker.policy.runner.create_message_chunks", return_value=[entities[:3], entities[3:]]):
+    with patch(
+        "worker.policy.runner.estimate_message_size", return_value=5 * 1024 * 1024
+    ), patch(
+        "worker.policy.runner.create_message_chunks",
+        return_value=[entities[:3], entities[3:]],
+    ):
 
         with caplog.at_level("ERROR"):
             policy_runner.run(mock_diode_client, mock_backend, sample_policy)

@@ -37,7 +37,9 @@ def test_start_policy(policy_manager, sample_policy):
         policy_manager.start_policy("policy1", sample_policy)
 
         # Check that PolicyRunner.setup was called with correct arguments
-        mock_runner.setup.assert_called_once_with("policy1", None, sample_policy)
+        mock_runner.setup.assert_called_once_with(
+            "policy1", None, sample_policy, policy_manager.run_store
+        )
 
         # Ensure the policy runner was added to the manager's runners
         assert "policy1" in policy_manager.runners
