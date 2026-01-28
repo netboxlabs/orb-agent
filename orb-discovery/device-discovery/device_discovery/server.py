@@ -9,13 +9,22 @@ from datetime import datetime
 
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from device_discovery.discovery import supported_drivers
 from device_discovery.metrics import get_metric
 from device_discovery.policy.manager import PolicyManager
-from device_discovery.policy.models import PolicyRequest
+from device_discovery.policy.models import PolicyRequest, PolicyStatus
 from device_discovery.version import version_semver
+
+
+class StatusResponse(BaseModel):
+    """Enhanced status response with policy runs."""
+
+    version: str
+    up_time_seconds: int
+    policies: list[PolicyStatus] = []
+
 
 manager = PolicyManager()
 start_time = datetime.now()
@@ -117,18 +126,25 @@ async def parse_yaml_body(request: Request) -> PolicyRequest:
 @app.get("/api/v1/status")
 def read_status():
     """
-    Get the status of the server.
+    Get the status of the server with policy run history.
 
     Returns
     -------
-        dict: The status of the server.
+        dict: The status of the server including policy runs.
 
     """
     time_diff = datetime.now() - start_time
-    return {
-        "version": version_semver(),
-        "up_time_seconds": round(time_diff.total_seconds()),
-    }
+
+    # Get policy statuses with run history
+    policy_statuses = manager.get_policy_statuses()
+
+    response = StatusResponse(
+        version=version_semver(),
+        up_time_seconds=round(time_diff.total_seconds()),
+        policies=policy_statuses,
+    )
+
+    return response.model_dump()
 
 
 @app.get("/api/v1/capabilities")

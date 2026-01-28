@@ -10,6 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from device_discovery.policy.models import Config, Defaults, Napalm, Options, Status
+from device_discovery.policy.run import RunStore
 from device_discovery.policy.runner import PolicyRunner
 
 
@@ -17,6 +18,12 @@ from device_discovery.policy.runner import PolicyRunner
 def policy_runner():
     """Fixture to create a PolicyRunner instance."""
     return PolicyRunner()
+
+
+@pytest.fixture
+def run_store():
+    """Fixture to create a RunStore instance."""
+    return RunStore()
 
 
 @pytest.fixture
@@ -44,14 +51,16 @@ def test_initial_status(policy_runner):
     assert policy_runner.status == Status.NEW
 
 
-def test_setup_policy_runner_with_cron(policy_runner, sample_config, sample_scopes):
+def test_setup_policy_runner_with_cron(
+    policy_runner, sample_config, sample_scopes, run_store
+):
     """Test setting up the PolicyRunner with a cron schedule."""
     with (
         patch.object(policy_runner.scheduler, "start") as mock_start,
         patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
     ):
 
-        policy_runner.setup("policy1", sample_config, sample_scopes)
+        policy_runner.setup("policy1", sample_config, sample_scopes, run_store)
 
         # Ensure scheduler starts and job is added
         mock_start.assert_called_once()
@@ -69,7 +78,7 @@ def test_setup_policy_runner_with_cron(policy_runner, sample_config, sample_scop
         assert policy_runner.config.defaults.site == "New York"
 
 
-def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes):
+def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes, run_store):
     """Test setting up the PolicyRunner with a one-time schedule."""
     one_time_config = Config()
     with (
@@ -77,7 +86,7 @@ def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes):
         patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
     ):
 
-        policy_runner.setup("policy1", one_time_config, sample_scopes)
+        policy_runner.setup("policy1", one_time_config, sample_scopes, run_store)
 
         # Verify that DateTrigger is used for one-time scheduling
         trigger = mock_add_job.call_args[1]["trigger"]
@@ -87,14 +96,14 @@ def test_setup_policy_runner_with_one_time_run(policy_runner, sample_scopes):
 
 
 def test_setup_sets_misfire_grace_time_none(
-    policy_runner, sample_config, sample_scopes
+    policy_runner, sample_config, sample_scopes, run_store
 ):
     """Ensure jobs are added with misfire_grace_time=None (run even if late)."""
     with (
         patch.object(policy_runner.scheduler, "start"),
         patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
     ):
-        policy_runner.setup("policy1", sample_config, sample_scopes)
+        policy_runner.setup("policy1", sample_config, sample_scopes, run_store)
 
         # First add_job call corresponds to the device run job
         first_call_kwargs = mock_add_job.call_args_list[0][1]
@@ -102,14 +111,14 @@ def test_setup_sets_misfire_grace_time_none(
         assert first_call_kwargs["misfire_grace_time"] is None
 
 
-def test_setup_policy_runner_with_none_config(policy_runner, sample_scopes):
+def test_setup_policy_runner_with_none_config(policy_runner, sample_scopes, run_store):
     """Ensure PolicyRunner uses default config when none is provided."""
     with (
         patch.object(policy_runner.scheduler, "start") as mock_start,
         patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
     ):
 
-        policy_runner.setup("policy1", None, sample_scopes)
+        policy_runner.setup("policy1", None, sample_scopes, run_store)
 
         mock_start.assert_called_once()
         assert mock_add_job.call_count == 2
@@ -118,7 +127,9 @@ def test_setup_policy_runner_with_none_config(policy_runner, sample_scopes):
         assert policy_runner.status == Status.RUNNING
 
 
-def test_setup_policy_runner_expands_hostname_ranges(policy_runner, sample_config):
+def test_setup_policy_runner_expands_hostname_ranges(
+    policy_runner, sample_config, run_store
+):
     """Ranges schedule a port scan job instead of direct discovery."""
     ranged_scope = Napalm(
         driver="ios",
@@ -132,7 +143,7 @@ def test_setup_policy_runner_expands_hostname_ranges(policy_runner, sample_confi
         patch.object(policy_runner.scheduler, "start"),
         patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
     ):
-        policy_runner.setup("policy1", sample_config, [ranged_scope])
+        policy_runner.setup("policy1", sample_config, [ranged_scope], run_store)
 
     assert mock_add_job.call_count == 2
     first_call = mock_add_job.call_args_list[0]
@@ -146,7 +157,9 @@ def test_setup_policy_runner_expands_hostname_ranges(policy_runner, sample_confi
     assert copied_config.defaults.role == "Router"
 
 
-def test_setup_with_unsupported_driver_raises_error(policy_runner, sample_scopes):
+def test_setup_with_unsupported_driver_raises_error(
+    policy_runner, sample_scopes, run_store
+):
     """Test setup raises error if driver is unsupported."""
     sample_scopes[0].driver = "unsupported_driver"
     with (
@@ -155,11 +168,13 @@ def test_setup_with_unsupported_driver_raises_error(policy_runner, sample_scopes
             Exception, match="specified driver 'unsupported_driver' was not found"
         ),
     ):
-        policy_runner.setup("policy1", Config(), sample_scopes)
+        policy_runner.setup("policy1", Config(), sample_scopes, run_store)
     assert policy_runner.status == Status.NEW
 
 
-def test_run_device_with_discovered_driver(policy_runner, sample_scopes, sample_config):
+def test_run_device_with_discovered_driver(
+    policy_runner, sample_scopes, sample_config, run_store
+):
     """Test running a device where the driver needs discovery."""
     sample_scopes[0].driver = None  # Force driver discovery
     with (
@@ -179,6 +194,10 @@ def test_run_device_with_discovered_driver(policy_runner, sample_scopes, sample_
         mock_driver_instance.get_interfaces.return_value = {"eth0": "up"}
         mock_driver_instance.get_interfaces_ip.return_value = {"eth0": "192.168.1.1"}
 
+        # Set up run_store
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
+
         # Run the device with the setup runner
         policy_runner.run("test_id", sample_scopes[0], sample_config)
 
@@ -196,7 +215,9 @@ def test_run_device_with_discovered_driver(policy_runner, sample_scopes, sample_
         assert data["interface_ip"] == {"eth0": "192.168.1.1"}
 
 
-def test_run_discovered_driver_error(policy_runner, sample_scopes, sample_config):
+def test_run_discovered_driver_error(
+    policy_runner, sample_scopes, sample_config, run_store
+):
     """Test running a device where the driver discovery fails."""
     sample_scopes[0].driver = None  # Force driver discovery
     with (
@@ -205,6 +226,9 @@ def test_run_discovered_driver_error(policy_runner, sample_scopes, sample_config
         ) as mock_discover,
         patch("device_discovery.policy.runner.logger.error") as mock_logger_error,
     ):
+        # Set up run_store
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
 
         # Run the device with an error to check error handling
         policy_runner.run("test_id", sample_scopes[0], sample_config)
@@ -214,7 +238,9 @@ def test_run_discovered_driver_error(policy_runner, sample_scopes, sample_config
         assert policy_runner.status == Status.FAILED
 
 
-def test_run_device_with_error_in_job(policy_runner, sample_scopes, sample_config):
+def test_run_device_with_error_in_job(
+    policy_runner, sample_scopes, sample_config, run_store
+):
     """Test run handles an error during device interaction gracefully."""
     with (
         patch(
@@ -223,6 +249,9 @@ def test_run_device_with_error_in_job(policy_runner, sample_scopes, sample_confi
         ),
         patch("device_discovery.policy.runner.logger.error") as mock_logger_error,
     ):
+        # Set up run_store
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
 
         # Run the device with an error to check error handling
         policy_runner.run("test_id", sample_scopes[0], sample_config)
@@ -233,6 +262,7 @@ def test_run_scan_schedules_reachable_hosts(monkeypatch):
     """Reachable hosts should be scheduled for discovery with copied scope."""
     runner = PolicyRunner()
     runner.name = "policy1"
+    runner.run_store = RunStore()
     runner.scheduler = MagicMock()
     scope = Napalm(
         driver="ios", hostname="seed-host", username="admin", password="password"
@@ -246,16 +276,19 @@ def test_run_scan_schedules_reachable_hosts(monkeypatch):
             "device_discovery.policy.runner.find_reachable_hosts",
             return_value=reachability,
         ) as mock_reachable_hosts,
-        patch("uuid.uuid4", side_effect=["job-1"]),
+        patch(
+            "uuid.uuid4", side_effect=["scan-run-id", "job-1"]
+        ),  # scan run ID + job ID
     ):
         runner.run_scan(["host-a", "host-b"], trigger, scope, config)
 
     runner.scheduler.add_job.assert_called_once()
     scheduled_call = runner.scheduler.add_job.call_args
-    assert scheduled_call[0][0] == runner.run
+    assert scheduled_call[0][0] == runner.run_with_parent
     assert scheduled_call[1]["args"][0] == "job-1"
     assert scheduled_call[1]["args"][1].hostname == "host-a"
     assert scheduled_call[1]["args"][2] == config
+    assert scheduled_call[1]["args"][3] == "seed-host"  # parent_target
     mock_reachable_hosts.assert_called_once_with(["host-a", "host-b"], [1, 2], 0.1)
 
 
@@ -263,6 +296,7 @@ def test_run_scan_uses_default_port_scan_options(monkeypatch):
     """Default port scan options are applied when none are provided."""
     runner = PolicyRunner()
     runner.name = "policy1"
+    runner.run_store = RunStore()
     runner.scheduler = MagicMock()
     scope = Napalm(
         driver="ios", hostname="seed-host", username="admin", password="password"
@@ -293,7 +327,9 @@ def test_stop_policy_runner(policy_runner):
         assert policy_runner.status == Status.FINISHED
 
 
-def test_metrics_during_policy_lifecycle(policy_runner, sample_config, sample_scopes):
+def test_metrics_during_policy_lifecycle(
+    policy_runner, sample_config, sample_scopes, run_store
+):
     """Test that metrics are properly updated during the policy lifecycle."""
     # Create mock metrics
     mock_active_policies = MagicMock()
@@ -328,7 +364,7 @@ def test_metrics_during_policy_lifecycle(policy_runner, sample_config, sample_sc
     ):
 
         # Test setup - should increment active_policies
-        policy_runner.setup("test_policy", sample_config, sample_scopes)
+        policy_runner.setup("test_policy", sample_config, sample_scopes, run_store)
         mock_active_policies.add.assert_called_once_with(1, {"policy": "test_policy"})
 
         # Test telemetry job - should increment policy_executions
@@ -359,7 +395,7 @@ def test_metrics_during_policy_lifecycle(policy_runner, sample_config, sample_sc
             mock_active_policies.add.assert_called_with(-1, {"policy": "test_policy"})
 
 
-def test_metrics_during_failed_discovery(policy_runner, sample_config):
+def test_metrics_during_failed_discovery(policy_runner, sample_config, run_store):
     """Test that metrics are properly updated when discovery fails."""
     # Create a scope with no driver to force discovery
     scope = Napalm(
@@ -390,12 +426,15 @@ def test_metrics_during_failed_discovery(policy_runner, sample_config):
         ),
         patch.object(policy_runner.scheduler, "remove_job"),
     ):
+        # Set up run_store
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
 
         # Run the device with discovery that will fail
         policy_runner.run("test_id", scope, sample_config)
 
         # Verify failure metric was called
-        mock_discovery_failure.add.assert_called_once_with(1, {"policy": ""})
+        mock_discovery_failure.add.assert_called_once_with(1, {"policy": "test_policy"})
 
         # Verify discovery latency recorded with failure status
         mock_discovery_latency.record.assert_called_once()
@@ -403,3 +442,34 @@ def test_metrics_during_failed_discovery(policy_runner, sample_config):
         latency_kwargs = mock_discovery_latency.record.call_args[0][1]
         assert latency_args > 0.01
         assert latency_kwargs["status"] == "failed"
+
+
+def test_run_scan_handles_port_scan_failure(policy_runner, sample_config, run_store):
+    """Test that scan runs are marked as FAILED when port scanning fails."""
+    scope = Napalm(
+        driver=None,
+        hostname="seed-host",
+        username="admin",
+        password="password",
+    )
+    trigger = MagicMock(spec=BaseTrigger)
+
+    with (
+        patch(
+            "device_discovery.policy.runner.find_reachable_hosts",
+            side_effect=Exception("Port scan timeout"),
+        ),
+        patch("uuid.uuid4", side_effect=["scan-run-id"]),
+    ):
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
+
+        # Run scan which will fail
+        policy_runner.run_scan(["10.0.0.1", "10.0.0.2"], trigger, scope, sample_config)
+
+        # Verify scan run was created and marked as FAILED
+        runs = run_store.get_runs_for_target("test_policy", "seed-host")
+        assert len(runs) == 1
+        assert runs[0].status.value == "failed"
+        assert runs[0].entity_count == 0
+        assert "Port scan timeout" in runs[0].reason

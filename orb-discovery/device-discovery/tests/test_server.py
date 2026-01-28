@@ -164,6 +164,8 @@ def test_read_status(mock_version_semver):
     assert response.status_code == 200
     assert response.json()["version"] == "1.0.0"
     assert "up_time_seconds" in response.json()
+    assert "policies" in response.json()
+    assert isinstance(response.json()["policies"], list)
 
 
 def test_read_capabilities(mock_supported_drivers):
@@ -399,3 +401,61 @@ def test_delete_policy_error(mock_manager):
     response = client.delete("/api/v1/policies/policy1")
     assert response.status_code == 400
     assert response.json()["detail"] == "unexpected error"
+
+
+def test_read_status_with_policies(mock_version_semver):
+    """
+    Test the /api/v1/status endpoint with policy data.
+
+    Ensures that policies field contains correct structure with runs.
+
+    Args:
+    ----
+        mock_version_semver: Mocked version_semver function.
+
+    """
+    from datetime import datetime
+
+    from device_discovery.policy.models import PolicyStatus, Run, RunStatus
+
+    # Create mock policy statuses
+    run1 = Run(
+        policy_id="test_policy",
+        status=RunStatus.COMPLETED,
+        entity_count=10,
+        created_at=datetime(2026, 1, 27, 10, 0, 0),
+        updated_at=datetime(2026, 1, 27, 10, 5, 0),
+    )
+    policy_status = PolicyStatus(
+        name="test_policy", status="completed", runs=[run1]
+    )
+
+    with patch(
+        "device_discovery.server.manager.get_policy_statuses",
+        return_value=[policy_status],
+    ):
+        response = client.get("/api/v1/status")
+
+        assert response.status_code == 200
+        json_response = response.json()
+
+        assert json_response["version"] == "1.0.0"
+        assert "up_time_seconds" in json_response
+        assert "policies" in json_response
+
+        # Verify policies structure
+        policies = json_response["policies"]
+        assert len(policies) == 1
+        assert policies[0]["name"] == "test_policy"
+        assert policies[0]["status"] == "completed"
+        assert "runs" in policies[0]
+        assert len(policies[0]["runs"]) == 1
+
+        # Verify run structure
+        run = policies[0]["runs"][0]
+        assert run["policy_id"] == "test_policy"
+        assert run["status"] == "completed"
+        assert run["entity_count"] == 10
+        assert "id" in run
+        assert "created_at" in run
+        assert "updated_at" in run

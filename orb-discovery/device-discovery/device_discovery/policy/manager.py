@@ -7,7 +7,8 @@ import os
 
 import yaml
 
-from device_discovery.policy.models import Policy, PolicyRequest
+from device_discovery.policy.models import Policy, PolicyRequest, PolicyStatus
+from device_discovery.policy.run import RunStore
 from device_discovery.policy.runner import PolicyRunner
 
 # Set up logging
@@ -37,12 +38,14 @@ def resolve_env_vars(config):
         return os.getenv(env_var, config)
     return config
 
+
 class PolicyManager:
     """Policy Manager class."""
 
     def __init__(self):
         """Initialize the PolicyManager instance with an empty list of policies."""
         self.runners = dict[str, PolicyRunner]()
+        self.run_store = RunStore()
 
     def start_policy(self, name: str, policy: Policy):
         """
@@ -58,7 +61,7 @@ class PolicyManager:
             raise ValueError(f"policy '{name}' already exists")
 
         runner = PolicyRunner()
-        runner.setup(name, policy.config, policy.scope)
+        runner.setup(name, policy.config, policy.scope, self.run_store)
         self.runners[name] = runner
 
     def parse_policy(self, config_data: bytes) -> PolicyRequest:
@@ -113,3 +116,57 @@ class PolicyManager:
             logger.info(f"Stopping policy '{name}'")
             runner.stop()
         self.runners = {}
+
+    def get_policy_statuses(self) -> list[PolicyStatus]:
+        """
+        Get all policies with their run history.
+
+        Returns
+        -------
+            list[PolicyStatus]: List of policy statuses with runs.
+
+        """
+        # Get all runs from the run store
+        all_runs = self.run_store.get_all_policies_with_runs()
+
+        statuses = []
+
+        # Get statuses for active runners
+        for name, runner in self.runners.items():
+            runs = all_runs.get(name, [])
+
+            # Derive status: prefer RUNNING if any run is still running
+            if runs:
+                # Check if any run is still running
+                if any(run.status.value == "running" for run in runs):
+                    latest_status = "running"
+                else:
+                    latest_status = runs[0].status.value
+            else:
+                latest_status = runner.status.value
+
+            statuses.append(
+                PolicyStatus(
+                    name=name,
+                    status=latest_status,
+                    runs=runs,
+                )
+            )
+
+        # Include policies with runs but no active runner
+        for name, runs in all_runs.items():
+            if name not in self.runners and runs:
+                # Check if any run is still running
+                if any(run.status.value == "running" for run in runs):
+                    latest_status = "running"
+                else:
+                    latest_status = runs[0].status.value
+                statuses.append(
+                    PolicyStatus(
+                        name=name,
+                        status=latest_status,
+                        runs=runs,
+                    )
+                )
+
+        return statuses

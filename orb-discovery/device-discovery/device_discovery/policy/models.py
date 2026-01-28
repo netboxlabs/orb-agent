@@ -3,6 +3,8 @@
 """Device Discovery Policy Models."""
 
 import re
+import uuid
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -22,7 +24,9 @@ class Status(Enum):
 class InterfacePattern(BaseModel):
     """Model for interface type pattern matching."""
 
-    match: str = Field(description="Regular expression pattern to match interface names")
+    match: str = Field(
+        description="Regular expression pattern to match interface names"
+    )
     type: str = Field(description="Interface type to assign when pattern matches")
 
     @field_validator("match")
@@ -72,17 +76,21 @@ class DeviceParameters(ObjectParameters):
         default=None, description="Device platform override, optional"
     )
 
+
 class TenantParameters(ObjectParameters):
     """Model for Tenant parameters."""
 
-    name : str
+    name: str
     group: str | None = Field(default=None, description="Tenant group, optional")
+
 
 class VlanParameters(ObjectParameters):
     """Model for VLAN parameters."""
 
     group: str | None = Field(default=None, description="VLAN group, optional")
-    tenant: str | TenantParameters | None = Field(default=None, description="VLAN tenant, optional")
+    tenant: str | TenantParameters | None = Field(
+        default=None, description="VLAN tenant, optional"
+    )
     role: str | None = Field(default=None, description="VLAN role, optional")
 
 
@@ -90,7 +98,9 @@ class IpamParameters(ObjectParameters):
     """Model for IPAM parameters."""
 
     role: str | None = Field(default=None, description="IPAM role, optional")
-    tenant: str | TenantParameters | None = Field(default=None, description="IPAM tenant, optional")
+    tenant: str | TenantParameters | None = Field(
+        default=None, description="IPAM tenant, optional"
+    )
     vrf: str | None = Field(default=None, description="IPAM VRF, optional")
 
 
@@ -104,10 +114,12 @@ class Defaults(BaseModel):
     if_type: str | None = Field(default="other", description="Interface type, optional")
     interface_patterns: list[InterfacePattern] | None = Field(
         default=None,
-        description="Interface type patterns for name-based matching, optional"
+        description="Interface type patterns for name-based matching, optional",
     )
     location: str | None = Field(default=None, description="Location name, optional")
-    tenant: str | TenantParameters | None = Field(default=None, description="Tenant, optional")
+    tenant: str | TenantParameters | None = Field(
+        default=None, description="Tenant, optional"
+    )
     tags: list[str] | None = Field(default=None, description="Tags, optional")
     device: DeviceParameters | None = Field(
         default=None, description="Device parameters, optional"
@@ -203,3 +215,32 @@ class PolicyRequest(BaseModel):
     """Model for a policy request."""
 
     policies: dict[str, Policy]
+
+
+class RunStatus(str, Enum):
+    """Run status enumeration."""
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class Run(BaseModel):
+    """Model for a single run execution."""
+
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    policy_id: str
+    status: RunStatus
+    reason: str = ""
+    entity_count: int = 0
+    metadata: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now())
+    updated_at: datetime = Field(default_factory=lambda: datetime.now())
+
+
+class PolicyStatus(BaseModel):
+    """Status response for a policy with run history."""
+
+    name: str
+    status: str  # Derived from latest run
+    runs: list[Run]
