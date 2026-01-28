@@ -398,9 +398,9 @@ func TestArgs(t *testing.T) {
 			want:  []string{"--host", "localhost", "--client-secret"},
 		},
 		{
-			name:  "sensitive flag followed by another flag",
+			name:  "sensitive flag followed by another flag (security: mask anyway)",
 			input: []string{"--client-secret", "--host", "localhost"},
-			want:  []string{"--client-secret", "--host", "localhost"},
+			want:  []string{"--client-secret", MaskedSecret, "localhost"},
 		},
 		{
 			name:  "empty args",
@@ -421,6 +421,26 @@ func TestArgs(t *testing.T) {
 			name:  "api-key flag",
 			input: []string{"--api-key", "key123"},
 			want:  []string{"--api-key", MaskedSecret},
+		},
+		{
+			name:  "private key with PEM format (starts with dashes)",
+			input: []string{"--private-key", "-----BEGIN RSA PRIVATE KEY-----\nMIIE...", "--host", "localhost"},
+			want:  []string{"--private-key", MaskedSecret, "--host", "localhost"},
+		},
+		{
+			name:  "password that starts with dash",
+			input: []string{"--password", "-myWeirdPassword123"},
+			want:  []string{"--password", MaskedSecret},
+		},
+		{
+			name:  "token that starts with double dash",
+			input: []string{"--token", "--someTokenValue"},
+			want:  []string{"--token", MaskedSecret},
+		},
+		{
+			name:  "client secret followed by flag-like value",
+			input: []string{"--client-secret", "-x-custom-header-value", "--url", "https://example.com"},
+			want:  []string{"--client-secret", MaskedSecret, "--url", "https://example.com"},
 		},
 	}
 

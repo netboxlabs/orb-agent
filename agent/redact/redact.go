@@ -288,8 +288,8 @@ func Args(args []string) []string {
 	// Scan for sensitive flags and mask the following value
 	for i := 0; i < len(result); i++ {
 		if isSensitiveArg(result[i]) {
-			// Mask the next argument if it exists and isn't another flag
-			if i+1 < len(result) && !strings.HasPrefix(result[i+1], "-") {
+			// Mask the next argument if it exists
+			if i+1 < len(result) {
 				result[i+1] = MaskedSecret
 				i++ // Skip the next iteration since we just processed it
 			}
