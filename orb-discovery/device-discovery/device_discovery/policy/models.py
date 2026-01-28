@@ -3,8 +3,8 @@
 """Device Discovery Policy Models."""
 
 import re
+import time
 import uuid
-from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -234,8 +234,8 @@ class Run(BaseModel):
     reason: str = ""
     entity_count: int = 0
     metadata: dict[str, str] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now())
-    updated_at: datetime = Field(default_factory=lambda: datetime.now())
+    created_at: int = Field(default_factory=time.time_ns)
+    updated_at: int = Field(default_factory=time.time_ns)
 
 
 class PolicyStatus(BaseModel):

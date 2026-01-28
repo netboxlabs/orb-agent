@@ -28,8 +28,8 @@ type Run struct {
 	Reason      string            `json:"reason,omitempty"`
 	EntityCount int               `json:"entity_count"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	CreatedAt   int64             `json:"created_at"`
+	UpdatedAt   int64             `json:"updated_at"`
 }
 
 // RunStore manages runs in memory
@@ -69,8 +69,8 @@ func (rs *RunStore) CreateRun(policyName string, targets []string) *Run {
 		PolicyID:  policyName,
 		Status:    RunStatusRunning,
 		Metadata:  metadata,
-		CreatedAt: now,
-		UpdatedAt: now,
+		CreatedAt: now.UTC().UnixNano(),
+		UpdatedAt: now.UTC().UnixNano(),
 	}
 
 	// Add run to the policy's run list
@@ -96,7 +96,7 @@ func (rs *RunStore) UpdateRun(policyName, runID string, status RunStatus, err er
 		if run.ID == runID {
 			run.Status = status
 			run.EntityCount = entityCount
-			run.UpdatedAt = time.Now()
+			run.UpdatedAt = time.Now().UTC().UnixNano()
 			if err != nil {
 				run.Reason = err.Error()
 			}

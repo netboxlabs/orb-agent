@@ -24,8 +24,8 @@ func TestRunStore_CreateRun(t *testing.T) {
 	assert.Equal(t, policy.RunStatusRunning, run.Status)
 	assert.Empty(t, run.Reason)
 	assert.Equal(t, 0, run.EntityCount)
-	assert.False(t, run.CreatedAt.IsZero())
-	assert.False(t, run.UpdatedAt.IsZero())
+	assert.Greater(t, run.CreatedAt, int64(0))
+	assert.Greater(t, run.UpdatedAt, int64(0))
 	assert.Equal(t, run.CreatedAt, run.UpdatedAt)
 
 	// Verify run is stored
@@ -51,7 +51,7 @@ func TestRunStore_UpdateRun(t *testing.T) {
 	assert.Equal(t, policy.RunStatusCompleted, runs[0].Status)
 	assert.Empty(t, runs[0].Reason)
 	assert.Equal(t, entityCount, runs[0].EntityCount)
-	assert.True(t, runs[0].UpdatedAt.After(runs[0].CreatedAt))
+	assert.Greater(t, runs[0].UpdatedAt, runs[0].CreatedAt)
 
 	// Update to failed with error
 	testError := errors.New("test error")

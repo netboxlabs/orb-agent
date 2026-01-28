@@ -423,8 +423,8 @@ def test_read_status_with_policies(mock_version_semver):
         policy_id="test_policy",
         status=RunStatus.COMPLETED,
         entity_count=10,
-        created_at=datetime(2026, 1, 27, 10, 0, 0),
-        updated_at=datetime(2026, 1, 27, 10, 5, 0),
+        created_at=int(datetime(2026, 1, 27, 10, 0, 0).timestamp() * 1e9),
+        updated_at=int(datetime(2026, 1, 27, 10, 5, 0).timestamp() * 1e9),
     )
     policy_status = PolicyStatus(
         name="test_policy", status="completed", runs=[run1]

@@ -4,7 +4,7 @@
 
 import ipaddress
 import threading
-from datetime import datetime
+import time
 
 from device_discovery.policy.models import Run, RunStatus
 
@@ -154,7 +154,7 @@ class RunStore:
                 if run.id == run_id:
                     run.status = status
                     run.entity_count = entity_count
-                    run.updated_at = datetime.now()
+                    run.updated_at = time.time_ns()
 
                     if error:
                         run.reason = str(error)

@@ -3,8 +3,8 @@
 """Worker Run Store."""
 
 import threading
+import time
 import uuid
-from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -27,8 +27,8 @@ class Run(BaseModel):
     reason: str = ""
     entity_count: int = 0
     metadata: dict[str, str] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=lambda: datetime.now())
-    updated_at: datetime = Field(default_factory=lambda: datetime.now())
+    created_at: int = Field(default_factory=time.time_ns)
+    updated_at: int = Field(default_factory=time.time_ns)
 
 
 # Maximum number of runs to keep per policy
@@ -130,7 +130,7 @@ class RunStore:
                 if run.id == run_id:
                     run.status = status
                     run.entity_count = entity_count
-                    run.updated_at = datetime.now()
+                    run.updated_at = time.time_ns()
 
                     if error:
                         run.reason = str(error)

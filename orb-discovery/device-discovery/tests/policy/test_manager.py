@@ -167,13 +167,13 @@ def test_get_policy_statuses_active_policy_with_runs(policy_manager):
         policy_id="policy1",
         status=RunStatus.COMPLETED,
         entity_count=10,
-        created_at=datetime(2026, 1, 27, 10, 0, 0),
+        created_at=int(datetime(2026, 1, 27, 10, 0, 0).timestamp() * 1e9),
     )
     run2 = Run(
         policy_id="policy1",
         status=RunStatus.RUNNING,
         entity_count=0,
-        created_at=datetime(2026, 1, 27, 11, 0, 0),
+        created_at=int(datetime(2026, 1, 27, 11, 0, 0).timestamp() * 1e9),
     )
 
     # Mock the run store to return runs (sorted newest first)
@@ -225,13 +225,13 @@ def test_get_policy_statuses_historical_policy_no_active_runner(policy_manager):
         policy_id="old_policy",
         status=RunStatus.COMPLETED,
         entity_count=5,
-        created_at=datetime(2026, 1, 26, 10, 0, 0),
+        created_at=int(datetime(2026, 1, 26, 10, 0, 0).timestamp() * 1e9),
     )
     run2 = Run(
         policy_id="old_policy",
         status=RunStatus.FAILED,
         reason="Connection timeout",
-        created_at=datetime(2026, 1, 27, 10, 0, 0),
+        created_at=int(datetime(2026, 1, 27, 10, 0, 0).timestamp() * 1e9),
     )
 
     # Mock the run store to return runs (sorted newest first)
@@ -266,19 +266,19 @@ def test_get_policy_statuses_mixed_active_and_historical(policy_manager):
         policy_id="active_policy",
         status=RunStatus.COMPLETED,
         entity_count=15,
-        created_at=datetime(2026, 1, 27, 12, 0, 0),
+        created_at=int(datetime(2026, 1, 27, 12, 0, 0).timestamp() * 1e9),
     )
     historical_run1 = Run(
         policy_id="historical_policy",
         status=RunStatus.COMPLETED,
         entity_count=8,
-        created_at=datetime(2026, 1, 26, 10, 0, 0),
+        created_at=int(datetime(2026, 1, 26, 10, 0, 0).timestamp() * 1e9),
     )
     historical_run2 = Run(
         policy_id="historical_policy",
         status=RunStatus.COMPLETED,
         entity_count=12,
-        created_at=datetime(2026, 1, 27, 9, 0, 0),
+        created_at=int(datetime(2026, 1, 27, 9, 0, 0).timestamp() * 1e9),
     )
 
     # Mock the run store
@@ -329,7 +329,7 @@ def test_get_policy_statuses_multiple_active_policies(policy_manager):
         policy_id="policy1",
         status=RunStatus.FAILED,
         reason="Network error",
-        created_at=datetime(2026, 1, 27, 10, 0, 0),
+        created_at=int(datetime(2026, 1, 27, 10, 0, 0).timestamp() * 1e9),
     )
 
     # Mock the run store
@@ -371,13 +371,13 @@ def test_get_policy_statuses_prefer_running_status(policy_manager):
         policy_id="policy1",
         status=RunStatus.RUNNING,
         entity_count=0,
-        created_at=datetime(2026, 1, 27, 10, 0, 0),
+        created_at=int(datetime(2026, 1, 27, 10, 0, 0).timestamp() * 1e9),
     )
     run2 = Run(
         policy_id="policy1",
         status=RunStatus.COMPLETED,
         entity_count=15,
-        created_at=datetime(2026, 1, 27, 11, 0, 0),  # Latest run
+        created_at=int(datetime(2026, 1, 27, 11, 0, 0).timestamp() * 1e9),  # Latest run
     )
 
     # Mock the run store to return runs (sorted newest first)

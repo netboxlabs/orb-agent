@@ -33,8 +33,8 @@ func TestRunStore_CreateRun(t *testing.T) {
 	assert.Equal(t, "161", run.Metadata["port"])
 	assert.Equal(t, parentTarget, run.Metadata["parent_target"])
 
-	assert.False(t, run.CreatedAt.IsZero())
-	assert.False(t, run.UpdatedAt.IsZero())
+	assert.Greater(t, run.CreatedAt, int64(0))
+	assert.Greater(t, run.UpdatedAt, int64(0))
 	assert.Equal(t, run.CreatedAt, run.UpdatedAt)
 
 	// Verify run is stored for target
@@ -76,7 +76,7 @@ func TestRunStore_UpdateRun(t *testing.T) {
 	assert.Equal(t, policy.RunStatusCompleted, runs[0].Status)
 	assert.Empty(t, runs[0].Reason)
 	assert.Equal(t, entityCount, runs[0].EntityCount)
-	assert.True(t, runs[0].UpdatedAt.After(runs[0].CreatedAt))
+	assert.Greater(t, runs[0].UpdatedAt, runs[0].CreatedAt)
 
 	// Update to failed with error
 	testError := errors.New("test error")
@@ -162,7 +162,7 @@ func TestRunStore_MaxThreeRunsPerTarget_MultipleTargets(t *testing.T) {
 
 	// Verify runs are sorted by CreatedAt descending (newest first)
 	for i := 0; i < len(allRuns)-1; i++ {
-		assert.True(t, allRuns[i].CreatedAt.After(allRuns[i+1].CreatedAt) || allRuns[i].CreatedAt.Equal(allRuns[i+1].CreatedAt),
+		assert.GreaterOrEqual(t, allRuns[i].CreatedAt, allRuns[i+1].CreatedAt,
 			"Runs should be sorted newest first")
 	}
 }
@@ -215,8 +215,8 @@ func TestRunStore_GetRunsForPolicy(t *testing.T) {
 	assert.Len(t, runs, 3)
 
 	// Verify runs are sorted by CreatedAt descending
-	assert.True(t, runs[0].CreatedAt.After(runs[1].CreatedAt))
-	assert.True(t, runs[1].CreatedAt.After(runs[2].CreatedAt))
+	assert.Greater(t, runs[0].CreatedAt, runs[1].CreatedAt)
+	assert.Greater(t, runs[1].CreatedAt, runs[2].CreatedAt)
 
 	// Verify each run has correct metadata
 	targets := make(map[string]bool)
@@ -354,7 +354,7 @@ func TestRunStore_GetAllPoliciesWithRuns(t *testing.T) {
 	// Verify runs are sorted within each policy
 	for _, runs := range allRuns {
 		for i := 0; i < len(runs)-1; i++ {
-			assert.True(t, runs[i].CreatedAt.After(runs[i+1].CreatedAt) || runs[i].CreatedAt.Equal(runs[i+1].CreatedAt))
+			assert.GreaterOrEqual(t, runs[i].CreatedAt, runs[i+1].CreatedAt)
 		}
 	}
 }

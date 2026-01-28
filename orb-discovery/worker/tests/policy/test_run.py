@@ -30,11 +30,11 @@ def test_create_run_basic(run_store):
     assert run.reason == ""
     assert run.entity_count == 0
     assert run.metadata == {}
-    assert isinstance(run.created_at, datetime)
-    assert isinstance(run.updated_at, datetime)
-    # created_at and updated_at should be very close (within 1 second)
-    time_diff = abs((run.updated_at - run.created_at).total_seconds())
-    assert time_diff < 1
+    assert isinstance(run.created_at, int)
+    assert isinstance(run.updated_at, int)
+    # created_at and updated_at should be very close (within 1 second in nanoseconds)
+    time_diff_ns = abs(run.updated_at - run.created_at)
+    assert time_diff_ns < 1_000_000_000  # 1 second in nanoseconds
 
     # Verify run is stored
     runs = run_store.get_runs_for_policy(policy_name)
