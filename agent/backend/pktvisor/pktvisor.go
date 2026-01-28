@@ -440,9 +440,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 			return err
 		}
 	}
-
-	// Note: Stop() already cleaned up temp file, but kept path for restart
-	// for each policy, restart the scraper
+	// create a new context for the backend
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "pktvisor"))
 
 	// start it
