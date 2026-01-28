@@ -270,6 +270,49 @@ func TestSensitiveData_NonStringValues(t *testing.T) {
 	}
 }
 
+// TestSensitiveData_URLValues tests url.Values redaction (map[string][]string)
+func TestSensitiveData_URLValues(t *testing.T) {
+	// Simulate url.Values structure: map[string][]string
+	original := map[string]any{
+		"client_id":     []string{"my-client-id"},
+		"client_secret": []string{"my-secret-123"},
+		"grant_type":    []string{"client_credentials"},
+		"scope":         []string{"read write"},
+	}
+
+	redacted := SensitiveData(original)
+
+	redactedMap := redacted.(map[string]any)
+
+	// Verify sensitive field (slice) is masked
+	clientSecretSlice, ok := redactedMap["client_secret"].([]any)
+	if !ok {
+		t.Fatalf("Expected client_secret to be []any, got %T", redactedMap["client_secret"])
+	}
+	if len(clientSecretSlice) != 1 {
+		t.Fatalf("Expected client_secret slice to have 1 element, got %d", len(clientSecretSlice))
+	}
+	if clientSecretSlice[0] != MaskedSecret {
+		t.Errorf("Expected client_secret[0] to be %s, got %v", MaskedSecret, clientSecretSlice[0])
+	}
+
+	// Verify non-sensitive fields are preserved
+	clientIDSlice := redactedMap["client_id"].([]any)
+	if clientIDSlice[0] != "my-client-id" {
+		t.Errorf("Expected client_id to be preserved, got %v", clientIDSlice[0])
+	}
+
+	grantTypeSlice := redactedMap["grant_type"].([]any)
+	if grantTypeSlice[0] != "client_credentials" {
+		t.Errorf("Expected grant_type to be preserved, got %v", grantTypeSlice[0])
+	}
+
+	// Verify original is NOT mutated
+	if original["client_secret"].([]string)[0] != "my-secret-123" {
+		t.Error("Original map was mutated!")
+	}
+}
+
 // TestIsSensitiveField tests the field name pattern matching
 func TestIsSensitiveField(t *testing.T) {
 	tests := []struct {
@@ -296,8 +339,15 @@ func TestIsSensitiveField(t *testing.T) {
 		{"username", false},
 		{"url", false},
 		{"target", false},
-		{"token_url", true},   // Contains "token"
-		{"secret_name", true}, // Contains "secret"
+		{"token_url", false},         // Should NOT match - not exact "token"
+		{"secret_name", false},       // Should NOT match - not exact "secret"
+		{"my_custom_secret", true},   // Should match - ends with "_secret"
+		{"my_custom_token", true},    // Should match - ends with "_token"
+		{"my_custom_password", true}, // Should match - ends with "_password"
+		{"oauth_private_key", true},  // Should match - ends with "_private_key"
+		{"oauth_api_key", true},      // Should match - ends with "_api_key"
+		{"partition_key", false},     // Should NOT match - not a sensitive key type
+		{"sort_key", false},          // Should NOT match - not a sensitive key type
 	}
 
 	for _, tt := range tests {
@@ -446,7 +496,10 @@ func TestIsSensitiveArg(t *testing.T) {
 		{"--my-custom-secret", true},
 		{"--my-custom-password", true},
 		{"--my-custom-token", true},
-		{"--my-custom-key", true},
+		{"--my-custom-api-key", true},
+		{"--my-custom-private-key", true},
+		{"--sort-key", false},      // Should not match - not a sensitive key type
+		{"--partition-key", false}, // Should not match - not a sensitive key type
 		{"--host", false},
 		{"--port", false},
 		{"--client-id", false},

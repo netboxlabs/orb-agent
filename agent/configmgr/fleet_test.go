@@ -279,7 +279,7 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 		{
 			name:         "sanitizes non-empty client secret",
 			clientSecret: "my-super-secret-password",
-			wantSecret:   "******",
+			wantSecret:   "********",
 			wantErr:      false,
 			checkInYAML:  true,
 		},
@@ -334,9 +334,9 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 				assert.Contains(t, result, tt.wantSecret, "sanitized secret should be in output")
 				// YAML can use either single or double quotes, so check for either
 				assert.True(t,
-					strings.Contains(result, "client_secret: '******'") ||
-						strings.Contains(result, "client_secret: \"******\"") ||
-						strings.Contains(result, "client_secret: ******"),
+					strings.Contains(result, "client_secret: '********'") ||
+						strings.Contains(result, "client_secret: \"********\"") ||
+						strings.Contains(result, "client_secret: ********"),
 					"client_secret should be masked in YAML output")
 			}
 		})

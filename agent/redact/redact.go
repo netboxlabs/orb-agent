@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -8,7 +9,7 @@ import (
 // MaskedSecret is the value used to replace sensitive information in logs
 const MaskedSecret = "********"
 
-// sensitiveFieldPatterns contains lowercase patterns that identify sensitive fields
+// sensitiveFieldPatterns contains lowercase exact field names that identify sensitive fields
 var sensitiveFieldPatterns = []string{
 	"client_secret",
 	"clientsecret",
@@ -17,14 +18,24 @@ var sensitiveFieldPatterns = []string{
 	"privatekey",
 	"access_token",
 	"accesstoken",
-	"token",
-	"secret",
 	"api_key",
 	"apikey",
 	"auth_token",
 	"authtoken",
 	"bearer",
 	"jwt",
+	"secret", // Exact match only
+	"token",  // Exact match only
+}
+
+// sensitiveFieldSuffixes contains lowercase suffixes that indicate sensitive fields
+var sensitiveFieldSuffixes = []string{
+	"_secret",
+	"_password",
+	"_token",
+	"_private_key",
+	"_api_key",
+	"_auth_key",
 }
 
 // sensitiveFlagPatterns contains patterns for sensitive CLI flags
@@ -45,7 +56,9 @@ var sensitiveFlagSuffixes = []string{
 	"-secret",
 	"-password",
 	"-token",
-	"-key",
+	"-private-key",
+	"-api-key",
+	"-auth-key",
 }
 
 // SensitiveData creates a deep copy of the input data and masks sensitive fields.
@@ -87,9 +100,13 @@ func redactValue(val reflect.Value, fieldName string) any {
 
 	// Check if this field should be redacted
 	if fieldName != "" && isSensitiveField(fieldName) {
-		// Only redact string values
+		// Redact string values
 		if val.Kind() == reflect.String {
 			return MaskedSecret
+		}
+		// Redact slices/arrays of strings (e.g., url.Values which is map[string][]string)
+		if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
+			return redactSliceSensitive(val)
 		}
 		// For non-string sensitive fields, return as-is (e.g., port numbers)
 	}
@@ -133,11 +150,19 @@ func redactMap(val reflect.Value) any {
 		value := iter.Value()
 
 		// Get the key as a string
-		keyStr := ""
+		var keyStr string
 		if key.Kind() == reflect.String {
 			keyStr = key.String()
 		} else if key.CanInterface() {
-			keyStr = key.Interface().(string)
+			// Safely convert non-string keys using fmt.Sprintf
+			if str, ok := key.Interface().(string); ok {
+				keyStr = str
+			} else {
+				keyStr = fmt.Sprintf("%v", key.Interface())
+			}
+		} else {
+			// Fallback for unexported keys
+			keyStr = fmt.Sprintf("%v", key)
 		}
 
 		// Redact the value, passing the field name for sensitive field detection
@@ -184,6 +209,29 @@ func redactStruct(val reflect.Value) any {
 	return result
 }
 
+// redactSliceSensitive handles redaction of slice/array values for sensitive fields
+// It masks all string elements since the field itself is sensitive (e.g., url.Values)
+func redactSliceSensitive(val reflect.Value) any {
+	if val.Kind() == reflect.Slice && val.IsNil() {
+		return nil
+	}
+
+	length := val.Len()
+	result := make([]any, length)
+
+	for i := 0; i < length; i++ {
+		elem := val.Index(i)
+		// Mask string elements in sensitive slices
+		if elem.Kind() == reflect.String {
+			result[i] = MaskedSecret
+		} else {
+			result[i] = redactValue(elem, "")
+		}
+	}
+
+	return result
+}
+
 // redactSlice handles redaction of slice and array types
 func redactSlice(val reflect.Value) any {
 	if val.Kind() == reflect.Slice && val.IsNil() {
@@ -204,11 +252,21 @@ func redactSlice(val reflect.Value) any {
 // isSensitiveField checks if a field name matches sensitive patterns
 func isSensitiveField(fieldName string) bool {
 	lower := strings.ToLower(fieldName)
+
+	// Check exact matches first (to avoid false positives like "token_url")
 	for _, pattern := range sensitiveFieldPatterns {
-		if strings.Contains(lower, pattern) {
+		if lower == pattern {
 			return true
 		}
 	}
+
+	// Check suffixes (e.g., "my_custom_secret" matches "_secret")
+	for _, suffix := range sensitiveFieldSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+
 	return false
 }
 
