@@ -77,14 +77,52 @@ fi
 trap agentstop1 SIGINT
 trap agentstop2 SIGTERM
 
-# eternal loop
+# Restart failure tracking
+MAX_QUICK_FAILURES=5
+QUICK_FAILURE_THRESHOLD=10  # seconds
+MAX_BACKOFF=60  # max backoff delay in seconds
+consecutive_failures=0
+last_start_time=0
+
+# Main loop with failure detection and exponential backoff
 while true
 do
   # pid file exists
   if [ -f "/var/run/orb-agent.pid" ]; then
     PID=$(cat /var/run/orb-agent.pid)
     if [ ! -d "/proc/$PID" ]; then
-       # Process not running, clean stale PID file and continue to start agent
+       # Process not running - check if this was a quick failure
+       current_time=$(date +%s)
+       time_running=$((current_time - last_start_time))
+
+       if [ "$last_start_time" -gt 0 ] && [ "$time_running" -lt "$QUICK_FAILURE_THRESHOLD" ]; then
+         # Quick failure detected
+         consecutive_failures=$((consecutive_failures + 1))
+         echo "Agent failed quickly (ran for ${time_running}s). Consecutive failures: ${consecutive_failures}/${MAX_QUICK_FAILURES}"
+
+         if [ "$consecutive_failures" -ge "$MAX_QUICK_FAILURES" ]; then
+           echo "ERROR: Agent failed ${MAX_QUICK_FAILURES} times in quick succession. Exiting to prevent restart loop."
+           echo "Common causes: port already in use (bind error), configuration error, missing dependencies."
+           echo "Check logs above for specific error messages."
+           rm -f /var/run/orb-agent.pid
+           exit 1
+         fi
+
+         # Apply exponential backoff: min(MAX_BACKOFF, 2 * 2^failures)
+         backoff_delay=$((2 * (1 << (consecutive_failures - 1))))
+         if [ "$backoff_delay" -gt "$MAX_BACKOFF" ]; then
+           backoff_delay=$MAX_BACKOFF
+         fi
+         echo "Applying exponential backoff: waiting ${backoff_delay}s before retry..."
+         sleep "$backoff_delay"
+       else
+         # Not a quick failure or first start - reset counter
+         if [ "$last_start_time" -gt 0 ]; then
+           echo "Agent ran for ${time_running}s before exiting. Resetting failure counter."
+           consecutive_failures=0
+         fi
+       fi
+
        echo "Cleaning stale PID file for $PID (process not running)"
        rm /var/run/orb-agent.pid
        # Fall through to next iteration which will start agent
@@ -94,6 +132,8 @@ do
     fi
   else
     # pid file doesn't exist, start agent
+    echo "Starting orb-agent : /usr/local/bin/orb-agent with args ${#agent_args[@]}"
+    last_start_time=$(date +%s)
     nohup /run-agent.sh "${agent_args[@]}" &
     sleep 2
     if [ -f "/nohup.out" ]; then
