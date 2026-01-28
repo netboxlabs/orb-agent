@@ -15,6 +15,8 @@ import (
 
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
+
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 // AuthTokenManager manages auth tokens
@@ -92,7 +94,7 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 		},
 	}
 
-	fleetManager.logger.Debug("sending token request", "url", tokenURL, "data", data, "client_id", clientID)
+	fleetManager.logger.Debug("sending token request", "url", tokenURL, "data", redact.SensitiveData(data), "client_id", clientID)
 
 	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
