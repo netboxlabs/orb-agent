@@ -80,22 +80,24 @@ trap agentstop2 SIGTERM
 # eternal loop
 while true
 do
-  # pid file dont exist
-  if [ ! -f "/var/run/orb-agent.pid"  ]; then
-    # running orb-agent in background
+  # pid file exists
+  if [ -f "/var/run/orb-agent.pid" ]; then
+    PID=$(cat /var/run/orb-agent.pid)
+    if [ ! -d "/proc/$PID" ]; then
+       # Process not running, clean stale PID file and continue to start agent
+       echo "Cleaning stale PID file for $PID (process not running)"
+       rm /var/run/orb-agent.pid
+       # Fall through to next iteration which will start agent
+    else
+       # Process is running, wait
+       sleep 5
+    fi
+  else
+    # pid file doesn't exist, start agent
     nohup /run-agent.sh "${agent_args[@]}" &
     sleep 2
     if [ -d "/nohup.out" ]; then
        tail -f /nohup.out &
     fi
-  else
-    PID=$(cat /var/run/orb-agent.pid)
-    if [ ! -d "/proc/$PID" ]; then
-       # stop container
-       echo "$PID is not running"
-       rm /var/run/orb-agent.pid
-       exit 1
-    fi
-    sleep 5
   fi
 done

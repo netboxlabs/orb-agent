@@ -23,7 +23,7 @@ var _ backend.Backend = (*snmpDiscoveryBackend)(nil)
 const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
-	readinessBackoff    = 10
+	readinessBackoff    = 12
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	statusTimeout       = 5

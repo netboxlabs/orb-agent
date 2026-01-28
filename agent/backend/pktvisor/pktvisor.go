@@ -25,7 +25,7 @@ var _ backend.Backend = (*pktvisorBackend)(nil)
 
 const (
 	defaultBinary       = "pktvisord"
-	readinessBackoff    = 10
+	readinessBackoff    = 12
 	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
@@ -314,6 +314,18 @@ func parsePktvisorEntity(line string) (entity, name, rest string, ok bool) {
 func (p *pktvisorBackend) Stop(ctx context.Context) error {
 	p.logger.Info("routine call to stop pktvisor", "routine", ctx.Value(config.ContextKey("routine")))
 	defer p.cancelFunc()
+
+	// Clean up temporary config file (but keep path for potential restart)
+	if p.configFile != "" {
+		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
+			p.logger.Warn("failed to remove pktvisor temp config file",
+				"file", p.configFile,
+				"error", err)
+		} else if err == nil {
+			p.logger.Debug("removed pktvisor temp config file", "file", p.configFile)
+		}
+	}
+
 	err := p.proc.Stop()
 	finalStatus := <-p.statusChan
 	if err != nil {
@@ -336,6 +348,15 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	p.adminAPIHost = defaultAPIHost
 	p.adminAPIPort = defaultAPIPort
 	p.agentLabels = common.Otlp.AgentLabels
+
+	// Clean up old temp config file if it exists
+	if p.configFile != "" {
+		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
+			p.logger.Warn("failed to remove old pktvisor temp config file",
+				"file", p.configFile,
+				"error", err)
+		}
+	}
 
 	// Create temp config file
 	tmpDir := os.TempDir()
@@ -432,6 +453,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 		}
 	}
 
+	// Note: Stop() already cleaned up temp file, but kept path for restart
 	// for each policy, restart the scraper
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "pktvisor"))
 

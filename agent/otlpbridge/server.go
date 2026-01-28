@@ -7,10 +7,12 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 
 	"github.com/netboxlabs/orb-agent/agent/policies"
@@ -105,7 +107,20 @@ func (s *BridgeServer) GetPolicyRepo() policies.PolicyRepo {
 // Start starts the gRPC server without establishing MQTT.
 // Publisher and topic should be set before OTLP data arrives.
 func (s *BridgeServer) Start(_ context.Context) error {
-	lis, err := net.Listen("tcp", s.cfg.ListenAddr)
+	// Use ListenConfig to enable SO_REUSEADDR for faster port reuse after restart
+	lc := net.ListenConfig{
+		Control: func(_, _ string, c syscall.RawConn) error {
+			var sockOptErr error
+			if err := c.Control(func(fd uintptr) {
+				// Enable SO_REUSEADDR to allow binding to TIME_WAIT sockets
+				sockOptErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+			}); err != nil {
+				return err
+			}
+			return sockOptErr
+		},
+	}
+	lis, err := lc.Listen(context.Background(), "tcp", s.cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s (port may be in use by another service): %w", s.cfg.ListenAddr, err)
 	}
