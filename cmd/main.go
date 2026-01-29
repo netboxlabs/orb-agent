@@ -113,7 +113,7 @@ func Run(_ *cobra.Command, _ []string) {
 			logger.Warn("stop signal received stopping agent")
 			a.Stop(rootCtx)
 			cancelFunc()
-			os.Exit(0) // Exit after clean shutdown
+			os.Exit(0)
 		case <-rootCtx.Done():
 			logger.Warn("mainRoutine context cancelled")
 			done <- true
