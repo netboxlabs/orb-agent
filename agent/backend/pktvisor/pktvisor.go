@@ -205,8 +205,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
 			http.NoBody, "application/json", readinessTimeout, "error")
 		if readinessError == nil {
-			p.logger.Info("pktvisor readiness ok, got version ",
-				"pktvisor_version", appMetrics.App.Version)
+			p.logger.Info("pktvisor readiness ok, got version", "version", appMetrics.App.Version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second

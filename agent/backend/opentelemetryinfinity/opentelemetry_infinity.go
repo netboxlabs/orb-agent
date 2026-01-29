@@ -181,8 +181,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		}
 		version, readinessErr = o.Version()
 		if readinessErr == nil {
-			o.logger.Info("opentelemetry infinity readiness ok, got version ",
-				"opentelemetry_infinity_version", version)
+			o.logger.Info("opentelemetry infinity readiness ok, got version", "version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
