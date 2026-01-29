@@ -238,8 +238,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
-			d.logger.Info("device-discovery readiness ok, got version ",
-				"device_discovery_version", version)
+			d.logger.Info("device-discovery readiness ok, got version", "version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second

@@ -255,8 +255,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
-			d.logger.Info("network-discovery readiness ok, got version ",
-				"network_discovery_version", version)
+			d.logger.Info("network-discovery readiness ok, got version", "version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second

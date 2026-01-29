@@ -255,8 +255,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
-			d.logger.Info("snmp-discovery readiness ok, got version ",
-				"snmp_discovery_version", version)
+			d.logger.Info("snmp-discovery readiness ok, got version", "version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
