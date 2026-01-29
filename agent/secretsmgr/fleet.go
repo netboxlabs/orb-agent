@@ -109,7 +109,6 @@ func (f *FleetSecretsManager) HandleMessage(topic string, payload []byte) error 
 		f.logger.Info("received unknown message on topic", "topic", topic)
 		return nil
 	}
-	return nil
 }
 
 func (f *FleetSecretsManager) handleResponse(payload []byte) error {
