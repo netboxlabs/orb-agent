@@ -80,7 +80,11 @@ func (f *FleetSecretsManager) BindMQTT(publisher Publisher, subscriber Subscribe
 	f.updatedTopic = updatedTopic
 
 	// Subscribe to response and updated topics
-	ctx := context.Background()
+	// Use the manager's context if available, otherwise use background context
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := f.subscriber.Subscribe(ctx, &paho.Subscribe{
 		Subscriptions: []paho.SubscribeOptions{
 			{Topic: responseTopic, QoS: 1},
@@ -164,7 +168,10 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 				"new_version", update.Version)
 
 			// Request updated secret
-			ctx := context.Background()
+			ctx := f.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
 			secret, err := f.requestSecret(ctx, update.Path, cached.policyIDs)
 			if err != nil {
 				f.logger.Error("failed to request updated secret", "path", update.Path, "error", err)
@@ -301,7 +308,10 @@ func (f *FleetSecretsManager) processString(s string, id string) (string, error)
 	}
 
 	// Request secret from control plane
-	ctx := context.Background()
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	policyIDs := map[string]bool{id: true}
 	secret, err := f.requestSecret(ctx, fleetPath, policyIDs)
 	if err != nil {
@@ -373,13 +383,18 @@ func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, po
 		return nil, fmt.Errorf("failed to marshal secret request: %w", err)
 	}
 
-	// Create response channel
+	// Create response channel with buffer size 1 to prevent blocking handleResponse
 	responseCh := make(chan *messages.SecretResponseMsg, 1)
 	f.mu.Lock()
 	f.pendingReqs[requestID] = responseCh
 	f.mu.Unlock()
 
 	// Cleanup pending request on exit
+	// Note: The channel is intentionally not closed here to avoid a race condition where
+	// handleResponse might already have a reference to the channel and attempt to send after
+	// it's closed (which would panic). By removing the channel from pendingReqs, we ensure
+	// no new sends will be attempted, and the buffered channel prevents blocking. The channel
+	// will be garbage collected once this function returns and any in-flight sends complete.
 	defer func() {
 		f.mu.Lock()
 		delete(f.pendingReqs, requestID)
