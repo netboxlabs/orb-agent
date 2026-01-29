@@ -54,7 +54,7 @@ type fleetCachedSecret struct {
 
 // NewFleetSecretsManager creates a new Fleet secrets manager
 func NewFleetSecretsManager(logger *slog.Logger, cfg config.FleetSecretsManager) *FleetSecretsManager {
-	timeout := 30 * time.Second
+	timeout := 120 * time.Second
 	if cfg.Timeout != nil && *cfg.Timeout > 0 {
 		timeout = time.Duration(*cfg.Timeout) * time.Second
 	}
@@ -105,6 +105,9 @@ func (f *FleetSecretsManager) HandleMessage(topic string, payload []byte) error 
 		return f.handleResponse(payload)
 	case f.updatedTopic:
 		return f.handleUpdateNotification(payload)
+	default:
+		f.logger.Info("received unknown message on topic", "topic", topic)
+		return nil
 	}
 	return nil
 }
@@ -115,6 +118,7 @@ func (f *FleetSecretsManager) handleResponse(payload []byte) error {
 		f.logger.Error("failed to unmarshal secret response", "error", err)
 		return err
 	}
+	f.logger.Debug("handling secret response", "request_id", response.RequestID, "status", response.Status, "secrets", len(response.Secrets))
 
 	f.mu.Lock()
 	ch, exists := f.pendingReqs[response.RequestID]
@@ -211,6 +215,7 @@ func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (
 	newPayload := payload
 
 	// Process the Data field
+	// TODO: currently this will solve secrets sequentially - we should find all the secrets and then request them all at once
 	processedData, err := f.processValue(payload.Data, payload.ID)
 	if err != nil {
 		return payload, err
@@ -304,6 +309,8 @@ func (f *FleetSecretsManager) processString(s string, id string) (string, error)
 		return "", fmt.Errorf("failed to get secret %s: %w", fleetPath, err)
 	}
 
+	f.logger.Info("got secret", "secret_path", fleetPath)
+
 	// Cache the secret
 	f.mu.Lock()
 	f.usedVars[fleetPath] = fleetCachedSecret{
@@ -344,6 +351,7 @@ func (f *FleetSecretsManager) processSlice(s []any, id string) ([]any, error) {
 
 // requestSecret requests a secret from the control plane via MQTT
 func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, policyIDs map[string]bool) (*messages.SecretValue, error) {
+	f.logger.Info("requesting secret", "path", path, "policy_ids", policyIDs)
 	if f.publisher == nil {
 		return nil, fmt.Errorf("MQTT publisher not bound")
 	}
@@ -404,7 +412,7 @@ func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, po
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context canceled while waiting for secret response")
 	case <-time.After(f.timeout):
-		return nil, fmt.Errorf("timeout waiting for secret response")
+		return nil, fmt.Errorf("timeout waiting for secret response after %s", f.timeout)
 	}
 }
 

@@ -233,30 +233,36 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 					connection.mu.Unlock()
 
 					if hasHandler {
-						if err := handler(pr.Packet.Topic, pr.Packet.Payload); err != nil {
-							connection.logger.Error("topic handler failed", "topic", pr.Packet.Topic, "error", err)
-						}
+						// Process in goroutine to avoid blocking message acknowledgment
+						go func() {
+							if err := handler(pr.Packet.Topic, pr.Packet.Payload); err != nil {
+								connection.logger.Error("topic handler failed", "topic", pr.Packet.Topic, "error", err)
+							}
+						}()
 						return true, nil
 					}
 
-					orgID := strings.Split(pr.Packet.Topic, "/")[1]
+					// Process in goroutine to avoid blocking message acknowledgment
+					go func() {
+						orgID := strings.Split(pr.Packet.Topic, "/")[1]
 
-					// Use a fresh context for async message handling, not the Connect() context
-					// which may be canceled or have a short timeout
-					err = connection.messaging.DispatchToHandlers(
-						context.Background(),
-						pr.Packet.Payload,
-						orgID,
-						details.AgentID,
-						TopicActions{
-							Subscribe:   connection.subscribeToTopic,
-							Publish:     connection.publishToTopic,
-							Unsubscribe: connection.unsubscribeFromTopic,
-						},
-					)
-					if err != nil {
-						connection.logger.Error("failed to dispatch to handlers", "error", err)
-					}
+						// Use a fresh context for async message handling, not the Connect() context
+						// which may be canceled or have a short timeout
+						err := connection.messaging.DispatchToHandlers(
+							context.Background(),
+							pr.Packet.Payload,
+							orgID,
+							details.AgentID,
+							TopicActions{
+								Subscribe:   connection.subscribeToTopic,
+								Publish:     connection.publishToTopic,
+								Unsubscribe: connection.unsubscribeFromTopic,
+							},
+						)
+						if err != nil {
+							connection.logger.Error("failed to dispatch to handlers", "error", err)
+						}
+					}()
 
 					return true, nil
 				},
