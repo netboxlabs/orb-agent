@@ -19,6 +19,11 @@ import (
 
 var _ Manager = (*FleetSecretsManager)(nil)
 
+// fleetRefRegex matches fleet secret references in the format ${fleet://path}
+var fleetRefRegex = regexp.MustCompile(`\${fleet://([^}]+)}`)
+
+const defaultSecretRequestTimeout = 30 * time.Second
+
 // Publisher interface for MQTT publishing
 type Publisher interface {
 	Publish(ctx context.Context, topic string, payload []byte) error
@@ -54,7 +59,7 @@ type fleetCachedSecret struct {
 
 // NewFleetSecretsManager creates a new Fleet secrets manager
 func NewFleetSecretsManager(logger *slog.Logger, cfg config.FleetSecretsManager) *FleetSecretsManager {
-	timeout := 120 * time.Second
+	timeout := defaultSecretRequestTimeout
 	if cfg.Timeout != nil && *cfg.Timeout > 0 {
 		timeout = time.Duration(*cfg.Timeout) * time.Second
 	}
@@ -149,49 +154,80 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 		return err
 	}
 
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	changedPolicyIDs := make(map[string]bool)
 
 	for _, update := range notification.Updates {
+		// Copy data needed for the request while holding the lock
+		f.mu.Lock()
 		cached, exists := f.usedVars[update.Path]
 		if !exists {
+			f.mu.Unlock()
 			continue
 		}
 
 		// Check if version changed
-		if update.Version > cached.Version {
-			f.logger.Info("secret version changed, requesting update",
-				"path", update.Path,
-				"old_version", cached.Version,
-				"new_version", update.Version)
-
-			// Request updated secret
-			ctx := f.ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			secret, err := f.requestSecret(ctx, update.Path, cached.policyIDs)
-			if err != nil {
-				f.logger.Error("failed to request updated secret", "path", update.Path, "error", err)
-				// Mark policies as needing update but with error
-				for id := range cached.policyIDs {
-					changedPolicyIDs[id] = false
-				}
-				continue
-			}
-
-			// Update cache
-			cached.Value = secret.Value
-			cached.Version = secret.Version
-			f.usedVars[update.Path] = cached
-
-			// Mark policies as needing update
-			for id := range cached.policyIDs {
-				changedPolicyIDs[id] = true
-			}
+		if update.Version <= cached.Version {
+			f.mu.Unlock()
+			continue
 		}
+
+		f.logger.Info("secret version changed, requesting update",
+			"path", update.Path,
+			"old_version", cached.Version,
+			"new_version", update.Version)
+
+		// Deep-copy policy IDs so they can be safely used while the lock is released
+		policyIDsCopy := make(map[string]bool, len(cached.policyIDs))
+		for id := range cached.policyIDs {
+			policyIDsCopy[id] = true
+		}
+		path := update.Path
+
+		// Release the lock before performing the potentially long-running network request
+		f.mu.Unlock()
+
+		// Request updated secret
+		ctx := f.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		secret, err := f.requestSecret(ctx, path, policyIDsCopy)
+
+		// Re-acquire the lock before accessing or mutating shared state
+		f.mu.Lock()
+		if err != nil {
+			f.logger.Error("failed to request updated secret", "path", path, "error", err)
+			// Mark policies as needing update but with error
+			for id := range policyIDsCopy {
+				changedPolicyIDs[id] = false
+			}
+			f.mu.Unlock()
+			continue
+		}
+
+		// Re-fetch the cached entry in case it changed while the lock was released
+		cached, exists = f.usedVars[path]
+		if !exists {
+			// The secret was removed while we were requesting it; skip updating.
+			f.mu.Unlock()
+			continue
+		}
+		// If the version is already up-to-date or newer, skip overwriting.
+		if cached.Version >= secret.Version {
+			f.mu.Unlock()
+			continue
+		}
+
+		// Update cache
+		cached.Value = secret.Value
+		cached.Version = secret.Version
+		f.usedVars[path] = cached
+
+		// Mark policies as needing update
+		for id := range cached.policyIDs {
+			changedPolicyIDs[id] = true
+		}
+		f.mu.Unlock()
 	}
 
 	// Call callback if secrets changed
@@ -283,29 +319,31 @@ func (f *FleetSecretsManager) processValue(value any, id string) (any, error) {
 
 // processString processes a string and replaces fleet secret references
 func (f *FleetSecretsManager) processString(s string, id string) (string, error) {
-	re := regexp.MustCompile(`\${fleet://([^}]+)}`)
-	if !re.MatchString(s) {
+	if !fleetRefRegex.MatchString(s) {
 		return s, nil
 	}
 
-	match := re.FindStringSubmatchIndex(s)
+	match := fleetRefRegex.FindStringSubmatchIndex(s)
 	if len(match) < 4 {
 		return "", fmt.Errorf("failed to find fleet secret reference in string: %s", s)
 	}
 
 	fleetPath := s[match[2]:match[3]]
 
-	f.mu.RLock()
+	// Check if secret exists in cache and update policy tracking
+	f.mu.Lock()
 	cached, exists := f.usedVars[fleetPath]
-	f.mu.RUnlock()
-
 	if exists {
-		f.mu.Lock()
+		if cached.policyIDs == nil {
+			cached.policyIDs = make(map[string]bool)
+		}
 		cached.policyIDs[id] = true
 		f.usedVars[fleetPath] = cached
+		value := cached.Value
 		f.mu.Unlock()
-		return cached.Value, nil
+		return value, nil
 	}
+	f.mu.Unlock()
 
 	// Request secret from control plane
 	ctx := f.ctx
@@ -419,6 +457,16 @@ func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, po
 
 		if len(response.Secrets) == 0 {
 			return nil, fmt.Errorf("no secrets in response")
+		}
+
+		// Log warning for partial responses (some secrets succeeded, some failed)
+		if response.Status == "partial" && len(response.Errors) > 0 {
+			for _, secretErr := range response.Errors {
+				f.logger.Warn("partial secret response: some secrets failed",
+					"path", secretErr.Path,
+					"error", secretErr.Error,
+					"code", secretErr.Code)
+			}
 		}
 
 		return &response.Secrets[0], nil
