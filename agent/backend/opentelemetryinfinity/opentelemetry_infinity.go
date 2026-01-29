@@ -27,7 +27,7 @@ const (
 	defaultAPIPort      = "10222"
 	versionTimeout      = 5
 	capabilitiesTimeout = 5
-	readinessBackoff    = 12
+	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	statusTimeout       = 5

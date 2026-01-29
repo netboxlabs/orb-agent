@@ -25,7 +25,7 @@ var _ backend.Backend = (*pktvisorBackend)(nil)
 
 const (
 	defaultBinary       = "pktvisord"
-	readinessBackoff    = 12
+	readinessBackoff    = 10
 	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
