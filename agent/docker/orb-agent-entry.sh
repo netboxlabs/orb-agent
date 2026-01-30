@@ -62,6 +62,11 @@ if [ -n "${FLEET_CLIENT_ID}" ] && [ -n "${FLEET_CLIENT_SECRET}" ]; then
   fi
 fi
 
+# Default to 'run' subcommand if no args provided (preserve backward compatibility)
+if [ ${#agent_args[@]} -eq 0 ]; then
+  agent_args=(run)
+fi
+
 # Use exec to replace this shell process with the agent
 # This makes the agent a direct child of tini, ensuring proper signal handling
 exec /usr/local/bin/orb-agent "${agent_args[@]}"
