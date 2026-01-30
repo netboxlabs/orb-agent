@@ -114,7 +114,8 @@ func Run(_ *cobra.Command, _ []string) {
 			logger.Warn("stop signal received stopping agent")
 			a.Stop(rootCtx)
 			cancelFunc()
-			os.Exit(0)
+			done <- true
+			return
 		case <-rootCtx.Done():
 			logger.Warn("mainRoutine context cancelled")
 			done <- true
