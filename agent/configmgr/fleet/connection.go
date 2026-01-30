@@ -19,6 +19,14 @@ import (
 // TopicMessageHandler handles messages for a specific topic
 type TopicMessageHandler func(topic string, payload []byte) error
 
+// dispatchJob represents a message to be processed by the dispatch worker
+type dispatchJob struct {
+	payload      []byte
+	orgID        string
+	agentID      string
+	topicActions TopicActions
+}
+
 // MQTTConnection manages the MQTT connection
 type MQTTConnection struct {
 	logger                   *slog.Logger
@@ -30,6 +38,8 @@ type MQTTConnection struct {
 	topicHandlers            map[string]TopicMessageHandler
 	connectionTopics         TokenResponseTopics
 	reconnectChan            chan struct{}
+	dispatchQueue            chan dispatchJob
+	dispatchWorkerDone       chan struct{}
 	capabilitiesFailCount    int
 	groupMembershipFailCount int
 	heartbeatFailCount       int
@@ -40,14 +50,16 @@ type MQTTConnection struct {
 func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}, reconnectChan chan struct{}, backendState backend.StateRetriever) *MQTTConnection {
 	groupManager := newGroupManager()
 	return &MQTTConnection{
-		connectionManager: nil,
-		logger:            logger,
-		heartbeater:       newHeartbeater(logger, backendState, pMgr, &groupManager),
-		messaging:         NewMessaging(logger, pMgr, resetChan, &groupManager),
-		resetChan:         resetChan,
-		onReadyHooks:      make([]func(cm *autopaho.ConnectionManager, topics TokenResponseTopics), 0),
-		topicHandlers:     make(map[string]TopicMessageHandler),
-		reconnectChan:     reconnectChan,
+		connectionManager:  nil,
+		logger:             logger,
+		heartbeater:        newHeartbeater(logger, backendState, pMgr, &groupManager),
+		messaging:          NewMessaging(logger, pMgr, resetChan, &groupManager),
+		resetChan:          resetChan,
+		onReadyHooks:       make([]func(cm *autopaho.ConnectionManager, topics TokenResponseTopics), 0),
+		topicHandlers:      make(map[string]TopicMessageHandler),
+		reconnectChan:      reconnectChan,
+		dispatchQueue:      make(chan dispatchJob, 100), // Buffered channel to prevent blocking MQTT acks
+		dispatchWorkerDone: make(chan struct{}),
 	}
 }
 
@@ -89,6 +101,31 @@ type MQTTConnector interface {
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 }
 
+// startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially
+func (connection *MQTTConnection) startDispatchWorker() {
+	go func() {
+		defer close(connection.dispatchWorkerDone)
+		for job := range connection.dispatchQueue {
+			err := connection.messaging.DispatchToHandlers(
+				context.Background(),
+				job.payload,
+				job.orgID,
+				job.agentID,
+				job.topicActions,
+			)
+			if err != nil {
+				connection.logger.Error("failed to dispatch to handlers", "error", err)
+			}
+		}
+	}()
+}
+
+// stopDispatchWorker stops the dispatch worker and waits for it to finish
+func (connection *MQTTConnection) stopDispatchWorker() {
+	close(connection.dispatchQueue)
+	<-connection.dispatchWorkerDone
+}
+
 // Connect connects to the MQTT broker
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
 	// Parse the ORB URL
@@ -100,6 +137,9 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 	// Store topics for hook callbacks
 	connection.connectionTopics = details.Topics
+
+	// Start the dispatch worker to process incoming messages sequentially
+	connection.startDispatchWorker()
 
 	cfg := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{serverURL},
@@ -242,12 +282,24 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 						return true, nil
 					}
 
-					// Process in goroutine to avoid blocking message acknowledgment
-					go func() {
-						orgID := strings.Split(pr.Packet.Topic, "/")[1]
-
-						// Use a fresh context for async message handling, not the Connect() context
-						// which may be canceled or have a short timeout
+					// Enqueue the job for sequential processing by the dispatch worker
+					// This preserves message ordering and prevents race conditions
+					orgID := strings.Split(pr.Packet.Topic, "/")[1]
+					select {
+					case connection.dispatchQueue <- dispatchJob{
+						payload: pr.Packet.Payload,
+						orgID:   orgID,
+						agentID: details.AgentID,
+						topicActions: TopicActions{
+							Subscribe:   connection.subscribeToTopic,
+							Publish:     connection.publishToTopic,
+							Unsubscribe: connection.unsubscribeFromTopic,
+						},
+					}:
+						// Job enqueued successfully
+					default:
+						// Queue is full - log warning and process synchronously as fallback
+						connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
 						err := connection.messaging.DispatchToHandlers(
 							context.Background(),
 							pr.Packet.Payload,
@@ -262,7 +314,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 						if err != nil {
 							connection.logger.Error("failed to dispatch to handlers", "error", err)
 						}
-					}()
+					}
 
 					return true, nil
 				},
@@ -281,6 +333,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 	connection.connectionManager, err = autopaho.NewConnection(ctx, cfg)
 	if err != nil {
 		connection.logger.Error("failed to create MQTT connection", "error", err)
+		connection.stopDispatchWorker()
 		return err
 	}
 
@@ -292,6 +345,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 	err = connection.connectionManager.AwaitConnection(waitCtx)
 	if err != nil {
 		connection.logger.Error("failed to establish initial MQTT connection", "error", err)
+		connection.stopDispatchWorker()
 		return err
 	}
 
@@ -307,12 +361,17 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 	if connection.connectionManager != nil {
 		disconnectCtx, cancel := context.WithTimeout(ctx, timeout)
 		connection.heartbeater.stop(details.Topics.Heartbeat, connection.publishToTopic)
+		// Stop the dispatch worker before disconnecting
+		connection.stopDispatchWorker()
 		err := connection.connectionManager.Disconnect(disconnectCtx)
 		cancel()
 		if err != nil {
 			connection.logger.Error("failed to disconnect during reconnect", "error", err)
 			// Continue anyway to try to establish new connection
 		}
+		// Create new channels for the next connection
+		connection.dispatchQueue = make(chan dispatchJob, 100)
+		connection.dispatchWorkerDone = make(chan struct{})
 	}
 
 	// Reset failure counters
@@ -333,6 +392,7 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 // Disconnect disconnects from the MQTT broker
 func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
 	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+	connection.stopDispatchWorker()
 	return connection.connectionManager.Disconnect(ctx)
 }
 

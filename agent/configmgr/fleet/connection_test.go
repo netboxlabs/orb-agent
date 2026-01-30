@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -121,4 +122,96 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 			strings.Contains(err.Error(), "no such host") ||
 			strings.Contains(err.Error(), "server denied connect"),
 		"Expected connection-related error, got: %v", err)
+}
+
+func TestDispatchQueue_ProcessesJobsSequentially(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+
+	// Track the order of job processing using a channel
+	processedOrder := make([]int, 0, 10)
+	var mu sync.Mutex
+	jobProcessed := make(chan struct{}, 10)
+
+	// Create a custom messaging handler that tracks processing order
+	numJobs := 10
+
+	// Start the dispatch worker
+	connection.startDispatchWorker()
+
+	// Enqueue multiple jobs rapidly
+	for i := 0; i < numJobs; i++ {
+		jobIndex := i
+		// Create a group_membership RPC payload that will trigger Subscribe
+		payload := []byte(`{"schema_version":"1.0","func":"group_membership","payload":{"full_list":false,"groups":[{"group_id":"test-group","name":"Test"}]}}`)
+		connection.dispatchQueue <- dispatchJob{
+			payload: payload,
+			orgID:   "test-org",
+			agentID: "test-agent",
+			topicActions: TopicActions{
+				Subscribe: func(_ string) error {
+					mu.Lock()
+					processedOrder = append(processedOrder, jobIndex)
+					mu.Unlock()
+					jobProcessed <- struct{}{}
+					return nil
+				},
+				Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+				Unsubscribe: func(_ string) error { return nil },
+			},
+		}
+	}
+
+	// Wait for all jobs to be processed
+	for i := 0; i < numJobs; i++ {
+		select {
+		case <-jobProcessed:
+			// Job processed
+		case <-time.After(5 * time.Second):
+			t.Fatal("timeout waiting for jobs to be processed")
+		}
+	}
+
+	// Stop the worker
+	connection.stopDispatchWorker()
+
+	// Assert - all jobs were processed in order (since they're processed sequentially)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Len(t, processedOrder, numJobs)
+	for i := 0; i < numJobs; i++ {
+		assert.Equal(t, i, processedOrder[i], "Jobs should be processed in order")
+	}
+}
+
+func TestDispatchQueue_HandlesQueueFull(t *testing.T) {
+	// Arrange
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+
+	// Don't start the worker so the queue fills up
+	// Just verify we can enqueue up to the buffer size
+	for i := 0; i < 100; i++ {
+		select {
+		case connection.dispatchQueue <- dispatchJob{}:
+			// Successfully enqueued
+		default:
+			t.Fatal("Queue should have capacity for 100 items")
+		}
+	}
+
+	// The 101st item should not block (select with default)
+	select {
+	case connection.dispatchQueue <- dispatchJob{}:
+		t.Fatal("Queue should be full")
+	default:
+		// Expected - queue is full
+	}
 }
