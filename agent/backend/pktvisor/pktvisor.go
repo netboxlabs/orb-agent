@@ -313,6 +313,7 @@ func parsePktvisorEntity(line string) (entity, name, rest string, ok bool) {
 func (p *pktvisorBackend) Stop(ctx context.Context) error {
 	p.logger.Info("routine call to stop pktvisor", "routine", ctx.Value(config.ContextKey("routine")))
 	defer p.cancelFunc()
+
 	err := p.proc.Stop()
 	finalStatus := <-p.statusChan
 	if err != nil {
@@ -335,6 +336,15 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	p.adminAPIHost = defaultAPIHost
 	p.adminAPIPort = defaultAPIPort
 	p.agentLabels = common.Otlp.AgentLabels
+
+	// Clean up old temp config file if it exists
+	if p.configFile != "" {
+		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
+			p.logger.Warn("failed to remove old pktvisor temp config file",
+				"file", p.configFile,
+				"error", err)
+		}
+	}
 
 	// Create temp config file
 	tmpDir := os.TempDir()
@@ -430,8 +440,7 @@ func (p *pktvisorBackend) FullReset(ctx context.Context) error {
 			return err
 		}
 	}
-
-	// for each policy, restart the scraper
+	// create a new context for the backend
 	backendCtx, cancelFunc := context.WithCancel(context.WithValue(ctx, config.ContextKey("routine"), "pktvisor"))
 
 	// start it

@@ -47,7 +47,7 @@ FROM python:3.14-slim-trixie
 
 RUN \
     apt update && \
-    apt install --yes --no-install-recommends nmap openssh-client && \
+    apt install --yes --no-install-recommends nmap openssh-client tini && \
     rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/orb
@@ -70,7 +70,6 @@ COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-dis
 
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
-COPY --from=builder /src/orb-agent/agent/docker/run-agent.sh /run-agent.sh
 COPY --from=builder /src/orb-agent/agent/docker/default_config.yaml /opt/orb/default_config.yaml
 
-ENTRYPOINT [ "/usr/local/bin/orb-agent-entry.sh" ]
+ENTRYPOINT [ "/usr/bin/tini", "--", "/usr/local/bin/orb-agent-entry.sh" ]
