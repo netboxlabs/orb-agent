@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -40,6 +41,7 @@ type MQTTConnection struct {
 	reconnectChan            chan struct{}
 	dispatchQueue            chan dispatchJob
 	dispatchWorkerDone       chan struct{}
+	shuttingDown             atomic.Bool
 	capabilitiesFailCount    int
 	groupMembershipFailCount int
 	heartbeatFailCount       int
@@ -290,16 +292,23 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 						return true, nil
 					}
 
-					// Enqueue the job for sequential processing by the dispatch worker
-					// This preserves message ordering and prevents race conditions
-					parts := strings.Split(pr.Packet.Topic, "/")
-					if len(parts) < 2 {
-						connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
-						return true, nil
-					}
-					orgID := parts[1]
-					select {
-					case connection.dispatchQueue <- dispatchJob{
+				// Enqueue the job for sequential processing by the dispatch worker
+				// This preserves message ordering and prevents race conditions
+				parts := strings.Split(pr.Packet.Topic, "/")
+				if len(parts) < 2 {
+					connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
+					return true, nil
+				}
+				orgID := parts[1]
+
+				// Check if we're shutting down to avoid sending to a closed channel
+				if connection.shuttingDown.Load() {
+					connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
+					return true, nil
+				}
+
+				select {
+				case connection.dispatchQueue <- dispatchJob{
 						payload: pr.Packet.Payload,
 						orgID:   orgID,
 						agentID: details.AgentID,
@@ -372,19 +381,23 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 
 	// Disconnect the existing connection
 	if connection.connectionManager != nil {
+		// Set shutdown flag first to prevent new messages from being enqueued
+		connection.shuttingDown.Store(true)
+
 		disconnectCtx, cancel := context.WithTimeout(ctx, timeout)
 		connection.heartbeater.stop(details.Topics.Heartbeat, connection.publishToTopic)
-		// Stop the dispatch worker before disconnecting
-		connection.stopDispatchWorker()
 		err := connection.connectionManager.Disconnect(disconnectCtx)
 		cancel()
 		if err != nil {
 			connection.logger.Error("failed to disconnect during reconnect", "error", err)
 			// Continue anyway to try to establish new connection
 		}
-		// Create new channels for the next connection
+		connection.stopDispatchWorker()
+
+		// Create new channels for the next connection and reset shutdown flag
 		connection.dispatchQueue = make(chan dispatchJob, 100)
 		connection.dispatchWorkerDone = make(chan struct{})
+		connection.shuttingDown.Store(false)
 	}
 
 	// Reset failure counters
@@ -404,9 +417,14 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 
 // Disconnect disconnects from the MQTT broker
 func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
+	// Set shutdown flag first to prevent new messages from being enqueued
+	connection.shuttingDown.Store(true)
+
 	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+	// Disconnect first to stop receiving new messages, then stop the worker
+	err := connection.connectionManager.Disconnect(ctx)
 	connection.stopDispatchWorker()
-	return connection.connectionManager.Disconnect(ctx)
+	return err
 }
 
 func (connection *MQTTConnection) subscribeToTopic(topic string) error {
