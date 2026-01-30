@@ -122,6 +122,14 @@ func (connection *MQTTConnection) startDispatchWorker() {
 
 // stopDispatchWorker stops the dispatch worker and waits for it to finish
 func (connection *MQTTConnection) stopDispatchWorker() {
+	// If the worker is already done (dispatchWorkerDone is closed), do nothing.
+	select {
+	case <-connection.dispatchWorkerDone:
+		return
+	default:
+	}
+
+	// First time stopping: close the queue to signal the worker to exit, then wait for it.
 	close(connection.dispatchQueue)
 	<-connection.dispatchWorkerDone
 }
@@ -284,7 +292,12 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 					// Enqueue the job for sequential processing by the dispatch worker
 					// This preserves message ordering and prevents race conditions
-					orgID := strings.Split(pr.Packet.Topic, "/")[1]
+					parts := strings.Split(pr.Packet.Topic, "/")
+					if len(parts) < 2 {
+						connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
+						return true, nil
+					}
+					orgID := parts[1]
 					select {
 					case connection.dispatchQueue <- dispatchJob{
 						payload: pr.Packet.Payload,
