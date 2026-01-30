@@ -292,23 +292,23 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 						return true, nil
 					}
 
-				// Enqueue the job for sequential processing by the dispatch worker
-				// This preserves message ordering and prevents race conditions
-				parts := strings.Split(pr.Packet.Topic, "/")
-				if len(parts) < 2 {
-					connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
-					return true, nil
-				}
-				orgID := parts[1]
+					// Enqueue the job for sequential processing by the dispatch worker
+					// This preserves message ordering and prevents race conditions
+					parts := strings.Split(pr.Packet.Topic, "/")
+					if len(parts) < 2 {
+						connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
+						return true, nil
+					}
+					orgID := parts[1]
 
-				// Check if we're shutting down to avoid sending to a closed channel
-				if connection.shuttingDown.Load() {
-					connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
-					return true, nil
-				}
+					// Check if we're shutting down to avoid sending to a closed channel
+					if connection.shuttingDown.Load() {
+						connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
+						return true, nil
+					}
 
-				select {
-				case connection.dispatchQueue <- dispatchJob{
+					select {
+					case connection.dispatchQueue <- dispatchJob{
 						payload: pr.Packet.Payload,
 						orgID:   orgID,
 						agentID: details.AgentID,
