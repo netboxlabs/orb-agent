@@ -7,6 +7,11 @@ orb:
         client_id: ${FLEET_CLIENT_ID}
         client_secret: ${FLEET_CLIENT_SECRET}
         otlp_bridge_grpc_port: 4337
+  secrets_manager:
+    active: fleet
+    sources:
+      fleet:
+        timeout: 30
   backends:
     network_discovery:
     device_discovery:

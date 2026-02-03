@@ -52,6 +52,7 @@ func TestNewAuthentication(t *testing.T) {
 
 func TestTokenAuth_Authenticate(t *testing.T) {
 	// Use shared test vault server
+	// If setup failed (e.g., Docker port binding), createTestVault will skip via getTestVaultClient
 	_, client := createTestVault(t)
 
 	ctx := context.Background()

@@ -13,12 +13,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// findAvailablePort finds an available port by listening on port 0 and returning the assigned port
+func findAvailablePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err, "failed to find available port")
+	defer func() {
+		_ = listener.Close()
+	}()
+	addr := listener.Addr().(*net.TCPAddr)
+	return addr.Port
+}
+
 func TestBridgeServer_Start_PortInUse(t *testing.T) {
 	// Test that Start() returns a clear error when the port is already in use
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	// Pre-occupy a port with a test listener
-	testPort := 54322
+	testPort := findAvailablePort(t)
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
 	defer func() {
@@ -74,7 +86,7 @@ func TestBridgeServer_Start_ErrorMessageFormat(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	// Pre-occupy a port
-	testPort := 54323
+	testPort := findAvailablePort(t)
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
 	defer func() {

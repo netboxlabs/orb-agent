@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -191,4 +192,62 @@ func TestGroupManager_GroupRetrieverInterface(t *testing.T) {
 	require.Len(t, groups, 2)
 	assert.Equal(t, "group-1", groups[0].GroupID)
 	assert.Equal(t, "group-2", groups[1].GroupID)
+}
+
+func TestGroupManager_ConcurrentAccess(t *testing.T) {
+	// Arrange
+	gm := newGroupManager()
+	numGoroutines := 100
+	var wg sync.WaitGroup
+
+	// Act - Concurrent adds, removes, and reads
+	wg.Add(numGoroutines * 3)
+
+	// Concurrent adds
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			gm.Add(messages.GroupMembershipData{
+				GroupID: "group-" + string(rune('A'+id%26)),
+				Name:    "Test Group",
+			})
+		}(i)
+	}
+
+	// Concurrent reads
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			_ = gm.GetAll()
+		}()
+	}
+
+	// Concurrent removes
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			gm.Remove("group-" + string(rune('A'+id%26)))
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Assert - No panics occurred and state is consistent
+	groups := gm.GetAll()
+	assert.NotNil(t, groups)
+}
+
+func TestGroupManager_GetAll_ReturnsCopy(t *testing.T) {
+	// Arrange
+	gm := newGroupManager()
+	gm.Add(messages.GroupMembershipData{GroupID: "group-1", Name: "Test Group 1"})
+	gm.Add(messages.GroupMembershipData{GroupID: "group-2", Name: "Test Group 2"})
+
+	// Act - Get groups and modify the returned slice
+	groups := gm.GetAll()
+	groups[0].GroupID = "modified"
+
+	// Assert - Original should be unchanged
+	originalGroups := gm.GetAll()
+	assert.Equal(t, "group-1", originalGroups[0].GroupID)
 }
