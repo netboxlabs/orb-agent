@@ -95,7 +95,7 @@ func Run(_ *cobra.Command, _ []string) {
 	logger.Info("backends loaded", "backends", configData.OrbAgent.Backends)
 
 	// new agent
-	a, err := agent.New(logger, configData)
+	a, err := agent.New(logger, configData, debug)
 	if err != nil {
 		logger.Error("agent start up error", "error", err)
 		os.Exit(1)

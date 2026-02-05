@@ -95,6 +95,7 @@ type BackendCommons struct {
 		DryRun          bool   `yaml:"dry_run"`
 		DryRunOutputDir string `yaml:"dry_run_output_dir"`
 	}
+	Debug bool // Debug flag from CLI (not from YAML config)
 }
 
 // OrbAgent represents the configuration for the Orb agent
