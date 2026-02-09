@@ -11,8 +11,6 @@ from worker.models import DiodeConfig, Policy, PolicyRequest
 from worker.policy.run import RunStore
 from worker.policy.runner import PolicyRunner
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

@@ -72,6 +72,7 @@ def mock_load_class():
     """
     with patch("worker.policy.runner.load_class") as mock_load:
         mock_backend_class = MagicMock(spec=Backend)
+        mock_backend_class.__name__ = "MockBackend"
         mock_load.return_value = mock_backend_class
         yield mock_load
 

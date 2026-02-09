@@ -9,3 +9,6 @@ __pycache__/
 
 .cursor/
 .cursor.md
+
+CLAUDE.md
+.DS_Store

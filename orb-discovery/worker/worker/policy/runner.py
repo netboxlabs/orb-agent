@@ -22,8 +22,6 @@ from worker.metrics import get_metric
 from worker.models import DiodeConfig, Policy, Status
 from worker.policy.run import RunStatus, RunStore
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -57,8 +55,12 @@ class PolicyRunner:
         policy.config.package = policy.config.package.replace("\r\n", "").replace(
             "\n", ""
         )
+
+        # Debug logging for backend loading
+        logger.debug(f"Loading backend class: {policy.config.package}")
         backend_class = load_class(policy.config.package)
         backend = backend_class()
+        logger.debug(f"Backend class loaded successfully: {backend_class.__name__}")
 
         metadata = backend.setup()
         app_name = (
@@ -153,8 +155,12 @@ class PolicyRunner:
         exec_start_time = time.perf_counter()
         entity_count = 0
         try:
+            logger.debug(f"Policy {self.name}: Starting backend execution")
             entities = backend.run(self.name, policy)
+            elapsed = time.perf_counter() - exec_start_time
+            logger.debug(f"Policy {self.name}: Backend execution completed in {elapsed:.3f} seconds")
             entity_count = len(entities)
+
             metadata = {
                 "policy_name": self.name,
                 "worker_backend": self.metadata.name,

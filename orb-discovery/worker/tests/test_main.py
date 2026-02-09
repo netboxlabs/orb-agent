@@ -182,3 +182,55 @@ def test_resolve_env_var_returns_original(monkeypatch):
     monkeypatch.delenv("NOT_DEFINED", raising=False)
     assert resolve_env_var("plain-value") == "plain-value"
     assert resolve_env_var("${NOT_DEFINED}") == "${NOT_DEFINED}"
+
+
+def test_main_with_debug_flag(mock_parse_args, mock_uvicorn_run, mock_diode_client):
+    """Test main with --debug flag sets application log level to DEBUG."""
+    mock_parse_args.return_value.debug = True
+    mock_parse_args.return_value.dry_run = False
+    mock_parse_args.return_value.diode_target = "localhost:8081"
+    mock_parse_args.return_value.diode_client_id = "test-id"
+    mock_parse_args.return_value.diode_client_secret = "test-secret"
+    mock_parse_args.return_value.diode_app_name_prefix = None
+    mock_parse_args.return_value.dry_run_output_dir = None
+    mock_parse_args.return_value.host = "0.0.0.0"
+    mock_parse_args.return_value.port = 8071
+    mock_parse_args.return_value.otel_endpoint = None
+    mock_parse_args.return_value.otel_export_period = None
+
+    import logging
+    with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
+        try:
+            main()
+        except Exception as e:
+            assert str(e) == "Test Exit"
+
+    # Verify system log level is DEBUG
+    root_logger = logging.getLogger()
+    assert root_logger.level == logging.DEBUG
+
+
+def test_main_without_debug_flag(mock_parse_args, mock_uvicorn_run, mock_diode_client):
+    """Test main without --debug flag - application uses INFO, uvicorn stays at INFO."""
+    mock_parse_args.return_value.debug = False
+    mock_parse_args.return_value.dry_run = False
+    mock_parse_args.return_value.diode_target = "localhost:8081"
+    mock_parse_args.return_value.diode_client_id = "test-id"
+    mock_parse_args.return_value.diode_client_secret = "test-secret"
+    mock_parse_args.return_value.diode_app_name_prefix = None
+    mock_parse_args.return_value.dry_run_output_dir = None
+    mock_parse_args.return_value.host = "0.0.0.0"
+    mock_parse_args.return_value.port = 8071
+    mock_parse_args.return_value.otel_endpoint = None
+    mock_parse_args.return_value.otel_export_period = None
+
+    import logging
+    with patch.object(sys, "exit", side_effect=Exception("Test Exit")):
+        try:
+            main()
+        except Exception as e:
+            assert str(e) == "Test Exit"
+
+    # Verify system log level is INFO
+    root_logger = logging.getLogger()
+    assert root_logger.level == logging.INFO

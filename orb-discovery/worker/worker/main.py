@@ -3,6 +3,7 @@
 """Orb Worker entry point."""
 
 import argparse
+import logging
 import os
 import sys
 
@@ -129,8 +130,26 @@ def main():
         required=False,
     )
 
+    parser.add_argument(
+        "--debug",
+        help="Enable debug logging",
+        action="store_true",
+        required=False,
+    )
+
     try:
         args = parser.parse_args()
+
+        log_level = logging.DEBUG if args.debug else logging.INFO
+        logging.basicConfig(
+            level=log_level,
+            format='%(levelname)s: %(name)s: %(message)s',
+            force=True,
+        )
+        logger = logging.getLogger(__name__)
+        if args.debug:
+            logger.debug("Debug logging enabled")
+
         if not args.dry_run:
             missing = [
                 name

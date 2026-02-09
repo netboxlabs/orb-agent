@@ -14,8 +14,6 @@ from opentelemetry.sdk.metrics.export import (
 
 from worker.version import version_semver
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Global variables to store the provider and meter
