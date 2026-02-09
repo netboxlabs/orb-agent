@@ -39,6 +39,7 @@ type orbAgent struct {
 	config         config.Config
 	backends       map[string]backend.Backend
 	backendsCommon config.BackendCommons
+	debug          bool
 	ctx            context.Context
 	cancelFunction context.CancelFunc
 	otlpShutdown   func(context.Context) error
@@ -53,7 +54,7 @@ type orbAgent struct {
 var _ Agent = (*orbAgent)(nil)
 
 // New creates a new agent
-func New(logger *slog.Logger, c config.Config) (Agent, error) {
+func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
 	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {
@@ -76,6 +77,7 @@ func New(logger *slog.Logger, c config.Config) (Agent, error) {
 	return &orbAgent{
 		logger:              logger,
 		config:              c,
+		debug:               debug,
 		policyManager:       pm,
 		configManager:       cm,
 		secretsManager:      sm,
@@ -106,6 +108,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 		commonConfig = config.BackendCommons{}
 	}
 	commonConfig.Otlp.AgentLabels = labels
+	commonConfig.Debug = a.debug
 	a.backendsCommon = commonConfig
 	delete(cfgBackends, "common")
 

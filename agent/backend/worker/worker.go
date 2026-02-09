@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ type workerBackend struct {
 	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
+	debug                bool // Debug flag from CLI
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -71,12 +73,33 @@ func Register() bool {
 	return true
 }
 
+func (d *workerBackend) checkWorkerSupportsDebug() bool {
+	cmd := exec.Command(d.exec, "--help")
+	output, err := cmd.Output()
+	if err != nil {
+		d.logger.Warn("unable to check orb-worker help, skipping --debug flag",
+			"error", err)
+		return false
+	}
+
+	supportsDebug := strings.Contains(string(output), "--debug")
+
+	if !supportsDebug {
+		d.logger.Debug("orb-worker does not support --debug flag")
+	} else {
+		d.logger.Debug("orb-worker supports --debug flag")
+	}
+
+	return supportsDebug
+}
+
 func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons,
 ) error {
 	d.logger = logger.With("backend", "worker")
 	d.policyRepo = repo
 	d.diodeTargetFromOtel = false
+	d.debug = common.Debug
 
 	var prs bool
 	if d.apiHost, prs = config["host"].(string); !prs {
@@ -148,6 +171,14 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		"--host", d.apiHost,
 		"--port", d.apiPort,
 	}
+
+	// Add debug flag if enabled and worker supports it
+	if d.debug && d.checkWorkerSupportsDebug() {
+		dOptions = append(dOptions, "--debug")
+	} else if d.debug {
+		d.logger.Warn("Debug flag requested but not supported by orb-worker, skipping --debug flag")
+	}
+
 	if d.diodeDryRun {
 		dOptions = append([]string{
 			"--dry-run",

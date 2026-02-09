@@ -108,7 +108,7 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 		},
 	}
 
-	agent, err := New(logger, cfg)
+	agent, err := New(logger, cfg, false)
 	require.NoError(t, err)
 
 	orbAgent := agent.(*orbAgent)
@@ -151,7 +151,7 @@ func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
 		},
 	}
 
-	agent, err := New(logger, cfg)
+	agent, err := New(logger, cfg, false)
 	require.NoError(t, err)
 
 	orbAgent := agent.(*orbAgent)
@@ -187,7 +187,7 @@ func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
 		},
 	}
 
-	agent, err := New(logger, cfg)
+	agent, err := New(logger, cfg, false)
 	require.NoError(t, err)
 
 	orbAgent := agent.(*orbAgent)
@@ -230,7 +230,7 @@ func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
 		},
 	}
 
-	agent, err := New(logger, cfg)
+	agent, err := New(logger, cfg, false)
 	require.NoError(t, err)
 
 	orbAgent := agent.(*orbAgent)
@@ -271,7 +271,7 @@ func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 		},
 	}
 
-	agent, err := New(logger, cfg)
+	agent, err := New(logger, cfg, false)
 	require.NoError(t, err)
 
 	orbAgent := agent.(*orbAgent)
