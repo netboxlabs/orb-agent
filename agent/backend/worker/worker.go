@@ -73,7 +73,6 @@ func Register() bool {
 	return true
 }
 
-// checkWorkerSupportsDebug checks if the orb-worker binary supports --debug flag
 func (d *workerBackend) checkWorkerSupportsDebug() bool {
 	cmd := exec.Command(d.exec, "--help")
 	output, err := cmd.Output()
@@ -86,7 +85,7 @@ func (d *workerBackend) checkWorkerSupportsDebug() bool {
 	supportsDebug := strings.Contains(string(output), "--debug")
 
 	if !supportsDebug {
-		d.logger.Info("orb-worker does not support --debug flag, skipping")
+		d.logger.Debug("orb-worker does not support --debug flag")
 	} else {
 		d.logger.Debug("orb-worker supports --debug flag")
 	}
@@ -174,8 +173,10 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	}
 
 	// Add debug flag if enabled and worker supports it
-	if d.debug {
+	if d.debug && d.checkWorkerSupportsDebug() {
 		dOptions = append(dOptions, "--debug")
+	} else if d.debug {
+		d.logger.Warn("Debug flag requested but not supported by orb-worker, skipping --debug flag")
 	}
 
 	if d.diodeDryRun {
