@@ -111,7 +111,8 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 					manager.logger.Debug("failed to get policy status", "backend", name, "error", err)
 				} else {
 					for _, ps := range statuses {
-						runs := convertToRunData(ps.Runs)
+						existingRuns := getExistingRuns(manager.policyRepo, ps.Name)
+						runs := convertToRunData(ps.Runs, existingRuns)
 						if err := manager.policyRepo.UpdateRuns(ps.Name, runs); err != nil {
 							manager.logger.Debug("failed to update runs for policy", "policy", ps.Name, "error", err)
 						}
@@ -158,17 +159,52 @@ func (manager *stateManager) Get() map[string]*State {
 	return result
 }
 
-// convertToRunData converts backend PolicyStatusRun to policies.RunData
-func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
+// getExistingRuns returns the existing runs for a policy by name, or nil if not found
+func getExistingRuns(repo policies.PolicyRepo, policyName string) []policies.RunData {
+	policy, err := repo.GetByName(policyName)
+	if err != nil {
+		return nil
+	}
+	return policy.Runs
+}
+
+// entityCountEqual compares two entity count pointers for equality
+func entityCountEqual(a, b *int64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+// convertToRunData converts backend PolicyStatusRun to policies.RunData.
+// UpdatedAt is only updated when status, reason, or entity count have changed.
+func convertToRunData(statusRuns []PolicyStatusRun, existingRuns []policies.RunData) []policies.RunData {
+	existingByID := make(map[string]policies.RunData)
+	for _, r := range existingRuns {
+		existingByID[r.ID] = r
+	}
+
 	runs := make([]policies.RunData, len(statusRuns))
 	for i, sr := range statusRuns {
+		updatedAt := sr.UpdatedAt
+		if existing, ok := existingByID[sr.ID]; ok {
+			if sr.Status == existing.Status &&
+				sr.Reason == existing.Reason &&
+				entityCountEqual(sr.EntityCount, existing.EntityCount) {
+				updatedAt = existing.UpdatedAt
+			}
+		}
+
 		runs[i] = policies.RunData{
 			ID:          sr.ID,
 			Status:      sr.Status,
 			Reason:      sr.Reason,
 			EntityCount: sr.EntityCount,
 			CreatedAt:   sr.CreatedAt,
-			UpdatedAt:   sr.UpdatedAt,
+			UpdatedAt:   updatedAt,
 		}
 	}
 	return runs
