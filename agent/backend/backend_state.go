@@ -111,7 +111,10 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 					manager.logger.Debug("failed to get policy status", "backend", name, "error", err)
 				} else {
 					for _, ps := range statuses {
-						existingRuns := getExistingRuns(manager.policyRepo, ps.Name)
+						existingRuns, err := getExistingRuns(manager.policyRepo, ps.Name)
+						if err != nil {
+							manager.logger.Debug("failed to get existing runs for policy", "policy", ps.Name, "error", err)
+						}
 						runs := convertToRunData(ps.Runs, existingRuns)
 						if err := manager.policyRepo.UpdateRuns(ps.Name, runs); err != nil {
 							manager.logger.Debug("failed to update runs for policy", "policy", ps.Name, "error", err)
@@ -159,13 +162,14 @@ func (manager *stateManager) Get() map[string]*State {
 	return result
 }
 
-// getExistingRuns returns the existing runs for a policy by name, or nil if not found
-func getExistingRuns(repo policies.PolicyRepo, policyName string) []policies.RunData {
+// getExistingRuns returns the existing runs for a policy by name.
+// Returns nil runs and an error if the policy lookup fails.
+func getExistingRuns(repo policies.PolicyRepo, policyName string) ([]policies.RunData, error) {
 	policy, err := repo.GetByName(policyName)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return policy.Runs
+	return policy.Runs, nil
 }
 
 // entityCountEqual compares two entity count pointers for equality
