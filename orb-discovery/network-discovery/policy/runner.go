@@ -25,7 +25,7 @@ type contextKey string
 // Define the policy key
 const (
 	policyKey      contextKey = "policy"
-	defaultTimeout            = 2 * time.Minute
+	defaultTimeout            = 5 * time.Minute
 )
 
 // targetInfo stores information about each target
@@ -181,6 +181,9 @@ func (r *Runner) run() {
 
 	if r.scope.Timing != nil {
 		options = append(options, nmap.WithTimingTemplate(nmap.Timing(*r.scope.Timing)))
+	} else {
+		// Default to -T4 (aggressive) timing template
+		options = append(options, nmap.WithTimingTemplate(nmap.Timing(4)))
 	}
 
 	if r.scope.TopPorts != nil {

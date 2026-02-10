@@ -46,7 +46,7 @@ policies:
   network_1:
     config:
       schedule: "* * * * *" #Cron expression
-      timeout: 5 #default 2 minutes
+      timeout: 10 #default 5 minutes
     scope:
       targets: [192.168.1.0/24] # REQUIRED param
       fast_mode: True # -F 
@@ -73,12 +73,12 @@ build/network-discovery --diode-target grpc://192.168.31.114:8080/diode  --diode
 ```
 
 ### ⚠️ Warning
-Be **AWARE** that executing a policy with only targets defined is equivalent to running `nmap <targets>`, which in turn is the same as executing `nmap -sS -p1-1000 --open -T3 <target>`:
+Be **AWARE** that executing a policy with only targets defined is equivalent to running `nmap <targets>`, which in turn is the same as executing `nmap -sS -p1-1000 --open -T4 <target>`:
 
 - `-sS` → SYN scan (stealth scan, requires root privileges)
 - `-p1-1000` → Scans the top 1000 most common ports
 - `--open` → Only shows open ports
-- `-T3` → Uses the default timing template (T3 is the standard speed)
+- `-T4` → Uses the agressive timing template
 
 ### Docker Image
 device-discovery can be build and run using docker:
