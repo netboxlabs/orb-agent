@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -110,16 +111,17 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 				if err != nil {
 					manager.logger.Debug("failed to get policy status", "backend", name, "error", err)
 				} else {
-					for _, ps := range statuses {
-						existingRuns, err := getExistingRuns(manager.policyRepo, ps.Name)
-						if err != nil {
-							manager.logger.Debug("failed to get existing runs for policy", "policy", ps.Name, "error", err)
-						}
-						runs := convertToRunData(ps.Runs, existingRuns)
-						if err := manager.policyRepo.UpdateRuns(ps.Name, runs); err != nil {
-							manager.logger.Debug("failed to update runs for policy", "policy", ps.Name, "error", err)
-						}
+				for _, ps := range statuses {
+					existingRuns, err := getExistingRuns(manager.policyRepo, ps.Name)
+					if err != nil && !errors.Is(err, policies.ErrPolicyNotFound) {
+						manager.logger.Warn("unexpected error looking up policy runs", "policy", ps.Name, "error", err)
+						continue
 					}
+					runs := convertToRunData(ps.Runs, existingRuns)
+					if err := manager.policyRepo.UpdateRuns(ps.Name, runs); err != nil {
+						manager.logger.Debug("failed to update runs for policy", "policy", ps.Name, "error", err)
+					}
+				}
 				}
 			}
 		}
