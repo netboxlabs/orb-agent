@@ -464,7 +464,7 @@ func TestUpdateRuns_NonExistentPolicy(t *testing.T) {
 
 	err = repo.UpdateRuns("non-existent-policy", runs)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "policy name not found")
+	assert.ErrorIs(t, err, policies.ErrPolicyNotFound)
 }
 
 func TestUpdateRuns_GetAllIncludesRuns(t *testing.T) {
