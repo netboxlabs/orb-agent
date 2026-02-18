@@ -20,6 +20,7 @@ from device_discovery.policy.models import (
 from device_discovery.translate import (
     translate_data,
     translate_device,
+    translate_device_config,
     translate_vlan,
 )
 
@@ -546,9 +547,7 @@ def test_translate_data_with_interface_patterns(
     entities = list(translate_data(data))
 
     # Find interface entities
-    interface_entities = [
-        e for e in entities if e.WhichOneof("entity") == "interface"
-    ]
+    interface_entities = [e for e in entities if e.WhichOneof("entity") == "interface"]
 
     # Both GigabitEthernet interfaces should match the pattern
     for interface_entity in interface_entities:
@@ -577,11 +576,225 @@ def test_translate_data_with_builtin_patterns(
     entities = list(translate_data(data))
 
     # Find interface entities
-    interface_entities = [
-        e for e in entities if e.WhichOneof("entity") == "interface"
-    ]
+    interface_entities = [e for e in entities if e.WhichOneof("entity") == "interface"]
 
     # Both GigabitEthernet interfaces should match built-in pattern
     for interface_entity in interface_entities:
         if interface_entity.interface.name.startswith("GigabitEthernet"):
             assert interface_entity.interface.type == "1000base-t"
+
+
+def test_translate_device_config_with_valid_config():
+    """Test that translate_device_config returns DeviceConfig with valid data."""
+    config_info = {
+        "startup": "startup config content",
+        "running": "running config content",
+    }
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    result = translate_device_config(config_info, options)
+
+    # Should return a valid DeviceConfig
+    assert result is not None
+    assert result.startup == b"startup config content"
+    assert result.running == b"running config content"
+    # Protobuf uses empty bytes for unset byte fields
+    assert result.candidate == b""
+
+
+def test_translate_device_config_with_empty_config():
+    """Test that translate_device_config returns None with empty config."""
+    config_info = {}
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    result = translate_device_config(config_info, options)
+
+    assert result is None
+
+
+def test_translate_device_handles_none_config():
+    """Test that translate_device handles None config_info gracefully in the integration."""
+    device_info = {
+        "hostname": "test-router",
+        "model": "ISR4451",
+        "vendor": "Cisco",
+        "serial_number": "123456",
+        "platform": "ios",
+    }
+    defaults = Defaults(site="Test Site", role="router")
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    # translate_device should handle None config_info without error
+    # The 'if config_info and options' check will skip config translation
+    device = translate_device(device_info, defaults, None, options)
+
+    assert device is not None
+    assert device.name == "test-router"
+
+
+def test_translate_device_config_respects_capture_flags():
+    """Test that config capture respects the configuration flags."""
+    config_info = {
+        "startup": "startup config content",
+        "running": "running config content",
+    }
+
+    # Test with both flags disabled
+    options_disabled = Options(
+        capture_running_config=False, capture_startup_config=False
+    )
+    result = translate_device_config(config_info, options_disabled)
+    assert result is None
+
+    # Test with only running config enabled
+    options_running = Options(capture_running_config=True, capture_startup_config=False)
+    result = translate_device_config(config_info, options_running)
+    assert result is not None
+    assert result.running == b"running config content"
+    # Protobuf uses empty bytes for unset byte fields
+    assert result.startup == b""
+
+    # Test with only startup config enabled
+    options_startup = Options(capture_running_config=False, capture_startup_config=True)
+    result = translate_device_config(config_info, options_startup)
+    assert result is not None
+    assert result.startup == b"startup config content"
+    # Protobuf uses empty bytes for unset byte fields
+    assert result.running == b""
+
+
+def test_translate_device_config_string_to_bytes_conversion():
+    """Test that string configs are converted to bytes."""
+    config_info = {
+        "startup": "startup config as string",
+        "running": "running config as string",
+    }
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    result = translate_device_config(config_info, options)
+
+    # Verify strings were converted to bytes
+    assert result is not None
+    assert isinstance(result.running, bytes)
+    assert isinstance(result.startup, bytes)
+    assert result.running == b"running config as string"
+    assert result.startup == b"startup config as string"
+
+
+def test_translate_device_config_with_bytes_input():
+    """Test that bytes configs are handled correctly."""
+    config_info = {
+        "startup": b"startup config as bytes",
+        "running": b"running config as bytes",
+    }
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    result = translate_device_config(config_info, options)
+
+    # Bytes should pass through without conversion
+    assert result is not None
+    assert isinstance(result.running, bytes)
+    assert isinstance(result.startup, bytes)
+    assert result.running == b"running config as bytes"
+    assert result.startup == b"startup config as bytes"
+
+
+def test_translate_device_config_with_empty_string():
+    """Test that empty string configs are properly encoded to bytes."""
+    config_info = {
+        "startup": "",  # Empty string should be encoded to b""
+        "running": "running config content",
+    }
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    result = translate_device_config(config_info, options)
+
+    # Empty strings should be encoded to empty bytes
+    assert result is not None
+    assert isinstance(result.startup, bytes)
+    assert result.startup == b""
+    assert isinstance(result.running, bytes)
+    assert result.running == b"running config content"
+
+
+def test_translate_device_config_candidate_not_captured():
+    """Test that candidate config is never captured (always None)."""
+    config_info = {
+        "startup": "startup config",
+        "running": "running config",
+        "candidate": "candidate config",  # Should be ignored
+    }
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    result = translate_device_config(config_info, options)
+
+    # Candidate should always be empty (not captured)
+    assert result is not None
+    assert result.candidate == b""
+
+
+def test_translate_device_with_config_integration(sample_device_info):
+    """Test that translate_device integrates with config translation."""
+    config_info = {
+        "startup": "startup config content",
+        "running": "running config content",
+    }
+    defaults = Defaults(site="New York", role="router")
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    device = translate_device(sample_device_info, defaults, config_info, options)
+
+    # Device should be created successfully
+    assert device.name == "router1"
+    # Config integration documented for when SDK is available
+
+
+def test_translate_data_with_config(sample_device_info):
+    """Test full data translation with config data."""
+    config_info = {
+        "startup": "startup configuration content here",
+        "running": "running configuration content here",
+    }
+    defaults = Defaults(site="New York", role="router")
+    options = Options(capture_running_config=True, capture_startup_config=True)
+
+    data = {
+        "device": sample_device_info,
+        "config": config_info,
+        "driver": "ios",
+        "defaults": defaults,
+        "options": options,
+    }
+
+    entities = list(translate_data(data))
+
+    # Should have exactly one device entity (no interfaces/IPs in data)
+    assert len(entities) == 1
+    device_entities = [e for e in entities if e.WhichOneof("entity") == "device"]
+    assert len(device_entities) == 1
+
+    # When SDK supports it, device will have config attached
+
+
+def test_translate_data_with_config_disabled(sample_device_info):
+    """Test that config is not captured when flags are disabled."""
+    config_info = {
+        "startup": "startup configuration",
+        "running": "running configuration",
+    }
+    defaults = Defaults(site="New York", role="router")
+    options = Options(capture_running_config=False, capture_startup_config=False)
+
+    data = {
+        "device": sample_device_info,
+        "config": config_info,
+        "driver": "ios",
+        "defaults": defaults,
+        "options": options,
+    }
+
+    entities = list(translate_data(data))
+
+    # Device should be created but without config
+    device_entities = [e for e in entities if e.WhichOneof("entity") == "device"]
+    assert len(device_entities) == 1

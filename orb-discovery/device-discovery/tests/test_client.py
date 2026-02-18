@@ -128,7 +128,7 @@ def test_ingest_success(mock_diode_client_class, sample_data, sample_metadata):
 
 
 def test_ingest_failure(mock_diode_client_class, sample_data, sample_metadata):
-    """Test data ingestion with errors."""
+    """Test data ingestion with errors raises RuntimeError."""
     client = Client()
     client.init_client(
         prefix="prefix",
@@ -140,18 +140,14 @@ def test_ingest_failure(mock_diode_client_class, sample_data, sample_metadata):
     mock_diode_instance = mock_diode_client_class.return_value
     mock_diode_instance.ingest.return_value.errors = ["Error1", "Error2"]
     metadata = sample_metadata
-    with patch(
-        "device_discovery.client.translate_data",
-        return_value=translate_data(sample_data),
-    ) as mock_translate_data:
-        client.ingest(metadata, sample_data)
-        mock_translate_data.assert_called_once_with(sample_data)
-        mock_diode_instance.ingest.assert_called_once_with(
-            entities=mock_translate_data.return_value,
-            metadata=metadata,
-        )
 
-    assert len(mock_diode_instance.ingest.return_value.errors) > 0
+    # Ingestion should raise RuntimeError on failure
+    with pytest.raises(RuntimeError, match="Ingestion failed for router1"):
+        with patch(
+            "device_discovery.client.translate_data",
+            return_value=translate_data(sample_data),
+        ):
+            client.ingest(metadata, sample_data)
 
 
 def test_ingest_without_initialization(sample_metadata):

@@ -152,6 +152,12 @@ class Options(BaseModel):
         default=0.5,
         description="TCP port probe timeout in seconds",
     )
+    capture_running_config: bool | None = Field(
+        default=False, description="Capture running configuration, optional"
+    )
+    capture_startup_config: bool | None = Field(
+        default=False, description="Capture startup/saved configuration, optional"
+    )
 
 
 class Config(BaseModel):

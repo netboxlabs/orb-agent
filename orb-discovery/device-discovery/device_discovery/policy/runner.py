@@ -206,6 +206,17 @@ class PolicyRunner:
                 "defaults": config.defaults,
                 "options": config.options,
             }
+            # Only retrieve config if at least one capture flag is enabled
+            if config.options and (
+                config.options.capture_running_config
+                or config.options.capture_startup_config
+            ):
+                try:
+                    data["config"] = device.get_config()
+                except Exception as e:
+                    logger.warning(
+                        f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting config: {e}. Continuing without config data."
+                    )
             try:
                 data["vlan"] = device.get_vlans()
             except Exception as e:
