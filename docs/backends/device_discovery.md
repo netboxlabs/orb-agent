@@ -55,6 +55,8 @@ Current supported options:
 | platform_omit_version  | bool | If True, only the driver name will be used as the NetBox platform name (defaults to 'False' if not specified) |
 | port_scan_ports | list | TCP ports to probe before discovery if hostname is a IP Range or a Subnet (defaults to [22,23,80,443,830,57400]) |
 | port_scan_timeout | float | TCP port probe timeout in seconds (defaults to 0.5) |
+| capture_running_config | bool | If True, collects the running configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
+| capture_startup_config | bool | If True, collects the startup/saved configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 
 #### Defaults
 Current supported defaults:
