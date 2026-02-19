@@ -837,6 +837,7 @@ func TestNew(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager := New(logger, tt.config)
+
 			assert.NotNil(t, manager)
 			assert.Equal(t, tt.expectedType, fmt.Sprintf("%T", manager))
 		})
