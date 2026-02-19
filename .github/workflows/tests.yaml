@@ -25,8 +25,6 @@ jobs:
   go-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      DOCKER_MIN_API_VERSION: "1.40"
     defaults:
       run:
         working-directory: .
@@ -47,7 +45,7 @@ jobs:
       - name: Run go test
         id: go-test
         run: |
-          make test-coverage
+          DOCKER_MIN_API_VERSION="1.40" make test-coverage
           echo 'coverage-report<<EOF' >> $GITHUB_OUTPUT
           cat .coverage/test-report.md >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
