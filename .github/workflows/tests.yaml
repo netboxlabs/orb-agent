@@ -25,6 +25,8 @@ jobs:
   go-test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      DOCKER_MIN_API_VERSION: "1.40"
     defaults:
       run:
         working-directory: .
