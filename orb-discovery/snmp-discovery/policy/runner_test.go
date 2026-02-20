@@ -104,6 +104,38 @@ func TestNewRunner(t *testing.T) {
 	assert.NoError(t, err, "policy.NewRunner should not return an error")
 }
 
+func TestNewRunnerTimeoutNotGreaterThanSNMPTimeout(t *testing.T) {
+	setupTestMetrics(t)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	mockClient := new(MockDiodeClient)
+	tests := []struct {
+		desc        string
+		timeout     int // seconds
+		snmpTimeout int // seconds
+	}{
+		{desc: "timeout equal to snmp_timeout", timeout: 5, snmpTimeout: 5},
+		{desc: "timeout less than snmp_timeout", timeout: 1, snmpTimeout: 5},
+		{desc: "timeout less than default snmp_timeout", timeout: 1, snmpTimeout: 0}, // 0 uses default 5s
+	}
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			policyConfig := config.Policy{
+				Config: config.PolicyConfig{
+					Timeout:     tt.timeout,
+					SNMPTimeout: tt.snmpTimeout,
+				},
+				Scope: config.Scope{
+					Targets: []config.Target{{Host: "localhost", Port: 161}},
+				},
+			}
+			runStore := policy.NewRunStore()
+			runner, err := policy.NewRunner(context.Background(), logger, "test-policy", policyConfig, mockClient, snmp.NewFakeSNMPWalker, &config.Mapping{}, nil, nil, runStore)
+			assert.Error(t, err)
+			assert.Nil(t, runner)
+		})
+	}
+}
+
 func TestNewRunnerInvalidSchedule(t *testing.T) {
 	setupTestMetrics(t)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))

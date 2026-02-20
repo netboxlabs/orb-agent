@@ -86,6 +86,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if runner.snmpProbeTimeout == 0 {
 		runner.snmpProbeTimeout = defaultSNMPProbeTimeout
 	}
+	if runner.timeout <= runner.snmpTimeout {
+		return nil, fmt.Errorf("policy timeout (%s) must be greater than snmp_timeout (%s)", runner.timeout, runner.snmpTimeout)
+	}
 	runner.ctx = context.WithValue(ctx, policyKey, name)
 	runner.scope = policy.Scope
 	runner.config = policy.Config
@@ -295,7 +298,12 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	entities := r.queryTarget(target)
+	entities, err := r.queryTarget(ctx, target)
+	if err != nil {
+		r.logger.Error("error querying target", "host", target.Host, "error", err, "policy", policyName)
+		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, 0)
+		return
+	}
 	r.logger.Info("SNMP crawl complete", "host", target.Host, "policy", policyName, "entityCount", len(entities))
 
 	if len(entities) == 0 {
@@ -307,7 +315,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 
 	r.logEntitiesForIngestion(entities)
 
-	resp, err := r.client.Ingest(ctx, entities, diode.WithIngestMetadata(diode.Metadata{
+	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
 	}))
@@ -330,18 +338,20 @@ func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
 	}
 }
 
-func (r *Runner) queryTarget(target config.Target) []diode.Entity {
+func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode.Entity, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	targetDefaults := r.resolveTargetDefaults(target)
 
 	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, targetDefaults)
 	if err != nil {
 		r.logger.Error("Error creating mapping config", "error", err)
-		return make([]diode.Entity, 0)
+		return nil, err
 	}
 	objectIDs := mappingConfig.ObjectIDs()
-	r.logger.Info("Querying target", "target", target, "objectCount", len(objectIDs))
-
-	entities := make([]diode.Entity, 0)
+	r.logger.Info("Querying target", "host", target.Host, "port", target.Port, "objectCount", len(objectIDs))
 
 	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, targetDefaults)
 	policyName := r.ctx.Value(policyKey).(string)
@@ -358,19 +368,44 @@ func (r *Runner) queryTarget(target config.Target) []diode.Entity {
 	auth := r.resolveTargetAuthentication(target)
 
 	host := snmp.NewHost(target.Host, target.Port, r.config.Retries, r.snmpTimeout, auth, r.logger, r.ClientFactory)
-	oids, err := host.Walk(objectIDs)
-	if err != nil {
-		r.logger.Warn("Error crawling host", "host", target.Host, "error", err)
-		// Track failed discovery
+
+	type walkResult struct {
+		oids mapping.ObjectIDValueMap
+		err  error
+	}
+	// The buffered channel ensures the goroutine can always send its result and exit,
+	// even if we have already returned due to context cancellation. The goroutine is
+	// bounded by snmpTimeout (set on the SNMP client), so it is not a permanent leak.
+	resultCh := make(chan walkResult, 1)
+	go func() {
+		oids, err := host.Walk(objectIDs)
+		resultCh <- walkResult{oids, err}
+	}()
+
+	var oids mapping.ObjectIDValueMap
+	select {
+	case <-ctx.Done():
 		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-			policyName := r.ctx.Value(policyKey).(string)
 			rMetric.Add(r.ctx, 1,
 				metric.WithAttributes(
 					attribute.String("policy", policyName),
-					attribute.String("error", err.Error()),
+					attribute.String("error", ctx.Err().Error()),
 				))
 		}
-		return entities
+		return nil, ctx.Err()
+	case res := <-resultCh:
+		if res.err != nil {
+			r.logger.Warn("Error crawling host", "host", target.Host, "error", res.err)
+			if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+				rMetric.Add(r.ctx, 1,
+					metric.WithAttributes(
+						attribute.String("policy", policyName),
+						attribute.String("error", res.err.Error()),
+					))
+			}
+			return nil, res.err
+		}
+		oids = res.oids
 	}
 
 	// Track successful discovery
@@ -387,6 +422,7 @@ func (r *Runner) queryTarget(target config.Target) []diode.Entity {
 				attribute.String("policy", policyName)))
 	}
 
+	entities := make([]diode.Entity, 0)
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	entities = append(entities, entitiesForTarget...)
 
@@ -397,7 +433,7 @@ func (r *Runner) queryTarget(target config.Target) []diode.Entity {
 				attribute.String("policy", policyName)))
 	}
 
-	return entities
+	return entities, nil
 }
 
 func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expandedTargetGroup {
