@@ -175,7 +175,7 @@ func getEthernetInterfaceType(speed *int64) string {
 
 	// 10 Mbps Ethernet
 	if speedMbps <= 10 {
-		return "10base-t"
+		return "other"
 	}
 	// 100 Mbps FastEthernet
 	if speedMbps <= 100 {

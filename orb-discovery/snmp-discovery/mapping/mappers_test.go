@@ -593,7 +593,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			defaults: nil,
 			expectedEntity: &diode.Interface{
 				Speed: int64Ptr(10000),
-				Type:  mapping.StringPtr("10base-t"),
+				Type:  mapping.StringPtr("other"),
 			},
 			expectError: false,
 		},
