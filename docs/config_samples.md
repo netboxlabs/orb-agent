@@ -71,6 +71,101 @@ Run command:
 ```
 The relative path used by `pip install` should point to the directory containing the `.txt` file.
 
+## Device Discovery with Jumphost
+
+This example demonstrates discovering devices through a bastion host using SSH ProxyJump.
+
+**Scenario:**
+- Bastion host at 203.0.113.100
+- Network devices in 10.0.0.0/8 accessible only through bastion
+- Key-based authentication to bastion
+- Password authentication to network devices
+
+**Directory Structure:**
+```
+/local/orb/
+├── agent.yaml
+├── ssh-jumphost.conf
+└── keys/
+    └── bastion_key
+```
+
+**SSH Config** (`/local/orb/ssh-jumphost.conf`):
+```sshconfig
+Host bastion
+  HostName 203.0.113.100
+  User admin
+  IdentityFile /opt/orb/keys/bastion_key
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+
+Host 10.*
+  ProxyJump bastion
+  StrictHostKeyChecking no
+```
+
+**Agent Config** (`/local/orb/agent.yaml`):
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: bastion-agent
+    device_discovery:
+  policies:
+    device_discovery:
+      behind_bastion:
+        config:
+          schedule: "*/10 * * * *"
+          defaults:
+            site: Remote Site
+            role: switch
+        scope:
+          - driver: ios
+            hostname: 10.0.1.10
+            username: cisco
+            password: ${CISCO_PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-jumphost.conf
+          - driver: eos
+            hostname: 10.0.2.20
+            username: arista
+            password: ${ARISTA_PASS}
+            optional_args:
+              ssh_config_file: /opt/orb/ssh-jumphost.conf
+```
+
+**Setup Commands:**
+```bash
+# Create directory structure
+mkdir -p /local/orb/keys
+
+# Generate SSH key for bastion
+ssh-keygen -t rsa -b 4096 -f /local/orb/keys/bastion_key -N ""
+chmod 600 /local/orb/keys/bastion_key
+
+# Copy public key to bastion host
+ssh-copy-id -i /local/orb/keys/bastion_key.pub admin@203.0.113.100
+
+# Create the SSH config and agent config files (content above)
+```
+
+**Run Command:**
+```bash
+docker run -v /local/orb:/opt/orb/ \
+  -e DIODE_CLIENT_ID="${DIODE_CLIENT_ID}" \
+  -e DIODE_CLIENT_SECRET="${DIODE_CLIENT_SECRET}" \
+  -e CISCO_PASS="${CISCO_PASS}" \
+  -e ARISTA_PASS="${ARISTA_PASS}" \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+For advanced scenarios including VRF-aware connections, multiple jumphosts, and performance optimization with Control Master, see the comprehensive [SSH Configuration and Jumphost Support](backends/device_discovery_ssh.md) guide.
 
 ## Network-discovery backend
 ```yaml
@@ -102,6 +197,100 @@ Run command:
  -e DIODE_CLIENT_SECRET={YOUR_DIODE_CLIENT_SECRET} \
  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
+
+### Rootless Podman Network Discovery
+
+This sample demonstrates running network discovery with rootless podman (without sudo). This configuration is suitable for restricted environments like enterprise deployments where root access is not available.
+
+**Key Requirements:**
+- TCP connect scan only (no raw sockets)
+- Skip ICMP host discovery
+- Fast mode must be disabled
+
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    network_discovery:
+    common:
+      diode:
+        target: grpc://192.168.31.114:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: rootless-agent
+  policies:
+    network_discovery:
+      rootless_policy:
+        config:
+          schedule: "0 */2 * * *"  # Every 2 hours
+          timeout: 10
+          defaults:
+            description: "Discovered by rootless network scanner"
+            tags: ["rootless-scan", "tcp-connect"]
+        scope:
+          targets:
+            - 192.168.1.0/24
+            - 10.0.1.71
+          scan_types: [connect]    # Required: TCP connect scan only
+          skip_host: true           # Required: Skip ICMP host discovery
+          ports: [22, 80, 443, 8080, 8443]  # Recommended: specify ports
+          max_retries: 3
+          # fast_mode must be false (default) or omitted for rootless
+```
+
+Run command (rootless - no sudo required):
+```sh
+podman create --privileged --net=host \
+  --name orb \
+  -v /home/user/orb:/opt/orb \
+  -e DIODE_CLIENT_ID=${DIODE_CLIENT_ID} \
+  -e DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET} \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+
+podman start orb
+podman logs -f orb
+```
+
+**Testing with Dry Run Mode:**
+
+For testing without sending data to Diode, use dry run mode:
+
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    network_discovery:
+    common:
+      diode:
+        dry_run: true
+        dry_run_output_dir: /opt/orb
+        agent_name: rootless-test
+  policies:
+    network_discovery:
+      test_scan:
+        scope:
+          targets: [192.168.1.1, 192.168.1.10]
+          scan_types: [connect]
+          skip_host: true
+          ports: [22, 80, 443]
+```
+
+Run command for testing:
+```sh
+podman run --privileged --net=host \
+  -v /home/user/orb:/opt/orb \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+This will create JSON files in `/opt/orb` with scan results. Verify the files contain expected IP and port information before configuring live Diode connection.
+
+**Important Notes:**
+- The configuration will **fail** if `scan_types: [connect]` or `skip_host: true` are missing
+- Setting `fast_mode: true` will cause permission errors in rootless mode
+- This configuration has been tested on RHEL 9 and Ubuntu with rootless podman
+- For full NMAP functionality (SYN scans, OS detection), use `sudo podman` instead
 
 ## Worker backend
 ```yaml
@@ -350,7 +539,7 @@ orb:
     device_discovery:
       policy_1:
         config:
-          schedule: "0 */6 * * *"
+          schedule: "*/10 * * * *"
         scope:
           - driver: ios
             hostname: "192.168.1.1"

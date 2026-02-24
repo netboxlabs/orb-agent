@@ -118,6 +118,11 @@ func (m *MockMQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManag
 	m.hooks = append(m.hooks, fn)
 }
 
+// RegisterTopicHandler registers a handler for a specific topic (mock implementation)
+func (m *MockMQTTConnection) RegisterTopicHandler(_ string, _ TopicMessageHandler) {
+	// No-op for mock
+}
+
 // TriggerOnReadyHook triggers all registered onReady hooks (for testing)
 func (m *MockMQTTConnection) TriggerOnReadyHook(cm *autopaho.ConnectionManager, topics TokenResponseTopics) {
 	for _, hook := range m.hooks {

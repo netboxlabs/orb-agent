@@ -16,6 +16,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 var _ backend.Backend = (*networkDiscoveryBackend)(nil)
@@ -30,7 +31,6 @@ const (
 	defaultExec         = "network-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8073"
-	maskedSecret        = "********"
 )
 
 type networkDiscoveryBackend struct {
@@ -169,7 +169,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		if !d.diodeTargetFromOtel {
 			opts = append(opts,
 				"--diode-client-id", d.diodeClientID,
-				"--diode-client-secret", maskedSecret,
+				"--diode-client-secret", d.diodeClientSecret,
 			)
 		}
 		dOptions = append(opts, dOptions...)
@@ -187,16 +187,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("network-discovery startup", "arguments", dOptions)
-
-	if !d.diodeDryRun {
-		for i, arg := range dOptions {
-			if arg == maskedSecret {
-				dOptions[i] = d.diodeClientSecret
-				break
-			}
-		}
-	}
+	d.logger.Info("network-discovery startup", "arguments", redact.Args(dOptions))
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
@@ -264,8 +255,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
-			d.logger.Info("network-discovery readiness ok, got version ",
-				"network_discovery_version", version)
+			d.logger.Info("network-discovery readiness ok, got version", "version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second

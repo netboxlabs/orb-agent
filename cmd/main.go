@@ -19,6 +19,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend/snmpdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/worker"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
 
@@ -92,10 +93,10 @@ func Run(_ *cobra.Command, _ []string) {
 		cobra.CheckErr(fmt.Errorf("no config file specified, use --config or -c flag to provide config files"))
 	}
 
-	logger.Info("backends loaded", "backends", configData.OrbAgent.Backends)
+	logger.Info("backends loaded", "backends", redact.SensitiveData(configData.OrbAgent.Backends))
 
 	// new agent
-	a, err := agent.New(logger, configData)
+	a, err := agent.New(logger, configData, debug)
 	if err != nil {
 		logger.Error("agent start up error", "error", err)
 		os.Exit(1)
@@ -113,6 +114,8 @@ func Run(_ *cobra.Command, _ []string) {
 			logger.Warn("stop signal received stopping agent")
 			a.Stop(rootCtx)
 			cancelFunc()
+			done <- true
+			return
 		case <-rootCtx.Done():
 			logger.Warn("mainRoutine context cancelled")
 			done <- true

@@ -16,6 +16,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 var _ backend.Backend = (*snmpDiscoveryBackend)(nil)
@@ -30,7 +31,6 @@ const (
 	defaultExec         = "snmp-discovery"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8070"
-	maskedSecret        = "********"
 )
 
 type snmpDiscoveryBackend struct {
@@ -169,7 +169,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		if !d.diodeTargetFromOtel {
 			opts = append(opts,
 				"--diode-client-id", d.diodeClientID,
-				"--diode-client-secret", maskedSecret,
+				"--diode-client-secret", d.diodeClientSecret,
 			)
 		}
 		dOptions = append(opts, dOptions...)
@@ -187,17 +187,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("snmp-discovery startup", "arguments", dOptions)
-
-	if !d.diodeDryRun {
-		// Swap the masked secret used for logging with the real value before execution
-		for i, arg := range dOptions {
-			if arg == maskedSecret {
-				dOptions[i] = d.diodeClientSecret
-				break
-			}
-		}
-	}
+	d.logger.Info("snmp-discovery startup", "arguments", redact.Args(dOptions))
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
@@ -265,8 +255,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		}
 		version, readinessErr = d.Version()
 		if readinessErr == nil {
-			d.logger.Info("snmp-discovery readiness ok, got version ",
-				"snmp_discovery_version", version)
+			d.logger.Info("snmp-discovery readiness ok, got version", "version", version)
 			break
 		}
 		backoffDuration := time.Duration(backoff) * time.Second

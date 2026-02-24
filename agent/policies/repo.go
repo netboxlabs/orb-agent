@@ -2,8 +2,12 @@ package policies
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 )
+
+// ErrPolicyNotFound is returned when a policy cannot be found by name or ID.
+var ErrPolicyNotFound = errors.New("policy not found")
 
 // PolicyRepo is the interface for policy repositories
 type PolicyRepo interface {
@@ -34,7 +38,7 @@ func (p *policyMemRepo) GetByName(policyName string) (PolicyData, error) {
 	if ok {
 		return p.Get(id)
 	}
-	return PolicyData{}, errors.New("policy name not found")
+	return PolicyData{}, fmt.Errorf("%w: %s", ErrPolicyNotFound, policyName)
 }
 
 // NewMemRepo creates a new in-memory policy repository
@@ -149,11 +153,11 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 	defer p.mu.Unlock()
 	policyID, ok := p.nameMap[policyName]
 	if !ok {
-		return errors.New("policy name not found")
+		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyName)
 	}
 	policy, ok := p.db[policyID]
 	if !ok {
-		return errors.New("unknown policy ID")
+		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyID)
 	}
 	policy.Runs = runs
 	p.db[policyID] = policy

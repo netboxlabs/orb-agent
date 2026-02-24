@@ -75,6 +75,18 @@ func (m *mockBackendState) Get() map[string]*backend.State {
 	return m.Called().Get(0).(map[string]*backend.State)
 }
 
+// findAvailablePort finds an available port by listening on port 0 and returning the assigned port
+func findAvailablePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", ":0")
+	require.NoError(t, err, "failed to find available port")
+	defer func() {
+		_ = listener.Close()
+	}()
+	addr := listener.Addr().(*net.TCPAddr)
+	return addr.Port
+}
+
 func TestFleetConfigManager_Start_TokenError(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -279,7 +291,7 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 		{
 			name:         "sanitizes non-empty client secret",
 			clientSecret: "my-super-secret-password",
-			wantSecret:   "******",
+			wantSecret:   "********",
 			wantErr:      false,
 			checkInYAML:  true,
 		},
@@ -334,9 +346,9 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 				assert.Contains(t, result, tt.wantSecret, "sanitized secret should be in output")
 				// YAML can use either single or double quotes, so check for either
 				assert.True(t,
-					strings.Contains(result, "client_secret: '******'") ||
-						strings.Contains(result, "client_secret: \"******\"") ||
-						strings.Contains(result, "client_secret: ******"),
+					strings.Contains(result, "client_secret: '********'") ||
+						strings.Contains(result, "client_secret: \"********\"") ||
+						strings.Contains(result, "client_secret: ********"),
 					"client_secret should be masked in YAML output")
 			}
 		})
@@ -1024,7 +1036,7 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	mockPMgr.On("GetRepo").Return(nil)
 
 	// Pre-occupy a port with a test listener
-	testPort := 54321
+	testPort := findAvailablePort(t)
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
 	defer func() {

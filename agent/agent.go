@@ -14,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 	"github.com/netboxlabs/orb-agent/agent/telemetry"
 	"github.com/netboxlabs/orb-agent/agent/version"
@@ -38,6 +39,7 @@ type orbAgent struct {
 	config         config.Config
 	backends       map[string]backend.Backend
 	backendsCommon config.BackendCommons
+	debug          bool
 	ctx            context.Context
 	cancelFunction context.CancelFunc
 	otlpShutdown   func(context.Context) error
@@ -52,7 +54,7 @@ type orbAgent struct {
 var _ Agent = (*orbAgent)(nil)
 
 // New creates a new agent
-func New(logger *slog.Logger, c config.Config) (Agent, error) {
+func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
 	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {
@@ -75,6 +77,7 @@ func New(logger *slog.Logger, c config.Config) (Agent, error) {
 	return &orbAgent{
 		logger:              logger,
 		config:              c,
+		debug:               debug,
 		policyManager:       pm,
 		configManager:       cm,
 		secretsManager:      sm,
@@ -105,6 +108,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 		commonConfig = config.BackendCommons{}
 	}
 	commonConfig.Otlp.AgentLabels = labels
+	commonConfig.Debug = a.debug
 	a.backendsCommon = commonConfig
 	delete(cfgBackends, "common")
 
@@ -183,11 +187,22 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	agentCtx := context.WithValue(ctx, routineKey, "agentRoutine")
 	a.cancelFunction = cancelFunc
 	a.logger.Info("agent started", "version", version.GetBuildVersion(), "routine", agentCtx.Value(routineKey))
-	a.logger.Info("requested backends", "values", a.config.OrbAgent.Backends)
+	a.logger.Info("requested backends", "values", redact.SensitiveData(a.config.OrbAgent.Backends))
 
 	if err := a.secretsManager.Start(ctx); err != nil {
 		a.logger.Error("error during start secrets manager", "error", err)
 		return err
+	}
+
+	// Bind fleet secrets manager to fleet config manager if both are fleet-based
+	// This needs to happen before SolveConfigSecrets so secrets can be resolved
+	if a.config.OrbAgent.ConfigManager.Active == "fleet" && a.config.OrbAgent.SecretsManager.Active == "fleet" {
+		if fleetCM, ok := a.configManager.(*configmgr.FleetConfigManager); ok {
+			if err := fleetCM.BindSecretsManager(a.secretsManager); err != nil {
+				a.logger.Error("error binding fleet secrets manager", "error", err)
+				return err
+			}
+		}
 	}
 
 	var err error

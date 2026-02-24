@@ -55,6 +55,8 @@ Current supported options:
 | platform_omit_version  | bool | If True, only the driver name will be used as the NetBox platform name (defaults to 'False' if not specified) |
 | port_scan_ports | list | TCP ports to probe before discovery if hostname is a IP Range or a Subnet (defaults to [22,23,80,443,830,57400]) |
 | port_scan_timeout | float | TCP port probe timeout in seconds (defaults to 0.5) |
+| capture_running_config | bool | If True, collects the running configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
+| capture_startup_config | bool | If True, collects the startup/saved configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 
 #### Defaults
 Current supported defaults:
@@ -63,7 +65,8 @@ Current supported defaults:
 |:-----:|:----:|:-------------:|
 | site  | str | NetBox Site Name (defaults to 'undefined' if not specified) |
 | role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
-| if_type | str | Interface Type (defaults to 'other' if not specified) |
+| if_type | str | Default interface type when no pattern matches (defaults to 'other' if not specified) |
+| interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./device_discovery_interface.md)) |
 | location | str | Device location |
 | tenant | str/map | Device tenant |
 | description | str  | General description   |
@@ -111,6 +114,7 @@ Current supported defaults:
 | ├─ comments   | str  | VLAN comments              |
 | ├─ tags       | list | VLAN tags                  |
 
+
 ### Scope
 The scope defines a list of devices that can be accessed and pulled data. 
 
@@ -120,11 +124,26 @@ The scope defines a list of devices that can be accessed and pulled data.
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
 | driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
-| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments) |
+| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./device_discovery_ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
 
+### SSH Configuration and Jumphost Support
 
+For advanced SSH scenarios including bastion/jumphost connectivity, VRF-aware connections, and multi-hop SSH configurations, see the dedicated guide: [SSH Configuration and Jumphost Support](./device_discovery_ssh.md).
 
+The `ssh_config_file` optional argument allows you to specify a standard OpenSSH configuration file for connecting to devices through intermediate jump servers:
+
+```yaml
+scope:
+  - driver: ios
+    hostname: 192.168.10.5
+    username: admin
+    password: ${DEVICE_PASS}
+    optional_args:
+      ssh_config_file: /opt/orb/ssh-napalm.conf
+```
+
+See the [SSH Configuration guide](./device_discovery_ssh.md) for complete examples, security best practices, and troubleshooting.
 
 ### Sample
 A sample policy including all parameters supported by the device discovery backend.
@@ -139,6 +158,14 @@ orb:
           defaults:
             site: New York NY
             role: switch
+            if_type: other
+            interface_patterns:
+              - match: "^(GigabitEthernet|Gi).*"
+                type: "1000base-t"
+              - match: "^(TenGig|Te).*"
+                type: "10gbase-x-sfpp"
+              - match: "^Loopback.*"
+                type: "virtual"
             location: Row A
             tenant: NetBox Labs
             description: for all

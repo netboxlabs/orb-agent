@@ -49,10 +49,11 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | site | string | no | Default site name for discovered devices |
 | location | string | no | Default location for discovered devices |
 | role | string | no | Default role for discovered devices |
+| interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./snmp_discovery_interface.md)) |
 
 ##### Nested Defaults
 | Parameter | Type | Description |
-|:---------:|:----:|:-----------:|
+|---------|----|-----------|
 | device      | map  | Device-specific defaults        |
 | ├─ description | string  | Device description           |
 | ├─ comments   | string  | Device comments               |
@@ -68,8 +69,18 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 ### Scope Section
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| targets | list | yes | List of SNMP targets to discover. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10. |
-| authentication | map | yes | SNMP authentication settings |
+| targets | list | yes | List of SNMP targets to discover. Supports subnets (e.g. 192.168.1.0/28), IP ranges (192.168.0.1-192.168.0.10 or 192.168.0.1-10), and per-target authentication. |
+| authentication | map | conditional | Policy-level SNMP authentication settings (required unless all targets have their own authentication) |
+
+#### Target Parameters
+Each target in the `targets` list can include:
+
+| Parameter | Type | Required | Description |
+|:---------:|:----:|:--------:|:-----------:|
+| host | string | yes | Target hostname,  IP address, subnets or IP ranges |
+| port | integer | no | SNMP port (defaults to 161) |
+| authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
+| override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
@@ -84,6 +95,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | priv_passphrase | string | no | SNMPv3 privacy passphrase |
 
 *Required for SNMPv1/v2c, optional for SNMPv3
+
+**Note:** Authentication can be specified at the policy level (under `scope.authentication`) as a fallback, or per-target (under each target's `authentication` field). Targets without authentication use the policy-level authentication. Environment variables are supported using `${VAR}` syntax for `community`, `username`, `auth_passphrase`, and `priv_passphrase` fields.
 
 ### Sample
 A sample policy including all parameters supported by the SNMP discovery backend.
@@ -107,6 +120,11 @@ config:
     interface:
       description: "Auto-discovered interface"
       if_type: "ethernet"
+    interface_patterns:
+      - match: "^(GigabitEthernet|Gi).*"
+        type: "1000base-t"
+      - match: "^(TenGigE|Te).*"
+        type: "10gbase-x-sfpp"
     device:
       description: "SNMP discovered device"
       comments: "Automatically discovered via SNMP"
@@ -114,10 +132,23 @@ config:
 scope:
   targets:
     - host: "192.168.1.1/24" # subnet support
-    - host: "192.168.2.2-10" #range support
+    - host: "192.168.2.2-10" # range support
     - host: "10.0.0.1"
       port: 162  # Non-standard SNMP port
-  authentication:
+      override_defaults:
+        role: "switch"
+        tags: ["custom"]
+    - host: "10.0.0.10"
+      port: 161
+      authentication:  # Per-target authentication (optional)
+        protocol_version: "SNMPv3"
+        security_level: "authPriv"
+        username: "admin"
+        auth_protocol: "SHA"
+        auth_passphrase: "${SNMP_AUTH_PASS}"
+        priv_protocol: "AES"
+        priv_passphrase: "${SNMP_PRIV_PASS}"
+  authentication:  # Policy-level authentication (fallback)
     protocol_version: "SNMPv2c"
     community: "public"
 ```
