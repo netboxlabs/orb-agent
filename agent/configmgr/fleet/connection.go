@@ -275,7 +275,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
 				func(pr paho.PublishReceived) (bool, error) {
 					// Log any published messages to subscribed topics
-					connection.logger.Info("received MQTT message", "topic", pr.Packet.Topic)
+					connection.logger.Debug("received MQTT message", "topic", pr.Packet.Topic)
 
 					// Check if there's a topic-specific handler
 					connection.mu.Lock()
@@ -371,7 +371,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		return err
 	}
 
-	connection.logger.Info("MQTT connection manager started successfully")
+	connection.logger.Debug("MQTT connection manager started successfully")
 	return nil
 }
 
@@ -411,7 +411,7 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 		return fmt.Errorf("failed to connect during reconnect: %w", err)
 	}
 
-	connection.logger.Info("successfully reconnected to MQTT broker")
+	connection.logger.Debug("successfully reconnected to MQTT broker")
 	return nil
 }
 
