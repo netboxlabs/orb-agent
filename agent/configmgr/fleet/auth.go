@@ -134,7 +134,7 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 		return nil, fmt.Errorf("received empty access token from server")
 	}
 
-	fleetManager.logger.Info("successfully obtained access token",
+	fleetManager.logger.Debug("successfully obtained access token",
 		"token_url", tokenURL,
 		"expires_in", TokenResponse.ExpiresIn,
 		"mqtt_url", TokenResponse.MQTTURL)
@@ -165,7 +165,7 @@ func (fleetManager *AuthTokenManager) RefreshToken(ctx context.Context) (*TokenR
 		return nil, fmt.Errorf("cannot refresh token: credentials not initialized")
 	}
 
-	fleetManager.logger.Info("refreshing JWT token")
+	fleetManager.logger.Debug("refreshing JWT token")
 	return fleetManager.GetToken(ctx, fleetManager.tokenURL, fleetManager.skipTLS, fleetManager.timeout, fleetManager.clientID, fleetManager.clientSecret)
 }
 

@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   go-test:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 10
     defaults:
       run:
@@ -36,10 +36,6 @@ jobs:
         with:
           go-version: '1.25.x'
           check-latest: true
-      - name: Configure Docker min API version
-        run: |
-          echo '{"min-api-version": "1.40"}' | sudo tee /etc/docker/daemon.json
-          sudo systemctl restart docker
       - name: Run go build
         run: go build ./...
       - name: Install additional dependencies

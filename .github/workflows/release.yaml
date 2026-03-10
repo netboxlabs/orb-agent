@@ -120,28 +120,33 @@ jobs:
       - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
 
   build:
-    name: Build
+    name: Build (${{ matrix.platform }})
     needs: get-next-version
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     if: needs.get-next-version.outputs.new-release-published == 'true'
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
     env:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
       BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
+      REGISTRY: netboxlabs.jfrog.io
+      IMAGE_NAME: obs-builds/${{ github.event.repository.name }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: blacksmith-2vcpu-ubuntu-2404
+          - platform: linux/arm64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@4574d27a4764455b42196d70a065bc6853246a25 #v3.4.0
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca #v3.9.0
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3.3.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
       - name: Setup JFrog CLI
         id: setup-jfrog-cli
@@ -153,42 +158,108 @@ jobs:
           oidc-provider-name: github-ci
 
       - name: Login to JFrog Artifactory
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 #v3.4.0
         with:
-          registry: netboxlabs.jfrog.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ steps.setup-jfrog-cli.outputs.oidc-user }}
           password: ${{ steps.setup-jfrog-cli.outputs.oidc-token }}
-
-      - name: Verify QEMU installation
-        run: |
-              docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-              docker run --rm --platform linux/arm64 debian:latest uname -m
 
       - name: Set build info
         run: |
           echo $BUILD_COMMIT > ./agent/version/BUILD_COMMIT.txt
           echo $BUILD_VERSION > ./agent/version/BUILD_VERSION.txt
 
-      - name: Build image and push
-        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 #v6.14.0
+      - name: Build image and push by digest
+        id: build
+        uses: docker/build-push-action@1dc73863535b631f98b2378be8619f83b136f4a0 # v6.17.0
         with:
           context: .
           file: agent/docker/Dockerfile
-          platforms: linux/amd64, linux/arm64
-          push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: |
-            netboxlabs/${{ env.APP_NAME }}:latest
-            netboxlabs/${{ env.APP_NAME }}:${{ env.BUILD_VERSION }}
-            netboxlabs.jfrog.io/obs-builds/${{ env.APP_NAME }}:latest
-            netboxlabs.jfrog.io/obs-builds/${{ env.APP_NAME }}:${{ env.BUILD_VERSION }}
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,scope=${{ matrix.platform }},mode=max
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.runner }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    needs: [get-next-version, build]
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+    env:
+      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
+      REGISTRY: netboxlabs.jfrog.io
+      IMAGE_NAME: obs-builds/${{ github.event.repository.name }}
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Setup JFrog CLI
+        id: setup-jfrog-cli
+        uses: jfrog/setup-jfrog-cli@ff5cb544114ffc152db9cea1cd3d5978d5074946 # v4.5.11
+        env:
+          JF_URL: https://netboxlabs.jfrog.io
+          JF_PROJECT: obs
+        with:
+          oidc-provider-name: github-ci
+
+      - name: Login to JFrog Artifactory
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 #v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ steps.setup-jfrog-cli.outputs.oidc-user }}
+          password: ${{ steps.setup-jfrog-cli.outputs.oidc-token }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 #v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create manifest list and push to JFrog
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BUILD_VERSION }} \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+      - name: Copy manifests to Docker Hub
+        run: |
+          docker buildx imagetools create \
+            --tag netboxlabs/${{ env.APP_NAME }}:latest \
+            --tag netboxlabs/${{ env.APP_NAME }}:${{ env.BUILD_VERSION }} \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
   semantic-release:
     name: Semantic release
-    needs: build
+    needs: merge
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

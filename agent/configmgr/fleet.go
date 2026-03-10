@@ -211,7 +211,7 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	// Start goroutine to handle reconnect requests (JWT refresh)
 	go func() {
 		for range fleetManager.reconnectChan {
-			fleetManager.logger.Info("JWT refresh and reconnection requested")
+			fleetManager.logger.Debug("JWT refresh and reconnection requested")
 			if err := fleetManager.refreshAndReconnect(ctx, timeout); err != nil {
 				fleetManager.logger.Error("failed to refresh and reconnect", "error", err)
 			}
@@ -285,7 +285,7 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 		return fmt.Errorf("failed to generate topics: %w", err)
 	}
 
-	fleetManager.logger.Info("refreshed JWT and generated new topics",
+	fleetManager.logger.Debug("refreshed JWT and generated new topics",
 		"heartbeat_topic", topics.Heartbeat,
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
