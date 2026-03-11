@@ -730,26 +730,35 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testi
 }
 
 // TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedToken verifies that
-// the monitor does NOT trigger an immediate reconnect for a short-lived but valid token.
+// the monitor does NOT trigger a reconnect for a short-lived but valid token where the effective
+// lifetime (after the proportional buffer) is greater than the reconnect buffer.
 //
 // Scenario (reproduces OBS-2248 at the monitor layer):
 //   - Token TTL = 5 minutes → after proportional buffer (30s) → ~4m30s effective lifetime
-//   - Configured reconnectBuffer = 2 minutes (default)
-//   - 4m30s remaining > 2m reconnect buffer → IsTokenExpiringSoon(2m) is FALSE → no spurious reconnect
+//   - Configured reconnectBuffer = 2 minutes
+//   - 4m30s remaining > 2m reconnect buffer → IsTokenExpiringSoon(2m) is FALSE → no reconnect
+//
+// The ticker interval is set to 1 second so the monitor loop actually executes within the test
+// window. We wait 1.5 seconds to guarantee at least one full tick fires before asserting.
 func TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedToken(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
 
+	// Use a 1-second check interval so the ticker fires within the test window.
+	// The default is 30 seconds which would never tick during a short test.
+	checkInterval := 1
+	reconnectBuffer := 120 // 2 minutes in seconds
 	cfg := config.Config{
 		OrbAgent: config.OrbAgent{
 			ConfigManager: config.ManagerConfig{
 				Sources: config.Sources{
 					Fleet: config.FleetManager{
-						TokenURL:     "https://example.com/token",
-						ClientID:     "test-client-id",
-						ClientSecret: "test-secret",
-						// No custom TokenReconnectBuffer — uses default 2 minutes
+						TokenURL:                 "https://example.com/token",
+						ClientID:                 "test-client-id",
+						ClientSecret:             "test-secret",
+						TokenExpiryCheckInterval: &checkInterval,
+						TokenReconnectBuffer:     &reconnectBuffer,
 					},
 				},
 			},
@@ -757,7 +766,8 @@ func TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedT
 	}
 	fleetManager.config = cfg
 
-	// Token expires in 5 minutes; proportional buffer = 10% of 5m = 30s → effective lifetime ≈ 4m30s
+	// Token expires in 5 minutes; proportional buffer = 10% of 5m = 30s → effective lifetime ≈ 4m30s.
+	// This is well above the 2-minute reconnect buffer, so IsTokenExpiringSoon must return false.
 	fiveMinExpiry := time.Now().Add(5 * time.Minute)
 	jwtToken := fleet.RawJWTWithClaims(map[string]any{
 		"exp": fiveMinExpiry.Unix(),
@@ -779,13 +789,13 @@ func TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedT
 	_, err := fleetManager.authTokenManager.GetToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
 	require.NoError(t, err)
 
-	// Confirm the token is valid: ~4m30s effective lifetime is well above the 2m reconnect buffer,
-	// so neither IsTokenExpired nor IsTokenExpiringSoon(2m) should be true.
+	// Pre-flight: confirm the auth manager state is correct before starting the monitor.
 	assert.False(t, fleetManager.authTokenManager.IsTokenExpired(), "token should not be expired")
 	assert.False(t, fleetManager.authTokenManager.IsTokenExpiringSoon(2*time.Minute),
-		"5-minute token with ~4m30s effective lifetime should not trigger proactive reconnect with 2m buffer")
+		"5-minute token with ~4m30s effective lifetime should not be expiring soon with 2m buffer")
 
-	// Run the actual monitorTokenExpiry and confirm no reconnect signal is sent within 200ms
+	// Start the monitor and wait 1.5 seconds — enough for at least one 1-second tick to fire.
+	// If the monitor loop is broken and emits a reconnect, the test will catch it.
 	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
 	defer fleetManager.monitorCancel()
 
@@ -793,9 +803,9 @@ func TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedT
 
 	select {
 	case <-fleetManager.reconnectChan:
-		t.Fatal("reconnect was triggered spuriously for a healthy 5-minute token")
-	case <-time.After(200 * time.Millisecond):
-		// No spurious reconnect — correct behaviour
+		t.Fatal("reconnect was triggered spuriously for a healthy 5-minute token after at least one monitor tick")
+	case <-time.After(1500 * time.Millisecond):
+		// At least one tick fired with no spurious reconnect — correct behaviour
 	}
 }
 
