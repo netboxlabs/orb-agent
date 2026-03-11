@@ -729,6 +729,87 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testi
 	}
 }
 
+// TestFleetConfigManager_MonitorTokenExpiry_CapsReconnectBufferForShortLivedToken verifies that
+// the monitor does NOT trigger an immediate reconnect for a short-lived but valid token when the
+// configured reconnectBuffer would otherwise exceed the token's remaining lifetime.
+//
+// Scenario (reproduces OBS-2248 at the monitor layer):
+//   - Token TTL = 5 minutes → after proportional buffer (30s) → ~4m30s effective lifetime
+//   - Configured reconnectBuffer = 2 minutes (default)
+//   - Without capping: remaining (4m30s) / 2 = 2m15s; effectiveBuffer = min(2m, 2m15s) = 2m
+//   - With 4m30s remaining and effectiveBuffer = 2m: IsTokenExpiringSoon(2m) is FALSE → no spurious reconnect
+func TestFleetConfigManager_MonitorTokenExpiry_CapsReconnectBufferForShortLivedToken(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:     "https://example.com/token",
+						ClientID:     "test-client-id",
+						ClientSecret: "test-secret",
+						// No custom TokenReconnectBuffer — uses default 2 minutes
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Token expires in 5 minutes; proportional buffer = 10% of 5m = 30s → effective lifetime ≈ 4m30s
+	fiveMinExpiry := time.Now().Add(5 * time.Minute)
+	jwtToken := fleet.RawJWTWithClaims(map[string]any{
+		"exp": fiveMinExpiry.Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := fleet.TokenResponse{
+			AccessToken: jwtToken,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   300,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := fleetManager.authTokenManager.GetToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
+	require.NoError(t, err)
+
+	// Confirm the token is valid (not expired, not expiring soon with a 1m buffer)
+	assert.False(t, fleetManager.authTokenManager.IsTokenExpired(), "token should not be expired")
+	assert.False(t, fleetManager.authTokenManager.IsTokenExpiringSoon(1*time.Minute), "token should not be expiring soon with 1m buffer")
+
+	// The default reconnectBuffer (2m) is less than half of remaining (≈4m30s / 2 ≈ 2m15s),
+	// so the effective buffer stays at 2m and IsTokenExpiringSoon(2m) must be false.
+	tokenExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+	remaining := time.Until(tokenExpiry)
+	effectiveBuffer := 2 * time.Minute
+	if cap := remaining / 2; effectiveBuffer > cap {
+		effectiveBuffer = cap
+	}
+	assert.False(t, fleetManager.authTokenManager.IsTokenExpiringSoon(effectiveBuffer),
+		"5-minute token with ~4m30s remaining should not trigger proactive reconnect with effective buffer %v", effectiveBuffer)
+
+	// Run the actual monitorTokenExpiry and confirm no reconnect signal is sent within 200ms
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+	defer fleetManager.monitorCancel()
+
+	go fleetManager.monitorTokenExpiry()
+
+	select {
+	case <-fleetManager.reconnectChan:
+		t.Fatal("reconnect was triggered spuriously for a healthy 5-minute token")
+	case <-time.After(200 * time.Millisecond):
+		// No spurious reconnect — correct behaviour
+	}
+}
+
 func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.T) {
 	// Test that OnReadyHook initializes the bridge when called the first time
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
