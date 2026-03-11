@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1248,5 +1249,213 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 	// Cleanup
 	if fleetManager.otlpBridge != nil {
 		_ = fleetManager.otlpBridge.Stop(context.Background())
+	}
+}
+
+// controlledTokenServer is a test HTTP server whose response can switch from failure to success
+// after a configurable number of requests. Thread-safe.
+type controlledTokenServer struct {
+	t            *testing.T
+	mu           sync.Mutex
+	failForCount int // requests 1..failForCount return 500; subsequent requests return a valid token
+	requestCount int
+	validJWT     string
+	mqttURL      string
+}
+
+func (s *controlledTokenServer) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	s.requestCount++
+	count := s.requestCount
+	s.mu.Unlock()
+
+	// Request 1 is the credential-priming GetToken call — always succeed.
+	// Requests 2..failForCount+1 fail; requests failForCount+2 onward succeed again.
+	if count > 1 && count <= s.failForCount+1 {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(fleet.TokenResponse{
+		AccessToken: s.validJWT,
+		MQTTURL:     s.mqttURL,
+		ExpiresIn:   3600,
+	})
+}
+
+func (s *controlledTokenServer) RequestCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requestCount
+}
+
+// newControlledTokenServer wraps a controlledTokenServer in a TLS httptest.Server.
+// failForCount requests will return HTTP 500 before switching to valid responses.
+func newControlledTokenServer(t *testing.T, failForCount int) (*httptest.Server, *controlledTokenServer) {
+	t.Helper()
+	mqttURL := "mqtt://test.example.com:1883"
+	validJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          1516239022,
+		"ext": map[string]any{
+			"orb:mqtt_url": mqttURL,
+		},
+	})
+	handler := &controlledTokenServer{
+		t:            t,
+		failForCount: failForCount,
+		validJWT:     validJWT,
+		mqttURL:      mqttURL,
+	}
+	return httptest.NewTLSServer(handler), handler
+}
+
+// newReconnectWorkerManager creates a FleetConfigManager wired with a mock MQTT connection and a
+// pre-fetched valid token so that runReconnectWorker can be invoked directly in tests.
+func newReconnectWorkerManager(t *testing.T, mockConn *fleet.MockMQTTConnection, tokenServerURL string) *FleetConfigManager {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	mgr := &FleetConfigManager{
+		logger:           logger,
+		connection:       mockConn,
+		authTokenManager: fleet.NewAuthTokenManager(logger),
+		resetChan:        resetChan,
+		reconnectChan:    reconnectChan,
+		policyManager:    mockPMgr,
+		config: config.Config{
+			OrbAgent: config.OrbAgent{
+				ConfigManager: config.ManagerConfig{
+					Sources: config.Sources{
+						Fleet: config.FleetManager{
+							TokenURL:     tokenServerURL,
+							SkipTLS:      true,
+							ClientID:     "test_client",
+							ClientSecret: "test_secret",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Pre-fetch a token so the manager has stored credentials for RefreshToken.
+	ctx := context.Background()
+	_, err := mgr.authTokenManager.GetToken(ctx, tokenServerURL, true, 10*time.Second, "test_client", "test_secret")
+	require.NoError(t, err, "initial GetToken must succeed to prime credentials")
+
+	// Set a heartbeat topic so Disconnect has a valid topic string.
+	mgr.connectionDetails = fleet.ConnectionDetails{
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test-agent/heartbeat",
+		},
+	}
+
+	return mgr
+}
+
+// TestFleetConfigManager_ReconnectWorker_RetriesOnTransientFailure verifies that when the token
+// endpoint fails for fewer attempts than maxRetries, refreshAndReconnect eventually succeeds,
+// Disconnect is NOT called, and no re-signal timer is scheduled.
+func TestFleetConfigManager_ReconnectWorker_RetriesOnTransientFailure(t *testing.T) {
+	// Token server fails for the first 2 requests, then succeeds.
+	// With maxRetries=5 the worker should succeed on attempt 3.
+	server, handler := newControlledTokenServer(t, 2)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{
+		ReconnectError: nil, // Reconnect succeeds after token refresh
+	}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Run worker with very short backoffs so the test completes quickly.
+	go mgr.runReconnectWorker(ctx, 10*time.Second, 5, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond)
+
+	// Trigger one reconnect.
+	mgr.reconnectChan <- struct{}{}
+
+	// Wait long enough for 2 failures + backoffs + 1 success (generous upper bound).
+	time.Sleep(300 * time.Millisecond)
+
+	assert.False(t, mockConn.DisconnectCalled, "Disconnect should NOT be called when refresh eventually succeeds")
+	// Request 1 = prime, requests 2-3 = failures, request 4 = success → at least 4 total.
+	assert.GreaterOrEqual(t, handler.RequestCount(), 4, "token endpoint should have been called at least 4 times (1 prime + 2 failures + 1 success)")
+
+	// reconnectChan should be empty (no re-signal scheduled).
+	select {
+	case <-mgr.reconnectChan:
+		t.Fatal("reconnectChan should be empty after a successful retry")
+	default:
+	}
+}
+
+// TestFleetConfigManager_ReconnectWorker_DisconnectsAfterAllRetriesFail verifies that when the
+// token endpoint fails on every request, the worker calls Disconnect after exhausting maxRetries.
+func TestFleetConfigManager_ReconnectWorker_DisconnectsAfterAllRetriesFail(t *testing.T) {
+	// Token server always fails (failForCount > maxRetries).
+	server, _ := newControlledTokenServer(t, 100)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	// Override the token URL with the always-failing server AFTER priming credentials,
+	// so RefreshToken uses this URL.
+	mgr.config.OrbAgent.ConfigManager.Sources.Fleet.TokenURL = server.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// maxRetries=3, very short backoffs to keep test fast.
+	const testMaxRetries = 3
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, 5*time.Second)
+
+	mgr.reconnectChan <- struct{}{}
+
+	// Wait long enough for 3 attempts + backoffs + disconnect.
+	// 3 attempts: 10ms + 20ms backoffs between them = ~50ms total; add generous buffer.
+	require.Eventually(t, func() bool {
+		return mockConn.DisconnectCalled
+	}, 2*time.Second, 20*time.Millisecond, "Disconnect should be called after all retries are exhausted")
+}
+
+// TestFleetConfigManager_ReconnectWorker_ReschedulesAfterExhaustion verifies that after all retries
+// fail, the worker schedules a re-signal on reconnectChan so recovery does not depend solely on the
+// 30-second monitor tick.
+func TestFleetConfigManager_ReconnectWorker_ReschedulesAfterExhaustion(t *testing.T) {
+	// Token server always fails.
+	server, _ := newControlledTokenServer(t, 100)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// maxRetries=2, very short retry delay (50ms) so the re-signal arrives quickly.
+	const testMaxRetries = 2
+	const testRetryDelay = 50 * time.Millisecond
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, testRetryDelay)
+
+	// Send first signal; the worker will exhaust retries and schedule a re-signal.
+	mgr.reconnectChan <- struct{}{}
+
+	// Drain the first signal that was consumed by the worker (it's already gone).
+	// Now wait for the re-signal to arrive within retryDelay + a generous buffer.
+	select {
+	case <-mgr.reconnectChan:
+		// Re-signal received — correct behaviour.
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a re-signal on reconnectChan after retry exhaustion but none arrived")
 	}
 }
