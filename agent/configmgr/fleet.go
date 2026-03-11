@@ -208,11 +208,14 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 			slog.String("telemetry_topic", topics.Telemetry))
 	})
 
+	// Create a shared cancellable context for both the reconnect worker and the token expiry
+	// monitor so that Stop() can terminate both goroutines with a single monitorCancel() call.
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+
 	// Start goroutine to handle reconnect requests (JWT refresh)
-	go fleetManager.runReconnectWorker(ctx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second)
+	go fleetManager.runReconnectWorker(fleetManager.monitorCtx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second)
 
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
-	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
 	go fleetManager.monitorTokenExpiry()
 
 	return nil
@@ -224,7 +227,12 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 // does not have to wait for the next full monitor tick. Timing parameters are injected so tests can
 // use millisecond-scale values without slowing the test suite.
 func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, timeout time.Duration, maxRetries int, baseBackoff, maxBackoff, retryDelay time.Duration) {
-	for range fleetManager.reconnectChan {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-fleetManager.reconnectChan:
+		}
 		fleetManager.logger.Debug("JWT refresh and reconnection requested")
 
 		backoff := baseBackoff

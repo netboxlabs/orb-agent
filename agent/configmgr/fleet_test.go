@@ -1428,6 +1428,34 @@ func TestFleetConfigManager_ReconnectWorker_DisconnectsAfterAllRetriesFail(t *te
 	}, 2*time.Second, 20*time.Millisecond, "Disconnect should be called after all retries are exhausted")
 }
 
+// TestFleetConfigManager_ReconnectWorker_ExitsOnContextCancel verifies that runReconnectWorker
+// exits promptly when its context is cancelled, even while idle waiting for a signal.
+func TestFleetConfigManager_ReconnectWorker_ExitsOnContextCancel(t *testing.T) {
+	server, _ := newControlledTokenServer(t, 0)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		mgr.runReconnectWorker(ctx, 10*time.Second, 3, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond)
+		close(done)
+	}()
+
+	// Cancel the context — worker should exit without any signal on reconnectChan.
+	cancel()
+
+	select {
+	case <-done:
+		// Worker exited as expected.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("runReconnectWorker did not exit after context cancellation")
+	}
+}
+
 // TestFleetConfigManager_ReconnectWorker_ReschedulesAfterExhaustion verifies that after all retries
 // fail, the worker schedules a re-signal on reconnectChan so recovery does not depend solely on the
 // 30-second monitor tick.
