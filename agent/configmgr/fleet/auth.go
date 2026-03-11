@@ -208,7 +208,7 @@ func parseJWTExpiry(tokenString string) (time.Time, error) {
 	var claims jwt.Claims
 
 	// Extract standard claims without verification
-	if err := token.UnsafeClaimsWithoutVerification(&claims, nil); err != nil {
+	if err := token.UnsafeClaimsWithoutVerification(&claims); err != nil {
 		return time.Time{}, fmt.Errorf("failed to extract claims from JWT: %w", err)
 	}
 
