@@ -90,11 +90,12 @@ func (m *mockBackend) RemovePolicy(data policies.PolicyData) error {
 
 // MockMQTTConnection is a mock implementation of MQTTConnector for testing
 type MockMQTTConnection struct {
-	ConnectError    error
-	DisconnectError error
-	ReconnectError  error
-	ConnectCalled   bool
-	hooks           []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	ConnectError     error
+	DisconnectError  error
+	ReconnectError   error
+	ConnectCalled    bool
+	DisconnectCalled bool
+	hooks            []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
 }
 
 // Connect connects to the MQTT broker
@@ -105,6 +106,7 @@ func (m *MockMQTTConnection) Connect(_ context.Context, _ ConnectionDetails, _ m
 
 // Disconnect disconnects from the MQTT broker
 func (m *MockMQTTConnection) Disconnect(_ context.Context, _ string) error {
+	m.DisconnectCalled = true
 	return m.DisconnectError
 }
 
