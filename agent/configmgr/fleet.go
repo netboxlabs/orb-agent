@@ -356,20 +356,6 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 			fleetManager.logger.Info("token expiry monitor stopped")
 			return
 		case <-ticker.C:
-			// Cap the reconnect buffer to at most 50% of the token's remaining effective lifetime.
-			// Without this cap, a large default buffer (e.g. 2 minutes) would trigger
-			// proactive reconnects immediately on short-lived tokens.
-			effectiveBuffer := reconnectBuffer
-			if tokenExpiry := fleetManager.authTokenManager.GetTokenExpiryTime(); !tokenExpiry.IsZero() {
-				remaining := time.Until(tokenExpiry)
-				if cap := remaining / 2; effectiveBuffer > cap {
-					effectiveBuffer = cap
-				}
-				if effectiveBuffer < 0 {
-					effectiveBuffer = 0
-				}
-			}
-
 			// Check if token is expired or expiring soon
 			if fleetManager.authTokenManager.IsTokenExpired() {
 				fleetManager.logger.Warn("JWT token has expired, triggering reconnection",
@@ -380,10 +366,10 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 				default:
 					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
 				}
-			} else if fleetManager.authTokenManager.IsTokenExpiringSoon(effectiveBuffer) {
+			} else if fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
 				fleetManager.logger.Warn("JWT token expiring soon, triggering proactive reconnection",
 					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
-					"effective_reconnect_buffer", effectiveBuffer)
+					"reconnect_buffer", reconnectBuffer)
 				select {
 				case fleetManager.reconnectChan <- struct{}{}:
 					fleetManager.logger.Debug("reconnection signal sent due to imminent token expiry")
