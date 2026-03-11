@@ -175,15 +175,15 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 
 			// Disconnect first
 			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
-			err := fleetManager.connection.Disconnect(disconnectCtx, topics.Heartbeat)
+			err := fleetManager.connection.Disconnect(disconnectCtx, fleetManager.connectionDetails.Topics.Heartbeat)
 			cancel()
 			if err != nil {
 				fleetManager.logger.Error("failed to disconnect during reset", "error", err)
 			}
 
-			// Reconnect
+			// Reconnect using the latest connection details (updated by refreshAndReconnect after token refresh)
 			connectCtx := context.Background()
-			err = fleetManager.connection.Connect(connectCtx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
+			err = fleetManager.connection.Connect(connectCtx, fleetManager.connectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml)
 			if err != nil {
 				fleetManager.logger.Error("failed to reconnect during reset", "error", err)
 			}
