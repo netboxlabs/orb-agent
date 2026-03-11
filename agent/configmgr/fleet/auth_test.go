@@ -363,10 +363,9 @@ func TestAuthTokenManager_IsTokenExpiringSoon(t *testing.T) {
 	_, err := authTokenManager.GetToken(ctx, serverSoon.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
 	require.NoError(t, err)
 
-	// With 2 minute buffer, token expiring in 1 minute should be considered expiring soon
-	// But note: GetToken applies a 5-minute buffer, so the actual expiry check is against (soonExpiry - 5 minutes)
-	// So if soonExpiry is 1 minute from now, tokenExpiresAt will be (1 minute - 5 minutes) = -4 minutes ago
-	// So IsTokenExpiringSoon(2 minutes) should return true
+	// With 2 minute buffer, token expiring in 1 minute should be considered expiring soon.
+	// GetToken applies a proportional buffer: 10% of 60s = 6s, so tokenExpiresAt ≈ now + 54s.
+	// IsTokenExpiringSoon(2min): now + 2min > now + 54s → true.
 	assert.True(t, authTokenManager.IsTokenExpiringSoon(2*time.Minute))
 
 	// Test with token not expiring soon
@@ -393,6 +392,85 @@ func TestAuthTokenManager_IsTokenExpiringSoon(t *testing.T) {
 
 	// With 2 minute buffer, token expiring in ~55 minutes should not be considered expiring soon
 	assert.False(t, authTokenManager2.IsTokenExpiringSoon(2*time.Minute))
+}
+
+// TestAuthTokenManager_GetToken_ShortLivedToken reproduces OBS-2248: when the server-side
+// TTL equals the old hardcoded 5-minute buffer, the token was considered expired on receipt.
+// With the proportional buffer (10% of TTL, capped at 5min), a 5-minute token should have a
+// 30-second buffer, leaving ~4m30s of effective lifetime.
+func TestAuthTokenManager_GetToken_ShortLivedToken(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	authTokenManager := NewAuthTokenManager(logger)
+
+	ttl := 5 * time.Minute
+	futureExpiry := time.Now().Add(ttl)
+	jwtToken := RawJWTWithClaims(map[string]any{
+		"exp": futureExpiry.Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := TokenResponse{
+			AccessToken: jwtToken,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   int(ttl.Seconds()),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := authTokenManager.GetToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
+	require.NoError(t, err)
+
+	// 10% of 5min = 30s buffer → effective expiry ≈ now + 4m30s
+	expiryTime := authTokenManager.GetTokenExpiryTime()
+	expectedBuffer := 30 * time.Second
+	assert.WithinDuration(t, futureExpiry.Add(-expectedBuffer), expiryTime, 2*time.Second)
+
+	// Token must NOT be considered expired immediately
+	assert.False(t, authTokenManager.IsTokenExpired(), "5-minute token should not be expired on receipt")
+
+	// Token should not be considered expiring soon with a 1-minute reconnect buffer
+	assert.False(t, authTokenManager.IsTokenExpiringSoon(1*time.Minute), "5-minute token should not be expiring soon with 1m buffer")
+}
+
+// TestAuthTokenManager_GetToken_VeryShortLivedToken verifies the proportional buffer
+// for an extremely short-lived token (30 seconds): 10% of 30s = 3s buffer.
+func TestAuthTokenManager_GetToken_VeryShortLivedToken(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	authTokenManager := NewAuthTokenManager(logger)
+
+	ttl := 30 * time.Second
+	futureExpiry := time.Now().Add(ttl)
+	jwtToken := RawJWTWithClaims(map[string]any{
+		"exp": futureExpiry.Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := TokenResponse{
+			AccessToken: jwtToken,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   int(ttl.Seconds()),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := authTokenManager.GetToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
+	require.NoError(t, err)
+
+	// 10% of 30s = 3s buffer → effective expiry ≈ now + 27s
+	expiryTime := authTokenManager.GetTokenExpiryTime()
+	expectedBuffer := 3 * time.Second
+	assert.WithinDuration(t, futureExpiry.Add(-expectedBuffer), expiryTime, 2*time.Second)
+
+	// Token must NOT be considered expired immediately
+	assert.False(t, authTokenManager.IsTokenExpired(), "30-second token should not be expired on receipt")
 }
 
 func TestAuthTokenManager_RefreshToken(t *testing.T) {

@@ -145,16 +145,34 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 	// Try to parse JWT exp claim for more accurate expiry tracking
 	var expiryTime time.Time
 	if parsedExpiry, err := parseJWTExpiry(TokenResponse.AccessToken); err == nil && !parsedExpiry.IsZero() {
-		// Use JWT exp claim with 5-minute buffer for safety
-		expiryTime = parsedExpiry.Add(-5 * time.Minute)
-		fleetManager.logger.Debug("using JWT exp claim for token expiry", "expiry", parsedExpiry, "buffer_applied", expiryTime)
+		// Use JWT exp claim with a proportional buffer: 10% of TTL, capped at 5 minutes.
+		// A hardcoded 5-minute buffer breaks when the server TTL is short (e.g. 5 minutes),
+		// causing the token to be considered expired immediately upon receipt.
+		ttl := time.Until(parsedExpiry)
+		buffer := ttl / 10
+		if buffer > 5*time.Minute {
+			buffer = 5 * time.Minute
+		}
+		expiryTime = parsedExpiry.Add(-buffer)
+		fleetManager.logger.Debug("using JWT exp claim for token expiry", "expiry", parsedExpiry, "ttl", ttl, "buffer_applied", buffer, "effective_expiry", expiryTime)
 	} else if TokenResponse.ExpiresIn > 0 {
-		// Fallback to ExpiresIn from response (with 5-minute buffer)
-		expiryTime = time.Now().Add(time.Duration(TokenResponse.ExpiresIn)*time.Second - 5*time.Minute)
-		fleetManager.logger.Debug("using ExpiresIn for token expiry", "expires_in", TokenResponse.ExpiresIn, "buffer_applied", expiryTime)
+		// Fallback to ExpiresIn from response with the same proportional buffer.
+		ttl := time.Duration(TokenResponse.ExpiresIn) * time.Second
+		buffer := ttl / 10
+		if buffer > 5*time.Minute {
+			buffer = 5 * time.Minute
+		}
+		expiryTime = time.Now().Add(ttl - buffer)
+		fleetManager.logger.Debug("using ExpiresIn for token expiry", "expires_in", TokenResponse.ExpiresIn, "ttl", ttl, "buffer_applied", buffer, "effective_expiry", expiryTime)
 	}
 
 	fleetManager.tokenExpiresAt = expiryTime
+
+	if effectiveLifetime := time.Until(expiryTime); effectiveLifetime <= 0 {
+		fleetManager.logger.Warn("token effective lifetime is zero or negative after applying buffer — token will be treated as expired immediately",
+			"effective_expiry", expiryTime,
+			"expires_in_field", TokenResponse.ExpiresIn)
+	}
 
 	return &TokenResponse, nil
 }
@@ -208,7 +226,7 @@ func parseJWTExpiry(tokenString string) (time.Time, error) {
 	var claims jwt.Claims
 
 	// Extract standard claims without verification
-	if err := token.UnsafeClaimsWithoutVerification(&claims, nil); err != nil {
+	if err := token.UnsafeClaimsWithoutVerification(&claims); err != nil {
 		return time.Time{}, fmt.Errorf("failed to extract claims from JWT: %w", err)
 	}
 
