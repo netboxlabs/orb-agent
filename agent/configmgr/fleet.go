@@ -266,6 +266,9 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 				fleetManager.logger.Error("failed to disconnect after exhausted retries", "error", err)
 			}
 			time.AfterFunc(retryDelay, func() {
+				if ctx.Err() != nil {
+					return
+				}
 				select {
 				case fleetManager.reconnectChan <- struct{}{}:
 					fleetManager.logger.Debug("scheduled retry signal sent after refresh failure")
