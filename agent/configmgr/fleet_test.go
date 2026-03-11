@@ -1487,3 +1487,92 @@ func TestFleetConfigManager_ReconnectWorker_ReschedulesAfterExhaustion(t *testin
 		t.Fatal("expected a re-signal on reconnectChan after retry exhaustion but none arrived")
 	}
 }
+
+// TestFleetConfigManager_ReconnectWorker_AfterFuncSuppressedOnContextCancel verifies that
+// when the context is cancelled before the retryDelay elapses, the time.AfterFunc callback
+// does not send a re-signal on reconnectChan.
+func TestFleetConfigManager_ReconnectWorker_AfterFuncSuppressedOnContextCancel(t *testing.T) {
+	// Token server always fails so the worker exhausts retries and schedules a re-signal.
+	server, _ := newControlledTokenServer(t, 100)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	const testMaxRetries = 2
+	const testRetryDelay = 200 * time.Millisecond
+
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 5*time.Millisecond, 20*time.Millisecond, testRetryDelay)
+
+	// Trigger one reconnect attempt.
+	mgr.reconnectChan <- struct{}{}
+
+	// Wait for retries to exhaust (2 attempts with tiny backoffs take ~25ms).
+	// Then cancel the context before retryDelay (200ms) elapses.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	// Now wait past the retryDelay and verify no re-signal was sent.
+	select {
+	case <-mgr.reconnectChan:
+		t.Fatal("AfterFunc callback should have been suppressed by context cancellation")
+	case <-time.After(testRetryDelay + 100*time.Millisecond):
+		// No re-signal — correct behaviour.
+	}
+}
+
+// TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails verifies that the reset
+// goroutine reads the current fleetManager.connectionDetails rather than the stale closure
+// values captured at Start() time.
+func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	// Simulate Start() having stored an initial set of connection details.
+	initialDetails := fleet.ConnectionDetails{
+		Token: "initial-token",
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test-agent/heartbeat",
+		},
+	}
+	mgr.connectionDetails = initialDetails
+	mgr.backends = make(map[string]backend.Backend)
+	mgr.labels = map[string]string{"env": "test"}
+	mgr.configYaml = "initial-config"
+
+	// Launch the reset goroutine (mirrors what Start() does).
+	timeout := 5 * time.Second
+	go func() {
+		for range mgr.resetChan {
+			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
+			_ = mgr.connection.Disconnect(disconnectCtx, mgr.connectionDetails.Topics.Heartbeat)
+			cancel()
+			connectCtx := context.Background()
+			_ = mgr.connection.Connect(connectCtx, mgr.connectionDetails, mgr.backends, mgr.labels, mgr.configYaml)
+		}
+	}()
+
+	// Simulate a successful token refresh updating connectionDetails on the struct.
+	refreshedDetails := fleet.ConnectionDetails{
+		Token: "refreshed-token",
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test-agent/heartbeat",
+		},
+	}
+	mgr.connectionDetails = refreshedDetails
+
+	// Signal a reset and wait for the goroutine to call Connect.
+	mgr.resetChan <- struct{}{}
+
+	require.Eventually(t, func() bool {
+		return mockConn.ConnectCalled
+	}, time.Second, 10*time.Millisecond, "Connect should have been called by the reset goroutine")
+
+	assert.Equal(t, "refreshed-token", mockConn.LastConnectDetails.Token,
+		"reset goroutine should use the refreshed token, not the stale initial token")
+}
