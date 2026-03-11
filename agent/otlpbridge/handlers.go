@@ -9,11 +9,29 @@ import (
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
+	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 const diodePolicyNameAttributeKey = "diode.metadata.policy_name"
+
+// isIngestRequest reports whether any of the provided resources carry the
+// diode.metadata.policy_name attribute, indicating the payload is Diode data
+// that should be routed to the ingest topic rather than the telemetry topic.
+func isIngestRequest(resources []*resourcev1.Resource) bool {
+	for _, r := range resources {
+		if r == nil {
+			continue
+		}
+		for _, attr := range r.Attributes {
+			if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Trace service handler
 type traceServer struct {
@@ -26,9 +44,25 @@ func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTrac
 	if pub == nil {
 		return nil, fmt.Errorf("publisher not yet initialized")
 	}
-	topic := s.bridge.GetIngestTopic()
-	if topic == "" {
-		return nil, fmt.Errorf("topic not yet initialized")
+
+	resources := make([]*resourcev1.Resource, 0, len(req.ResourceSpans))
+	for _, rs := range req.ResourceSpans {
+		if rs != nil {
+			resources = append(resources, rs.Resource)
+		}
+	}
+
+	var topic string
+	if isIngestRequest(resources) {
+		topic = s.bridge.GetIngestTopic()
+		if topic == "" {
+			return nil, fmt.Errorf("ingest topic not yet initialized")
+		}
+	} else {
+		topic = s.bridge.GetTelemetryTopic()
+		if topic == "" {
+			return nil, fmt.Errorf("telemetry topic not yet initialized")
+		}
 	}
 
 	payload, err := s.bridge.enc.Marshal(req)
@@ -52,9 +86,25 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 	if pub == nil {
 		return nil, fmt.Errorf("publisher not yet initialized")
 	}
-	topic := s.bridge.GetIngestTopic()
-	if topic == "" {
-		return nil, fmt.Errorf("topic not yet initialized")
+
+	resources := make([]*resourcev1.Resource, 0, len(req.ResourceMetrics))
+	for _, rm := range req.ResourceMetrics {
+		if rm != nil {
+			resources = append(resources, rm.Resource)
+		}
+	}
+
+	var topic string
+	if isIngestRequest(resources) {
+		topic = s.bridge.GetIngestTopic()
+		if topic == "" {
+			return nil, fmt.Errorf("ingest topic not yet initialized")
+		}
+	} else {
+		topic = s.bridge.GetTelemetryTopic()
+		if topic == "" {
+			return nil, fmt.Errorf("telemetry topic not yet initialized")
+		}
 	}
 
 	payload, err := s.bridge.enc.Marshal(req)
@@ -95,21 +145,23 @@ func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsSe
 	return &collectorlogs.ExportLogsServiceResponse{}, nil
 }
 
-// isIngestRequest checks if the request contains a policy_name attribute in resource or scope attributes
+// isIngestRequest checks if the request contains a policy_name attribute in
+// resource attributes or, for backward compatibility, in scope attributes.
 func (s *logsServer) isIngestRequest(req *collectorlogs.ExportLogsServiceRequest) bool {
+	resources := make([]*resourcev1.Resource, 0, len(req.ResourceLogs))
+	for _, rl := range req.ResourceLogs {
+		if rl != nil {
+			resources = append(resources, rl.Resource)
+		}
+	}
+	if isIngestRequest(resources) {
+		return true
+	}
+	// Backward compatibility: also check ScopeLogs attributes.
 	for _, rl := range req.ResourceLogs {
 		if rl == nil {
 			continue
 		}
-		// Check Resource attributes first
-		if rl.Resource != nil && rl.Resource.Attributes != nil {
-			for _, attr := range rl.Resource.Attributes {
-				if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
-					return true
-				}
-			}
-		}
-		// Also check Scope attributes for backward compatibility
 		for _, sl := range rl.ScopeLogs {
 			if sl == nil || sl.Scope == nil || sl.Scope.Attributes == nil {
 				continue
