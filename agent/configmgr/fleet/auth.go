@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -21,6 +22,7 @@ import (
 
 // AuthTokenManager manages auth tokens
 type AuthTokenManager struct {
+	mu             sync.RWMutex
 	logger         *slog.Logger
 	tokenURL       string
 	skipTLS        bool
@@ -57,13 +59,6 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 	if clientSecret == "" {
 		return nil, fmt.Errorf("client secret cannot be empty")
 	}
-
-	// Store credentials for future refresh
-	fleetManager.tokenURL = tokenURL
-	fleetManager.skipTLS = skipTLS
-	fleetManager.timeout = timeout
-	fleetManager.clientID = clientID
-	fleetManager.clientSecret = clientSecret
 
 	fleetManager.logger.Debug("requesting access token", "token_url", tokenURL, "client_id", clientID)
 
@@ -122,29 +117,26 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var TokenResponse TokenResponse
-	if err := json.Unmarshal(body, &TokenResponse); err != nil {
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		fleetManager.logger.Error("failed to parse token response", "error", err, "response", string(body))
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
 	}
 
 	// Validate token response
-	if TokenResponse.AccessToken == "" {
+	if tokenResp.AccessToken == "" {
 		fleetManager.logger.Error("received empty access token", "response", string(body))
 		return nil, fmt.Errorf("received empty access token from server")
 	}
 
 	fleetManager.logger.Debug("successfully obtained access token",
 		"token_url", tokenURL,
-		"expires_in", TokenResponse.ExpiresIn,
-		"mqtt_url", TokenResponse.MQTTURL)
+		"expires_in", tokenResp.ExpiresIn,
+		"mqtt_url", tokenResp.MQTTURL)
 
-	// Store token and calculate expiration time
-	fleetManager.lastToken = &TokenResponse
-
-	// Try to parse JWT exp claim for more accurate expiry tracking
+	// Calculate expiration time before taking the lock
 	var expiryTime time.Time
-	if parsedExpiry, err := parseJWTExpiry(TokenResponse.AccessToken); err == nil && !parsedExpiry.IsZero() {
+	if parsedExpiry, err := parseJWTExpiry(tokenResp.AccessToken); err == nil && !parsedExpiry.IsZero() {
 		// Use JWT exp claim with a proportional buffer: 10% of TTL, capped at 5 minutes.
 		// A hardcoded 5-minute buffer breaks when the server TTL is short (e.g. 5 minutes),
 		// causing the token to be considered expired immediately upon receipt.
@@ -155,59 +147,89 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 		}
 		expiryTime = parsedExpiry.Add(-buffer)
 		fleetManager.logger.Debug("using JWT exp claim for token expiry", "expiry", parsedExpiry, "ttl", ttl, "buffer_applied", buffer, "effective_expiry", expiryTime)
-	} else if TokenResponse.ExpiresIn > 0 {
+	} else if tokenResp.ExpiresIn > 0 {
 		// Fallback to ExpiresIn from response with the same proportional buffer.
-		ttl := time.Duration(TokenResponse.ExpiresIn) * time.Second
+		ttl := time.Duration(tokenResp.ExpiresIn) * time.Second
 		buffer := ttl / 10
 		if buffer > 5*time.Minute {
 			buffer = 5 * time.Minute
 		}
 		expiryTime = time.Now().Add(ttl - buffer)
-		fleetManager.logger.Debug("using ExpiresIn for token expiry", "expires_in", TokenResponse.ExpiresIn, "ttl", ttl, "buffer_applied", buffer, "effective_expiry", expiryTime)
+		fleetManager.logger.Debug("using ExpiresIn for token expiry", "expires_in", tokenResp.ExpiresIn, "ttl", ttl, "buffer_applied", buffer, "effective_expiry", expiryTime)
 	}
-
-	fleetManager.tokenExpiresAt = expiryTime
 
 	if effectiveLifetime := time.Until(expiryTime); effectiveLifetime <= 0 {
 		fleetManager.logger.Warn("token effective lifetime is zero or negative after applying buffer — token will be treated as expired immediately",
 			"effective_expiry", expiryTime,
-			"expires_in_field", TokenResponse.ExpiresIn)
+			"expires_in_field", tokenResp.ExpiresIn)
 	}
 
-	return &TokenResponse, nil
+	// Store credentials and token state under write lock; the HTTP call above is intentionally
+	// outside the lock to avoid holding it during I/O.
+	fleetManager.mu.Lock()
+	fleetManager.tokenURL = tokenURL
+	fleetManager.skipTLS = skipTLS
+	fleetManager.timeout = timeout
+	fleetManager.clientID = clientID
+	fleetManager.clientSecret = clientSecret
+	fleetManager.lastToken = &tokenResp
+	fleetManager.tokenExpiresAt = expiryTime
+	fleetManager.mu.Unlock()
+
+	return &tokenResp, nil
 }
 
 // RefreshToken refreshes the auth token using stored credentials
 func (fleetManager *AuthTokenManager) RefreshToken(ctx context.Context) (*TokenResponse, error) {
-	if fleetManager.tokenURL == "" {
+	fleetManager.mu.RLock()
+	tokenURL := fleetManager.tokenURL
+	skipTLS := fleetManager.skipTLS
+	timeout := fleetManager.timeout
+	clientID := fleetManager.clientID
+	clientSecret := fleetManager.clientSecret
+	fleetManager.mu.RUnlock()
+
+	if tokenURL == "" {
 		return nil, fmt.Errorf("cannot refresh token: credentials not initialized")
 	}
 
 	fleetManager.logger.Debug("refreshing JWT token")
-	return fleetManager.GetToken(ctx, fleetManager.tokenURL, fleetManager.skipTLS, fleetManager.timeout, fleetManager.clientID, fleetManager.clientSecret)
+	return fleetManager.GetToken(ctx, tokenURL, skipTLS, timeout, clientID, clientSecret)
 }
 
 // IsTokenExpired checks if the current token is expired or will expire soon
 func (fleetManager *AuthTokenManager) IsTokenExpired() bool {
-	if fleetManager.lastToken == nil {
+	fleetManager.mu.RLock()
+	lastToken := fleetManager.lastToken
+	tokenExpiresAt := fleetManager.tokenExpiresAt
+	fleetManager.mu.RUnlock()
+
+	if lastToken == nil {
 		return true
 	}
-	return time.Now().After(fleetManager.tokenExpiresAt)
+	return time.Now().After(tokenExpiresAt)
 }
 
 // IsTokenExpiringSoon checks if the token will expire within the specified duration
 func (fleetManager *AuthTokenManager) IsTokenExpiringSoon(buffer time.Duration) bool {
-	if fleetManager.lastToken == nil {
+	fleetManager.mu.RLock()
+	lastToken := fleetManager.lastToken
+	tokenExpiresAt := fleetManager.tokenExpiresAt
+	fleetManager.mu.RUnlock()
+
+	if lastToken == nil {
 		return true
 	}
-	if fleetManager.tokenExpiresAt.IsZero() {
+	if tokenExpiresAt.IsZero() {
 		return true
 	}
-	return time.Now().Add(buffer).After(fleetManager.tokenExpiresAt)
+	return time.Now().Add(buffer).After(tokenExpiresAt)
 }
 
 // GetTokenExpiryTime returns the time when the current token expires (with buffer already applied)
 func (fleetManager *AuthTokenManager) GetTokenExpiryTime() time.Time {
+	fleetManager.mu.RLock()
+	defer fleetManager.mu.RUnlock()
 	return fleetManager.tokenExpiresAt
 }
 
