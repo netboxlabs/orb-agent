@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -35,14 +36,15 @@ type Agent interface {
 }
 
 type orbAgent struct {
-	logger         *slog.Logger
-	config         config.Config
-	backends       map[string]backend.Backend
-	backendsCommon config.BackendCommons
-	debug          bool
-	ctx            context.Context
-	cancelFunction context.CancelFunc
-	otlpShutdown   func(context.Context) error
+	logger           *slog.Logger
+	config           config.Config
+	backends         map[string]backend.Backend
+	backendsCommon   config.BackendCommons
+	debug            bool
+	ctx              context.Context
+	cancelFunction   context.CancelFunc
+	otlpShutdown     func(context.Context) error
+	otlpShutdownOnce sync.Once
 
 	policyManager       policymgr.PolicyManager
 	configManager       configmgr.Manager
@@ -286,20 +288,21 @@ func (a *orbAgent) Stop(ctx context.Context) {
 }
 
 func (a *orbAgent) shutdownOTLP() {
-	shutdown := a.otlpShutdown
-	if shutdown == nil {
-		return
-	}
-	a.otlpShutdown = nil
+	a.otlpShutdownOnce.Do(func() {
+		shutdown := a.otlpShutdown
+		if shutdown == nil {
+			return
+		}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), otlpShutdownTimeout)
-	defer cancel()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), otlpShutdownTimeout)
+		defer cancel()
 
-	if err := shutdown(shutdownCtx); err != nil {
-		a.logger.Error("error while shutting down OTLP log exporter", "error", err)
-		return
-	}
-	a.logger.Debug("shut down OTLP log exporter")
+		if err := shutdown(shutdownCtx); err != nil {
+			a.logger.Error("error while shutting down OTLP log exporter", "error", err)
+			return
+		}
+		a.logger.Debug("shut down OTLP log exporter")
+	})
 }
 
 func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {
