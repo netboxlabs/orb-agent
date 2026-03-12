@@ -120,13 +120,11 @@ func (s *BridgeServer) Start(ctx context.Context) error {
 	collectorlogs.RegisterLogsServiceServer(s.ingestGRPCServer, &logsServer{bridge: s})
 
 	go func() {
-		err := s.ingestGRPCServer.Serve(lis)
-		if err != nil {
+		if err := s.ingestGRPCServer.Serve(lis); err != nil {
 			s.logger.Error("failed to serve gRPC server", "error", err)
-		} else {
-			s.logger.Info("OTLP bridge server started")
 		}
 	}()
+	s.logger.Info("OTLP bridge server started")
 	return nil
 }
 
