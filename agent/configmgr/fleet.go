@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -23,18 +24,21 @@ var _ Manager = (*FleetConfigManager)(nil)
 
 // FleetConfigManager implements the Manager interface for Fleet-based configuration
 type FleetConfigManager struct {
-	logger            *slog.Logger
-	connection        fleet.MQTTConnector
-	authTokenManager  *fleet.AuthTokenManager
-	resetChan         chan struct{}
-	reconnectChan     chan struct{}
-	backendState      backend.StateRetriever
-	policyManager     policymgr.PolicyManager
-	otlpBridge        *otlpbridge.BridgeServer
-	config            config.Config
-	backends          map[string]backend.Backend
-	labels            map[string]string
-	configYaml        string
+	logger           *slog.Logger
+	connection       fleet.MQTTConnector
+	authTokenManager *fleet.AuthTokenManager
+	resetChan        chan struct{}
+	reconnectChan    chan struct{}
+	backendState     backend.StateRetriever
+	policyManager    policymgr.PolicyManager
+	otlpBridge       *otlpbridge.BridgeServer
+	config           config.Config
+	backends         map[string]backend.Backend
+	labels           map[string]string
+	configYaml       string
+	// connMu guards connectionDetails, which is written by refreshAndReconnect and read
+	// concurrently by the reset goroutine and the reconnect worker.
+	connMu            sync.RWMutex
 	connectionDetails fleet.ConnectionDetails
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
@@ -173,17 +177,23 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		for range fleetManager.resetChan {
 			fleetManager.logger.Info("agent reset requested, reconnecting MQTT connection")
 
+			// Snapshot connection details under the read lock so we get a consistent view
+			// even if the reconnect worker is concurrently writing after a token refresh.
+			fleetManager.connMu.RLock()
+			details := fleetManager.connectionDetails
+			fleetManager.connMu.RUnlock()
+
 			// Disconnect first
 			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
-			err := fleetManager.connection.Disconnect(disconnectCtx, topics.Heartbeat)
+			err := fleetManager.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
 			cancel()
 			if err != nil {
 				fleetManager.logger.Error("failed to disconnect during reset", "error", err)
 			}
 
-			// Reconnect
+			// Reconnect using the latest connection details (updated by refreshAndReconnect after token refresh)
 			connectCtx := context.Background()
-			err = fleetManager.connection.Connect(connectCtx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
+			err = fleetManager.connection.Connect(connectCtx, details, fleetManager.backends, fleetManager.labels, fleetManager.configYaml)
 			if err != nil {
 				fleetManager.logger.Error("failed to reconnect during reset", "error", err)
 			}
@@ -208,21 +218,83 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 			slog.String("telemetry_topic", topics.Telemetry))
 	})
 
+	// Create a shared cancellable context for both the reconnect worker and the token expiry
+	// monitor so that Stop() can terminate both goroutines with a single monitorCancel() call.
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+
 	// Start goroutine to handle reconnect requests (JWT refresh)
-	go func() {
-		for range fleetManager.reconnectChan {
-			fleetManager.logger.Debug("JWT refresh and reconnection requested")
-			if err := fleetManager.refreshAndReconnect(ctx, timeout); err != nil {
-				fleetManager.logger.Error("failed to refresh and reconnect", "error", err)
-			}
-		}
-	}()
+	go fleetManager.runReconnectWorker(fleetManager.monitorCtx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second)
 
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
-	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
 	go fleetManager.monitorTokenExpiry()
 
 	return nil
+}
+
+// runReconnectWorker processes signals from reconnectChan, retrying token refresh with exponential
+// backoff. After all retries are exhausted it disconnects the MQTT connection (Fix 2) so the server
+// sees the agent as Offline rather than Stale, then schedules a fast re-signal (Fix 3) so recovery
+// does not have to wait for the next full monitor tick. Timing parameters are injected so tests can
+// use millisecond-scale values without slowing the test suite.
+func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, timeout time.Duration, maxRetries int, baseBackoff, maxBackoff, retryDelay time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-fleetManager.reconnectChan:
+		}
+		fleetManager.logger.Debug("JWT refresh and reconnection requested")
+
+		backoff := baseBackoff
+		var lastErr error
+
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			if lastErr = fleetManager.refreshAndReconnect(ctx, timeout); lastErr == nil {
+				break
+			}
+			fleetManager.logger.Error("refresh and reconnect attempt failed",
+				"attempt", attempt, "max_retries", maxRetries,
+				"error", lastErr, "retry_in", backoff)
+			if attempt < maxRetries {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff*2 < maxBackoff {
+					backoff *= 2
+				} else {
+					backoff = maxBackoff
+				}
+			}
+		}
+
+		if lastErr != nil {
+			fleetManager.logger.Error("all refresh and reconnect attempts exhausted, disconnecting agent",
+				"error", lastErr)
+			// Use a dedicated timeout context for teardown so that a hung MQTT broker cannot
+			// block the reconnect loop indefinitely; the worker's ctx is long-lived and would
+			// never expire on its own.
+			fleetManager.connMu.RLock()
+			heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
+			fleetManager.connMu.RUnlock()
+			disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), timeout)
+			if err := fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic); err != nil {
+				fleetManager.logger.Error("failed to disconnect after exhausted retries", "error", err)
+			}
+			disconnectCancel()
+			time.AfterFunc(retryDelay, func() {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case fleetManager.reconnectChan <- struct{}{}:
+					fleetManager.logger.Debug("scheduled retry signal sent after refresh failure")
+				default:
+				}
+			})
+		}
+	}
 }
 
 // BindSecretsManager binds a fleet secrets manager to the MQTT connection
@@ -301,8 +373,11 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 		Zone:     jwtClaims.Zone,
 	}
 
-	// Store updated connection details
+	// Store updated connection details under write lock so the reset goroutine and
+	// reconnect worker always observe a fully initialised value.
+	fleetManager.connMu.Lock()
 	fleetManager.connectionDetails = newConnectionDetails
+	fleetManager.connMu.Unlock()
 
 	// Reconnect with new token
 	err = fleetManager.connection.Reconnect(ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)

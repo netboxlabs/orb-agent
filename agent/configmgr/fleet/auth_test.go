@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -471,6 +472,67 @@ func TestAuthTokenManager_GetToken_VeryShortLivedToken(t *testing.T) {
 
 	// Token must NOT be considered expired immediately
 	assert.False(t, authTokenManager.IsTokenExpired(), "30-second token should not be expired on receipt")
+}
+
+// TestAuthTokenManager_ConcurrentAccess verifies that concurrent reads and writes to
+// AuthTokenManager fields do not produce data races. Run with `go test -race` to exercise
+// the race detector — this test will fail without the sync.RWMutex protection.
+func TestAuthTokenManager_ConcurrentAccess(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	authTokenManager := NewAuthTokenManager(logger)
+
+	futureExpiry := time.Now().Add(1 * time.Hour)
+	jwtToken := RawJWTWithClaims(map[string]any{
+		"exp": futureExpiry.Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := TokenResponse{
+			AccessToken: jwtToken,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   3600,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	// Seed an initial token so readers see a non-nil lastToken from the start.
+	ctx := context.Background()
+	_, err := authTokenManager.GetToken(ctx, server.URL, true, 5*time.Second, "client", "secret")
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(100 * time.Millisecond)
+
+	const numGoroutines = 4
+	var wg sync.WaitGroup
+
+	// Writers: concurrently refresh the token (writes lastToken, tokenExpiresAt, etc.)
+	for range numGoroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(deadline) {
+				_, _ = authTokenManager.RefreshToken(ctx)
+			}
+		}()
+	}
+
+	// Readers: concurrently call the read-only methods
+	for range numGoroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Now().Before(deadline) {
+				_ = authTokenManager.IsTokenExpired()
+				_ = authTokenManager.IsTokenExpiringSoon(2 * time.Minute)
+				_ = authTokenManager.GetTokenExpiryTime()
+			}
+		}()
+	}
+
+	wg.Wait()
 }
 
 func TestAuthTokenManager_RefreshToken(t *testing.T) {

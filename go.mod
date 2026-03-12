@@ -9,12 +9,12 @@ require (
 	github.com/go-git/go-git/v5 v5.16.5
 	github.com/go-jose/go-jose/v4 v4.1.1
 	github.com/google/uuid v1.6.0
-	github.com/hashicorp/vault/api v1.20.0
-	github.com/hashicorp/vault/api/auth/approle v0.10.0
+	github.com/hashicorp/vault/api v1.22.0
+	github.com/hashicorp/vault/api/auth/approle v0.11.0
 	github.com/hashicorp/vault/api/auth/kubernetes v0.10.0
-	github.com/hashicorp/vault/api/auth/ldap v0.10.0
-	github.com/hashicorp/vault/api/auth/userpass v0.10.0
-	github.com/hashicorp/vault/sdk v0.18.0
+	github.com/hashicorp/vault/api/auth/ldap v0.11.0
+	github.com/hashicorp/vault/api/auth/userpass v0.11.0
+	github.com/hashicorp/vault/sdk v0.23.0
 	github.com/spf13/cobra v1.8.1
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.13.0
@@ -33,7 +33,6 @@ require (
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.2.0 // indirect
-	github.com/cenkalti/backoff/v3 v3.2.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -67,6 +66,7 @@ require (
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect
 	github.com/hashicorp/go-secure-stdlib/parseutil v0.2.0 // indirect
 	github.com/hashicorp/go-secure-stdlib/strutil v0.1.2 // indirect
+	github.com/hashicorp/go-secure-stdlib/tlsutil v0.1.3 // indirect
 	github.com/hashicorp/go-sockaddr v1.0.7 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/hashicorp/hcl v1.0.1-vault-7 // indirect
@@ -114,7 +114,7 @@ require (
 	golang.org/x/exp v0.0.0-20250531010427-b6e5de432a8b // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
-	golang.org/x/time v0.11.0 // indirect
+	golang.org/x/time v0.12.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250825161204-c5933d9347a5 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250825161204-c5933d9347a5 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
