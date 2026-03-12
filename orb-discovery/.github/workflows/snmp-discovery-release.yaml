@@ -14,7 +14,7 @@ concurrency:
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.25'
   APP_NAME: snmp-discovery
 
 permissions:
