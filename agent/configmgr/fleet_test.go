@@ -1241,7 +1241,7 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 	// 1. OTLP bridge was started (it should exist)
 	// 2. Connect() was called (indicating we got past bridge startup)
 	require.Error(t, err, "Start() should fail due to MQTT connection error")
-	assert.True(t, mockConn.ConnectCalled, "MQTT Connect() should have been called")
+	assert.True(t, mockConn.ConnectCalled(), "MQTT Connect() should have been called")
 	// The bridge should have been created and started before Connect() was called
 	// Since Connect() was called, the bridge must have started successfully
 	assert.NotNil(t, fleetManager.otlpBridge, "OTLP bridge should be initialized before MQTT connection")
@@ -1386,7 +1386,7 @@ func TestFleetConfigManager_ReconnectWorker_RetriesOnTransientFailure(t *testing
 	// Wait long enough for 2 failures + backoffs + 1 success (generous upper bound).
 	time.Sleep(300 * time.Millisecond)
 
-	assert.False(t, mockConn.DisconnectCalled, "Disconnect should NOT be called when refresh eventually succeeds")
+	assert.False(t, mockConn.DisconnectCalled(), "Disconnect should NOT be called when refresh eventually succeeds")
 	// Request 1 = prime, requests 2-3 = failures, request 4 = success → at least 4 total.
 	assert.GreaterOrEqual(t, handler.RequestCount(), 4, "token endpoint should have been called at least 4 times (1 prime + 2 failures + 1 success)")
 
@@ -1424,7 +1424,7 @@ func TestFleetConfigManager_ReconnectWorker_DisconnectsAfterAllRetriesFail(t *te
 	// Wait long enough for 3 attempts + backoffs + disconnect.
 	// 3 attempts: 10ms + 20ms backoffs between them = ~50ms total; add generous buffer.
 	require.Eventually(t, func() bool {
-		return mockConn.DisconnectCalled
+		return mockConn.DisconnectCalled()
 	}, 2*time.Second, 20*time.Millisecond, "Disconnect should be called after all retries are exhausted")
 }
 
@@ -1545,15 +1545,19 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 	mgr.labels = map[string]string{"env": "test"}
 	mgr.configYaml = "initial-config"
 
-	// Launch the reset goroutine (mirrors what Start() does).
+	// Launch the reset goroutine (mirrors what Start() does, including the connMu snapshot).
 	timeout := 5 * time.Second
 	go func() {
 		for range mgr.resetChan {
+			mgr.connMu.RLock()
+			details := mgr.connectionDetails
+			mgr.connMu.RUnlock()
+
 			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
-			_ = mgr.connection.Disconnect(disconnectCtx, mgr.connectionDetails.Topics.Heartbeat)
+			_ = mgr.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
 			cancel()
 			connectCtx := context.Background()
-			_ = mgr.connection.Connect(connectCtx, mgr.connectionDetails, mgr.backends, mgr.labels, mgr.configYaml)
+			_ = mgr.connection.Connect(connectCtx, details, mgr.backends, mgr.labels, mgr.configYaml)
 		}
 	}()
 
@@ -1564,15 +1568,17 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 			Heartbeat: "agents/test-agent/heartbeat",
 		},
 	}
+	mgr.connMu.Lock()
 	mgr.connectionDetails = refreshedDetails
+	mgr.connMu.Unlock()
 
 	// Signal a reset and wait for the goroutine to call Connect.
 	mgr.resetChan <- struct{}{}
 
 	require.Eventually(t, func() bool {
-		return mockConn.ConnectCalled
+		return mockConn.ConnectCalled()
 	}, time.Second, 10*time.Millisecond, "Connect should have been called by the reset goroutine")
 
-	assert.Equal(t, "refreshed-token", mockConn.LastConnectDetails.Token,
+	assert.Equal(t, "refreshed-token", mockConn.LastConnectDetails().Token,
 		"reset goroutine should use the refreshed token, not the stale initial token")
 }

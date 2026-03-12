@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -90,25 +91,55 @@ func (m *mockBackend) RemovePolicy(data policies.PolicyData) error {
 
 // MockMQTTConnection is a mock implementation of MQTTConnector for testing
 type MockMQTTConnection struct {
-	ConnectError          error
-	DisconnectError       error
-	ReconnectError        error
-	ConnectCalled         bool
-	DisconnectCalled      bool
-	LastConnectDetails    ConnectionDetails
-	hooks                 []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	mu sync.Mutex
+
+	ConnectError    error
+	DisconnectError error
+	ReconnectError  error
+
+	// guarded by mu — written from the goroutine under test, read from test goroutines
+	connectCalled      bool
+	disconnectCalled   bool
+	lastConnectDetails ConnectionDetails
+
+	hooks []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+}
+
+// ConnectCalled returns whether Connect has been called (safe for concurrent use).
+func (m *MockMQTTConnection) ConnectCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.connectCalled
+}
+
+// DisconnectCalled returns whether Disconnect has been called (safe for concurrent use).
+func (m *MockMQTTConnection) DisconnectCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.disconnectCalled
+}
+
+// LastConnectDetails returns the details passed to the most recent Connect call (safe for concurrent use).
+func (m *MockMQTTConnection) LastConnectDetails() ConnectionDetails {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastConnectDetails
 }
 
 // Connect connects to the MQTT broker
 func (m *MockMQTTConnection) Connect(_ context.Context, details ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string) error {
-	m.ConnectCalled = true
-	m.LastConnectDetails = details
+	m.mu.Lock()
+	m.connectCalled = true
+	m.lastConnectDetails = details
+	m.mu.Unlock()
 	return m.ConnectError
 }
 
 // Disconnect disconnects from the MQTT broker
 func (m *MockMQTTConnection) Disconnect(_ context.Context, _ string) error {
-	m.DisconnectCalled = true
+	m.mu.Lock()
+	m.disconnectCalled = true
+	m.mu.Unlock()
 	return m.DisconnectError
 }
 
