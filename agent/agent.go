@@ -123,7 +123,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 			a.otlpShutdown = otlpShutdown
 			defer func() {
 				if err != nil {
-					a.shutdownOTLP(agentCtx)
+					a.shutdownOTLP()
 				}
 			}()
 		}
@@ -269,6 +269,7 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			}
 		}
 	}
+	a.shutdownOTLP()
 	if err := a.configManager.Stop(ctx); err != nil {
 		a.logger.Error("error while stopping config manager", slog.Any("error", err))
 	}
@@ -276,7 +277,6 @@ func (a *orbAgent) Stop(ctx context.Context) {
 	if a.cancelFunction != nil {
 		a.cancelFunction()
 	}
-	a.shutdownOTLP(ctx)
 	a.logger.Debug("stopping agent with number of go routines and go calls", "goroutines", runtime.NumGoroutine(), "gocalls", runtime.NumCgoCall())
 	defer func() {
 		if a.cancelFunction != nil {
@@ -285,17 +285,14 @@ func (a *orbAgent) Stop(ctx context.Context) {
 	}()
 }
 
-func (a *orbAgent) shutdownOTLP(ctx context.Context) {
+func (a *orbAgent) shutdownOTLP() {
 	shutdown := a.otlpShutdown
 	if shutdown == nil {
 		return
 	}
 	a.otlpShutdown = nil
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	shutdownCtx, cancel := context.WithTimeout(ctx, otlpShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), otlpShutdownTimeout)
 	defer cancel()
 
 	if err := shutdown(shutdownCtx); err != nil {
