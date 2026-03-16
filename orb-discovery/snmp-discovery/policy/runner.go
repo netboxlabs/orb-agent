@@ -138,7 +138,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	// Create run for the scan operation (includes port)
 	scanRun := r.runStore.CreateRun(policyName, originalTarget, port, "")
 
-	r.logger.Info("Starting SNMP probe scan", "policy", policyName, "target", originalTarget, "targetCount", len(targets))
+	r.logger.Info("starting SNMP probe scan", "policy", policyName, "target", originalTarget, "target_count", len(targets))
 	workerCount := min(256, len(targets))
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
@@ -184,7 +184,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 
 	// Check if context was canceled or timed out
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		r.logger.Warn("SNMP probe scan interrupted", "policy", policyName, "error", ctxErr, "responsiveTargetCount", len(responsive))
+		r.logger.Warn("SNMP probe scan interrupted", "policy", policyName, "error", ctxErr, "responsive_target_count", len(responsive))
 		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, ctxErr, len(responsive))
 		return
 	}
@@ -210,18 +210,18 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 
 	// Update scan run status
 	r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusCompleted, nil, len(responsive))
-	r.logger.Info("SNMP probe scan complete", "policy", policyName, "responsiveTargetCount", len(responsive))
+	r.logger.Info("SNMP probe scan complete", "policy", policyName, "responsive_target_count", len(responsive))
 }
 
 // resolveTargetAuthentication returns the authentication to use for a target
 // Uses target-level auth if available, otherwise falls back to policy-level auth
 func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authentication {
 	if target.Authentication != nil {
-		r.logger.Debug("Using target-level authentication", "host", target.Host)
+		r.logger.Debug("using target-level authentication", "host", target.Host)
 		return target.Authentication
 	}
 
-	r.logger.Debug("Using policy-level authentication (fallback)", "host", target.Host)
+	r.logger.Debug("using policy-level authentication (fallback)", "host", target.Host)
 	return &r.scope.Authentication
 }
 
@@ -229,11 +229,11 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 // Merges target-level override defaults with policy-level defaults
 func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
 	if target.OverrideDefaults != nil {
-		r.logger.Debug("Merging target-level override defaults", "host", target.Host)
+		r.logger.Debug("merging target-level override defaults", "host", target.Host)
 		return config.MergeDefaults(&r.config.Defaults, target.OverrideDefaults)
 	}
 
-	r.logger.Debug("Using policy-level defaults", "host", target.Host)
+	r.logger.Debug("using policy-level defaults", "host", target.Host)
 	return &r.config.Defaults
 }
 
@@ -304,10 +304,10 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, 0)
 		return
 	}
-	r.logger.Info("SNMP crawl complete", "host", target.Host, "policy", policyName, "entityCount", len(entities))
+	r.logger.Info("SNMP crawl complete", "host", target.Host, "policy", policyName, "entity_count", len(entities))
 
 	if len(entities) == 0 {
-		r.logger.Info("No entities to ingest", "host", target.Host, "policy", policyName)
+		r.logger.Info("no entities to ingest", "host", target.Host, "policy", policyName)
 		// Update run status to completed even if no entities
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusCompleted, nil, 0)
 		return
@@ -320,21 +320,21 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		"run_id":      run.ID,
 	}))
 	if err != nil {
-		r.logger.Error("error ingesting entities", "host", target.Host, "error", err, "policy", policyName)
+		r.logger.Error("error ingesting entities", "host", target.Host, "error", err, "policy", policyName, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, len(entities))
 	} else if resp != nil && resp.Errors != nil {
 		ingestErr := fmt.Errorf("ingestion errors: %v", resp.Errors)
-		r.logger.Error("error ingesting entities", "host", target.Host, "error", resp.Errors, "policy", policyName)
+		r.logger.Error("error ingesting entities", "host", target.Host, "error", resp.Errors, "policy", policyName, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, ingestErr, len(entities))
 	} else {
-		r.logger.Info("entities ingested successfully", "host", target.Host, "policy", policyName)
+		r.logger.Info("entities ingested successfully", "host", target.Host, "policy", policyName, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusCompleted, nil, len(entities))
 	}
 }
 
 func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
 	for _, entity := range entities {
-		r.logger.Debug("Entity for ingestion", "entity", entity.ConvertToProtoMessage())
+		r.logger.Debug("entity for ingestion", "entity", entity.ConvertToProtoMessage())
 	}
 }
 
@@ -347,11 +347,11 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 
 	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, targetDefaults)
 	if err != nil {
-		r.logger.Error("Error creating mapping config", "error", err)
+		r.logger.Error("error creating mapping config", "error", err)
 		return nil, err
 	}
 	objectIDs := mappingConfig.ObjectIDs()
-	r.logger.Info("Querying target", "host", target.Host, "port", target.Port, "objectCount", len(objectIDs))
+	r.logger.Info("querying target", "host", target.Host, "port", target.Port, "object_count", len(objectIDs))
 
 	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, targetDefaults)
 	policyName := r.ctx.Value(policyKey).(string)
@@ -395,7 +395,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		return nil, ctx.Err()
 	case res := <-resultCh:
 		if res.err != nil {
-			r.logger.Warn("Error crawling host", "host", target.Host, "error", res.err)
+			r.logger.Warn("error crawling host", "host", target.Host, "error", res.err)
 			if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
 				rMetric.Add(r.ctx, 1,
 					metric.WithAttributes(
@@ -442,7 +442,7 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expande
 		originalHost := target.Host // Preserve original target string
 		ips, err := targets.Expand(target.Host)
 		if err != nil {
-			r.logger.Warn("Error expanding target host", "host", target.Host, "error", err)
+			r.logger.Warn("error expanding target host", "host", target.Host, "error", err)
 			continue
 		}
 
@@ -465,7 +465,7 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expande
 
 // Start starts the policy runner
 func (r *Runner) Start() {
-	r.logger.Info("Starting policy runner", "policy", r.ctx.Value(policyKey))
+	r.logger.Info("starting policy runner", "policy", r.ctx.Value(policyKey))
 	r.scheduler.Start()
 }
 

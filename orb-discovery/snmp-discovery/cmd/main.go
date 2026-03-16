@@ -79,7 +79,7 @@ func main() {
 			diode.WithClientSecret(env.ResolveEnvOrExit(*diodeClientSecret)),
 		)
 	} else {
-		logger.Debug("Initializing OTLP client")
+		logger.Debug("initializing OTLP client")
 		client, err = diode.NewOTLPClient(
 			env.ResolveEnvOrExit(*diodeTarget),
 			producerName,
@@ -98,12 +98,12 @@ func main() {
 			logger.Error("failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("Metrics export configured", "endpoint", *otelEndpoint, "period_seconds", *otelExportPeriod)
+		logger.Info("metrics export configured", "endpoint", *otelEndpoint, "period_seconds", *otelExportPeriod)
 	}
 
 	manufacturers, err := data.NewManufacturerLookup()
 	if err != nil {
-		logger.Error("Failed to load manufacturer lookup", "error", err)
+		logger.Error("failed to load manufacturer lookup", "error", err)
 		os.Exit(1)
 	}
 

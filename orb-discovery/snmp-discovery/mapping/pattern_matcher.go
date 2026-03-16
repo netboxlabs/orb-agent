@@ -55,7 +55,7 @@ func (pm *PatternMatcher) MatchInterfaceType(interfaceName string, userPatternCo
 	// Priority 1: Check user patterns first
 	if len(userPatterns) > 0 {
 		if matchedType := pm.findBestMatch(interfaceName, userPatterns); matchedType != "" {
-			pm.logger.Debug("Matched interface with user pattern",
+			pm.logger.Debug("matched interface with user pattern",
 				"interface", interfaceName,
 				"type", matchedType)
 			return matchedType
@@ -64,7 +64,7 @@ func (pm *PatternMatcher) MatchInterfaceType(interfaceName string, userPatternCo
 
 	// Priority 2: Check built-in patterns only if no user pattern matched
 	if matchedType := pm.findBestMatch(interfaceName, builtinPatterns); matchedType != "" {
-		pm.logger.Debug("Matched interface with built-in pattern",
+		pm.logger.Debug("matched interface with built-in pattern",
 			"interface", interfaceName,
 			"type", matchedType)
 		return matchedType

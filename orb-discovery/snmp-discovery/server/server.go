@@ -171,11 +171,11 @@ func (s *Server) createPolicy(c *gin.Context) {
 		return
 	}
 
-	s.logger.Info("Received policies", "policyCount", len(policies))
+	s.logger.Info("received policies", "policy_count", len(policies))
 
 	rPolicies := []string{}
 	for name, policy := range policies {
-		s.logger.Debug("Starting policy", "policy", policy)
+		s.logger.Debug("starting policy", "policy", policy)
 		if s.manager.HasPolicy(name) {
 			for _, p := range rPolicies {
 				if err = s.manager.StopPolicy(p); err != nil {

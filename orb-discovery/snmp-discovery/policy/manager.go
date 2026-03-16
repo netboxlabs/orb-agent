@@ -39,7 +39,7 @@ type Manager struct {
 func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client, manufacturers data.ManufacturerRetriever) (*Manager, error) {
 	mappingConfig, err := loadMappingConfig()
 	if err != nil {
-		logger.Error("Failed to load mapping config", "error", err)
+		logger.Error("failed to load mapping config", "error", err)
 		return nil, err
 	}
 
@@ -210,7 +210,7 @@ func (m *Manager) HasPolicy(name string) bool {
 
 // StartPolicy starts the policy
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
-	m.logger.Debug("Starting policy", "policy", policy)
+	m.logger.Debug("starting policy", "policy", policy)
 	if len(policy.Scope.Targets) == 0 {
 		return fmt.Errorf("%s : no targets found in the policy", name)
 	}
@@ -219,9 +219,9 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 		// Load device lookup extensions
 		deviceLookup, err := data.LoadDeviceLookupExtensions(policy.Config.LookupExtensionsDir)
 		if err != nil {
-			m.logger.Warn("Failed to load device lookup extensions", "error", err, "directory", policy.Config.LookupExtensionsDir)
+			m.logger.Warn("failed to load device lookup extensions", "error", err, "directory", policy.Config.LookupExtensionsDir)
 		} else {
-			m.logger.Info("Loaded device lookup extensions", "directory", policy.Config.LookupExtensionsDir)
+			m.logger.Info("loaded device lookup extensions", "directory", policy.Config.LookupExtensionsDir)
 		}
 
 		// Create logger-aware ClientFactory wrapper

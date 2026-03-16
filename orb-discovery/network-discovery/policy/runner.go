@@ -236,8 +236,8 @@ func (r *Runner) run() {
 						hasOtherScans = true
 					}
 				} else {
-					r.logger.Warn("Skipping additional TCP scan due to conflict", "skipped_scan", scanType,
-						"selected_scan", selectedTCPScan, slog.String("policy", policyName))
+					r.logger.Warn("skipping additional TCP scan due to conflict", "skipped_scan", scanType,
+						"selected_scan", selectedTCPScan, "policy", policyName)
 				}
 			} else if fn, exists := privilegedScans[scanType]; exists {
 				options = append(options, fn())
@@ -256,8 +256,8 @@ func (r *Runner) run() {
 
 	if r.scope.PingScan != nil && *r.scope.PingScan {
 		if hasOtherScans || selectedTCPScan != "" {
-			r.logger.Warn("Skipping ping scan because it is not valid with any other scan types",
-				slog.String("policy", policyName))
+			r.logger.Warn("skipping ping scan because it is not valid with any other scan types",
+				"policy", policyName)
 		} else {
 			options = append(options, nmap.WithPingScan())
 		}
@@ -268,7 +268,7 @@ func (r *Runner) run() {
 
 	scanner, err := nmap.NewScanner(ctx, options...)
 	if err != nil {
-		r.logger.Error("error creating scanner", slog.Any("error", err), slog.String("policy", policyName))
+		r.logger.Error("error creating scanner", "error", err, "policy", policyName)
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, err, 0)
 		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
 			rMetric.Add(r.ctx, 1,
@@ -279,20 +279,20 @@ func (r *Runner) run() {
 		}
 		return
 	}
-	r.logger.Info("running scanner", slog.Any("targets", r.scope.Targets), slog.String("policy", policyName))
+	r.logger.Info("running scanner", "targets", r.scope.Targets, "policy", policyName)
 	result, warnings, err := scanner.Run()
 	if len(*warnings) > 0 {
-		r.logger.Warn("run finished with warnings", slog.String("warnings", fmt.Sprintf("%v", *warnings)))
+		r.logger.Warn("run finished with warnings", "warnings", fmt.Sprintf("%v", *warnings))
 	}
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			r.logger.Warn("nmap scan timed out; consider increasing policy timeout",
-				slog.Duration("timeout", r.timeout),
-				slog.String("policy", policyName),
+				"timeout", r.timeout,
+				"policy", policyName,
 			)
 			err = fmt.Errorf("nmap scan timed out after %s: %w", r.timeout, err)
 		}
-		r.logger.Error("error running scanner", slog.Any("error", err), slog.String("policy", policyName))
+		r.logger.Error("error running scanner", "error", err, "policy", policyName)
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, err, 0)
 		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
 			rMetric.Add(r.ctx, 1,
@@ -322,13 +322,13 @@ func (r *Runner) run() {
 
 	entities := make([]diode.Entity, 0, len(result.Hosts))
 	if len(result.Hosts) == 0 {
-		r.logger.Warn("discovery complete: no hosts found", slog.Any("targets", r.scope.Targets),
-			slog.String("policy", policyName))
+		r.logger.Warn("discovery complete: no hosts found", "targets", r.scope.Targets,
+			"policy", policyName)
 		// Update run status to completed even if no hosts found
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusCompleted, nil, 0)
 		return
 	}
-	r.logger.Info("discovery complete", slog.Int("hosts_found", len(result.Hosts)), slog.String("policy", policyName))
+	r.logger.Info("discovery complete", "hosts_found", len(result.Hosts), "policy", policyName)
 
 	// Track discovered hosts
 	processedEntries := make(map[string]bool)
@@ -339,15 +339,15 @@ func (r *Runner) run() {
 	}
 
 	for _, host := range result.Hosts {
-		r.logger.Debug("processing host", slog.Any("host_address", host.Addresses), slog.Any("host_ports", host.Ports),
-			slog.Any("host_hostnames", host.Hostnames), slog.String("policy", policyName))
+		r.logger.Debug("processing host", "host_address", host.Addresses, "host_ports", host.Ports,
+			"host_hostnames", host.Hostnames, "policy", policyName)
 		if len(host.Addresses) == 0 {
 			continue
 		}
 
 		addr := host.Addresses[0].Addr
 		if _, exists := processedEntries[addr]; exists {
-			r.logger.Info("skipping already processed IP address", slog.String("ip_address", addr), slog.String("policy", policyName))
+			r.logger.Info("skipping already processed IP address", "ip_address", addr, "policy", policyName)
 			continue
 		}
 
@@ -431,7 +431,7 @@ func (r *Runner) run() {
 			}
 			data, err := json.Marshal(&metadata)
 			if err != nil {
-				r.logger.Error("error marshalling metadata", slog.Any("error", err), slog.String("policy", policyName))
+				r.logger.Error("error marshalling metadata", "error", err, "policy", policyName)
 			} else {
 				ip.Comments = diode.String(string(data))
 			}
@@ -445,14 +445,14 @@ func (r *Runner) run() {
 		"run_id":      run.ID,
 	}))
 	if err != nil {
-		r.logger.Error("error ingesting entities", slog.Any("error", err), slog.String("policy", policyName))
+		r.logger.Error("error ingesting entities", "error", err, "policy", policyName, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, err, len(entities))
 	} else if resp != nil && resp.Errors != nil {
 		ingestErr := fmt.Errorf("ingestion errors: %v", resp.Errors)
-		r.logger.Error("error ingesting entities", slog.Any("error", resp.Errors), slog.String("policy", policyName))
+		r.logger.Error("error ingesting entities", "error", resp.Errors, "policy", policyName, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, ingestErr, len(entities))
 	} else {
-		r.logger.Info("entities ingested successfully", slog.String("policy", policyName))
+		r.logger.Info("entities ingested successfully", "policy", policyName, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusCompleted, nil, len(entities))
 	}
 }

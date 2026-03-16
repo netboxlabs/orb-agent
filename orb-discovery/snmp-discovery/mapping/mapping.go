@@ -84,7 +84,7 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 		return
 	}
 
-	r.logger.Debug("Resolving parent interfaces for subinterfaces")
+	r.logger.Debug("resolving parent interfaces for subinterfaces")
 	resolvedCount := 0
 	notFoundCount := 0
 
@@ -110,12 +110,12 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 				Type:   parent.Type,
 				Device: parent.Device,
 			}
-			r.logger.Debug("Resolved parent interface",
+			r.logger.Debug("resolved parent interface",
 				"subinterface", *iface.Name,
 				"parent", parentName)
 			resolvedCount++
 		} else {
-			r.logger.Debug("Parent interface not found",
+			r.logger.Debug("parent interface not found",
 				"subinterface", *iface.Name,
 				"parent", parentName)
 			notFoundCount++
@@ -123,7 +123,7 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 	}
 
 	if resolvedCount > 0 {
-		r.logger.Info("Resolved subinterface parents",
+		r.logger.Info("resolved subinterface parents",
 			"resolved", resolvedCount,
 			"not_found", notFoundCount)
 	}
@@ -131,15 +131,15 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 
 // GetOrCreateEntity returns an entity from the EntityRegistry or creates a new one if it doesn't exist
 func (r *EntityRegistry) GetOrCreateEntity(entityType EntityType, index ObjectIDIndex) diode.Entity {
-	r.logger.Debug("Getting entity", "entityType", entityType, "index", index, "from", r.entities)
+	r.logger.Debug("getting entity", "entity_type", entityType, "index", index, "from", r.entities)
 	if r.entities[entityType] == nil {
 		r.entities[entityType] = make(map[ObjectIDIndex]diode.Entity)
 	}
 	if r.entities[entityType][index] == nil {
 		entity, err := createEntity(entityType)
-		r.logger.Debug("Entity not found, creating", "entityType", entityType, "index", index, "entity", entity)
+		r.logger.Debug("entity not found, creating", "entity_type", entityType, "index", index, "entity", entity)
 		if err != nil {
-			r.logger.Warn("Error creating entity", "error", err, "entityType", entityType, "index", index)
+			r.logger.Warn("error creating entity", "error", err, "entity_type", entityType, "index", index)
 			return nil
 		}
 		r.entities[entityType][index] = entity
@@ -204,16 +204,16 @@ type Entry struct {
 
 // MapToEntity maps a value to an entity
 func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistry *EntityRegistry, defaults *config.Defaults, logger *slog.Logger) diode.Entity {
-	logger.Debug("Mapping value to entity", "entity", m.Entity, "value", pdus)
+	logger.Debug("mapping value to entity", "entity", m.Entity, "value", pdus)
 
 	if m.Mapper == nil {
-		logger.Warn("No mapper found for entity. Ignoring.", "entity", m.Entity)
+		logger.Warn("no mapper found for entity, ignoring", "entity", m.Entity)
 		return nil
 	}
 	entity := m.Mapper.Map(pdus, m, entityRegistry, defaults)
-	logger.Debug("Entity returned from mapper", "entity", entity)
+	logger.Debug("entity returned from mapper", "entity", entity)
 	if entity == nil {
-		logger.Warn("No entity returned from mapper. Ignoring.", "entity", m.Entity)
+		logger.Warn("no entity returned from mapper, ignoring", "entity", m.Entity)
 		return nil
 	}
 	return entity
@@ -252,7 +252,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 	}
 	mapping := make(map[string]*Entry)
 	for _, m := range mappings {
-		logger.Debug("Adding mapping", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
+		logger.Debug("adding mapping", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
 		Entry := newMappingEntry(m, logger, entityMappers)
 		if Entry == nil {
 			continue
@@ -288,7 +288,7 @@ func getIndex(values map[ObjectIDIndex]*ObjectIDValue) ObjectIDIndex {
 func newMappingEntry(m config.MappingEntry, logger *slog.Logger, entityMappers map[string]orbToEntityMapper) *Entry {
 	mapper := entityMappers[m.Entity]
 	if mapper == nil {
-		logger.Warn("No mapper found for entity. Ignoring.", "entity", m.Entity)
+		logger.Warn("no mapper found for entity, ignoring", "entity", m.Entity)
 		return nil
 	}
 	return &Entry{
@@ -305,7 +305,7 @@ func newMappingEntry(m config.MappingEntry, logger *slog.Logger, entityMappers m
 func newChildMappingEntries(configMappingEntries []config.MappingEntry, logger *slog.Logger, parentIdentifierSize int) []Entry {
 	childMappingEntries := make([]Entry, 0, len(configMappingEntries))
 	for _, m := range configMappingEntries {
-		logger.Debug("Adding child mapping entry", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
+		logger.Debug("adding child mapping entry", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
 
 		// Use child's IdentifierSize if specified, otherwise inherit from parent
 		identifierSize := m.IdentifierSize
@@ -376,10 +376,10 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 	objectIDIndexMap := m.groupByObjectIDIndex(objectIDs)
 	uniqueEntities := make(map[diode.Entity]bool)
 	for index, value := range objectIDIndexMap {
-		m.logger.Debug("Mapping objectIDIndex", "objectIDIndex", index, "values", value.Values)
+		m.logger.Debug("mapping object ID index", "object_id_index", index, "values", value.Values)
 		entry, err := m.mappingConfig.getMappingEntry(value.Index)
 		if err != nil {
-			m.logger.Warn("Error finding mapping entry", "error", err, "objectID", value.Index)
+			m.logger.Warn("error finding mapping entry", "error", err, "object_id", value.Index)
 			continue
 		}
 		newEntity := entry.MapToEntity(value.Values, m.registry, m.defaults, m.logger)
@@ -434,7 +434,7 @@ func (m *ObjectIDMapper) groupByObjectIDIndex(objectIDs ObjectIDValueMap) map[Ob
 	for objectID, value := range objectIDs {
 		objectIDValue, err := newObjectIDValue(objectID, value)
 		if err != nil {
-			m.logger.Warn("Error creating objectIDValue", "error", err, "objectID", objectID)
+			m.logger.Warn("error creating object ID value", "error", err, "object_id", objectID)
 			continue
 		}
 

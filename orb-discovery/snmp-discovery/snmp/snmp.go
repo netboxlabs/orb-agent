@@ -53,7 +53,7 @@ func NewHost(host string, port uint16, retries int, timeout time.Duration, authe
 
 // Walk walks the SNMP host
 func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) {
-	s.logger.Info("Scanning", "host", s.address)
+	s.logger.Info("scanning", "host", s.address)
 
 	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.timeout, s.authentication, s.logger)
 	if err != nil {
@@ -61,13 +61,13 @@ func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) 
 	}
 	defer func() {
 		if err := snmpClient.Close(); err != nil {
-			s.logger.Warn("Error closing SNMP connection", "host", s.address, "error", err)
+			s.logger.Warn("error closing SNMP connection", "host", s.address, "error", err)
 		}
 	}()
 
 	err = snmpClient.Connect()
 	if err != nil {
-		s.logger.Warn("Could not connect to host", "host", s.address, "error", err)
+		s.logger.Warn("could not connect to host", "host", s.address, "error", err)
 		return nil, err
 	}
 
@@ -75,18 +75,18 @@ func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) 
 	for objectID, identifierSize := range objectIDs {
 		pdu, err := snmpClient.Walk(objectID, identifierSize)
 		if err != nil {
-			s.logger.Warn("Error walking ObjectID", "objectID", objectID, "error", err)
+			s.logger.Warn("error walking object ID", "object_id", objectID, "error", err)
 			return nil, err
 		}
 		for k, value := range pdu {
-			s.logger.Debug("Mapping PDU", "objectID", k, "value", value, "ValueType", reflect.TypeOf(value.Value))
+			s.logger.Debug("mapping PDU", "object_id", k, "value", value, "value_type", reflect.TypeOf(value.Value))
 			value, err := MapPDU(value)
 			if err != nil {
-				s.logger.Warn("Error mapping PDU", "objectID", k, "error", err)
+				s.logger.Warn("error mapping PDU", "object_id", k, "error", err)
 				continue
 			}
 			output[k] = value
-			s.logger.Debug("Mapped PDU", "objectID", k, "value", value)
+			s.logger.Debug("mapped PDU", "object_id", k, "value", value)
 		}
 	}
 
@@ -124,7 +124,7 @@ func MapPDU(pdu PDU) (mapping.Value, error) {
 			value = fmt.Sprintf("%d", val)
 		}
 	default:
-		slog.Warn("Unhandled SNMP type", "name", pdu.Name, "type", pdu.Type)
+		slog.Warn("unhandled SNMP type", "name", pdu.Name, "type", pdu.Type)
 		return mapping.Value{}, fmt.Errorf("unhandled SNMP type: %s", pdu.Type)
 	}
 	return mapping.Value{

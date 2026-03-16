@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -92,7 +91,7 @@ func main() {
 			diode.WithClientSecret(resolveEnv(*diodeClientSecret)),
 		)
 	} else {
-		logger.Debug("Initializing OTLP client")
+		logger.Debug("initializing OTLP client")
 		client, err = diode.NewOTLPClient(
 			resolveEnv(*diodeTarget),
 			producerName,
@@ -111,7 +110,7 @@ func main() {
 			logger.Error("failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("Metrics export configured", slog.String("endpoint", *otelEndpoint), slog.Int("period_seconds", *otelExportPeriod))
+		logger.Info("metrics export configured", "endpoint", *otelEndpoint, "period_seconds", *otelExportPeriod)
 	}
 
 	policyManager := policy.NewManager(ctx, logger, client)

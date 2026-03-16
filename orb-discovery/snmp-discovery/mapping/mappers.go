@@ -96,7 +96,7 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 
 // Map maps IP addresses to entities
 func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
-	m.logger.Debug("Mapping values to ipAddress entity", "values", values, "mappingEntry", mappingEntry)
+	m.logger.Debug("mapping values to ipAddress entity", "values", values, "mapping_entry", mappingEntry)
 	ipAddress := diode.IPAddress{}
 
 	fieldFound := false
@@ -109,7 +109,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 		if value.Index != "" {
 			if ip := net.ParseIP(string(value.Index)); ip != nil && ip.To4() != nil {
 				extractedIP = ip.String()
-				m.logger.Debug("Extracted IP address", "field", field, "ip", extractedIP)
+				m.logger.Debug("extracted IP address", "field", field, "ip", extractedIP)
 			}
 		}
 	}
@@ -122,7 +122,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 		if value.Value != "" {
 			if ip := net.ParseIP(value.Value); ip != nil && ip.To4() != nil {
 				extractedIP = ip.String()
-				m.logger.Debug("Extracted IP address", "field", field, "ip", extractedIP)
+				m.logger.Debug("extracted IP address", "field", field, "ip", extractedIP)
 				return true
 			}
 		}
@@ -136,13 +136,13 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	}
 
 	for objectID, value := range values {
-		m.logger.Debug("Mapping value to ipAddress entity", "objectID", objectID, "value", value)
+		m.logger.Debug("mapping value to ipAddress entity", "object_id", objectID, "value", value)
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
 				switch propertyMappingEntry.Field {
 				case "address":
 					if !extractIPFromValueOrIndex(value, propertyMappingEntry.Field) {
-						m.logger.Warn("Could not extract valid IP address from any field")
+						m.logger.Warn("could not extract valid IP address from any field")
 						continue
 					}
 					if ipAddress.Address != nil && strings.HasPrefix(*ipAddress.Address, "/") {
@@ -157,7 +157,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					extractIPFromIndex(value, propertyMappingEntry.Field)
 					prefixLength, err := maskToPrefixSize(value.Value)
 					if err != nil {
-						m.logger.Warn("Error converting mask to prefix size", "error", err, "value", value.Value)
+						m.logger.Warn("error converting mask to prefix size", "error", err, "value", value.Value)
 						continue
 					}
 					if ipAddress.Address == nil || *ipAddress.Address == "" {
@@ -185,7 +185,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					if propertyMappingEntry.Relationship != (config.Relationship{}) {
 						linkedEntity := entityRegistry.GetOrCreateEntity(EntityType(propertyMappingEntry.Relationship.Type), ObjectIDIndex(value.Value))
 						if linkedEntity == nil {
-							m.logger.Warn("No linked entity found while mapping assigned object", "relationship", propertyMappingEntry.Relationship)
+							m.logger.Warn("no linked entity found while mapping assigned object", "relationship", propertyMappingEntry.Relationship)
 							continue
 						}
 						// Handle relationship mapping
@@ -195,7 +195,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						}
 					}
 				default:
-					m.logger.Warn("Unknown field", "field", mappingEntry.Field)
+					m.logger.Warn("unknown field", "field", mappingEntry.Field)
 				}
 			}
 		}
@@ -204,7 +204,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	// Validate the final IP/CIDR before storage
 	if ipAddress.Address != nil && *ipAddress.Address != "" {
 		if !ValidateIPv4CIDR(*ipAddress.Address) {
-			m.logger.Warn("Invalid IP/CIDR format, skipping",
+			m.logger.Warn("invalid IP/CIDR format, skipping",
 				"address", *ipAddress.Address)
 			return &diode.IPAddress{} // Empty entity won't be added
 		}
@@ -213,9 +213,9 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	if fieldFound {
 		m.applyDefaults(&ipAddress, defaults)
 		if ipAddress.Address != nil {
-			m.logger.Debug("Successfully mapped IP address", "address", *ipAddress.Address)
+			m.logger.Debug("successfully mapped IP address", "address", *ipAddress.Address)
 		} else {
-			m.logger.Debug("Successfully mapped IP address (address field empty)")
+			m.logger.Debug("successfully mapped IP address (address field empty)")
 		}
 	}
 
@@ -341,7 +341,7 @@ func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *confi
 
 // Map maps interfaces to entities
 func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
-	m.logger.Debug("Mapping values to interface entity", "values", values, "mappingEntry", mappingEntry)
+	m.logger.Debug("mapping values to interface entity", "values", values, "mapping_entry", mappingEntry)
 	interfaceEntity := entityRegistry.GetOrCreateEntity(InterfaceEntityType, getIndex(values)).(*diode.Interface)
 
 	fieldFound := false
@@ -359,7 +359,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 		value := values[objectID]
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
-				m.logger.Debug("Mapping value to interface entity with mapper", "objectID", objectID, "value", value)
+				m.logger.Debug("mapping value to interface entity with mapper", "object_id", objectID, "value", value)
 				switch propertyMappingEntry.Field {
 				case "name":
 					interfaceEntity.Name = &value.Value
@@ -378,44 +378,44 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					fieldFound = true
 				case "speed":
 					if value.Value == "" {
-						m.logger.Debug("Speed is empty", "value", value.Value)
+						m.logger.Debug("speed is empty", "value", value.Value)
 						continue
 					}
 					speed, err := strconv.Atoi(value.Value)
 					if err != nil {
-						m.logger.Warn("Error converting speed to int", "error", err, "value", value.Value)
+						m.logger.Warn("error converting speed to int", "error", err, "value", value.Value)
 						continue
 					}
 					bitsPerSecond := int64(speed)
 					kiloBitsPerSecond := bitsPerSecond / 1000
 					// Check if speed is within valid range (0 to 2147483647 inclusive)
 					if kiloBitsPerSecond < minInterfaceSpeed || kiloBitsPerSecond > maxInterfaceSpeed {
-						m.logger.Warn("Interface speed is outside valid range (0-2147483647)", "speed", speed, "value",
-							value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
+						m.logger.Warn("interface speed is outside valid range (0-2147483647)", "speed", speed, "value",
+							value.Value, "mapping_id", propertyMappingEntry.OID, "interface_index", objectID)
 						continue
 					}
 					if interfaceEntity.Speed != nil && *interfaceEntity.Speed > 0 {
-						m.logger.Debug("Interface speed already set, skipping", "existingSpeed", *interfaceEntity.Speed,
-							"newSpeed", kiloBitsPerSecond, "interfaceIndex", objectID)
+						m.logger.Debug("interface speed already set, skipping", "existing_speed", *interfaceEntity.Speed,
+							"new_speed", kiloBitsPerSecond, "interface_index", objectID)
 						continue
 					}
 					interfaceEntity.Speed = &kiloBitsPerSecond
 					fieldFound = true
 				case "highSpeed":
 					if value.Value == "" {
-						m.logger.Debug("highSpeed is empty", "value", value.Value)
+						m.logger.Debug("high_speed is empty", "value", value.Value)
 						continue
 					}
 					highSpeed, err := strconv.Atoi(value.Value)
 					if err != nil {
-						m.logger.Warn("Error converting highSpeed to int", "error", err, "value", value.Value)
+						m.logger.Warn("error converting high_speed to int", "error", err, "value", value.Value)
 						continue
 					}
 					speedMbps := int64(highSpeed)
 					// Check if highSpeed is within valid range (0 to 2147483647 inclusive)
 					if speedMbps < minInterfaceSpeed || speedMbps > maxInterfaceSpeed {
-						m.logger.Warn("Interface highSpeed is outside valid range (0-2147483647)", "highSpeed",
-							highSpeed, "value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
+						m.logger.Warn("interface high_speed is outside valid range (0-2147483647)", "highSpeed",
+							highSpeed, "value", value.Value, "mapping_id", propertyMappingEntry.OID, "interface_index", objectID)
 						continue
 					}
 					kiloBitsPerSecond := speedMbps * 1000
@@ -428,7 +428,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					}
 					mtu, err := strconv.ParseInt(value.Value, 10, 64)
 					if err != nil {
-						m.logger.Warn("Error converting mtu to int64", "error", err, "value", value.Value)
+						m.logger.Warn("error converting mtu to int64", "error", err, "value", value.Value)
 						continue
 					}
 					if mtu == 0 {
@@ -437,8 +437,8 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					}
 					// Check if MTU is within valid range (1 to 2147483647 inclusive) and not overflowing int32
 					if mtu < minInterfaceMTU || mtu > maxInterfaceMTU {
-						m.logger.Warn("Interface MTU is outside valid range (1-2147483647) or overflows int32", "mtu", mtu,
-							"value", value.Value, "mappingID", propertyMappingEntry.OID, "interfaceIndex", objectID)
+						m.logger.Warn("interface MTU is outside valid range (1-2147483647) or overflows int32", "mtu", mtu,
+							"value", value.Value, "mapping_id", propertyMappingEntry.OID, "interface_index", objectID)
 						continue
 					}
 					mtu64 := mtu
@@ -447,7 +447,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				case "macAddress":
 					macAddress, err := m.FormatMACAddress(value.Value)
 					if err != nil {
-						m.logger.Debug("Error formatting mac address", "error", err, "value", value.Value)
+						m.logger.Debug("error formatting mac address", "error", err, "value", value.Value)
 						continue
 					}
 					interfaceEntity.PrimaryMacAddress = &diode.MACAddress{
@@ -459,7 +459,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					interfaceEntity.Enabled = &enabled
 					fieldFound = true
 				default:
-					m.logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
+					m.logger.Warn("unknown field", "field", propertyMappingEntry.Field)
 				}
 			}
 		}
@@ -493,9 +493,9 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	if fieldFound {
 		m.applyDefaults(interfaceEntity, defaults)
 		if interfaceEntity.Name != nil {
-			m.logger.Debug("Successfully mapped interface", "name", *interfaceEntity.Name)
+			m.logger.Debug("successfully mapped interface", "name", *interfaceEntity.Name)
 		} else {
-			m.logger.Debug("Successfully mapped interface (name field empty)")
+			m.logger.Debug("successfully mapped interface (name field empty)")
 		}
 	}
 
@@ -531,7 +531,7 @@ func (m *InterfaceMapper) FormatMACAddress(input string) (string, error) {
 	}
 
 	output := strings.Join(parts, ":")
-	m.logger.Debug("Formatted mac address", "input", input, "output", output)
+	m.logger.Debug("formatted mac address", "input", input, "output", output)
 	return output, nil
 }
 
@@ -621,14 +621,14 @@ func NewDeviceMapper(manufacturers data.ManufacturerRetriever, deviceLookup data
 
 // Map maps devices to entities
 func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
-	m.logger.Debug("Mapping values to device entity", "values", values, "mappingEntry", mappingEntry)
+	m.logger.Debug("mapping values to device entity", "values", values, "mapping_entry", mappingEntry)
 	deviceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), CurrentDeviceIndex).(*diode.Device)
 
 	fieldFound := false
 	for objectID, value := range values {
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
-				m.logger.Debug("Mapping value to device entity with mapper", "objectID", objectID, "value", value, "mappingEntry", propertyMappingEntry)
+				m.logger.Debug("mapping value to device entity with mapper", "object_id", objectID, "value", value, "mapping_entry", propertyMappingEntry)
 				switch propertyMappingEntry.Field {
 				case "name":
 					deviceEntity.Name = &value.Value
@@ -643,12 +643,12 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 				case "platform":
 					manufacturerID, err := m.getManufacturerID(value.Value)
 					if err != nil {
-						m.logger.Warn("Error getting device IDs", "error", err, "value", value.Value)
+						m.logger.Warn("error getting device IDs", "error", err, "value", value.Value)
 						continue
 					}
 					manufacturer, err := m.manufacturers.GetManufacturer(manufacturerID)
 					if err != nil {
-						m.logger.Warn("Error getting manufacturer", "error", err, "manufacturerID", manufacturerID)
+						m.logger.Warn("error getting manufacturer", "error", err, "manufacturer_id", manufacturerID)
 						manufacturer = value.Value
 					}
 
@@ -664,7 +664,7 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 
 					deviceModel, err := m.deviceLookup.GetDevice(value.Value)
 					if err != nil {
-						m.logger.Warn("Error getting device model falling back to OID", "error", err, "deviceOID", value.Value)
+						m.logger.Warn("error getting device model falling back to OID", "error", err, "device_oid", value.Value)
 						deviceModel = value.Value
 					}
 					deviceEntity.DeviceType = &diode.DeviceType{
@@ -673,7 +673,7 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 					}
 					fieldFound = true
 				default:
-					m.logger.Warn("Unknown field", "field", propertyMappingEntry.Field)
+					m.logger.Warn("unknown field", "field", propertyMappingEntry.Field)
 				}
 			}
 		}
@@ -683,9 +683,9 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 	if fieldFound {
 		m.applyDefaults(deviceEntity, defaults)
 		if deviceEntity.Name != nil {
-			m.logger.Debug("Successfully mapped device", "name", *deviceEntity.Name)
+			m.logger.Debug("successfully mapped device", "name", *deviceEntity.Name)
 		} else {
-			m.logger.Debug("Successfully mapped device (name field empty)")
+			m.logger.Debug("successfully mapped device (name field empty)")
 		}
 	}
 

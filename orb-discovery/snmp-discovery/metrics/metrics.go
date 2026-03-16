@@ -65,7 +65,7 @@ func GetCounter(name string, description string) metric.Int64Counter {
 	// Create the counter (error handling omitted for brevity)
 	c, err := meter.Int64Counter(name, metric.WithDescription(description))
 	if err != nil {
-		logger.Error("Error creating counter", "name", name, "error", err)
+		logger.Error("error creating counter", "name", name, "error", err)
 		return nil
 	}
 	counterCache[name] = c
@@ -85,7 +85,7 @@ func GetUpDownCounter(name string, description string) metric.Int64UpDownCounter
 	}
 	c, err := meter.Int64UpDownCounter(name, metric.WithDescription(description))
 	if err != nil {
-		logger.Error("Error creating updown counter", "name", name, "error", err)
+		logger.Error("error creating updown counter", "name", name, "error", err)
 		return nil
 	}
 	upDownCounterCache[name] = c
@@ -105,7 +105,7 @@ func GetHistogram(name string, description string) metric.Float64Histogram {
 	}
 	h, err := meter.Float64Histogram(name, metric.WithDescription(description))
 	if err != nil {
-		logger.Error("Error creating histogram", "name", name, "error", err)
+		logger.Error("error creating histogram", "name", name, "error", err)
 		return nil
 	}
 	histogramCache[name] = h
@@ -125,7 +125,7 @@ func GetGauge(name string, description string) metric.Int64Gauge {
 	}
 	g, err := meter.Int64Gauge(name, metric.WithDescription(description))
 	if err != nil {
-		logger.Error("Error creating gauge", "name", name, "error", err)
+		logger.Error("error creating gauge", "name", name, "error", err)
 		return nil
 	}
 	gaugeCache[name] = g
