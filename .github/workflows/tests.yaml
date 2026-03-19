@@ -58,6 +58,7 @@ jobs:
         if: always()
         run: cat .coverage/test-report.md
       - name: Find comment
+        if: github.event_name == 'pull_request'
         uses: peter-evans/find-comment@3eae4d37986fb5a8592848f6a574fdf654e61f9e #v3.1.0
         id: existing-comment
         with:
@@ -65,6 +66,7 @@ jobs:
           comment-author: 'github-actions[bot]'
           body-includes: Go test coverage
       - name: Post comment
+        if: github.event_name == 'pull_request'
         uses: peter-evans/create-or-update-comment@71345be0265236311c031f5c7866368bd1eff043 #v4.0.0
         with:
           comment-id: ${{ steps.existing-comment.outputs.comment-id }}
