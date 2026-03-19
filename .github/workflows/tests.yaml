@@ -6,11 +6,15 @@ on:
     paths:
       - "agent/**"
       - "cmd/**"
+      - "go.mod"
+      - "go.sum"
       - "!agent/docker/**"
   pull_request:
     paths:
       - "agent/**"
       - "cmd/**"
+      - "go.mod"
+      - "go.sum"
       - "!agent/docker/**"
 
 concurrency:
