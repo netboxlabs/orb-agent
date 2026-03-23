@@ -20,7 +20,7 @@ func TestHeartbeater_MultipleStopStartCycles_OBS2315(t *testing.T) {
 	ctx := context.Background()
 	testTopic := "test/heartbeat"
 	var publishCount atomic.Int32
-	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Run(func(args mock.Arguments) {
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Run(func(_ mock.Arguments) {
 		publishCount.Add(1)
 	}).Maybe()
 
