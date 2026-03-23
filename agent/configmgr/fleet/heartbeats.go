@@ -48,7 +48,9 @@ func (hb *heartbeater) StartHeartbeats(parentCtx context.Context, heartbeatTopic
 	hb.mu.Lock()
 	if hb.sessionCancel != nil {
 		prev := hb.sessionCancel
-		hb.sessionCancel = nil
+		// Keep sessionCancel set until wg.Wait() completes so concurrent stop()
+		// still observes an active session and cancels the same context instead of
+		// treating the heartbeater as idle (OBS-2315 review).
 		hb.mu.Unlock()
 		prev()
 		hb.wg.Wait()

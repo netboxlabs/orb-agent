@@ -180,8 +180,9 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 				}(hook)
 			}
 
-			// start heartbeat loop bound to the same connection-level context
-			connection.heartbeater.StartHeartbeats(ctx, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
+			// Start heartbeat session without blocking OnConnectionUp: StartHeartbeats
+			// may wait for a prior session to drain on reconnect (OBS-2315 review).
+			go connection.heartbeater.StartHeartbeats(ctx, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
 				// Track heartbeat failures
 				connection.heartbeatFailCount++
 				connection.logger.Error("heartbeat publish failed",
