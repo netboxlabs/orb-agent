@@ -181,7 +181,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			}
 
 			// start heartbeat loop bound to the same connection-level context
-			go connection.heartbeater.sendHeartbeats(ctx, func() {}, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
+			connection.heartbeater.StartHeartbeats(ctx, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
 				// Track heartbeat failures
 				connection.heartbeatFailCount++
 				connection.logger.Error("heartbeat publish failed",
