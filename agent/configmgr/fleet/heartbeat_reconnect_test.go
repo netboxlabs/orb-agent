@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,14 +19,17 @@ func TestHeartbeater_MultipleStopStartCycles_OBS2315(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx := context.Background()
 	testTopic := "test/heartbeat"
-	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Maybe()
+	var publishCount atomic.Int32
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Run(func(args mock.Arguments) {
+		publishCount.Add(1)
+	}).Maybe()
 
 	for range 4 {
 		hb.StartHeartbeats(ctx, testTopic, "test-agent-id", mockPublish.Publish, nil)
 		time.Sleep(80 * time.Millisecond)
 		hb.stop(testTopic, mockPublish.Publish)
 	}
-	require.GreaterOrEqual(t, len(mockPublish.Calls), 8)
+	require.GreaterOrEqual(t, int(publishCount.Load()), 8)
 	mockPublish.AssertExpectations(t)
 }
 

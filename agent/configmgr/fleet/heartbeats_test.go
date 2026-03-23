@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1590,20 +1591,23 @@ func TestHeartbeater_SecondSessionResumesPeriodicHeartbeats(t *testing.T) {
 	mockPublish := &mockPublishFunc{}
 	ctx := context.Background()
 	testTopic := "test/heartbeat"
-	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Maybe()
+	var publishCount atomic.Int32
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Run(func(args mock.Arguments) {
+		publishCount.Add(1)
+	}).Maybe()
 
 	hb.StartHeartbeats(ctx, testTopic, "test-agent-id", mockPublish.Publish, nil)
 	time.Sleep(120 * time.Millisecond)
-	n1 := len(mockPublish.Calls)
+	n1 := int(publishCount.Load())
 	require.GreaterOrEqual(t, n1, 2, "expected periodic heartbeats in first session")
 
 	hb.stop(testTopic, mockPublish.Publish)
-	n2 := len(mockPublish.Calls)
+	n2 := int(publishCount.Load())
 	require.Greater(t, n2, n1, "expected final offline after stop")
 
 	hb.StartHeartbeats(ctx, testTopic, "test-agent-id", mockPublish.Publish, nil)
 	time.Sleep(120 * time.Millisecond)
-	n3 := len(mockPublish.Calls)
+	n3 := int(publishCount.Load())
 	require.GreaterOrEqual(t, n3-n2, 2, "expected periodic heartbeats in second session after reconnect simulation")
 	hb.stop(testTopic, mockPublish.Publish)
 }
