@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -16,19 +17,24 @@ const (
 	heartbeatFreq = 5 * time.Second
 )
 
+// heartbeatTickInterval is the delay between periodic heartbeats. Tests shorten it.
+var heartbeatTickInterval = heartbeatFreq
+
 type heartbeater struct {
 	logger         *slog.Logger
-	hbTicker       *time.Ticker
 	heartbeatCtx   context.Context
 	backendState   backend.StateRetriever
 	policyManager  policymgr.PolicyManager
 	groupRetriever GroupRetriever
+
+	mu            sync.Mutex
+	sessionCancel context.CancelFunc
+	wg            sync.WaitGroup
 }
 
 func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager, groupRetriever GroupRetriever) *heartbeater {
 	return &heartbeater{
 		logger:         logger,
-		hbTicker:       time.NewTicker(heartbeatFreq),
 		heartbeatCtx:   context.Background(),
 		backendState:   backendState,
 		policyManager:  policyManager,
@@ -36,9 +42,65 @@ func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, po
 	}
 }
 
+// StartHeartbeats begins a heartbeat session: it cancels any prior session, waits for it to exit,
+// then starts a new loop with its own ticker until the session context is cancelled or stop() runs.
+func (hb *heartbeater) StartHeartbeats(parentCtx context.Context, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error, onFailure func()) {
+	hb.mu.Lock()
+	if hb.sessionCancel != nil {
+		prev := hb.sessionCancel
+		// Keep sessionCancel set until wg.Wait() completes so concurrent stop()
+		// still observes an active session and cancels the same context instead of
+		// treating the heartbeater as idle (OBS-2315 review).
+		hb.mu.Unlock()
+		prev()
+		hb.wg.Wait()
+		hb.mu.Lock()
+	}
+	childCtx, cancel := context.WithCancel(parentCtx)
+	hb.sessionCancel = cancel
+	hb.wg.Add(1)
+	hb.mu.Unlock()
+
+	go func() {
+		defer hb.wg.Done()
+		ticker := time.NewTicker(heartbeatTickInterval)
+		defer ticker.Stop()
+		hb.runHeartbeatLoop(childCtx, ticker, heartbeatTopic, agentID, publishFunc, onFailure)
+	}()
+}
+
 func (hb *heartbeater) stop(heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error) {
-	hb.hbTicker.Stop()
-	hb.sendSingleHeartbeat(hb.heartbeatCtx, heartbeatTopic, publishFunc, "", time.Now(), messages.HeartbeatState(messages.Offline), nil)
+	hb.mu.Lock()
+	cancel := hb.sessionCancel
+	hb.sessionCancel = nil
+	hb.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+		hb.wg.Wait()
+		return
+	}
+
+	hb.sendSingleHeartbeat(context.Background(), heartbeatTopic, publishFunc, "", time.Now(), messages.HeartbeatState(messages.Offline), nil)
+}
+
+func (hb *heartbeater) runHeartbeatLoop(ctx context.Context, ticker *time.Ticker, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error, onFailure func()) {
+	hb.heartbeatCtx = ctx
+
+	hb.logger.Debug("start heartbeats routine")
+	hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Online, onFailure)
+
+	for {
+		select {
+		case <-ctx.Done():
+			hb.logger.Debug("context done, stopping heartbeats routine")
+			hb.sendSingleHeartbeat(context.Background(), heartbeatTopic, publishFunc, agentID, time.Now(), messages.Offline, nil)
+			hb.heartbeatCtx = nil
+			return
+		case t := <-ticker.C:
+			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, t, messages.Online, onFailure)
+		}
+	}
 }
 
 func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error, _ string, _ time.Time, _ messages.HeartbeatState, onFailure func()) {
@@ -133,29 +195,4 @@ func (hb *heartbeater) getGroupState() map[string]messages.GroupStateInfo {
 		}
 	}
 	return gs
-}
-
-// sendHeartbeats starts a goroutine that periodically issues heartbeats until the
-// supplied context is cancelled.  The cancelFunc parameter is ignored by the
-// implementation but is accepted for backward-compatibility with unit tests
-// that expect to pass it.
-func (hb *heartbeater) sendHeartbeats(ctx context.Context, _ context.CancelFunc, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error, onFailure func()) {
-	// Update our internal reference so other methods that read hb.heartbeatCtx
-	// (if any) remain accurate.
-	hb.heartbeatCtx = ctx
-
-	hb.logger.Debug("start heartbeats routine")
-	hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Online, onFailure)
-
-	for {
-		select {
-		case <-ctx.Done():
-			hb.logger.Debug("context done, stopping heartbeats routine")
-			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Offline, nil)
-			hb.heartbeatCtx = nil
-			return
-		case t := <-hb.hbTicker.C:
-			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, t, messages.Online, onFailure)
-		}
-	}
 }
