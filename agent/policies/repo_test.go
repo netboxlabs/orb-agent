@@ -415,24 +415,22 @@ func TestUpdateRuns(t *testing.T) {
 	err = repo.Update(pd)
 	require.NoError(t, err)
 
-	// Update runs for the policy
+	// Update runs for the policy (new runs, no timestamps)
 	runs := []policies.RunData{
 		{
-			ID:        "run-1",
-			Status:    "completed",
-			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+			ID:     "run-1",
+			Status: "completed",
 		},
 		{
-			ID:        "run-2",
-			Status:    "running",
-			CreatedAt: time.Date(2024, 1, 1, 0, 10, 0, 0, time.UTC),
-			UpdatedAt: time.Date(2024, 1, 1, 0, 12, 0, 0, time.UTC),
+			ID:     "run-2",
+			Status: "running",
 		},
 	}
 
+	before := time.Now().UTC()
 	err = repo.UpdateRuns("test-policy", runs)
 	require.NoError(t, err)
+	after := time.Now().UTC()
 
 	// Verify runs are updated
 	retrievedPD, err := repo.Get("test-id")
@@ -440,13 +438,150 @@ func TestUpdateRuns(t *testing.T) {
 	assert.Len(t, retrievedPD.Runs, 2)
 	assert.Equal(t, "run-1", retrievedPD.Runs[0].ID)
 	assert.Equal(t, "completed", retrievedPD.Runs[0].Status)
+	assert.Equal(t, "test-id", retrievedPD.Runs[0].PolicyID)
 	assert.Equal(t, "run-2", retrievedPD.Runs[1].ID)
 	assert.Equal(t, "running", retrievedPD.Runs[1].Status)
+	assert.Equal(t, "test-id", retrievedPD.Runs[1].PolicyID)
+
+	// Verify timestamps were set for new runs
+	for _, r := range retrievedPD.Runs {
+		assert.False(t, r.CreatedAt.IsZero(), "CreatedAt should be set for new run %s", r.ID)
+		assert.False(t, r.UpdatedAt.IsZero(), "UpdatedAt should be set for new run %s", r.ID)
+		assert.True(t, !r.CreatedAt.Before(before) && !r.CreatedAt.After(after))
+		assert.True(t, !r.UpdatedAt.Before(before) && !r.UpdatedAt.After(after))
+	}
 
 	// Verify runs are also returned via GetByName
 	retrievedPDByName, err := repo.GetByName("test-policy")
 	require.NoError(t, err)
 	assert.Len(t, retrievedPDByName.Runs, 2)
+}
+
+func TestUpdateRuns_InProgressRunAlwaysAdvancesUpdatedAt(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		State:    policies.Running,
+	}
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	entityCount := int64(5)
+
+	// First update: new run
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", EntityCount: entityCount},
+	})
+	require.NoError(t, err)
+
+	first, _ := repo.Get("test-id")
+	createdAt := first.Runs[0].CreatedAt
+	updatedAt := first.Runs[0].UpdatedAt
+
+	time.Sleep(2 * time.Millisecond)
+
+	// Second update: exact same data — UpdatedAt must still advance
+	// because the run is in progress and UpdatedAt reflects elapsed time
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", EntityCount: entityCount},
+	})
+	require.NoError(t, err)
+
+	second, _ := repo.Get("test-id")
+	assert.Equal(t, createdAt, second.Runs[0].CreatedAt, "CreatedAt must not change")
+	assert.True(t, second.Runs[0].UpdatedAt.After(updatedAt), "UpdatedAt must advance on every poll while run is in progress")
+}
+
+func TestUpdateRuns_TerminalStatusFreezesUpdatedAt(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		State:    policies.Running,
+	}
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	// First: run is running
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running"},
+	})
+	require.NoError(t, err)
+
+	time.Sleep(2 * time.Millisecond)
+
+	// Second: run completes — UpdatedAt should advance to mark completion
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "completed"},
+	})
+	require.NoError(t, err)
+
+	completed, _ := repo.Get("test-id")
+	completedAt := completed.Runs[0].UpdatedAt
+	createdAt := completed.Runs[0].CreatedAt
+	assert.True(t, completedAt.After(createdAt), "UpdatedAt should be after CreatedAt for completed run")
+
+	time.Sleep(2 * time.Millisecond)
+
+	// Third: backend keeps reporting the same completed run — UpdatedAt must not change
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "completed"},
+	})
+	require.NoError(t, err)
+
+	frozen, _ := repo.Get("test-id")
+	assert.Equal(t, completedAt, frozen.Runs[0].UpdatedAt, "UpdatedAt must be frozen after terminal status")
+	assert.Equal(t, createdAt, frozen.Runs[0].CreatedAt, "CreatedAt must never change")
+}
+
+func TestUpdateRuns_FailedStatusFreezesUpdatedAt(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		State:    policies.Running,
+	}
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	// Run fails
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "failed", Reason: "timeout"},
+	})
+	require.NoError(t, err)
+
+	failed, _ := repo.Get("test-id")
+	failedAt := failed.Runs[0].UpdatedAt
+
+	time.Sleep(2 * time.Millisecond)
+
+	// Backend keeps reporting same failed run — timestamps frozen
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "failed", Reason: "timeout"},
+	})
+	require.NoError(t, err)
+
+	frozen, _ := repo.Get("test-id")
+	assert.Equal(t, failedAt, frozen.Runs[0].UpdatedAt, "UpdatedAt must be frozen after failed status")
 }
 
 func TestUpdateRuns_NonExistentPolicy(t *testing.T) {
@@ -455,10 +590,8 @@ func TestUpdateRuns_NonExistentPolicy(t *testing.T) {
 
 	runs := []policies.RunData{
 		{
-			ID:        "run-1",
-			Status:    "completed",
-			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+			ID:     "run-1",
+			Status: "completed",
 		},
 	}
 
@@ -502,10 +635,8 @@ func TestUpdateRuns_GetAllIncludesRuns(t *testing.T) {
 	// Update runs for policy 1
 	runs1 := []policies.RunData{
 		{
-			ID:        "run-1",
-			Status:    "completed",
-			CreatedAt: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
-			UpdatedAt: time.Date(2024, 1, 1, 0, 5, 0, 0, time.UTC),
+			ID:     "run-1",
+			Status: "completed",
 		},
 	}
 	err = repo.UpdateRuns("test-policy-1", runs1)

@@ -33,10 +33,10 @@ type BackendStateInfo struct {
 // RunStateInfo contains state information for a run
 type RunStateInfo struct {
 	ID          string    `json:"id"`
-	PolicyID    string    `json:"policy_id"`
+	PolicyID    string    `json:"policy_id,omitempty"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
-	EntityCount *int64    `json:"entity_count,omitempty"`
+	EntityCount int64     `json:"entity_count,omitzero"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }

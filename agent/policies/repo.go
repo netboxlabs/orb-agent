@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // ErrPolicyNotFound is returned when a policy cannot be found by name or ID.
@@ -159,9 +160,41 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyID)
 	}
+
+	// Index existing runs for change detection and timestamp preservation
+	existingByID := make(map[string]RunData, len(policy.Runs))
+	for _, r := range policy.Runs {
+		existingByID[r.ID] = r
+	}
+
+	now := time.Now().UTC()
+	for i := range runs {
+		runs[i].PolicyID = policyID
+
+		if existing, ok := existingByID[runs[i].ID]; ok {
+			// Existing run: always preserve CreatedAt
+			runs[i].CreatedAt = existing.CreatedAt
+
+			if isTerminalStatus(existing.Status) {
+				// Run already finished; freeze UpdatedAt so
+				// UpdatedAt − CreatedAt reflects the final run duration.
+				runs[i].UpdatedAt = existing.UpdatedAt
+			} else {
+				// Run is still in progress; always advance UpdatedAt so
+				// UpdatedAt − CreatedAt reflects the current elapsed time.
+				runs[i].UpdatedAt = now
+			}
+		} else {
+			// New run: agent is the system of record for timestamps
+			runs[i].CreatedAt = now
+			runs[i].UpdatedAt = now
+		}
+	}
+
 	policy.Runs = runs
 	p.db[policyID] = policy
 	return nil
 }
+
 
 var _ PolicyRepo = (*policyMemRepo)(nil)
