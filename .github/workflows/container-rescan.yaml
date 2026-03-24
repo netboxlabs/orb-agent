@@ -1,0 +1,16 @@
+name: Scheduled Container Rescan
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  rescan:
+    uses: netboxlabs/internal-workflows/.github/workflows/reusable-container-rescan.yml@develop
+    with:
+      image_ref: "docker.io/netboxlabs/orb-agent:develop"
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
