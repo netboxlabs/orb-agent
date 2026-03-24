@@ -158,7 +158,6 @@ func (manager *stateManager) Get() map[string]*State {
 	return result
 }
 
-
 // convertToRunData converts backend PolicyStatusRun to policies.RunData.
 // Passes through all fields including timestamps from the backend.
 // The policy repo's UpdateRuns handles fallback logic when timestamps

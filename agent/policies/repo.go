@@ -196,5 +196,4 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 	return nil
 }
 
-
 var _ PolicyRepo = (*policyMemRepo)(nil)
