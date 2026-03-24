@@ -5,12 +5,42 @@ on:
     - cron: '0 6 * * *'  # Daily at 06:00 UTC
   workflow_dispatch:
 
+env:
+  IMAGE_REF: docker.io/netboxlabs/orb-agent:develop
+
 jobs:
   rescan:
-    uses: netboxlabs/internal-workflows/.github/workflows/reusable-container-rescan.yml@develop
-    with:
-      image_ref: "docker.io/netboxlabs/orb-agent:develop"
+    name: Rescan Container Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write
-    secrets: inherit
+    env:
+      TRIVY_DISABLE_VEX_NOTICE: "true"
+
+    steps:
+      - name: Pull image
+        env:
+          IMAGE_REF: ${{ env.IMAGE_REF }}
+        run: docker pull "$IMAGE_REF"
+
+      - name: Scan for vulnerabilities
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ env.IMAGE_REF }}
+          format: table
+          vuln-type: os,library
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Summary
+        if: always()
+        env:
+          IMAGE_REF: ${{ env.IMAGE_REF }}
+        run: |
+          echo "### Rescan Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${IMAGE_REF}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Scanned at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
