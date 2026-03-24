@@ -440,6 +440,8 @@ func (r *Runner) run() {
 		entities = append(entities, ip)
 	}
 
+	annotateEntitiesWithRunID(entities, run.ID)
+
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,

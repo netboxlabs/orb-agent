@@ -314,6 +314,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	}
 
 	r.logEntitiesForIngestion(entities)
+	annotateEntitiesWithRunID(entities, run.ID)
 
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,

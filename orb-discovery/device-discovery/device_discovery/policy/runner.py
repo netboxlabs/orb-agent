@@ -160,7 +160,11 @@ class PolicyRunner:
         return True
 
     def _collect_device_data(
-        self, scope: Napalm, sanitized_hostname: str, config: Config
+        self,
+        scope: Napalm,
+        sanitized_hostname: str,
+        config: Config,
+        run_id: str,
     ):
         """
         Connect to device and collect data.
@@ -170,6 +174,7 @@ class PolicyRunner:
             scope: Scope data for the device.
             sanitized_hostname: Sanitized hostname for logging.
             config: Configuration data containing site information.
+            run_id: Run identifier for ingest and per-entity metadata.
 
         """
         np_driver = get_network_driver(scope.driver)
@@ -224,7 +229,7 @@ class PolicyRunner:
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}. Continuing without VLAN data."
                 )
             metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
-            Client().ingest(metadata, data)
+            Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
@@ -355,7 +360,7 @@ class PolicyRunner:
                 discovery_attempts.add(1, {"policy": self.name})
 
             # Collect data from device
-            self._collect_device_data(scope, sanitized_hostname, config)
+            self._collect_device_data(scope, sanitized_hostname, config, run.id)
 
             # UPDATE RUN ON SUCCESS
             self.run_store.update_run(
@@ -467,7 +472,7 @@ class PolicyRunner:
                 discovery_attempts.add(1, {"policy": self.name})
 
             # Collect data from device
-            self._collect_device_data(scope, sanitized_hostname, config)
+            self._collect_device_data(scope, sanitized_hostname, config, run.id)
 
             # UPDATE RUN ON SUCCESS
             self.run_store.update_run(

@@ -358,25 +358,29 @@ func TestRunnerIngestCalledWithCorrectValues(t *testing.T) {
 	// Use a channel to signal that Ingest was called
 	ingestCalled := make(chan bool, 1)
 
-	expectedEntities := []diode.Entity{
-		&diode.Interface{
-			Device:      &diode.Device{},
-			Name:        diode.String("GigabitEthernet1/0/1"),
-			Description: diode.String("Interface Default"),
-			Tags: []*diode.Tag{
-				{Name: diode.String("interface")},
-				{Name: diode.String("default")},
-				{Name: diode.String("test")},
-				{Name: diode.String("snmp")},
-			},
-			Type: diode.String("virtual"),
-		},
-	}
-
-	mockClient.On("Ingest", mock.Anything, expectedEntities).Run(func(args mock.Arguments) {
+	mockClient.On("Ingest", mock.Anything, mock.MatchedBy(func(entities []diode.Entity) bool {
+		if len(entities) != 1 {
+			return false
+		}
+		iface, ok := entities[0].(*diode.Interface)
+		if !ok {
+			return false
+		}
+		rid, ok := iface.Metadata["run_id"].(string)
+		if !ok || rid == "" {
+			return false
+		}
+		if iface.Device == nil {
+			return false
+		}
+		drid, ok := iface.Device.Metadata["run_id"].(string)
+		return ok && drid == rid
+	})).Run(func(args mock.Arguments) {
 		ingestCalled <- true
 		entities := args.Get(1).([]diode.Entity)
-		assert.Equal(t, expectedEntities, entities, "Ingest should be called with the correct entities")
+		iface := entities[0].(*diode.Interface)
+		assert.Equal(t, "GigabitEthernet1/0/1", *iface.Name)
+		assert.Equal(t, "virtual", *iface.Type)
 	}).Return(&diodepb.IngestResponse{}, nil)
 
 	// Start the process

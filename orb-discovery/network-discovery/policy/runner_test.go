@@ -432,7 +432,10 @@ func TestRunnerWithNetworkMask(t *testing.T) {
 		ingestCalled <- true
 		entities := args.Get(1).([]diode.Entity)
 		assert.NotEmpty(t, entities, "Entities should not be empty when scanning a network with a mask")
-		assert.Contains(t, *entities[0].(*diode.IPAddress).Address, "/28", "The scanned entity should reflect the network mask")
+		ip0 := entities[0].(*diode.IPAddress)
+		assert.Contains(t, *ip0.Address, "/28", "The scanned entity should reflect the network mask")
+		rid, ok := ip0.Metadata["run_id"].(string)
+		assert.True(t, ok && rid != "", "per-entity metadata should include run_id")
 	}).Return(&diodepb.IngestResponse{}, nil)
 
 	// Start the process

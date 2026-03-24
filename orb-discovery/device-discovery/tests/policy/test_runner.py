@@ -205,10 +205,13 @@ def test_run_device_with_discovered_driver(
         mock_discover.assert_called_once_with(sample_scopes[0])
         mock_ingest.assert_called_once()
         metadata_arg, data = mock_ingest.call_args[0]
+        kwargs = mock_ingest.call_args[1]
         assert metadata_arg == {
             "policy_name": policy_runner.name,
             "hostname": sample_scopes[0].hostname,
         }
+        run = run_store.get_runs_for_policy(policy_runner.name)[0]
+        assert kwargs["run_id"] == run.id
         assert data["driver"] == "ios"
         assert data["device"] == {"model": "SampleModel"}
         assert data["interface"] == {"eth0": "up"}

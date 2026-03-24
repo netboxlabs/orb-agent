@@ -1,0 +1,86 @@
+package policy
+
+import (
+	"unsafe"
+
+	"github.com/netboxlabs/diode-sdk-go/diode"
+)
+
+// annotateEntitiesWithRunID sets per-entity Diode metadata key "run_id" on each entity
+// in the batch and on nested Device, Interface, and IPAddress references.
+func annotateEntitiesWithRunID(entities []diode.Entity, runID string) {
+	seen := make(map[unsafe.Pointer]struct{})
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.Device:
+			annotateDevice(v, runID, seen)
+		case *diode.Interface:
+			annotateInterface(v, runID, seen)
+		case *diode.IPAddress:
+			annotateIPAddress(v, runID, seen)
+		}
+	}
+}
+
+func mergeRunID(md *diode.Metadata, runID string) {
+	if md == nil {
+		return
+	}
+	if *md == nil {
+		*md = make(diode.Metadata)
+	}
+	(*md)["run_id"] = runID
+}
+
+func annotateDevice(d *diode.Device, runID string, seen map[unsafe.Pointer]struct{}) {
+	if d == nil {
+		return
+	}
+	p := unsafe.Pointer(d)
+	if _, ok := seen[p]; ok {
+		return
+	}
+	seen[p] = struct{}{}
+	mergeRunID(&d.Metadata, runID)
+}
+
+func annotateInterface(iface *diode.Interface, runID string, seen map[unsafe.Pointer]struct{}) {
+	if iface == nil {
+		return
+	}
+	p := unsafe.Pointer(iface)
+	if _, ok := seen[p]; ok {
+		return
+	}
+	seen[p] = struct{}{}
+	mergeRunID(&iface.Metadata, runID)
+	annotateDevice(iface.Device, runID, seen)
+	annotateInterface(iface.Parent, runID, seen)
+	annotateInterface(iface.Bridge, runID, seen)
+	annotateInterface(iface.Lag, runID, seen)
+}
+
+func annotateIPAddress(ip *diode.IPAddress, runID string, seen map[unsafe.Pointer]struct{}) {
+	if ip == nil {
+		return
+	}
+	p := unsafe.Pointer(ip)
+	if _, ok := seen[p]; ok {
+		return
+	}
+	seen[p] = struct{}{}
+	mergeRunID(&ip.Metadata, runID)
+	if ip.AssignedObject != nil {
+		switch a := ip.AssignedObject.(type) {
+		case *diode.Interface:
+			annotateInterface(a, runID, seen)
+		case *diode.FHRPGroup:
+			mergeRunID(&a.Metadata, runID)
+		case *diode.VMInterface:
+			mergeRunID(&a.Metadata, runID)
+		}
+	}
+	if ip.NatInside != nil {
+		annotateIPAddress(ip.NatInside, runID, seen)
+	}
+}

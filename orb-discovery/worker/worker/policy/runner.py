@@ -18,6 +18,7 @@ from netboxlabs.diode.sdk import (
 )
 
 from worker.backend import Backend, load_class
+from worker.entity_metadata import apply_run_id_to_entities
 from worker.metrics import get_metric
 from worker.models import DiodeConfig, Policy, Status
 from worker.policy.run import RunStatus, RunStore
@@ -156,14 +157,17 @@ class PolicyRunner:
         entity_count = 0
         try:
             logger.debug(f"Policy {self.name}: Starting backend execution")
-            entities = backend.run(self.name, policy)
+            entities = list(backend.run(self.name, policy))
             elapsed = time.perf_counter() - exec_start_time
             logger.debug(f"Policy {self.name}: Backend execution completed in {elapsed:.3f} seconds")
             entity_count = len(entities)
 
+            apply_run_id_to_entities(entities, run.id)
+
             metadata = {
                 "policy_name": self.name,
                 "worker_backend": self.metadata.name,
+                "run_id": run.id,
             }
             chunk_num = 1
             size_bytes = estimate_message_size(entities)

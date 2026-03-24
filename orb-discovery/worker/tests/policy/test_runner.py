@@ -46,7 +46,11 @@ def sample_diode_config():
 @pytest.fixture
 def mock_run_store():
     """Fixture for a mock RunStore."""
-    return MagicMock(spec=RunStore)
+    store = MagicMock(spec=RunStore)
+    run = MagicMock()
+    run.id = "11111111-1111-1111-1111-111111111111"
+    store.create_run.return_value = run
+    return store
 
 
 @pytest.fixture
@@ -267,7 +271,17 @@ def test_run_passes_metadata_to_ingest(
     assert kwargs["metadata"] == {
         "policy_name": "policy-meta",
         "worker_backend": "custom_backend",
+        "run_id": "11111111-1111-1111-1111-111111111111",
     }
+    ingested = kwargs["entities"][0]
+    assert ingested.device.metadata["run_id"] == "11111111-1111-1111-1111-111111111111"
+
+
+def test_apply_run_id_to_entities_skips_non_protobuf_entries():
+    """apply_run_id_to_entities ignores non-Entity entries (e.g. test doubles)."""
+    from worker.entity_metadata import apply_run_id_to_entities
+
+    apply_run_id_to_entities(["not-an-entity"], "run-id")
 
 
 def test_run_ingestion_errors(

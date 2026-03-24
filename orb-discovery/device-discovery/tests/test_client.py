@@ -127,6 +127,26 @@ def test_ingest_success(mock_diode_client_class, sample_data, sample_metadata):
         )
 
 
+def test_ingest_includes_run_id_in_request_and_entities(
+    mock_diode_client_class, sample_data, sample_metadata
+):
+    """run_id is added to ingest metadata and each entity's metadata Struct."""
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = []
+    with patch(
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
+    ):
+        client.ingest(sample_metadata, sample_data, run_id="run-xyz")
+    kwargs = mock_diode_instance.ingest.call_args[1]
+    assert kwargs["metadata"]["run_id"] == "run-xyz"
+    assert kwargs["entities"][0].device.metadata["run_id"] == "run-xyz"
+
+
 def test_ingest_failure(mock_diode_client_class, sample_data, sample_metadata):
     """Test data ingestion with errors raises RuntimeError."""
     client = Client()

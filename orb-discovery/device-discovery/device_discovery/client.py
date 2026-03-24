@@ -14,6 +14,7 @@ from netboxlabs.diode.sdk import (
     estimate_message_size,
 )
 
+from device_discovery.entity_metadata import apply_run_id_to_entities
 from device_discovery.translate import translate_data
 from device_discovery.version import version_semver
 
@@ -106,7 +107,12 @@ class Client:
                     app_version=APP_VERSION,
                 )
 
-    def ingest(self, metadata: dict[str, Any] | None, data: dict):
+    def ingest(
+        self,
+        metadata: dict[str, Any] | None,
+        data: dict,
+        run_id: str | None = None,
+    ):
         """
         Ingest data using the Diode client after translating it.
 
@@ -114,6 +120,7 @@ class Client:
         ----
             metadata (dict[str, Any] | None): Metadata to attach to the ingestion request.
             data (dict): The data to be ingested.
+            run_id (str | None): Discovery run ID for ingest and per-entity metadata.
 
         Raises:
         ------
@@ -125,10 +132,18 @@ class Client:
 
         with self._lock:
             translated_entities = translate_data(data)
-            request_metadata = metadata or {}
+            entities_list = (
+                translated_entities
+                if isinstance(translated_entities, list)
+                else list(translated_entities)
+            )
+            if run_id is not None:
+                apply_run_id_to_entities(entities_list, run_id)
 
-            # Convert to list for size estimation and chunking
-            entities_list = list(translated_entities)
+            request_metadata = dict(metadata or {})
+            if run_id is not None:
+                request_metadata["run_id"] = str(run_id)
+
             entity_count = len(entities_list)
 
             hostname = request_metadata.get("hostname") or "unknown-host"
