@@ -600,7 +600,7 @@ func TestBackendStateManager_PolicyStatusPolling_WithEntityCount(t *testing.T) {
 				{
 					ID:          "run-1",
 					Status:      "completed",
-					EntityCount: &entityCount,
+					EntityCount: entityCount,
 					CreatedAt:   testTime,
 					UpdatedAt:   testTime.Add(5 * time.Minute),
 				},
@@ -625,7 +625,7 @@ func TestBackendStateManager_PolicyStatusPolling_WithEntityCount(t *testing.T) {
 	assert.Equal(t, "run-1", retrievedPolicy.Runs[0].ID)
 	assert.Equal(t, "completed", retrievedPolicy.Runs[0].Status)
 	require.NotNil(t, retrievedPolicy.Runs[0].EntityCount, "Expected entity_count to be stored")
-	assert.Equal(t, int64(42), *retrievedPolicy.Runs[0].EntityCount)
+	assert.Equal(t, int64(42), retrievedPolicy.Runs[0].EntityCount)
 
 	mockBe.AssertExpectations(t)
 }
@@ -667,11 +667,10 @@ func TestBackendStateManager_PolicyStatusPolling_WithoutEntityCount(t *testing.T
 			Status: "completed",
 			Runs: []backend.PolicyStatusRun{
 				{
-					ID:          "run-1",
-					Status:      "completed",
-					EntityCount: nil, // Explicitly nil
-					CreatedAt:   testTime,
-					UpdatedAt:   testTime.Add(5 * time.Minute),
+					ID:        "run-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
 				},
 			},
 		},
@@ -693,7 +692,7 @@ func TestBackendStateManager_PolicyStatusPolling_WithoutEntityCount(t *testing.T
 	require.Len(t, retrievedPolicy.Runs, 1, "Expected runs to be updated after ticker fires")
 	assert.Equal(t, "run-1", retrievedPolicy.Runs[0].ID)
 	assert.Equal(t, "completed", retrievedPolicy.Runs[0].Status)
-	assert.Nil(t, retrievedPolicy.Runs[0].EntityCount, "Expected entity_count to be nil when not provided")
+	assert.Zero(t, retrievedPolicy.Runs[0].EntityCount, "Expected entity_count to be zero when not provided")
 
 	mockBe.AssertExpectations(t)
 }

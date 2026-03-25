@@ -1478,7 +1478,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithEntityCount(t *testing.T) {
 				{
 					ID:          "run-1",
 					Status:      "completed",
-					EntityCount: &entityCount,
+					EntityCount: entityCount,
 					CreatedAt:   testTime,
 					UpdatedAt:   testTime.Add(5 * time.Minute),
 				},
@@ -1518,7 +1518,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithEntityCount(t *testing.T) {
 	assert.Equal(t, "completed", policy.Runs[0].Status)
 	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
 	require.NotNil(t, policy.Runs[0].EntityCount, "Expected entity_count to be included in heartbeat")
-	assert.Equal(t, int64(100), *policy.Runs[0].EntityCount)
+	assert.Equal(t, int64(100), policy.Runs[0].EntityCount)
 
 	mockPMgr.AssertExpectations(t)
 }
@@ -1538,11 +1538,10 @@ func TestHeartbeater_SendSingleHeartbeat_WithoutEntityCount(t *testing.T) {
 			Datasets: map[string]bool{"dataset-1": true},
 			Runs: []policies.RunData{
 				{
-					ID:          "run-1",
-					Status:      "completed",
-					EntityCount: nil, // Explicitly nil
-					CreatedAt:   testTime,
-					UpdatedAt:   testTime.Add(5 * time.Minute),
+					ID:        "run-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
 				},
 			},
 		},
@@ -1579,7 +1578,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithoutEntityCount(t *testing.T) {
 	assert.Equal(t, "run-1", policy.Runs[0].ID)
 	assert.Equal(t, "completed", policy.Runs[0].Status)
 	assert.Equal(t, testTime, policy.Runs[0].CreatedAt)
-	assert.Nil(t, policy.Runs[0].EntityCount, "Expected entity_count to be nil when not provided")
+	assert.Zero(t, policy.Runs[0].EntityCount, "Expected entity_count to be zero when not provided")
 
 	mockPMgr.AssertExpectations(t)
 }
