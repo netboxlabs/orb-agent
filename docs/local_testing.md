@@ -1,8 +1,6 @@
 # Local Testing Guide
 
-This guide covers running orb-agent with local code changes in two modes:
-1. **Standalone (local config)** — open source mode, no fleet required
-2. **Fleet-connected** — against a local orb-pro dev fleet (Kind + Tilt)
+This guide covers running orb-agent with local code changes.
 
 ---
 
@@ -10,7 +8,6 @@ This guide covers running orb-agent with local code changes in two modes:
 
 - Docker (or Podman)
 - Go 1.25+
-- For fleet mode: a running orb-pro local dev environment (`make dev` in the orb-pro repo)
 
 ---
 
@@ -29,8 +26,6 @@ make agent
 make agent_bin
 # Binary output: build/orb-agent
 ```
-
-The `agent_fast` target tags the image as `netboxlabs/orb-agent:develop`, which is what the orb-pro test infrastructure expects.
 
 ---
 
