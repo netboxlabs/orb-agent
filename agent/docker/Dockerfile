@@ -18,7 +18,7 @@ ARG TARGETOS TARGETARCH
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /build/orb-agent ./cmd/main.go
+    GOOS=$TARGETOS GOARCH=$TARGETARCH EXTRA_LDFLAGS="-s -w" BUILD_DIR=/build make agent_bin
 
 ########################################################################
 FROM netboxlabs/opentelemetry-infinity:${OTEL_TAG} AS otlpinf

@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
 const CurrentHeartbeatSchemaVersion = "1.0"
 
@@ -88,7 +89,11 @@ const (
 
 // OrbAgentInfo contains information about the Orb agent itself
 type OrbAgentInfo struct {
-	Version string `json:"version"`
+	Version   string `json:"version"`
+	Branch    string `json:"branch,omitempty"`
+	Commit    string `json:"commit,omitempty"`
+	Modified  bool   `json:"modified,omitempty"`
+	BuildTime time.Time `json:"build_time,omitzero"`
 }
 
 // BackendInfo contains version and configuration data for a specific backend
