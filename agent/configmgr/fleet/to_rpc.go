@@ -99,4 +99,3 @@ func (messaging *Messaging) sendAgentPoliciesRequest(ctx context.Context, orgID 
 
 	return nil
 }
-
