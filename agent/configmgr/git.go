@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"github.com/go-co-op/gocron/v2"
 	gitv5 "github.com/go-git/go-git/v5"
@@ -23,6 +24,14 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
+
+// IsAzureDevOpsURL reports whether url points to an Azure DevOps repository.
+// Azure DevOps is incompatible with go-git's pack protocol negotiation; these
+// repos require a system git fallback.
+func IsAzureDevOpsURL(rawURL string) bool {
+	return strings.Contains(rawURL, "dev.azure.com") ||
+		strings.Contains(rawURL, "visualstudio.com")
+}
 
 var _ Manager = (*gitConfigManager)(nil)
 

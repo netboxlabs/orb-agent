@@ -17,6 +17,27 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 )
 
+// TestIsAzureDevOpsURL tests the IsAzureDevOpsURL helper function.
+func TestIsAzureDevOpsURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://dev.azure.com/org/proj/_git/repo", true},
+		{"git@ssh.dev.azure.com:v3/org/proj/repo", true},
+		{"https://org.visualstudio.com/proj/_git/repo", true},
+		{"org@vs-ssh.visualstudio.com:v3/org/proj/repo", true},
+		{"https://github.com/org/repo.git", false},
+		{"file:///tmp/repo", false},
+		{"git@github.com:org/repo.git", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			require.Equal(t, tt.want, configmgr.IsAzureDevOpsURL(tt.url))
+		})
+	}
+}
+
 // TestGitStart tests the Start method of gitConfigManager.
 func TestGitStart(t *testing.T) {
 	// Create a temporary directory for the fake remote repository.
