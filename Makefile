@@ -11,7 +11,7 @@ BUILD_DIR ?= build
 CGO_ENABLED ?= 0
 GOARCH ?= $(shell go env GOARCH)
 GOOS ?= $(shell go env GOOS)
-ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(git describe --tags --always 2>/dev/null || echo dev)}")
+ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || git describe --tags --always 2>/dev/null || echo dev)}")
 COMMIT_HASH = $(shell git rev-parse --short HEAD)
 COMMIT_BRANCH = $(shell branch=$$(git rev-parse --abbrev-ref HEAD); if [ "$$branch" = "HEAD" ]; then branch=$${GITHUB_HEAD_REF:-$$GITHUB_REF_NAME}; fi; echo "$${branch:-unknown}")
 VERSION_PKG = github.com/netboxlabs/orb-agent/agent/version
