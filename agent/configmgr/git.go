@@ -3,8 +3,12 @@ package configmgr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 
@@ -46,6 +50,7 @@ type gitConfigManager struct {
 	version          int32
 	matchPolicyPaths []string
 	namespace        uuid.UUID
+	tempDir          string // non-empty when using system git fallback (Azure DevOps)
 }
 
 type (
@@ -56,6 +61,76 @@ type (
 		Name    string
 	}
 )
+
+// cloneWithSystemGit clones the repository using the system git binary to a
+// temporary directory.  It is used as a fallback for hosts (e.g. Azure DevOps)
+// that are incompatible with go-git's pack-protocol negotiation.
+// The caller is responsible for removing the returned directory when done.
+func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Repository, error) {
+	dir, err := os.MkdirTemp("", "orb-git-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to create temp dir for git clone: %w", err)
+	}
+
+	cloneURL := gc.config.URL
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+
+	switch gc.config.Auth {
+	case "basic":
+		u, err := url.Parse(gc.config.URL)
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			return "", nil, fmt.Errorf("failed to parse git URL: %w", err)
+		}
+		u.User = url.UserPassword(gc.config.Username, gc.config.Password)
+		cloneURL = u.String()
+	case "ssh":
+		if gc.config.PrivateKey != "" {
+			env = append(env,
+				"GIT_SSH_COMMAND=ssh -i "+gc.config.PrivateKey+
+					" -o StrictHostKeyChecking=no -o BatchMode=yes")
+		}
+	}
+
+	args := []string{"clone"}
+	if branch != "" {
+		args = append(args, "--branch", branch, "--single-branch")
+	}
+	args = append(args, cloneURL, dir)
+
+	cmd := exec.Command("git", args...)
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("system git clone failed: %w\n%s", err, out)
+	}
+
+	repo, err := gitv5.PlainOpen(dir)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("failed to open cloned repo: %w", err)
+	}
+
+	return dir, repo, nil
+}
+
+// fetchWithSystemGit runs "git fetch --all" in the on-disk clone directory.
+// Used for scheduled updates when the system git fallback is active.
+func (gc *gitConfigManager) fetchWithSystemGit() error {
+	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if gc.config.Auth == "ssh" && gc.config.PrivateKey != "" {
+		env = append(env,
+			"GIT_SSH_COMMAND=ssh -i "+gc.config.PrivateKey+
+				" -o StrictHostKeyChecking=no -o BatchMode=yes")
+	}
+
+	cmd := exec.Command("git", "-C", gc.tempDir, "fetch", "--all")
+	cmd.Env = env
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("system git fetch failed: %w\n%s", err, out)
+	}
+	return nil
+}
 
 func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []string) (map[policyPath]policyData, error) {
 	policiesByPath := make(map[policyPath]policyData)
