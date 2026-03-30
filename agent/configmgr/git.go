@@ -114,20 +114,33 @@ func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Re
 	return dir, repo, nil
 }
 
-// fetchWithSystemGit runs "git fetch --all" in the on-disk clone directory.
+// fetchWithSystemGit runs "git fetch" with an explicit refspec to update refs/heads/<branch>.
 // Used for scheduled updates when the system git fallback is active.
 func (gc *gitConfigManager) fetchWithSystemGit() error {
 	if gc.tempDir == "" {
 		return errors.New("system git fallback not initialized; clone must be called first")
 	}
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
-	if gc.config.Auth == "ssh" && gc.config.PrivateKey != "" {
-		env = append(env,
-			"GIT_SSH_COMMAND=ssh -i '"+gc.config.PrivateKey+
-				"' -o StrictHostKeyChecking=no -o BatchMode=yes")
+
+	fetchURL := gc.config.URL
+	switch gc.config.Auth {
+	case "basic":
+		u, err := url.Parse(gc.config.URL)
+		if err != nil {
+			return fmt.Errorf("failed to parse git URL for fetch: %w", err)
+		}
+		u.User = url.UserPassword(gc.config.Username, gc.config.Password)
+		fetchURL = u.String()
+	case "ssh":
+		if gc.config.PrivateKey != "" {
+			env = append(env,
+				"GIT_SSH_COMMAND=ssh -i '"+gc.config.PrivateKey+
+					"' -o StrictHostKeyChecking=no -o BatchMode=yes")
+		}
 	}
 
-	cmd := exec.Command("git", "-C", gc.tempDir, "fetch", "--all")
+	refspec := "refs/heads/" + gc.config.Branch + ":refs/heads/" + gc.config.Branch
+	cmd := exec.Command("git", "-C", gc.tempDir, "fetch", fetchURL, refspec)
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("system git fetch failed: %w\n%s", err, out)
