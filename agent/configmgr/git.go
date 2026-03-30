@@ -461,68 +461,93 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		return err
 	}
 
-	// Open an in-memory repository
-	repo, err := gitv5.Init(memory.NewStorage(), nil)
-	if err != nil {
-		return err
-	}
+	var branchName string
 
-	// Add the remote
-	if _, err = repo.CreateRemote(&gitconfig.RemoteConfig{
-		Name: "origin",
-		URLs: []string{gc.config.URL},
-	}); err != nil {
-		return err
-	}
+	if IsAzureDevOpsURL(gc.config.URL) {
+		gc.logger.Info("Azure DevOps URL detected, using system git fallback", "url", gc.config.URL)
+		branchName = gc.config.Branch // may be empty; cloneWithSystemGit handles that
 
-	// Fetch all branches and references
-	if err = repo.Fetch(&gitv5.FetchOptions{
-		RemoteName:      "origin",
-		Auth:            gc.authMethod,
-		InsecureSkipTLS: gc.config.SkipTLS,
-	}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
-		return err
-	}
+		var dir string
+		dir, gc.repo, err = gc.cloneWithSystemGit(branchName)
+		if err != nil {
+			return err
+		}
+		gc.tempDir = dir
 
-	// Get the remote reference list
-	remote, err := repo.Remote("origin")
-	if err != nil {
-		return err
-	}
+		// If no branch was specified, read the actual branch from HEAD
+		if branchName == "" {
+			head, err := gc.repo.Head()
+			if err != nil {
+				_ = os.RemoveAll(gc.tempDir)
+				return fmt.Errorf("failed to read HEAD after system git clone: %w", err)
+			}
+			branchName = head.Name().Short()
+			gc.logger.Info("detected default branch", "branch", branchName)
+		}
+	} else {
+		// Open an in-memory repository
+		repo, err := gitv5.Init(memory.NewStorage(), nil)
+		if err != nil {
+			return err
+		}
 
-	refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod, InsecureSkipTLS: gc.config.SkipTLS})
-	if err != nil {
-		return err
-	}
+		// Add the remote
+		if _, err = repo.CreateRemote(&gitconfig.RemoteConfig{
+			Name: "origin",
+			URLs: []string{gc.config.URL},
+		}); err != nil {
+			return err
+		}
 
-	// Find the default branch
-	branchName := gc.config.Branch
-	if branchName == "" {
-		for _, ref := range refs {
-			if ref.Name().IsBranch() {
-				branchName = ref.Name().Short()
-				gc.logger.Info("detected default branch", "branch", branchName)
-				break
+		// Fetch all branches and references
+		if err = repo.Fetch(&gitv5.FetchOptions{
+			RemoteName:      "origin",
+			Auth:            gc.authMethod,
+			InsecureSkipTLS: gc.config.SkipTLS,
+		}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
+			return err
+		}
+
+		// Get the remote reference list
+		remote, err := repo.Remote("origin")
+		if err != nil {
+			return err
+		}
+
+		refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod, InsecureSkipTLS: gc.config.SkipTLS})
+		if err != nil {
+			return err
+		}
+
+		// Find the default branch
+		branchName = gc.config.Branch
+		if branchName == "" {
+			for _, ref := range refs {
+				if ref.Name().IsBranch() {
+					branchName = ref.Name().Short()
+					gc.logger.Info("detected default branch", "branch", branchName)
+					break
+				}
+			}
+
+			if branchName == "" {
+				return errors.New("failed to detect default branch, repository might be empty")
 			}
 		}
 
-		if branchName == "" {
-			return errors.New("failed to detect default branch, repository might be empty")
+		gc.logger.Info("cloning repository", "url", gc.config.URL, "branch", branchName)
+
+		// Now clone the repository with the determined branch
+		gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
+			Auth:            gc.authMethod,
+			URL:             gc.config.URL,
+			ReferenceName:   plumbing.NewBranchReferenceName(branchName),
+			SingleBranch:    true,
+			InsecureSkipTLS: gc.config.SkipTLS,
+		})
+		if err != nil {
+			return err
 		}
-	}
-
-	gc.logger.Info("cloning repository", "url", gc.config.URL, "branch", branchName)
-
-	// Now clone the repository with the determined branch
-	gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
-		Auth:            gc.authMethod,
-		URL:             gc.config.URL,
-		ReferenceName:   plumbing.NewBranchReferenceName(branchName),
-		SingleBranch:    true,
-		InsecureSkipTLS: gc.config.SkipTLS,
-	})
-	if err != nil {
-		return err
 	}
 
 	gc.config.Branch = branchName
