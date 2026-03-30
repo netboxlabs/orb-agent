@@ -87,8 +87,8 @@ func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Re
 	case "ssh":
 		if gc.config.PrivateKey != "" {
 			env = append(env,
-				"GIT_SSH_COMMAND=ssh -i "+gc.config.PrivateKey+
-					" -o StrictHostKeyChecking=no -o BatchMode=yes")
+				"GIT_SSH_COMMAND=ssh -i '"+gc.config.PrivateKey+
+					"' -o StrictHostKeyChecking=no -o BatchMode=yes")
 		}
 	}
 
@@ -117,11 +117,14 @@ func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Re
 // fetchWithSystemGit runs "git fetch --all" in the on-disk clone directory.
 // Used for scheduled updates when the system git fallback is active.
 func (gc *gitConfigManager) fetchWithSystemGit() error {
+	if gc.tempDir == "" {
+		return errors.New("system git fallback not initialized; clone must be called first")
+	}
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	if gc.config.Auth == "ssh" && gc.config.PrivateKey != "" {
 		env = append(env,
-			"GIT_SSH_COMMAND=ssh -i "+gc.config.PrivateKey+
-				" -o StrictHostKeyChecking=no -o BatchMode=yes")
+			"GIT_SSH_COMMAND=ssh -i '"+gc.config.PrivateKey+
+				"' -o StrictHostKeyChecking=no -o BatchMode=yes")
 	}
 
 	cmd := exec.Command("git", "-C", gc.tempDir, "fetch", "--all")
