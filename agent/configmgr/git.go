@@ -301,15 +301,23 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	gc.logger.Debug("Running scheduled Git Config Manager task")
 
 	// Fetch latest updates from remote
-	err := gc.repo.Fetch(&gitv5.FetchOptions{
-		RemoteName:      "origin",
-		Auth:            gc.authMethod,
-		InsecureSkipTLS: gc.config.SkipTLS,
-		RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
-	})
-	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
-		gc.logger.Error("Failed to fetch latest changes", "error", err)
-		return
+	if gc.tempDir != "" {
+		// Azure DevOps fallback: use system git
+		if err := gc.fetchWithSystemGit(); err != nil {
+			gc.logger.Error("Failed to fetch latest changes", "error", err)
+			return
+		}
+	} else {
+		err := gc.repo.Fetch(&gitv5.FetchOptions{
+			RemoteName:      "origin",
+			Auth:            gc.authMethod,
+			InsecureSkipTLS: gc.config.SkipTLS,
+			RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
+		})
+		if err != nil && err != gitv5.NoErrAlreadyUpToDate {
+			gc.logger.Error("Failed to fetch latest changes", "error", err)
+			return
+		}
 	}
 
 	// Get the latest reference (HEAD)
