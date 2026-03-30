@@ -1,26 +1,66 @@
 package version
 
 import (
-	_ "embed"
-	"strings"
+	"runtime/debug"
+	"strconv"
+	"time"
 )
 
-// Version is the version of the orb-agent
-//
-//go:embed BUILD_VERSION.txt
+// buildVersion is set at build time via -ldflags "-X"
 var buildVersion string
 
-// Commit is the commit of the orb-agent
-//
-//go:embed BUILD_COMMIT.txt
-var buildCommit string
+// buildBranch is set at build time via -ldflags "-X"
+var buildBranch string
 
-// GetBuildVersion returns the build version of the orb-agent
-func GetBuildVersion() string {
-	return strings.TrimSpace(buildVersion)
+var (
+	buildCommit   string
+	buildTime     time.Time
+	buildModified bool
+)
+
+func init() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			buildCommit = s.Value
+		case "vcs.time":
+			if t, err := time.Parse(time.RFC3339, s.Value); err == nil {
+				buildTime = t
+			}
+		case "vcs.modified":
+			buildModified, _ = strconv.ParseBool(s.Value)
+		}
+	}
 }
 
-// GetBuildCommit returns the build commit of the orb-agent
+// GetBuildVersion returns the build version of the orb-agent.
+func GetBuildVersion() string {
+	if buildVersion == "" {
+		return "dev"
+	}
+	return buildVersion
+}
+
+// GetBuildCommit returns the full VCS commit hash.
 func GetBuildCommit() string {
-	return strings.TrimSpace(buildCommit)
+	return buildCommit
+}
+
+// GetBuildBranch returns the branch the binary was built from.
+func GetBuildBranch() string {
+	return buildBranch
+}
+
+// GetBuildTime returns the VCS commit timestamp.
+func GetBuildTime() time.Time {
+	return buildTime
+}
+
+// GetBuildModified returns whether the working tree had uncommitted changes at build time.
+func GetBuildModified() bool {
+	return buildModified
 }

@@ -52,7 +52,11 @@ func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[s
 		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
 		AgentLabels:   labels,
 		OrbAgent: messages.OrbAgentInfo{
-			Version: version.GetBuildVersion(),
+			Version:   version.GetBuildVersion(),
+			Branch:    version.GetBuildBranch(),
+			Commit:    version.GetBuildCommit(),
+			Modified:  version.GetBuildModified(),
+			BuildTime: version.GetBuildTime(),
 		},
 		Backends:    backendsInfo,
 		AgentConfig: config,
