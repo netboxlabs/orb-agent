@@ -636,7 +636,13 @@ func (gc *gitConfigManager) GetContext(ctx context.Context) context.Context {
 	return ctx
 }
 
-// Stop is a no-op for git config manager.
+// Stop cleans up resources held by the git config manager.
 func (gc *gitConfigManager) Stop(_ context.Context) error {
+	if gc.tempDir != "" {
+		if err := os.RemoveAll(gc.tempDir); err != nil {
+			gc.logger.Error("failed to remove git temp dir", "path", gc.tempDir, "error", err)
+		}
+		gc.tempDir = ""
+	}
 	return nil
 }
