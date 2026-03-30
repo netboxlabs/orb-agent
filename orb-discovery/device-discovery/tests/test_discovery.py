@@ -10,6 +10,7 @@ import pytest
 from napalm.base.base import NetworkDriver
 
 from device_discovery.discovery import (
+    _DRIVER_MISMATCH_MARKERS,
     discover_device_driver,
     napalm_driver_list,
     set_napalm_logs_level,
@@ -162,6 +163,87 @@ def test_discover_device_driver_mixed_results(mock_get_network_driver):
 
     driver = discover_device_driver(info)
     assert driver == "nxos", "Expected the 'ios' driver to be found"
+
+
+def _make_driver_mock(mock_get_network_driver, facts: dict):
+    """
+    Configure mock_get_network_driver so device.get_facts() returns facts.
+
+    The call chain in discover_device_driver is:
+      np_driver = get_network_driver(name)   → class mock
+      with np_driver(host, ...) as device:   → instance mock used as context manager
+          device_info = device.get_facts()   → device is __enter__'s return value
+    """
+    mock_class = MagicMock()
+    mock_class.return_value.__enter__.return_value.get_facts.return_value = facts
+    mock_get_network_driver.return_value = mock_class
+
+
+@pytest.mark.parametrize(
+    "hostname,fqdn,marker",
+    [
+        ("% Invalid", "", "%"),
+        ("", "^ bad fqdn", "^"),
+        ("Invalid input detected", "", "Invalid input"),
+        ("", "prefix-Invalid input-suffix", "Invalid input"),
+    ],
+)
+def test_discover_device_driver_mismatch_marker_in_facts(
+    mock_get_network_driver, hostname, fqdn, marker
+):
+    """Test that a driver is skipped when device facts contain a mismatch marker."""
+    _make_driver_mock(mock_get_network_driver, {
+        "serial_number": "ABC123",
+        "hostname": hostname,
+        "fqdn": fqdn,
+    })
+
+    info = SimpleNamespace(
+        hostname="testhost",
+        username="testuser",
+        password="testpass",
+        timeout=10,
+        optional_args={},
+    )
+
+    driver = discover_device_driver(info)
+    assert driver is None, f"Expected no driver when '{marker}' marker is in facts"
+
+
+def test_discover_device_driver_mismatch_marker_falls_through_to_valid_driver(
+    mock_get_network_driver,
+):
+    """Test that discovery succeeds on a later driver when an earlier one returns mismatch markers."""
+
+    def side_effect(driver_name):
+        mock_class = MagicMock()
+        if driver_name == "eos":
+            facts = {"serial_number": "ABC123", "hostname": "% invalid", "fqdn": ""}
+        else:
+            facts = {"serial_number": "ABC123", "hostname": "real-device", "fqdn": "real-device.example.com"}
+        mock_class.return_value.__enter__.return_value.get_facts.return_value = facts
+        return mock_class
+
+    mock_get_network_driver.side_effect = side_effect
+
+    info = SimpleNamespace(
+        hostname="testhost",
+        username="testuser",
+        password="testpass",
+        timeout=10,
+        optional_args={},
+    )
+
+    driver = discover_device_driver(info)
+    assert driver is not None
+    assert driver != "eos"
+
+
+def test_driver_mismatch_markers_constant():
+    """Test that _DRIVER_MISMATCH_MARKERS contains the expected markers."""
+    assert "%" in _DRIVER_MISMATCH_MARKERS
+    assert "^" in _DRIVER_MISMATCH_MARKERS
+    assert "Invalid input" in _DRIVER_MISMATCH_MARKERS
 
 
 def test_napalm_driver_list(mock_packages_distributions, mock_import_module):
