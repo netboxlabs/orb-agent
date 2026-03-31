@@ -3,6 +3,7 @@ package configmgr_test
 import (
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -214,4 +215,105 @@ backend1:
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no policies match the selector")
 	pMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
+}
+
+// TestGitStartAzureDevOpsURLFallback verifies that an Azure DevOps URL triggers
+// the system git fallback path.  A local bare repo is used as the "remote"; a
+// git URL rewrite (via GIT_CONFIG_GLOBAL) redirects the dev.azure.com URL to
+// the filesystem so the test runs without network access.
+func TestGitStartAzureDevOpsURLFallback(t *testing.T) {
+	// Skip if system git is not available.
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("system git not found, skipping ADO fallback test")
+	}
+
+	// Create a source repo with selector.yaml + policy.yaml.
+	sourceDir, err := os.MkdirTemp("", "ado-source-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(sourceDir)
+
+	sourceRepo, err := gitv5.PlainInit(sourceDir, false)
+	require.NoError(t, err)
+
+	selectorContent := `
+ado_selector:
+  selector:
+    env: test
+  policies:
+    ado_policy:
+      enabled: true
+      path: "policy.yaml"
+`
+	policyContent := `
+backend1:
+  ado_policy:
+    key: value
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "selector.yaml"), []byte(selectorContent), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "policy.yaml"), []byte(policyContent), 0o644))
+
+	wt, err := sourceRepo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add("selector.yaml")
+	require.NoError(t, err)
+	_, err = wt.Add("policy.yaml")
+	require.NoError(t, err)
+	_, err = wt.Commit("initial commit", &gitv5.CommitOptions{
+		Author: &object.Signature{Name: "test", Email: "test@test.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	// Create a bare clone to act as the remote.
+	bareDir, err := os.MkdirTemp("", "ado-bare-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(bareDir)
+
+	bareRepoPath := filepath.Join(bareDir, "repo.git")
+	out, err := exec.Command("git", "clone", "--bare", sourceDir, bareRepoPath).CombinedOutput()
+	require.NoError(t, err, "bare clone failed: %s", out)
+
+	// Write a gitconfig that rewrites the ADO URL to the local bare repo.
+	adoURL := "https://dev.azure.com/test/org/_git/testrepo"
+	localURL := "file://" + bareRepoPath
+	gitconfigContent := "[url \"" + localURL + "\"]\n\tinsteadOf = " + adoURL + "\n"
+	gitconfigPath := filepath.Join(t.TempDir(), "test-gitconfig")
+	require.NoError(t, os.WriteFile(gitconfigPath, []byte(gitconfigContent), 0o644))
+
+	// Point git at our test config so the URL rewrite takes effect.
+	t.Setenv("GIT_CONFIG_GLOBAL", gitconfigPath)
+
+	// Confirm URL detection.
+	require.True(t, configmgr.IsAzureDevOpsURL(adoURL), "expected IsAzureDevOpsURL to return true")
+
+	pMgr := new(mockPolicyManager)
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Labels: map[string]string{"env": "test"},
+			ConfigManager: config.ManagerConfig{
+				Active: "git",
+				Sources: config.Sources{
+					Git: config.GitManager{
+						URL:    adoURL,
+						Branch: "", // auto-detect
+						Auth:   "none",
+					},
+				},
+			},
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	gc := configmgr.New(logger, pMgr, "git", &mockBackendState{})
+
+	backends := map[string]backend.Backend{
+		"backend1": &mockBackend{name: "backend1"},
+	}
+
+	pMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		return p.Backend == "backend1" && p.Action == "manage"
+	})).Return()
+
+	err = gc.Start(cfg, backends)
+	require.NoError(t, err, "Start() via system git fallback should succeed")
+	pMgr.AssertCalled(t, "ManagePolicy", mock.Anything)
 }
