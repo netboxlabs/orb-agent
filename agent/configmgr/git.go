@@ -32,6 +32,12 @@ import (
 // IsAzureDevOpsURL reports whether url points to an Azure DevOps repository.
 // Azure DevOps is incompatible with go-git's pack protocol negotiation; these
 // repos require a system git fallback.
+//
+// TODO: Remove IsAzureDevOpsURL, cloneWithSystemGit, fetchWithSystemGit, and
+// the ADO branches in Start()/schedule()/Stop() once go-git v6 is released.
+// Full multi_ack/multi_ack_detailed support was merged to go-git main at
+// commit 14eabbda76d37e2dfcfa25b3ac236f2365adb6da but targets v6.
+// Tracking issue: https://github.com/go-git/go-git/issues/64
 func IsAzureDevOpsURL(rawURL string) bool {
 	return strings.Contains(rawURL, "dev.azure.com") ||
 		strings.Contains(rawURL, "visualstudio.com")
