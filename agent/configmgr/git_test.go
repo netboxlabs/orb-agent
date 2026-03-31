@@ -230,7 +230,9 @@ func TestGitStartAzureDevOpsURLFallback(t *testing.T) {
 	// Create a source repo with selector.yaml + policy.yaml.
 	sourceDir, err := os.MkdirTemp("", "ado-source-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(sourceDir)
+	defer func() {
+		require.NoError(t, os.RemoveAll(sourceDir))
+	}()
 
 	sourceRepo, err := gitv5.PlainInit(sourceDir, false)
 	require.NoError(t, err)
@@ -266,7 +268,9 @@ backend1:
 	// Create a bare clone to act as the remote.
 	bareDir, err := os.MkdirTemp("", "ado-bare-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(bareDir)
+	defer func() {
+		require.NoError(t, os.RemoveAll(bareDir))
+	}()
 
 	bareRepoPath := filepath.Join(bareDir, "repo.git")
 	out, err := exec.Command("git", "clone", "--bare", sourceDir, bareRepoPath).CombinedOutput()
