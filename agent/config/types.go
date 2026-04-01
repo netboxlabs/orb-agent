@@ -44,7 +44,6 @@ type FleetManager struct {
 	TokenExpiryCheckInterval *int   `yaml:"token_expiry_check_interval,omitempty"` // Check interval in seconds (default: 30)
 	TokenReconnectBuffer     *int   `yaml:"token_reconnect_buffer,omitempty"`      // Reconnect buffer in seconds before expiry (default: 120)
 	OTLPBridgeGRPCPort       *int   `yaml:"otlp_bridge_grpc_port,omitempty"`       // GRPC port for the OTLP bridge (default: 4317)
-	DebugPort                *int   `yaml:"debug_port,omitempty"`                  // Debug HTTP server port (default: OS-assigned); set to enable debug endpoints
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.

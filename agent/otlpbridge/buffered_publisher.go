@@ -61,6 +61,9 @@ func (bp *BufferedPublisher) Publish(_ context.Context, topic string, payload []
 	select {
 	case <-bp.ctx.Done():
 		return fmt.Errorf("publisher closed")
+	default:
+	}
+	select {
 	case bp.queue <- publishJob{topic: topic, payload: payload}:
 		return nil
 	default:

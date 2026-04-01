@@ -1,3 +1,5 @@
+//go:build debug
+
 package configmgr
 
 import (
@@ -14,10 +16,11 @@ import (
 )
 
 func TestDebugServer_Health(t *testing.T) {
+	t.Setenv("ORB_DEBUG_PORT", "0")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reconnectChan := make(chan struct{}, 1)
 
-	ds, err := startDebugServer(logger, 0, debugServerOpts{reconnectChan: reconnectChan})
+	ds, err := startDebugServer(logger, debugServerOpts{reconnectChan: reconnectChan})
 	require.NoError(t, err)
 	defer ds.stop()
 
@@ -29,12 +32,13 @@ func TestDebugServer_Health(t *testing.T) {
 }
 
 func TestDebugServer_ForceTokenRotation_Success(t *testing.T) {
+	t.Setenv("ORB_DEBUG_PORT", "0")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reconnectChan := make(chan struct{}, 1)
 	oldExpiry := time.Now().Add(5 * time.Minute)
 	newExpiry := time.Now().Add(60 * time.Minute)
 
-	ds, err := startDebugServer(logger, 0, debugServerOpts{
+	ds, err := startDebugServer(logger, debugServerOpts{
 		reconnectChan: reconnectChan,
 		tokenRotate: func() (time.Time, time.Time, error) {
 			return oldExpiry, newExpiry, nil
@@ -64,10 +68,11 @@ func TestDebugServer_ForceTokenRotation_Success(t *testing.T) {
 }
 
 func TestDebugServer_ForceTokenRotation_RefreshError(t *testing.T) {
+	t.Setenv("ORB_DEBUG_PORT", "0")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reconnectChan := make(chan struct{}, 1)
 
-	ds, err := startDebugServer(logger, 0, debugServerOpts{
+	ds, err := startDebugServer(logger, debugServerOpts{
 		reconnectChan: reconnectChan,
 		tokenRotate: func() (time.Time, time.Time, error) {
 			return time.Time{}, time.Time{}, fmt.Errorf("auth server unavailable")
@@ -89,10 +94,11 @@ func TestDebugServer_ForceTokenRotation_RefreshError(t *testing.T) {
 }
 
 func TestDebugServer_ForceTokenRotation_NotAvailable(t *testing.T) {
+	t.Setenv("ORB_DEBUG_PORT", "0")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reconnectChan := make(chan struct{}, 1)
 
-	ds, err := startDebugServer(logger, 0, debugServerOpts{
+	ds, err := startDebugServer(logger, debugServerOpts{
 		reconnectChan: reconnectChan,
 		tokenRotate:   nil,
 	})
@@ -107,11 +113,12 @@ func TestDebugServer_ForceTokenRotation_NotAvailable(t *testing.T) {
 }
 
 func TestDebugServer_TokenStatus(t *testing.T) {
+	t.Setenv("ORB_DEBUG_PORT", "0")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reconnectChan := make(chan struct{}, 1)
 	expiry := time.Now().Add(30 * time.Minute)
 
-	ds, err := startDebugServer(logger, 0, debugServerOpts{
+	ds, err := startDebugServer(logger, debugServerOpts{
 		reconnectChan: reconnectChan,
 		tokenStatus: func() tokenStatusInfo {
 			return tokenStatusInfo{
@@ -138,10 +145,11 @@ func TestDebugServer_TokenStatus(t *testing.T) {
 }
 
 func TestDebugServer_TokenStatus_NotAvailable(t *testing.T) {
+	t.Setenv("ORB_DEBUG_PORT", "0")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reconnectChan := make(chan struct{}, 1)
 
-	ds, err := startDebugServer(logger, 0, debugServerOpts{
+	ds, err := startDebugServer(logger, debugServerOpts{
 		reconnectChan: reconnectChan,
 		tokenStatus:   nil,
 	})
@@ -156,10 +164,11 @@ func TestDebugServer_TokenStatus_NotAvailable(t *testing.T) {
 }
 
 func TestDebugServer_ForceReconnect(t *testing.T) {
+	t.Setenv("ORB_DEBUG_PORT", "0")
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reconnectChan := make(chan struct{}, 1)
 
-	ds, err := startDebugServer(logger, 0, debugServerOpts{reconnectChan: reconnectChan})
+	ds, err := startDebugServer(logger, debugServerOpts{reconnectChan: reconnectChan})
 	require.NoError(t, err)
 	defer ds.stop()
 

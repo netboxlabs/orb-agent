@@ -1,4 +1,4 @@
-//go:build !nodebug
+//go:build debug
 
 package configmgr
 
@@ -8,44 +8,29 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 )
 
 // debugServer runs a lightweight HTTP server exposing debug/test endpoints.
-// It is compiled in by default; build with "-tags nodebug" to exclude it.
+// Only compiled when built with "-tags debug".
 type debugServer struct {
 	logger   *slog.Logger
 	listener net.Listener
 	server   *http.Server
 }
 
-// tokenStatusInfo is returned by the token-status endpoint.
-type tokenStatusInfo struct {
-	ExpiresAt      time.Time `json:"expires_at"`
-	TimeUntilExpiry string   `json:"time_until_expiry"`
-	Expired        bool      `json:"expired"`
-	ExpiringSoon   bool      `json:"expiring_soon"`
-}
+// startDebugServer starts the debug HTTP server.
+// Port is read from ORB_DEBUG_PORT env (default 6166).
+func startDebugServer(logger *slog.Logger, opts debugServerOpts) (*debugServer, error) {
+	port := 6166
+	if v := os.Getenv("ORB_DEBUG_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p >= 0 {
+			port = p
+		}
+	}
 
-// tokenRotationResult is returned by the force-token-rotation endpoint.
-type tokenRotationResult struct {
-	Status          string        `json:"status"`
-	PreviousExpiry  time.Time     `json:"previous_expiry,omitempty"`
-	NewExpiry       time.Time     `json:"new_expiry,omitempty"`
-	TimeUntilExpiry string        `json:"time_until_expiry,omitempty"`
-}
-
-// debugServerOpts holds the callbacks the debug server needs, keeping it decoupled
-// from concrete types like AuthTokenManager.
-type debugServerOpts struct {
-	reconnectChan chan<- struct{}
-	tokenStatus   func() tokenStatusInfo                  // nil-safe: endpoint returns 501 when absent
-	tokenRotate   func() (old, new time.Time, err error)  // nil-safe: refreshes token without reconnecting
-}
-
-// startDebugServer starts the debug HTTP server on the given port.
-// Pass 0 to let the OS pick a free port (useful in tests).
-func startDebugServer(logger *slog.Logger, port int, opts debugServerOpts) (*debugServer, error) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /debug/force-reconnect", func(w http.ResponseWriter, _ *http.Request) {
@@ -62,9 +47,6 @@ func startDebugServer(logger *slog.Logger, port int, opts debugServerOpts) (*deb
 	})
 
 	mux.HandleFunc("POST /debug/force-token-rotation", func(w http.ResponseWriter, _ *http.Request) {
-		// Non-destructive: refreshes and stashes the JWT without tearing down the
-		// MQTT connection. The ConnectPacketBuilder will pick up the fresh token
-		// whenever the next natural reconnect occurs.
 		if opts.tokenRotate == nil {
 			w.WriteHeader(http.StatusNotImplemented)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "token rotation not available"})

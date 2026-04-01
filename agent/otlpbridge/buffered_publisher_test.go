@@ -93,7 +93,7 @@ func TestBufferedPublisher_PublishAfterCloseReturnsError(t *testing.T) {
 	bp.Close()
 
 	err := bp.Publish(context.Background(), "test/topic", []byte("payload"))
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "closed")
 }
 

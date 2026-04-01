@@ -245,13 +245,9 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
 	go fleetManager.monitorTokenExpiry()
 
-	// Start debug HTTP server (no-op when built with -tags nodebug).
-	// Default port 6166; override via debug_port in config.
-	debugPort := 6166
-	if cfg.OrbAgent.ConfigManager.Sources.Fleet.DebugPort != nil {
-		debugPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.DebugPort
-	}
-	fleetManager.debug, _ = startDebugServer(fleetManager.logger, debugPort, debugServerOpts{
+	// Start debug HTTP server (no-op unless built with -tags debug).
+	// Port controlled via ORB_DEBUG_PORT env var (default 6166).
+	fleetManager.debug, _ = startDebugServer(fleetManager.logger, debugServerOpts{
 		reconnectChan: fleetManager.reconnectChan,
 		tokenStatus: func() tokenStatusInfo {
 			expiry := fleetManager.authTokenManager.GetTokenExpiryTime()
