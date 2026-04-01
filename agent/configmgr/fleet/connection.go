@@ -362,19 +362,8 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 	// On every reconnect, refresh the JWT before sending CONNECT so autopaho's
 	// auto-reconnect never presents a stale token to the broker.
-	if connection.tokenRefresher != nil {
-		cfg.ConnectPacketBuilder = func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
-			freshJWT, err := connection.tokenRefresher(context.Background())
-			if err != nil {
-				connection.logger.Error("failed to refresh token for MQTT reconnect", "error", err)
-				// Fall through with existing credentials — broker will reject if truly expired,
-				// and autopaho will retry (calling this builder again).
-				return cp, nil
-			}
-			connection.logger.Info("JWT refreshed for MQTT reconnect")
-			cp.Password = []byte(freshJWT)
-			return cp, nil
-		}
+	if builder := buildConnectPacketBuilder(connection); builder != nil {
+		cfg.ConnectPacketBuilder = builder
 	}
 
 	// Create and start the connection manager using the long-lived context.
@@ -485,4 +474,24 @@ func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic stri
 	// (heartbeats use this function, so successful publish means connection is ok)
 	connection.heartbeatFailCount = 0
 	return nil
+}
+
+// buildConnectPacketBuilder returns a ConnectPacketBuilder callback that refreshes
+// the JWT before every CONNECT packet. Returns nil when no tokenRefresher is set.
+func buildConnectPacketBuilder(connection *MQTTConnection) func(*paho.Connect, *url.URL) (*paho.Connect, error) {
+	if connection.tokenRefresher == nil {
+		return nil
+	}
+	return func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+		freshJWT, err := connection.tokenRefresher(context.Background())
+		if err != nil {
+			connection.logger.Error("failed to refresh token for MQTT reconnect", "error", err)
+			// Fall through with existing credentials — broker will reject if truly expired,
+			// and autopaho will retry (calling this builder again).
+			return cp, nil
+		}
+		connection.logger.Info("JWT refreshed for MQTT reconnect")
+		cp.Password = []byte(freshJWT)
+		return cp, nil
+	}
 }

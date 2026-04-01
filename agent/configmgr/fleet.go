@@ -42,6 +42,7 @@ type FleetConfigManager struct {
 	connectionDetails fleet.ConnectionDetails
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
+	debug             *debugServer
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -239,6 +240,27 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
 	go fleetManager.monitorTokenExpiry()
+
+	// Start debug HTTP server (no-op when built with -tags nodebug)
+	debugPort := 0
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.DebugPort != nil {
+		debugPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.DebugPort
+	}
+	fleetManager.debug, _ = startDebugServer(fleetManager.logger, debugPort, debugServerOpts{
+		reconnectChan: fleetManager.reconnectChan,
+		tokenStatus: func() tokenStatusInfo {
+			expiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+			return tokenStatusInfo{
+				ExpiresAt:       expiry,
+				TimeUntilExpiry: time.Until(expiry).Truncate(time.Second).String(),
+				Expired:         fleetManager.authTokenManager.IsTokenExpired(),
+				ExpiringSoon:    fleetManager.authTokenManager.IsTokenExpiringSoon(2 * time.Minute),
+			}
+		},
+	})
+	if fleetManager.debug != nil {
+		fleetManager.logger.Info("debug server available", "addr", fleetManager.debug.addr())
+	}
 
 	return nil
 }
@@ -482,6 +504,8 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	if fleetManager.monitorCancel != nil {
 		fleetManager.monitorCancel()
 	}
+
+	fleetManager.debug.stop()
 
 	if fleetManager.otlpBridge != nil {
 		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
