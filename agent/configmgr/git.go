@@ -80,6 +80,9 @@ func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Re
 
 	cloneURL := gc.config.URL
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if gc.config.SkipTLS {
+		env = append(env, "GIT_SSL_NO_VERIFY=true")
+	}
 
 	switch gc.config.Auth {
 	case "basic":
@@ -127,6 +130,9 @@ func (gc *gitConfigManager) fetchWithSystemGit() error {
 		return errors.New("system git fallback not initialized; clone must be called first")
 	}
 	env := append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if gc.config.SkipTLS {
+		env = append(env, "GIT_SSL_NO_VERIFY=true")
+	}
 
 	fetchURL := gc.config.URL
 	switch gc.config.Auth {
@@ -146,7 +152,7 @@ func (gc *gitConfigManager) fetchWithSystemGit() error {
 	}
 
 	refspec := "refs/heads/" + gc.config.Branch + ":refs/heads/" + gc.config.Branch
-	cmd := exec.Command("git", "-C", gc.tempDir, "fetch", fetchURL, refspec)
+	cmd := exec.Command("git", "-C", gc.tempDir, "fetch", "--update-head-ok", fetchURL, refspec)
 	cmd.Env = env
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("system git fetch failed: %w\n%s", err, out)
