@@ -43,9 +43,11 @@ install-dev-tools:
 deps:
 	@go mod tidy
 
+GO_BUILD_TAGS := $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)")
+
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)") -o ${BUILD_DIR}/orb-agent cmd/main.go
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" $(GO_BUILD_TAGS) -o ${BUILD_DIR}/orb-agent cmd/main.go
 
 .PHONY: test
 test:
