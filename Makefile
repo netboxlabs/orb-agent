@@ -13,8 +13,6 @@ GOARCH ?= $(shell go env GOARCH)
 GOOS ?= $(shell go env GOOS)
 ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || git describe --tags --always 2>/dev/null || echo dev)}")
 COMMIT_HASH = $(shell git rev-parse --short HEAD)
-# Only append -HASH when ORB_VERSION isn't already the hash itself
-ORB_VERSION_HASH := $(if $(filter $(ORB_VERSION),$(COMMIT_HASH)),$(COMMIT_HASH),$(ORB_VERSION)-$(COMMIT_HASH))
 COMMIT_BRANCH = $(shell branch=$$(git rev-parse --abbrev-ref HEAD); if [ "$$branch" = "HEAD" ]; then branch=$${GITHUB_HEAD_REF:-$$GITHUB_REF_NAME}; fi; echo "$${branch:-unknown}")
 VERSION_PKG = github.com/netboxlabs/orb-agent/agent/version
 EXTRA_LDFLAGS ?=
@@ -48,7 +46,7 @@ deps:
 GO_BUILD_TAGS := $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)")
 
 agent_bin:
-	echo "ORB_VERSION: $(ORB_VERSION_HASH)"
+	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" $(GO_BUILD_TAGS) -o ${BUILD_DIR}/orb-agent cmd/main.go
 
 .PHONY: test
@@ -91,7 +89,7 @@ agent:
 	  --build-arg BUILD_TAGS=$(BUILD_TAGS) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION_HASH) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  -f agent/docker/Dockerfile .
 
 agent_fast:
@@ -102,7 +100,7 @@ agent_fast:
 	  --build-arg BUILD_TAGS=$(BUILD_TAGS) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION_HASH) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  -f agent/docker/Dockerfile .
 
 agent_debug:
@@ -117,7 +115,7 @@ agent_production:
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION_HASH) \
+	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  -f agent/docker/Dockerfile .
 
 agent_debug_production:
