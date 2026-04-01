@@ -15,5 +15,6 @@ func startFleetDebugServer(_ *slog.Logger, _ *fleet.AuthTokenManager, _ chan<- s
 	return nil
 }
 
-func (ds *debugServer) stop()        {}
-func (ds *debugServer) addr() string { return "" }
+func (ds *debugServer) stop() {}
+
+// func (ds *debugServer) addr() string { return "" }
