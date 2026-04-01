@@ -46,6 +46,7 @@ type MQTTConnection struct {
 	groupMembershipFailCount int
 	heartbeatFailCount       int
 	mu                       sync.Mutex
+	tokenRefresher           func(ctx context.Context) (string, error) // returns fresh JWT on reconnect
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -63,6 +64,13 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		dispatchQueue:      make(chan dispatchJob, 100), // Buffered channel to prevent blocking MQTT acks
 		dispatchWorkerDone: make(chan struct{}),
 	}
+}
+
+// SetTokenRefresher sets a callback that returns a fresh JWT. When set, the MQTT
+// connection will call this before every CONNECT packet (including auto-reconnects)
+// to ensure the broker always receives a valid token.
+func (connection *MQTTConnection) SetTokenRefresher(fn func(ctx context.Context) (string, error)) {
+	connection.tokenRefresher = fn
 }
 
 // AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
@@ -350,6 +358,23 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		connection.logger.Info("setting MQTT authentication", "client_id", details.ClientID, "zone", details.Zone)
 		cfg.ConnectUsername = fmt.Sprintf("%s:%s", details.Zone, details.ClientID)
 		cfg.ConnectPassword = []byte(details.Token)
+	}
+
+	// On every reconnect, refresh the JWT before sending CONNECT so autopaho's
+	// auto-reconnect never presents a stale token to the broker.
+	if connection.tokenRefresher != nil {
+		cfg.ConnectPacketBuilder = func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+			freshJWT, err := connection.tokenRefresher(context.Background())
+			if err != nil {
+				connection.logger.Error("failed to refresh token for MQTT reconnect", "error", err)
+				// Fall through with existing credentials — broker will reject if truly expired,
+				// and autopaho will retry (calling this builder again).
+				return cp, nil
+			}
+			connection.logger.Info("JWT refreshed for MQTT reconnect")
+			cp.Password = []byte(freshJWT)
+			return cp, nil
+		}
 	}
 
 	// Create and start the connection manager using the long-lived context.

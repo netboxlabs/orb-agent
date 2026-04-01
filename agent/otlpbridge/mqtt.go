@@ -18,8 +18,9 @@ type MQTTPublisher struct {
 }
 
 // NewMQTTPublisher connects to the MQTT broker and returns a Publisher.
-// It awaits initial connection before returning.
-func NewMQTTPublisher(ctx context.Context, mqttURL, jwt string) (*MQTTPublisher, error) {
+// It awaits initial connection before returning. If tokenRefresher is non-nil,
+// it is called before every CONNECT packet to supply a fresh JWT.
+func NewMQTTPublisher(ctx context.Context, mqttURL, jwt string, tokenRefresher func(ctx context.Context) (string, error)) (*MQTTPublisher, error) {
 	u, err := url.Parse(mqttURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid mqtt url: %w", err)
@@ -39,6 +40,17 @@ func NewMQTTPublisher(ctx context.Context, mqttURL, jwt string) (*MQTTPublisher,
 	if jwt != "" {
 		cfg.ConnectUsername = clientID
 		cfg.ConnectPassword = []byte(jwt)
+	}
+
+	if tokenRefresher != nil {
+		cfg.ConnectPacketBuilder = func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+			freshJWT, err := tokenRefresher(context.Background())
+			if err != nil {
+				return cp, nil // fall through with existing token
+			}
+			cp.Password = []byte(freshJWT)
+			return cp, nil
+		}
 	}
 
 	cm, err := autopaho.NewConnection(ctx, cfg)

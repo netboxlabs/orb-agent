@@ -167,6 +167,18 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
 
+	// Wire up token refresher so autopaho's ConnectPacketBuilder can fetch a fresh JWT
+	// on every reconnect attempt, eliminating the stale-token race window.
+	if mqttConn, ok := fleetManager.connection.(*fleet.MQTTConnection); ok {
+		mqttConn.SetTokenRefresher(func(ctx context.Context) (string, error) {
+			resp, err := fleetManager.authTokenManager.RefreshToken(ctx)
+			if err != nil {
+				return "", err
+			}
+			return resp.AccessToken, nil
+		})
+	}
+
 	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 	if err != nil {
 		return err
