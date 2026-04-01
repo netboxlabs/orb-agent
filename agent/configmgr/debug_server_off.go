@@ -11,5 +11,5 @@ func startDebugServer(_ *slog.Logger, _ debugServerOpts) (*debugServer, error) {
 	return nil, nil
 }
 
-func (ds *debugServer) stop() {}
+func (ds *debugServer) stop()        {}
 func (ds *debugServer) addr() string { return "" }

@@ -253,14 +253,14 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 				ExpiringSoon:    fleetManager.authTokenManager.IsTokenExpiringSoon(2 * time.Minute),
 			}
 		},
-		tokenRotate: func() (old, new time.Time, err error) {
+		tokenRotate: func() (old, fresh time.Time, err error) {
 			old = fleetManager.authTokenManager.GetTokenExpiryTime()
 			_, err = fleetManager.authTokenManager.RefreshToken(context.Background())
 			if err != nil {
 				return old, time.Time{}, err
 			}
-			new = fleetManager.authTokenManager.GetTokenExpiryTime()
-			return old, new, nil
+			fresh = fleetManager.authTokenManager.GetTokenExpiryTime()
+			return old, fresh, nil
 		},
 	})
 	if fleetManager.debug != nil {

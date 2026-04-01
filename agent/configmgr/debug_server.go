@@ -21,6 +21,14 @@ type debugServer struct {
 	server   *http.Server
 }
 
+// tokenRotationResult is returned by the force-token-rotation debug endpoint.
+type tokenRotationResult struct {
+	Status          string    `json:"status"`
+	TimeUntilExpiry string    `json:"time_until_expiry,omitempty"`
+	PreviousExpiry  time.Time `json:"previous_expiry,omitempty"`
+	NewExpiry       time.Time `json:"new_expiry,omitempty"`
+}
+
 // startDebugServer starts the debug HTTP server.
 // Port is read from ORB_DEBUG_PORT env (default 6166).
 func startDebugServer(logger *slog.Logger, opts debugServerOpts) (*debugServer, error) {

@@ -44,7 +44,9 @@ func NewMQTTPublisher(ctx context.Context, mqttURL, jwt string, tokenRefresher f
 
 	if tokenRefresher != nil {
 		cfg.ConnectPacketBuilder = func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
-			freshJWT, err := tokenRefresher(context.Background())
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			freshJWT, err := tokenRefresher(ctx)
 			if err != nil {
 				return cp, nil // fall through with existing token
 			}
