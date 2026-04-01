@@ -16,6 +16,11 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
+type publishJob struct {
+	topic   string
+	payload []byte
+}
+
 // BridgeServer holds the lifecycle for the OTLP → MQTT bridge server.
 type BridgeServer struct {
 	cfg              BridgeConfig
@@ -31,15 +36,34 @@ type BridgeServer struct {
 	telemetryTopic string
 	policyRepo     policies.PolicyRepo
 	logger         *slog.Logger
+
+	// Publish buffer — absorbs brief MQTT outages so handlers never block.
+	queue      chan publishJob
+	queueCtx   context.Context
+	queueStop  context.CancelFunc
+	queueDone  chan struct{}
 }
 
 // NewBridgeServer builds a BridgeServer but does not start it.
+// The publish buffer starts immediately; messages queue until a publisher is set.
 func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *slog.Logger) (*BridgeServer, error) {
 	enc, err := buildEncoder(cfg.Encoding)
 	if err != nil {
 		return nil, err
 	}
-	return &BridgeServer{cfg: cfg, enc: enc, policyRepo: policyRepo, logger: logger}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &BridgeServer{
+		cfg:        cfg,
+		enc:        enc,
+		policyRepo: policyRepo,
+		logger:     logger,
+		queue:      make(chan publishJob, 1000),
+		queueCtx:   ctx,
+		queueStop:  cancel,
+		queueDone:  make(chan struct{}),
+	}
+	go s.drainQueue()
+	return s, nil
 }
 
 func buildEncoder(name string) (Encoder, error) {
@@ -128,8 +152,47 @@ func (s *BridgeServer) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the server.
+// Enqueue adds a message to the publish buffer. Non-blocking; returns an error
+// only if the buffer is full.
+func (s *BridgeServer) Enqueue(topic string, payload []byte) error {
+	select {
+	case <-s.queueCtx.Done():
+		return fmt.Errorf("bridge stopped")
+	default:
+	}
+	select {
+	case s.queue <- publishJob{topic: topic, payload: payload}:
+		return nil
+	default:
+		return fmt.Errorf("OTLP publish buffer full (capacity %d)", cap(s.queue))
+	}
+}
+
+func (s *BridgeServer) drainQueue() {
+	defer close(s.queueDone)
+	for {
+		select {
+		case <-s.queueCtx.Done():
+			return
+		case job := <-s.queue:
+			s.mu.RLock()
+			pub := s.publisher
+			s.mu.RUnlock()
+			if pub == nil {
+				s.logger.Warn("OTLP publish dropped, no publisher", "topic", job.topic)
+				continue
+			}
+			if err := pub.Publish(s.queueCtx, job.topic, job.payload); err != nil {
+				s.logger.Error("OTLP publish failed", "topic", job.topic, "error", err)
+			}
+		}
+	}
+}
+
+// Stop gracefully shuts down the server and the publish buffer.
 func (s *BridgeServer) Stop(_ context.Context) error {
+	s.queueStop()
+	<-s.queueDone
 	var err error
 	s.closeOnce.Do(func() {
 		if s.ingestGRPCServer != nil {

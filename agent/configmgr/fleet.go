@@ -43,7 +43,6 @@ type FleetConfigManager struct {
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
 	debug             *debugServer
-	otlpPublisher     *otlpbridge.BufferedPublisher
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -214,20 +213,16 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
-	// Create a buffered publisher that persists across reconnects.
-	// Messages queue in the channel during brief MQTT outages and drain
-	// once the connection is back via AwaitConnection.
-	fleetManager.otlpPublisher = otlpbridge.NewBufferedPublisher(fleetManager.logger, 1000)
-	fleetManager.otlpBridge.SetPublisher(fleetManager.otlpPublisher)
-
-	// On each (re)connect, swap the underlying connection manager and update topics.
+	// On each (re)connect, bind the MQTT publisher and topics to the OTLP bridge.
+	// The bridge buffers messages internally, so brief outages during reconnect don't drop data.
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
 			return
 		}
 
-		fleetManager.otlpPublisher.SetConnectionManager(cm)
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
 		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
 		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
 		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
@@ -516,10 +511,6 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	}
 
 	fleetManager.debug.stop()
-
-	if fleetManager.otlpPublisher != nil {
-		fleetManager.otlpPublisher.Close()
-	}
 
 	if fleetManager.otlpBridge != nil {
 		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
