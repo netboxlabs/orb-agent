@@ -241,31 +241,7 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	go fleetManager.monitorTokenExpiry()
 
 	// Start debug HTTP server (no-op unless built with -tags debug).
-	// Port controlled via ORB_DEBUG_PORT env var (default 6166).
-	fleetManager.debug, _ = startDebugServer(fleetManager.logger, debugServerOpts{
-		reconnectChan: fleetManager.reconnectChan,
-		tokenStatus: func() tokenStatusInfo {
-			expiry := fleetManager.authTokenManager.GetTokenExpiryTime()
-			return tokenStatusInfo{
-				ExpiresAt:       expiry,
-				TimeUntilExpiry: time.Until(expiry).Truncate(time.Second).String(),
-				Expired:         fleetManager.authTokenManager.IsTokenExpired(),
-				ExpiringSoon:    fleetManager.authTokenManager.IsTokenExpiringSoon(2 * time.Minute),
-			}
-		},
-		tokenRotate: func() (old, fresh time.Time, err error) {
-			old = fleetManager.authTokenManager.GetTokenExpiryTime()
-			_, err = fleetManager.authTokenManager.RefreshToken(context.Background())
-			if err != nil {
-				return old, time.Time{}, err
-			}
-			fresh = fleetManager.authTokenManager.GetTokenExpiryTime()
-			return old, fresh, nil
-		},
-	})
-	if fleetManager.debug != nil {
-		fleetManager.logger.Info("debug server available", "addr", fleetManager.debug.addr())
-	}
+	fleetManager.debug = startFleetDebugServer(fleetManager.logger, fleetManager.authTokenManager, fleetManager.reconnectChan)
 
 	return nil
 }

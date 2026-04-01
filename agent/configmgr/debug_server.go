@@ -3,6 +3,7 @@
 package configmgr
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
 )
 
 // debugServer runs a lightweight HTTP server exposing debug/test endpoints.
@@ -29,8 +32,39 @@ type tokenRotationResult struct {
 	NewExpiry       time.Time `json:"new_expiry,omitempty"`
 }
 
-// startDebugServer starts the debug HTTP server.
-// Port is read from ORB_DEBUG_PORT env (default 6166).
+// startFleetDebugServer starts a debug HTTP server wired to the fleet manager's
+// auth token manager and reconnect channel. Port is read from ORB_DEBUG_PORT
+// env (default 6166).
+func startFleetDebugServer(logger *slog.Logger, atm *fleet.AuthTokenManager, reconnectChan chan<- struct{}) *debugServer {
+	ds, err := startDebugServer(logger, debugServerOpts{
+		reconnectChan: reconnectChan,
+		tokenStatus: func() tokenStatusInfo {
+			expiry := atm.GetTokenExpiryTime()
+			return tokenStatusInfo{
+				ExpiresAt:       expiry,
+				TimeUntilExpiry: time.Until(expiry).Truncate(time.Second).String(),
+				Expired:         atm.IsTokenExpired(),
+				ExpiringSoon:    atm.IsTokenExpiringSoon(2 * time.Minute),
+			}
+		},
+		tokenRotate: func() (old, fresh time.Time, err error) {
+			old = atm.GetTokenExpiryTime()
+			_, err = atm.RefreshToken(context.Background())
+			if err != nil {
+				return old, time.Time{}, err
+			}
+			fresh = atm.GetTokenExpiryTime()
+			return old, fresh, nil
+		},
+	})
+	if err != nil {
+		logger.Error("failed to start debug server", "error", err)
+		return nil
+	}
+	logger.Info("debug server available", "addr", ds.addr())
+	return ds
+}
+
 func startDebugServer(logger *slog.Logger, opts debugServerOpts) (*debugServer, error) {
 	port := 6166
 	if v := os.Getenv("ORB_DEBUG_PORT"); v != "" {
