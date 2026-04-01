@@ -43,6 +43,7 @@ type FleetConfigManager struct {
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
 	debug             *debugServer
+	otlpPublisher     *otlpbridge.BufferedPublisher
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -213,17 +214,20 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
-	// Register MQTTOnReadyHook to bind publisher and topics to the OTLP bridge
-	// The bridge server is already started earlier in Start(), so we only need to bind MQTT here
+	// Create a buffered publisher that persists across reconnects.
+	// Messages queue in the channel during brief MQTT outages and drain
+	// once the connection is back via AwaitConnection.
+	fleetManager.otlpPublisher = otlpbridge.NewBufferedPublisher(fleetManager.logger, 1000)
+	fleetManager.otlpBridge.SetPublisher(fleetManager.otlpPublisher)
+
+	// On each (re)connect, swap the underlying connection manager and update topics.
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
 			return
 		}
 
-		// Create publisher adapter and bind to bridge
-		pub := otlpbridge.NewCMAdapterPublisher(cm)
-		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpPublisher.SetConnectionManager(cm)
 		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
 		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
 		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
@@ -241,8 +245,9 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
 	go fleetManager.monitorTokenExpiry()
 
-	// Start debug HTTP server (no-op when built with -tags nodebug)
-	debugPort := 0
+	// Start debug HTTP server (no-op when built with -tags nodebug).
+	// Default port 6166; override via debug_port in config.
+	debugPort := 6166
 	if cfg.OrbAgent.ConfigManager.Sources.Fleet.DebugPort != nil {
 		debugPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.DebugPort
 	}
@@ -256,6 +261,15 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 				Expired:         fleetManager.authTokenManager.IsTokenExpired(),
 				ExpiringSoon:    fleetManager.authTokenManager.IsTokenExpiringSoon(2 * time.Minute),
 			}
+		},
+		tokenRotate: func() (old, new time.Time, err error) {
+			old = fleetManager.authTokenManager.GetTokenExpiryTime()
+			_, err = fleetManager.authTokenManager.RefreshToken(context.Background())
+			if err != nil {
+				return old, time.Time{}, err
+			}
+			new = fleetManager.authTokenManager.GetTokenExpiryTime()
+			return old, new, nil
 		},
 	})
 	if fleetManager.debug != nil {
@@ -506,6 +520,10 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	}
 
 	fleetManager.debug.stop()
+
+	if fleetManager.otlpPublisher != nil {
+		fleetManager.otlpPublisher.Close()
+	}
 
 	if fleetManager.otlpBridge != nil {
 		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {

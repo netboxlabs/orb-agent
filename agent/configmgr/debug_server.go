@@ -27,11 +27,20 @@ type tokenStatusInfo struct {
 	ExpiringSoon   bool      `json:"expiring_soon"`
 }
 
+// tokenRotationResult is returned by the force-token-rotation endpoint.
+type tokenRotationResult struct {
+	Status          string        `json:"status"`
+	PreviousExpiry  time.Time     `json:"previous_expiry,omitempty"`
+	NewExpiry       time.Time     `json:"new_expiry,omitempty"`
+	TimeUntilExpiry string        `json:"time_until_expiry,omitempty"`
+}
+
 // debugServerOpts holds the callbacks the debug server needs, keeping it decoupled
 // from concrete types like AuthTokenManager.
 type debugServerOpts struct {
 	reconnectChan chan<- struct{}
-	tokenStatus   func() tokenStatusInfo // nil-safe: endpoint returns 501 when absent
+	tokenStatus   func() tokenStatusInfo                  // nil-safe: endpoint returns 501 when absent
+	tokenRotate   func() (old, new time.Time, err error)  // nil-safe: refreshes token without reconnecting
 }
 
 // startDebugServer starts the debug HTTP server on the given port.
@@ -53,18 +62,29 @@ func startDebugServer(logger *slog.Logger, port int, opts debugServerOpts) (*deb
 	})
 
 	mux.HandleFunc("POST /debug/force-token-rotation", func(w http.ResponseWriter, _ *http.Request) {
-		// Signals a reconnect which will refresh the JWT via ConnectPacketBuilder.
-		// Unlike force-reconnect, this is explicitly about exercising the token rotation path.
-		select {
-		case opts.reconnectChan <- struct{}{}:
-			logger.Warn("debug: forced token rotation triggered via HTTP")
-			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "token_rotation_triggered"})
-		default:
-			logger.Warn("debug: forced token rotation requested but reconnect already in progress")
-			w.WriteHeader(http.StatusConflict)
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "reconnect_already_in_progress"})
+		// Non-destructive: refreshes and stashes the JWT without tearing down the
+		// MQTT connection. The ConnectPacketBuilder will pick up the fresh token
+		// whenever the next natural reconnect occurs.
+		if opts.tokenRotate == nil {
+			w.WriteHeader(http.StatusNotImplemented)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "token rotation not available"})
+			return
 		}
+		oldExpiry, newExpiry, err := opts.tokenRotate()
+		if err != nil {
+			logger.Error("debug: token rotation failed", "error", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "token_rotation_failed", "error": err.Error()})
+			return
+		}
+		logger.Warn("debug: token rotated (connection unchanged)", "old_expiry", oldExpiry, "new_expiry", newExpiry)
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(tokenRotationResult{
+			Status:          "token_rotated",
+			PreviousExpiry:  oldExpiry,
+			NewExpiry:       newExpiry,
+			TimeUntilExpiry: time.Until(newExpiry).Truncate(time.Second).String(),
+		})
 	})
 
 	mux.HandleFunc("GET /debug/token-status", func(w http.ResponseWriter, _ *http.Request) {
@@ -82,7 +102,7 @@ func startDebugServer(logger *slog.Logger, port int, opts debugServerOpts) (*deb
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("debug server listen: %w", err)
 	}
