@@ -39,7 +39,12 @@ type traceServer struct {
 	collectortrace.UnimplementedTraceServiceServer
 }
 
-func (s *traceServer) Export(_ context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
+func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
+	pub := s.bridge.GetPublisher()
+	if pub == nil {
+		return nil, fmt.Errorf("publisher not yet initialized")
+	}
+
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceSpans))
 	for _, rs := range req.ResourceSpans {
 		if rs != nil {
@@ -64,7 +69,7 @@ func (s *traceServer) Export(_ context.Context, req *collectortrace.ExportTraceS
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bridge.Enqueue(topic, payload); err != nil {
+	if err := pub.Publish(ctx, topic, payload); err != nil {
 		return nil, err
 	}
 	return &collectortrace.ExportTraceServiceResponse{}, nil
@@ -76,7 +81,12 @@ type metricsServer struct {
 	collectormetrics.UnimplementedMetricsServiceServer
 }
 
-func (s *metricsServer) Export(_ context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
+func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
+	pub := s.bridge.GetPublisher()
+	if pub == nil {
+		return nil, fmt.Errorf("publisher not yet initialized")
+	}
+
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceMetrics))
 	for _, rm := range req.ResourceMetrics {
 		if rm != nil {
@@ -101,7 +111,7 @@ func (s *metricsServer) Export(_ context.Context, req *collectormetrics.ExportMe
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bridge.Enqueue(topic, payload); err != nil {
+	if err := pub.Publish(ctx, topic, payload); err != nil {
 		return nil, err
 	}
 	return &collectormetrics.ExportMetricsServiceResponse{}, nil
@@ -113,17 +123,21 @@ type logsServer struct {
 	collectorlogs.UnimplementedLogsServiceServer
 }
 
-func (s *logsServer) Export(_ context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
+func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
+	pub := s.bridge.GetPublisher()
+	if pub == nil {
+		return nil, fmt.Errorf("publisher not yet initialized")
+	}
 	if s.isIngestRequest(req) {
 		repo := s.bridge.GetPolicyRepo()
 		enrichLogsWithDatasets(req, repo)
 		s.bridge.logger.Info("ingesting enriched logs with dataset_ids", "request", req)
-		err := s.publishToIngestTopic(req)
+		err := s.publishToIngestTopic(ctx, req, pub)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		err := s.publishToTelemetryTopic(req)
+		err := s.publishToTelemetryTopic(ctx, req, pub)
 		if err != nil {
 			return nil, err
 		}
@@ -162,28 +176,33 @@ func (s *logsServer) isIngestRequest(req *collectorlogs.ExportLogsServiceRequest
 	return false
 }
 
-func (s *logsServer) publishToIngestTopic(req *collectorlogs.ExportLogsServiceRequest) error {
+func (s *logsServer) publishToIngestTopic(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher) error {
 	topic := s.bridge.GetIngestTopic()
 	if topic == "" {
 		return fmt.Errorf("ingest topic not yet initialized")
 	}
-	payload, err := s.bridge.enc.Marshal(req)
-	if err != nil {
-		return err
-	}
-	return s.bridge.Enqueue(topic, payload)
+
+	return s.publish(ctx, req, pub, topic)
 }
 
-func (s *logsServer) publishToTelemetryTopic(req *collectorlogs.ExportLogsServiceRequest) error {
+func (s *logsServer) publishToTelemetryTopic(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher) error {
 	topic := s.bridge.GetTelemetryTopic()
 	if topic == "" {
 		return fmt.Errorf("telemetry topic not yet initialized")
 	}
+
+	return s.publish(ctx, req, pub, topic)
+}
+
+func (s *logsServer) publish(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher, topic string) error {
 	payload, err := s.bridge.enc.Marshal(req)
 	if err != nil {
 		return err
 	}
-	return s.bridge.Enqueue(topic, payload)
+	if err := pub.Publish(ctx, topic, payload); err != nil {
+		return err
+	}
+	return nil
 }
 
 // enrichLogsWithDatasets adds dataset_ids to ScopeLogs attributes based on policy_name.

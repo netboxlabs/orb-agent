@@ -2,9 +2,7 @@ package otlpbridge
 
 import (
 	"context"
-	"log/slog"
 	"testing"
-	"time"
 
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -18,30 +16,12 @@ import (
 type fakePublisher struct {
 	topic   string
 	payload []byte
-	done    chan struct{} // signals when Publish has been called
-}
-
-func newFakePublisher() *fakePublisher {
-	return &fakePublisher{done: make(chan struct{}, 1)}
 }
 
 func (f *fakePublisher) Publish(_ context.Context, topic string, payload []byte) error {
 	f.topic = topic
 	f.payload = append([]byte(nil), payload...)
-	select {
-	case f.done <- struct{}{}:
-	default:
-	}
 	return nil
-}
-
-func (f *fakePublisher) wait(t *testing.T) {
-	t.Helper()
-	select {
-	case <-f.done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for publish")
-	}
 }
 
 // diodeResource returns a resource carrying the diode.metadata.policy_name attribute.
@@ -57,10 +37,8 @@ func diodeResource() *resourcev1.Resource {
 }
 
 func newBridgeWithTopics(enc Encoder) (*BridgeServer, *fakePublisher) {
-	fp := newFakePublisher()
-	logger := slog.Default()
-	bridge, _ := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, logger)
-	bridge.enc = enc
+	fp := &fakePublisher{}
+	bridge := &BridgeServer{enc: enc}
 	bridge.SetPublisher(fp)
 	bridge.SetIngestTopic("ingest")
 	bridge.SetTelemetryTopic("telemetry")
@@ -78,7 +56,6 @@ func TestTraceHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	fp.wait(t)
 	if fp.topic != "telemetry" {
 		t.Fatalf("expected telemetry topic, got %q", fp.topic)
 	}
@@ -96,7 +73,6 @@ func TestTraceHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	fp.wait(t)
 	if fp.topic != "ingest" {
 		t.Fatalf("expected ingest topic, got %q", fp.topic)
 	}
@@ -113,7 +89,6 @@ func TestMetricsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	fp.wait(t)
 	if fp.topic != "telemetry" {
 		t.Fatalf("expected telemetry topic, got %q", fp.topic)
 	}
@@ -131,7 +106,6 @@ func TestMetricsHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	fp.wait(t)
 	if fp.topic != "ingest" {
 		t.Fatalf("expected ingest topic, got %q", fp.topic)
 	}
@@ -148,7 +122,6 @@ func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	fp.wait(t)
 	if fp.topic != "telemetry" {
 		t.Fatalf("expected telemetry topic, got %q", fp.topic)
 	}
