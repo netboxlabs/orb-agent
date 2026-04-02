@@ -51,7 +51,7 @@ agent_bin:
 
 .PHONY: test
 test:
-	@go test -race ./...
+	@go test $(GO_BUILD_TAGS)-race ./...
 
 .PHONY: test-timed
 test-timed:
