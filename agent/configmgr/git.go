@@ -71,13 +71,17 @@ type (
 // file that echoes the password without exposing it in argv.  The script is
 // chmod 0700 so only the current user can read or execute it.  The caller is
 // responsible for removing the file when done.
-func writeAskpassScript(password string) (string, error) {
+func writeAskpassScript(username, password string) (string, error) {
 	f, err := os.CreateTemp("", "git-askpass-*.sh")
 	if err != nil {
 		return "", fmt.Errorf("failed to create askpass script: %w", err)
 	}
 	defer func() { _ = f.Close() }()
-	script := "#!/bin/sh\necho " + shellescape(password) + "\n"
+	// Git calls GIT_ASKPASS with the prompt text as $1.  We match on
+	// "username" (case-insensitive) to return the right value for each prompt.
+	script := "#!/bin/sh\ncase \"$1\" in\n  *[Uu]sername*) echo " +
+		shellescape(username) + " ;;\n  *) echo " +
+		shellescape(password) + " ;;\nesac\n"
 	if _, err := f.WriteString(script); err != nil {
 		_ = os.Remove(f.Name())
 		return "", fmt.Errorf("failed to write askpass script: %w", err)
@@ -114,7 +118,7 @@ func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Re
 
 	switch gc.config.Auth {
 	case "basic":
-		askpass, err := writeAskpassScript(gc.config.Password)
+		askpass, err := writeAskpassScript(gc.config.Username, gc.config.Password)
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			return "", nil, err
@@ -168,7 +172,7 @@ func (gc *gitConfigManager) fetchWithSystemGit() error {
 	fetchURL := gc.config.URL
 	switch gc.config.Auth {
 	case "basic":
-		askpass, err := writeAskpassScript(gc.config.Password)
+		askpass, err := writeAskpassScript(gc.config.Username, gc.config.Password)
 		if err != nil {
 			return err
 		}
