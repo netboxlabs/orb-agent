@@ -202,7 +202,7 @@ def test_run_device_with_discovered_driver(
         policy_runner.run("test_id", sample_scopes[0], sample_config)
 
         # Verify driver discovery and ingestion
-        mock_discover.assert_called_once_with(sample_scopes[0])
+        mock_discover.assert_called_once_with(sample_scopes[0], drivers=None)
         mock_ingest.assert_called_once()
         metadata_arg, data = mock_ingest.call_args[0]
         kwargs = mock_ingest.call_args[1]
@@ -236,7 +236,7 @@ def test_run_discovered_driver_error(
         # Run the device with an error to check error handling
         policy_runner.run("test_id", sample_scopes[0], sample_config)
 
-        mock_discover.assert_called_once()
+        mock_discover.assert_called_once_with(sample_scopes[0], drivers=None)
         assert mock_logger_error.call_count == 2
         assert policy_runner.status == Status.FAILED
 
@@ -476,3 +476,64 @@ def test_run_scan_handles_port_scan_failure(policy_runner, sample_config, run_st
         assert runs[0].status.value == "failed"
         assert runs[0].entity_count == 0
         assert "Port scan timeout" in runs[0].reason
+
+
+def test_options_discovery_drivers_default_none():
+    """Test that discovery_drivers defaults to None when not specified."""
+    from device_discovery.policy.models import Options
+    opts = Options()
+    assert opts.discovery_drivers is None
+
+
+def test_options_discovery_drivers_parsed():
+    """Test that discovery_drivers parses a list of driver names correctly."""
+    from device_discovery.policy.models import Options
+    opts = Options(discovery_drivers=["ios", "panos"])
+    assert opts.discovery_drivers == ["ios", "panos"]
+
+
+def test_setup_raises_on_unknown_discovery_drivers():
+    """setup() raises if discovery_drivers contains a driver not in supported_drivers."""
+    from device_discovery.policy.models import Config, Napalm, Options
+    from device_discovery.policy.run import RunStore
+    from device_discovery.policy.runner import PolicyRunner
+
+    runner = PolicyRunner()
+    config = Config(options=Options(discovery_drivers=["not_a_real_driver_xyz"]))
+    scope = [Napalm(hostname="192.168.1.1", username="admin", password="pass")]
+    run_store = RunStore()
+
+    with pytest.raises(Exception, match="discovery_drivers contains unknown drivers"):
+        runner.setup("test-policy", config, scope, run_store)
+
+
+def test_setup_raises_on_empty_discovery_drivers():
+    """setup() raises if discovery_drivers is an empty list."""
+    from device_discovery.policy.models import Config, Napalm, Options
+    from device_discovery.policy.run import RunStore
+    from device_discovery.policy.runner import PolicyRunner
+
+    runner = PolicyRunner()
+    config = Config(options=Options(discovery_drivers=[]))
+    scope = [Napalm(hostname="192.168.1.1", username="admin", password="pass")]
+    run_store = RunStore()
+
+    with pytest.raises(Exception, match="discovery_drivers must not be empty"):
+        runner.setup("test-policy", config, scope, run_store)
+
+
+def test_setup_accepts_valid_discovery_drivers():
+    """setup() does not raise when discovery_drivers contains only known drivers."""
+    from device_discovery.policy.models import Config, Napalm, Options
+    from device_discovery.policy.run import RunStore
+    from device_discovery.policy.runner import PolicyRunner
+
+    runner = PolicyRunner()
+    config = Config(options=Options(discovery_drivers=["ios", "eos"]))
+    scope = [Napalm(hostname="192.168.1.1", username="admin", password="pass")]
+    run_store = RunStore()
+
+    try:
+        runner.setup("test-policy", config, scope, run_store)
+    finally:
+        runner.stop()

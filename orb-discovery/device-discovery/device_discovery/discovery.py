@@ -87,7 +87,25 @@ def napalm_driver_list() -> list[str]:
     return napalm_packages
 
 
-supported_drivers = napalm_driver_list()
+def custom_napalm_driver_list() -> list[str]:
+    """
+    List the available custom NAPALM drivers from the custom_napalm package.
+
+    Returns
+    -------
+        List[str]: Driver short-names (e.g. 'panos', 'huawei_vrp') found in custom_napalm.
+
+    """
+    try:
+        module = import_module("custom_napalm")
+        return walk_napalm_packages(module, "custom_napalm.", [])
+    except Exception as e:
+        logger.error(f"Error loading custom_napalm drivers: {str(e)}")
+        return []
+
+
+_default_discovery_drivers = napalm_driver_list()
+supported_drivers = _default_discovery_drivers + custom_napalm_driver_list()
 
 
 def set_napalm_logs_level(level: int):
@@ -111,7 +129,7 @@ def set_napalm_logs_level(level: int):
     logging.getLogger("pyeapi").setLevel(level)
 
 
-def discover_device_driver(info: dict) -> str | None:
+def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str | None:
     """
     Discover the correct NAPALM driver for the given device information.
 
@@ -120,6 +138,10 @@ def discover_device_driver(info: dict) -> str | None:
         info (dict): A dictionary containing device connection information.
             Expected keys are 'hostname', 'username', 'password', 'timeout',
             and 'optional_args'.
+        drivers (list[str] | None): An optional list of driver names to try.
+            When provided, only those drivers are attempted. When None,
+            only standard NAPALM drivers are tried (custom_napalm drivers
+            are excluded from auto-discovery unless explicitly specified).
 
     Returns:
     -------
@@ -128,7 +150,8 @@ def discover_device_driver(info: dict) -> str | None:
 
     """
     set_napalm_logs_level(logging.CRITICAL)
-    for driver in supported_drivers:
+    driver_list = drivers if drivers is not None else _default_discovery_drivers
+    for driver in driver_list:
         try:
             logger.info(f"Hostname {info.hostname}: Trying '{driver}' driver")
             np_driver = get_network_driver(driver)

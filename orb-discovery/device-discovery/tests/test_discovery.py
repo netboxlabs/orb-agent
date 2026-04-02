@@ -11,6 +11,8 @@ from napalm.base.base import NetworkDriver
 
 from device_discovery.discovery import (
     _DRIVER_MISMATCH_MARKERS,
+    _default_discovery_drivers,
+    custom_napalm_driver_list,
     discover_device_driver,
     napalm_driver_list,
     set_napalm_logs_level,
@@ -436,3 +438,88 @@ def test_set_napalm_logs_level(mock_loggers):
 
     for logger in mock_loggers.values():
         logger.setLevel.assert_called_once_with(logging.DEBUG)
+
+
+def test_custom_napalm_driver_list(mock_import_module, mock_walk_packages):
+    """Test that custom_napalm_driver_list discovers drivers from the custom_napalm package."""
+    class MockVRPDriver(NetworkDriver):
+        pass
+
+    mock_module = MagicMock()
+    mock_module.__path__ = ["custom_napalm"]
+    mock_module.__name__ = "custom_napalm"
+    setattr(mock_module, "MockVRPDriver", MockVRPDriver)
+
+    mock_package = MagicMock()
+    mock_package.name = "custom_napalm.huawei_vrp"
+
+    mock_import_module.return_value = mock_module
+    mock_walk_packages.return_value = [mock_package]
+
+    result = custom_napalm_driver_list()
+
+    mock_import_module.assert_any_call("custom_napalm")
+    assert "huawei_vrp" in result
+
+
+def test_supported_drivers_includes_custom_napalm():
+    """Test that supported_drivers contains drivers from custom_napalm."""
+    pytest.importorskip("custom_napalm")
+    for driver in ("panos", "panos_ssh", "huawei_vrp"):
+        assert driver in supported_drivers, f"Expected '{driver}' in supported_drivers"
+
+
+def test_default_discovery_drivers_excludes_custom_napalm():
+    """Test that _default_discovery_drivers does not include custom_napalm drivers."""
+    pytest.importorskip("custom_napalm")
+    for driver in ("panos", "panos_ssh", "huawei_vrp"):
+        assert driver not in _default_discovery_drivers, (
+            f"Custom driver '{driver}' must not appear in default auto-discovery pool"
+        )
+
+
+def test_discover_device_driver_uses_provided_drivers(mock_get_network_driver):
+    """discover_device_driver only tries drivers from the provided list."""
+    _make_driver_mock(mock_get_network_driver, {
+        "serial_number": "XYZ999",
+        "hostname": "mydevice",
+        "fqdn": "mydevice.local",
+    })
+
+    info = SimpleNamespace(
+        hostname="testhost",
+        username="testuser",
+        password="testpass",
+        timeout=10,
+        optional_args={},
+    )
+
+    driver = discover_device_driver(info, drivers=["panos"])
+    assert driver == "panos"
+    mock_get_network_driver.assert_called_once_with("panos")
+
+
+def test_discover_device_driver_defaults_to_standard_napalm_only(mock_get_network_driver):
+    """discover_device_driver defaults to standard NAPALM drivers only (no custom_napalm) when drivers=None."""
+    _make_driver_mock(mock_get_network_driver, {
+        "serial_number": "ABC123",
+        "hostname": "host",
+        "fqdn": "host.local",
+    })
+
+    info = SimpleNamespace(
+        hostname="testhost",
+        username="testuser",
+        password="testpass",
+        timeout=10,
+        optional_args={},
+    )
+
+    driver = discover_device_driver(info)  # no drivers= arg
+    assert driver in _default_discovery_drivers
+    # custom_napalm drivers must not be tried by default
+    custom_drivers = custom_napalm_driver_list()
+    for call in mock_get_network_driver.call_args_list:
+        assert call.args[0] not in custom_drivers, (
+            f"Custom driver '{call.args[0]}' was tried during default auto-discovery"
+        )

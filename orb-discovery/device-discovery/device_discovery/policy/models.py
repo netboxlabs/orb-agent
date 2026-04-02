@@ -158,6 +158,10 @@ class Options(BaseModel):
     capture_startup_config: bool | None = Field(
         default=False, description="Capture startup/saved configuration, optional"
     )
+    discovery_drivers: list[str] | None = Field(
+        default=None,
+        description="Restrict auto-discovery to this driver list. If not set, all supported drivers are tried.",
+    )
 
 
 class Config(BaseModel):

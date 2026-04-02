@@ -1,5 +1,6 @@
 # Copyright 2026 NetBox Labs Inc
-"""Custom PAN-OS SSH NAPALM driver.
+"""
+Custom PAN-OS SSH NAPALM driver.
 
 Implements only the methods used by device-discovery:
   get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
@@ -7,6 +8,7 @@ Implements only the methods used by device-discovery:
 Uses ntc-templates 9.x for structured parsing.
 """
 
+import logging
 import re
 import socket
 
@@ -14,10 +16,7 @@ import napalm.base as _napalm_base
 from napalm.base import models
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
-
 from ntc_templates.parse import parse_output
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,7 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
             null = chr(0)
             self.device.write_channel(null)
             return {"is_alive": self.device.remote_conn.transport.is_active()}
-        except (socket.error, EOFError, OSError, AttributeError):
+        except (EOFError, OSError, AttributeError):
             return {"is_alive": False}
 
     # ------------------------------------------------------------------
