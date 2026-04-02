@@ -18,7 +18,8 @@ type MQTTPublisher struct {
 }
 
 // NewMQTTPublisher connects to the MQTT broker and returns a Publisher.
-// It awaits initial connection before returning. If tokenRefresher is non-nil,
+// It awaits initial connection before returning.
+// If tokenRefresher is non-nil,
 // it is called before every CONNECT packet to supply a fresh JWT.
 func NewMQTTPublisher(ctx context.Context, mqttURL, jwt string, tokenRefresher func(ctx context.Context) (string, error)) (*MQTTPublisher, error) {
 	u, err := url.Parse(mqttURL)
