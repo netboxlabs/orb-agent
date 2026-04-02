@@ -35,8 +35,51 @@ orb:
 | branch | string | no  |  the git branch that should be used by the agent. If not specified, the default branch will be used   |
 | auth | string | no | it can be either 'basic' or 'ssh'. The basic authentication supports both password or token. If not specified, no auth will be used (public repository) |
 | username | string | no | username used for authentication |
-| password | string | no | the password used for authentication. If the auth method is 'basic' it should cointains the password or auth token. If the method is 'ssh' it should contains the password for the ssh certificate file |
-| private_key | string | no | the path for the ssh certificate file |
+| password | string | no | the password used for authentication. If the auth method is 'basic' it should contain the password or auth token. If the method is 'ssh' it should contain the passphrase for the private key file (leave empty for unprotected keys) |
+| private_key | string | no | the path to the SSH private key file |
+| skip_tls | bool | no | skip TLS certificate verification when connecting to the repository (default: false). Useful for self-signed or private CA certificates |
+
+## SSH Authentication
+
+When using `auth: ssh`, the agent uses the configured private key to authenticate with the Git server.
+
+### Known Hosts
+
+SSH connections require host key verification to prevent man-in-the-middle attacks. The agent reads known hosts from a file specified by the `SSH_KNOWN_HOSTS` environment variable. If the variable is not set, the agent looks for the standard `~/.ssh/known_hosts` file.
+
+To generate a `known_hosts` file for your Git server:
+
+```bash
+# GitHub
+ssh-keyscan github.com > /opt/orb/known_hosts
+
+# GitLab
+ssh-keyscan gitlab.com > /opt/orb/known_hosts
+
+# Azure DevOps
+ssh-keyscan -p 22 ssh.dev.azure.com > /opt/orb/known_hosts
+
+# Any other host
+ssh-keyscan your.git.host >> /opt/orb/known_hosts
+```
+
+Then pass the file to the container:
+
+```bash
+docker run \
+  -v /local/orb:/opt/orb \
+  -e SSH_KNOWN_HOSTS=/opt/orb/known_hosts \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+### Generating an SSH Key Pair
+
+```bash
+ssh-keygen -t ed25519 -f /local/orb/id_ed25519 -N ""
+# Then add the contents of /local/orb/id_ed25519.pub to your Git provider's SSH keys
+```
+
+> **Note:** Azure DevOps requires RSA keys. Use `ssh-keygen -t rsa -b 4096` instead.
 
 ## Git Repository Structure
 
