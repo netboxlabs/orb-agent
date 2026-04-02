@@ -120,7 +120,7 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 	}
 
 	if err := publishFunc(ctx, heartbeatTopic, body); err != nil {
-		hb.logger.Error("error sending heartbeat", "error", err)
+		hb.logger.Debug("error sending heartbeat", "error", err)
 		if onFailure != nil {
 			onFailure()
 		}

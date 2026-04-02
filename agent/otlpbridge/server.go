@@ -16,6 +16,12 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
+// pendingPublish holds a marshaled OTLP payload queued before the MQTT publisher was ready.
+type pendingPublish struct {
+	isIngest bool
+	payload  []byte
+}
+
 // BridgeServer holds the lifecycle for the OTLP → MQTT bridge server.
 type BridgeServer struct {
 	cfg              BridgeConfig
@@ -24,13 +30,20 @@ type BridgeServer struct {
 	listener         net.Listener
 	closeOnce        sync.Once
 
-	// Shared runtime state
+	// Shared runtime state — publisher and topics are set by the OnReadyHook
+	// after the MQTT connection is established.
 	mu             sync.RWMutex
 	publisher      Publisher
 	ingestTopic    string
 	telemetryTopic string
 	policyRepo     policies.PolicyRepo
 	logger         *slog.Logger
+
+	// Pending publish queue — messages received before MQTT is ready are held
+	// here and drained once publisher + topics are all set.
+	pendingMu sync.Mutex
+	pending   []pendingPublish
+	ready     bool
 }
 
 // NewBridgeServer builds a BridgeServer but does not start it.
@@ -56,39 +69,104 @@ func buildEncoder(name string) (Encoder, error) {
 // SetPublisher sets the publisher for OTLP payloads.
 func (s *BridgeServer) SetPublisher(pub Publisher) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.publisher = pub
+	s.mu.Unlock()
+	s.checkReady()
 }
 
 // SetIngestTopic sets the topic for publishing.
 func (s *BridgeServer) SetIngestTopic(topic string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.ingestTopic = topic
+	s.mu.Unlock()
+	s.checkReady()
 }
 
-// GetPublisher returns the current publisher (for handlers).
-func (s *BridgeServer) GetPublisher() Publisher {
+// SetTelemetryTopic sets the telemetry topic for publishing.
+func (s *BridgeServer) SetTelemetryTopic(topic string) {
+	s.mu.Lock()
+	s.telemetryTopic = topic
+	s.mu.Unlock()
+	s.checkReady()
+}
+
+// checkReady checks whether publisher and both topics are set. If so, it drains
+// any pending messages that were queued before the MQTT connection was ready.
+func (s *BridgeServer) checkReady() {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.publisher
+	allSet := s.publisher != nil && s.ingestTopic != "" && s.telemetryTopic != ""
+	s.mu.RUnlock()
+	if allSet {
+		s.drainPending()
+	}
 }
 
-// GetIngestTopic returns the current topic (for handlers).
+// drainPending flushes queued messages and marks the bridge as ready for direct
+// publishing. Must only be called when publisher + topics are set.
+func (s *BridgeServer) drainPending() {
+	s.pendingMu.Lock()
+	s.ready = true
+	queued := s.pending
+	s.pending = nil
+	s.pendingMu.Unlock()
+
+	if len(queued) == 0 {
+		return
+	}
+
+	s.mu.RLock()
+	pub := s.publisher
+	ingest := s.ingestTopic
+	telemetry := s.telemetryTopic
+	s.mu.RUnlock()
+
+	for _, msg := range queued {
+		topic := telemetry
+		if msg.isIngest {
+			topic = ingest
+		}
+		if err := pub.Publish(context.Background(), topic, msg.payload); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("failed to publish queued OTLP data", "topic", topic, "error", err)
+			}
+		}
+	}
+
+	if s.logger != nil {
+		s.logger.Info("drained pending OTLP messages", "count", len(queued))
+	}
+}
+
+// Enqueue marshaled OTLP data for publishing. Before the MQTT connection is
+// ready the payload is queued in memory; afterwards it is published directly.
+func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byte) error {
+	s.pendingMu.Lock()
+	if !s.ready {
+		s.pending = append(s.pending, pendingPublish{isIngest: isIngest, payload: payload})
+		s.pendingMu.Unlock()
+		return nil
+	}
+	s.pendingMu.Unlock()
+
+	s.mu.RLock()
+	pub := s.publisher
+	topic := s.telemetryTopic
+	if isIngest {
+		topic = s.ingestTopic
+	}
+	s.mu.RUnlock()
+
+	return pub.Publish(ctx, topic, payload)
+}
+
+// GetIngestTopic returns the current ingest topic.
 func (s *BridgeServer) GetIngestTopic() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ingestTopic
 }
 
-// SetTelemetryTopic sets the telemetry topic for publishing.
-func (s *BridgeServer) SetTelemetryTopic(topic string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.telemetryTopic = topic
-}
-
-// GetTelemetryTopic returns the current telemetry topic (for handlers).
+// GetTelemetryTopic returns the current telemetry topic.
 func (s *BridgeServer) GetTelemetryTopic() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

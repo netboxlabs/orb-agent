@@ -126,3 +126,32 @@ func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 		t.Fatalf("expected telemetry topic, got %q", fp.topic)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Pending queue
+// ---------------------------------------------------------------------------
+
+func TestBridge_Enqueue_QueuesDrainsOnReady(t *testing.T) {
+	fp := &fakePublisher{}
+	bridge := &BridgeServer{enc: ProtobufEncoder{}}
+
+	// Enqueue before publisher is set — should queue, not error.
+	if err := bridge.Enqueue(context.Background(), false, []byte("hello")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fp.topic != "" {
+		t.Fatalf("expected no publish yet, got topic %q", fp.topic)
+	}
+
+	// Setting publisher + topics drains the queue.
+	bridge.SetPublisher(fp)
+	bridge.SetIngestTopic("ingest")
+	bridge.SetTelemetryTopic("telemetry")
+
+	if fp.topic != "telemetry" {
+		t.Fatalf("expected queued message to drain to telemetry, got %q", fp.topic)
+	}
+	if string(fp.payload) != "hello" {
+		t.Fatalf("expected payload 'hello', got %q", string(fp.payload))
+	}
+}
