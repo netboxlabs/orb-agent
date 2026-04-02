@@ -91,6 +91,12 @@ func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Re
 		)
 	case "ssh":
 		if gc.config.PrivateKey != "" {
+			// NOTE: passphrase-protected keys are not supported in this fallback
+			// path. BatchMode=yes disables prompting, and wiring SSH_ASKPASS for
+			// passphrases requires OpenSSH >= 8.4 (SSH_ASKPASS_REQUIRE=force).
+			// In practice ADO SSH keys are unprotected deploy keys; if a
+			// passphrase is needed, unlock the key via ssh-agent before starting
+			// the agent. This limitation goes away when go-git v6 is released.
 			env = append(env,
 				"GIT_SSH_COMMAND=ssh -i '"+gc.config.PrivateKey+
 					"' -o StrictHostKeyChecking=no -o BatchMode=yes")
@@ -145,6 +151,8 @@ func (gc *gitConfigManager) fetchWithSystemGit() error {
 		)
 	case "ssh":
 		if gc.config.PrivateKey != "" {
+			// See note in cloneWithSystemGit: passphrase-protected keys are not
+			// supported without ssh-agent pre-unlocking the key.
 			env = append(env,
 				"GIT_SSH_COMMAND=ssh -i '"+gc.config.PrivateKey+
 					"' -o StrictHostKeyChecking=no -o BatchMode=yes")
