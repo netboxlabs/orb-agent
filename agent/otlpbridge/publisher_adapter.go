@@ -8,6 +8,8 @@ import (
 )
 
 // CMAdapterPublisher adapts autopaho.ConnectionManager to implement Publisher.
+// It uses PublishViaQueue so that messages are buffered in memory during MQTT
+// disconnects and drained automatically after reconnection — no data loss.
 type CMAdapterPublisher struct {
 	cm *autopaho.ConnectionManager
 }
@@ -17,13 +19,16 @@ func NewCMAdapterPublisher(cm *autopaho.ConnectionManager) *CMAdapterPublisher {
 	return &CMAdapterPublisher{cm: cm}
 }
 
-// Publish sends the payload to the topic with QoS 0.
+// Publish enqueues the payload for delivery to the topic with QoS 0.
+// Returns an error only if the message could not be added to the local queue.
+// Actual transmission happens asynchronously after the MQTT connection is up.
 func (p *CMAdapterPublisher) Publish(ctx context.Context, topic string, payload []byte) error {
-	_, err := p.cm.Publish(ctx, &paho.Publish{
-		Topic:   topic,
-		Payload: payload,
-		QoS:     0,
-		Retain:  false,
+	return p.cm.PublishViaQueue(ctx, &autopaho.QueuePublish{
+		Publish: &paho.Publish{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     0,
+			Retain:  false,
+		},
 	})
-	return err
 }

@@ -46,6 +46,7 @@ type MQTTConnection struct {
 	groupMembershipFailCount int
 	heartbeatFailCount       int
 	mu                       sync.Mutex
+	tokenRefresher           func(ctx context.Context) (string, error) // returns fresh JWT on reconnect
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -63,6 +64,13 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		dispatchQueue:      make(chan dispatchJob, 100), // Buffered channel to prevent blocking MQTT acks
 		dispatchWorkerDone: make(chan struct{}),
 	}
+}
+
+// SetTokenRefresher sets a callback that returns a fresh JWT. When set, the MQTT
+// connection will call this before every auto-reconnect CONNECT packet so the broker
+// always receives a valid token.
+func (connection *MQTTConnection) SetTokenRefresher(fn func(ctx context.Context) (string, error)) {
+	connection.tokenRefresher = fn
 }
 
 // AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
@@ -352,6 +360,14 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		cfg.ConnectPassword = []byte(details.Token)
 	}
 
+	// On every auto-reconnect, refresh the JWT before sending CONNECT so autopaho
+	// never presents a stale token to the broker. The first call uses the initial
+	// token (consistent with topics derived from the same JWT); subsequent calls
+	// fetch a fresh JWT via tokenRefresher.
+	if builder := buildConnectPacketBuilder(connection, details.Token); builder != nil {
+		cfg.ConnectPacketBuilder = builder
+	}
+
 	// Create and start the connection manager using the long-lived context.
 	connection.connectionManager, err = autopaho.NewConnection(ctx, cfg)
 	if err != nil {
@@ -460,4 +476,43 @@ func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic stri
 	// (heartbeats use this function, so successful publish means connection is ok)
 	connection.heartbeatFailCount = 0
 	return nil
+}
+
+// buildConnectPacketBuilder returns a ConnectPacketBuilder callback that refreshes
+// the JWT before every CONNECT packet. Returns nil when no tokenRefresher is set.
+//
+// initialToken is the token already used to derive topics/zone for this Connect call.
+// The first invocation of the returned closure uses initialToken as-is (keeping
+// password and topics consistent). Subsequent invocations (autopaho auto-reconnects)
+// call tokenRefresher to obtain a fresh JWT. The "first call" state is scoped to the
+// closure instance, not to the connection struct, so each Connect creates an
+// independent builder with its own lifecycle.
+func buildConnectPacketBuilder(connection *MQTTConnection, initialToken string) func(*paho.Connect, *url.URL) (*paho.Connect, error) {
+	if connection.tokenRefresher == nil {
+		return nil
+	}
+	firstCall := true
+	return func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+		// First call: use the token that was already placed in ConnectPassword
+		// and that topics were derived from — no extra refresh needed.
+		if firstCall {
+			firstCall = false
+			connection.logger.Debug("using initial token for CONNECT")
+			return cp, nil
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		freshJWT, err := connection.tokenRefresher(ctx)
+		if err != nil {
+			connection.logger.Error("failed to refresh token for MQTT reconnect", "error", err)
+			// Fall through with existing credentials — broker will reject if truly expired,
+			// and autopaho will retry (calling this builder again).
+			return cp, nil
+		}
+		connection.logger.Info("JWT refreshed for MQTT reconnect")
+		cp.Password = []byte(freshJWT)
+		return cp, nil
+	}
 }

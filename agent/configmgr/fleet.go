@@ -167,6 +167,18 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	}
 	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
 
+	// Wire up token refresher so autopaho's ConnectPacketBuilder can fetch a fresh JWT
+	// on every auto-reconnect, eliminating stale-token failures.
+	if mqttConn, ok := fleetManager.connection.(*fleet.MQTTConnection); ok {
+		mqttConn.SetTokenRefresher(func(ctx context.Context) (string, error) {
+			resp, err := fleetManager.authTokenManager.RefreshToken(ctx)
+			if err != nil {
+				return "", err
+			}
+			return resp.AccessToken, nil
+		})
+	}
+
 	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 	if err != nil {
 		return err
@@ -227,6 +239,10 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
 	go fleetManager.monitorTokenExpiry()
+
+	// Start debug signal triggers (no-op unless built with -tags debug).
+	// Uses monitorCtx so the goroutine dies with monitorCancel() in Stop().
+	fleet.StartDebugTrigger(fleetManager.monitorCtx, fleetManager.logger, fleetManager)
 
 	return nil
 }
@@ -396,6 +412,40 @@ func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (s
 		return "", fmt.Errorf("failed to marshal agent config: %w", err)
 	}
 	return string(configYaml), nil
+}
+
+// RotateCredentials refreshes the JWT token and signals the reconnect worker.
+// Implements fleet.DebugCredentials.
+func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) error {
+	oldExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+	_, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	if err != nil {
+		return err
+	}
+	newExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+	fleetManager.logger.Warn("credentials rotated",
+		"previous_expiry", oldExpiry,
+		"new_expiry", newExpiry,
+		"new_time_until_expiry", time.Until(newExpiry).Truncate(time.Second))
+
+	select {
+	case fleetManager.reconnectChan <- struct{}{}:
+		fleetManager.logger.Debug("reconnect signal sent after credential rotation")
+	default:
+		fleetManager.logger.Debug("reconnect already in progress, skipping signal")
+	}
+	return nil
+}
+
+// LogCredentials logs current token age and status.
+// Implements fleet.DebugCredentials.
+func (fleetManager *FleetConfigManager) LogCredentials() {
+	expiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+	fleetManager.logger.Warn("token status",
+		"expires_at", expiry,
+		"time_until_expiry", time.Until(expiry).Truncate(time.Second),
+		"expired", fleetManager.authTokenManager.IsTokenExpired(),
+		"expiring_soon", fleetManager.authTokenManager.IsTokenExpiringSoon(2*time.Minute))
 }
 
 // GetContext returns the context for the Fleet configuration manager
