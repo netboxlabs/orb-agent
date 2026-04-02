@@ -516,7 +516,8 @@ func buildConnectPacketBuilder(connection *MQTTConnection) func(*paho.Connect, *
 
 		freshJWT, err := connection.tokenRefresher(ctx)
 		if err != nil {
-			connection.logger.Error("failed to refresh token for MQTT reconnect", "error", err)
+			// While this is an error, it could blow out logs if there's a network fault
+			connection.logger.Debug("failed to refresh token for MQTT reconnect", "error", err)
 			// Fall through with existing credentials — broker will reject if truly expired,
 			// and autopaho will retry (calling this builder again).
 			return cp, nil
