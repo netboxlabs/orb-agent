@@ -2,6 +2,7 @@ package configmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -262,9 +263,18 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			if lastErr = fleetManager.refreshAndReconnect(ctx, timeout); lastErr == nil {
 				break
 			}
-			fleetManager.logger.Warn("refresh and reconnect attempt failed",
-				"attempt", attempt, "max_retries", maxRetries,
-				"error", lastErr, "retry_in", backoff)
+			// Auth failures (HTTP 401/403) mean bad credentials — retrying is pointless.
+			var authErr *fleet.AuthError
+			if errors.As(lastErr, &authErr) {
+				fleetManager.logger.Error("authentication failed, not retrying",
+					"status_code", authErr.StatusCode, "error", authErr)
+				break
+			}
+			if attempt > 1 {
+				fleetManager.logger.Warn("refresh and reconnect attempt failed",
+					"attempt", attempt, "max_retries", maxRetries,
+					"error", lastErr, "retry_in", backoff)
+			}
 			if attempt < maxRetries {
 				select {
 				case <-ctx.Done():

@@ -20,6 +20,17 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
+// AuthError indicates a non-retriable authentication failure (e.g. HTTP 401/403).
+// Callers should not retry when they receive this error — the credentials are wrong.
+type AuthError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf("authentication failed (HTTP %d): %s", e.StatusCode, e.Body)
+}
+
 // AuthTokenManager manages auth tokens
 type AuthTokenManager struct {
 	mu             sync.RWMutex
@@ -114,6 +125,9 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 			"response", string(body),
 			"token_url", tokenURL,
 			"client_id", clientID)
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, &AuthError{StatusCode: resp.StatusCode, Body: string(body)}
+		}
 		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 

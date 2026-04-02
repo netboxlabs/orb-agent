@@ -200,8 +200,10 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			go connection.heartbeater.StartHeartbeats(ctx, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
 				// Track heartbeat failures
 				connection.heartbeatFailCount++
-				connection.logger.Warn("heartbeat publish failed",
-					"fail_count", connection.heartbeatFailCount)
+				if connection.heartbeatFailCount > 1 {
+					connection.logger.Warn("heartbeat publish failed",
+						"fail_count", connection.heartbeatFailCount)
+				}
 
 				// After 5 consecutive failures, trigger reconnect
 				if connection.heartbeatFailCount >= 5 {
@@ -224,9 +226,11 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 				})
 				if err != nil {
 					connection.capabilitiesFailCount++
-					connection.logger.Warn("failed to publish capabilities",
-						"error", err,
-						"fail_count", connection.capabilitiesFailCount)
+					if connection.capabilitiesFailCount > 1 {
+						connection.logger.Warn("failed to publish capabilities",
+							"error", err,
+							"fail_count", connection.capabilitiesFailCount)
+					}
 
 					// After 1 retry (2 failures), trigger reconnect
 					if connection.capabilitiesFailCount >= 2 {
@@ -261,9 +265,11 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 				})
 				if err != nil {
 					connection.groupMembershipFailCount++
-					connection.logger.Warn("failed to publish group memberships request",
-						"error", err,
-						"fail_count", connection.groupMembershipFailCount)
+					if connection.groupMembershipFailCount > 1 {
+						connection.logger.Warn("failed to publish group memberships request",
+							"error", err,
+							"fail_count", connection.groupMembershipFailCount)
+					}
 
 					// After 1 retry (2 failures), trigger reconnect
 					if connection.groupMembershipFailCount >= 2 {
@@ -284,7 +290,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			})
 		},
 		OnConnectError: func(err error) {
-			connection.logger.Warn("MQTT connection error", "error", err)
+			connection.logger.Debug("MQTT connection error", "error", err)
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID: details.ClientID,
@@ -396,7 +402,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 	err = connection.connectionManager.AwaitConnection(waitCtx)
 	if err != nil {
-		connection.logger.Warn("failed to establish MQTT connection", "error", err)
+		connection.logger.Debug("failed to establish MQTT connection", "error", err)
 		connection.stopDispatchWorker()
 		return err
 	}
