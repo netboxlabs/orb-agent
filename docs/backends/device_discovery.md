@@ -124,7 +124,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | hostname | string | yes  | Device hostname. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10.  |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
-| driver | string | no  | If defined, connect using the specified NAPALM driver (including custom drivers such as `panos`, `panos_ssh`, `huawei_vrp`). If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
+| driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
 | optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./device_discovery_ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
 
