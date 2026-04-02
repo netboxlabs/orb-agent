@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -42,7 +45,7 @@ type traceServer struct {
 func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
 	pub := s.bridge.GetPublisher()
 	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
+		return nil, status.Error(codes.Unavailable, "publisher not yet initialized")
 	}
 
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceSpans))
@@ -84,7 +87,7 @@ type metricsServer struct {
 func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
 	pub := s.bridge.GetPublisher()
 	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
+		return nil, status.Error(codes.Unavailable, "publisher not yet initialized")
 	}
 
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceMetrics))
@@ -126,7 +129,7 @@ type logsServer struct {
 func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
 	pub := s.bridge.GetPublisher()
 	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
+		return nil, status.Error(codes.Unavailable, "publisher not yet initialized")
 	}
 	if s.isIngestRequest(req) {
 		repo := s.bridge.GetPolicyRepo()

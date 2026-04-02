@@ -262,7 +262,7 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			if lastErr = fleetManager.refreshAndReconnect(ctx, timeout); lastErr == nil {
 				break
 			}
-			fleetManager.logger.Error("refresh and reconnect attempt failed",
+			fleetManager.logger.Warn("refresh and reconnect attempt failed",
 				"attempt", attempt, "max_retries", maxRetries,
 				"error", lastErr, "retry_in", backoff)
 			if attempt < maxRetries {

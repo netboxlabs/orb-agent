@@ -200,7 +200,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			go connection.heartbeater.StartHeartbeats(ctx, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
 				// Track heartbeat failures
 				connection.heartbeatFailCount++
-				connection.logger.Error("heartbeat publish failed",
+				connection.logger.Warn("heartbeat publish failed",
 					"fail_count", connection.heartbeatFailCount)
 
 				// After 5 consecutive failures, trigger reconnect
@@ -224,7 +224,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 				})
 				if err != nil {
 					connection.capabilitiesFailCount++
-					connection.logger.Error("failed to publish capabilities",
+					connection.logger.Warn("failed to publish capabilities",
 						"error", err,
 						"fail_count", connection.capabilitiesFailCount)
 
@@ -261,7 +261,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 				})
 				if err != nil {
 					connection.groupMembershipFailCount++
-					connection.logger.Error("failed to publish group memberships request",
+					connection.logger.Warn("failed to publish group memberships request",
 						"error", err,
 						"fail_count", connection.groupMembershipFailCount)
 
@@ -284,7 +284,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			})
 		},
 		OnConnectError: func(err error) {
-			connection.logger.Error("MQTT connection error", "error", err)
+			connection.logger.Warn("MQTT connection error", "error", err)
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID: details.ClientID,
@@ -396,7 +396,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 	err = connection.connectionManager.AwaitConnection(waitCtx)
 	if err != nil {
-		connection.logger.Error("failed to establish initial MQTT connection", "error", err)
+		connection.logger.Warn("failed to establish MQTT connection", "error", err)
 		connection.stopDispatchWorker()
 		return err
 	}
@@ -480,7 +480,7 @@ func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic stri
 		Retain:  false,
 	})
 	if err != nil {
-		connection.logger.Error("failed to publish to topic", "topic", topic, "error", err)
+		connection.logger.Warn("failed to publish to topic", "topic", topic, "error", err)
 		return err
 	}
 	// Reset heartbeat failure counter on successful publish
