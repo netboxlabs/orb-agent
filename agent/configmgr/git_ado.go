@@ -24,6 +24,7 @@ import (
 // negotiation, so these repos require a system-git fallback.
 func IsAzureDevOpsURL(rawURL string) bool {
 	return strings.Contains(rawURL, "dev.azure.com") ||
+		strings.Contains(rawURL, "ssh.dev.azure.com") ||
 		strings.Contains(rawURL, "visualstudio.com")
 }
 
