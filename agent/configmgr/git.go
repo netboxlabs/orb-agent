@@ -459,6 +459,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 
 func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
+	var startOK bool
 	gc.version = 1
 	gc.config = cfg.OrbAgent.ConfigManager.Sources.Git
 
@@ -506,12 +507,17 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 			return err
 		}
 		gc.tempDir = dir
+		defer func() {
+			if !startOK {
+				_ = os.RemoveAll(gc.tempDir)
+				gc.tempDir = ""
+			}
+		}()
 
 		// If no branch was specified, read the actual branch from HEAD
 		if branchName == "" {
 			head, err := gc.repo.Head()
 			if err != nil {
-				_ = os.RemoveAll(gc.tempDir)
 				return fmt.Errorf("failed to read HEAD after system git clone: %w", err)
 			}
 			branchName = head.Name().Short()
@@ -653,6 +659,7 @@ func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend
 		gc.scheduler.Start()
 	}
 
+	startOK = true
 	return nil
 }
 
