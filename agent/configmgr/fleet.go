@@ -42,7 +42,6 @@ type FleetConfigManager struct {
 	connectionDetails fleet.ConnectionDetails
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
-	debug             *debugServer
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -241,7 +240,7 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	go fleetManager.monitorTokenExpiry()
 
 	// Start debug HTTP server (no-op unless built with -tags debug).
-	fleetManager.debug = startFleetDebugServer(fleetManager.logger, fleetManager.authTokenManager, fleetManager.reconnectChan)
+	fleet.StartDebugTrigger(fleetManager.monitorCtx, fleetManager.logger, fleetManager)
 
 	return nil
 }
@@ -413,6 +412,40 @@ func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (s
 	return string(configYaml), nil
 }
 
+// RotateCredentials refreshes the JWT token and signals the reconnect worker.
+// Implements fleet.DebugCredentials.
+func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) error {
+	oldExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+	_, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	if err != nil {
+		return err
+	}
+	newExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+	fleetManager.logger.Warn("credentials rotated",
+		"previous_expiry", oldExpiry,
+		"new_expiry", newExpiry,
+		"new_time_until_expiry", time.Until(newExpiry).Truncate(time.Second))
+
+	select {
+	case fleetManager.reconnectChan <- struct{}{}:
+		fleetManager.logger.Debug("reconnect signal sent after credential rotation")
+	default:
+		fleetManager.logger.Debug("reconnect already in progress, skipping signal")
+	}
+	return nil
+}
+
+// LogCredentials logs current token age and status.
+// Implements fleet.DebugCredentials.
+func (fleetManager *FleetConfigManager) LogCredentials() {
+	expiry := fleetManager.authTokenManager.GetTokenExpiryTime()
+	fleetManager.logger.Warn("token status",
+		"expires_at", expiry,
+		"time_until_expiry", time.Until(expiry).Truncate(time.Second),
+		"expired", fleetManager.authTokenManager.IsTokenExpired(),
+		"expiring_soon", fleetManager.authTokenManager.IsTokenExpiringSoon(2*time.Minute))
+}
+
 // GetContext returns the context for the Fleet configuration manager
 func (fleetManager *FleetConfigManager) GetContext(ctx context.Context) context.Context {
 	// Empty implementation for now - just return the context as-is
@@ -485,8 +518,6 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	if fleetManager.monitorCancel != nil {
 		fleetManager.monitorCancel()
 	}
-
-	fleetManager.debug.stop()
 
 	if fleetManager.otlpBridge != nil {
 		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
