@@ -82,7 +82,7 @@ func writeAskpassScript(password string) (string, error) {
 		_ = os.Remove(f.Name())
 		return "", fmt.Errorf("failed to write askpass script: %w", err)
 	}
-	if err := os.Chmod(f.Name(), 0700); err != nil {
+	if err := os.Chmod(f.Name(), 0o700); err != nil {
 		_ = os.Remove(f.Name())
 		return "", fmt.Errorf("failed to chmod askpass script: %w", err)
 	}
