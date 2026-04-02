@@ -1,0 +1,19 @@
+<response status="success">
+  <result>
+    <hw>
+      <entry>
+        <name>ethernet1/1</name>
+        <id>16</id>
+        <state>up</state>
+        <mac>00:50:56:01:02:03</mac>
+        <speed>1000</speed>
+      </entry>
+    </hw>
+    <ifnet>
+      <entry>
+        <name>ethernet1/1</name>
+        <ip>192.168.1.1/24</ip>
+      </entry>
+    </ifnet>
+  </result>
+</response>

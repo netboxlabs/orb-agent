@@ -1,0 +1,12 @@
+{
+  "hostname": "PA-VM-LAB",
+  "vendor": "Palo Alto Networks",
+  "model": "PA-VM",
+  "os_version": "10.1.6",
+  "serial_number": "007056000123456",
+  "uptime": 600.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ethernet1/1"
+  ]
+}

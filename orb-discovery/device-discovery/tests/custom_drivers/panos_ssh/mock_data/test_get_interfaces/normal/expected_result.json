@@ -1,0 +1,11 @@
+{
+  "ethernet1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": "00:0C:29:AA:BB:01"
+  }
+}

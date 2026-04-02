@@ -1,0 +1,18 @@
+ U: Up;         D: Down;         TG: Tagged;   UT: Untagged;
+ MP: Vlan-mapping;               ST: Vlan-stacking;
+ #: ProtocolTransparent-vlan;    *: Management-vlan;
+-------------------------------------------------------------------------------
+VID  Type    Ports
+-------------------------------------------------------------------------------
+1    common  UT:GigabitEthernet1/0/2(U)
+                GigabitEthernet1/0/3(D)
+100  common  UT:GigabitEthernet1/0/0(U)
+             TG:GigabitEthernet1/0/1(U)
+200  common  UT:GigabitEthernet1/0/2(U)
+
+-------------------------------------------------------------------------------
+VID  Status  Property      MAC-LRN Statistics Description
+-------------------------------------------------------------------------------
+1    enable  default       enable  disable    VLAN 0001
+100  enable  default       enable  disable    servers
+200  enable  default       enable  disable    storage

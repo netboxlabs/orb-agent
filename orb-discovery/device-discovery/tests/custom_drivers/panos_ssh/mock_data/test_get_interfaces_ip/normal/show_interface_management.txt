@@ -1,0 +1,12 @@
+Name:            management
+Link status:
+    Runtime link speed/duplex/state: 1000/full/up
+    Configured link speed/duplex/state: auto/auto/auto
+MAC address
+    Port MAC address  0e:0c:29:aa:bb:00
+Ip address:     192.168.1.100
+Netmask:        255.255.255.0
+Default gateway: 192.168.1.1
+Ipv6 address:   unknown
+Ipv6 link local address: fe80::c0:29ff:feaa:bb00
+Ipv6 default gateway: unknown

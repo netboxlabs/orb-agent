@@ -11,4 +11,5 @@ __pycache__/
 .cursor.md
 
 CLAUDE.md
+!device-discovery/custom_napalm/CLAUDE.md
 .DS_Store

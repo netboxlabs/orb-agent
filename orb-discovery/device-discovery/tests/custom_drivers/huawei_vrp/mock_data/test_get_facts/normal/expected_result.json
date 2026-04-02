@@ -1,0 +1,10 @@
+{
+  "uptime": 35035740,
+  "vendor": "Huawei",
+  "os_version": "8.211",
+  "serial_number": "2102550AFWP0H6000080",
+  "model": "NE40E-X8A",
+  "hostname": "HUAWEI-LAB-PE-1",
+  "fqdn": "Unknown",
+  "interface_list": ["GigabitEthernet1/0/0", "GigabitEthernet1/0/1", "GigabitEthernet1/0/2", "LoopBack0", "Vlanif100"]
+}
