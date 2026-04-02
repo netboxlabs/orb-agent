@@ -85,6 +85,22 @@ func TestDebugTrigger_ContextCancel(t *testing.T) {
 	cancel()
 	time.Sleep(50 * time.Millisecond)
 
-	// After cancel, signals should not be delivered
-	assert.NotNil(t, dc)
+	// After cancel, signals should not trigger RotateCredentials or LogCredentials.
+	_ = syscall.Kill(os.Getpid(), syscall.SIGUSR1)
+
+	select {
+	case <-dc.rotateCalled:
+		t.Fatal("RotateCredentials should not be called after context cancel")
+	case <-time.After(100 * time.Millisecond):
+		// expected: no call within timeout
+	}
+
+	_ = syscall.Kill(os.Getpid(), syscall.SIGUSR2)
+
+	select {
+	case <-dc.logCalled:
+		t.Fatal("LogCredentials should not be called after context cancel")
+	case <-time.After(100 * time.Millisecond):
+		// expected: no call within timeout
+	}
 }
