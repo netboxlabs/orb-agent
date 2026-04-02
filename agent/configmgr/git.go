@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"os"
 	"os/exec"
 	"slices"
@@ -68,6 +67,35 @@ type (
 	}
 )
 
+// writeAskpassScript writes a minimal GIT_ASKPASS helper script to a temp
+// file that echoes the password without exposing it in argv.  The script is
+// chmod 0700 so only the current user can read or execute it.  The caller is
+// responsible for removing the file when done.
+func writeAskpassScript(password string) (string, error) {
+	f, err := os.CreateTemp("", "git-askpass-*.sh")
+	if err != nil {
+		return "", fmt.Errorf("failed to create askpass script: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	script := "#!/bin/sh\necho " + shellescape(password) + "\n"
+	if _, err := f.WriteString(script); err != nil {
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("failed to write askpass script: %w", err)
+	}
+	if err := os.Chmod(f.Name(), 0700); err != nil {
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("failed to chmod askpass script: %w", err)
+	}
+	return f.Name(), nil
+}
+
+// shellescape single-quote escapes a string for safe embedding in a POSIX
+// shell script.
+func shellescape(s string) string {
+	// Wrap in single quotes; any literal single quote inside becomes '\''
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // cloneWithSystemGit clones the repository using the system git binary to a
 // temporary directory.  It is used as a fallback for hosts (e.g. Azure DevOps)
 // that are incompatible with go-git's pack-protocol negotiation.
@@ -86,13 +114,16 @@ func (gc *gitConfigManager) cloneWithSystemGit(branch string) (string, *gitv5.Re
 
 	switch gc.config.Auth {
 	case "basic":
-		u, err := url.Parse(gc.config.URL)
+		askpass, err := writeAskpassScript(gc.config.Password)
 		if err != nil {
 			_ = os.RemoveAll(dir)
-			return "", nil, fmt.Errorf("failed to parse git URL: %w", err)
+			return "", nil, err
 		}
-		u.User = url.UserPassword(gc.config.Username, gc.config.Password)
-		cloneURL = u.String()
+		defer func() { _ = os.Remove(askpass) }()
+		env = append(env,
+			"GIT_ASKPASS="+askpass,
+			"GIT_USERNAME="+gc.config.Username,
+		)
 	case "ssh":
 		if gc.config.PrivateKey != "" {
 			env = append(env,
@@ -137,12 +168,15 @@ func (gc *gitConfigManager) fetchWithSystemGit() error {
 	fetchURL := gc.config.URL
 	switch gc.config.Auth {
 	case "basic":
-		u, err := url.Parse(gc.config.URL)
+		askpass, err := writeAskpassScript(gc.config.Password)
 		if err != nil {
-			return fmt.Errorf("failed to parse git URL for fetch: %w", err)
+			return err
 		}
-		u.User = url.UserPassword(gc.config.Username, gc.config.Password)
-		fetchURL = u.String()
+		defer func() { _ = os.Remove(askpass) }()
+		env = append(env,
+			"GIT_ASKPASS="+askpass,
+			"GIT_USERNAME="+gc.config.Username,
+		)
 	case "ssh":
 		if gc.config.PrivateKey != "" {
 			env = append(env,
