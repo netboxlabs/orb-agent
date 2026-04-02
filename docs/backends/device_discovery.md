@@ -57,7 +57,7 @@ Current supported options:
 | port_scan_timeout | float | TCP port probe timeout in seconds (defaults to 0.5) |
 | capture_running_config | bool | If True, collects the running configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 | capture_startup_config | bool | If True, collects the startup/saved configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
-| discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, all installed drivers — including `custom_napalm` drivers (`panos`, `panos_ssh`, `huawei_vrp`) — are tried. |
+| discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`panos`, `panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. |
 
 #### Defaults
 Current supported defaults:
