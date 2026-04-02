@@ -212,14 +212,15 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
-	// On each (re)connect, bind the MQTT publisher and topics to the OTLP bridge.
-	// The bridge buffers messages internally, so brief outages during reconnect don't drop data.
+	// Register MQTTOnReadyHook to bind publisher and topics to the OTLP bridge
+	// The bridge server is already started earlier in Start(), so we only need to bind MQTT here
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		if fleetManager.otlpBridge == nil {
 			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
 			return
 		}
 
+		// Create publisher adapter and bind to bridge
 		pub := otlpbridge.NewCMAdapterPublisher(cm)
 		fleetManager.otlpBridge.SetPublisher(pub)
 		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
@@ -239,7 +240,8 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
 	go fleetManager.monitorTokenExpiry()
 
-	// Start debug HTTP server (no-op unless built with -tags debug).
+	// Start debug handler (no-op unless built with -tags debug).
+	// The handler can force a token rotation or log token status on demand
 	fleet.StartDebugTrigger(fleetManager.monitorCtx, fleetManager.logger, fleetManager)
 
 	return nil
