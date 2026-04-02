@@ -1,6 +1,113 @@
 # Configuration Samples
 Here is a collection of configuration samples supported by orb agent
 
+## Git Config Manager
+
+The Git config manager fetches policies from a Git repository and applies them dynamically. See the [full Git config manager documentation](configs/git.md) for all options.
+
+### Public repository (no auth)
+
+```yaml
+orb:
+  labels:
+    region: EU
+    pop: ams02
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "https://github.com/myorg/policyrepo"
+        schedule: "* * * * *"
+  backends:
+    network_discovery:
+    device_discovery:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent01
+```
+
+### HTTPS with token (GitHub / Azure DevOps PAT)
+
+```yaml
+orb:
+  labels:
+    region: EU
+    pop: ams02
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "https://github.com/myorg/policyrepo"
+        auth: "basic"
+        username: "myuser"
+        password: ${GIT_TOKEN}
+        schedule: "* * * * *"
+  backends:
+    network_discovery:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent01
+```
+
+Run command:
+```bash
+docker run \
+  -v /local/orb:/opt/orb \
+  -e GIT_TOKEN=${GIT_TOKEN} \
+  -e DIODE_CLIENT_ID=${DIODE_CLIENT_ID} \
+  -e DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET} \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+### SSH key authentication (GitHub / GitLab)
+
+First, generate a known_hosts file and an SSH key pair:
+
+```bash
+ssh-keyscan github.com > /local/orb/known_hosts
+ssh-keygen -t ed25519 -f /local/orb/id_ed25519 -N ""
+# Add the contents of /local/orb/id_ed25519.pub as a deploy key in your repository
+```
+
+```yaml
+orb:
+  labels:
+    region: EU
+    pop: ams02
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "git@github.com:myorg/policyrepo.git"
+        auth: "ssh"
+        private_key: "/opt/orb/id_ed25519"
+        schedule: "* * * * *"
+  backends:
+    network_discovery:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent01
+```
+
+Run command:
+```bash
+docker run \
+  -v /local/orb:/opt/orb \
+  -e SSH_KNOWN_HOSTS=/opt/orb/known_hosts \
+  -e DIODE_CLIENT_ID=${DIODE_CLIENT_ID} \
+  -e DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET} \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
 ## Device-discovery backend
 This sample configuration file demonstrates the device discovery backend connecting to a Cisco router at 192.168.0.5. It retrieves device, interface, and IP information, then sends the data to a [diode](https://github.com/netboxlabs/diode) server running at 192.168.0.100.
 
