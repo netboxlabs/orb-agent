@@ -170,13 +170,7 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	// Wire up token refresher so autopaho's ConnectPacketBuilder can fetch a fresh JWT
 	// on every auto-reconnect, eliminating stale-token failures.
 	if mqttConn, ok := fleetManager.connection.(*fleet.MQTTConnection); ok {
-		mqttConn.SetTokenRefresher(func(ctx context.Context) (string, error) {
-			resp, err := fleetManager.authTokenManager.RefreshToken(ctx)
-			if err != nil {
-				return "", err
-			}
-			return resp.AccessToken, nil
-		})
+		mqttConn.SetTokenRefresher(fleetManager.authTokenManager.GetFreshToken)
 	}
 
 	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
@@ -414,11 +408,13 @@ func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (s
 	return string(configYaml), nil
 }
 
-// RotateCredentials refreshes the JWT token and signals the reconnect worker.
+// RotateCredentials refreshes the JWT token and stashes it for future use.
+// The MQTT connection is not torn down — autopaho's ConnectPacketBuilder will
+// use the fresh cached token on the next auto-reconnect.
 // Implements fleet.DebugCredentials.
 func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) error {
 	oldExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
-	_, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	token, err := fleetManager.authTokenManager.RefreshToken(ctx)
 	if err != nil {
 		return err
 	}
@@ -428,12 +424,10 @@ func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) e
 		"new_expiry", newExpiry,
 		"new_time_until_expiry", time.Until(newExpiry).Truncate(time.Second))
 
-	select {
-	case fleetManager.reconnectChan <- struct{}{}:
-		fleetManager.logger.Debug("reconnect signal sent after credential rotation")
-	default:
-		fleetManager.logger.Debug("reconnect already in progress, skipping signal")
-	}
+	// Update stored token so reset goroutine uses the fresh JWT.
+	fleetManager.connMu.Lock()
+	fleetManager.connectionDetails.Token = token.AccessToken
+	fleetManager.connMu.Unlock()
 	return nil
 }
 
@@ -481,33 +475,30 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 			fleetManager.logger.Info("token expiry monitor stopped")
 			return
 		case <-ticker.C:
-			// Check if token is expired or expiring soon
-			if fleetManager.authTokenManager.IsTokenExpired() {
-				fleetManager.logger.Warn("JWT token has expired, triggering reconnection",
-					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime())
-				select {
-				case fleetManager.reconnectChan <- struct{}{}:
-					fleetManager.logger.Debug("reconnection signal sent due to expired token")
-				default:
-					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
-				}
-			} else if fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
-				fleetManager.logger.Warn("JWT token expiring soon, triggering proactive reconnection",
+			// Proactively refresh the token before it expires. The MQTT connection
+			// is NOT torn down — autopaho's buildConnectPacketBuilder will pick up
+			// the fresh cached token on the next auto-reconnect if one is needed.
+			if fleetManager.authTokenManager.IsTokenExpired() || fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
+				fleetManager.logger.Info("proactively refreshing JWT token",
 					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
-					"reconnect_buffer", reconnectBuffer)
-				select {
-				case fleetManager.reconnectChan <- struct{}{}:
-					fleetManager.logger.Debug("reconnection signal sent due to imminent token expiry")
-				default:
-					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
+					"expired", fleetManager.authTokenManager.IsTokenExpired())
+				token, err := fleetManager.authTokenManager.RefreshToken(fleetManager.monitorCtx)
+				if err != nil {
+					fleetManager.logger.Error("failed to proactively refresh token", "error", err)
+				} else {
+					// Update stored token so reset goroutine uses the fresh JWT.
+					fleetManager.connMu.Lock()
+					fleetManager.connectionDetails.Token = token.AccessToken
+					fleetManager.connMu.Unlock()
+					fleetManager.logger.Info("JWT token refreshed proactively",
+						"new_expiry", fleetManager.authTokenManager.GetTokenExpiryTime())
 				}
 			} else {
 				expiryTime := fleetManager.authTokenManager.GetTokenExpiryTime()
 				if !expiryTime.IsZero() {
-					timeUntilExpiry := time.Until(expiryTime)
 					fleetManager.logger.Debug("token expiry check passed",
 						"expiry_time", expiryTime,
-						"time_until_expiry", timeUntilExpiry)
+						"time_until_expiry", time.Until(expiryTime))
 				}
 			}
 		}

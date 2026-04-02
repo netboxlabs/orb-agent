@@ -197,6 +197,26 @@ func (fleetManager *AuthTokenManager) RefreshToken(ctx context.Context) (*TokenR
 	return fleetManager.GetToken(ctx, tokenURL, skipTLS, timeout, clientID, clientSecret)
 }
 
+// GetFreshToken returns the cached access token if it is still valid, otherwise
+// performs an HTTP refresh and returns the new token. This avoids redundant HTTP
+// calls when the token monitor has already refreshed proactively.
+func (fleetManager *AuthTokenManager) GetFreshToken(ctx context.Context) (string, error) {
+	fleetManager.mu.RLock()
+	token := fleetManager.lastToken
+	expired := fleetManager.lastToken == nil || time.Now().After(fleetManager.tokenExpiresAt)
+	fleetManager.mu.RUnlock()
+
+	if !expired {
+		return token.AccessToken, nil
+	}
+
+	resp, err := fleetManager.RefreshToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	return resp.AccessToken, nil
+}
+
 // IsTokenExpired checks if the current token is expired or will expire soon
 func (fleetManager *AuthTokenManager) IsTokenExpired() bool {
 	fleetManager.mu.RLock()
