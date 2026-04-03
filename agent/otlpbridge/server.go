@@ -12,6 +12,8 @@ import (
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -154,13 +156,13 @@ func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byt
 	s.pendingMu.Lock()
 	if !s.ready {
 		if s.maxPending > 0 && len(s.pending) >= s.maxPending {
-			// Drop the oldest message to make room.
-			s.pending = s.pending[1:]
 			s.pendingDropped++
 			if s.logger != nil {
-				s.logger.Warn("pending OTLP queue full, dropping oldest message",
+				s.logger.Warn("pending OTLP queue full, rejecting message",
 					"max_pending", s.maxPending, "total_dropped", s.pendingDropped)
 			}
+			s.pendingMu.Unlock()
+			return status.Error(codes.ResourceExhausted, "OTLP pending queue is full")
 		}
 		s.pending = append(s.pending, pendingPublish{isIngest: isIngest, payload: payload})
 		s.pendingMu.Unlock()

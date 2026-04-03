@@ -127,18 +127,24 @@ func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Enqueue more messages than the limit allows.
-	for i := 0; i < 8; i++ {
+	// Enqueue up to the limit — all should succeed.
+	for i := 0; i < 5; i++ {
 		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))))
 	}
 
-	// Queue should contain only the 5 most recent messages.
+	// Enqueue beyond the limit — should return ResourceExhausted.
+	for i := 5; i < 8; i++ {
+		err = bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i)))
+		require.Error(t, err, "enqueue beyond limit should fail")
+		assert.Contains(t, err.Error(), "queue is full")
+	}
+
+	// Queue should still contain the original 5 messages (no eviction).
 	bridge.pendingMu.Lock()
 	assert.Equal(t, 5, len(bridge.pending), "queue should be capped at MaxPendingQueue")
-	assert.Equal(t, int64(3), bridge.pendingDropped, "should have dropped 3 oldest messages")
-	// Verify the oldest messages were dropped and newest retained.
-	assert.Equal(t, "msg-3", string(bridge.pending[0].payload))
-	assert.Equal(t, "msg-7", string(bridge.pending[4].payload))
+	assert.Equal(t, int64(3), bridge.pendingDropped, "should have counted 3 rejections")
+	assert.Equal(t, "msg-0", string(bridge.pending[0].payload))
+	assert.Equal(t, "msg-4", string(bridge.pending[4].payload))
 	bridge.pendingMu.Unlock()
 }
 
