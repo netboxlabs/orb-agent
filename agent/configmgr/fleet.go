@@ -457,8 +457,8 @@ func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (s
 	return string(configYaml), nil
 }
 
-// RotateCredentials refreshes the JWT token and signals the reconnect worker
-// so the broker receives the new token before the old one expires.
+// RotateCredentials refreshes the JWT token. The refreshed token is cached so
+// autopaho's ConnectPacketBuilder uses it on the next auto-reconnect.
 // Implements fleet.DebugCredentials.
 func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) error {
 	oldExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
@@ -471,13 +471,6 @@ func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) e
 		"previous_expiry", oldExpiry,
 		"new_expiry", newExpiry,
 		"new_time_until_expiry", time.Until(newExpiry).Truncate(time.Second))
-
-	select {
-	case fleetManager.reconnectChan <- struct{}{}:
-		fleetManager.logger.Debug("reconnect signal sent after credential rotation")
-	default:
-		fleetManager.logger.Debug("reconnect already in progress")
-	}
 	return nil
 }
 
@@ -498,18 +491,24 @@ func (fleetManager *FleetConfigManager) GetContext(ctx context.Context) context.
 	return ctx
 }
 
-// monitorTokenExpiry periodically checks token expiry and triggers reconnection before token expires
+// monitorTokenExpiry periodically checks token expiry and proactively refreshes
+// the JWT before it expires. The refreshed token is cached so that autopaho's
+// ConnectPacketBuilder (set up in startConnection) can use it on the next
+// auto-reconnect — no disruptive disconnect/reconnect cycle is needed.
+//
+// NOTE: topics are currently static for a given agent. If topics ever become
+// dynamic (derived from the JWT and changing between refreshes), this function
+// would need to signal reconnectChan to trigger a full reconnect with new
+// subscription topics.
 func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
-	// Check interval: default 30 seconds, configurable via config
 	checkInterval := 30 * time.Second
 	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval > 0 {
 		checkInterval = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval) * time.Second
 	}
 
-	// Reconnect buffer: default 2 minutes before expiry, configurable via config
-	reconnectBuffer := 2 * time.Minute
+	refreshBuffer := 2 * time.Minute
 	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer > 0 {
-		reconnectBuffer = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer) * time.Second
+		refreshBuffer = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer) * time.Second
 	}
 
 	ticker := time.NewTicker(checkInterval)
@@ -517,7 +516,7 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 
 	fleetManager.logger.Info("starting token expiry monitor",
 		"check_interval", checkInterval,
-		"reconnect_buffer", reconnectBuffer)
+		"refresh_buffer", refreshBuffer)
 
 	for {
 		select {
@@ -525,19 +524,18 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 			fleetManager.logger.Info("token expiry monitor stopped")
 			return
 		case <-ticker.C:
-			// Signal the reconnect worker before the broker kicks us for an
-			// expired JWT. The worker calls refreshAndReconnect which does
-			// the actual token refresh + MQTT reconnect — keeping that logic
-			// in one place avoids redundant HTTP calls.
-			if fleetManager.authTokenManager.IsTokenExpired() || fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
-				fleetManager.logger.Info("token expiring, triggering reconnect",
+			if fleetManager.authTokenManager.IsTokenExpired() || fleetManager.authTokenManager.IsTokenExpiringSoon(refreshBuffer) {
+				fleetManager.logger.Info("token expiring, refreshing proactively",
 					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
 					"expired", fleetManager.authTokenManager.IsTokenExpired())
-				select {
-				case fleetManager.reconnectChan <- struct{}{}:
-				default:
-					fleetManager.logger.Debug("reconnect already in progress")
+				ctx, cancel := context.WithTimeout(fleetManager.monitorCtx, 30*time.Second)
+				if _, err := fleetManager.authTokenManager.RefreshToken(ctx); err != nil {
+					fleetManager.logger.Warn("proactive token refresh failed", "error", err)
+				} else {
+					fleetManager.logger.Info("proactive token refresh succeeded",
+						"new_expiry", fleetManager.authTokenManager.GetTokenExpiryTime())
 				}
+				cancel()
 			} else {
 				expiryTime := fleetManager.authTokenManager.GetTokenExpiryTime()
 				if !expiryTime.IsZero() {
