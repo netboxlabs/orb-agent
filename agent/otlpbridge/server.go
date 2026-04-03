@@ -113,18 +113,19 @@ func (s *BridgeServer) checkReady() {
 
 // drainPending flushes queued messages and marks the bridge as ready for direct
 // publishing. Must only be called when publisher + topics are set.
+// Ready is set *after* the drain completes so that concurrent Enqueue calls
+// continue to queue (preserving FIFO order) until the backlog is flushed.
 func (s *BridgeServer) drainPending() {
 	s.pendingMu.Lock()
-	s.ready = true
+	if s.ready {
+		s.pendingMu.Unlock()
+		return
+	}
 	queued := s.pending
 	dropped := s.pendingDropped
 	s.pending = nil
 	s.pendingDropped = 0
 	s.pendingMu.Unlock()
-
-	if len(queued) == 0 {
-		return
-	}
 
 	s.mu.RLock()
 	pub := s.publisher
@@ -144,7 +145,32 @@ func (s *BridgeServer) drainPending() {
 		}
 	}
 
-	if s.logger != nil {
+	// Drain anything that arrived while we were flushing, then mark ready.
+	s.pendingMu.Lock()
+	for len(s.pending) > 0 {
+		extra := s.pending
+		dropped += s.pendingDropped
+		s.pending = nil
+		s.pendingDropped = 0
+		s.pendingMu.Unlock()
+
+		for _, msg := range extra {
+			topic := telemetry
+			if msg.isIngest {
+				topic = ingest
+			}
+			if err := pub.Publish(context.Background(), topic, msg.payload); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("failed to publish queued OTLP data", "topic", topic, "error", err)
+				}
+			}
+		}
+		s.pendingMu.Lock()
+	}
+	s.ready = true
+	s.pendingMu.Unlock()
+
+	if s.logger != nil && len(queued) > 0 {
 		s.logger.Info("drained pending OTLP messages", "count", len(queued), "dropped_while_pending", dropped)
 	}
 }
@@ -157,7 +183,7 @@ func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byt
 	if !s.ready {
 		if s.maxPending > 0 && len(s.pending) >= s.maxPending {
 			s.pendingDropped++
-			if s.logger != nil {
+			if s.logger != nil && (s.pendingDropped == 1 || s.pendingDropped%100 == 0) {
 				s.logger.Warn("pending OTLP queue full, rejecting message",
 					"max_pending", s.maxPending, "total_dropped", s.pendingDropped)
 			}
