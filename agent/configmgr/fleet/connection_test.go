@@ -188,6 +188,114 @@ func TestDispatchQueue_ProcessesJobsSequentially(t *testing.T) {
 	}
 }
 
+// TestDispatchQueue_SendOnClosedChannel verifies the dispatchMu guard prevents
+// panics when concurrent senders race with stopDispatchWorker closing the channel.
+// Run with: go test -race -count=100 -run TestDispatchQueue_SendOnClosedChannel
+func TestDispatchQueue_SendOnClosedChannel(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+
+	// Start the dispatch worker so the channel is actively consumed.
+	connection.startDispatchWorker()
+
+	const numSenders = 20
+	const msgsPerSender = 500
+
+	// sendSafe replicates the exact locking protocol from OnPublishReceived:
+	// hold dispatchMu while checking shuttingDown and sending on dispatchQueue.
+	sendSafe := func() bool {
+		connection.dispatchMu.Lock()
+		if connection.shuttingDown {
+			connection.dispatchMu.Unlock()
+			return false
+		}
+		select {
+		case connection.dispatchQueue <- dispatchJob{}:
+			connection.dispatchMu.Unlock()
+		default:
+			connection.dispatchMu.Unlock()
+		}
+		return true
+	}
+
+	// Launch senders that will race with shutdown.
+	var wg sync.WaitGroup
+	wg.Add(numSenders)
+	for i := 0; i < numSenders; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < msgsPerSender; j++ {
+				if !sendSafe() {
+					return // channel closed, stop sending
+				}
+			}
+		}()
+	}
+
+	// Let senders build some pressure, then shut down the worker.
+	// If the mutex guard is broken this will panic with "send on closed channel".
+	time.Sleep(1 * time.Millisecond)
+	connection.stopDispatchWorker()
+
+	wg.Wait() // all senders must finish without panic
+}
+
+// TestDispatchQueue_ReconnectCycle validates that dispatchQueue can be torn down
+// and recreated (as Reconnect does) without panics from concurrent senders.
+func TestDispatchQueue_ReconnectCycle(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+
+	const cycles = 10
+	const sendersPerCycle = 5
+	const msgsPerSender = 200
+
+	for cycle := 0; cycle < cycles; cycle++ {
+		connection.startDispatchWorker()
+
+		var wg sync.WaitGroup
+		wg.Add(sendersPerCycle)
+		for s := 0; s < sendersPerCycle; s++ {
+			go func() {
+				defer wg.Done()
+				for j := 0; j < msgsPerSender; j++ {
+					connection.dispatchMu.Lock()
+					if connection.shuttingDown {
+						connection.dispatchMu.Unlock()
+						return
+					}
+					select {
+					case connection.dispatchQueue <- dispatchJob{}:
+					default:
+					}
+					connection.dispatchMu.Unlock()
+				}
+			}()
+		}
+
+		time.Sleep(500 * time.Microsecond)
+		connection.stopDispatchWorker()
+		wg.Wait()
+
+		// Recreate channels exactly as Reconnect does.
+		connection.dispatchMu.Lock()
+		connection.dispatchQueue = make(chan dispatchJob, 100)
+		connection.dispatchWorkerDone = make(chan struct{})
+		connection.shuttingDown = false
+		connection.dispatchMu.Unlock()
+	}
+}
+
 func TestDispatchQueue_HandlesQueueFull(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
