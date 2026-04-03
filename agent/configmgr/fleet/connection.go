@@ -131,31 +131,36 @@ func (connection *MQTTConnection) startDispatchWorker() {
 }
 
 // stopDispatchWorker stops the dispatch worker and waits for it to finish.
-// It holds dispatchMu while setting shuttingDown and closing the channel so
-// that no sender can race with the close.
+// All reads of dispatchWorkerDone and dispatchQueue are done under dispatchMu
+// so that Reconnect (which replaces both channels under the same lock) cannot
+// race with this function.
 func (connection *MQTTConnection) stopDispatchWorker() {
-	// If the worker is already done (dispatchWorkerDone is closed), do nothing.
+	connection.dispatchMu.Lock()
+
+	// Capture the done channel under the lock so we wait on the correct
+	// instance even if Reconnect replaces it concurrently.
+	done := connection.dispatchWorkerDone
+
+	// Fast path: worker already finished.
 	select {
-	case <-connection.dispatchWorkerDone:
+	case <-done:
+		connection.dispatchMu.Unlock()
 		return
 	default:
 	}
 
-	// Atomically mark shutdown and close the queue under the same lock that
-	// senders hold when enqueueing, so no send-on-closed-channel is possible.
-	// The shuttingDown check inside the lock prevents double-close if two
-	// callers race past the select above.
-	connection.dispatchMu.Lock()
+	// If another caller is already shutting down, just wait.
 	if connection.shuttingDown {
 		connection.dispatchMu.Unlock()
-		<-connection.dispatchWorkerDone
+		<-done
 		return
 	}
+
 	connection.shuttingDown = true
 	close(connection.dispatchQueue)
 	connection.dispatchMu.Unlock()
 
-	<-connection.dispatchWorkerDone
+	<-done
 }
 
 // Connect connects to the MQTT broker
