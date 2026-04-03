@@ -9,8 +9,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
 )
 
 // fakeDebugCredentials records calls for test assertions.

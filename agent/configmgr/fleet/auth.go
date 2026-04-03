@@ -104,23 +104,23 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 
 	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
-		fleetManager.logger.Error("failed to send token request", "error", err, "token_url", tokenURL)
+		fleetManager.logger.Warn("failed to send token request", "error", err, "token_url", tokenURL)
 		return nil, fmt.Errorf("failed to send request to %s: %w", tokenURL, err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fleetManager.logger.Error("failed to close response body", "error", err)
+			fleetManager.logger.Warn("failed to close response body", "error", err)
 		}
 	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fleetManager.logger.Error("failed to read response body", "error", err, "status_code", resp.StatusCode)
+		fleetManager.logger.Warn("failed to read response body", "error", err, "status_code", resp.StatusCode)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		fleetManager.logger.Error("token request failed",
+		fleetManager.logger.Warn("token request failed",
 			"status_code", resp.StatusCode,
 			"response", string(body),
 			"token_url", tokenURL,

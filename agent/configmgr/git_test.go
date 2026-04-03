@@ -1,6 +1,7 @@
 package configmgr_test
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -115,7 +116,7 @@ backend1:
 			payload.Action == "manage"
 	})).Return()
 
-	err = gc.Start(cfg, backends)
+	err = gc.Start(context.Background(), cfg, backends)
 	require.NoError(t, err)
 }
 
@@ -189,7 +190,7 @@ backend1:
 		"backend1": &mockBackend{name: "backend1"},
 	}
 
-	err = gc.Start(cfg, backends)
+	err = gc.Start(context.Background(), cfg, backends)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no policies match the selector")
 	pMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
