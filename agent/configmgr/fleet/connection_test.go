@@ -296,6 +296,40 @@ func TestDispatchQueue_ReconnectCycle(t *testing.T) {
 	}
 }
 
+// TestDispatchQueue_ConcurrentStopDispatchWorker validates that two goroutines
+// calling stopDispatchWorker concurrently do not double-close the channel.
+func TestDispatchQueue_ConcurrentStopDispatchWorker(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+
+	// Run multiple iterations to increase the chance of triggering a race.
+	for i := 0; i < 50; i++ {
+		connection.startDispatchWorker()
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		for c := 0; c < 2; c++ {
+			go func() {
+				defer wg.Done()
+				connection.stopDispatchWorker()
+			}()
+		}
+		wg.Wait()
+
+		// Reset for next iteration.
+		connection.dispatchMu.Lock()
+		connection.dispatchQueue = make(chan dispatchJob, 100)
+		connection.dispatchWorkerDone = make(chan struct{})
+		connection.shuttingDown = false
+		connection.dispatchMu.Unlock()
+	}
+}
+
 func TestDispatchQueue_HandlesQueueFull(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))

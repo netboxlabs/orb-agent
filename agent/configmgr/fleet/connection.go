@@ -143,7 +143,14 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 
 	// Atomically mark shutdown and close the queue under the same lock that
 	// senders hold when enqueueing, so no send-on-closed-channel is possible.
+	// The shuttingDown check inside the lock prevents double-close if two
+	// callers race past the select above.
 	connection.dispatchMu.Lock()
+	if connection.shuttingDown {
+		connection.dispatchMu.Unlock()
+		<-connection.dispatchWorkerDone
+		return
+	}
 	connection.shuttingDown = true
 	close(connection.dispatchQueue)
 	connection.dispatchMu.Unlock()
