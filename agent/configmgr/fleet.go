@@ -357,9 +357,10 @@ func (fleetManager *FleetConfigManager) BindSecretsManager(sm secretsmgr.Manager
 	return nil
 }
 
-// refreshAndReconnect refreshes the JWT token and reconnects to MQTT
+// refreshAndReconnect refreshes the JWT token and reconnects to MQTT.
 func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context, timeout time.Duration) error {
-	// Refresh JWT token
+	// Always do a fresh HTTP refresh — we need the absolute latest token
+	// before tearing down and rebuilding the MQTT connection.
 	token, err := fleetManager.authTokenManager.RefreshToken(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to refresh token: %w", err)
@@ -486,17 +487,14 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 			fleetManager.logger.Info("token expiry monitor stopped")
 			return
 		case <-ticker.C:
-			// Proactively refresh the token and reconnect before the broker kicks
-			// us for an expired JWT. The token is refreshed first so that
-			// refreshAndReconnect (via GetFreshToken) uses the cached value
-			// instead of making a redundant HTTP call.
+			// Signal the reconnect worker before the broker kicks us for an
+			// expired JWT. The worker calls refreshAndReconnect which does
+			// the actual token refresh + MQTT reconnect — keeping that logic
+			// in one place avoids redundant HTTP calls.
 			if fleetManager.authTokenManager.IsTokenExpired() || fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
-				fleetManager.logger.Info("token expiring, refreshing and triggering reconnect",
+				fleetManager.logger.Info("token expiring, triggering reconnect",
 					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
 					"expired", fleetManager.authTokenManager.IsTokenExpired())
-				if _, err := fleetManager.authTokenManager.RefreshToken(fleetManager.monitorCtx); err != nil {
-					fleetManager.logger.Error("failed to proactively refresh token", "error", err)
-				}
 				select {
 				case fleetManager.reconnectChan <- struct{}{}:
 				default:
