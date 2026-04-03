@@ -113,3 +113,45 @@ func TestBridgeServer_Start_ErrorMessageFormat(t *testing.T) {
 		strings.Contains(errorMsg, "use") || strings.Contains(errorMsg, "bind"),
 		"error message should mention port in use or bind failure: %s", err.Error())
 }
+
+func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := BridgeConfig{
+		ListenAddr:      ":0",
+		Encoding:        "json",
+		MaxPendingQueue: 5,
+	}
+	bridge, err := NewBridgeServer(cfg, nil, logger)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Enqueue more messages than the limit allows.
+	for i := 0; i < 8; i++ {
+		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))))
+	}
+
+	// Queue should contain only the 5 most recent messages.
+	bridge.pendingMu.Lock()
+	assert.Equal(t, 5, len(bridge.pending), "queue should be capped at MaxPendingQueue")
+	assert.Equal(t, int64(3), bridge.pendingDropped, "should have dropped 3 oldest messages")
+	// Verify the oldest messages were dropped and newest retained.
+	assert.Equal(t, "msg-3", string(bridge.pending[0].payload))
+	assert.Equal(t, "msg-7", string(bridge.pending[4].payload))
+	bridge.pendingMu.Unlock()
+}
+
+func TestBridgeServer_Enqueue_DefaultQueueLimit(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := BridgeConfig{
+		ListenAddr: ":0",
+		Encoding:   "json",
+		// MaxPendingQueue = 0 → should use default
+	}
+	bridge, err := NewBridgeServer(cfg, nil, logger)
+	require.NoError(t, err)
+
+	assert.Equal(t, defaultMaxPendingQueue, bridge.maxPending, "should use default when MaxPendingQueue is 0")
+}

@@ -16,6 +16,8 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
+const defaultMaxPendingQueue = 1000
+
 // pendingPublish holds a marshaled OTLP payload queued before the MQTT publisher was ready.
 type pendingPublish struct {
 	isIngest bool
@@ -41,9 +43,11 @@ type BridgeServer struct {
 
 	// Pending publish queue — messages received before MQTT is ready are held
 	// here and drained once publisher + topics are all set.
-	pendingMu sync.Mutex
-	pending   []pendingPublish
-	ready     bool
+	pendingMu      sync.Mutex
+	pending        []pendingPublish
+	ready          bool
+	maxPending     int
+	pendingDropped int64
 }
 
 // NewBridgeServer builds a BridgeServer but does not start it.
@@ -52,7 +56,11 @@ func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *s
 	if err != nil {
 		return nil, err
 	}
-	return &BridgeServer{cfg: cfg, enc: enc, policyRepo: policyRepo, logger: logger}, nil
+	maxPending := cfg.MaxPendingQueue
+	if maxPending <= 0 {
+		maxPending = defaultMaxPendingQueue
+	}
+	return &BridgeServer{cfg: cfg, enc: enc, policyRepo: policyRepo, logger: logger, maxPending: maxPending}, nil
 }
 
 func buildEncoder(name string) (Encoder, error) {
@@ -107,7 +115,9 @@ func (s *BridgeServer) drainPending() {
 	s.pendingMu.Lock()
 	s.ready = true
 	queued := s.pending
+	dropped := s.pendingDropped
 	s.pending = nil
+	s.pendingDropped = 0
 	s.pendingMu.Unlock()
 
 	if len(queued) == 0 {
@@ -133,15 +143,25 @@ func (s *BridgeServer) drainPending() {
 	}
 
 	if s.logger != nil {
-		s.logger.Info("drained pending OTLP messages", "count", len(queued))
+		s.logger.Info("drained pending OTLP messages", "count", len(queued), "dropped_while_pending", dropped)
 	}
 }
 
 // Enqueue marshaled OTLP data for publishing. Before the MQTT connection is
-// ready the payload is queued in memory; afterwards it is published directly.
+// ready the payload is queued in memory (up to maxPending messages; oldest
+// messages are dropped when the queue is full). Once ready, publishes directly.
 func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byte) error {
 	s.pendingMu.Lock()
 	if !s.ready {
+		if s.maxPending > 0 && len(s.pending) >= s.maxPending {
+			// Drop the oldest message to make room.
+			s.pending = s.pending[1:]
+			s.pendingDropped++
+			if s.logger != nil {
+				s.logger.Warn("pending OTLP queue full, dropping oldest message",
+					"max_pending", s.maxPending, "total_dropped", s.pendingDropped)
+			}
+		}
 		s.pending = append(s.pending, pendingPublish{isIngest: isIngest, payload: payload})
 		s.pendingMu.Unlock()
 		return nil
