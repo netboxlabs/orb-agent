@@ -138,18 +138,22 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 		}
 
 		startSeq := globalSeq
+		enqueueErrs := make(chan error, batchSize)
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := 0; i < batchSize; i++ {
 				seq := startSeq + i
-				_ = bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("rot-%04d", seq)))
+				if err := bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("rot-%04d", seq))); err != nil {
+					enqueueErrs <- fmt.Errorf("rot-%04d: %w", seq, err)
+				}
 				if i == rotationPoint {
 					close(triggerRotation)
 					<-rotationDone
 				}
 			}
+			close(enqueueErrs)
 		}()
 
 		// Wait for sender to reach rotation point
@@ -173,6 +177,9 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 		close(rotationDone)
 
 		wg.Wait()
+		for err := range enqueueErrs {
+			t.Errorf("enqueue failed during rotation %d: %v", rot, err)
+		}
 		globalSeq += batchSize
 	}
 
