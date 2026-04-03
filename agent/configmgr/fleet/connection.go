@@ -124,7 +124,7 @@ func (connection *MQTTConnection) startDispatchWorker() {
 				job.topicActions,
 			)
 			if err != nil {
-				connection.logger.Error("failed to dispatch to handlers", "error", err)
+				connection.logger.Warn("failed to dispatch to handlers", "error", err)
 			}
 		}
 	}()
@@ -302,7 +302,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 			})
 		},
 		OnConnectError: func(err error) {
-			connection.logger.Debug("MQTT connection error", "error", err)
+			connection.logger.Warn("MQTT connection error", "error", err)
 		},
 		ClientConfig: paho.ClientConfig{
 			ClientID: details.ClientID,
@@ -320,7 +320,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 						// Process in goroutine to avoid blocking message acknowledgment
 						go func() {
 							if err := handler(pr.Packet.Topic, pr.Packet.Payload); err != nil {
-								connection.logger.Error("topic handler failed", "topic", pr.Packet.Topic, "error", err)
+								connection.logger.Warn("topic handler failed", "topic", pr.Packet.Topic, "error", err)
 							}
 						}()
 						return true, nil
@@ -330,7 +330,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 					// This preserves message ordering and prevents race conditions
 					parts := strings.Split(pr.Packet.Topic, "/")
 					if len(parts) < 2 {
-						connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
+						connection.logger.Warn("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
 						return true, nil
 					}
 					orgID := parts[1]
@@ -374,7 +374,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 							},
 						)
 						if err != nil {
-							connection.logger.Error("failed to dispatch to handlers", "error", err)
+							connection.logger.Warn("failed to dispatch to handlers", "error", err)
 						}
 					}
 
@@ -414,7 +414,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 	err = connection.connectionManager.AwaitConnection(waitCtx)
 	if err != nil {
-		connection.logger.Debug("failed to establish MQTT connection", "error", err)
+		connection.logger.Warn("failed to establish MQTT connection", "error", err)
 		connection.stopDispatchWorker()
 		return err
 	}
@@ -434,7 +434,7 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 		err := connection.connectionManager.Disconnect(disconnectCtx)
 		cancel()
 		if err != nil {
-			connection.logger.Error("failed to disconnect during reconnect", "error", err)
+			connection.logger.Warn("failed to disconnect during reconnect", "error", err)
 			// Continue anyway to try to establish new connection
 		}
 		// stopDispatchWorker sets shuttingDown and closes the channel under dispatchMu
@@ -534,8 +534,7 @@ func buildConnectPacketBuilder(connection *MQTTConnection) func(*paho.Connect, *
 
 		freshJWT, err := connection.tokenRefresher(ctx)
 		if err != nil {
-			// While this is an error, it could blow out logs if there's a network fault
-			connection.logger.Debug("failed to refresh token for MQTT reconnect", "error", err)
+			connection.logger.Warn("failed to refresh token for MQTT reconnect", "error", err)
 			// Fall through with existing credentials — broker will reject if truly expired,
 			// and autopaho will retry (calling this builder again).
 			return cp, nil
