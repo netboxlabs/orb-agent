@@ -272,7 +272,9 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 	fleetManager.connectionDetails = connectionDetails
 
 	// Wire up token refresher so autopaho's ConnectPacketBuilder can fetch a fresh JWT
-	// on every auto-reconnect, eliminating stale-token failures.
+	// on any auto-reconnect. The broker does not re-validate the JWT after CONNECT, so
+	// no proactive disconnect is needed — monitorTokenExpiry keeps the cached token
+	// fresh for whenever a real reconnect occurs.
 	if mqttConn, ok := fleetManager.connection.(*fleet.MQTTConnection); ok {
 		mqttConn.SetTokenRefresher(fleetManager.authTokenManager.GetFreshToken)
 	}
@@ -509,6 +511,14 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 	refreshBuffer := 2 * time.Minute
 	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer > 0 {
 		refreshBuffer = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer) * time.Second
+	}
+
+	// Cap refresh buffer to half the token's effective lifetime so that
+	// short TTLs (e.g. 2m) don't cause "always refreshing" on every tick.
+	if tokenExpiry := fleetManager.authTokenManager.GetTokenExpiryTime(); !tokenExpiry.IsZero() {
+		if ttl := time.Until(tokenExpiry); ttl > 0 && refreshBuffer > ttl/2 {
+			refreshBuffer = ttl / 2
+		}
 	}
 
 	ticker := time.NewTicker(checkInterval)
