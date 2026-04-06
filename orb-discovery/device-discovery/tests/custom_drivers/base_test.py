@@ -154,6 +154,19 @@ class BaseDriverTest:
         if expected is not None:
             assert result == expected
 
+    def test_get_config_sanitized(self, scenario: str) -> None:
+        """Verify get_config(sanitized=True) redacts sensitive fields."""
+        mock_dir = self._mock_dir("test_get_config_sanitized", scenario)
+        driver = self._build_driver(mock_dir)
+        result = driver.get_config(sanitized=True)
+
+        assert isinstance(result, dict), "get_config must return a dict"
+        assert {"running", "candidate", "startup"} <= result.keys()
+
+        expected = _load_expected(mock_dir)
+        if expected is not None:
+            assert result == expected
+
     def test_get_vlans(self, scenario: str) -> None:
         """Verify get_vlans returns a valid dict with name and interfaces per VLAN."""
         mock_dir = self._mock_dir("test_get_vlans", scenario)

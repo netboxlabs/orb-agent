@@ -1,0 +1,11 @@
+config system global
+    set hostname FGT-LAB
+    set timezone 04
+end
+config system interface
+    edit "port1"
+        set ip 192.168.1.1 255.255.255.0
+        set allowaccess ping https ssh
+        set type physical
+    next
+end

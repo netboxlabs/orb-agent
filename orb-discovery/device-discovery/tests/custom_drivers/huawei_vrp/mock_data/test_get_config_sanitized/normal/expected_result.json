@@ -1,0 +1,5 @@
+{
+  "running": "#\nsysname HUAWEI-TEST\n#\nsnmp-agent community read <redacted>\n#\n local-user admin password cipher <redacted>\n#\n psk cipher <redacted>\n#\ninterface GigabitEthernet0/0/0\n ip address 10.0.0.1 255.255.255.0\n#\nreturn\n",
+  "candidate": "",
+  "startup": "#\nsysname HUAWEI-TEST\n#\n local-user admin secret 8 <redacted>\n#\nreturn\n"
+}

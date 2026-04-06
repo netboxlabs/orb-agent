@@ -22,6 +22,16 @@ from napalm.base.utils.string_parsers import convert_uptime_string_seconds
 
 logger = logging.getLogger(__name__)
 
+_SECRET_TAG_RE = re.compile(
+    r"(<(phash|password|psk|secret|hash|bind-password|api-key)>)"
+    r"[^<]*"
+    r"(</\2>)"
+)
+
+
+def _sanitize_config(text: str) -> str:
+    return _SECRET_TAG_RE.sub(r"\1<redacted>\3", text)
+
 
 def _extract_ip_info(parsed_intf_dict: dict) -> dict:
     """Extract NAPALM-format IP address info from a single PAN-OS interface dict."""
@@ -267,6 +277,12 @@ class PANOSDriver(_napalm_base.NetworkDriver):
             running = self._get_running()
         if retrieve in ("all", "candidate"):
             candidate = self._get_candidate()
+
+        if sanitized:
+            if running:
+                running = _sanitize_config(running)
+            if candidate:
+                candidate = _sanitize_config(candidate)
 
         return {"running": running, "candidate": candidate, "startup": ""}
 

@@ -20,6 +20,16 @@ from ntc_templates.parse import parse_output
 
 logger = logging.getLogger(__name__)
 
+_SECRET_TAG_RE = re.compile(
+    r"(<(phash|password|psk|secret|hash|bind-password|api-key)>)"
+    r"[^<]*"
+    r"(</\2>)"
+)
+
+
+def _sanitize_config(text: str) -> str:
+    return _SECRET_TAG_RE.sub(r"\1<redacted>\3", text)
+
 
 def _parse_uptime(uptime_str: str) -> int:
     """Convert PAN-OS uptime string 'N days, H:MM:SS' to seconds."""
@@ -192,6 +202,11 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
             config["running"] = self.device.send_command("show config running")
         if retrieve in ("all", "candidate"):
             config["candidate"] = self.device.send_command("show config candidate")
+
+        if sanitized:
+            for key in ("running", "candidate", "startup"):
+                if config[key]:
+                    config[key] = _sanitize_config(config[key])
 
         return config
 

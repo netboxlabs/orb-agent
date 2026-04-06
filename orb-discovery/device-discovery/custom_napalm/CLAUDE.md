@@ -51,12 +51,90 @@ must return the correct empty type so the rest of the pipeline doesn't break.
 | `get_facts()` | `dict` | `{}` |
 | `get_interfaces()` | `dict[str, dict]` | `{}` |
 | `get_interfaces_ip()` | `dict[str, dict]` | `{}` |
-| `get_config(retrieve, full, sanitized, format)` | `models.ConfigDict` | `{"running":"","candidate":"","startup":""}` |
+| `get_config(retrieve, full, sanitized, format)` | `models.ConfigDict` | `{"running":"","candidate":"","startup":""}` — **must honour `sanitized=True`** |
 | `get_vlans()` | `dict` | `{}` |
 
 `get_facts` **must** return a dict with these keys (any extra keys are fine):
 ```
 hostname, vendor, model, os_version, serial_number, uptime (float, seconds), fqdn, interface_list (list[str])
+```
+
+---
+
+## Config sanitization
+
+`runner.py` calls `get_config(sanitized=True)` by default (operators can set `sanitize_config: false`
+in the policy options to opt out). Every driver **must** honour the flag.
+
+Sanitization logic lives inline in the driver — define module-level compiled regexes and a private
+`_sanitize_config(text: str) -> str` function just above the class:
+
+```python
+import re
+
+_SET_FIELDS_RE = re.compile(
+    r"(set\s+(?:password|passwd|psk|psksecret|secret|auth-password))\s+.*",
+    re.IGNORECASE,
+)
+_ENC_RE = re.compile(r"(\bENC\b)\s+\S+")
+
+
+def _sanitize_config(text: str) -> str:
+    text = _SET_FIELDS_RE.sub(r"\1 <redacted>", text)
+    text = _ENC_RE.sub(r"\1 <redacted>", text)
+    return text
+```
+
+Then call it inside `get_config()` after fetching, before returning:
+
+```python
+def get_config(self, retrieve="all", full=False, sanitized=False, format="text"):
+    config = {"running": "", "candidate": "", "startup": ""}
+    if retrieve in ("all", "running"):
+        config["running"] = self.device.send_command("show full-configuration")
+    if sanitized:
+        for key in ("running", "candidate", "startup"):
+            if config[key]:
+                config[key] = _sanitize_config(config[key])
+    return config
+```
+
+### Patterns to redact per vendor
+
+| Vendor | Fields |
+|--------|--------|
+| FortiOS | `set password/passwd/psk/psksecret/secret/auth-password <v>`, standalone `ENC <v>` |
+| PAN-OS | XML tags: `<phash>`, `<password>`, `<psk>`, `<secret>`, `<hash>`, `<bind-password>`, `<api-key>` |
+| Huawei VRP | `cipher <v>`, `secret [N] <v>`, `community [read\|write] <v>` |
+
+Redacted value is always the literal string `<redacted>`.
+
+### Testing sanitization
+
+Each driver needs a `test_get_config_sanitized/normal/` scenario (alongside `test_get_config/normal/`).
+The mock config file should contain intentional sensitive fields; `expected_result.json` has them
+replaced with `<redacted>`. Generate it with:
+
+```bash
+python3 -c "
+from pathlib import Path; import json
+from custom_napalm.my_driver import MyDriver
+from tests.custom_drivers.mock_device import FakeCLIDevice
+
+mock_dir = Path('tests/custom_drivers/my_driver/mock_data/test_get_config_sanitized/normal')
+driver = object.__new__(MyDriver)
+driver.hostname = driver.username = driver.password = 'test'
+driver.timeout = 60
+driver.device = FakeCLIDevice(mock_dir)
+print(json.dumps(driver.get_config(sanitized=True), indent=2))
+" > tests/custom_drivers/my_driver/mock_data/test_get_config_sanitized/normal/expected_result.json
+```
+
+Verify no raw secrets made it through:
+```bash
+grep -c "<redacted>" tests/custom_drivers/my_driver/mock_data/test_get_config_sanitized/normal/expected_result.json
+grep -c "MyRawSecret" tests/custom_drivers/my_driver/mock_data/test_get_config_sanitized/normal/expected_result.json
+# Expected: 0
 ```
 
 ---
@@ -84,6 +162,7 @@ device-discovery/
                 ├── test_get_interfaces/normal/
                 ├── test_get_interfaces_ip/normal/
                 ├── test_get_config/normal/
+                ├── test_get_config_sanitized/normal/
                 └── test_get_vlans/normal/
 ```
 
@@ -135,6 +214,13 @@ from ntc_templates.parse import parse_output
 import logging
 
 logger = logging.getLogger(__name__)
+
+# --- config sanitization (adjust patterns for this vendor) ---
+_SENSITIVE_RE = re.compile(r"(set\s+(?:password|secret))\s+.*", re.IGNORECASE)
+
+
+def _sanitize_config(text: str) -> str:
+    return _SENSITIVE_RE.sub(r"\1 <redacted>", text)
 
 
 class MyDriver(_napalm_base.NetworkDriver):
@@ -195,6 +281,10 @@ class MyDriver(_napalm_base.NetworkDriver):
         config: models.ConfigDict = {"running": "", "candidate": "", "startup": ""}
         if retrieve in ("all", "running"):
             config["running"] = self.device.send_command("show running-config")
+        if sanitized:
+            for key in ("running", "candidate", "startup"):
+                if config[key]:
+                    config[key] = _sanitize_config(config[key])
         return config
 
     def get_vlans(self) -> dict:
@@ -442,24 +532,60 @@ curl -X POST http://localhost:8072/api/v1/policies \
 
 ### 4. Inspect the output
 
-```bash
-ls /tmp/dryrun/
-# device-discovery_<timestamp>.json
+Pick up the latest output file and print a grouped summary:
 
-python3 -c "
-import json
-data = json.load(open('/tmp/dryrun/<file>.json'))
-entities = data['entities']
-print(f'Total entities: {len(entities)}')
-for e in entities[:3]:
-    print(json.dumps(e, indent=2)[:400])
-"
+```bash
+FILE=$(ls -t /tmp/dryrun/*.json | head -1)
+
+python3 - "$FILE" <<'EOF'
+import json, sys
+data  = json.load(open(sys.argv[1]))
+ents  = data["entities"]
+print(f"Total entities: {len(ents)}\n")
+
+dev   = next((e["device"]      for e in ents if "device"    in e), None)
+intfs = [e["interface"]        for e in ents if "interface" in e]
+ips   = [e["ip_address"]       for e in ents if "ip_address" in e]
+prefs = [e["prefix"]["prefix"] for e in ents if "prefix"    in e]
+cfgs  = [e for e in ents if "config" in e]
+
+if dev:
+    print("DEVICE")
+    print(f"  name:     {dev['name']}")
+    print(f"  vendor:   {dev['device_type']['manufacturer']['name']}")
+    print(f"  model:    {dev['device_type']['model']}")
+    print(f"  serial:   {dev.get('serial', 'n/a')}")
+    print(f"  platform: {dev['platform']['name']}")
+
+print(f"\nINTERFACES ({len(intfs)})")
+for i in sorted(intfs, key=lambda x: x["name"]):
+    speed = f"  speed={i['speed']}" if "speed" in i else ""
+    print(f"  {i['name']:20s}  enabled={i.get('enabled','?')}{speed}")
+
+print(f"\nIP ADDRESSES ({len(ips)})")
+for ip in ips:
+    intf = ip.get("assigned_object_interface", {}).get("name", "?")
+    print(f"  {ip['address']:20s}  interface: {intf}")
+
+print(f"\nPREFIXES ({len(prefs)})")
+for p in prefs:
+    print(f"  {p}")
+
+if cfgs:
+    cfg = cfgs[0]["config"]
+    print("\nCONFIG")
+    print(f"  running:   {len(cfg.get('running',''))} chars")
+    print(f"  candidate: {len(cfg.get('candidate',''))} chars")
+    print(f"  startup:   {len(cfg.get('startup',''))} chars")
+EOF
 ```
 
 A successful run produces a device entity + interface entities. Verify:
 - `device.name` matches the hostname returned by the device.
 - `device.device_type.manufacturer.name` and `model` match `get_facts()`.
-- Interface entities are present and have correct names.
+- Interface entities are present with correct `name`, `type`, and `enabled` fields.
+- Interfaces with IPs appear in both `ip_address` and `prefix` entities.
+- If config capture is enabled: `CONFIG` block shows non-zero char counts and no raw secrets.
 
 ### 5. Troubleshoot
 
@@ -494,6 +620,7 @@ Before opening a PR with a new driver, confirm all of the following:
 - [ ] `python -c "from device_discovery.discovery import supported_drivers; print(supported_drivers)"` includes the new driver.
 - [ ] Unit test module created under `tests/custom_drivers/<driver_name>/`.
 - [ ] Mock data files exist for all five test methods with an `expected_result.json` for each.
+- [ ] `test_get_config_sanitized/normal/` mock data exists with sensitive fields + redacted expected output.
 - [ ] `ruff check .` from `device-discovery/` reports no errors.
 - [ ] `pytest tests/custom_drivers/ -v` — all tests pass (existing + new).
 - [ ] `docker run` mockit container starts and SSH access works (`ssh -p <port> admin@localhost`).

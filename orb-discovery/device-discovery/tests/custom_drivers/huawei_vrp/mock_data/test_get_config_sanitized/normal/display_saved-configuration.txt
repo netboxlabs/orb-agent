@@ -1,0 +1,6 @@
+#
+sysname HUAWEI-TEST
+#
+ local-user admin secret 8 $1$savehash$abc
+#
+return
