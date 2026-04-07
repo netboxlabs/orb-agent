@@ -67,19 +67,31 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 	assert.Equal(t, ts3, r1.CreatedAt)
 	assert.Equal(t, ts4, r1.UpdatedAt)
 
-	// Running run: zero int64 timestamps convert to Unix epoch (1970-01-01T00:00:00Z)
+	// Running run: zero int64 timestamps (omitted/missing) become zero time.Time
+	// so that UpdateRuns' IsZero() fallback fires correctly.
 	r2 := runs[2]
 	assert.Equal(t, "run-running", r2.ID)
 	assert.Equal(t, "running", r2.Status)
 	assert.Empty(t, r2.Reason)
 	assert.Zero(t, r2.EntityCount)
-	assert.Equal(t, time.Unix(0, 0).UTC(), r2.CreatedAt, "zero int64 converts to Unix epoch")
-	assert.Equal(t, time.Unix(0, 0).UTC(), r2.UpdatedAt, "zero int64 converts to Unix epoch")
+	assert.True(t, r2.CreatedAt.IsZero(), "zero int64 should map to zero time.Time, not Unix epoch")
+	assert.True(t, r2.UpdatedAt.IsZero(), "zero int64 should map to zero time.Time, not Unix epoch")
 
 	// PolicyID should never be set by the converter (repo owns that)
 	for _, r := range runs {
 		assert.Empty(t, r.PolicyID, "PolicyID must not be set by convertToRunData")
 	}
+}
+
+func TestNsToTime_ZeroIsZeroTime(t *testing.T) {
+	// Zero ns must map to zero time.Time, not Unix epoch, so IsZero() guards work.
+	assert.True(t, nsToTime(0).IsZero(), "nsToTime(0) must return zero time.Time")
+}
+
+func TestNsToTime_NonZeroConvertsCorrectly(t *testing.T) {
+	ns := int64(1742464800000000000)
+	expected := time.Unix(0, ns).UTC()
+	assert.Equal(t, expected, nsToTime(ns))
 }
 
 func TestConvertToRunData_EmptyInput(t *testing.T) {

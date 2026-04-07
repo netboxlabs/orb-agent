@@ -158,6 +158,16 @@ func (manager *stateManager) Get() map[string]*State {
 	return result
 }
 
+// nsToTime converts a nanosecond Unix timestamp to time.Time.
+// A zero value is treated as "not provided" and returns the zero time.Time,
+// so that downstream IsZero() checks (e.g. in UpdateRuns) still fire correctly.
+func nsToTime(ns int64) time.Time {
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns).UTC()
+}
+
 // convertToRunData converts backend PolicyStatusRun to policies.RunData.
 // All discovery backends emit created_at/updated_at as nanoseconds since epoch;
 // convert them to time.Time here so the rest of the agent works with time.Time.
@@ -169,8 +179,8 @@ func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 			Status:      sr.Status,
 			Reason:      sr.Reason,
 			EntityCount: sr.EntityCount,
-			CreatedAt:   time.Unix(0, sr.CreatedAt).UTC(),
-			UpdatedAt:   time.Unix(0, sr.UpdatedAt).UTC(),
+			CreatedAt:   nsToTime(sr.CreatedAt),
+			UpdatedAt:   nsToTime(sr.UpdatedAt),
 		}
 	}
 	return runs
