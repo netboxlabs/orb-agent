@@ -653,6 +653,77 @@ func TestUpdateRuns_ZeroCreatedAtFallsBackToNow(t *testing.T) {
 		"UpdatedAt must be set even when CreatedAt falls back to now")
 }
 
+func TestUpdateRuns_NewTerminalRunPreservesBackendUpdatedAt(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "device_discovery",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		State:    policies.Running,
+	}
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	// Simulate agent restart: first observation of a run that is already terminal.
+	// The backend provides both timestamps from before the restart.
+	backendCreatedAt := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	backendUpdatedAt := time.Date(2024, 1, 15, 12, 5, 0, 0, time.UTC)
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "completed", CreatedAt: backendCreatedAt, UpdatedAt: backendUpdatedAt},
+	})
+	require.NoError(t, err)
+
+	pd2, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, pd2.Runs, 1)
+
+	// Both timestamps must come from the backend, not poll time.
+	assert.Equal(t, backendCreatedAt, pd2.Runs[0].CreatedAt,
+		"CreatedAt must be preserved from backend for new terminal run")
+	assert.Equal(t, backendUpdatedAt, pd2.Runs[0].UpdatedAt,
+		"UpdatedAt must be preserved from backend for new terminal run — not overwritten with poll time")
+}
+
+func TestUpdateRuns_NewInProgressRunSetsUpdatedAtToNow(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "device_discovery",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		State:    policies.Running,
+	}
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	before := time.Now().UTC()
+	// In-progress run with a backend-provided UpdatedAt — agent should use now
+	// so UpdatedAt − CreatedAt reflects elapsed time from the agent's perspective.
+	backendUpdatedAt := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", UpdatedAt: backendUpdatedAt},
+	})
+	require.NoError(t, err)
+	after := time.Now().UTC()
+
+	pd2, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, pd2.Runs, 1)
+
+	// For in-progress runs, UpdatedAt must be set to now (not the backend's value).
+	assert.True(t, !pd2.Runs[0].UpdatedAt.Before(before) && !pd2.Runs[0].UpdatedAt.After(after),
+		"UpdatedAt must be set to now for new in-progress runs")
+}
+
 func TestUpdateRuns_NonExistentPolicy(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)

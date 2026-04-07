@@ -185,11 +185,16 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 				runs[i].UpdatedAt = now
 			}
 		} else {
-			// New run: use the backend's CreatedAt if provided; fall back to now.
+			// New run: use the backend's timestamps if provided; fall back to now.
 			if runs[i].CreatedAt.IsZero() {
 				runs[i].CreatedAt = now
 			}
-			runs[i].UpdatedAt = now
+			// For terminal runs seen for the first time (e.g. after agent restart),
+			// preserve the backend's UpdatedAt so UpdatedAt − CreatedAt reflects
+			// actual run duration rather than agent poll time.
+			if runs[i].UpdatedAt.IsZero() || !isTerminalStatus(runs[i].Status) {
+				runs[i].UpdatedAt = now
+			}
 		}
 	}
 
