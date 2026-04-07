@@ -584,6 +584,72 @@ func TestUpdateRuns_FailedStatusFreezesUpdatedAt(t *testing.T) {
 	assert.Equal(t, failedAt, frozen.Runs[0].UpdatedAt, "UpdatedAt must be frozen after failed status")
 }
 
+func TestUpdateRuns_BackendCreatedAtPreserved(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "device_discovery",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		State:    policies.Running,
+	}
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	// Simulate a run with a backend-provided CreatedAt (e.g. from convertToRunData).
+	backendCreatedAt := time.Date(2026, 4, 7, 18, 34, 0, 0, time.UTC)
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", CreatedAt: backendCreatedAt},
+	})
+	require.NoError(t, err)
+
+	pd2, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, pd2.Runs, 1)
+
+	// Backend's CreatedAt must be preserved, not overwritten with time.Now().
+	assert.Equal(t, backendCreatedAt, pd2.Runs[0].CreatedAt,
+		"UpdateRuns must preserve the backend's CreatedAt for new runs")
+	// UpdatedAt is always set to now (elapsed time tracking).
+	assert.False(t, pd2.Runs[0].UpdatedAt.IsZero())
+}
+
+func TestUpdateRuns_ZeroCreatedAtFallsBackToNow(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "device_discovery",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		State:    policies.Running,
+	}
+	err = repo.Update(pd)
+	require.NoError(t, err)
+
+	before := time.Now().UTC()
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running"}, // zero CreatedAt
+	})
+	require.NoError(t, err)
+	after := time.Now().UTC()
+
+	pd2, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, pd2.Runs, 1)
+
+	// When backend provides no CreatedAt (zero), fall back to now.
+	assert.True(t, !pd2.Runs[0].CreatedAt.Before(before) && !pd2.Runs[0].CreatedAt.After(after),
+		"zero CreatedAt should fall back to time.Now()")
+}
+
 func TestUpdateRuns_NonExistentPolicy(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)

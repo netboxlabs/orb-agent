@@ -185,8 +185,10 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 				runs[i].UpdatedAt = now
 			}
 		} else {
-			// New run: agent is the system of record for timestamps
-			runs[i].CreatedAt = now
+			// New run: use the backend's CreatedAt if provided; fall back to now.
+			if runs[i].CreatedAt.IsZero() {
+				runs[i].CreatedAt = now
+			}
 			runs[i].UpdatedAt = now
 		}
 	}
