@@ -600,8 +600,9 @@ func TestUpdateRuns_BackendCreatedAtPreserved(t *testing.T) {
 	err = repo.Update(pd)
 	require.NoError(t, err)
 
-	// Simulate a run with a backend-provided CreatedAt (e.g. from convertToRunData).
-	backendCreatedAt := time.Date(2026, 4, 7, 18, 34, 0, 0, time.UTC)
+	// Arbitrary past timestamp — the specific value doesn't matter,
+	// only that it is non-zero so we can verify it is preserved verbatim.
+	backendCreatedAt := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
 	err = repo.UpdateRuns("test-policy", []policies.RunData{
 		{ID: "run-1", Status: "running", CreatedAt: backendCreatedAt},
 	})
@@ -648,6 +649,8 @@ func TestUpdateRuns_ZeroCreatedAtFallsBackToNow(t *testing.T) {
 	// When backend provides no CreatedAt (zero), fall back to now.
 	assert.True(t, !pd2.Runs[0].CreatedAt.Before(before) && !pd2.Runs[0].CreatedAt.After(after),
 		"zero CreatedAt should fall back to time.Now()")
+	assert.False(t, pd2.Runs[0].UpdatedAt.IsZero(),
+		"UpdatedAt must be set even when CreatedAt falls back to now")
 }
 
 func TestUpdateRuns_NonExistentPolicy(t *testing.T) {
