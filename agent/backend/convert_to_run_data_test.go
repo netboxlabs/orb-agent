@@ -12,8 +12,8 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 	// Nanosecond timestamps — matches the wire format all backends actually emit.
 	ts1Ns := int64(1742464800000000000) // 2025-03-20T10:00:00Z in nanoseconds
 	ts2Ns := int64(1742465100000000000) // 2025-03-20T10:05:00Z in nanoseconds
-	ts3Ns := int64(1742551200000000000) // 2025-03-21T08:00:00Z in nanoseconds
-	ts4Ns := int64(1742553000000000000) // 2025-03-21T08:30:00Z in nanoseconds
+	ts3Ns := int64(1742551200000000000) // 2025-03-21T10:00:00Z in nanoseconds
+	ts4Ns := int64(1742553000000000000) // 2025-03-21T10:30:00Z in nanoseconds
 
 	ts1 := time.Unix(0, ts1Ns).UTC()
 	ts2 := time.Unix(0, ts2Ns).UTC()
