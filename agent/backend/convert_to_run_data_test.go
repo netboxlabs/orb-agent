@@ -9,10 +9,17 @@ import (
 )
 
 func TestConvertToRunData_MapsAllFields(t *testing.T) {
-	ts1 := time.Date(2026, 3, 20, 10, 0, 0, 0, time.UTC)
-	ts2 := time.Date(2026, 3, 20, 10, 5, 0, 0, time.UTC)
-	ts3 := time.Date(2026, 3, 21, 8, 0, 0, 0, time.UTC)
-	ts4 := time.Date(2026, 3, 21, 8, 30, 0, 0, time.UTC)
+	// Nanosecond timestamps — matches the wire format all backends actually emit.
+	ts1Ns := int64(1742464800000000000) // 2025-03-20T10:00:00Z in nanoseconds
+	ts2Ns := int64(1742465100000000000) // 2025-03-20T10:05:00Z in nanoseconds
+	ts3Ns := int64(1742551200000000000) // 2025-03-21T08:00:00Z in nanoseconds
+	ts4Ns := int64(1742553000000000000) // 2025-03-21T08:30:00Z in nanoseconds
+
+	ts1 := time.Unix(0, ts1Ns).UTC()
+	ts2 := time.Unix(0, ts2Ns).UTC()
+	ts3 := time.Unix(0, ts3Ns).UTC()
+	ts4 := time.Unix(0, ts4Ns).UTC()
+
 	entityCount := int64(42)
 
 	statusRuns := []PolicyStatusRun{
@@ -21,15 +28,15 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 			Status:      "completed",
 			Reason:      "finished normally",
 			EntityCount: entityCount,
-			CreatedAt:   ts1,
-			UpdatedAt:   ts2,
+			CreatedAt:   ts1Ns,
+			UpdatedAt:   ts2Ns,
 		},
 		{
 			ID:        "run-failed",
 			Status:    "failed",
 			Reason:    "timeout",
-			CreatedAt: ts3,
-			UpdatedAt: ts4,
+			CreatedAt: ts3Ns,
+			UpdatedAt: ts4Ns,
 		},
 		{
 			ID:     "run-running",
@@ -60,14 +67,14 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 	assert.Equal(t, ts3, r1.CreatedAt)
 	assert.Equal(t, ts4, r1.UpdatedAt)
 
-	// Running run: zero-value optionals pass through as-is
+	// Running run: zero int64 timestamps convert to Unix epoch (1970-01-01T00:00:00Z)
 	r2 := runs[2]
 	assert.Equal(t, "run-running", r2.ID)
 	assert.Equal(t, "running", r2.Status)
 	assert.Empty(t, r2.Reason)
 	assert.Zero(t, r2.EntityCount)
-	assert.True(t, r2.CreatedAt.IsZero(), "zero CreatedAt should pass through unchanged")
-	assert.True(t, r2.UpdatedAt.IsZero(), "zero UpdatedAt should pass through unchanged")
+	assert.Equal(t, time.Unix(0, 0).UTC(), r2.CreatedAt, "zero int64 converts to Unix epoch")
+	assert.Equal(t, time.Unix(0, 0).UTC(), r2.UpdatedAt, "zero int64 converts to Unix epoch")
 
 	// PolicyID should never be set by the converter (repo owns that)
 	for _, r := range runs {

@@ -159,9 +159,8 @@ func (manager *stateManager) Get() map[string]*State {
 }
 
 // convertToRunData converts backend PolicyStatusRun to policies.RunData.
-// Passes through all fields including timestamps from the backend.
-// The policy repo's UpdateRuns handles fallback logic when timestamps
-// are zero (i.e. not provided by the backend).
+// All discovery backends emit created_at/updated_at as nanoseconds since epoch;
+// convert them to time.Time here so the rest of the agent works with time.Time.
 func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 	runs := make([]policies.RunData, len(statusRuns))
 	for i, sr := range statusRuns {
@@ -170,8 +169,8 @@ func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 			Status:      sr.Status,
 			Reason:      sr.Reason,
 			EntityCount: sr.EntityCount,
-			CreatedAt:   sr.CreatedAt,
-			UpdatedAt:   sr.UpdatedAt,
+			CreatedAt:   time.Unix(0, sr.CreatedAt).UTC(),
+			UpdatedAt:   time.Unix(0, sr.UpdatedAt).UTC(),
 		}
 	}
 	return runs
