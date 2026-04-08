@@ -132,7 +132,7 @@ func (s *BridgeServer) publishBatch(pub Publisher, msgs []pendingPublish, ingest
 			s.pendingMu.Unlock()
 			return false
 		}
-		*published++
+		(*published)++
 	}
 	return true
 }
