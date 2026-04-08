@@ -1,12 +1,14 @@
 package data
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestNewManufacturerLookup(t *testing.T) {
@@ -474,6 +476,78 @@ func (m *mockDirEntry) Type() os.FileMode {
 
 func (m *mockDirEntry) Info() (os.FileInfo, error) {
 	return nil, nil
+}
+
+func TestEmbeddedLookupExtensions_DataIntegrity(t *testing.T) {
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	require.NotNil(t, deviceLookup)
+
+	count := len(*deviceLookup.devicesByVendor)
+	assert.Greater(t, count, 500, "Expected at least 500 device entries across all embedded lookup files")
+}
+
+func TestEmbeddedLookupExtensions_NoDuplicateOIDs(t *testing.T) {
+	oidSources := make(map[string]string) // oid -> first file it was seen in
+
+	files, err := lookupExtensionsData.ReadDir("lookup_extensions")
+	require.NoError(t, err)
+
+	for _, file := range files {
+		if !isLookupExtensionFile(file) {
+			continue
+		}
+
+		filePath := filepath.Join("lookup_extensions", file.Name())
+		data, err := lookupExtensionsData.ReadFile(filePath)
+		require.NoError(t, err, "file %s should be readable", file.Name())
+
+		var fileData struct {
+			Devices map[string]string `yaml:"devices"`
+		}
+		require.NoError(t, yaml.Unmarshal(data, &fileData), "file %s should parse without error", file.Name())
+
+		for oid := range fileData.Devices {
+			if firstFile, exists := oidSources[oid]; exists {
+				t.Errorf("duplicate OID %s found in %s (already defined in %s)", oid, file.Name(), firstFile)
+			} else {
+				oidSources[oid] = file.Name()
+			}
+		}
+	}
+}
+
+func TestEmbeddedLookupExtensions_AllOIDsMappedCorrectly(t *testing.T) {
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	require.NotNil(t, deviceLookup)
+
+	files, err := lookupExtensionsData.ReadDir("lookup_extensions")
+	require.NoError(t, err)
+
+	for _, file := range files {
+		if !isLookupExtensionFile(file) {
+			continue
+		}
+
+		filePath := filepath.Join("lookup_extensions", file.Name())
+		data, err := lookupExtensionsData.ReadFile(filePath)
+		require.NoError(t, err, "file %s should be readable", file.Name())
+
+		var fileData struct {
+			Devices map[string]string `yaml:"devices"`
+		}
+		require.NoError(t, yaml.Unmarshal(data, &fileData), "file %s should parse without error", file.Name())
+
+		for oid, expectedModel := range fileData.Devices {
+			oid, expectedModel := oid, expectedModel // capture loop vars
+			t.Run(fmt.Sprintf("%s/%s", file.Name(), oid), func(t *testing.T) {
+				got, err := deviceLookup.GetDevice(oid)
+				assert.NoError(t, err, "OID %s from %s should be found in the lookup", oid, file.Name())
+				assert.Equal(t, expectedModel, got, "OID %s should map to model %q", oid, expectedModel)
+			})
+		}
+	}
 }
 
 func TestLoadYAMLFile(t *testing.T) {
