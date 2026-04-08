@@ -135,10 +135,12 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 		// Non-retriable: bad credentials
 		var authErr *fleet.AuthError
 		if errors.As(startupErr, &authErr) {
+			_ = fleetManager.otlpBridge.Stop(context.Background())
 			return fmt.Errorf("startup aborted, credentials rejected: %w", startupErr)
 		}
 
 		if maxStartupRetries > 0 && attempt >= maxStartupRetries {
+			_ = fleetManager.otlpBridge.Stop(context.Background())
 			return fmt.Errorf("startup failed after %d attempts: %w", attempt, startupErr)
 		}
 
@@ -149,6 +151,7 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 
 		select {
 		case <-ctx.Done():
+			_ = fleetManager.otlpBridge.Stop(context.Background())
 			return fmt.Errorf("startup cancelled: %w", ctx.Err())
 		case <-time.After(startupBackoff):
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -246,9 +247,12 @@ func TestBridge_ZeroDataLoss_GRPCPath(t *testing.T) {
 	require.NoError(t, bridge.Start(context.Background()))
 	defer func() { _ = bridge.Stop(context.Background()) }()
 
-	// Connect a gRPC metrics client to the bridge
-	addr := bridge.listener.Addr().String()
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Connect a gRPC metrics client to the bridge.
+	// Extract the port and dial localhost explicitly — listener.Addr() on ":0"
+	// may return a wildcard like "[::]:<port>" which isn't reliably dialable.
+	_, port, err := net.SplitHostPort(bridge.listener.Addr().String())
+	require.NoError(t, err)
+	conn, err := grpc.NewClient("localhost:"+port, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 	client := collectormetrics.NewMetricsServiceClient(conn)
