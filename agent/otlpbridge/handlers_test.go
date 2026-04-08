@@ -38,7 +38,7 @@ func diodeResource() *resourcev1.Resource {
 
 func newBridgeWithTopics(enc Encoder) (*BridgeServer, *fakePublisher) {
 	fp := &fakePublisher{}
-	bridge := &BridgeServer{enc: enc}
+	bridge := &BridgeServer{enc: enc, maxPending: defaultMaxPendingQueue}
 	bridge.SetPublisher(fp)
 	bridge.SetIngestTopic("ingest")
 	bridge.SetTelemetryTopic("telemetry")
@@ -133,7 +133,7 @@ func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 
 func TestBridge_Enqueue_QueuesDrainsOnReady(t *testing.T) {
 	fp := &fakePublisher{}
-	bridge := &BridgeServer{enc: ProtobufEncoder{}}
+	bridge := &BridgeServer{enc: ProtobufEncoder{}, maxPending: defaultMaxPendingQueue}
 
 	// Enqueue before publisher is set — should queue, not error.
 	if err := bridge.Enqueue(context.Background(), false, []byte("hello")); err != nil {

@@ -85,7 +85,7 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	bridge := &BridgeServer{enc: ProtobufEncoder{}}
+	bridge := &BridgeServer{enc: ProtobufEncoder{}, maxPending: defaultMaxPendingQueue}
 
 	// ---- Phase 1: pre-ready queuing (startup) ----
 	pub1 := &recordingPublisher{}

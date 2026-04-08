@@ -48,6 +48,7 @@ type BridgeServer struct {
 	pendingMu      sync.Mutex
 	pending        []pendingPublish
 	ready          bool
+	draining       bool
 	maxPending     int
 	pendingDropped int64
 }
@@ -117,10 +118,11 @@ func (s *BridgeServer) checkReady() {
 // continue to queue (preserving FIFO order) until the backlog is flushed.
 func (s *BridgeServer) drainPending() {
 	s.pendingMu.Lock()
-	if s.ready {
+	if s.ready || s.draining {
 		s.pendingMu.Unlock()
 		return
 	}
+	s.draining = true
 	queued := s.pending
 	dropped := s.pendingDropped
 	s.pending = nil
@@ -167,6 +169,7 @@ func (s *BridgeServer) drainPending() {
 		}
 		s.pendingMu.Lock()
 	}
+	s.draining = false
 	s.ready = true
 	s.pendingMu.Unlock()
 
@@ -176,8 +179,9 @@ func (s *BridgeServer) drainPending() {
 }
 
 // Enqueue marshaled OTLP data for publishing. Before the MQTT connection is
-// ready the payload is queued in memory (up to maxPending messages; oldest
-// messages are dropped when the queue is full). Once ready, publishes directly.
+// ready the payload is queued in memory (up to maxPending messages). When the
+// queue is full, new messages are rejected with ResourceExhausted so the OTLP
+// client can back off and retry. Once ready, publishes directly.
 func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byte) error {
 	s.pendingMu.Lock()
 	if !s.ready {

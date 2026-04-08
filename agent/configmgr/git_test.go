@@ -318,7 +318,7 @@ backend1:
 		return p.Backend == "backend1" && p.Action == "manage"
 	})).Return()
 
-	err = gc.Start(cfg, backends)
+	err = gc.Start(context.Background(), cfg, backends)
 	require.NoError(t, err, "Start() via system git fallback should succeed")
 	pMgr.AssertCalled(t, "ManagePolicy", mock.Anything)
 }
