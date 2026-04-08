@@ -3,8 +3,10 @@ package configmgr
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"slices"
 
 	"github.com/go-co-op/gocron/v2"
@@ -37,6 +39,7 @@ type gitConfigManager struct {
 	version          int32
 	matchPolicyPaths []string
 	namespace        uuid.UUID
+	tempDir          string // non-empty when using system git fallback (Azure DevOps)
 }
 
 type (
@@ -214,15 +217,23 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	gc.logger.Debug("Running scheduled Git Config Manager task")
 
 	// Fetch latest updates from remote
-	err := gc.repo.Fetch(&gitv5.FetchOptions{
-		RemoteName:      "origin",
-		Auth:            gc.authMethod,
-		InsecureSkipTLS: gc.config.SkipTLS,
-		RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
-	})
-	if err != nil && err != gitv5.NoErrAlreadyUpToDate {
-		gc.logger.Error("Failed to fetch latest changes", "error", err)
-		return
+	if gc.tempDir != "" {
+		// Azure DevOps fallback: use system git
+		if err := gc.fetchWithSystemGit(); err != nil {
+			gc.logger.Error("Failed to fetch latest changes", "error", err)
+			return
+		}
+	} else {
+		err := gc.repo.Fetch(&gitv5.FetchOptions{
+			RemoteName:      "origin",
+			Auth:            gc.authMethod,
+			InsecureSkipTLS: gc.config.SkipTLS,
+			RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
+		})
+		if err != nil && err != gitv5.NoErrAlreadyUpToDate {
+			gc.logger.Error("Failed to fetch latest changes", "error", err)
+			return
+		}
 	}
 
 	// Get the latest reference (HEAD)
@@ -339,6 +350,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 
 func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
+	var startOK bool
 	gc.version = 1
 	gc.config = cfg.OrbAgent.ConfigManager.Sources.Git
 
@@ -374,68 +386,98 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 		return err
 	}
 
-	// Open an in-memory repository
-	repo, err := gitv5.Init(memory.NewStorage(), nil)
-	if err != nil {
-		return err
-	}
+	var branchName string
 
-	// Add the remote
-	if _, err = repo.CreateRemote(&gitconfig.RemoteConfig{
-		Name: "origin",
-		URLs: []string{gc.config.URL},
-	}); err != nil {
-		return err
-	}
+	if IsAzureDevOpsURL(gc.config.URL) {
+		gc.logger.Info("Azure DevOps URL detected, using system git fallback", "url", gc.config.URL)
+		branchName = gc.config.Branch // may be empty; cloneWithSystemGit handles that
 
-	// Fetch all branches and references
-	if err = repo.Fetch(&gitv5.FetchOptions{
-		RemoteName:      "origin",
-		Auth:            gc.authMethod,
-		InsecureSkipTLS: gc.config.SkipTLS,
-	}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
-		return err
-	}
+		var dir string
+		dir, gc.repo, err = gc.cloneWithSystemGit(branchName)
+		if err != nil {
+			return err
+		}
+		gc.tempDir = dir
+		defer func() {
+			if !startOK {
+				_ = os.RemoveAll(gc.tempDir)
+				gc.tempDir = ""
+			}
+		}()
 
-	// Get the remote reference list
-	remote, err := repo.Remote("origin")
-	if err != nil {
-		return err
-	}
+		// If no branch was specified, read the actual branch from HEAD
+		if branchName == "" {
+			head, err := gc.repo.Head()
+			if err != nil {
+				return fmt.Errorf("failed to read HEAD after system git clone: %w", err)
+			}
+			branchName = head.Name().Short()
+			gc.logger.Info("detected default branch", "branch", branchName)
+		}
+	} else {
+		// Open an in-memory repository
+		repo, err := gitv5.Init(memory.NewStorage(), nil)
+		if err != nil {
+			return err
+		}
 
-	refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod, InsecureSkipTLS: gc.config.SkipTLS})
-	if err != nil {
-		return err
-	}
+		// Add the remote
+		if _, err = repo.CreateRemote(&gitconfig.RemoteConfig{
+			Name: "origin",
+			URLs: []string{gc.config.URL},
+		}); err != nil {
+			return err
+		}
 
-	// Find the default branch
-	branchName := gc.config.Branch
-	if branchName == "" {
-		for _, ref := range refs {
-			if ref.Name().IsBranch() {
-				branchName = ref.Name().Short()
-				gc.logger.Info("detected default branch", "branch", branchName)
-				break
+		// Fetch all branches and references
+		if err = repo.Fetch(&gitv5.FetchOptions{
+			RemoteName:      "origin",
+			Auth:            gc.authMethod,
+			InsecureSkipTLS: gc.config.SkipTLS,
+		}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
+			return err
+		}
+
+		// Get the remote reference list
+		remote, err := repo.Remote("origin")
+		if err != nil {
+			return err
+		}
+
+		refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod, InsecureSkipTLS: gc.config.SkipTLS})
+		if err != nil {
+			return err
+		}
+
+		// Find the default branch
+		branchName = gc.config.Branch
+		if branchName == "" {
+			for _, ref := range refs {
+				if ref.Name().IsBranch() {
+					branchName = ref.Name().Short()
+					gc.logger.Info("detected default branch", "branch", branchName)
+					break
+				}
+			}
+
+			if branchName == "" {
+				return errors.New("failed to detect default branch, repository might be empty")
 			}
 		}
 
-		if branchName == "" {
-			return errors.New("failed to detect default branch, repository might be empty")
+		gc.logger.Info("cloning repository", "url", gc.config.URL, "branch", branchName)
+
+		// Now clone the repository with the determined branch
+		gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
+			Auth:            gc.authMethod,
+			URL:             gc.config.URL,
+			ReferenceName:   plumbing.NewBranchReferenceName(branchName),
+			SingleBranch:    true,
+			InsecureSkipTLS: gc.config.SkipTLS,
+		})
+		if err != nil {
+			return err
 		}
-	}
-
-	gc.logger.Info("cloning repository", "url", gc.config.URL, "branch", branchName)
-
-	// Now clone the repository with the determined branch
-	gc.repo, err = gitv5.Clone(memory.NewStorage(), nil, &gitv5.CloneOptions{
-		Auth:            gc.authMethod,
-		URL:             gc.config.URL,
-		ReferenceName:   plumbing.NewBranchReferenceName(branchName),
-		SingleBranch:    true,
-		InsecureSkipTLS: gc.config.SkipTLS,
-	})
-	if err != nil {
-		return err
 	}
 
 	gc.config.Branch = branchName
@@ -508,6 +550,7 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 		gc.scheduler.Start()
 	}
 
+	startOK = true
 	return nil
 }
 
@@ -516,7 +559,13 @@ func (gc *gitConfigManager) GetContext(ctx context.Context) context.Context {
 	return ctx
 }
 
-// Stop is a no-op for git config manager.
+// Stop cleans up resources held by the git config manager.
 func (gc *gitConfigManager) Stop(_ context.Context) error {
+	if gc.tempDir != "" {
+		if err := os.RemoveAll(gc.tempDir); err != nil {
+			gc.logger.Error("failed to remove git temp dir", "path", gc.tempDir, "error", err)
+		}
+		gc.tempDir = ""
+	}
 	return nil
 }

@@ -57,6 +57,8 @@ Current supported options:
 | port_scan_timeout | float | TCP port probe timeout in seconds (defaults to 0.5) |
 | capture_running_config | bool | If True, collects the running configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 | capture_startup_config | bool | If True, collects the startup/saved configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
+| sanitize_config | bool | If False, captured configuration is stored as-is without redacting sensitive values such as passwords and pre-shared keys (defaults to 'True' if not specified) |
+| discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`panos`, `panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. |
 
 #### Defaults
 Current supported defaults:
@@ -123,7 +125,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | hostname | string | yes  | Device hostname. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10.  |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
-| driver | string | no  |  If defined, try to connect to device using the specified NAPALM driver. If not, it will try all the current installed drivers |
+| driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
 | optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./device_discovery_ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
 
@@ -205,6 +207,32 @@ orb:
               role: router
               location: Row B
 ```
+
+### Custom Driver Discovery Example
+
+Use `discovery_drivers` to limit auto-discovery to a specific set of drivers. This is useful when you know the device type in advance or when using custom NAPALM drivers shipped with device-discovery (`panos`, `panos_ssh`, `huawei_vrp`).
+
+```yaml
+orb:
+  ...
+  policies:
+    device_discovery:
+      panos_discovery:
+        config:
+          schedule: "0 * * * *"
+          options:
+            discovery_drivers:
+              - panos
+              - panos_ssh
+          defaults:
+            site: DC1
+        scope:
+          - hostname: 192.168.10.20
+            username: admin
+            password: ${PANOS_PASS}
+```
+
+In this example, only the `panos` and `panos_ssh` drivers are tried during auto-discovery for devices in this policy. If you set `driver` explicitly on a scope entry, `discovery_drivers` is ignored for that entry.
 
 ### Advanced Sample
 
