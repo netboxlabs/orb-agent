@@ -112,7 +112,7 @@ class Client:
         metadata: dict[str, Any] | None,
         data: dict,
         run_id: str | None = None,
-    ):
+    ) -> int:
         """
         Ingest data using the Diode client after translating it.
 
@@ -121,6 +121,10 @@ class Client:
             metadata (dict[str, Any] | None): Metadata to attach to the ingestion request.
             data (dict): The data to be ingested.
             run_id (str | None): Discovery run ID for ingest and per-entity metadata.
+
+        Returns:
+        -------
+            int: Number of entities ingested.
 
         Raises:
         ------
@@ -188,3 +192,5 @@ class Client:
                 logger.info(
                     f"Hostname {hostname}: Successfully ingested {entity_count} entities"
                 )
+
+            return entity_count

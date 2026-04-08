@@ -229,3 +229,22 @@ def test_init_client_uses_otlp_when_credentials_missing(
         app_name="prefix/device-discovery",
         app_version=mock_version_semver(),
     )
+
+
+def test_ingest_returns_entity_count(mock_diode_client_class, sample_data, sample_metadata):
+    """ingest() returns the number of entities ingested."""
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = []
+
+    with patch(
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
+    ):
+        count = client.ingest(sample_metadata, sample_data)
+
+    expected = len(list(translate_data(sample_data)))
+    assert count == expected

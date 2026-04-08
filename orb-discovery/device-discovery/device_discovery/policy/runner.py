@@ -195,7 +195,7 @@ class PolicyRunner:
         sanitized_hostname: str,
         config: Config,
         run_id: str,
-    ):
+    ) -> int:
         """
         Connect to device and collect data.
 
@@ -205,6 +205,10 @@ class PolicyRunner:
             sanitized_hostname: Sanitized hostname for logging.
             config: Configuration data containing site information.
             run_id: Run identifier for ingest and per-entity metadata.
+
+        Returns:
+        -------
+            int: Number of entities ingested.
 
         """
         np_driver = get_network_driver(scope.driver)
@@ -260,10 +264,11 @@ class PolicyRunner:
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}. Continuing without VLAN data."
                 )
             metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
-            Client().ingest(metadata, data, run_id=run_id)
+            entity_count = Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
+            return entity_count
 
     def run_scan(
         self, hostnames: list[str], trigger: BaseTrigger, scope: Napalm, config: Config
@@ -392,7 +397,7 @@ class PolicyRunner:
                 discovery_attempts.add(1, {"policy": self.name})
 
             # Collect data from device
-            self._collect_device_data(scope, sanitized_hostname, config, run.id)
+            entity_count = self._collect_device_data(scope, sanitized_hostname, config, run.id)
 
             # UPDATE RUN ON SUCCESS
             self.run_store.update_run(
@@ -401,7 +406,7 @@ class PolicyRunner:
                 run_id=run.id,
                 status=RunStatus.COMPLETED,
                 error=None,
-                entity_count=1,
+                entity_count=entity_count,
             )
 
             # Record total discovery duration
@@ -505,7 +510,7 @@ class PolicyRunner:
                 discovery_attempts.add(1, {"policy": self.name})
 
             # Collect data from device
-            self._collect_device_data(scope, sanitized_hostname, config, run.id)
+            entity_count = self._collect_device_data(scope, sanitized_hostname, config, run.id)
 
             # UPDATE RUN ON SUCCESS
             self.run_store.update_run(
@@ -514,7 +519,7 @@ class PolicyRunner:
                 run_id=run.id,
                 status=RunStatus.COMPLETED,
                 error=None,
-                entity_count=1,
+                entity_count=entity_count,
             )
 
             # Record total discovery duration
