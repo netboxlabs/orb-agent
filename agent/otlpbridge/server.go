@@ -112,6 +112,31 @@ func (s *BridgeServer) checkReady() {
 	}
 }
 
+// publishBatch publishes a slice of pending messages. On failure it re-queues the
+// remaining messages (including the one that failed) and clears the draining flag.
+// Returns true if all messages were published, false if a failure occurred.
+func (s *BridgeServer) publishBatch(pub Publisher, msgs []pendingPublish, ingest, telemetry string, published *int) bool {
+	for i, msg := range msgs {
+		topic := telemetry
+		if msg.isIngest {
+			topic = ingest
+		}
+		if err := pub.Publish(context.Background(), topic, msg.payload); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("publish failed during drain, re-queuing remaining messages",
+					"published", *published, "remaining", len(msgs)-i, "error", err)
+			}
+			s.pendingMu.Lock()
+			s.pending = append(msgs[i:], s.pending...)
+			s.draining = false
+			s.pendingMu.Unlock()
+			return false
+		}
+		*published++
+	}
+	return true
+}
+
 // drainPending flushes queued messages and marks the bridge as ready for direct
 // publishing. Must only be called when publisher + topics are set.
 // Ready is set *after* the drain completes so that concurrent Enqueue calls
@@ -135,16 +160,9 @@ func (s *BridgeServer) drainPending() {
 	telemetry := s.telemetryTopic
 	s.mu.RUnlock()
 
-	for _, msg := range queued {
-		topic := telemetry
-		if msg.isIngest {
-			topic = ingest
-		}
-		if err := pub.Publish(context.Background(), topic, msg.payload); err != nil {
-			if s.logger != nil {
-				s.logger.Warn("failed to publish queued OTLP data", "topic", topic, "error", err)
-			}
-		}
+	published := 0
+	if !s.publishBatch(pub, queued, ingest, telemetry, &published) {
+		return
 	}
 
 	// Drain anything that arrived while we were flushing, then mark ready.
@@ -156,16 +174,8 @@ func (s *BridgeServer) drainPending() {
 		s.pendingDropped = 0
 		s.pendingMu.Unlock()
 
-		for _, msg := range extra {
-			topic := telemetry
-			if msg.isIngest {
-				topic = ingest
-			}
-			if err := pub.Publish(context.Background(), topic, msg.payload); err != nil {
-				if s.logger != nil {
-					s.logger.Warn("failed to publish queued OTLP data", "topic", topic, "error", err)
-				}
-			}
+		if !s.publishBatch(pub, extra, ingest, telemetry, &published) {
+			return
 		}
 		s.pendingMu.Lock()
 	}
@@ -173,8 +183,8 @@ func (s *BridgeServer) drainPending() {
 	s.ready = true
 	s.pendingMu.Unlock()
 
-	if s.logger != nil && len(queued) > 0 {
-		s.logger.Info("drained pending OTLP messages", "count", len(queued), "dropped_while_pending", dropped)
+	if s.logger != nil && published > 0 {
+		s.logger.Info("drained pending OTLP messages", "count", published, "dropped_while_pending", dropped)
 	}
 }
 
