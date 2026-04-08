@@ -1,2 +1,25 @@
 devices:
+  # Dell EMC OS10 switches (enterprise 674.11000.5000.100.2)
   .1.3.6.1.4.1.674.11000.5000.100.2: os10Products
+  .1.3.6.1.4.1.674.11000.5000.100.2.1.1: dellOS10S6000ON
+  .1.3.6.1.4.1.674.11000.5000.100.2.1.9: dellOS10S4128TON
+  .1.3.6.1.4.1.674.11000.5000.100.2.1.20: dellOS10S5232FON
+  .1.3.6.1.4.1.674.11000.5000.100.2.1.21: dellOS10S5248FON
+
+  # Dell iDRAC / server management (enterprise 674.10892)
+  .1.3.6.1.4.1.674.10892: dellIdrac
+
+  # EMC Data Domain backup appliances (enterprise 19746.3.1)
+  .1.3.6.1.4.1.19746.3.1: emcDataDomain
+  .1.3.6.1.4.1.19746.3.1.1: emcDD200
+  .1.3.6.1.4.1.19746.3.1.2: emcDD200Proto
+  .1.3.6.1.4.1.19746.3.1.3: emcDD410
+  .1.3.6.1.4.1.19746.3.1.4: emcDD430
+  .1.3.6.1.4.1.19746.3.1.5: emcDD460
+  .1.3.6.1.4.1.19746.3.1.6: emcDD400G
+  .1.3.6.1.4.1.19746.3.1.7: emcDD460G
+  .1.3.6.1.4.1.19746.3.1.8: emcDD560
+  .1.3.6.1.4.1.19746.3.1.9: emcDD560G
+
+  # SonicWall firewalls (enterprise 8741)
+  .1.3.6.1.4.1.8741.1: sonicwallTZ400

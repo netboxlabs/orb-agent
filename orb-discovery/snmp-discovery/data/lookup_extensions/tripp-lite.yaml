@@ -1,2 +1,7 @@
 devices:
-  .1.3.6.1.4.1.850.1.1.1: UPS
+  # Tripp-Lite UPS (enterprise 850.1)
+  .1.3.6.1.4.1.850.1: trippLiteUPS
+  .1.3.6.1.4.1.850.1.4: trippLiteSMART500RT1U
+
+  # Tripp-Lite PDU (enterprise 850.1.1.1)
+  .1.3.6.1.4.1.850.1.1.1: trippLitePDU
