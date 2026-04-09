@@ -1,0 +1,8 @@
+: Saved
+!
+ASA Version 9.16.4
+!
+hostname asa-firewall
+enable password $sha512$5000$StartupHash encrypted
+!
+end

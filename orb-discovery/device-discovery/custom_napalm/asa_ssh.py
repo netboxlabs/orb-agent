@@ -226,6 +226,9 @@ class ASASSHDriver(_napalm_base.NetworkDriver):
         if retrieve in ("all", "running"):
             config["running"] = self.device.send_command("show running-config")
 
+        if retrieve in ("all", "startup"):
+            config["startup"] = self.device.send_command("show startup-config")
+
         if sanitized:
             for key in ("running", "candidate", "startup"):
                 if config[key]:

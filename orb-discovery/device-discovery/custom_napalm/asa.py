@@ -292,9 +292,9 @@ class ASADriver(_napalm_base.NetworkDriver):
             raw = outputs[i] if i < len(outputs) else ""
             match_mac = re.search(r"MAC address (.{14}),", raw)
             mac = match_mac.group(1) if match_mac else ""
-            match_status = re.search(r"line protocol is (.{2,4})\n", raw)
-            is_up = match_status.group(1) == "up" if match_status else False
-            match_mtu = re.search(r"MTU (.{1,4})\n", raw)
+            match_status = re.search(r"line protocol is (.{2,4})\r?\n", raw)
+            is_up = match_status.group(1).strip() == "up" if match_status else False
+            match_mtu = re.search(r"MTU (.{1,4})\r?\n", raw)
             mtu = int(match_mtu.group(1)) if match_mtu else 0
             details[name] = {"mac_address": mac, "is_up": is_up, "mtu": mtu}
         return details

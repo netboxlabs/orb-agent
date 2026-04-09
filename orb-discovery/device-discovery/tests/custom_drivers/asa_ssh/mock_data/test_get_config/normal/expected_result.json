@@ -1,5 +1,5 @@
 {
   "running": ": Saved\n!\nASA Version 9.16.4\n!\nhostname asa-firewall\ndomain-name example.com\n!\ninterface GigabitEthernet1/1\n nameif inside\n security-level 100\n ip address 192.168.1.1 255.255.255.0\n!\ninterface GigabitEthernet1/2\n nameif outside\n security-level 0\n ip address 203.0.113.1 255.255.255.0\n!\ninterface Management1/1\n nameif mgmt\n security-level 50\n ip address 10.0.0.1 255.255.255.0\n!\nroute outside 0.0.0.0 0.0.0.0 203.0.113.254 1\n!\nend\n",
   "candidate": "",
-  "startup": ""
+  "startup": ": Saved\n!\nASA Version 9.16.4\n!\nhostname asa-firewall\n!\ninterface GigabitEthernet1/1\n nameif inside\n!\nend\n"
 }

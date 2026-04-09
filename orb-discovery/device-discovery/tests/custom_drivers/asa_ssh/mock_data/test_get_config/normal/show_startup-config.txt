@@ -1,0 +1,10 @@
+: Saved
+!
+ASA Version 9.16.4
+!
+hostname asa-firewall
+!
+interface GigabitEthernet1/1
+ nameif inside
+!
+end
