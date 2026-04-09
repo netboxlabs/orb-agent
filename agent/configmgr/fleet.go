@@ -333,6 +333,15 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 		}
 
 		if lastErr != nil {
+			// Auth failures (401/403) are permanent — don't disconnect or schedule
+			// further reconnect attempts; the credentials need to be fixed externally.
+			var authErr *fleet.AuthError
+			if errors.As(lastErr, &authErr) {
+				fleetManager.logger.Error("authentication failed permanently, not scheduling further reconnects",
+					"status_code", authErr.StatusCode, "error", authErr)
+				continue
+			}
+
 			fleetManager.logger.Error("all refresh and reconnect attempts exhausted, disconnecting agent",
 				"error", lastErr)
 			// Use a dedicated timeout context for teardown so that a hung MQTT broker cannot

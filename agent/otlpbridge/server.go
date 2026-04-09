@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -162,6 +163,7 @@ func (s *BridgeServer) drainPending() {
 
 	published := 0
 	if !s.publishBatch(pub, queued, ingest, telemetry, &published) {
+		s.scheduleRetryDrain()
 		return
 	}
 
@@ -175,6 +177,7 @@ func (s *BridgeServer) drainPending() {
 		s.pendingMu.Unlock()
 
 		if !s.publishBatch(pub, extra, ingest, telemetry, &published) {
+			s.scheduleRetryDrain()
 			return
 		}
 		s.pendingMu.Lock()
@@ -186,6 +189,14 @@ func (s *BridgeServer) drainPending() {
 	if s.logger != nil && published > 0 {
 		s.logger.Info("drained pending OTLP messages", "count", published, "dropped_while_pending", dropped)
 	}
+}
+
+// scheduleRetryDrain re-triggers drainPending after a short delay so that
+// messages re-queued by a failed publishBatch are not stuck indefinitely.
+func (s *BridgeServer) scheduleRetryDrain() {
+	time.AfterFunc(2*time.Second, func() {
+		s.drainPending()
+	})
 }
 
 // Enqueue marshaled OTLP data for publishing. Before the MQTT connection is

@@ -163,8 +163,30 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 	<-done
 }
 
-// Connect connects to the MQTT broker
+// Connect connects to the MQTT broker. It is safe to call after a previous
+// Connect that failed (e.g., during startup retries): stale dispatch worker
+// state and a lingering ConnectionManager are cleaned up before proceeding.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
+	// Reinitialize dispatch worker channels so Connect is safely re-entrant
+	// after a prior call that ended with stopDispatchWorker (which closes the
+	// channels and sets shuttingDown = true).
+	connection.dispatchMu.Lock()
+	if connection.shuttingDown {
+		connection.dispatchQueue = make(chan dispatchJob, 100)
+		connection.dispatchWorkerDone = make(chan struct{})
+		connection.shuttingDown = false
+	}
+	connection.dispatchMu.Unlock()
+
+	// Tear down any lingering ConnectionManager from a previous failed Connect
+	// so we don't leak a background reconnect loop.
+	if connection.connectionManager != nil {
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = connection.connectionManager.Disconnect(disconnectCtx)
+		disconnectCancel()
+		connection.connectionManager = nil
+	}
+
 	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
 	if err != nil {
@@ -415,6 +437,12 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 	err = connection.connectionManager.AwaitConnection(waitCtx)
 	if err != nil {
 		connection.logger.Warn("failed to establish MQTT connection", "error", err)
+		// Disconnect the manager so it stops retrying in the background;
+		// the next Connect call will create a fresh one.
+		disconnectCtx2, disconnectCancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = connection.connectionManager.Disconnect(disconnectCtx2)
+		disconnectCancel2()
+		connection.connectionManager = nil
 		connection.stopDispatchWorker()
 		return err
 	}
