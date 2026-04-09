@@ -1,0 +1,10 @@
+{
+  "hostname": "procurve-lab-sw1",
+  "vendor": "HP",
+  "model": "HP ProCurve Switch 2650",
+  "os_version": "R.11.72",
+  "serial_number": "SG80HC0086",
+  "uptime": 433815,
+  "fqdn": "Unknown",
+  "interface_list": ["1", "2", "3", "A1"]
+}

@@ -1,0 +1,4 @@
+{
+  "DEFAULT_VLAN": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}},
+  "VLAN10": {"ipv4": {"192.168.10.1": {"prefix_length": 24}}}
+}

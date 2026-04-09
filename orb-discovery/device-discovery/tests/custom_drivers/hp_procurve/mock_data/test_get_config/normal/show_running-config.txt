@@ -1,0 +1,24 @@
+Running configuration:
+
+; J4899B Configuration Editor; Created on release #R.11.72
+; Ver #02:01.00.00.00.00.00.00.00.05.ff:ff
+
+hostname "procurve-lab-sw1"
+module 1 type j4899b
+console baud-rate 9600
+ip default-gateway 10.0.0.1
+snmp-server community "public" unrestricted
+snmp-server community "private" unrestricted
+radius-server key mysecretkey
+vlan 1
+   name "DEFAULT_VLAN"
+   untagged 1-24
+   ip address 10.0.0.1 255.255.255.0
+   exit
+vlan 10
+   name "Internal"
+   tagged 1-24
+   exit
+spanning-tree
+no telnet-server
+no web-management

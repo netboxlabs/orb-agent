@@ -1,0 +1,6 @@
+{
+  "1": {"is_up": true, "is_enabled": true, "description": "", "last_flapped": -1.0, "mtu": -1, "speed": 1000.0, "mac_address": ""},
+  "2": {"is_up": false, "is_enabled": true, "description": "", "last_flapped": -1.0, "mtu": -1, "speed": 1000.0, "mac_address": ""},
+  "3": {"is_up": false, "is_enabled": false, "description": "", "last_flapped": -1.0, "mtu": -1, "speed": -1.0, "mac_address": ""},
+  "A1": {"is_up": true, "is_enabled": true, "description": "", "last_flapped": -1.0, "mtu": -1, "speed": 1000.0, "mac_address": ""}
+}
