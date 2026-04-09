@@ -1,0 +1,13 @@
+Cisco Adaptive Security Appliance Software Version 9.16.4
+
+asa-firewall up 3 hours 24 mins
+
+Hardware:   ASA5506-X
+
+Model Id:   ASA5506-X
+Serial Number: JAD2150ABCD
+
+  0: Ext: GigabitEthernet1/1
+  1: Ext: GigabitEthernet1/2
+  2: Ext: GigabitEthernet1/3
+  3: Mgmt: Management1/1

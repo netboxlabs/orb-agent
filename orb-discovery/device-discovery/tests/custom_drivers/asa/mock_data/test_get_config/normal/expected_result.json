@@ -1,0 +1,5 @@
+{
+  "running": ": Saved\n!\nASA Version 9.16.4\n!\nhostname asa-firewall\ndomain-name example.com\n!\nend\n",
+  "candidate": "",
+  "startup": "ASA Version 9.16.4\n!\nhostname asa-firewall\n!\nend\n"
+}

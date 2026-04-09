@@ -1,0 +1,5 @@
+{
+  "running": ": Saved\n!\nASA Version 9.16.4\n!\nhostname asa-firewall\nenable password <redacted> encrypted\npasswd <redacted> encrypted\n!\nusername admin password <redacted> privilege 15\nusername readonly password <redacted> privilege 5\n!\ninterface GigabitEthernet1/1\n nameif inside\n security-level 100\n ip address 192.168.1.1 255.255.255.0\n!\nsnmp-server community <redacted> RO\n!\ntacacs-server host 10.0.0.2 key <redacted>\ncrypto isakmp key <redacted> address 10.0.0.3\n ip ospf message-digest-key 1 md5 <redacted>\nrouter bgp 65000\n neighbor 10.0.0.4 password <redacted>\naaa-server RADIUS protocol radius\n key <redacted>\ntunnel-group 10.0.0.1 ipsec-attributes\n pre-shared-key <redacted>\n!\nend\n",
+  "candidate": "",
+  "startup": ""
+}

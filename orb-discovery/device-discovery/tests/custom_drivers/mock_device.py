@@ -18,6 +18,7 @@ XML:  op(cmd="<show><system><info></info></system></show>")
       show() → running_config.xml
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -97,3 +98,53 @@ class FakeXmlDevice:
         if self._current_file and self._current_file.exists():
             return self._current_file.read_text(encoding="utf-8")
         return "<response status='success'><result/></response>"
+
+
+class FakeRestDevice:
+    """
+    Drop-in replacement for _ASARest in Cisco ASA driver unit tests.
+
+    Maps get_resp(endpoint) to <mock_dir>/<path>.json where path is the
+    endpoint with the leading '/' stripped and remaining '/' replaced with '_'.
+
+    Returns {} for missing files (silent). has_active_token() always returns True.
+
+    Examples:
+        /monitoring/serialnumber   -> monitoring_serialnumber.json
+        /interfaces/physical       -> interfaces_physical.json
+        /cli                       -> cli.json
+
+    """
+
+    def __init__(self, mock_dir: Path) -> None:
+        """Store the directory containing mock JSON response files."""
+        self._mock_dir = mock_dir
+
+    def get_resp(
+        self,
+        endpoint: str = "",
+        data: str | None = None,
+        params: dict | None = None,
+        throw: bool = True,
+    ) -> dict:
+        """Return the contents of the mock JSON file for *endpoint*, or {} if missing."""
+        name = endpoint.lstrip("/").replace("/", "_") + ".json"
+        path = self._mock_dir / name
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def has_active_token(self) -> bool:
+        """Always True — the fake connection is always alive."""
+        return True
+
+    def get_auth_token(self) -> tuple[bool, None]:
+        """Stub — not called by tests (open() is bypassed)."""
+        return (True, None)
+
+    def delete_token(self) -> tuple[bool, None]:
+        """Stub — not called by tests (close() is bypassed)."""
+        return (True, None)
+
+    def close_session(self) -> None:
+        """No-op stub — no real session to close."""

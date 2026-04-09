@@ -1,0 +1,6 @@
+{
+  "response": [
+    "Interface GigabitEthernet1/1 \"inside\", is up, line protocol is up\n  Hardware is EtherSVC, BW 1000 Mbps\n  MAC address aabb.cc00.0100, MTU 1500\n",
+    "Interface GigabitEthernet1/2 \"outside\", is administratively down, line protocol is down\n  Hardware is EtherSVC, BW 1000 Mbps\n  MAC address aabb.cc00.0200, MTU 1500\n"
+  ]
+}
