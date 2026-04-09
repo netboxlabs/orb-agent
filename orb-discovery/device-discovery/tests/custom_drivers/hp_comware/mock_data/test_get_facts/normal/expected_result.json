@@ -1,0 +1,15 @@
+{
+  "hostname": "comware-sw01",
+  "vendor": "HP",
+  "model": "S5560X-30C-EI",
+  "os_version": "7.1.070",
+  "serial_number": "CN3H2G7800X",
+  "uptime": 1484100.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "GigabitEthernet1/0/1",
+    "GigabitEthernet1/0/2",
+    "GigabitEthernet1/0/3",
+    "Vlan-interface10"
+  ]
+}
