@@ -1,0 +1,23 @@
+: Saved
+
+ASA Version 9.16(1)
+!
+hostname ftd-firewall
+domain-name example.com
+!
+interface GigabitEthernet0/0
+ nameif outside
+ security-level 0
+ ip address 203.0.113.1 255.255.255.252
+!
+interface GigabitEthernet0/1
+ nameif inside
+ security-level 100
+ ip address 192.168.1.1 255.255.255.0
+!
+interface Management0/0
+ management-only
+ no nameif
+ no ip address
+!
+end

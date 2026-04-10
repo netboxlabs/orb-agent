@@ -1,0 +1,5 @@
+{
+  "running": ": Saved\n\nASA Version 9.16(1)\n!\nhostname ftd-firewall\ndomain-name example.com\n!\ninterface GigabitEthernet0/0\n nameif outside\n security-level 0\n ip address 203.0.113.1 255.255.255.252\n!\ninterface GigabitEthernet0/1\n nameif inside\n security-level 100\n ip address 192.168.1.1 255.255.255.0\n!\ninterface Management0/0\n management-only\n no nameif\n no ip address\n!\nend\n",
+  "candidate": "",
+  "startup": ": Saved\n\nASA Version 9.16(1)\n!\nhostname ftd-firewall\n!\nend\n"
+}

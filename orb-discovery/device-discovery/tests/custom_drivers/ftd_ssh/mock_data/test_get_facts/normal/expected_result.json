@@ -1,0 +1,14 @@
+{
+  "hostname": "ftd-firewall",
+  "vendor": "Cisco",
+  "model": "Cisco Firepower Threat Defense for VMware",
+  "os_version": "7.2.0.82",
+  "serial_number": "9AH9UCQP3AE",
+  "uptime": 0.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "GigabitEthernet0/0",
+    "GigabitEthernet0/1",
+    "Management0/0"
+  ]
+}
