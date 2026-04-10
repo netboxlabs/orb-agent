@@ -15,7 +15,6 @@ concurrency:
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  GO_VERSION: '1.25'
   APP_NAME: orb-agent
 
 permissions:
@@ -151,6 +150,9 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Go version from go.mod
+        run: echo "GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}' | cut -d. -f1,2)" >> $GITHUB_ENV
 
       - name: Set build info
         run: |
