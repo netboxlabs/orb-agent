@@ -36,7 +36,7 @@ func diodeResource() *resourcev1.Resource {
 	}
 }
 
-func newBridgeWithTopics(enc Encoder) (*BridgeServer, *fakePublisher) {
+func newBridgeWithTopics(_ Encoder) (*BridgeServer, *fakePublisher) {
 	fp := &fakePublisher{}
 	bridge, _ := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, nil)
 	bridge.SetPublisher(fp)
