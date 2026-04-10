@@ -1,0 +1,29 @@
+{
+  "1/1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "uplink-to-core",
+    "last_flapped": -1.0,
+    "speed": 10000.0,
+    "mtu": 1500,
+    "mac_address": "70:4D:7B:11:22:33"
+  },
+  "1/1/2": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "speed": 10000.0,
+    "mtu": 1500,
+    "mac_address": "70:4D:7B:11:22:34"
+  },
+  "mgmt": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "management",
+    "last_flapped": -1.0,
+    "speed": -1.0,
+    "mtu": 1500,
+    "mac_address": "70:4D:7B:11:22:35"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "running": "{\n  \"system\": {\n    \"hostname\": \"aruba-cx-6300\",\n    \"aaa\": {\n      \"authentication\": {\n        \"local_auth_users\": {\n          \"admin\": {\n            \"password\": \"<redacted>\",\n            \"role\": \"administrators\"\n          }\n        }\n      }\n    },\n    \"radius_servers\": {\n      \"10.0.0.1\": {\n        \"passkey\": \"<redacted>\",\n        \"port\": 1812\n      }\n    },\n    \"tacacs_servers\": {\n      \"10.0.0.2\": {\n        \"passkey\": \"<redacted>\",\n        \"port\": 49\n      }\n    }\n  }\n}",
+  "candidate": "",
+  "startup": "{\n  \"system\": {\n    \"hostname\": \"aruba-cx-6300\"\n  }\n}"
+}

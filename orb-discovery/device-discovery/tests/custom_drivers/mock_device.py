@@ -100,6 +100,61 @@ class FakeXmlDevice:
         return "<response status='success'><result/></response>"
 
 
+class FakePyaoscxSession:
+    """
+    Drop-in replacement for a pyaoscx v2 Session object.
+
+    Maps session.request(operation, path, ...) to <mock_dir>/<filename>.json
+    where the filename is derived from the path by:
+      1. Strip the query string (everything from '?' onward).
+      2. Replace '/' with '_'.
+      3. Strip leading/trailing '_'.
+      4. Append '.json'.
+
+    Examples:
+        "system?attributes=hostname,software_info,boot_time"  → system.json
+        "system/subsystems?attributes=product_info&depth=2"   → system_subsystems.json
+        "system/interfaces?depth=2"                           → system_interfaces.json
+        "system/vlans?depth=2"                                → system_vlans.json
+        "fullconfigs/running-config"                          → fullconfigs_running-config.json
+
+    Returns a mock response with ``.text`` (JSON string) and ``.status_code`` (200).
+    If the file is missing, returns an empty JSON object ``{}`` with status 200.
+
+    """
+
+    class _MockResponse:
+        """Minimal requests.Response look-alike."""
+
+        def __init__(self, text: str, status_code: int = 200) -> None:
+            self.text = text
+            self.status_code = status_code
+
+    def __init__(self, mock_dir: Path) -> None:
+        """Store the directory containing mock JSON response files."""
+        self._mock_dir = mock_dir
+
+    def request(
+        self,
+        operation: str,
+        path: str,
+        params: dict | None = None,
+        data: dict | None = None,
+        verify: bool = False,
+    ) -> "_MockResponse":
+        """Return a mock response for the given REST path."""
+        # Drop query string
+        base_path = path.split("?")[0]
+        # Build filename: replace / with _, strip edges
+        name = base_path.replace("/", "_").strip("_") + ".json"
+        file_path = self._mock_dir / name
+        if file_path.exists():
+            text = file_path.read_text(encoding="utf-8")
+        else:
+            text = "{}"
+        return self._MockResponse(text)
+
+
 class FakeRestDevice:
     """
     Drop-in replacement for _ASARest in Cisco ASA driver unit tests.

@@ -1,0 +1,5 @@
+{
+  "running": "Current configuration:\n!\nhostname aruba-cx-6300\n!\nvlan 1\nvlan 10\n    name MGMT\n!\ninterface 1/1/1\n    no shutdown\n    description uplink-to-core\n!\n",
+  "candidate": "",
+  "startup": "Startup configuration:\n!\nhostname aruba-cx-6300\n!\nvlan 1\n!\n"
+}

@@ -1,0 +1,14 @@
+{
+  "system": {
+    "hostname": "aruba-cx-6300",
+    "ntp": {
+      "servers": {}
+    }
+  },
+  "vlans": {
+    "1": {
+      "id": 1,
+      "name": "DEFAULT_VLAN_1"
+    }
+  }
+}

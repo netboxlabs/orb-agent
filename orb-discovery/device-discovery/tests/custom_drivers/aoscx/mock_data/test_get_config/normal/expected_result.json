@@ -1,0 +1,5 @@
+{
+  "running": "{\n  \"system\": {\n    \"hostname\": \"aruba-cx-6300\",\n    \"ntp\": {\n      \"servers\": {}\n    }\n  },\n  \"vlans\": {\n    \"1\": {\n      \"id\": 1,\n      \"name\": \"DEFAULT_VLAN_1\"\n    }\n  }\n}",
+  "candidate": "",
+  "startup": "{\n  \"system\": {\n    \"hostname\": \"aruba-cx-6300\"\n  }\n}"
+}

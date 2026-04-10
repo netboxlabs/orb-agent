@@ -1,0 +1,12 @@
+Hostname            : aruba-cx-6300
+System Contact      :
+System Location     :
+Vendor              : Aruba
+Product Name        : 6300M 24-port SFP+ 4-port SFP56
+Chassis Serial Nbr  : CN29FP60KT
+Base MAC Address    : 70:4d:7b:11:22:33
+AOS-CX Version      : GL.10.10.0001
+Time Zone           : UTC
+Up Time             : 0 weeks, 0 days, 1 hours, 2 minutes
+CPU
+Memory

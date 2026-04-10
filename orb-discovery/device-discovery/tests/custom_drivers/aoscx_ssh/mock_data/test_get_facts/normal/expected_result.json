@@ -1,0 +1,13 @@
+{
+  "hostname": "aruba-cx-6300",
+  "vendor": "Aruba",
+  "model": "6300M 24-port SFP+ 4-port SFP56",
+  "os_version": "GL.10.10.0001",
+  "serial_number": "CN29FP60KT",
+  "uptime": 3720.0,
+  "fqdn": "aruba-cx-6300",
+  "interface_list": [
+    "1/1/1",
+    "1/1/2"
+  ]
+}
