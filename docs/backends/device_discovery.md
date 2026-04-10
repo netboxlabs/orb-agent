@@ -128,6 +128,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
 | optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./device_discovery_ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
+| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when hostname is a subnet or IP range. |
 
 ### SSH Configuration and Jumphost Support
 
@@ -203,6 +204,7 @@ orb:
           - hostname: myhost.com
             username: remote
             password: 12345
+            netbox_id: 42
             override_defaults:
               role: router
               location: Row B
