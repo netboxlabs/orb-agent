@@ -81,6 +81,7 @@ Each target in the `targets` list can include:
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
 | override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
+| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
@@ -135,6 +136,7 @@ scope:
     - host: "192.168.2.2-10" # range support
     - host: "10.0.0.1"
       port: 162  # Non-standard SNMP port
+      netbox_id: 42
       override_defaults:
         role: "switch"
         tags: ["custom"]
