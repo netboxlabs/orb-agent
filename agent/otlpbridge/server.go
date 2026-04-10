@@ -19,7 +19,11 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
-const defaultMaxPendingQueue = 1000
+const (
+	defaultMaxPendingQueue = 1000
+	initialRetryBackoff    = 2 * time.Second
+	maxRetryBackoff        = 30 * time.Second
+)
 
 // pendingPublish holds a marshaled OTLP payload queued before the MQTT publisher was ready.
 type pendingPublish struct {
@@ -44,6 +48,11 @@ type BridgeServer struct {
 	policyRepo     policies.PolicyRepo
 	logger         *slog.Logger
 
+	// Lifecycle context — cancelled by Stop() to unblock in-flight drains and
+	// scheduled retry goroutines.
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	// Pending publish queue — messages received before MQTT is ready are held
 	// here and drained once publisher + topics are all set.
 	pendingMu      sync.Mutex
@@ -52,6 +61,7 @@ type BridgeServer struct {
 	draining       bool
 	maxPending     int
 	pendingDropped int64
+	retryBackoff   time.Duration
 }
 
 // NewBridgeServer builds a BridgeServer but does not start it.
@@ -64,7 +74,8 @@ func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *s
 	if maxPending <= 0 {
 		maxPending = defaultMaxPendingQueue
 	}
-	return &BridgeServer{cfg: cfg, enc: enc, policyRepo: policyRepo, logger: logger, maxPending: maxPending}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &BridgeServer{cfg: cfg, enc: enc, policyRepo: policyRepo, logger: logger, maxPending: maxPending, ctx: ctx, cancel: cancel}, nil
 }
 
 func buildEncoder(name string) (Encoder, error) {
@@ -102,6 +113,23 @@ func (s *BridgeServer) SetTelemetryTopic(topic string) {
 	s.checkReady()
 }
 
+// ClearPublisher clears the publisher and marks the bridge as not ready,
+// causing Enqueue to buffer messages until a new publisher is set via
+// SetPublisher. Call this before MQTT disconnect/reconnect to prevent
+// publish failures during the reconnect window.
+func (s *BridgeServer) ClearPublisher() {
+	// Set ready=false first so concurrent Enqueue calls start buffering immediately.
+	s.pendingMu.Lock()
+	s.ready = false
+	s.draining = false
+	s.retryBackoff = 0
+	s.pendingMu.Unlock()
+
+	s.mu.Lock()
+	s.publisher = nil
+	s.mu.Unlock()
+}
+
 // checkReady checks whether publisher and both topics are set. If so, it drains
 // any pending messages that were queued before the MQTT connection was ready.
 func (s *BridgeServer) checkReady() {
@@ -122,13 +150,26 @@ func (s *BridgeServer) publishBatch(pub Publisher, msgs []pendingPublish, ingest
 		if msg.isIngest {
 			topic = ingest
 		}
-		if err := pub.Publish(context.Background(), topic, msg.payload); err != nil {
+		if err := pub.Publish(s.ctx, topic, msg.payload); err != nil {
 			if s.logger != nil {
 				s.logger.Warn("publish failed during drain, re-queuing remaining messages",
 					"published", *published, "remaining", len(msgs)-i, "error", err)
 			}
 			s.pendingMu.Lock()
 			s.pending = append(msgs[i:], s.pending...)
+			// Enforce the bounded-buffer guarantee: if the combined re-queued
+			// batch + newly arrived messages exceeds maxPending, truncate to
+			// cap. We keep the oldest (head) to preserve FIFO ordering —
+			// consistent with Enqueue rejecting new messages when full.
+			if s.maxPending > 0 && len(s.pending) > s.maxPending {
+				excess := len(s.pending) - s.maxPending
+				s.pending = s.pending[:s.maxPending]
+				s.pendingDropped += int64(excess)
+				if s.logger != nil {
+					s.logger.Warn("truncated re-queued pending messages to maxPending",
+						"max_pending", s.maxPending, "dropped", excess)
+				}
+			}
 			s.draining = false
 			s.pendingMu.Unlock()
 			return false
@@ -184,6 +225,7 @@ func (s *BridgeServer) drainPending() {
 	}
 	s.draining = false
 	s.ready = true
+	s.retryBackoff = 0
 	s.pendingMu.Unlock()
 
 	if s.logger != nil && published > 0 {
@@ -191,12 +233,27 @@ func (s *BridgeServer) drainPending() {
 	}
 }
 
-// scheduleRetryDrain re-triggers drainPending after a short delay so that
-// messages re-queued by a failed publishBatch are not stuck indefinitely.
+// scheduleRetryDrain re-triggers drainPending after a delay so that messages
+// re-queued by a failed publishBatch are not stuck indefinitely. Uses
+// exponential backoff (capped at maxRetryBackoff) and respects the server's
+// lifecycle context so pending retries are cancelled on Stop().
 func (s *BridgeServer) scheduleRetryDrain() {
-	time.AfterFunc(2*time.Second, func() {
-		s.drainPending()
-	})
+	s.pendingMu.Lock()
+	backoff := s.retryBackoff
+	if backoff == 0 {
+		backoff = initialRetryBackoff
+	}
+	s.retryBackoff = min(backoff*2, maxRetryBackoff)
+	s.pendingMu.Unlock()
+
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(backoff):
+			s.drainPending()
+		}
+	}()
 }
 
 // Enqueue marshaled OTLP data for publishing. Before the MQTT connection is
@@ -283,6 +340,11 @@ func (s *BridgeServer) Start(ctx context.Context) error {
 func (s *BridgeServer) Stop(_ context.Context) error {
 	var err error
 	s.closeOnce.Do(func() {
+		// Cancel the lifecycle context first to unblock in-flight drains
+		// and scheduled retry goroutines.
+		if s.cancel != nil {
+			s.cancel()
+		}
 		if s.ingestGRPCServer != nil {
 			s.ingestGRPCServer.GracefulStop()
 		}

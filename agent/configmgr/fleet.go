@@ -144,6 +144,14 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 			return fmt.Errorf("startup failed after %d attempts: %w", attempt, startupErr)
 		}
 
+		// Defense-in-depth: tear down any lingering connection manager from the
+		// failed attempt before retrying. Connect() has its own guard, but an
+		// explicit teardown here ensures no leaked manager can reconnect in the
+		// background. Disconnect is nil-safe.
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = fleetManager.connection.Disconnect(disconnectCtx, "")
+		disconnectCancel()
+
 		fleetManager.logger.Warn("startup attempt failed, retrying",
 			"attempt", attempt,
 			"error", startupErr,
@@ -169,6 +177,11 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 			fleetManager.connMu.RLock()
 			details := fleetManager.connectionDetails
 			fleetManager.connMu.RUnlock()
+
+			// Clear OTLP bridge so it buffers during the reset window.
+			if fleetManager.otlpBridge != nil {
+				fleetManager.otlpBridge.ClearPublisher()
+			}
 
 			// Disconnect first
 			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -344,6 +357,10 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 
 			fleetManager.logger.Error("all refresh and reconnect attempts exhausted, disconnecting agent",
 				"error", lastErr)
+			// Clear OTLP bridge so it buffers while disconnected.
+			if fleetManager.otlpBridge != nil {
+				fleetManager.otlpBridge.ClearPublisher()
+			}
 			// Use a dedicated timeout context for teardown so that a hung MQTT broker cannot
 			// block the reconnect loop indefinitely; the worker's ctx is long-lived and would
 			// never expire on its own.
@@ -451,6 +468,12 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 	fleetManager.connMu.Lock()
 	fleetManager.connectionDetails = newConnectionDetails
 	fleetManager.connMu.Unlock()
+
+	// Clear OTLP bridge publisher so it buffers during the reconnect window.
+	// The OnReadyHook will re-bind the publisher once the new connection is up.
+	if fleetManager.otlpBridge != nil {
+		fleetManager.otlpBridge.ClearPublisher()
+	}
 
 	// Reconnect with new token
 	err = fleetManager.connection.Reconnect(ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)

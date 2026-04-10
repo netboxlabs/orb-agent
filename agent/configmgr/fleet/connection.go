@@ -491,11 +491,16 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 	return nil
 }
 
-// Disconnect disconnects from the MQTT broker
+// Disconnect disconnects from the MQTT broker. It is nil-safe: calling
+// Disconnect when no connection manager exists is a no-op.
 func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
+	if connection.connectionManager == nil {
+		return nil
+	}
 	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
 	// Disconnect first to stop receiving new messages, then stop the worker
 	err := connection.connectionManager.Disconnect(ctx)
+	connection.connectionManager = nil
 	// stopDispatchWorker sets shuttingDown and closes the channel under dispatchMu
 	connection.stopDispatchWorker()
 	return err

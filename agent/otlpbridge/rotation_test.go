@@ -86,7 +86,8 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	bridge := &BridgeServer{enc: ProtobufEncoder{}, maxPending: defaultMaxPendingQueue}
+	bridge, err := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, nil)
+	require.NoError(t, err)
 
 	// ---- Phase 1: pre-ready queuing (startup) ----
 	pub1 := &recordingPublisher{}
@@ -160,13 +161,8 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 		// Wait for sender to reach rotation point
 		<-triggerRotation
 
-		// Simulate rotation: mark not ready, clear publisher
-		bridge.pendingMu.Lock()
-		bridge.ready = false
-		bridge.pendingMu.Unlock()
-		bridge.mu.Lock()
-		bridge.publisher = nil
-		bridge.mu.Unlock()
+		// Simulate rotation: clear publisher so the bridge buffers
+		bridge.ClearPublisher()
 
 		// Let some messages queue while publisher is nil
 		// Then restore with a new publisher
@@ -283,12 +279,7 @@ func TestBridge_ZeroDataLoss_GRPCPath(t *testing.T) {
 	require.Equal(t, preReadyCount+steadyCount, len(pub1.snapshot()))
 
 	// ---- Phase 3: rotation ----
-	bridge.pendingMu.Lock()
-	bridge.ready = false
-	bridge.pendingMu.Unlock()
-	bridge.mu.Lock()
-	bridge.publisher = nil
-	bridge.mu.Unlock()
+	bridge.ClearPublisher()
 
 	for i := 0; i < rotationCount; i++ {
 		sendOne()
