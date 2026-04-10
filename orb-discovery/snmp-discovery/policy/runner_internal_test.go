@@ -87,6 +87,41 @@ func TestExpandTargetRangesGroupsTargets(t *testing.T) {
 	assert.Equal(t, uint16(162), expanded[1].targets[0].Port)
 }
 
+func TestExpandTargetRanges_NetboxID_propagation(t *testing.T) {
+	netboxID := 42
+	runner := &Runner{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	tests := []struct {
+		name         string
+		host         string
+		wantNetboxID bool
+	}{
+		{"plain IP carries netbox_id", "192.168.1.1", true},
+		{"CIDR /32 clears netbox_id", "192.168.1.1/32", false},
+		{"single-IP range clears netbox_id", "192.168.1.1-192.168.1.1", false},
+		{"multi-IP range clears netbox_id", "192.168.1.1-192.168.1.2", false},
+		{"subnet clears netbox_id", "192.168.1.0/30", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			targets := []config.Target{{Host: tc.host, Port: 161, NetboxID: &netboxID}}
+			expanded := runner.expandTargetRanges(targets)
+			require.NotEmpty(t, expanded)
+			for _, target := range expanded[0].targets {
+				if tc.wantNetboxID {
+					require.NotNil(t, target.NetboxID)
+					assert.Equal(t, netboxID, *target.NetboxID)
+				} else {
+					assert.Nil(t, target.NetboxID)
+				}
+			}
+		})
+	}
+}
+
 func TestProbeTargetCanceledContextSkipsClientFactory(t *testing.T) {
 	var factoryCalls int32
 	runner := &Runner{

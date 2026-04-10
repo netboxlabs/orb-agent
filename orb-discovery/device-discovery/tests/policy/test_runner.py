@@ -492,6 +492,37 @@ def test_options_discovery_drivers_parsed():
     assert opts.discovery_drivers == ["ios", "panos"]
 
 
+def test_run_scan_clears_netbox_id_for_range_expanded_hosts():
+    """Hosts expanded from a range/subnet must not inherit the scope's netbox_id."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    scope = Napalm(
+        driver="ios",
+        hostname="192.168.1.0/24",
+        username="admin",
+        password="password",
+        netbox_id=42,
+    )
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+    trigger = MagicMock(spec=BaseTrigger)
+
+    with (
+        patch(
+            "device_discovery.policy.runner.find_reachable_hosts",
+            return_value={"192.168.1.1": True},
+        ),
+        patch("uuid.uuid4", side_effect=["scan-run-id", "job-1"]),
+    ):
+        runner.run_scan(["192.168.1.1"], trigger, scope, config)
+
+    scheduled_call = runner.scheduler.add_job.call_args
+    scheduled_scope = scheduled_call[1]["args"][1]
+    assert scheduled_scope.hostname == "192.168.1.1"
+    assert scheduled_scope.netbox_id is None
+
+
 def test_setup_raises_on_unknown_discovery_drivers():
     """setup() raises if discovery_drivers contains a driver not in supported_drivers."""
     from device_discovery.policy.models import Config, Napalm, Options

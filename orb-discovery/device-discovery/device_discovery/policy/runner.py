@@ -244,6 +244,7 @@ class PolicyRunner:
                 "interface_ip": device.get_interfaces_ip(),
                 "defaults": config.defaults,
                 "options": config.options,
+                "netbox_id": scope.netbox_id,
             }
             # Only retrieve config if at least one capture flag is enabled
             if config.options and (
@@ -320,7 +321,7 @@ class PolicyRunner:
                         f"Policy {self.name}, Hostname {hostname}: Reachable port found, scheduling discovery job"
                     )
                     id = str(uuid.uuid4())
-                    self.scopes[id] = scope.model_copy(update={"hostname": hostname})
+                    self.scopes[id] = scope.model_copy(update={"hostname": hostname, "netbox_id": None})
                     self.scheduler.add_job(
                         self.run_with_parent,
                         id=id,

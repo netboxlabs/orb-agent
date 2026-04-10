@@ -211,6 +211,10 @@ class Napalm(BaseModel):
     optional_args: dict[str, Any] | None = Field(
         default=None, description="Optional arguments"
     )
+    netbox_id: int | None = Field(
+        default=None,
+        description="NetBox device primary key for PK-based matching. Ignored when hostname is a range or subnet.",
+    )
     override_defaults: Defaults | None = Field(
         default=None,
         description="Override default configuration for this host, optional",

@@ -12,6 +12,7 @@ from device_discovery.policy.models import (
     Defaults,
     DeviceParameters,
     IpamParameters,
+    Napalm,
     ObjectParameters,
     Options,
     TenantParameters,
@@ -23,6 +24,18 @@ from device_discovery.translate import (
     translate_device_config,
     translate_vlan,
 )
+
+
+def test_napalm_netbox_id_parsed():
+    """netbox_id field is parsed correctly."""
+    n = Napalm(hostname="192.168.1.1", username="admin", password="secret", netbox_id=42)
+    assert n.netbox_id == 42
+
+
+def test_napalm_netbox_id_optional():
+    """netbox_id defaults to None."""
+    n = Napalm(hostname="192.168.1.1", username="admin", password="secret")
+    assert n.netbox_id is None
 
 
 @pytest.fixture
@@ -774,6 +787,19 @@ def test_translate_data_with_config(sample_device_info):
     assert len(device_entities) == 1
 
     # When SDK supports it, device will have config attached
+
+
+def test_translate_device_with_netbox_id(sample_device_info, sample_defaults):
+    """Device metadata contains source_match when netbox_id is provided."""
+    device = translate_device(sample_device_info, sample_defaults, netbox_id=42)
+    assert "source_match" in device.metadata
+    assert device.metadata["source_match"]["netbox_id"] == 42
+
+
+def test_translate_device_without_netbox_id(sample_device_info, sample_defaults):
+    """Device metadata has no source_match key when netbox_id is not provided."""
+    device = translate_device(sample_device_info, sample_defaults)
+    assert "source_match" not in device.metadata
 
 
 def test_translate_data_with_config_disabled(sample_device_info):

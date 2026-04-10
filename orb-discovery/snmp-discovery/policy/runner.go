@@ -313,8 +313,11 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		return
 	}
 
-	r.logEntitiesForIngestion(entities)
+	if target.NetboxID != nil {
+		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+	}
 	annotateEntitiesWithRunID(entities, run.ID)
+	r.logEntitiesForIngestion(entities)
 
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
@@ -454,6 +457,9 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expande
 				Port:             target.Port,
 				Authentication:   target.Authentication,
 				OverrideDefaults: target.OverrideDefaults,
+			}
+			if len(ips) == 1 && originalHost == ips[i] {
+				expandedTargets[i].NetboxID = target.NetboxID
 			}
 		}
 		expandedGroups = append(expandedGroups, expandedTargetGroup{

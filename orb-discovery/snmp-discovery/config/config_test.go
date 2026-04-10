@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	yaml "gopkg.in/yaml.v3"
 )
 
 func TestMergeDefaults(t *testing.T) {
@@ -234,4 +236,24 @@ func TestMergeDefaults(t *testing.T) {
 		assert.Equal(t, []string{"default", "policy"}, result.Tags)
 		assert.Len(t, result.InterfacePatterns, 1)
 	})
+}
+
+func TestTargetNetboxID_parsed(t *testing.T) {
+	input := `
+host: "192.168.1.1"
+netbox_id: 42
+`
+	var target Target
+	err := yaml.Unmarshal([]byte(input), &target)
+	require.NoError(t, err)
+	require.NotNil(t, target.NetboxID)
+	assert.Equal(t, 42, *target.NetboxID)
+}
+
+func TestTargetNetboxID_optional(t *testing.T) {
+	input := `host: "10.0.0.1"`
+	var target Target
+	err := yaml.Unmarshal([]byte(input), &target)
+	require.NoError(t, err)
+	assert.Nil(t, target.NetboxID)
 }

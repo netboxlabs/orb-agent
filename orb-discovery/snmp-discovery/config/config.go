@@ -21,6 +21,7 @@ type Target struct {
 	Port             uint16          `yaml:"port" default:"161"`
 	Authentication   *Authentication `yaml:"authentication,omitempty"`
 	OverrideDefaults *Defaults       `yaml:"override_defaults,omitempty"`
+	NetboxID         *int            `yaml:"netbox_id,omitempty"`
 }
 
 // Authentication represents the authentication credentials for a target host

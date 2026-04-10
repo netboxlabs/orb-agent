@@ -6,6 +6,46 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 )
 
+// annotateDeviceWithSourceMatch sets source_match metadata on the *diode.Device
+// reachable from the entity batch — either at the top level, via Interface.Device,
+// or via IPAddress→Interface.Device. This covers the shapes produced by
+// MapObjectIDsToEntity; deeper links (Interface.Parent/Bridge/Lag,
+// IPAddress.NatInside) are not traversed.
+func annotateDeviceWithSourceMatch(entities []diode.Entity, netboxID int) {
+	seen := make(map[unsafe.Pointer]struct{})
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.Device:
+			setDeviceSourceMatch(v, netboxID, seen)
+		case *diode.Interface:
+			if v != nil {
+				setDeviceSourceMatch(v.Device, netboxID, seen)
+			}
+		case *diode.IPAddress:
+			if v != nil {
+				if iface, ok := v.AssignedObject.(*diode.Interface); ok && iface != nil {
+					setDeviceSourceMatch(iface.Device, netboxID, seen)
+				}
+			}
+		}
+	}
+}
+
+func setDeviceSourceMatch(d *diode.Device, netboxID int, seen map[unsafe.Pointer]struct{}) {
+	if d == nil {
+		return
+	}
+	p := unsafe.Pointer(d)
+	if _, ok := seen[p]; ok {
+		return
+	}
+	seen[p] = struct{}{}
+	if d.Metadata == nil {
+		d.Metadata = make(diode.Metadata)
+	}
+	d.Metadata["source_match"] = diode.Metadata{"netbox_id": netboxID}
+}
+
 // annotateEntitiesWithRunID sets per-entity Diode metadata key "run_id" on each entity
 // in the batch and on nested Device, Interface, and IPAddress references.
 func annotateEntitiesWithRunID(entities []diode.Entity, runID string) {
