@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -22,15 +23,16 @@ import (
 var _ backend.Backend = (*workerBackend)(nil)
 
 const (
-	versionTimeout      = 2
-	capabilitiesTimeout = 5
-	readinessBackoff    = 10
-	applyPolicyTimeout  = 10
-	removePolicyTimeout = 20
-	statusTimeout       = 5
-	defaultExec         = "orb-worker"
-	defaultAPIHost      = "localhost"
-	defaultAPIPort      = "8071"
+	versionTimeout       = 2
+	capabilitiesTimeout  = 5
+	readinessBackoff     = 10
+	applyPolicyTimeout   = 10
+	removePolicyTimeout  = 20
+	statusTimeout        = 5
+	defaultExec          = "orb-worker"
+	defaultAPIHost       = "localhost"
+	defaultAPIPort       = "8071"
+	workerStopGracePeriod = 5 * time.Second
 )
 
 type workerBackend struct {
@@ -57,6 +59,17 @@ type workerBackend struct {
 	statusChan <-chan backend.CmdStatus
 	cancelFunc context.CancelFunc
 	ctx        context.Context
+
+	killGroupFunc   func(pid int) error
+	stopGracePeriod time.Duration // if zero, falls back to workerStopGracePeriod
+}
+
+// gracePeriod returns the effective grace period for Stop().
+func (d *workerBackend) gracePeriod() time.Duration {
+	if d.stopGracePeriod > 0 {
+		return d.stopGracePeriod
+	}
+	return workerStopGracePeriod
 }
 
 type info struct {
@@ -293,13 +306,26 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 func (d *workerBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop worker", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
-	err := d.proc.Stop()
-	finalStatus := <-d.statusChan
-	if err != nil {
-		d.logger.Error("worker shutdown error", "error", err)
+	if err := d.proc.Stop(); err != nil {
+		d.logger.Error("worker SIGTERM error", "error", err)
 	}
-	d.logger.Info("worker process stopped", "pid", finalStatus.PID,
-		"exit_code", finalStatus.Exit)
+	select {
+	case finalStatus := <-d.statusChan:
+		d.logger.Info("worker process stopped gracefully", "pid", finalStatus.PID, "exit_code", finalStatus.Exit)
+	case <-time.After(d.gracePeriod()):
+		pid := d.proc.Status().PID
+		d.logger.Warn("worker did not stop within grace period, sending SIGKILL",
+			"pid", pid, "grace_period", d.gracePeriod())
+		if d.killGroupFunc != nil {
+			_ = d.killGroupFunc(pid)
+		} else {
+			if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
+				d.logger.Error("worker SIGKILL failed", "pid", pid, "error", err)
+			}
+		}
+		finalStatus := <-d.statusChan
+		d.logger.Info("worker force-stopped", "pid", finalStatus.PID, "exit_code", finalStatus.Exit)
+	}
 	return nil
 }
 
