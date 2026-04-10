@@ -149,8 +149,28 @@ func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	var hbMsg messages.Heartbeat
 	require.NoError(t, json.Unmarshal(payload, &hbMsg))
 	assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, hbMsg.SchemaVersion)
-	assert.Equal(t, messages.State(1), hbMsg.State)
+	assert.Equal(t, messages.State(messages.Online), hbMsg.State)
 	assert.False(t, hbMsg.TimeStamp.IsZero())
+}
+
+func TestHeartbeater_SendSingleHeartbeat_OfflineState(t *testing.T) {
+	hb := createTestHeartbeater()
+
+	mockPublish := &mockPublishFunc{}
+	ctx := context.Background()
+	mockPublish.On("Publish", ctx, "test/hb", mock.AnythingOfType("[]uint8")).Return(nil)
+
+	hb.sendSingleHeartbeat(ctx, "test/hb", mockPublish.Publish, "agent-1", time.Now(), messages.Offline, nil)
+
+	calls := mockPublish.Calls
+	require.Len(t, calls, 1)
+	payload, ok := calls[0].Arguments.Get(2).([]byte)
+	require.True(t, ok)
+
+	var hbMsg messages.Heartbeat
+	require.NoError(t, json.Unmarshal(payload, &hbMsg))
+	assert.Equal(t, messages.State(messages.Offline), hbMsg.State,
+		"Offline heartbeat must carry State=Offline, not State=Online")
 }
 
 func TestHeartbeater_SendSingleHeartbeat_PublishError(t *testing.T) {
@@ -406,8 +426,12 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 		require.NoError(t, err, "Heartbeat %d should be valid JSON", i)
 		assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, heartbeat.SchemaVersion)
 		assert.False(t, heartbeat.TimeStamp.IsZero())
-		// Current implementation always sends Online state (1)
-		assert.Equal(t, messages.State(1), heartbeat.State)
+		// Initial heartbeats are Online; final heartbeat on context cancellation should be Offline
+		if i < len(payloadsCopy)-1 {
+			assert.Equal(t, messages.State(messages.Online), heartbeat.State)
+		} else {
+			assert.Equal(t, messages.State(messages.Offline), heartbeat.State)
+		}
 	}
 }
 
@@ -474,8 +498,8 @@ func TestHeartbeater_Stop_HeartbeatContent(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, heartbeat.SchemaVersion)
-	// The stop method sends an Offline heartbeat, but the implementation currently sends Online (1)
-	assert.Equal(t, messages.State(1), heartbeat.State)
+	// The stop method sends an Offline heartbeat
+	assert.Equal(t, messages.State(messages.Offline), heartbeat.State)
 	assert.False(t, heartbeat.TimeStamp.IsZero())
 }
 
