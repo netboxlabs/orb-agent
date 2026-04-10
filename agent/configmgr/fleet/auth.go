@@ -28,7 +28,7 @@ type AuthError struct {
 }
 
 func (e *AuthError) Error() string {
-	return fmt.Sprintf("authentication failed (HTTP %d): %s", e.StatusCode, e.Body)
+	return fmt.Sprintf("authentication failed (HTTP %d)", e.StatusCode)
 }
 
 // AuthTokenManager manages auth tokens
