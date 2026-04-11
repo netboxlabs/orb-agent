@@ -41,10 +41,11 @@ func TestFleetConfigManager_Stop_DisconnectsMQTT(t *testing.T) {
 
 	mgr := newFleetConfigManagerWithConnection(logger, nil, nil, mockConn)
 
-	// Simulate having successfully connected: populate heartbeat topic and set monitorCtx.
+	// Simulate having successfully connected: set connected flag, heartbeat topic, and monitorCtx.
 	ctx, cancel := context.WithCancel(context.Background())
 	mgr.monitorCtx = ctx
 	mgr.monitorCancel = cancel
+	mgr.connected = true
 	mgr.connectionDetails = fleet.ConnectionDetails{
 		Topics: fleet.TokenResponseTopics{Heartbeat: "agents/test/heartbeat"},
 	}

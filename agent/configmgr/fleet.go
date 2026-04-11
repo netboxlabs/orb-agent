@@ -42,6 +42,7 @@ type FleetConfigManager struct {
 	connectionDetails fleet.ConnectionDetails
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
+	connected         bool // true only after connection.Connect() succeeds
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -176,6 +177,7 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	if err != nil {
 		return err
 	}
+	fleetManager.connected = true
 
 	// Start goroutine to handle agent reset requests
 	go func() {
@@ -482,13 +484,13 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	}
 
 	// Send a clean MQTT DISCONNECT only when Start() successfully connected.
-	if fleetManager.monitorCancel != nil && fleetManager.connection != nil {
+	if fleetManager.connected {
 		fleetManager.connMu.RLock()
 		heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
 		fleetManager.connMu.RUnlock()
 
 		if heartbeatTopic != "" {
-			disconnectCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			disconnectCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			if err := fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic); err != nil {
 				fleetManager.logger.Warn("MQTT disconnect during Stop returned error", slog.Any("error", err))
 			}
