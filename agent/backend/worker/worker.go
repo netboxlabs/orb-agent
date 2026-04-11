@@ -31,7 +31,6 @@ const (
 	defaultExec           = "orb-worker"
 	defaultAPIHost        = "localhost"
 	defaultAPIPort        = "8071"
-	workerStopGracePeriod = 5 * time.Second
 )
 
 type workerBackend struct {
@@ -59,15 +58,6 @@ type workerBackend struct {
 	cancelFunc context.CancelFunc
 	ctx        context.Context
 
-	stopGracePeriod time.Duration // if zero, falls back to workerStopGracePeriod
-}
-
-// gracePeriod returns the effective grace period for Stop().
-func (d *workerBackend) gracePeriod() time.Duration {
-	if d.stopGracePeriod > 0 {
-		return d.stopGracePeriod
-	}
-	return workerStopGracePeriod
 }
 
 type info struct {
@@ -304,7 +294,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 func (d *workerBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop worker", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
-	backend.StopProcess(d.logger, d.proc, d.statusChan, d.gracePeriod(), "worker")
+	backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "worker")
 	return nil
 }
 
