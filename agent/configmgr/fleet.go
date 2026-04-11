@@ -485,7 +485,8 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	}
 
 	// Send a clean MQTT DISCONNECT only when Start() successfully connected.
-	if fleetManager.connected.Load() {
+	// Swap to false so a second Stop() call does not attempt a second Disconnect.
+	if fleetManager.connected.Swap(false) {
 		fleetManager.connMu.RLock()
 		heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
 		fleetManager.connMu.RUnlock()

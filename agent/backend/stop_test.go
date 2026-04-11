@@ -72,11 +72,13 @@ func TestStopProcess_GracefulExit(t *testing.T) {
 }
 
 func TestStopProcess_SIGKILLEscalationAfterGracePeriod(t *testing.T) {
-	slow := newSlowCommander(9999)
+	// Use a PID far above any OS maximum (Linux default max_pid=4194304) so
+	// the real syscall.Kill calls fail with ESRCH and never signal a live process.
+	const safeFakePID = 1<<22 + 1 // 4194305
+	slow := newSlowCommander(safeFakePID)
 	slow.Start()
 
 	// Unblock statusChan after grace period elapses — simulates OS reaping the process after SIGKILL.
-	// syscall.Kill(-9999, SIGKILL) will fail (no such process) but StopProcess logs and continues.
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		close(slow.exitCh)

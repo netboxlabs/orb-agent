@@ -12,6 +12,11 @@ import (
 // before sending SIGKILL to its process group.
 const DefaultStopGracePeriod = 5 * time.Second
 
+// postKillTimeout is how long to wait for a process to exit after SIGKILL.
+// SIGKILL is handled by the kernel and should complete near-instantly; a short
+// timeout keeps sequential backend stops well within Docker's stop deadline.
+const postKillTimeout = 2 * time.Second
+
 // StopProcess sends SIGTERM via proc.Stop(), waits up to gracePeriod for the
 // process to exit, then escalates to SIGKILL if needed. Returns without draining
 // statusChan if the pid is invalid or if the process does not exit after SIGKILL.
@@ -44,7 +49,7 @@ func StopProcess(logger *slog.Logger, proc Commander, statusChan <-chan CmdStatu
 		select {
 		case finalStatus := <-statusChan:
 			logger.Info("process force-stopped", "backend", backendName, "pid", finalStatus.PID, "exit_code", finalStatus.Exit)
-		case <-time.After(gracePeriod):
+		case <-time.After(postKillTimeout):
 			logger.Error("process did not exit after SIGKILL, giving up", "backend", backendName, "pid", pid)
 		}
 	}
