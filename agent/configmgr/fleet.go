@@ -198,17 +198,17 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 				details := fleetManager.connectionDetails
 				fleetManager.connMu.RUnlock()
 
-				// Disconnect first
-				disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
+				// Disconnect first — use monitorCtx so Stop() cancellation aborts in-flight resets.
+				disconnectCtx, cancel := context.WithTimeout(fleetManager.monitorCtx, timeout)
 				err := fleetManager.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
 				cancel()
 				if err != nil {
 					fleetManager.logger.Error("failed to disconnect during reset", "error", err)
 				}
 
-				// Reconnect using the latest connection details (updated by refreshAndReconnect after token refresh)
-				connectCtx := context.Background()
-				err = fleetManager.connection.Connect(connectCtx, details, fleetManager.backends, fleetManager.labels, fleetManager.configYaml)
+				// Reconnect using the latest connection details (updated by refreshAndReconnect after token refresh).
+				// Use monitorCtx so that a concurrent Stop() cancels a long-running connect.
+				err = fleetManager.connection.Connect(fleetManager.monitorCtx, details, fleetManager.backends, fleetManager.labels, fleetManager.configYaml)
 				if err != nil {
 					fleetManager.logger.Error("failed to reconnect during reset", "error", err)
 				}
