@@ -7,12 +7,12 @@ import (
 	"time"
 )
 
-// DefaultStopGracePeriod is how long to wait for a process to exit after SIGTERM
-// before sending SIGKILL to its process group.
+// DefaultStopGracePeriod is how long to wait for a process to exit after a
+// stop request before giving up and logging an error.
 const DefaultStopGracePeriod = 5 * time.Second
 
-// StopProcess on Windows only sends SIGTERM and waits for the process to exit;
-// SIGKILL escalation via process-group kill is not supported on this platform.
+// StopProcess on Windows requests the process to stop and waits for it to
+// exit until the grace period elapses.
 func StopProcess(logger *slog.Logger, proc Commander, statusChan <-chan CmdStatus, gracePeriod time.Duration, backendName string) {
 	if gracePeriod <= 0 {
 		gracePeriod = DefaultStopGracePeriod
