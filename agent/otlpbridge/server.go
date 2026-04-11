@@ -202,6 +202,22 @@ func (s *BridgeServer) drainPending() {
 	telemetry := s.telemetryTopic
 	s.mu.RUnlock()
 
+	// Guard against ClearPublisher() racing between setting draining=true and
+	// here. Re-queue everything and let the next SetPublisher → checkReady
+	// cycle re-trigger the drain.
+	if pub == nil {
+		s.pendingMu.Lock()
+		s.pending = append(queued, s.pending...)
+		if s.maxPending > 0 && len(s.pending) > s.maxPending {
+			excess := len(s.pending) - s.maxPending
+			s.pending = s.pending[:s.maxPending]
+			s.pendingDropped += int64(excess)
+		}
+		s.draining = false
+		s.pendingMu.Unlock()
+		return
+	}
+
 	published := 0
 	if !s.publishBatch(pub, queued, ingest, telemetry, &published) {
 		s.scheduleRetryDrain()
@@ -285,6 +301,20 @@ func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byt
 		topic = s.ingestTopic
 	}
 	s.mu.RUnlock()
+
+	// Guard against ClearPublisher() racing between the ready check above and
+	// the mu.RLock here. If publisher was cleared, buffer instead of panicking.
+	if pub == nil {
+		s.pendingMu.Lock()
+		if s.maxPending > 0 && len(s.pending) >= s.maxPending {
+			s.pendingDropped++
+			s.pendingMu.Unlock()
+			return status.Error(codes.ResourceExhausted, "OTLP pending queue is full")
+		}
+		s.pending = append(s.pending, pendingPublish{isIngest: isIngest, payload: payload})
+		s.pendingMu.Unlock()
+		return nil
+	}
 
 	return pub.Publish(ctx, topic, payload)
 }
