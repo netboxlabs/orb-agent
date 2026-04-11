@@ -13,8 +13,8 @@ import (
 const DefaultStopGracePeriod = 5 * time.Second
 
 // postKillTimeout is how long to wait for a process to exit after SIGKILL.
-// SIGKILL is handled by the kernel and should complete near-instantly; a short
-// timeout keeps sequential backend stops well within Docker's stop deadline.
+// SIGKILL is handled by the kernel near-instantly; a short timeout here bounds
+// the per-backend worst case to gracePeriod+postKillTimeout rather than 2×gracePeriod.
 const postKillTimeout = 2 * time.Second
 
 // StopProcess sends SIGTERM via proc.Stop(), waits up to gracePeriod for the

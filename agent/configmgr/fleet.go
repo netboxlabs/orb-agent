@@ -43,7 +43,8 @@ type FleetConfigManager struct {
 	connectionDetails fleet.ConnectionDetails
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
-	connected         atomic.Bool // true only after connection.Connect() succeeds
+	connected         atomic.Bool    // true only after connection.Connect() succeeds
+	goroutinesWg      sync.WaitGroup // tracks goroutines started in Start(); Wait()ed in Stop() before Disconnect
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -181,7 +182,9 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	fleetManager.connected.Store(true)
 
 	// Start goroutine to handle agent reset requests
+	fleetManager.goroutinesWg.Add(1)
 	go func() {
+		defer fleetManager.goroutinesWg.Done()
 		for {
 			select {
 			case <-fleetManager.monitorCtx.Done():
@@ -236,10 +239,18 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	})
 
 	// Start goroutine to handle reconnect requests (JWT refresh)
-	go fleetManager.runReconnectWorker(fleetManager.monitorCtx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second)
+	fleetManager.goroutinesWg.Add(1)
+	go func() {
+		defer fleetManager.goroutinesWg.Done()
+		fleetManager.runReconnectWorker(fleetManager.monitorCtx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second)
+	}()
 
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
-	go fleetManager.monitorTokenExpiry()
+	fleetManager.goroutinesWg.Add(1)
+	go func() {
+		defer fleetManager.goroutinesWg.Done()
+		fleetManager.monitorTokenExpiry()
+	}()
 
 	return nil
 }
@@ -291,7 +302,7 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			fleetManager.connMu.RLock()
 			heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
 			fleetManager.connMu.RUnlock()
-			disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), timeout)
+			disconnectCtx, disconnectCancel := context.WithTimeout(ctx, timeout)
 			if err := fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic); err != nil {
 				fleetManager.logger.Error("failed to disconnect after exhausted retries", "error", err)
 			}
@@ -483,6 +494,10 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	if fleetManager.monitorCancel != nil {
 		fleetManager.monitorCancel()
 	}
+
+	// Wait for all goroutines started in Start() to exit before calling Disconnect.
+	// This prevents a race where a goroutine is mid-Disconnect when Stop() also calls Disconnect.
+	fleetManager.goroutinesWg.Wait()
 
 	// Send a clean MQTT DISCONNECT only when Start() successfully connected.
 	// Swap to false so a second Stop() call does not attempt a second Disconnect.
