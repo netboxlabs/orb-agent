@@ -38,8 +38,8 @@ func (s *slowExitCommander) Start() <-chan backend.CmdStatus {
 }
 func (s *slowExitCommander) Stop() error               { return nil }
 func (s *slowExitCommander) Status() backend.CmdStatus { return backend.CmdStatus{PID: s.pid} }
-func (s *slowExitCommander) GetStdout() <-chan string   { return make(chan string) }
-func (s *slowExitCommander) GetStderr() <-chan string   { return make(chan string) }
+func (s *slowExitCommander) GetStdout() <-chan string  { return make(chan string) }
+func (s *slowExitCommander) GetStderr() <-chan string  { return make(chan string) }
 
 func TestWorkerStop_KillsProcessGroupWhenSIGTERMIgnored(t *testing.T) {
 	slow := newSlowExitCommander(9999)
@@ -103,8 +103,8 @@ type immediateExitCommander struct {
 	statusCh chan backend.CmdStatus
 }
 
-func (i *immediateExitCommander) Start() <-chan backend.CmdStatus  { return i.statusCh }
-func (i *immediateExitCommander) Stop() error                      { return nil }
-func (i *immediateExitCommander) Status() backend.CmdStatus        { return backend.CmdStatus{PID: i.pid} }
-func (i *immediateExitCommander) GetStdout() <-chan string          { return make(chan string) }
-func (i *immediateExitCommander) GetStderr() <-chan string          { return make(chan string) }
+func (i *immediateExitCommander) Start() <-chan backend.CmdStatus { return i.statusCh }
+func (i *immediateExitCommander) Stop() error                     { return nil }
+func (i *immediateExitCommander) Status() backend.CmdStatus       { return backend.CmdStatus{PID: i.pid} }
+func (i *immediateExitCommander) GetStdout() <-chan string        { return make(chan string) }
+func (i *immediateExitCommander) GetStderr() <-chan string        { return make(chan string) }
