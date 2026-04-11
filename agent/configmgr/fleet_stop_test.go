@@ -45,7 +45,7 @@ func TestFleetConfigManager_Stop_DisconnectsMQTT(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mgr.monitorCtx = ctx
 	mgr.monitorCancel = cancel
-	mgr.connected = true
+	mgr.connected.Store(true)
 	mgr.connectionDetails = fleet.ConnectionDetails{
 		Topics: fleet.TokenResponseTopics{Heartbeat: "agents/test/heartbeat"},
 	}

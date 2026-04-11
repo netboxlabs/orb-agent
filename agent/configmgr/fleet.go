@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -42,7 +43,7 @@ type FleetConfigManager struct {
 	connectionDetails fleet.ConnectionDetails
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
-	connected         bool // true only after connection.Connect() succeeds
+	connected         atomic.Bool // true only after connection.Connect() succeeds
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -177,7 +178,7 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	if err != nil {
 		return err
 	}
-	fleetManager.connected = true
+	fleetManager.connected.Store(true)
 
 	// Start goroutine to handle agent reset requests
 	go func() {
@@ -484,7 +485,7 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 	}
 
 	// Send a clean MQTT DISCONNECT only when Start() successfully connected.
-	if fleetManager.connected {
+	if fleetManager.connected.Load() {
 		fleetManager.connMu.RLock()
 		heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
 		fleetManager.connMu.RUnlock()

@@ -1,3 +1,5 @@
+//go:build unix
+
 package backend
 
 import (
@@ -11,8 +13,8 @@ import (
 const DefaultStopGracePeriod = 5 * time.Second
 
 // StopProcess sends SIGTERM via proc.Stop(), waits up to gracePeriod for the
-// process to exit, then escalates to SIGKILL on the process group if needed.
-// It always drains statusChan before returning.
+// process to exit, then escalates to SIGKILL if needed. Returns without draining
+// statusChan if the pid is invalid or if the process does not exit after SIGKILL.
 func StopProcess(logger *slog.Logger, proc Commander, statusChan <-chan CmdStatus, gracePeriod time.Duration, backendName string) {
 	if gracePeriod <= 0 {
 		gracePeriod = DefaultStopGracePeriod
@@ -31,8 +33,13 @@ func StopProcess(logger *slog.Logger, proc Commander, statusChan <-chan CmdStatu
 		}
 		logger.Warn("process did not stop within grace period, sending SIGKILL",
 			"backend", backendName, "pid", pid, "grace_period", gracePeriod)
+		// Kill the process group (handles subprocess trees where Setpgid was set)
+		// and the process directly (reliable fallback when not in its own group).
 		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-			logger.Error("SIGKILL failed", "backend", backendName, "pid", pid, "error", err)
+			logger.Debug("process group kill failed (process may not be group leader)", "backend", backendName, "pid", pid, "error", err)
+		}
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+			logger.Error("direct SIGKILL failed", "backend", backendName, "pid", pid, "error", err)
 		}
 		select {
 		case finalStatus := <-statusChan:
