@@ -22,15 +22,15 @@ import (
 var _ backend.Backend = (*workerBackend)(nil)
 
 const (
-	versionTimeout        = 2
-	capabilitiesTimeout   = 5
-	readinessBackoff      = 10
-	applyPolicyTimeout    = 10
-	removePolicyTimeout   = 20
-	statusTimeout         = 5
-	defaultExec           = "orb-worker"
-	defaultAPIHost        = "localhost"
-	defaultAPIPort        = "8071"
+	versionTimeout      = 2
+	capabilitiesTimeout = 5
+	readinessBackoff    = 10
+	applyPolicyTimeout  = 10
+	removePolicyTimeout = 20
+	statusTimeout       = 5
+	defaultExec         = "orb-worker"
+	defaultAPIHost      = "localhost"
+	defaultAPIPort      = "8071"
 )
 
 type workerBackend struct {
@@ -57,7 +57,6 @@ type workerBackend struct {
 	statusChan <-chan backend.CmdStatus
 	cancelFunc context.CancelFunc
 	ctx        context.Context
-
 }
 
 type info struct {

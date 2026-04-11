@@ -5,7 +5,6 @@ import (
 	"os"
 	"testing"
 	"time"
-
 )
 
 // slowCommander simulates a subprocess that ignores SIGTERM.
@@ -31,8 +30,8 @@ func (s *slowCommander) Start() <-chan CmdStatus {
 	}()
 	return s.statusCh
 }
-func (s *slowCommander) Stop() error           { return nil } // no-op: process ignores SIGTERM
-func (s *slowCommander) Status() CmdStatus     { return CmdStatus{PID: s.pid} }
+func (s *slowCommander) Stop() error              { return nil } // no-op: process ignores SIGTERM
+func (s *slowCommander) Status() CmdStatus        { return CmdStatus{PID: s.pid} }
 func (s *slowCommander) GetStdout() <-chan string { return make(chan string) }
 func (s *slowCommander) GetStderr() <-chan string { return make(chan string) }
 
@@ -45,8 +44,8 @@ type fastCommander struct {
 func (f *fastCommander) Start() <-chan CmdStatus  { return f.statusCh }
 func (f *fastCommander) Stop() error              { return nil }
 func (f *fastCommander) Status() CmdStatus        { return CmdStatus{PID: f.pid} }
-func (f *fastCommander) GetStdout() <-chan string  { return make(chan string) }
-func (f *fastCommander) GetStderr() <-chan string  { return make(chan string) }
+func (f *fastCommander) GetStdout() <-chan string { return make(chan string) }
+func (f *fastCommander) GetStderr() <-chan string { return make(chan string) }
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
