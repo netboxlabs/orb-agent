@@ -467,13 +467,6 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 		}
 		// stopDispatchWorker sets shuttingDown and closes the channel under dispatchMu
 		connection.stopDispatchWorker()
-
-		// Create new channels for the next connection and reset shutdown flag
-		connection.dispatchMu.Lock()
-		connection.dispatchQueue = make(chan dispatchJob, 100)
-		connection.dispatchWorkerDone = make(chan struct{})
-		connection.shuttingDown = false
-		connection.dispatchMu.Unlock()
 	}
 
 	// Reset failure counters

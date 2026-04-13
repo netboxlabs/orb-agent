@@ -102,6 +102,10 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 
 	fleetManager.logger.Debug("sending token request", "url", tokenURL, "data", redact.SensitiveData(data), "client_id", clientID)
 
+	// Note that errors below are logged with Warn level, but returned as errors to allow callers
+	// to distinguish between transient errors (e.g. network issues) and auth failures
+	// (e.g. invalid credentials). The caller can choose to retry on transient errors,
+	// but should not retry on auth failures without fixing the credentials.
 	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		fleetManager.logger.Warn("failed to send token request", "error", err, "token_url", tokenURL)
