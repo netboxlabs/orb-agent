@@ -1,0 +1,15 @@
+{
+  "hostname": "WLC-TEST",
+  "vendor": "Cisco",
+  "model": "AIR-CT3504-K9",
+  "os_version": "8.10.185.0",
+  "serial_number": "FCW2042B00R",
+  "uptime": 9020.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ap-manager",
+    "management",
+    "production",
+    "virtual"
+  ]
+}

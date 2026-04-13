@@ -1,0 +1,38 @@
+{
+  "management": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "ap-manager": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "virtual": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  },
+  "production": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  }
+}

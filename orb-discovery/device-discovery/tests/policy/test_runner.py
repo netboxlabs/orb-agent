@@ -237,7 +237,8 @@ def test_run_discovered_driver_error(
         policy_runner.run("test_id", sample_scopes[0], sample_config)
 
         mock_discover.assert_called_once_with(sample_scopes[0], drivers=None)
-        assert mock_logger_error.call_count == 2
+        mock_logger_error.assert_called_once()
+        assert "Not able to discover device driver" in mock_logger_error.call_args[0][0]
         assert policy_runner.status == Status.FAILED
 
 

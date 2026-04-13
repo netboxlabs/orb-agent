@@ -1,0 +1,15 @@
+{
+  "hostname": "Unknown",
+  "vendor": "Cisco",
+  "model": "AIR-CT3504-K9",
+  "os_version": "Unknown",
+  "serial_number": "FCW2042B00R",
+  "uptime": 0.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ap-manager",
+    "management",
+    "production",
+    "virtual"
+  ]
+}

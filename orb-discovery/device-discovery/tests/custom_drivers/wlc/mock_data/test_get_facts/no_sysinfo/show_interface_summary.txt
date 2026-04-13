@@ -1,0 +1,9 @@
+ Number of Interfaces.......................... 4
+
+Interface Name                   Port Vlan Id  IP Address      Type    Ap Mgr  Guest
+-------------------------------- ---- -------- --------------- ------- ------- ------
+management                          1 0        192.168.1.10    Static  Yes     No
+ap-manager                          1 0        192.168.1.11    Static  No      No
+virtual                             N/A N/A     1.1.1.1         Static  No      No
+production                          1 100      10.10.100.1     Dynamic No      No
+

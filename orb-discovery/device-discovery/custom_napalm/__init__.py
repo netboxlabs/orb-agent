@@ -10,6 +10,7 @@ from custom_napalm.hp_procurve import ProCurveDriver
 from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.panos import PANOSDriver
 from custom_napalm.panos_ssh import PANOSSHDriver
+from custom_napalm.wlc import WLCDriver
 
 __all__ = [
     "AOSCXDriver",
@@ -22,4 +23,5 @@ __all__ = [
     "VRPDriver",
     "PANOSDriver",
     "PANOSSHDriver",
+    "WLCDriver",
 ]
