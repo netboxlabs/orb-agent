@@ -139,18 +139,18 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 // Connect connects to the MQTT broker. It is safe to call repeatedly (e.g.
 // from a startup retry loop): dispatch channels are always freshly allocated.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
-	// Reinitialize dispatch channels so Connect is safe to call after a
-	// previous failure that closed them via stopDispatchWorker.
-	connection.dispatchQueue = make(chan dispatchJob, 100)
-	connection.dispatchWorkerDone = make(chan struct{})
-	connection.shuttingDown.Store(false)
-
 	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
 	if err != nil {
 		connection.logger.Error("failed to parse MQTT URL", "url", details.MQTTURL, "error", err)
 		return err
 	}
+
+	// Reinitialize dispatch channels after validation so a parse error doesn't
+	// leave unstarted channels that stopDispatchWorker would block on forever.
+	connection.dispatchQueue = make(chan dispatchJob, 100)
+	connection.dispatchWorkerDone = make(chan struct{})
+	connection.shuttingDown.Store(false)
 
 	// Store topics for hook callbacks
 	connection.connectionTopics = details.Topics
