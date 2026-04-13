@@ -113,3 +113,51 @@ func TestBridgeServer_Start_ErrorMessageFormat(t *testing.T) {
 		strings.Contains(errorMsg, "use") || strings.Contains(errorMsg, "bind"),
 		"error message should mention port in use or bind failure: %s", err.Error())
 }
+
+func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := BridgeConfig{
+		ListenAddr:      ":0",
+		Encoding:        "json",
+		MaxPendingQueue: 5,
+	}
+	bridge, err := NewBridgeServer(cfg, nil, logger)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	// Enqueue up to the limit — all should succeed.
+	for i := 0; i < 5; i++ {
+		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))))
+	}
+
+	// Enqueue beyond the limit — should return ResourceExhausted.
+	for i := 5; i < 8; i++ {
+		err = bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i)))
+		require.Error(t, err, "enqueue beyond limit should fail")
+		assert.Contains(t, err.Error(), "queue is full")
+	}
+
+	// Queue should still contain the original 5 messages (no eviction).
+	bridge.pendingMu.Lock()
+	assert.Equal(t, 5, len(bridge.pending), "queue should be capped at MaxPendingQueue")
+	assert.Equal(t, int64(3), bridge.pendingDropped, "should have counted 3 rejections")
+	assert.Equal(t, "msg-0", string(bridge.pending[0].payload))
+	assert.Equal(t, "msg-4", string(bridge.pending[4].payload))
+	bridge.pendingMu.Unlock()
+}
+
+func TestBridgeServer_Enqueue_DefaultQueueLimit(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := BridgeConfig{
+		ListenAddr: ":0",
+		Encoding:   "json",
+		// MaxPendingQueue = 0 → should use default
+	}
+	bridge, err := NewBridgeServer(cfg, nil, logger)
+	require.NoError(t, err)
+
+	assert.Equal(t, defaultMaxPendingQueue, bridge.maxPending, "should use default when MaxPendingQueue is 0")
+}

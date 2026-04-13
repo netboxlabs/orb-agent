@@ -54,15 +54,17 @@ func NewMQTTPublisher(ctx context.Context, mqttURL, jwt string) (*MQTTPublisher,
 	return &MQTTPublisher{cm: cm}, nil
 }
 
-// Publish sends the payload to the topic with QoS 0.
+// Publish enqueues the payload for delivery to the topic with QoS 0.
+// Returns an error only if the message could not be added to the local queue.
 func (p *MQTTPublisher) Publish(ctx context.Context, topic string, payload []byte) error {
-	_, err := p.cm.Publish(ctx, &paho.Publish{
-		Topic:   topic,
-		Payload: payload,
-		QoS:     0,
-		Retain:  false,
+	return p.cm.PublishViaQueue(ctx, &autopaho.QueuePublish{
+		Publish: &paho.Publish{
+			Topic:   topic,
+			Payload: payload,
+			QoS:     0,
+			Retain:  false,
+		},
 	})
-	return err
 }
 
 // Close disconnects from the broker.
