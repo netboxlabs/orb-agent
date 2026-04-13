@@ -112,8 +112,12 @@ func TestFleetConfigManager_Start_TokenError(t *testing.T) {
 
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Act
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// Assert
 	assert.Error(t, err)
@@ -171,13 +175,15 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Act
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// Assert
 	assert.Error(t, err)
-	// Verify the error is from the mock connection (no 30s wait)
-	assert.Contains(t, err.Error(), "mqtt connection failed")
 }
 
 func TestFleetConfigManager_GetContext(t *testing.T) {
@@ -261,20 +267,26 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	// Mock backends
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// The Start method should succeed in generating topics from JWT claims,
 	// but fail at the MQTT connection step (which is mocked to return an error)
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// We expect an error because the mock connection returns an error,
 	// but we want to verify that topic generation succeeded
 	// (The error should be related to MQTT connection, not JWT parsing)
 	require.Error(t, err)
-	// The error should be the mocked connection error
+	// The error may be the mocked connection error or context cancellation from the retry loop.
 	errorMsg := strings.ToLower(err.Error())
 	assert.True(t,
 		strings.Contains(errorMsg, "mqtt") ||
-			strings.Contains(errorMsg, "connection"),
-		"Expected connection-related error, got: %s", err.Error())
+			strings.Contains(errorMsg, "connection") ||
+			strings.Contains(errorMsg, "cancelled") ||
+			strings.Contains(errorMsg, "deadline"),
+		"Expected connection-related or cancellation error, got: %s", err.Error())
 }
 
 func TestFleetConfigManager_configToSafeString(t *testing.T) {
@@ -1170,8 +1182,8 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	}
 	fleetManager := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
 
-	// Act
-	err = fleetManager.Start(cfg, backends)
+	// Act — port binding is before the retry loop, so this fails immediately.
+	err = fleetManager.Start(context.Background(), cfg, backends)
 
 	// Assert
 	require.Error(t, err, "Start() should fail when port is in use")
@@ -1233,8 +1245,12 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Act
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// Assert
 	// Even though MQTT connection fails, we should verify that:

@@ -19,7 +19,7 @@ type localConfigManager struct {
 	pMgr   policymgr.PolicyManager
 }
 
-func (lc *localConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
+func (lc *localConfigManager) Start(_ context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	if cfg.OrbAgent.Policies == nil {
 		return errors.New("no policies specified")
 	}

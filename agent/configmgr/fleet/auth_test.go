@@ -75,7 +75,10 @@ func TestFleetConfigManager_GetToken_HTTPError(t *testing.T) {
 	// Assert
 	assert.Error(t, err)
 	assert.Nil(t, token)
-	assert.Contains(t, err.Error(), "token request failed")
+	assert.Contains(t, err.Error(), "authentication failed")
+	var authErr *AuthError
+	assert.ErrorAs(t, err, &authErr)
+	assert.Equal(t, http.StatusUnauthorized, authErr.StatusCode)
 }
 
 func TestFleetConfigManager_GetToken_InvalidJSON(t *testing.T) {

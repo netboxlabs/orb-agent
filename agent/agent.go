@@ -254,7 +254,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
-	if err = a.configManager.Start(a.config, a.backends); err != nil {
+	if err = a.configManager.Start(agentCtx, a.config, a.backends); err != nil {
 		return err
 	}
 

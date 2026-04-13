@@ -348,7 +348,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	}
 }
 
-func (gc *gitConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
+func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	var startOK bool
 	gc.version = 1
