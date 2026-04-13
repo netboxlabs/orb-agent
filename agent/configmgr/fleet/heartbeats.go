@@ -103,11 +103,11 @@ func (hb *heartbeater) runHeartbeatLoop(ctx context.Context, ticker *time.Ticker
 	}
 }
 
-func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error, _ string, _ time.Time, _ messages.HeartbeatState, onFailure func()) {
+func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic string, publishFunc func(ctx context.Context, topic string, payload []byte) error, _ string, _ time.Time, state messages.HeartbeatState, onFailure func()) {
 	hbData := messages.Heartbeat{
 		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
 		TimeStamp:     time.Now().UTC(),
-		State:         messages.State(messages.Online),
+		State:         messages.State(state),
 		BackendState:  hb.getBackendState(),
 		PolicyState:   hb.getPolicyState(),
 		GroupState:    hb.getGroupState(),

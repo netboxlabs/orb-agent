@@ -303,13 +303,7 @@ func (d *networkDiscoveryBackend) logNetworkDiscoveryOutput(line string, fallbac
 func (d *networkDiscoveryBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop network-discovery", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
-	err := d.proc.Stop()
-	finalStatus := <-d.statusChan
-	if err != nil {
-		d.logger.Error("network-discovery shutdown error", "error", err)
-	}
-	d.logger.Info("network-discovery process stopped", "pid", finalStatus.PID,
-		"exit_code", finalStatus.Exit)
+	backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "network_discovery")
 	return nil
 }
 
