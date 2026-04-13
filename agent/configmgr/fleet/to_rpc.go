@@ -24,7 +24,7 @@ func (messaging *Messaging) sendGroupMembershipsRequest(ctx context.Context, pub
 	messaging.logger.Debug("sending group memberships request", "value", string(body))
 	err = publishFunc(ctx, body)
 	if err != nil {
-		messaging.logger.Error("error sending group memberships request", "error", err)
+		messaging.logger.Debug("error sending group memberships request", "error", err)
 	}
 	messaging.logger.Debug("group memberships request sent", "value", string(body))
 }

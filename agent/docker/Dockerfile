@@ -2,7 +2,7 @@ ARG PKTVISOR_TAG=develop
 ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
 ARG SNMP_DISCOVERY_TAG=latest
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.25
 
 ########################################################################
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS builder
@@ -14,11 +14,12 @@ WORKDIR /src/orb-agent
 COPY . .
 
 ARG TARGETOS TARGETARCH
+ARG BUILD_TAGS
 
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    GOOS=$TARGETOS GOARCH=$TARGETARCH EXTRA_LDFLAGS="-s -w" BUILD_DIR=/build make agent_bin
+    GOOS=$TARGETOS GOARCH=$TARGETARCH EXTRA_LDFLAGS="-s -w" BUILD_DIR=/build BUILD_TAGS="${BUILD_TAGS}" make agent_bin
 
 ########################################################################
 FROM netboxlabs/opentelemetry-infinity:${OTEL_TAG} AS otlpinf

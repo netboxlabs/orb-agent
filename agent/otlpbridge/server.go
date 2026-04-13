@@ -60,6 +60,13 @@ func (s *BridgeServer) SetPublisher(pub Publisher) {
 	s.publisher = pub
 }
 
+// ClearPublisher clears the publisher so the bridge buffers during reconnection.
+func (s *BridgeServer) ClearPublisher() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.publisher = nil
+}
+
 // SetIngestTopic sets the topic for publishing.
 func (s *BridgeServer) SetIngestTopic(topic string) {
 	s.mu.Lock()

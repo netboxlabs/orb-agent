@@ -303,8 +303,8 @@ func TestResilientLogExporterWarnsOnce(t *testing.T) {
 	if exp.exportCount != 2 {
 		t.Fatalf("expected export to be called twice, got %d", exp.exportCount)
 	}
-	if handler.errorCount != 1 {
-		t.Fatalf("expected error log only once, got %d", handler.errorCount)
+	if handler.warnCount != 1 {
+		t.Fatalf("expected warn log only once, got %d", handler.warnCount)
 	}
 }
 
@@ -424,8 +424,8 @@ func (m *mockExporter) Shutdown(context.Context) error {
 }
 
 type levelRecordingHandler struct {
-	mu         sync.Mutex
-	errorCount int
+	mu        sync.Mutex
+	warnCount int
 }
 
 func (h *levelRecordingHandler) Enabled(context.Context, slog.Level) bool {
@@ -435,8 +435,8 @@ func (h *levelRecordingHandler) Enabled(context.Context, slog.Level) bool {
 func (h *levelRecordingHandler) Handle(_ context.Context, record slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if record.Level == slog.LevelError {
-		h.errorCount++
+	if record.Level == slog.LevelWarn {
+		h.warnCount++
 	}
 	return nil
 }

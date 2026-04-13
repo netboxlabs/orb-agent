@@ -235,7 +235,7 @@ func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Reco
 	if err := exp.Export(ctx, records); err != nil {
 		r.warnOnce.Do(func() {
 			if r.logger != nil {
-				r.logger.Error("OTLP gRPC log export failed",
+				r.logger.Warn("OTLP gRPC log export failed",
 					"endpoint", r.endpoint,
 					"error", err)
 			}
