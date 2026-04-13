@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,6 +89,8 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 	ctx := context.Background()
 	bridge, err := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, nil)
 	require.NoError(t, err)
+	bridge.initialBackoff = 5 * time.Millisecond
+	defer bridge.Stop(context.Background())
 
 	// ---- Phase 1: pre-ready queuing (startup) ----
 	pub1 := &recordingPublisher{}
@@ -101,8 +104,12 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 	bridge.SetIngestTopic(ingestTopic)
 	bridge.SetTelemetryTopic(telTopic)
 
-	msgs := pub1.snapshot()
-	require.Len(t, msgs, preReadyCount, "all pre-ready messages should drain")
+	// Wait for the writer goroutine to drain all pre-ready messages.
+	require.Eventually(t, func() bool {
+		return len(pub1.snapshot()) >= preReadyCount
+	}, 5*time.Second, time.Millisecond, "all pre-ready messages should drain")
+
+	msgs := pub1.snapshot()[:preReadyCount]
 	for i, m := range msgs {
 		assert.Equal(t, fmt.Sprintf("pre-%04d", i), string(m.payload), "pre-ready ordering")
 		assert.Equal(t, telTopic, m.topic)
@@ -114,8 +121,11 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 		require.NoError(t, bridge.Enqueue(ctx, isIngest, []byte(fmt.Sprintf("steady-%04d", i))))
 	}
 
-	steadyMsgs := pub1.snapshot()[preReadyCount:]
-	require.Len(t, steadyMsgs, steadyCount, "all steady-state messages should publish")
+	require.Eventually(t, func() bool {
+		return len(pub1.snapshot()) >= preReadyCount+steadyCount
+	}, 5*time.Second, time.Millisecond, "all steady-state messages should publish")
+
+	steadyMsgs := pub1.snapshot()[preReadyCount : preReadyCount+steadyCount]
 	for i, m := range steadyMsgs {
 		expectedTopic := telTopic
 		if i%3 == 0 {
@@ -180,6 +190,19 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 		globalSeq += batchSize
 	}
 
+	// Wait for the writer goroutine to publish all rotation messages.
+	require.Eventually(t, func() bool {
+		allMsgs := collectAll(allPubs...)
+		var count int
+		for _, m := range allMsgs {
+			if strings.HasPrefix(string(m.payload), "rot-") {
+				count++
+			}
+		}
+		return count == rotationCount
+	}, 10*time.Second, 10*time.Millisecond,
+		"expected all %d rotation messages to be published", rotationCount)
+
 	// ---- Verification ----
 	allMsgs := collectAll(allPubs...)
 	// Filter to only rotation messages (skip pre- and steady- prefixed)
@@ -240,6 +263,7 @@ func TestBridge_ZeroDataLoss_GRPCPath(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	bridge, err := NewBridgeServer(BridgeConfig{ListenAddr: ":0", Encoding: "json"}, nil, logger)
 	require.NoError(t, err)
+	bridge.initialBackoff = 5 * time.Millisecond
 	require.NoError(t, bridge.Start(context.Background()))
 	defer func() { _ = bridge.Stop(context.Background()) }()
 
@@ -269,14 +293,18 @@ func TestBridge_ZeroDataLoss_GRPCPath(t *testing.T) {
 	bridge.SetIngestTopic(ingestTopic)
 	bridge.SetTelemetryTopic(telTopic)
 
-	require.Equal(t, preReadyCount, len(pub1.snapshot()),
+	require.Eventually(t, func() bool {
+		return len(pub1.snapshot()) >= preReadyCount
+	}, 5*time.Second, time.Millisecond,
 		"all pre-ready gRPC requests should drain")
 
 	// ---- Phase 2: steady-state ----
 	for i := 0; i < steadyCount; i++ {
 		sendOne()
 	}
-	require.Equal(t, preReadyCount+steadyCount, len(pub1.snapshot()))
+	require.Eventually(t, func() bool {
+		return len(pub1.snapshot()) >= preReadyCount+steadyCount
+	}, 5*time.Second, time.Millisecond)
 
 	// ---- Phase 3: rotation ----
 	bridge.ClearPublisher()
@@ -291,8 +319,9 @@ func TestBridge_ZeroDataLoss_GRPCPath(t *testing.T) {
 	bridge.SetTelemetryTopic(telTopic)
 
 	// ---- Verification ----
-	total := len(pub1.snapshot()) + len(pub2.snapshot())
-	require.Equal(t, preReadyCount+steadyCount+rotationCount, total,
-		"zero data loss through gRPC path: expected %d, got %d",
-		preReadyCount+steadyCount+rotationCount, total)
+	require.Eventually(t, func() bool {
+		return len(pub1.snapshot())+len(pub2.snapshot()) >= preReadyCount+steadyCount+rotationCount
+	}, 5*time.Second, time.Millisecond,
+		"zero data loss through gRPC path: expected %d",
+		preReadyCount+steadyCount+rotationCount)
 }

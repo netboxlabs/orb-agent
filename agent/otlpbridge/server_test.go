@@ -124,28 +124,26 @@ func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
 	}
 	bridge, err := NewBridgeServer(cfg, nil, logger)
 	require.NoError(t, err)
+	defer bridge.Stop(context.Background())
 
 	ctx := context.Background()
 
-	// Enqueue up to the limit — all should succeed.
+	// Fill the channel buffer.
 	for i := 0; i < 5; i++ {
 		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))))
 	}
 
-	// Enqueue beyond the limit — should return ResourceExhausted.
-	for i := 5; i < 8; i++ {
-		err = bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i)))
-		require.Error(t, err, "enqueue beyond limit should fail")
-		assert.Contains(t, err.Error(), "queue is full")
+	// Beyond the limit — should return ResourceExhausted.
+	// The writer goroutine may have pulled at most 1 message from the channel,
+	// so we verify that most attempts beyond the limit are rejected.
+	var rejected int
+	for i := 5; i < 10; i++ {
+		if err := bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))); err != nil {
+			assert.Contains(t, err.Error(), "queue is full")
+			rejected++
+		}
 	}
-
-	// Queue should still contain the original 5 messages (no eviction).
-	bridge.pendingMu.Lock()
-	assert.Equal(t, 5, len(bridge.pending), "queue should be capped at MaxPendingQueue")
-	assert.Equal(t, int64(3), bridge.pendingDropped, "should have counted 3 rejections")
-	assert.Equal(t, "msg-0", string(bridge.pending[0].payload))
-	assert.Equal(t, "msg-4", string(bridge.pending[4].payload))
-	bridge.pendingMu.Unlock()
+	assert.GreaterOrEqual(t, rejected, 4, "most messages beyond the limit should be rejected")
 }
 
 func TestBridgeServer_Enqueue_DefaultQueueLimit(t *testing.T) {
@@ -159,5 +157,7 @@ func TestBridgeServer_Enqueue_DefaultQueueLimit(t *testing.T) {
 	bridge, err := NewBridgeServer(cfg, nil, logger)
 	require.NoError(t, err)
 
-	assert.Equal(t, defaultMaxPendingQueue, bridge.maxPending, "should use default when MaxPendingQueue is 0")
+	defer bridge.Stop(context.Background())
+
+	assert.Equal(t, defaultMaxPendingQueue, cap(bridge.msgCh), "should use default when MaxPendingQueue is 0")
 }
