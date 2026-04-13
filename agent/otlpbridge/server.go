@@ -118,16 +118,26 @@ func (s *BridgeServer) SetTelemetryTopic(topic string) {
 // SetPublisher. Call this before MQTT disconnect/reconnect to prevent
 // publish failures during the reconnect window.
 func (s *BridgeServer) ClearPublisher() {
-	// Set ready=false first so concurrent Enqueue calls start buffering immediately.
-	s.pendingMu.Lock()
-	s.ready = false
-	s.draining = false
-	s.retryBackoff = 0
-	s.pendingMu.Unlock()
+	for {
+		s.pendingMu.Lock()
+		if s.draining {
+			s.pendingMu.Unlock()
+			time.Sleep(time.Millisecond)
+			continue
+		}
 
-	s.mu.Lock()
-	s.publisher = nil
-	s.mu.Unlock()
+		// Prevent new drains from starting while transitioning the bridge back
+		// to the not-ready state, then clear the publisher.
+		s.ready = false
+		s.retryBackoff = 0
+
+		s.mu.Lock()
+		s.publisher = nil
+		s.mu.Unlock()
+
+		s.pendingMu.Unlock()
+		return
+	}
 }
 
 // checkReady checks whether publisher and both topics are set. If so, it drains
