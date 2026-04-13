@@ -155,7 +155,7 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 		}
 		s.mu.RUnlock()
 
-		if pub != nil {
+		if pub != nil && topic != "" {
 			if err := pub.Publish(s.ctx, topic, msg.payload); err == nil {
 				return
 			} else if s.logger != nil {
@@ -235,13 +235,14 @@ func (s *BridgeServer) Start(ctx context.Context) error {
 func (s *BridgeServer) Stop(_ context.Context) error {
 	var err error
 	s.closeOnce.Do(func() {
-		// Cancel the lifecycle context first to unblock the writer goroutine
-		// and any in-flight retry sleeps.
-		if s.cancel != nil {
-			s.cancel()
-		}
+		// Drain in-flight RPCs first so no Export handler enqueues after the
+		// writer goroutine exits. GracefulStop blocks until all active RPCs
+		// complete, then we cancel the writer context to flush remaining items.
 		if s.ingestGRPCServer != nil {
 			s.ingestGRPCServer.GracefulStop()
+		}
+		if s.cancel != nil {
+			s.cancel()
 		}
 		if s.listener != nil {
 			_ = s.listener.Close()
