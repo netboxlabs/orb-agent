@@ -144,11 +144,13 @@ func (s *BridgeServer) writer() {
 }
 
 // publishWithRetry publishes a single message, retrying with exponential
-// backoff when no publisher is available or a publish call fails. Retries
-// are bounded to prevent a single poison message from blocking the queue.
+// backoff when no publisher is available or a publish call fails. Only
+// actual publish failures count toward the retry budget; waiting for
+// publisher/topic readiness does not consume attempts.
 func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 	backoff := s.initialBackoff
-	for attempt := 0; attempt < maxPublishRetries; attempt++ {
+	failures := 0
+	for {
 		s.mu.RLock()
 		pub := s.publisher
 		topic := s.telemetryTopic
@@ -160,8 +162,17 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 		if pub != nil && topic != "" {
 			if err := pub.Publish(s.ctx, topic, msg.payload); err == nil {
 				return
-			} else if s.logger != nil {
-				s.logger.Warn("OTLP publish failed, retrying", "error", err, "attempt", attempt+1, "backoff", backoff)
+			} else {
+				failures++
+				if s.logger != nil {
+					s.logger.Warn("OTLP publish failed, retrying", "error", err, "attempt", failures, "backoff", backoff)
+				}
+				if failures >= maxPublishRetries {
+					if s.logger != nil {
+						s.logger.Warn("OTLP publish retries exhausted, dropping message", "max_retries", maxPublishRetries)
+					}
+					return
+				}
 			}
 		}
 
@@ -171,9 +182,6 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 		case <-s.ctx.Done():
 			return
 		}
-	}
-	if s.logger != nil {
-		s.logger.Warn("OTLP publish retries exhausted, dropping message", "max_retries", maxPublishRetries)
 	}
 }
 
