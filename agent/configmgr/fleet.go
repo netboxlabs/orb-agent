@@ -121,6 +121,10 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 	}
 	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
 
+	// Create monitorCtx before the retry loop so startConnection can pass it to
+	// Connect() as the long-lived MQTT connection context.
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+
 	// Retry loop for token fetch + MQTT connect. These depend on external services
 	// (token endpoint, MQTT broker) that may not be up yet at agent startup.
 	// AuthError (401/403) is permanent — bad credentials won't be fixed by retrying.
@@ -233,10 +237,6 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 			slog.String("ingest_topic", topics.Ingest),
 			slog.String("telemetry_topic", topics.Telemetry))
 	})
-
-	// Create a shared cancellable context for both the reconnect worker and the token expiry
-	// monitor so that Stop() can terminate both goroutines with a single monitorCancel() call.
-	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
 
 	// Start goroutine to handle reconnect requests (JWT refresh)
 	fleetManager.goroutinesWg.Add(1)

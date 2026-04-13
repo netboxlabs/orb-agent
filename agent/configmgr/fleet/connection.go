@@ -166,10 +166,13 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 // Connect connects to the MQTT broker. It is safe to call repeatedly (e.g.
 // from a startup retry loop): dispatch channels are always freshly allocated.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
-	// Reinitialize dispatch channels so Connect is safe to call after a
-	// previous failure that closed them via stopDispatchWorker.
+	// Reinitialize dispatch channels and reset shutdown flag so Connect is safe
+	// to call after a previous failure that closed them via stopDispatchWorker.
+	connection.dispatchMu.Lock()
 	connection.dispatchQueue = make(chan dispatchJob, 100)
 	connection.dispatchWorkerDone = make(chan struct{})
+	connection.shuttingDown = false
+	connection.dispatchMu.Unlock()
 
 	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
