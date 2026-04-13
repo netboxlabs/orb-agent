@@ -23,6 +23,7 @@ const (
 	defaultMaxPendingQueue = 1000
 	initialRetryBackoff    = 2 * time.Second
 	maxRetryBackoff        = 30 * time.Second
+	maxPublishRetries      = 10
 )
 
 // pendingPublish holds a marshaled OTLP payload queued for publishing.
@@ -143,10 +144,11 @@ func (s *BridgeServer) writer() {
 }
 
 // publishWithRetry publishes a single message, retrying with exponential
-// backoff when no publisher is available or a publish call fails.
+// backoff when no publisher is available or a publish call fails. Retries
+// are bounded to prevent a single poison message from blocking the queue.
 func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 	backoff := s.initialBackoff
-	for {
+	for attempt := 0; attempt < maxPublishRetries; attempt++ {
 		s.mu.RLock()
 		pub := s.publisher
 		topic := s.telemetryTopic
@@ -159,7 +161,7 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 			if err := pub.Publish(s.ctx, topic, msg.payload); err == nil {
 				return
 			} else if s.logger != nil {
-				s.logger.Warn("OTLP publish failed, retrying", "error", err, "backoff", backoff)
+				s.logger.Warn("OTLP publish failed, retrying", "error", err, "attempt", attempt+1, "backoff", backoff)
 			}
 		}
 
@@ -169,6 +171,9 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 		case <-s.ctx.Done():
 			return
 		}
+	}
+	if s.logger != nil {
+		s.logger.Warn("OTLP publish retries exhausted, dropping message", "max_retries", maxPublishRetries)
 	}
 }
 
