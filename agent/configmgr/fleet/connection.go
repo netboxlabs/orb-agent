@@ -427,7 +427,11 @@ func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic
 	// Set shutdown flag first to prevent new messages from being enqueued
 	connection.shuttingDown.Store(true)
 
-	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+	// Only attempt the offline heartbeat if we have a real topic; callers like
+	// the startup retry loop pass "" when no session was ever established.
+	if heartbeatTopic != "" {
+		connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+	}
 	// Disconnect first to stop receiving new messages, then stop the worker
 	err := connection.connectionManager.Disconnect(ctx)
 	connection.stopDispatchWorker()
