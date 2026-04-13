@@ -163,29 +163,13 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 	<-done
 }
 
-// Connect connects to the MQTT broker. It is safe to call after a previous
-// Connect that failed (e.g., during startup retries): stale dispatch worker
-// state and a lingering ConnectionManager are cleaned up before proceeding.
+// Connect connects to the MQTT broker. It is safe to call repeatedly (e.g.
+// from a startup retry loop): dispatch channels are always freshly allocated.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
-	// Reinitialize dispatch worker channels so Connect is safely re-entrant
-	// after a prior call that ended with stopDispatchWorker (which closes the
-	// channels and sets shuttingDown = true).
-	connection.dispatchMu.Lock()
-	if connection.shuttingDown {
-		connection.dispatchQueue = make(chan dispatchJob, 100)
-		connection.dispatchWorkerDone = make(chan struct{})
-		connection.shuttingDown = false
-	}
-	connection.dispatchMu.Unlock()
-
-	// Tear down any lingering ConnectionManager from a previous failed Connect
-	// so we don't leak a background reconnect loop.
-	if connection.connectionManager != nil {
-		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = connection.connectionManager.Disconnect(disconnectCtx)
-		disconnectCancel()
-		connection.connectionManager = nil
-	}
+	// Reinitialize dispatch channels so Connect is safe to call after a
+	// previous failure that closed them via stopDispatchWorker.
+	connection.dispatchQueue = make(chan dispatchJob, 100)
+	connection.dispatchWorkerDone = make(chan struct{})
 
 	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
@@ -490,7 +474,12 @@ func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic
 	if connection.connectionManager == nil {
 		return nil
 	}
-	connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+
+	// Only attempt the offline heartbeat if we have a real topic; callers like
+	// the startup retry loop pass "" when no session was ever established.
+	if heartbeatTopic != "" {
+		connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
+	}
 	// Disconnect first to stop receiving new messages, then stop the worker
 	err := connection.connectionManager.Disconnect(ctx)
 	connection.connectionManager = nil

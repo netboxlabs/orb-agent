@@ -263,6 +263,9 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 // It is called by Start's retry loop. Transient failures (network, broker down) return a
 // plain error that the caller retries; permanent failures (bad credentials) return an
 // *fleet.AuthError that the caller surfaces immediately.
+//
+// ctx is used for short-lived startup work (token fetch, JWT parse). The MQTT connection
+// itself uses fleetManager.monitorCtx so it outlives the startup context.
 func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg config.Config, backends map[string]backend.Backend, timeout time.Duration) error {
 	token, err := fleetManager.authTokenManager.GetToken(ctx,
 		cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
@@ -319,7 +322,9 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 		mqttConn.SetTokenRefresher(fleetManager.authTokenManager.GetFreshToken)
 	}
 
-	return fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
+	// Use monitorCtx for the MQTT connection so it outlives the caller's startup
+	// context. monitorCtx is cancelled by Stop(), which is the correct lifecycle.
+	return fleetManager.connection.Connect(fleetManager.monitorCtx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 }
 
 // runReconnectWorker processes signals from reconnectChan, retrying token refresh with exponential
