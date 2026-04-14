@@ -1,8 +1,8 @@
-"""Unit tests for custom_napalm.hp_comware.ComwareDriver."""
+"""Unit tests for custom_napalm.comware.ComwareDriver."""
 
 from pathlib import Path
 
-from custom_napalm.hp_comware import ComwareDriver
+from custom_napalm.comware import ComwareDriver
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
 

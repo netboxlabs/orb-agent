@@ -11,7 +11,6 @@ falls back to regex parsing where they do not (uptime).
 
 import logging
 import re
-import socket
 
 import napalm.base as _napalm_base
 from napalm.base import models

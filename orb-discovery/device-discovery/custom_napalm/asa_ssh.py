@@ -10,7 +10,6 @@ Uses ntc-templates 9.x for structured parsing.
 
 import logging
 import re
-import socket
 
 import napalm.base as _napalm_base
 from napalm.base import models

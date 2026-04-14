@@ -14,7 +14,6 @@ without templates (uptime, model).
 import ipaddress
 import logging
 import re
-import socket
 
 import napalm.base as _napalm_base
 from napalm.base import models

@@ -12,7 +12,6 @@ falls back to regex for commands without templates (serial number, IPv6).
 
 import logging
 import re
-import socket
 
 import napalm.base as _napalm_base
 from napalm.base import models
