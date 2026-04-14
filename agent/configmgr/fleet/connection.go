@@ -167,15 +167,7 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 // failed Connect (e.g. from a startup retry loop): any existing dispatch
 // worker and connection manager are torn down before reinitializing.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
-	// Reinitialize dispatch channels and reset shutdown flag so Connect is safe
-	// to call after a previous failure that closed them via stopDispatchWorker.
-	connection.dispatchMu.Lock()
-	connection.dispatchQueue = make(chan dispatchJob, 100)
-	connection.dispatchWorkerDone = make(chan struct{})
-	connection.shuttingDown = false
-	connection.dispatchMu.Unlock()
-
-	// Parse the ORB URL
+	// Parse the ORB URL before any state changes so a bad URL is a no-op.
 	serverURL, err := url.Parse(details.MQTTURL)
 	if err != nil {
 		connection.logger.Error("failed to parse MQTT URL", "url", details.MQTTURL, "error", err)
@@ -192,9 +184,13 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		connection.stopDispatchWorker()
 	}
 
-	// Reinitialize dispatch channels after validation and teardown.
+	// Reinitialize dispatch channels after teardown so stopDispatchWorker above
+	// operates on the old channels, not freshly-created ones with no worker.
+	connection.dispatchMu.Lock()
 	connection.dispatchQueue = make(chan dispatchJob, 100)
 	connection.dispatchWorkerDone = make(chan struct{})
+	connection.shuttingDown = false
+	connection.dispatchMu.Unlock()
 
 	// Store topics for hook callbacks
 	connection.connectionTopics = details.Topics
@@ -469,6 +465,7 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 		}
 		// stopDispatchWorker sets shuttingDown and closes the channel under dispatchMu
 		connection.stopDispatchWorker()
+		connection.connectionManager = nil
 	}
 
 	// Reset failure counters
