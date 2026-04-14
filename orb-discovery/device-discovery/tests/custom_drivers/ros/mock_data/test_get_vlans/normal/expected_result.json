@@ -1,0 +1,20 @@
+{
+  "10": {
+    "name": "Huis",
+    "interfaces": [
+      "bridge"
+    ]
+  },
+  "11": {
+    "name": "Kantoor",
+    "interfaces": [
+      "Huis"
+    ]
+  },
+  "12": {
+    "name": "Schuur",
+    "interfaces": [
+      "bridge"
+    ]
+  }
+}

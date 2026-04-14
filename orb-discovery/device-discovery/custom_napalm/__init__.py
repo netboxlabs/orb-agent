@@ -10,6 +10,7 @@ from custom_napalm.hp_procurve import ProCurveDriver
 from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.panos import PANOSDriver
 from custom_napalm.panos_ssh import PANOSSHDriver
+from custom_napalm.ros import ROSDriver
 from custom_napalm.viptela_ssh import ViptelaSSHDriver
 from custom_napalm.wlc import WLCDriver
 
@@ -21,6 +22,7 @@ __all__ = [
     "FTDSSHDriver",
     "ComwareDriver",
     "ProCurveDriver",
+    "ROSDriver",
     "VRPDriver",
     "PANOSDriver",
     "PANOSSHDriver",
