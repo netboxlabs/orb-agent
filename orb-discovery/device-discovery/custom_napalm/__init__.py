@@ -6,6 +6,7 @@ from custom_napalm.asa import ASADriver
 from custom_napalm.asa_ssh import ASASSHDriver
 from custom_napalm.avaya_ers import AvayaERSDriver
 from custom_napalm.exos import ExosDriver
+from custom_napalm.fastiron import FastIronDriver
 from custom_napalm.ftd_ssh import FTDSSHDriver
 from custom_napalm.ftos import FTOSDriver
 from custom_napalm.gaia import GaiaDriver
@@ -25,6 +26,7 @@ __all__ = [
     "ASASSHDriver",
     "AvayaERSDriver",
     "ExosDriver",
+    "FastIronDriver",
     "FTDSSHDriver",
     "FTOSDriver",
     "GaiaDriver",

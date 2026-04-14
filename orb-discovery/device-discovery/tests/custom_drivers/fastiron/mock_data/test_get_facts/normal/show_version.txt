@@ -1,0 +1,13 @@
+  UNIT 1
+  (Primary) from secondary ICX64S08050u.bin
+
+    SW: Version 08.0.50T7f2
+    HW: Stackable ICX6430-48
+
+=============================================================================
+UNIT 1: SL 1: ICX6430-48 48-port Management Module
+  Serial  #: CYH3456M1234
+  License: BASE_SOFT_PACKAGE
+
+Switch uptime is 15 day(s) 3 hour(s) 25 minute(s) 10 second(s)
+  The system : started=cold start

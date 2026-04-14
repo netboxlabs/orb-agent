@@ -1,0 +1,15 @@
+!
+ver 08.0.50T7f2
+!
+hostname fastiron-sw01
+!
+vlan 1 name DEFAULT-VLAN by port
+!
+interface ethernet 1/1/1
+ port-name uplink
+!
+interface ethernet 1/1/2
+!
+interface management 1
+!
+end
