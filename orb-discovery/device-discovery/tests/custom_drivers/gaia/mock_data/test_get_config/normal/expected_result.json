@@ -1,0 +1,5 @@
+{
+  "running": "# Configuration of gw-corp-01\nset hostname gw-corp-01\nset interface Mgmt ipv4-address 2.2.2.2 mask-length 29\nset interface Sync ipv4-address 192.168.0.1 mask-length 30\nset ntp server primary 10.0.0.1 version 4\n",
+  "candidate": "",
+  "startup": ""
+}
