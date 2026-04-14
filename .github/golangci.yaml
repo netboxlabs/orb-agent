@@ -1,6 +1,7 @@
 version: "2"
 run:
   modules-download-mode: readonly
+  relative-path-mode: gomod
 linters:
   enable:
     - bodyclose
