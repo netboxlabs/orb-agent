@@ -70,8 +70,7 @@ func newBridgeWithTopics(_ Encoder) (*BridgeServer, *fakePublisher) {
 
 func TestTraceHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 	s := &traceServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectortrace.ExportTraceServiceRequest{})
 	if err != nil {
@@ -84,8 +83,7 @@ func TestTraceHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 
 func TestTraceHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
 	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 	s := &traceServer{bridge: bridge}
 	req := &collectortrace.ExportTraceServiceRequest{
 		ResourceSpans: []*tracev1.ResourceSpans{
@@ -107,8 +105,7 @@ func TestTraceHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
 
 func TestMetricsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 	s := &metricsServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectormetrics.ExportMetricsServiceRequest{})
 	if err != nil {
@@ -121,8 +118,7 @@ func TestMetricsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T)
 
 func TestMetricsHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
 	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 	s := &metricsServer{bridge: bridge}
 	req := &collectormetrics.ExportMetricsServiceRequest{
 		ResourceMetrics: []*metricsv1.ResourceMetrics{
@@ -144,8 +140,7 @@ func TestMetricsHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
 
 func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 	s := &logsServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectorlogs.ExportLogsServiceRequest{})
 	if err != nil {
@@ -164,8 +159,7 @@ func TestBridge_Enqueue_QueuesDrainsOnReady(t *testing.T) {
 	fp := &fakePublisher{}
 	bridge, _ := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, nil)
 	bridge.initialBackoff = 5 * time.Millisecond
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 
 	// Enqueue before publisher is set — should queue, not error.
 	if err := bridge.Enqueue(context.Background(), false, []byte("hello")); err != nil {

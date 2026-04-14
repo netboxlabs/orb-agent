@@ -87,11 +87,11 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 	)
 
 	ctx := context.Background()
-	bridge, err := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, nil)
+	bridge, err := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, slog.Default())
 	require.NoError(t, err)
 	bridge.initialBackoff = 5 * time.Millisecond
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	require.NoError(t, bridge.Start(ctx))
+	defer func() { _ = bridge.Stop(context.Background()) }()
 
 	// ---- Phase 1: pre-ready queuing (startup) ----
 	pub1 := &recordingPublisher{}

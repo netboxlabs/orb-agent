@@ -124,8 +124,7 @@ func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
 	}
 	bridge, err := NewBridgeServer(cfg, nil, logger)
 	require.NoError(t, err)
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 
 	ctx := context.Background()
 
@@ -158,8 +157,7 @@ func TestBridgeServer_Enqueue_DefaultQueueLimit(t *testing.T) {
 	bridge, err := NewBridgeServer(cfg, nil, logger)
 	require.NoError(t, err)
 
-	//nolint:errcheck // err doesn't matter
-	defer bridge.Stop(context.Background())
+	defer func() { _ = bridge.Stop(context.Background()) }()
 
 	assert.Equal(t, defaultMaxPendingQueue, cap(bridge.msgCh), "should use default when MaxPendingQueue is 0")
 }
