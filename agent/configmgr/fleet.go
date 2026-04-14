@@ -126,6 +126,24 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 	// a single monitorCancel() call.
 	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
 
+	// Register OnReadyHook before the retry loop so it fires on the initial
+	// connection (OnConnectionUp runs synchronously before Connect returns).
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
+			return
+		}
+
+		// Create publisher adapter and bind to bridge
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
+	})
+
 	// Retry loop for token fetch + MQTT connect. These depend on external services
 	// (token endpoint, MQTT broker) that may not be up yet at agent startup.
 	// AuthError (401/403) is permanent — bad credentials won't be fixed by retrying.
@@ -214,24 +232,6 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 			}
 		}
 	}()
-
-	// Register MQTTOnReadyHook to bind publisher and topics to the OTLP bridge
-	// The bridge server is already started earlier in Start(), so we only need to bind MQTT here
-	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
-		if fleetManager.otlpBridge == nil {
-			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
-			return
-		}
-
-		// Create publisher adapter and bind to bridge
-		pub := otlpbridge.NewCMAdapterPublisher(cm)
-		fleetManager.otlpBridge.SetPublisher(pub)
-		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
-		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
-		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
-			slog.String("ingest_topic", topics.Ingest),
-			slog.String("telemetry_topic", topics.Telemetry))
-	})
 
 	// Start goroutine to handle reconnect requests (JWT refresh)
 	fleetManager.goroutinesWg.Add(1)

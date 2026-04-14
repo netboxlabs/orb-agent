@@ -136,8 +136,9 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 	<-connection.dispatchWorkerDone
 }
 
-// Connect connects to the MQTT broker. It is safe to call repeatedly (e.g.
-// from a startup retry loop): dispatch channels are always freshly allocated.
+// Connect connects to the MQTT broker. It is safe to call after a previous
+// failed Connect (e.g. from a startup retry loop): any existing dispatch
+// worker and connection manager are torn down before reinitializing.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
@@ -146,8 +147,17 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		return err
 	}
 
-	// Reinitialize dispatch channels after validation so a parse error doesn't
-	// leave unstarted channels that stopDispatchWorker would block on forever.
+	// Tear down any prior state so repeated Connect calls don't leak goroutines.
+	// Only needed when a previous Connect left a running connection manager.
+	if connection.connectionManager != nil {
+		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = connection.connectionManager.Disconnect(teardownCtx)
+		teardownCancel()
+		connection.connectionManager = nil
+		connection.stopDispatchWorker()
+	}
+
+	// Reinitialize dispatch channels after validation and teardown.
 	connection.dispatchQueue = make(chan dispatchJob, 100)
 	connection.dispatchWorkerDone = make(chan struct{})
 	connection.shuttingDown.Store(false)
