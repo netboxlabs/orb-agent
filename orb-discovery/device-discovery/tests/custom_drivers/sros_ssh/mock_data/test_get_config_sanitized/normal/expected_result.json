@@ -1,0 +1,5 @@
+{
+  "running": "# TiMOS-B-21.10.R2 both/x86_64 Nokia 7750 SR-12\n# Generated 2021-10-15T12:34:56.0Z by admin from console\n\nconfigure system\n    name \"PE-1\"\n    snmp\n        community \"<redacted>\" hash2 \"<redacted>\" r version both\n    exit\nexit\n\nconfigure router\n    interface \"system\"\n        address 10.0.0.1/32\n    exit\nexit\n\nconfigure system security\n    password \"<redacted>\"\n    authentication-key \"<redacted>\"\n    hmac-md5-key \"<redacted>\"\n    des-key \"<redacted>\"\n    aes-key \"<redacted>\"\nexit\n",
+  "candidate": "",
+  "startup": ""
+}

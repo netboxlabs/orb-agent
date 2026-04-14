@@ -1,0 +1,23 @@
+===============================================================================
+System Information
+===============================================================================
+System Name            : PE-1
+System Type            : 7750 SR-12
+System Version         : TiMOS-B-21.10.R2
+System Contact         :
+System Location        : Lab
+System Coordinates     :
+System Active Slot     : A
+System Last Booted     : 2021/10/05 07:45:18
+System Time            : 2021/10/15 12:34:56
+System Up Time         : 0 days, 10:49:38.040 (h:m:s.ms)
+
+SNMP Engine ID         : 0x00000003001a0001
+SNMP Max Message Size  : 9216
+
+Chassis Topology       : Standalone
+Chassis Type           : 7750 SR-12
+Chassis Location       :
+Chassis Coordinates    :
+Chassis Serial #       : NS12345678
+Chassis Part Number    : 3HE04034AAAA01
