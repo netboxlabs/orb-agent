@@ -601,3 +601,106 @@ func TestAuthTokenManager_RefreshToken(t *testing.T) {
 	newExpiryTime := authTokenManager.GetTokenExpiryTime()
 	assert.WithinDuration(t, newFutureExpiry.Add(-5*time.Minute), newExpiryTime, 1*time.Second)
 }
+
+func TestAuthTokenManager_GetFreshToken_ReturnsCachedWhenValid(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mgr := NewAuthTokenManager(logger)
+
+	// Seed a token that expires in 1 hour
+	jwtToken := RawJWTWithClaims(map[string]any{
+		"exp": time.Now().Add(1 * time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(TokenResponse{
+			AccessToken: jwtToken,
+			ExpiresIn:   3600,
+		})
+	}))
+	defer server.Close()
+
+	_, err := mgr.GetToken(context.Background(), server.URL, true, 30*time.Second, "client", "secret")
+	require.NoError(t, err)
+
+	// GetFreshToken should return the cached token without any HTTP call.
+	// (The server is still up, but we verify by checking the returned value matches.)
+	token, err := mgr.GetFreshToken(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, jwtToken, token)
+}
+
+func TestAuthTokenManager_GetFreshToken_RefreshesWhenExpired(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mgr := NewAuthTokenManager(logger)
+
+	// Seed a token that is already expired
+	expiredJWT := RawJWTWithClaims(map[string]any{
+		"exp": time.Now().Add(-1 * time.Hour).Unix(),
+		"iat": time.Now().Add(-2 * time.Hour).Unix(),
+	})
+
+	// First server: returns an expired token
+	server1 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(TokenResponse{
+			AccessToken: expiredJWT,
+			ExpiresIn:   0,
+		})
+	}))
+	defer server1.Close()
+
+	_, err := mgr.GetToken(context.Background(), server1.URL, true, 30*time.Second, "client", "secret")
+	require.NoError(t, err)
+
+	// Now point to a server that returns a fresh token
+	freshJWT := RawJWTWithClaims(map[string]any{
+		"exp": time.Now().Add(1 * time.Hour).Unix(),
+		"iat": time.Now().Unix(),
+	})
+	server2 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(TokenResponse{
+			AccessToken: freshJWT,
+			ExpiresIn:   3600,
+		})
+	}))
+	defer server2.Close()
+	mgr.tokenURL = server2.URL
+
+	// GetFreshToken should detect expiry and refresh
+	token, err := mgr.GetFreshToken(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, freshJWT, token)
+}
+
+func TestAuthTokenManager_GetFreshToken_PropagatesRefreshError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mgr := NewAuthTokenManager(logger)
+
+	// Seed an expired token
+	expiredJWT := RawJWTWithClaims(map[string]any{
+		"exp": time.Now().Add(-1 * time.Hour).Unix(),
+		"iat": time.Now().Add(-2 * time.Hour).Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(TokenResponse{
+			AccessToken: expiredJWT,
+			ExpiresIn:   0,
+		})
+	}))
+	defer server.Close()
+
+	_, err := mgr.GetToken(context.Background(), server.URL, true, 30*time.Second, "client", "secret")
+	require.NoError(t, err)
+
+	// Point to a server that returns 500
+	serverErr := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer serverErr.Close()
+	mgr.tokenURL = serverErr.URL
+
+	// GetFreshToken should propagate the error
+	_, err = mgr.GetFreshToken(context.Background())
+	assert.Error(t, err)
+}

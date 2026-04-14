@@ -2,7 +2,6 @@ package otlpbridge
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
@@ -42,11 +41,6 @@ type traceServer struct {
 }
 
 func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
-	pub := s.bridge.GetPublisher()
-	if pub == nil {
-		return nil, status.Error(codes.Unavailable, "MQTT publisher not ready, retry later")
-	}
-
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceSpans))
 	for _, rs := range req.ResourceSpans {
 		if rs != nil {
@@ -54,24 +48,11 @@ func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTrac
 		}
 	}
 
-	var topic string
-	if isIngestRequest(resources) {
-		topic = s.bridge.GetIngestTopic()
-		if topic == "" {
-			return nil, fmt.Errorf("ingest topic not yet initialized")
-		}
-	} else {
-		topic = s.bridge.GetTelemetryTopic()
-		if topic == "" {
-			return nil, fmt.Errorf("telemetry topic not yet initialized")
-		}
-	}
-
 	payload, err := s.bridge.enc.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := pub.Publish(ctx, topic, payload); err != nil {
+	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload); err != nil {
 		return nil, err
 	}
 	return &collectortrace.ExportTraceServiceResponse{}, nil
@@ -84,11 +65,6 @@ type metricsServer struct {
 }
 
 func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
-	pub := s.bridge.GetPublisher()
-	if pub == nil {
-		return nil, status.Error(codes.Unavailable, "MQTT publisher not ready, retry later")
-	}
-
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceMetrics))
 	for _, rm := range req.ResourceMetrics {
 		if rm != nil {
@@ -96,24 +72,11 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 		}
 	}
 
-	var topic string
-	if isIngestRequest(resources) {
-		topic = s.bridge.GetIngestTopic()
-		if topic == "" {
-			return nil, fmt.Errorf("ingest topic not yet initialized")
-		}
-	} else {
-		topic = s.bridge.GetTelemetryTopic()
-		if topic == "" {
-			return nil, fmt.Errorf("telemetry topic not yet initialized")
-		}
-	}
-
 	payload, err := s.bridge.enc.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := pub.Publish(ctx, topic, payload); err != nil {
+	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload); err != nil {
 		return nil, err
 	}
 	return &collectormetrics.ExportMetricsServiceResponse{}, nil
@@ -126,23 +89,19 @@ type logsServer struct {
 }
 
 func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
-	pub := s.bridge.GetPublisher()
-	if pub == nil {
-		return nil, status.Error(codes.Unavailable, "MQTT publisher not ready, retry later")
-	}
-	if s.isIngestRequest(req) {
+	isIngest := s.isIngestRequest(req)
+	if isIngest {
 		repo := s.bridge.GetPolicyRepo()
 		enrichLogsWithDatasets(req, repo)
 		s.bridge.logger.Info("ingesting enriched logs with dataset_ids", "request", req)
-		err := s.publishToIngestTopic(ctx, req, pub)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		err := s.publishToTelemetryTopic(ctx, req, pub)
-		if err != nil {
-			return nil, err
-		}
+	}
+
+	payload, err := s.bridge.enc.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.bridge.Enqueue(ctx, isIngest, payload); err != nil {
+		return nil, err
 	}
 	return &collectorlogs.ExportLogsServiceResponse{}, nil
 }
@@ -176,35 +135,6 @@ func (s *logsServer) isIngestRequest(req *collectorlogs.ExportLogsServiceRequest
 		}
 	}
 	return false
-}
-
-func (s *logsServer) publishToIngestTopic(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher) error {
-	topic := s.bridge.GetIngestTopic()
-	if topic == "" {
-		return fmt.Errorf("ingest topic not yet initialized")
-	}
-
-	return s.publish(ctx, req, pub, topic)
-}
-
-func (s *logsServer) publishToTelemetryTopic(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher) error {
-	topic := s.bridge.GetTelemetryTopic()
-	if topic == "" {
-		return fmt.Errorf("telemetry topic not yet initialized")
-	}
-
-	return s.publish(ctx, req, pub, topic)
-}
-
-func (s *logsServer) publish(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher, topic string) error {
-	payload, err := s.bridge.enc.Marshal(req)
-	if err != nil {
-		return err
-	}
-	if err := pub.Publish(ctx, topic, payload); err != nil {
-		return err
-	}
-	return nil
 }
 
 // enrichLogsWithDatasets adds dataset_ids to ScopeLogs attributes based on policy_name.

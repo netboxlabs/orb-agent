@@ -163,8 +163,9 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 	<-done
 }
 
-// Connect connects to the MQTT broker. It is safe to call repeatedly (e.g.
-// from a startup retry loop): dispatch channels are always freshly allocated.
+// Connect connects to the MQTT broker. It is safe to call after a previous
+// failed Connect (e.g. from a startup retry loop): any existing dispatch
+// worker and connection manager are torn down before reinitializing.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
 	// Reinitialize dispatch channels and reset shutdown flag so Connect is safe
 	// to call after a previous failure that closed them via stopDispatchWorker.
@@ -180,6 +181,21 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		connection.logger.Error("failed to parse MQTT URL", "url", details.MQTTURL, "error", err)
 		return err
 	}
+
+	// Tear down any prior state so repeated Connect calls don't leak goroutines.
+	// Only needed when a previous Connect left a running connection manager.
+	if connection.connectionManager != nil {
+		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = connection.connectionManager.Disconnect(teardownCtx)
+		teardownCancel()
+		connection.connectionManager = nil
+		connection.stopDispatchWorker()
+	}
+
+	// Reinitialize dispatch channels after validation and teardown.
+	connection.dispatchQueue = make(chan dispatchJob, 100)
+	connection.dispatchWorkerDone = make(chan struct{})
+	connection.shuttingDown.Store(false)
 
 	// Store topics for hook callbacks
 	connection.connectionTopics = details.Topics
@@ -477,6 +493,8 @@ func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic
 	if connection.connectionManager == nil {
 		return nil
 	}
+	// Set shutdown flag first to prevent new messages from being enqueued
+	connection.shuttingDown.Store(true)
 
 	// Only attempt the offline heartbeat if we have a real topic; callers like
 	// the startup retry loop pass "" when no session was ever established.
