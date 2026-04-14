@@ -13,6 +13,7 @@ from custom_napalm.gaia import GaiaDriver
 from custom_napalm.hp_comware import ComwareDriver
 from custom_napalm.hp_procurve import ProCurveDriver
 from custom_napalm.huawei_vrp import VRPDriver
+from custom_napalm.netiron import NetIronDriver
 from custom_napalm.panos import PANOSDriver
 from custom_napalm.panos_ssh import PANOSSHDriver
 from custom_napalm.ros import ROSDriver
@@ -31,6 +32,7 @@ __all__ = [
     "FTOSDriver",
     "GaiaDriver",
     "ComwareDriver",
+    "NetIronDriver",
     "ProCurveDriver",
     "ROSDriver",
     "VRPDriver",

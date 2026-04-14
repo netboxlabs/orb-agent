@@ -1,0 +1,5 @@
+{
+  "running": "!\n! Startup-config last changed at 12:34:56 UTC Mon Apr 14 2026\n!\nhostname netiron-core-1\n!\nenable 0 $1$abcd$hashedpassword\nenable super-user-password $1$xyz$superuserhash\n!\nusername admin password 7 encryptedpassword123\nusername operator privilege 5 password 7 operatorhash456\n!\nsnmp-server community public ro\n!\ninterface ethernet 1/1\n port-name uplink-core\n dual-mode\n!\ninterface ve 2\n ip address 192.168.1.1/24\n!\nip vrrp-extended auth-type simple-text-auth vrrppass123\n!\nvlan 1 name DEFAULT-VLAN\n!\nvlan 10 name MANAGEMENT\n tagged e 1/1\n router-interface ve 10\n!\nend\n",
+  "candidate": "",
+  "startup": ""
+}
