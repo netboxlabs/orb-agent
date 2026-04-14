@@ -2,6 +2,7 @@ package otlpbridge
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func diodeResource() *resourcev1.Resource {
 
 func newBridgeWithTopics(_ Encoder) (*BridgeServer, *fakePublisher) {
 	fp := &fakePublisher{}
-	bridge, _ := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, nil)
+	bridge, _ := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, slog.Default())
 	bridge.initialBackoff = 5 * time.Millisecond
 	bridge.SetPublisher(fp)
 	bridge.SetIngestTopic("ingest")
@@ -157,7 +158,7 @@ func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
 
 func TestBridge_Enqueue_QueuesDrainsOnReady(t *testing.T) {
 	fp := &fakePublisher{}
-	bridge, _ := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, nil)
+	bridge, _ := NewBridgeServer(BridgeConfig{Encoding: "protobuf"}, nil, slog.Default())
 	bridge.initialBackoff = 5 * time.Millisecond
 	defer func() { _ = bridge.Stop(context.Background()) }()
 

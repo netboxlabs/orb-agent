@@ -160,19 +160,15 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 		s.mu.RUnlock()
 
 		if pub != nil && topic != "" {
-			if err := pub.Publish(s.ctx, topic, msg.payload); err == nil {
+			err := pub.Publish(s.ctx, topic, msg.payload)
+			if err == nil {
 				return
-			} else {
-				failures++
-				if s.logger != nil {
-					s.logger.Warn("OTLP publish failed, retrying", "error", err, "attempt", failures, "backoff", backoff)
-				}
-				if failures >= maxPublishRetries {
-					if s.logger != nil {
-						s.logger.Warn("OTLP publish retries exhausted, dropping message", "max_retries", maxPublishRetries)
-					}
-					return
-				}
+			}
+			failures++
+			s.logger.Warn("OTLP publish failed, retrying", "error", err, "attempt", failures, "backoff", backoff)
+			if failures >= maxPublishRetries {
+				s.logger.Warn("OTLP publish retries exhausted, dropping message", "max_retries", maxPublishRetries)
+				return
 			}
 		}
 
