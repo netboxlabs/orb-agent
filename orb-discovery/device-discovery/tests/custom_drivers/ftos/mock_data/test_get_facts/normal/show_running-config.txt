@@ -1,0 +1,6 @@
+Current Configuration ...
+! Version 9.14.2.21
+! Last configuration change at 10:42:33 UTC Mon Mar 11 2024
+!
+hostname ftos-switch01
+!

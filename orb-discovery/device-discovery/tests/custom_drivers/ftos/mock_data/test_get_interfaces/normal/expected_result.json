@@ -1,0 +1,38 @@
+{
+  "TenGigabitEthernet 0/0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "uplink-core",
+    "last_flapped": -1.0,
+    "mtu": 12000,
+    "speed": 10000.0,
+    "mac_address": "AA:BB:CC:DD:EE:00"
+  },
+  "TenGigabitEthernet 0/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "server01",
+    "last_flapped": -1.0,
+    "mtu": 12000,
+    "speed": 10000.0,
+    "mac_address": "AA:BB:CC:DD:EE:01"
+  },
+  "GigabitEthernet 0/48": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1554,
+    "speed": -1.0,
+    "mac_address": "AA:BB:CC:DD:EE:30"
+  },
+  "ManagementEthernet 0/0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1554,
+    "speed": 100.0,
+    "mac_address": "AA:BB:CC:DD:EE:FF"
+  }
+}

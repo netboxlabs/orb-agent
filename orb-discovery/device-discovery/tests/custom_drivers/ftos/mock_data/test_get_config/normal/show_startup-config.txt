@@ -1,0 +1,6 @@
+Startup Configuration ...
+! Version 9.14.2.21
+!
+hostname ftos-switch01
+!
+end
