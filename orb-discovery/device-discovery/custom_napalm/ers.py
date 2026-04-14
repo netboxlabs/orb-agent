@@ -1,13 +1,16 @@
 # Copyright 2026 NetBox Labs Inc
 """
-Custom Avaya ERS NAPALM driver.
+Custom ERS NAPALM driver for Avaya/Extreme ERS switches.
+
+Avaya ERS (Ethernet Routing Switch) was acquired by Extreme Networks in 2017;
+both brands use identical hardware and CLI.
 
 Implements only the methods used by device-discovery:
   get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
 
-Uses ntc-templates 9.x for structured parsing wherever templates are available
-(sys-info, interface name, vlan); falls back to regex for commands without
-templates (interface status, IPv4/IPv6 addresses).
+Uses ntc-templates with platform ``avaya_ers`` (templates only exist under the
+Avaya name) and Netmiko device_type ``extreme_ers`` (the current unified
+driver that supports both Avaya- and Extreme-branded hardware).
 """
 
 import logging
@@ -135,8 +138,8 @@ def _mask_to_prefix(mask: str) -> int:
     return sum(bin(int(octet)).count("1") for octet in mask.split("."))
 
 
-class AvayaERSDriver(_napalm_base.NetworkDriver):
-    """Avaya ERS NAPALM driver (read-only subset for device-discovery)."""
+class ERSDriver(_napalm_base.NetworkDriver):
+    """Avaya/Extreme ERS NAPALM driver (read-only subset for device-discovery)."""
 
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
         """Initialise driver parameters."""
@@ -155,7 +158,7 @@ class AvayaERSDriver(_napalm_base.NetworkDriver):
     def open(self):
         """Open an SSH connection to the device via Netmiko."""
         self.device = self._netmiko_open(
-            "avaya_ers", netmiko_optional_args=self.netmiko_optional_args
+            "extreme_ers", netmiko_optional_args=self.netmiko_optional_args
         )
 
     def close(self):
@@ -196,7 +199,9 @@ class AvayaERSDriver(_napalm_base.NetworkDriver):
             logger.warning("Failed to parse 'show sys-info'; returning default facts")
         else:
             row = parsed[0]
-            facts["uptime"] = _parse_uptime(row.get("sys_up_time", ""))
+            uptime_str = row.get("sys_up_time", "")
+            if uptime_str:
+                facts["uptime"] = _parse_uptime(uptime_str)
             facts["hostname"] = row.get("sys_name", "Unknown") or "Unknown"
             facts["serial_number"] = row.get("serial_number", "Unknown") or "Unknown"
             facts["os_version"] = row.get("operational_software", "Unknown") or "Unknown"
