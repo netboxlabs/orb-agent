@@ -10,6 +10,8 @@ import (
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -42,7 +44,7 @@ type traceServer struct {
 func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
 	pub := s.bridge.GetPublisher()
 	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
+		return nil, status.Error(codes.Unavailable, "MQTT publisher not ready, retry later")
 	}
 
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceSpans))
@@ -84,7 +86,7 @@ type metricsServer struct {
 func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
 	pub := s.bridge.GetPublisher()
 	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
+		return nil, status.Error(codes.Unavailable, "MQTT publisher not ready, retry later")
 	}
 
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceMetrics))
@@ -126,7 +128,7 @@ type logsServer struct {
 func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
 	pub := s.bridge.GetPublisher()
 	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
+		return nil, status.Error(codes.Unavailable, "MQTT publisher not ready, retry later")
 	}
 	if s.isIngestRequest(req) {
 		repo := s.bridge.GetPolicyRepo()
