@@ -2,6 +2,7 @@ package configmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -77,9 +78,7 @@ func newFleetConfigManagerWithConnection(logger *slog.Logger, pMgr policymgr.Pol
 }
 
 // Start initializes and starts the Fleet configuration manager
-func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
-	ctx := context.Background()
-
+func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, err = config.ResolveEnv(cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL)
 	if err != nil {
@@ -98,61 +97,13 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		"token_url", cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
 		"client_id", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID)
 
-	// call the token url to get the token
 	timeout := 30 * time.Second
 	if cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout != nil && *cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout > 0 {
 		timeout = time.Duration(*cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout) * time.Second
 	}
-	token, err := fleetManager.authTokenManager.GetToken(ctx,
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.SkipTLS, timeout,
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
-	if err != nil {
-		return err
-	}
 
-	jwtClaims, err := fleet.ParseJWTClaims(token.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to parse JWT claims: %w", err)
-	}
-
-	// generate topics from JWT claims and config agent_id using hardcoded templates
-	topics, err := fleet.GenerateTopicsFromTemplate(jwtClaims)
-	if err != nil {
-		return fmt.Errorf("failed to generate topics: %w", err)
-	}
-
-	fleetManager.logger.Info("generated topics from JWT",
-		"heartbeat_topic", topics.Heartbeat,
-		"capabilities_topic", topics.Capabilities,
-		"inbox_topic", topics.Inbox,
-		"outbox_topic", topics.Outbox,
-		"otlp_topic", topics.Ingest,
-		"telemetry_topic", topics.Telemetry)
-
-	connectionDetails := fleet.ConnectionDetails{
-		MQTTURL:  jwtClaims.MqttURL,
-		Token:    token.AccessToken,
-		AgentID:  jwtClaims.AgentID,
-		Topics:   *topics,
-		ClientID: cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
-		Zone:     jwtClaims.Zone,
-	}
-	configYaml, err := fleetManager.configToSafeString(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to convert config to safe string: %w", err)
-	}
-
-	// Store connection state for reconnection
-	fleetManager.config = cfg
-	fleetManager.backends = backends
-	fleetManager.labels = cfg.OrbAgent.Labels
-	fleetManager.configYaml = string(configYaml)
-	fleetManager.connectionDetails = connectionDetails
-
-	// Start OTLP bridge server early, before MQTT connection
-	// This ensures port binding errors are detected immediately and propagate to fail the agent startup
+	// Start OTLP bridge server early, before MQTT connection.
+	// Port binding errors are local/permanent so we fail immediately.
 	grpcPort := 4317
 	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
 		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
@@ -175,9 +126,71 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	// a single monitorCancel() call.
 	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
 
-	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
-	if err != nil {
-		return err
+	// Register OnReadyHook before the retry loop so it fires on the initial
+	// connection (OnConnectionUp runs synchronously before Connect returns).
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
+			return
+		}
+
+		// Create publisher adapter and bind to bridge
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
+	})
+
+	// Retry loop for token fetch + MQTT connect. These depend on external services
+	// (token endpoint, MQTT broker) that may not be up yet at agent startup.
+	// AuthError (401/403) is permanent — bad credentials won't be fixed by retrying.
+	const maxStartupRetries = 0 // 0 = unlimited; agent retries until ctx is cancelled
+	startupBackoff := 5 * time.Second
+	const maxStartupBackoff = 2 * time.Minute
+	var attempt int
+	for {
+		attempt++
+		startupErr := fleetManager.startConnection(ctx, cfg, backends, timeout)
+		if startupErr == nil {
+			break
+		}
+
+		// Non-retriable: bad credentials
+		var authErr *fleet.AuthError
+		if errors.As(startupErr, &authErr) {
+			_ = fleetManager.otlpBridge.Stop(context.Background())
+			return fmt.Errorf("startup aborted, credentials rejected: %w", startupErr)
+		}
+
+		if maxStartupRetries > 0 && attempt >= maxStartupRetries {
+			_ = fleetManager.otlpBridge.Stop(context.Background())
+			return fmt.Errorf("startup failed after %d attempts: %w", attempt, startupErr)
+		}
+
+		// Defense-in-depth: tear down any lingering connection manager from the
+		// failed attempt before retrying. Connect() has its own guard, but an
+		// explicit teardown here ensures no leaked manager can reconnect in the
+		// background. Disconnect is nil-safe.
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = fleetManager.connection.Disconnect(disconnectCtx, "")
+		disconnectCancel()
+
+		fleetManager.logger.Warn("startup attempt failed, retrying",
+			"attempt", attempt,
+			"error", startupErr,
+			"retry_in", startupBackoff)
+
+		select {
+		case <-ctx.Done():
+			_ = fleetManager.otlpBridge.Stop(context.Background())
+			return fmt.Errorf("startup cancelled: %w", ctx.Err())
+		case <-time.After(startupBackoff):
+		}
+
+		startupBackoff = min(startupBackoff*2, maxStartupBackoff)
 	}
 	fleetManager.connected.Store(true)
 
@@ -220,24 +233,6 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		}
 	}()
 
-	// Register MQTTOnReadyHook to bind publisher and topics to the OTLP bridge
-	// The bridge server is already started earlier in Start(), so we only need to bind MQTT here
-	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
-		if fleetManager.otlpBridge == nil {
-			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
-			return
-		}
-
-		// Create publisher adapter and bind to bridge
-		pub := otlpbridge.NewCMAdapterPublisher(cm)
-		fleetManager.otlpBridge.SetPublisher(pub)
-		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
-		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
-		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
-			slog.String("ingest_topic", topics.Ingest),
-			slog.String("telemetry_topic", topics.Telemetry))
-	})
-
 	// Start goroutine to handle reconnect requests (JWT refresh)
 	fleetManager.goroutinesWg.Add(1)
 	go func() {
@@ -253,6 +248,66 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	}()
 
 	return nil
+}
+
+// startConnection performs the token fetch, JWT parse, topic generation, and MQTT connect.
+// It is called by Start's retry loop. Transient failures (network, broker down) return a
+// plain error that the caller retries; permanent failures (bad credentials) return an
+// *fleet.AuthError that the caller surfaces immediately.
+//
+// ctx is used for short-lived startup work (token fetch, JWT parse). The MQTT connection
+// itself uses fleetManager.monitorCtx so it outlives the startup context.
+func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg config.Config, backends map[string]backend.Backend, timeout time.Duration) error {
+	token, err := fleetManager.authTokenManager.GetToken(ctx,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.SkipTLS, timeout,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientSecret)
+	if err != nil {
+		return err
+	}
+
+	jwtClaims, err := fleet.ParseJWTClaims(token.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
+	topics, err := fleet.GenerateTopicsFromTemplate(jwtClaims)
+	if err != nil {
+		return fmt.Errorf("failed to generate topics: %w", err)
+	}
+
+	fleetManager.logger.Info("generated topics from JWT",
+		"heartbeat_topic", topics.Heartbeat,
+		"capabilities_topic", topics.Capabilities,
+		"inbox_topic", topics.Inbox,
+		"outbox_topic", topics.Outbox,
+		"otlp_topic", topics.Ingest,
+		"telemetry_topic", topics.Telemetry)
+
+	connectionDetails := fleet.ConnectionDetails{
+		MQTTURL:  jwtClaims.MqttURL,
+		Token:    token.AccessToken,
+		AgentID:  jwtClaims.AgentID,
+		Topics:   *topics,
+		ClientID: cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
+		Zone:     jwtClaims.Zone,
+	}
+	configYaml, err := fleetManager.configToSafeString(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to convert config to safe string: %w", err)
+	}
+
+	// Store connection state for reconnection
+	fleetManager.config = cfg
+	fleetManager.backends = backends
+	fleetManager.labels = cfg.OrbAgent.Labels
+	fleetManager.configYaml = string(configYaml)
+	fleetManager.connectionDetails = connectionDetails
+
+	// Use monitorCtx for the MQTT connection so it outlives the caller's startup
+	// context. monitorCtx is cancelled by Stop(), which is the correct lifecycle.
+	return fleetManager.connection.Connect(fleetManager.monitorCtx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 }
 
 // runReconnectWorker processes signals from reconnectChan, retrying token refresh with exponential

@@ -11,7 +11,7 @@ import (
 
 // Manager is the interface for configuration manager
 type Manager interface {
-	Start(cfg config.Config, backends map[string]backend.Backend) error
+	Start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error
 	GetContext(ctx context.Context) context.Context
 	Stop(ctx context.Context) error
 }

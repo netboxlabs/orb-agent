@@ -20,6 +20,17 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
+// AuthError indicates a non-retriable authentication failure (e.g. HTTP 401/403).
+// Callers should not retry when they receive this error — the credentials are wrong.
+type AuthError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *AuthError) Error() string {
+	return fmt.Sprintf("authentication failed (HTTP %d)", e.StatusCode)
+}
+
 // AuthTokenManager manages auth tokens
 type AuthTokenManager struct {
 	mu             sync.RWMutex
@@ -91,29 +102,36 @@ func (fleetManager *AuthTokenManager) GetToken(ctx context.Context, tokenURL str
 
 	fleetManager.logger.Debug("sending token request", "url", tokenURL, "data", redact.SensitiveData(data), "client_id", clientID)
 
+	// Note that errors below are logged with Warn level, but returned as errors to allow callers
+	// to distinguish between transient errors (e.g. network issues) and auth failures
+	// (e.g. invalid credentials). The caller can choose to retry on transient errors,
+	// but should not retry on auth failures without fixing the credentials.
 	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
-		fleetManager.logger.Error("failed to send token request", "error", err, "token_url", tokenURL)
+		fleetManager.logger.Warn("failed to send token request", "error", err, "token_url", tokenURL)
 		return nil, fmt.Errorf("failed to send request to %s: %w", tokenURL, err)
 	}
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
-			fleetManager.logger.Error("failed to close response body", "error", err)
+			fleetManager.logger.Warn("failed to close response body", "error", err)
 		}
 	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fleetManager.logger.Error("failed to read response body", "error", err, "status_code", resp.StatusCode)
+		fleetManager.logger.Warn("failed to read response body", "error", err, "status_code", resp.StatusCode)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		fleetManager.logger.Error("token request failed",
+		fleetManager.logger.Warn("token request failed",
 			"status_code", resp.StatusCode,
 			"response", string(body),
 			"token_url", tokenURL,
 			"client_id", clientID)
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, &AuthError{StatusCode: resp.StatusCode, Body: string(body)}
+		}
 		return nil, fmt.Errorf("token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -195,6 +213,26 @@ func (fleetManager *AuthTokenManager) RefreshToken(ctx context.Context) (*TokenR
 
 	fleetManager.logger.Debug("refreshing JWT token")
 	return fleetManager.GetToken(ctx, tokenURL, skipTLS, timeout, clientID, clientSecret)
+}
+
+// GetFreshToken returns the cached access token if it is still valid, otherwise
+// performs an HTTP refresh and returns the new token. This avoids redundant HTTP
+// calls when the token monitor has already refreshed proactively.
+func (fleetManager *AuthTokenManager) GetFreshToken(ctx context.Context) (string, error) {
+	fleetManager.mu.RLock()
+	token := fleetManager.lastToken
+	expired := fleetManager.lastToken == nil || time.Now().After(fleetManager.tokenExpiresAt)
+	fleetManager.mu.RUnlock()
+
+	if !expired {
+		return token.AccessToken, nil
+	}
+
+	resp, err := fleetManager.RefreshToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	return resp.AccessToken, nil
 }
 
 // IsTokenExpired checks if the current token is expired or will expire soon

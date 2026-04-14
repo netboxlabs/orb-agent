@@ -1,6 +1,7 @@
 package configmgr_test
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -137,7 +138,7 @@ backend1:
 			payload.Action == "manage"
 	})).Return()
 
-	err = gc.Start(cfg, backends)
+	err = gc.Start(context.Background(), cfg, backends)
 	require.NoError(t, err)
 }
 
@@ -211,7 +212,7 @@ backend1:
 		"backend1": &mockBackend{name: "backend1"},
 	}
 
-	err = gc.Start(cfg, backends)
+	err = gc.Start(context.Background(), cfg, backends)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no policies match the selector")
 	pMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
@@ -317,7 +318,7 @@ backend1:
 		return p.Backend == "backend1" && p.Action == "manage"
 	})).Return()
 
-	err = gc.Start(cfg, backends)
+	err = gc.Start(context.Background(), cfg, backends)
 	require.NoError(t, err, "Start() via system git fallback should succeed")
 	pMgr.AssertCalled(t, "ManagePolicy", mock.Anything)
 }

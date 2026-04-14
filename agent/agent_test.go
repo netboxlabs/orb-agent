@@ -20,7 +20,7 @@ type mockConfigManager struct {
 	stopCalled bool
 }
 
-func (m *mockConfigManager) Start(_ config.Config, _ map[string]backend.Backend) error {
+func (m *mockConfigManager) Start(_ context.Context, _ config.Config, _ map[string]backend.Backend) error {
 	return nil
 }
 func (m *mockConfigManager) GetContext(ctx context.Context) context.Context { return ctx }
@@ -114,19 +114,15 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 	orbAgent := agent.(*orbAgent)
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start will fail when trying to start backends, but we can check the config before that
 	err = orbAgent.Start(ctx, cancel)
-	// We expect an error because there are no actual backends configured
-	// But the important thing is that the config was modified
-	require.Error(t, err)
+	require.NoError(t, err)
 
-	// Verify the config was modified by checking backendsCommon which is set in startBackends
-	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	// Default port is 4317
+	// Verify the OTLP gRPC URL was overridden before backends started
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
@@ -157,16 +153,14 @@ func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
 	orbAgent := agent.(*orbAgent)
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	err = orbAgent.Start(ctx, cancel)
-	require.Error(t, err) // Expected to fail when starting backends
+	require.NoError(t, err)
 
-	// Verify the config was modified by checking backendsCommon which is set in startBackends
-	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	// Default port is 4317
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
@@ -193,16 +187,16 @@ func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
 	orbAgent := agent.(*orbAgent)
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	err = orbAgent.Start(ctx, cancel)
-	require.Error(t, err) // Expected to fail when starting backends
+	require.NoError(t, err)
 
-	// Verify the config was modified by checking backendsCommon which is set in startBackends
-	// The OTLP configuration happens before startBackends, so backendsCommon should have the updated value
-	// Default port is 4317
+	// The OTLP override creates the "common" backend with the grpc URL before
+	// startBackends extracts it into backendsCommon (and deletes the key).
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
@@ -277,14 +271,16 @@ func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 	orbAgent := agent.(*orbAgent)
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	err = orbAgent.Start(ctx, cancel)
-	require.Error(t, err) // Expected to fail when starting backends
+	require.NoError(t, err)
 
-	// Verify the config was modified with the custom port
-	expectedURL := "grpc://localhost:9999"
-	assert.Equal(t, expectedURL, orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should use configured port")
+	// The OTLP override runs before startBackends, which extracts common config
+	// into backendsCommon and then deletes the "common" key from the map.
+	// Verify the extracted config has the custom port.
+	assert.Equal(t, "grpc://localhost:9999", orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should use configured port")
 }
