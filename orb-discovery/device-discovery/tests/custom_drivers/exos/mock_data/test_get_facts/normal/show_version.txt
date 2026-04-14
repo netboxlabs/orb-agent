@@ -1,0 +1,19 @@
+Switch      : SummitX 48t (800472-00-14) Rev 14.0   Boot PROM Version v12.4.0.9
+System MAC  : 00:17:95:97:30:00
+System Type : X480-48t
+SysName     : exos-core-01
+SysLocation : Server Room
+SysContact  : admin@example.com
+SysSerial   : 1516G-00123
+Recovery Mode: None
+MSM/MM      : MSM-A (Master) - Up 3 days 4 hours 22 minutes ago, using active flash
+PowerSupply : Internal-PS (present, not powered)
+
+Image   : Version 22.6.1.4 build by release-manager
+    Build date  : Tue Nov 01 13:23:21 PDT 2022
+    Label       : Release_22.6.1.4
+    Machine     : arm-powerpc
+    Name        : BootROM 1.9.10.25; Rescue 22.6.1.4; MSS 22.6.1.4
+BootROM : Version 1.9.10.25
+          Build date: Fri Oct 09 09:52:00 PDT 2015
+          Label: Release_1.9.10.25

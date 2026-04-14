@@ -1,0 +1,16 @@
+{
+  "hostname": "exos-core-01",
+  "vendor": "Extreme",
+  "model": "X480-48t",
+  "os_version": "22.6.1.4",
+  "serial_number": "1516G-00123",
+  "uptime": 274920.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "5"
+  ]
+}
