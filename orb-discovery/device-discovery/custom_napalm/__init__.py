@@ -18,6 +18,7 @@ from custom_napalm.panos import PANOSDriver
 from custom_napalm.panos_ssh import PANOSSHDriver
 from custom_napalm.ros import ROSDriver
 from custom_napalm.viptela_ssh import ViptelaSSHDriver
+from custom_napalm.vsp import VSPDriver
 from custom_napalm.wlc import WLCDriver
 
 __all__ = [
@@ -39,5 +40,6 @@ __all__ = [
     "PANOSDriver",
     "PANOSSHDriver",
     "ViptelaSSHDriver",
+    "VSPDriver",
     "WLCDriver",
 ]

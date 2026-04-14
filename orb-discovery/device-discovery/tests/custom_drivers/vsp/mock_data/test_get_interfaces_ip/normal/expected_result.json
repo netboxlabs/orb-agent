@@ -1,0 +1,23 @@
+{
+  "Vlan1": {
+    "ipv4": {
+      "10.0.0.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Vlan10": {
+    "ipv4": {
+      "192.168.10.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Loopback1": {
+    "ipv4": {
+      "1.1.1.1": {
+        "prefix_length": 32
+      }
+    }
+  }
+}

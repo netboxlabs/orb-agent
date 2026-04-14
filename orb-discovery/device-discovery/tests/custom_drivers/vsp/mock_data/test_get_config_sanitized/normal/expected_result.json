@@ -1,0 +1,5 @@
+{
+  "running": "! Version VOSS8K.6.0.1.2.GA\n!\n! Avaya Virtual Services Platform 8284XSQ\n!\nusername admin level 15 password <redacted>\nenable password level 2 <redacted>\n!\nsnmp-server community \"<redacted>\" ro\nsnmp-server community \"<redacted>\" rw\nsnmp-server community <redacted> ro\n!\nvlan create 1 name Default type port\nvlan create 10 name Management type port\n!\ninterface vlan 1\n  ip address 10.0.0.1 255.255.255.0\n  exit\n!\nend\n",
+  "candidate": "",
+  "startup": "! Version VOSS8K.6.0.1.2.GA\n!\n! Avaya Virtual Services Platform 8284XSQ\n!\nusername admin level 15 password <redacted>\nenable password level 2 <redacted>\n!\nsnmp-server community \"<redacted>\" ro\nsnmp-server community \"<redacted>\" rw\nsnmp-server community <redacted> ro\n!\nvlan create 1 name Default type port\nvlan create 10 name Management type port\n!\ninterface vlan 1\n  ip address 10.0.0.1 255.255.255.0\n  exit\n!\nend\n"
+}

@@ -1,0 +1,16 @@
+{
+  "hostname": "vspsw01",
+  "vendor": "Extreme",
+  "model": "VSP 8K",
+  "os_version": "VOSS8K.6.0.1.2.GA",
+  "serial_number": "1DB4924B6FE6",
+  "uptime": 93784.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1/1",
+    "1/2",
+    "1/3",
+    "1/4",
+    "1/49"
+  ]
+}

@@ -1,0 +1,55 @@
+================================================================================
+                               Port Status
+================================================================================
+
+Port: 1/1
+================================================================================
+Admin Status:            Enable
+Oper Status:             Up (Link Up)
+Auto-Negotiate:          true
+Speed:                   1 Gbps
+Duplex:                  Full-Duplex
+MTU:                     9600
+MAC Address:             00-11-22-33-44-55
+Description:             Uplink-to-Core
+Flow Control:            Disabled
+================================================================================
+
+Port: 1/2
+================================================================================
+Admin Status:            Enable
+Oper Status:             Up (Link Up)
+Auto-Negotiate:          true
+Speed:                   1 Gbps
+Duplex:                  Full-Duplex
+MTU:                     9600
+MAC Address:             00-11-22-33-44-56
+Description:             Server-Port
+Flow Control:            Disabled
+================================================================================
+
+Port: 1/3
+================================================================================
+Admin Status:            Enable
+Oper Status:             Down (Link Down)
+Auto-Negotiate:          true
+Speed:                   100 Mbps
+Duplex:                  Half-Duplex
+MTU:                     9600
+MAC Address:             00-11-22-33-44-57
+Description:             Desktop-1
+Flow Control:            Disabled
+================================================================================
+
+Port: 1/4
+================================================================================
+Admin Status:            Disable
+Oper Status:             Down (Link Down)
+Auto-Negotiate:          true
+Speed:                   100 Mbps
+Duplex:                  Half-Duplex
+MTU:                     9600
+MAC Address:             00-11-22-33-44-58
+Description:             Desktop-2
+Flow Control:            Disabled
+================================================================================
