@@ -195,7 +195,6 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 	// Reinitialize dispatch channels after validation and teardown.
 	connection.dispatchQueue = make(chan dispatchJob, 100)
 	connection.dispatchWorkerDone = make(chan struct{})
-	connection.shuttingDown.Store(false)
 
 	// Store topics for hook callbacks
 	connection.connectionTopics = details.Topics
@@ -493,8 +492,6 @@ func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic
 	if connection.connectionManager == nil {
 		return nil
 	}
-	// Set shutdown flag first to prevent new messages from being enqueued
-	connection.shuttingDown.Store(true)
 
 	// Only attempt the offline heartbeat if we have a real topic; callers like
 	// the startup retry loop pass "" when no session was ever established.

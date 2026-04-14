@@ -130,14 +130,6 @@ func (s *BridgeServer) SetTelemetryTopic(topic string) {
 	s.mu.Unlock()
 }
 
-// ClearPublisher clears the publisher, causing the writer goroutine to retry
-// with backoff until a new publisher is set via SetPublisher.
-func (s *BridgeServer) ClearPublisher() {
-	s.mu.Lock()
-	s.publisher = nil
-	s.mu.Unlock()
-}
-
 // writer is the single goroutine that consumes from msgCh and publishes.
 func (s *BridgeServer) writer() {
 	for {
