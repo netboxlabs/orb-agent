@@ -113,3 +113,51 @@ func TestBridgeServer_Start_ErrorMessageFormat(t *testing.T) {
 		strings.Contains(errorMsg, "use") || strings.Contains(errorMsg, "bind"),
 		"error message should mention port in use or bind failure: %s", err.Error())
 }
+
+func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := BridgeConfig{
+		ListenAddr:      ":0",
+		Encoding:        "json",
+		MaxPendingQueue: 5,
+	}
+	bridge, err := NewBridgeServer(cfg, nil, logger)
+	require.NoError(t, err)
+	defer func() { _ = bridge.Stop(context.Background()) }()
+
+	ctx := context.Background()
+
+	// Fill the channel buffer.
+	for i := 0; i < 5; i++ {
+		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))))
+	}
+
+	// Beyond the limit — should return ResourceExhausted.
+	// The writer goroutine may have pulled at most 1 message from the channel,
+	// so we verify that most attempts beyond the limit are rejected.
+	var rejected int
+	for i := 5; i < 10; i++ {
+		if err := bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))); err != nil {
+			assert.Contains(t, err.Error(), "queue is full")
+			rejected++
+		}
+	}
+	assert.GreaterOrEqual(t, rejected, 4, "most messages beyond the limit should be rejected")
+}
+
+func TestBridgeServer_Enqueue_DefaultQueueLimit(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	cfg := BridgeConfig{
+		ListenAddr: ":0",
+		Encoding:   "json",
+		// MaxPendingQueue = 0 → should use default
+	}
+	bridge, err := NewBridgeServer(cfg, nil, logger)
+	require.NoError(t, err)
+
+	defer func() { _ = bridge.Stop(context.Background()) }()
+
+	assert.Equal(t, defaultMaxPendingQueue, cap(bridge.msgCh), "should use default when MaxPendingQueue is 0")
+}
