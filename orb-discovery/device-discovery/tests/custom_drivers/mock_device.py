@@ -155,6 +155,54 @@ class FakePyaoscxSession:
         return self._MockResponse(text)
 
 
+class FakeNetconfConn:
+    """
+    Mock ncclient manager for NETCONF-based driver unit tests.
+
+    Each test method has its own mock_dir. ``get()`` reads ``response.xml`` from
+    that directory; ``get_config(source)`` reads ``{source}_config.xml``
+    (e.g. ``running_config.xml``, ``candidate_config.xml``).
+
+    Examples:
+        test_get_facts/normal/response.xml
+        test_get_interfaces/normal/response.xml
+        test_get_interfaces_ip/normal/response.xml
+        test_get_config/normal/running_config.xml
+        test_get_config_sanitized/normal/running_config.xml
+
+    """
+
+    class _Response:
+        """Minimal ncclient reply look-alike (exposes .data_xml as a string)."""
+
+        def __init__(self, xml: str) -> None:
+            self.data_xml = xml
+
+    def __init__(self, mock_dir: Path) -> None:
+        """Store the directory containing mock XML response files."""
+        self._mock_dir = mock_dir
+
+    @property
+    def server_capabilities(self) -> list[str]:
+        """Return empty capabilities — driver treats this as a modern (non-R19) device."""
+        return []
+
+    def get(self, filter=None, with_defaults=None, **kwargs) -> "_Response":
+        """Return ``response.xml`` from the mock directory."""
+        path = self._mock_dir / "response.xml"
+        xml = path.read_text(encoding="utf-8") if path.exists() else "<data/>"
+        return self._Response(xml)
+
+    def get_config(self, source: str = "running", **kwargs) -> "_Response":
+        """Return ``{source}_config.xml`` from the mock directory."""
+        path = self._mock_dir / f"{source}_config.xml"
+        xml = path.read_text(encoding="utf-8") if path.exists() else "<data/>"
+        return self._Response(xml)
+
+    def close_session(self) -> None:
+        """No-op stub."""
+
+
 class FakeRestDevice:
     """
     Drop-in replacement for _ASARest in Cisco ASA driver unit tests.

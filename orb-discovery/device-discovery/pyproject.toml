@@ -42,6 +42,8 @@ dependencies = [
     "pan-python~=0.25",
     "pyaoscx~=2.6",
     "xmltodict~=1.0",
+    "ncclient~=0.7",
+    "lxml~=6.0",
 ]
 
 [project.optional-dependencies]

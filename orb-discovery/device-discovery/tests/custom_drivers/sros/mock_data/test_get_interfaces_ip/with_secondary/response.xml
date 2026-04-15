@@ -1,0 +1,24 @@
+<data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <configure xmlns="urn:nokia.com:sros:ns:yang:sr:conf">
+        <router>
+            <router-name>Base</router-name>
+            <interface>
+                <interface-name>uplink</interface-name>
+                <ipv4>
+                    <primary>
+                        <address>10.0.0.1</address>
+                        <prefix-length>24</prefix-length>
+                    </primary>
+                    <secondary>
+                        <address>10.0.1.1</address>
+                        <prefix-length>24</prefix-length>
+                    </secondary>
+                    <secondary>
+                        <address>10.0.2.1</address>
+                        <prefix-length>24</prefix-length>
+                    </secondary>
+                </ipv4>
+            </interface>
+        </router>
+    </configure>
+</data>

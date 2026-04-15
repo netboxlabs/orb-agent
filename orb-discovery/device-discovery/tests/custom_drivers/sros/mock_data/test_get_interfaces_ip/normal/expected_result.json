@@ -1,0 +1,23 @@
+{
+  "system": {
+    "ipv4": {
+      "1.1.1.1": {
+        "prefix_length": 32
+      }
+    }
+  },
+  "vlan901": {
+    "ipv6": {
+      "2400:cb00:133:900::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "2100/to_Network": {
+    "ipv4": {
+      "172.16.1.1": {
+        "prefix_length": 24
+      }
+    }
+  }
+}
