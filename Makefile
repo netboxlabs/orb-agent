@@ -43,15 +43,13 @@ install-dev-tools:
 deps:
 	@go mod tidy
 
-GO_BUILD_TAGS := $(if $(BUILD_TAGS),-tags "$(BUILD_TAGS)")
-
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" $(GO_BUILD_TAGS) -o ${BUILD_DIR}/orb-agent cmd/main.go
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" -o ${BUILD_DIR}/orb-agent cmd/main.go
 
 .PHONY: test
 test:
-	@go test $(GO_BUILD_TAGS) -race ./...
+	@go test -race ./...
 
 .PHONY: test-timed
 test-timed:
@@ -69,7 +67,7 @@ test-timed:
 .PHONY: test-coverage
 test-coverage:
 	@mkdir -p .coverage
-	@go test $(GO_BUILD_TAGS) -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd" | tparse -format=markdown > .coverage/test-report.md
+	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd" | tparse -format=markdown > .coverage/test-report.md
 	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep total | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 
@@ -86,7 +84,6 @@ agent:
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
-	  --build-arg BUILD_TAGS=$(BUILD_TAGS) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
@@ -97,7 +94,6 @@ agent_fast:
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
-	  --build-arg BUILD_TAGS=$(BUILD_TAGS) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
