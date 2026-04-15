@@ -215,6 +215,10 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 				details := fleetManager.connectionDetails
 				fleetManager.connMu.RUnlock()
 
+				if fleetManager.otlpBridge != nil {
+					fleetManager.otlpBridge.ClearPublisher()
+				}
+
 				// Disconnect first — use monitorCtx so Stop() cancellation aborts in-flight resets.
 				disconnectCtx, cancel := context.WithTimeout(fleetManager.monitorCtx, timeout)
 				err := fleetManager.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
@@ -357,6 +361,9 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			fleetManager.connMu.RLock()
 			heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
 			fleetManager.connMu.RUnlock()
+			if fleetManager.otlpBridge != nil {
+				fleetManager.otlpBridge.ClearPublisher()
+			}
 			disconnectCtx, disconnectCancel := context.WithTimeout(ctx, timeout)
 			if err := fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic); err != nil {
 				fleetManager.logger.Error("failed to disconnect after exhausted retries", "error", err)
@@ -457,6 +464,14 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 	fleetManager.connMu.Lock()
 	fleetManager.connectionDetails = newConnectionDetails
 	fleetManager.connMu.Unlock()
+
+	// Clear the OTLP bridge publisher before tearing down the old MQTT connection
+	// so the writer goroutine stops publishing into a dead connection manager and
+	// instead waits (without consuming retry budget) for the OnReadyHook to bind
+	// a fresh publisher after reconnect.
+	if fleetManager.otlpBridge != nil {
+		fleetManager.otlpBridge.ClearPublisher()
+	}
 
 	// Reconnect with new token
 	err = fleetManager.connection.Reconnect(ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)
