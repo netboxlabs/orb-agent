@@ -1,4 +1,4 @@
-"""Pytest config for HP ProCurve driver tests."""
+"""Pytest config for ProCurve driver tests."""
 
 from pathlib import Path
 

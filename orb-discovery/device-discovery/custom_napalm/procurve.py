@@ -1,12 +1,16 @@
 # Copyright 2026 NetBox Labs Inc
 # Based on napalm-hp-procurve (Apache-2.0): https://github.com/napalm-automation-community/napalm-hp-procurve
 """
-Custom HP ProCurve NAPALM driver.
+Custom ProCurve NAPALM driver.
+
+Covers HP ProCurve and Aruba ProCurve switches — both brands map to the same
+Netmiko device type (``aruba_procurve``) and the same ntc-templates platform
+(``hp_procurve``).  Register as driver ``procurve`` in policy YAML.
 
 Implements only the methods used by device-discovery:
   get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
 
-Uses Netmiko (hp_procurve device type) and ntc-templates for structured
+Uses Netmiko (aruba_procurve device type) and ntc-templates for structured
 parsing wherever templates are available; falls back to regex for commands
 without templates (uptime, model).
 """
@@ -23,7 +27,7 @@ from ntc_templates.parse import parse_output
 logger = logging.getLogger(__name__)
 
 # --- config sanitization ---
-# HP ProCurve: "password manager [sha1] <hash>" / "password operator [sha1] <hash>"
+# HP/Aruba ProCurve: "password manager [sha1] <hash>" / "password operator [sha1] <hash>"
 # Redact the full line after "password manager/operator" (algorithm + hash)
 _PASSWORD_RE = re.compile(r"(password\s+(?:manager|operator))\s+.*", re.IGNORECASE)
 # SNMP community string: quoted ("public") or unquoted (public)
@@ -54,7 +58,7 @@ def _parse_uptime(uptime_str: str) -> float:
     """
     Convert a ProCurve 'show uptime' string (d:h:m:s) to total seconds.
 
-    The `show uptime` command on HP ProCurve returns output like::
+    The `show uptime` command on HP/Aruba ProCurve returns output like::
 
         0:00:00:42
 
@@ -124,8 +128,18 @@ def _strip_config_header(text: str) -> str:
     return "\n".join(lines[start:]).strip()
 
 
-class ProCurveDriver(_napalm_base.NetworkDriver):
-    """HP ProCurve NAPALM driver (read-only subset for device-discovery)."""
+# ntc-templates platform: hp_procurve template files match both hp_procurve
+# and aruba_procurve platform strings via the index regex (hp|aruba)_procurve.
+_NTC_PLATFORM = "hp_procurve"
+
+
+class ProcurveDriver(_napalm_base.NetworkDriver):
+    """
+    HP/Aruba ProCurve NAPALM driver (read-only subset for device-discovery).
+
+    Netmiko device type: aruba_procurve (covers both hp_procurve and
+    aruba_procurve hardware — they share the same SSH implementation).
+    """
 
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
         """Initialize the driver."""
@@ -144,7 +158,7 @@ class ProCurveDriver(_napalm_base.NetworkDriver):
     def open(self):
         """Open an SSH connection to the device via Netmiko."""
         self.device = self._netmiko_open(
-            "hp_procurve", netmiko_optional_args=self.netmiko_optional_args
+            "aruba_procurve", netmiko_optional_args=self.netmiko_optional_args
         )
 
     def close(self):
@@ -174,7 +188,7 @@ class ProCurveDriver(_napalm_base.NetworkDriver):
         # --- system info via ntc-template ---
         raw_system = self.device.send_command("show system")
         parsed_system = parse_output(
-            platform="hp_procurve", command="show system", data=raw_system
+            platform=_NTC_PLATFORM, command="show system", data=raw_system
         )
         if parsed_system:
             row = parsed_system[0]
@@ -182,13 +196,20 @@ class ProCurveDriver(_napalm_base.NetworkDriver):
             os_version = row.get("software_version") or "Unknown"
             serial_number = row.get("serial") or "Unknown"
 
-        # --- model: regex on the raw show system header (before "Status and Counters") ---
+        # --- model: try the show system header first (real devices emit a banner
+        #     like "HP ProCurve Switch 2650" before the "Status and Counters" block),
+        #     then fall back to "show tech" which contains a "Name: <model>" line ---
         header = raw_system.split("Status and Counters")[0]
         m = re.search(
             r"((?:HP\s+)?(?:ProCurve|Aruba)\s+(?:Switch\s+)?\S+)", header, re.IGNORECASE
         )
         if m:
             model = m.group(1).strip()
+        else:
+            raw_tech = self.device.send_command("show tech")
+            m2 = re.search(r"^Name:\s+(.+)$", raw_tech, re.MULTILINE)
+            if m2:
+                model = m2.group(1).strip()
 
         # --- uptime via show uptime (d:h:m:s) ---
         raw_uptime = self.device.send_command("show uptime")
@@ -197,7 +218,7 @@ class ProCurveDriver(_napalm_base.NetworkDriver):
         # --- interface list from show interfaces brief ---
         raw_brief = self.device.send_command("show interfaces brief")
         parsed_brief = parse_output(
-            platform="hp_procurve", command="show interfaces brief", data=raw_brief
+            platform=_NTC_PLATFORM, command="show interfaces brief", data=raw_brief
         )
         interface_list = [row["port"] for row in parsed_brief if row.get("port")]
 
@@ -219,7 +240,7 @@ class ProCurveDriver(_napalm_base.NetworkDriver):
             return {}
 
         parsed = parse_output(
-            platform="hp_procurve", command="show interfaces brief", data=raw
+            platform=_NTC_PLATFORM, command="show interfaces brief", data=raw
         )
         interfaces = {}
         for row in parsed:
@@ -244,7 +265,7 @@ class ProCurveDriver(_napalm_base.NetworkDriver):
         if not raw:
             return {}
 
-        parsed = parse_output(platform="hp_procurve", command="show ip", data=raw)
+        parsed = parse_output(platform=_NTC_PLATFORM, command="show ip", data=raw)
         interfaces_ip: dict = {}
         for row in parsed:
             vlan_name = row.get("vlan_name", "").strip()
@@ -295,7 +316,7 @@ class ProCurveDriver(_napalm_base.NetworkDriver):
         if not raw:
             return {}
 
-        parsed = parse_output(platform="hp_procurve", command="show vlans", data=raw)
+        parsed = parse_output(platform=_NTC_PLATFORM, command="show vlans", data=raw)
         vlans: dict = {}
         for row in parsed:
             vlan_id = row.get("vlan_id", "")
