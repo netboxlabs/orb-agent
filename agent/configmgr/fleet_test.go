@@ -1598,3 +1598,112 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 	assert.Equal(t, "refreshed-token", mockConn.LastConnectDetails().Token,
 		"reset goroutine should use the refreshed token, not the stale initial token")
 }
+
+// TestFleetConfigManager_ResetAfterProactiveRefresh_UsesRotatedCredentials challenges the
+// credential-rotation path added in this branch: after a proactive RefreshToken updates the
+// auth manager cache, a later reset-driven Connect should use the rotated token and MQTT URL.
+func TestFleetConfigManager_ResetAfterProactiveRefresh_UsesRotatedCredentials(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	initialJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          time.Now().Unix(),
+		"exp":          time.Now().Add(10 * time.Minute).Unix(),
+		"ext": map[string]any{
+			"orb:mqtt_url": "mqtt://broker-a.example.com:1883",
+		},
+	})
+	rotatedJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          time.Now().Add(1 * time.Minute).Unix(),
+		"exp":          time.Now().Add(20 * time.Minute).Unix(),
+		"ext": map[string]any{
+			"orb:mqtt_url": "mqtt://broker-b.example.com:1883",
+		},
+	})
+
+	requestCount := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+
+		token := initialJWT
+		mqttURL := "mqtt://broker-a.example.com:1883"
+		if requestCount > 1 {
+			token = rotatedJWT
+			mqttURL = "mqtt://broker-b.example.com:1883"
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(fleet.TokenResponse{
+			AccessToken: token,
+			MQTTURL:     mqttURL,
+			ExpiresIn:   3600,
+		})
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := mgr.authTokenManager.GetToken(ctx, server.URL, true, 10*time.Second, "test_client", "test_secret")
+	require.NoError(t, err)
+
+	initialClaims, err := fleet.ParseJWTClaims(initialJWT)
+	require.NoError(t, err)
+	initialTopics, err := fleet.GenerateTopicsFromTemplate(initialClaims)
+	require.NoError(t, err)
+
+	mgr.connectionDetails = fleet.ConnectionDetails{
+		MQTTURL:  initialClaims.MqttURL,
+		Token:    initialJWT,
+		AgentID:  initialClaims.AgentID,
+		Topics:   *initialTopics,
+		ClientID: "test_client",
+		Zone:     initialClaims.Zone,
+	}
+	mgr.backends = make(map[string]backend.Backend)
+	mgr.labels = map[string]string{"env": "test"}
+	mgr.configYaml = "initial-config"
+
+	// Simulate the new proactive monitor behavior: refresh the auth-manager cache
+	// without updating connectionDetails.
+	_, err = mgr.authTokenManager.RefreshToken(ctx)
+	require.NoError(t, err)
+
+	freshToken, err := mgr.authTokenManager.GetFreshToken(ctx)
+	require.NoError(t, err)
+	require.Equal(t, rotatedJWT, freshToken, "auth manager should hold the rotated token after proactive refresh")
+
+	timeout := 5 * time.Second
+	go func() {
+		for range mgr.resetChan {
+			mgr.connMu.RLock()
+			details := mgr.connectionDetails
+			mgr.connMu.RUnlock()
+
+			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
+			_ = mgr.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
+			cancel()
+			_ = mgr.connection.Connect(context.Background(), details, mgr.backends, mgr.labels, mgr.configYaml)
+		}
+	}()
+
+	mgr.resetChan <- struct{}{}
+
+	require.Eventually(t, func() bool {
+		return mockConn.ConnectCalled()
+	}, time.Second, 10*time.Millisecond, "Connect should have been called by the reset goroutine")
+
+	assert.Equal(t, rotatedJWT, mockConn.LastConnectDetails().Token,
+		"reset reconnect should use the rotated token cached by proactive refresh")
+	assert.Equal(t, "mqtt://broker-b.example.com:1883", mockConn.LastConnectDetails().MQTTURL,
+		"reset reconnect should use the rotated MQTT URL from the refreshed credentials")
+}
