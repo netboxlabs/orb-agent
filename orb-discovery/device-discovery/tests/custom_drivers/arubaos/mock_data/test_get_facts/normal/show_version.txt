@@ -1,0 +1,8 @@
+Image stamp:    /sw/code/build/yoda(rel_8.8.0.2-8.8.0.2_82685)
+                Jun 11 2021 15:30:00
+                82685
+                8.8.0.2-8.8.0.2
+Boot Image:     /dev/mtdblock5
+Boot ROM Version: 3.4.2.0
+Active Boot ROM: Primary
+

@@ -1,0 +1,5 @@
+{
+  "running": "hostname \"ARUBAOSS-SW01\"\n\ninterface 1\n   name \"Uplink\"\n   exit\n\ninterface 2\n   exit\n\ninterface A1\n   name \"Server\"\n   exit\n\nvlan 1\n   name \"DEFAULT_VLAN\"\n   ip address 10.1.1.1 255.255.255.0\n   exit\n\nvlan 10\n   name \"VLAN10\"\n   ip address 192.168.10.1 255.255.255.0\n   exit\n\nip default-gateway 10.1.1.254",
+  "candidate": "",
+  "startup": "hostname \"ARUBAOSS-SW01\""
+}
