@@ -1,0 +1,21 @@
+
+username admin privilege 15 password 7 abc123def456
+enable password 7 xyz789uvw012
+enable secret 5 $1$abc123secrethash
+!
+snmp-server community public ro
+snmp-server community private rw
+!
+radius-server host 10.1.1.100 key radius_secret_key
+tacacs-server host 10.1.1.200 key tacacs_secret_key
+!
+vlan database
+ vlan 10,100
+ exit
+!
+interface vlan 1
+ ip address 192.168.1.1 255.255.255.0
+!
+interface vlan 10
+ ip address 10.0.10.1 255.255.255.0
+!

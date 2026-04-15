@@ -1,0 +1,3 @@
+IP address and subnet mask:
+Vlan 1              192.168.1.1/24
+Vlan 10             10.0.10.1/16

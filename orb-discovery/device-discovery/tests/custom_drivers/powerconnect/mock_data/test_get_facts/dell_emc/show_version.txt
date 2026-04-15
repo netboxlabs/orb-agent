@@ -1,0 +1,10 @@
+System Description:        Dell EMC Networking N3048, 1.0, Linux 3.6.5-1
+System Up Time (days,hour:min:sec):  1,00:00:00
+System Contact:
+System Name:               switch02
+System Location:
+System Object ID:          1.3.6.1.4.1.674.10895.3048
+
+Unit ID  HW Version  SW Version     Serial Number
+--------  ----------  -------------  ------------
+ 1         A00         6.2.0.4        DLEMC001ABCD

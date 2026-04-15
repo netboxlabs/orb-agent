@@ -1,0 +1,22 @@
+{
+  "1": {
+    "name": "default",
+    "interfaces": [
+      "g1",
+      "g2",
+      "g3",
+      "g5"
+    ]
+  },
+  "10": {
+    "name": "MGMT",
+    "interfaces": [
+      "ch1",
+      "ch2"
+    ]
+  },
+  "200": {
+    "name": "ISOLATED",
+    "interfaces": []
+  }
+}

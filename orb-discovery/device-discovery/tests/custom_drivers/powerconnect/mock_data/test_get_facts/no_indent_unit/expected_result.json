@@ -1,0 +1,10 @@
+{
+  "hostname": "switch03",
+  "vendor": "Dell",
+  "model": "N2048",
+  "os_version": "10.5.2.4",
+  "serial_number": "NOINDENT001234",
+  "uptime": 1800.0,
+  "fqdn": "Unknown",
+  "interface_list": []
+}

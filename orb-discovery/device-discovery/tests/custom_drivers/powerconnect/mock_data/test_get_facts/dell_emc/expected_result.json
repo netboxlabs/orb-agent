@@ -1,0 +1,10 @@
+{
+  "hostname": "switch02",
+  "vendor": "Dell",
+  "model": "N3048",
+  "os_version": "6.2.0.4",
+  "serial_number": "DLEMC001ABCD",
+  "uptime": 86400.0,
+  "fqdn": "Unknown",
+  "interface_list": []
+}

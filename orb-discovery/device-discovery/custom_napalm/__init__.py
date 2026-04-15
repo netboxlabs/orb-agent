@@ -24,6 +24,7 @@ from custom_napalm.ipos import IPOSDriver
 from custom_napalm.netiron import NetIronDriver
 from custom_napalm.panos import PANOSDriver
 from custom_napalm.panos_ssh import PANOSSHDriver
+from custom_napalm.powerconnect import PowerConnectDriver
 from custom_napalm.procurve import ProcurveDriver
 from custom_napalm.ros import ROSDriver
 from custom_napalm.saos import SAOSDriver
@@ -58,6 +59,7 @@ __all__ = [
     "NetIronDriver",
     "PANOSDriver",
     "PANOSSHDriver",
+    "PowerConnectDriver",
     "ProcurveDriver",
     "ROSDriver",
     "SAOSDriver",

@@ -1,0 +1,20 @@
+{
+  "g1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "TO_SRV01",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "ch1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "UPLINK_LAG",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  }
+}
