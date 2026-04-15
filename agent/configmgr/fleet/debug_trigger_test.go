@@ -81,24 +81,19 @@ func TestDebugTrigger_ContextCancel(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	cancel()
-	time.Sleep(50 * time.Millisecond)
 
-	// After cancel, signals should not trigger RotateCredentials or LogCredentials.
-	_ = syscall.Kill(os.Getpid(), syscall.SIGUSR1)
+	// Give the trigger goroutine time to observe ctx cancellation and stop
+	// handling signals. Do not send SIGUSR1/SIGUSR2 after cancellation:
+	// once signal handling is stopped, those signals may revert to their
+	// default disposition and terminate the test process.
+	time.Sleep(50 * time.Millisecond)
 
 	select {
 	case <-dc.rotateCalled:
 		t.Fatal("RotateCredentials should not be called after context cancel")
-	case <-time.After(100 * time.Millisecond):
-		// expected: no call within timeout
-	}
-
-	_ = syscall.Kill(os.Getpid(), syscall.SIGUSR2)
-
-	select {
 	case <-dc.logCalled:
 		t.Fatal("LogCredentials should not be called after context cancel")
 	case <-time.After(100 * time.Millisecond):
-		// expected: no call within timeout
+		// expected: no calls within timeout after cancellation
 	}
 }
