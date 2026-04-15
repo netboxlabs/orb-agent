@@ -1,0 +1,5 @@
+{
+  "running": "! Chassis:\nsystem name \"OS6860\"\n! VLANs:\nvlan 1 admin-state enable name \"VLAN 1\"\nvlan 100 admin-state enable name \"test-vlan\"\n! Interfaces:\ninterface 1/1/1 admin-state enable\ninterface 1/1/2 admin-state enable\n! SNMP:\nsnmp security no-security\nsnmp community-map mode enable\n",
+  "candidate": "",
+  "startup": ""
+}

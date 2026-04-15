@@ -1,0 +1,12 @@
+Local Chassis ID 1 (Master)
+  Model Name:                    OS6860E-24,
+  Module Type:                   0x6062203,
+  Description:                   Chassis,
+  Part Number:                   903708-90,
+  Hardware Revision:             07,
+  Serial Number:                 P468057P,
+  Manufacture Date:              Nov 15 2013,
+  Admin Status:                  POWER ON,
+  Operational Status:            UP,
+  Number Of Resets:              2058,
+  MAC Address:                   e8:e7:32:ab:1f:33

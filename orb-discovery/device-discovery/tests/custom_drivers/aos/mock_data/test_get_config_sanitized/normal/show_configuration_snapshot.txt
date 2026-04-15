@@ -1,0 +1,11 @@
+! Chassis:
+system name "OS6860"
+! VLANs:
+vlan 1 admin-state enable name "VLAN 1"
+! Users:
+user admin password MyRawSecret
+! SNMP:
+snmp security no-security
+snmp community-map hash-key 2afb1c2035338a93 user "public" enable
+! RADIUS:
+aaa radius-server myserver key TopSecretKey

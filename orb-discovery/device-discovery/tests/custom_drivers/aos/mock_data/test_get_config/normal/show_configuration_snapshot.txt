@@ -1,0 +1,11 @@
+! Chassis:
+system name "OS6860"
+! VLANs:
+vlan 1 admin-state enable name "VLAN 1"
+vlan 100 admin-state enable name "test-vlan"
+! Interfaces:
+interface 1/1/1 admin-state enable
+interface 1/1/2 admin-state enable
+! SNMP:
+snmp security no-security
+snmp community-map mode enable

@@ -1,0 +1,8 @@
+Total 3 interfaces
+ Flags (D=Directly-bound)
+
+            Name                 IP Address      Subnet Mask     Status Forward  Device   Flags
+--------------------------------+---------------+---------------+------+-------+---------+------
+EMP-CMMA-CHAS1                   0.0.0.0         0.0.0.0           DOWN      NO EMP
+Loopback                         127.0.0.1       255.255.255.255     UP      NO Loopback
+vlan1002                         10.1.2.93       255.255.255.0       UP     YES vlan 1002
