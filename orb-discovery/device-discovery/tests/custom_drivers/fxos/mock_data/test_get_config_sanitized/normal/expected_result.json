@@ -1,0 +1,5 @@
+{
+  "running": "!Command: show running-config\n!Running configuration last done at: Tue Apr 15 10:15:22 2025\n!Time: Tue Apr 15 10:15:22 2025\n\nversion 2.12\nhostname fpr4110-lab\nip domain-name example.com\n\nenable password 7 <redacted>\nusername admin password 0 <redacted>\nusername monitor secret 5 <redacted>\n\ninterface Ethernet1/1\n  description FPR-outside\n  no shutdown\n\ninterface mgmt0\n  vrf member management\n  ip address 10.10.10.100/24\n  no shutdown\n\nsnmp-server community <redacted> ro\nsnmp-server community <redacted> rw\n\nkey chain BGPKEY\n  key 1\n    key-string <redacted>\n  key 2\n    key-string 7 <redacted>\n\npre-shared-key <redacted>\n\ntacacs-server host 10.0.0.5 key <redacted>\ntacacs-server host 10.0.0.7 key 7 <redacted>\nradius-server host 10.0.0.6 key <redacted>\nradius-server host 10.0.0.8 key 0 <redacted>\n\naaa authentication login default local\n",
+  "candidate": "",
+  "startup": ""
+}

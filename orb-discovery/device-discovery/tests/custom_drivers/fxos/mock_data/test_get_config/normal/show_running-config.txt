@@ -1,0 +1,23 @@
+!Command: show running-config
+!Running configuration last done at: Tue Apr 15 10:15:22 2025
+!Time: Tue Apr 15 10:15:22 2025
+
+version 2.12
+hostname fpr4110-lab
+ip domain-name example.com
+
+interface Ethernet1/1
+  description FPR-outside
+  no shutdown
+
+interface Ethernet1/2
+  description FPR-inside
+  no shutdown
+
+interface mgmt0
+  vrf member management
+  ip address 10.10.10.100/24
+  no shutdown
+
+aaa authentication login default local
+ntp server 10.0.0.1 use-vrf management

@@ -1,0 +1,13 @@
+Cisco Firepower Extensible Operating System (FXOS) Software, Version 2.10(1.159)
+Copyright (c) 2009-2024, Cisco Systems, Inc.
+
+Hardware:
+  cisco Firepower 9300 Security Appliance
+  Intel(R) Xeon(R) CPU E5-2609 v3 @ 1.90GHz with 131072 kB of memory.
+
+System Version:
+  BIOS:          5.4.40.0
+  firmware:      2.10(1.159)
+
+  Device name: fpr9300-dc
+  Kernel uptime is 30 day(s), 0 hour(s), 0 minute(s), 0 second(s)

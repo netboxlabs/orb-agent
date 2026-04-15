@@ -1,0 +1,14 @@
+{
+  "hostname": "fpr4110-lab",
+  "vendor": "Cisco",
+  "model": "Firepower 4110",
+  "os_version": "2.12(0.498)",
+  "serial_number": "FLM2035A01X",
+  "uptime": 512063.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "Ethernet1/1",
+    "Ethernet1/2",
+    "mgmt0"
+  ]
+}

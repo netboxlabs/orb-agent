@@ -14,6 +14,7 @@ from custom_napalm.fastiron import FastIronDriver
 from custom_napalm.fortios_ssh import FortiOSSSHDriver
 from custom_napalm.ftd_ssh import FTDSSHDriver
 from custom_napalm.ftos import FTOSDriver
+from custom_napalm.fxos import FXOSDriver
 from custom_napalm.gaia import GaiaDriver
 from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.ipos import IPOSDriver
@@ -41,10 +42,11 @@ __all__ = [
     "EdgeRouterDriver",
     "EdgeSwitchDriver",
     "ExosDriver",
-    "FTDSSHDriver",
-    "FTOSDriver",
     "FastIronDriver",
     "FortiOSSSHDriver",
+    "FTDSSHDriver",
+    "FTOSDriver",
+    "FXOSDriver",
     "GaiaDriver",
     "IPOSDriver",
     "NetIronDriver",
