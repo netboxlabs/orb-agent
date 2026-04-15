@@ -109,14 +109,7 @@ func (s *BridgeServer) SetPublisher(pub Publisher) {
 	s.mu.Unlock()
 }
 
-// ClearPublisher clears the publisher so the bridge buffers during reconnection.
-func (s *BridgeServer) ClearPublisher() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.publisher = nil
-}
-
-// SetIngestTopic sets the topic for publishing.
+// SetIngestTopic sets the topic for ingest publishing.
 func (s *BridgeServer) SetIngestTopic(topic string) {
 	s.mu.Lock()
 	s.ingestTopic = topic
@@ -127,6 +120,14 @@ func (s *BridgeServer) SetIngestTopic(topic string) {
 func (s *BridgeServer) SetTelemetryTopic(topic string) {
 	s.mu.Lock()
 	s.telemetryTopic = topic
+	s.mu.Unlock()
+}
+
+// ClearPublisher clears the publisher, causing the writer goroutine to retry
+// with backoff until a new publisher is set via SetPublisher.
+func (s *BridgeServer) ClearPublisher() {
+	s.mu.Lock()
+	s.publisher = nil
 	s.mu.Unlock()
 }
 

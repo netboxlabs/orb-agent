@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -40,13 +41,19 @@ type MQTTConnection struct {
 	reconnectChan            chan struct{}
 	dispatchQueue            chan dispatchJob
 	dispatchWorkerDone       chan struct{}
-	dispatchMu               sync.Mutex // guards shuttingDown + dispatchQueue close
-	shuttingDown             bool
+	shuttingDown             atomic.Bool
 	capabilitiesFailCount    int
 	groupMembershipFailCount int
 	heartbeatFailCount       int
 	mu                       sync.Mutex
 	tokenRefresher           func(ctx context.Context) (string, error) // returns fresh JWT on reconnect
+}
+
+// SetTokenRefresher sets a callback that returns a fresh JWT. When set, the MQTT
+// connection will call this before every auto-reconnect CONNECT packet so the broker
+// always receives a valid token.
+func (connection *MQTTConnection) SetTokenRefresher(fn func(ctx context.Context) (string, error)) {
+	connection.tokenRefresher = fn
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -64,13 +71,6 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		dispatchQueue:      make(chan dispatchJob, 100), // Buffered channel to prevent blocking MQTT acks
 		dispatchWorkerDone: make(chan struct{}),
 	}
-}
-
-// SetTokenRefresher sets a callback that returns a fresh JWT. When set, the MQTT
-// connection will call this before every auto-reconnect CONNECT packet so the broker
-// always receives a valid token.
-func (connection *MQTTConnection) SetTokenRefresher(fn func(ctx context.Context) (string, error)) {
-	connection.tokenRefresher = fn
 }
 
 // AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
@@ -130,44 +130,25 @@ func (connection *MQTTConnection) startDispatchWorker() {
 	}()
 }
 
-// stopDispatchWorker stops the dispatch worker and waits for it to finish.
-// All reads of dispatchWorkerDone and dispatchQueue are done under dispatchMu
-// so that Reconnect (which replaces both channels under the same lock) cannot
-// race with this function.
+// stopDispatchWorker stops the dispatch worker and waits for it to finish
 func (connection *MQTTConnection) stopDispatchWorker() {
-	connection.dispatchMu.Lock()
-
-	// Capture the done channel under the lock so we wait on the correct
-	// instance even if Reconnect replaces it concurrently.
-	done := connection.dispatchWorkerDone
-
-	// Fast path: worker already finished.
+	// If the worker is already done (dispatchWorkerDone is closed), do nothing.
 	select {
-	case <-done:
-		connection.dispatchMu.Unlock()
+	case <-connection.dispatchWorkerDone:
 		return
 	default:
 	}
 
-	// If another caller is already shutting down, just wait.
-	if connection.shuttingDown {
-		connection.dispatchMu.Unlock()
-		<-done
-		return
-	}
-
-	connection.shuttingDown = true
+	// First time stopping: close the queue to signal the worker to exit, then wait for it.
 	close(connection.dispatchQueue)
-	connection.dispatchMu.Unlock()
-
-	<-done
+	<-connection.dispatchWorkerDone
 }
 
 // Connect connects to the MQTT broker. It is safe to call after a previous
 // failed Connect (e.g. from a startup retry loop): any existing dispatch
 // worker and connection manager are torn down before reinitializing.
 func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
-	// Parse the ORB URL before any state changes so a bad URL is a no-op.
+	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
 	if err != nil {
 		connection.logger.Error("failed to parse MQTT URL", "url", details.MQTTURL, "error", err)
@@ -184,13 +165,10 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		connection.stopDispatchWorker()
 	}
 
-	// Reinitialize dispatch channels after teardown so stopDispatchWorker above
-	// operates on the old channels, not freshly-created ones with no worker.
-	connection.dispatchMu.Lock()
+	// Reinitialize dispatch channels after validation and teardown.
 	connection.dispatchQueue = make(chan dispatchJob, 100)
 	connection.dispatchWorkerDone = make(chan struct{})
-	connection.shuttingDown = false
-	connection.dispatchMu.Unlock()
+	connection.shuttingDown.Store(false)
 
 	// Store topics for hook callbacks
 	connection.connectionTopics = details.Topics
@@ -355,13 +333,8 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 					}
 					orgID := parts[1]
 
-					// Hold dispatchMu while checking shuttingDown and sending on
-					// dispatchQueue.  stopDispatchWorker acquires the same lock
-					// before setting the flag and closing the channel, so this
-					// eliminates the race entirely — no panic is possible.
-					connection.dispatchMu.Lock()
-					if connection.shuttingDown {
-						connection.dispatchMu.Unlock()
+					// Check if we're shutting down to avoid sending to a closed channel
+					if connection.shuttingDown.Load() {
 						connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
 						return true, nil
 					}
@@ -377,9 +350,8 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 							Unsubscribe: connection.unsubscribeFromTopic,
 						},
 					}:
-						connection.dispatchMu.Unlock()
+						// Job enqueued successfully
 					default:
-						connection.dispatchMu.Unlock()
 						// Queue is full - log warning and process synchronously as fallback
 						connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
 						err := connection.messaging.DispatchToHandlers(
@@ -412,9 +384,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 	}
 
 	// On every auto-reconnect, refresh the JWT before sending CONNECT so autopaho
-	// never presents a stale token to the broker. The first call uses the initial
-	// token (consistent with topics derived from the same JWT); subsequent calls
-	// fetch a fresh JWT via tokenRefresher.
+	// never presents a stale token to the broker.
 	if builder := buildConnectPacketBuilder(connection); builder != nil {
 		cfg.ConnectPacketBuilder = builder
 	}
@@ -434,13 +404,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 	err = connection.connectionManager.AwaitConnection(waitCtx)
 	if err != nil {
-		connection.logger.Warn("failed to establish MQTT connection", "error", err)
-		// Disconnect the manager so it stops retrying in the background;
-		// the next Connect call will create a fresh one.
-		disconnectCtx2, disconnectCancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = connection.connectionManager.Disconnect(disconnectCtx2)
-		disconnectCancel2()
-		connection.connectionManager = nil
+		connection.logger.Error("failed to establish initial MQTT connection", "error", err)
 		connection.stopDispatchWorker()
 		return err
 	}
@@ -455,6 +419,9 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 
 	// Disconnect the existing connection
 	if connection.connectionManager != nil {
+		// Set shutdown flag first to prevent new messages from being enqueued
+		connection.shuttingDown.Store(true)
+
 		disconnectCtx, cancel := context.WithTimeout(ctx, timeout)
 		connection.heartbeater.stop(details.Topics.Heartbeat, connection.publishToTopic)
 		err := connection.connectionManager.Disconnect(disconnectCtx)
@@ -463,9 +430,7 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 			connection.logger.Warn("failed to disconnect during reconnect", "error", err)
 			// Continue anyway to try to establish new connection
 		}
-		// stopDispatchWorker sets shuttingDown and closes the channel under dispatchMu
 		connection.stopDispatchWorker()
-		connection.connectionManager = nil
 	}
 
 	// Reset failure counters
@@ -489,18 +454,17 @@ func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic
 	if connection.connectionManager == nil {
 		return nil
 	}
+	// Set shutdown flag first to prevent new messages from being enqueued
+	connection.shuttingDown.Store(true)
 
 	// Only attempt the offline heartbeat if we have a real topic; callers like
 	// the startup retry loop pass "" when no session was ever established.
 	if heartbeatTopic != "" {
 		connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
 	}
-	// Disconnect first to stop receiving new messages, then stop the worker.
-	// connectionManager must stay non-nil until the worker exits because
-	// draining jobs call publishToTopic/subscribeToTopic which dereference it.
+	// Disconnect first to stop receiving new messages, then stop the worker
 	err := connection.connectionManager.Disconnect(ctx)
 	connection.stopDispatchWorker()
-	connection.connectionManager = nil
 	return err
 }
 
@@ -541,22 +505,17 @@ func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic stri
 // buildConnectPacketBuilder returns a ConnectPacketBuilder callback that refreshes
 // the JWT before every CONNECT packet. Returns nil when no tokenRefresher is set.
 //
-// The first invocation of the returned closure is a no-op (the password on the
-// Connect packet already matches the JWT used to derive topics). Subsequent
-// invocations (autopaho auto-reconnects) call tokenRefresher to obtain a fresh
-// JWT. The "first call" state is scoped to the closure instance, so each Connect
-// creates an independent builder with its own lifecycle.
+// The first invocation is a no-op (the password already matches the JWT used to
+// derive topics). Subsequent invocations (autopaho auto-reconnects) call
+// tokenRefresher to obtain a fresh JWT.
 func buildConnectPacketBuilder(connection *MQTTConnection) func(*paho.Connect, *url.URL) (*paho.Connect, error) {
 	if connection.tokenRefresher == nil {
 		return nil
 	}
 	firstCall := true
 	return func(cp *paho.Connect, _ *url.URL) (*paho.Connect, error) {
-		// First call: use the token that was already placed in ConnectPassword
-		// and that topics were derived from — no extra refresh needed.
 		if firstCall {
 			firstCall = false
-			connection.logger.Debug("using initial token for CONNECT")
 			return cp, nil
 		}
 
@@ -565,9 +524,7 @@ func buildConnectPacketBuilder(connection *MQTTConnection) func(*paho.Connect, *
 
 		freshJWT, err := connection.tokenRefresher(ctx)
 		if err != nil {
-			connection.logger.Warn("failed to refresh token for MQTT reconnect", "error", err)
-			// Fall through with existing credentials — broker will reject if truly expired,
-			// and autopaho will retry (calling this builder again).
+			connection.logger.Warn("failed to refresh token for MQTT reconnect, using existing credentials", "error", err)
 			return cp, nil
 		}
 		connection.logger.Info("JWT refreshed for MQTT reconnect")
