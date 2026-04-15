@@ -1,0 +1,29 @@
+{
+  "eth0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "WAN",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  },
+  "eth1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "LAN",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  },
+  "lo": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  }
+}

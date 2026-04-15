@@ -1,0 +1,4 @@
+IP Address         Subnet Mask        Interface  Status
+-----------------  -----------------  ---------  ------
+192.168.1.1        255.255.255.0      VLAN 1     Valid
+10.0.0.1           255.255.255.0      VLAN 100   Valid

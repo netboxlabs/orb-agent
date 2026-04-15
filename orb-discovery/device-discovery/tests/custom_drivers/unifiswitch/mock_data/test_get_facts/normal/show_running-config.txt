@@ -1,0 +1,4 @@
+!Current Configuration:
+!
+hostname unifi-sw-24
+!

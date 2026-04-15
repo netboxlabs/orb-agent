@@ -1,0 +1,5 @@
+{
+  "running": "!Current Configuration:\n!\nhostname edgeswitch-24\n!\nusername admin password 7 <redacted>\nenable secret 5 <redacted>\nsnmp-server community <redacted> ro\n!\ninterface vlan 1\n ip address 192.168.1.1 255.255.255.0\n!\n",
+  "candidate": "",
+  "startup": ""
+}

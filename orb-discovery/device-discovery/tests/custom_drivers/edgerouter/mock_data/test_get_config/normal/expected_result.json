@@ -1,0 +1,5 @@
+{
+  "running": "set interfaces ethernet eth0 address '192.168.1.1/24'\nset interfaces ethernet eth0 description 'WAN'\nset interfaces ethernet eth1 address '10.0.0.1/24'\nset interfaces ethernet eth1 description 'LAN'\nset service ssh port '22'\nset system host-name 'ubnt-er-lite'\nset system name-server '8.8.8.8'\n",
+  "candidate": "",
+  "startup": ""
+}

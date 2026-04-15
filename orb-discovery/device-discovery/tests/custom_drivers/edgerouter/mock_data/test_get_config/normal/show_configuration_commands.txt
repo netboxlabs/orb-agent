@@ -1,0 +1,7 @@
+set interfaces ethernet eth0 address '192.168.1.1/24'
+set interfaces ethernet eth0 description 'WAN'
+set interfaces ethernet eth1 address '10.0.0.1/24'
+set interfaces ethernet eth1 description 'LAN'
+set service ssh port '22'
+set system host-name 'ubnt-er-lite'
+set system name-server '8.8.8.8'

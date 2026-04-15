@@ -1,0 +1,5 @@
+{
+  "running": "!Current Configuration:\n!\nhostname edgeswitch-24\n!\ninterface vlan 1\n ip address 192.168.1.1 255.255.255.0\n!\ninterface vlan 100\n ip address 10.0.0.1 255.255.255.0\n!\ninterface 0/1\n vlan participation include 1,100\n vlan tagging 100\n!\ninterface 0/2\n vlan participation include 1\n!\n",
+  "candidate": "",
+  "startup": ""
+}

@@ -1,0 +1,10 @@
+{
+  "hostname": "edgeswitch-24",
+  "vendor": "Ubiquiti",
+  "model": "ES-24-500W",
+  "os_version": "v1.9.3",
+  "serial_number": "F09FC2AB5678",
+  "uptime": 0.0,
+  "fqdn": "Unknown",
+  "interface_list": ["0/1", "0/2", "0/3"]
+}
