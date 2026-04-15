@@ -495,11 +495,12 @@ func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic
 	if heartbeatTopic != "" {
 		connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
 	}
-	// Disconnect first to stop receiving new messages, then stop the worker
+	// Disconnect first to stop receiving new messages, then stop the worker.
+	// connectionManager must stay non-nil until the worker exits because
+	// draining jobs call publishToTopic/subscribeToTopic which dereference it.
 	err := connection.connectionManager.Disconnect(ctx)
-	connection.connectionManager = nil
-	// stopDispatchWorker sets shuttingDown and closes the channel under dispatchMu
 	connection.stopDispatchWorker()
+	connection.connectionManager = nil
 	return err
 }
 
