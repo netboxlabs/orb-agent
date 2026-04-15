@@ -296,7 +296,7 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 		"telemetry_topic", topics.Telemetry)
 
 	connectionDetails := fleet.ConnectionDetails{
-		MQTTURL:  jwtClaims.MqttURL,
+		MQTTURL:  mqttURLFromToken(token, jwtClaims),
 		Token:    token.AccessToken,
 		AgentID:  jwtClaims.AgentID,
 		Topics:   *topics,
@@ -313,7 +313,9 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 	fleetManager.backends = backends
 	fleetManager.labels = cfg.OrbAgent.Labels
 	fleetManager.configYaml = string(configYaml)
+	fleetManager.connMu.Lock()
 	fleetManager.connectionDetails = connectionDetails
+	fleetManager.connMu.Unlock()
 
 	// Wire up token refresher so autopaho's ConnectPacketBuilder can fetch a fresh JWT
 	// on any auto-reconnect. The broker does not re-validate the JWT after CONNECT, so
@@ -458,46 +460,10 @@ func (fleetManager *FleetConfigManager) BindSecretsManager(sm secretsmgr.Manager
 
 // refreshAndReconnect refreshes the JWT token and reconnects to MQTT.
 func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context, timeout time.Duration) error {
-	// Always do a fresh HTTP refresh — we need the absolute latest token
-	// before tearing down and rebuilding the MQTT connection.
-	token, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	newConnectionDetails, err := fleetManager.refreshConnectionDetails(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to refresh token: %w", err)
+		return err
 	}
-
-	// Parse new JWT claims
-	jwtClaims, err := fleet.ParseJWTClaims(token.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to parse JWT claims: %w", err)
-	}
-
-	// Regenerate topics
-	topics, err := fleet.GenerateTopicsFromTemplate(jwtClaims)
-	if err != nil {
-		return fmt.Errorf("failed to generate topics: %w", err)
-	}
-
-	fleetManager.logger.Debug("refreshed JWT and generated new topics",
-		"heartbeat_topic", topics.Heartbeat,
-		"capabilities_topic", topics.Capabilities,
-		"inbox_topic", topics.Inbox,
-		"outbox_topic", topics.Outbox)
-
-	// Update connection details
-	newConnectionDetails := fleet.ConnectionDetails{
-		MQTTURL:  jwtClaims.MqttURL,
-		Token:    token.AccessToken,
-		AgentID:  jwtClaims.AgentID,
-		Topics:   *topics,
-		ClientID: fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
-		Zone:     jwtClaims.Zone,
-	}
-
-	// Store updated connection details under write lock so the reset goroutine and
-	// reconnect worker always observe a fully initialised value.
-	fleetManager.connMu.Lock()
-	fleetManager.connectionDetails = newConnectionDetails
-	fleetManager.connMu.Unlock()
 
 	// Clear OTLP bridge publisher so it buffers during the reconnect window.
 	// The OnReadyHook will re-bind the publisher once the new connection is up.
@@ -515,6 +481,57 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 	return nil
 }
 
+// refreshConnectionDetails refreshes the JWT and updates the cached connection
+// metadata that reset/reconnect paths depend on.
+func (fleetManager *FleetConfigManager) refreshConnectionDetails(ctx context.Context) (fleet.ConnectionDetails, error) {
+	token, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	if err != nil {
+		return fleet.ConnectionDetails{}, fmt.Errorf("failed to refresh token: %w", err)
+	}
+
+	jwtClaims, err := fleet.ParseJWTClaims(token.AccessToken)
+	if err != nil {
+		return fleet.ConnectionDetails{}, fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
+	topics, err := fleet.GenerateTopicsFromTemplate(jwtClaims)
+	if err != nil {
+		return fleet.ConnectionDetails{}, fmt.Errorf("failed to generate topics: %w", err)
+	}
+
+	newConnectionDetails := fleet.ConnectionDetails{
+		MQTTURL:  mqttURLFromToken(token, jwtClaims),
+		Token:    token.AccessToken,
+		AgentID:  jwtClaims.AgentID,
+		Topics:   *topics,
+		ClientID: fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
+		Zone:     jwtClaims.Zone,
+	}
+
+	fleetManager.logger.Debug("refreshed JWT and generated new topics",
+		"heartbeat_topic", topics.Heartbeat,
+		"capabilities_topic", topics.Capabilities,
+		"inbox_topic", topics.Inbox,
+		"outbox_topic", topics.Outbox,
+		"mqtt_url", newConnectionDetails.MQTTURL)
+
+	fleetManager.connMu.Lock()
+	fleetManager.connectionDetails = newConnectionDetails
+	fleetManager.connMu.Unlock()
+
+	return newConnectionDetails, nil
+}
+
+func mqttURLFromToken(token *fleet.TokenResponse, jwtClaims *fleet.JWTClaims) string {
+	if jwtClaims != nil && jwtClaims.MqttURL != "" {
+		return jwtClaims.MqttURL
+	}
+	if token != nil {
+		return token.MQTTURL
+	}
+	return ""
+}
+
 func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (string, error) {
 	redacted := redact.SensitiveData(cfg)
 	configYaml, err := yaml.Marshal(redacted)
@@ -529,7 +546,7 @@ func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (s
 // Implements fleet.DebugCredentials.
 func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) error {
 	oldExpiry := fleetManager.authTokenManager.GetTokenExpiryTime()
-	_, err := fleetManager.authTokenManager.RefreshToken(ctx)
+	newConnectionDetails, err := fleetManager.refreshConnectionDetails(ctx)
 	if err != nil {
 		return err
 	}
@@ -537,6 +554,7 @@ func (fleetManager *FleetConfigManager) RotateCredentials(ctx context.Context) e
 	fleetManager.logger.Warn("credentials rotated",
 		"previous_expiry", oldExpiry,
 		"new_expiry", newExpiry,
+		"mqtt_url", newConnectionDetails.MQTTURL,
 		"new_time_until_expiry", time.Until(newExpiry).Truncate(time.Second))
 	return nil
 }
@@ -604,10 +622,11 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
 					"expired", fleetManager.authTokenManager.IsTokenExpired())
 				ctx, cancel := context.WithTimeout(fleetManager.monitorCtx, 30*time.Second)
-				if _, err := fleetManager.authTokenManager.RefreshToken(ctx); err != nil {
+				if newConnectionDetails, err := fleetManager.refreshConnectionDetails(ctx); err != nil {
 					fleetManager.logger.Warn("proactive token refresh failed", "error", err)
 				} else {
 					fleetManager.logger.Info("proactive token refresh succeeded",
+						"mqtt_url", newConnectionDetails.MQTTURL,
 						"new_expiry", fleetManager.authTokenManager.GetTokenExpiryTime())
 				}
 				cancel()

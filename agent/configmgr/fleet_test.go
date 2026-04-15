@@ -1599,10 +1599,10 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 		"reset goroutine should use the refreshed token, not the stale initial token")
 }
 
-// TestFleetConfigManager_ResetAfterProactiveRefresh_UsesRotatedCredentials challenges the
-// credential-rotation path added in this branch: after a proactive RefreshToken updates the
-// auth manager cache, a later reset-driven Connect should use the rotated token and MQTT URL.
-func TestFleetConfigManager_ResetAfterProactiveRefresh_UsesRotatedCredentials(t *testing.T) {
+// TestFleetConfigManager_ResetAfterCredentialRotation_UsesRotatedCredentials challenges the
+// credential-rotation path added in this branch: after the manager rotates credentials,
+// a later reset-driven Connect should use the rotated token and MQTT URL.
+func TestFleetConfigManager_ResetAfterCredentialRotation_UsesRotatedCredentials(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 
@@ -1673,14 +1673,12 @@ func TestFleetConfigManager_ResetAfterProactiveRefresh_UsesRotatedCredentials(t 
 	mgr.labels = map[string]string{"env": "test"}
 	mgr.configYaml = "initial-config"
 
-	// Simulate the new proactive monitor behavior: refresh the auth-manager cache
-	// without updating connectionDetails.
-	_, err = mgr.authTokenManager.RefreshToken(ctx)
+	err = mgr.RotateCredentials(ctx)
 	require.NoError(t, err)
 
 	freshToken, err := mgr.authTokenManager.GetFreshToken(ctx)
 	require.NoError(t, err)
-	require.Equal(t, rotatedJWT, freshToken, "auth manager should hold the rotated token after proactive refresh")
+	require.Equal(t, rotatedJWT, freshToken, "auth manager should hold the rotated token after manager-driven rotation")
 
 	timeout := 5 * time.Second
 	go func() {
@@ -1706,4 +1704,119 @@ func TestFleetConfigManager_ResetAfterProactiveRefresh_UsesRotatedCredentials(t 
 		"reset reconnect should use the rotated token cached by proactive refresh")
 	assert.Equal(t, "mqtt://broker-b.example.com:1883", mockConn.LastConnectDetails().MQTTURL,
 		"reset reconnect should use the rotated MQTT URL from the refreshed credentials")
+}
+
+// TestFleetConfigManager_MonitorTokenExpiry_RefreshesCachedConnectionDetails verifies the
+// real-world monitor path: when the token is expired, the background monitor should
+// refresh credentials in place and update cached connection details for future reconnects,
+// without forcing an immediate reconnect signal of its own.
+func TestFleetConfigManager_MonitorTokenExpiry_RefreshesCachedConnectionDetails(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	checkInterval := 1
+	refreshBuffer := 120
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:                 "https://example.com/token",
+						ClientID:                 "test_client",
+						ClientSecret:             "test_secret",
+						TokenExpiryCheckInterval: &checkInterval,
+						TokenReconnectBuffer:     &refreshBuffer,
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	initialJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          time.Now().Unix(),
+		"exp":          time.Now().Add(-1 * time.Minute).Unix(),
+		"ext": map[string]any{
+			"orb:mqtt_url": "mqtt://broker-a.example.com:1883",
+		},
+	})
+	rotatedJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          time.Now().Add(1 * time.Minute).Unix(),
+		"exp":          time.Now().Add(20 * time.Minute).Unix(),
+		"ext": map[string]any{
+			"orb:mqtt_url": "mqtt://broker-b.example.com:1883",
+		},
+	})
+
+	requestCount := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+
+		token := initialJWT
+		mqttURL := "mqtt://broker-a.example.com:1883"
+		if requestCount > 1 {
+			token = rotatedJWT
+			mqttURL = "mqtt://broker-b.example.com:1883"
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(fleet.TokenResponse{
+			AccessToken: token,
+			MQTTURL:     mqttURL,
+			ExpiresIn:   3600,
+		})
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := fleetManager.authTokenManager.GetToken(ctx, server.URL, true, 10*time.Second, "test_client", "test_secret")
+	require.NoError(t, err)
+
+	initialClaims, err := fleet.ParseJWTClaims(initialJWT)
+	require.NoError(t, err)
+	initialTopics, err := fleet.GenerateTopicsFromTemplate(initialClaims)
+	require.NoError(t, err)
+
+	fleetManager.connMu.Lock()
+	fleetManager.connectionDetails = fleet.ConnectionDetails{
+		MQTTURL:  initialClaims.MqttURL,
+		Token:    initialJWT,
+		AgentID:  initialClaims.AgentID,
+		Topics:   *initialTopics,
+		ClientID: "test_client",
+		Zone:     initialClaims.Zone,
+	}
+	fleetManager.connMu.Unlock()
+
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+	defer fleetManager.monitorCancel()
+
+	go fleetManager.monitorTokenExpiry()
+
+	require.Eventually(t, func() bool {
+		fleetManager.connMu.RLock()
+		details := fleetManager.connectionDetails
+		fleetManager.connMu.RUnlock()
+		return details.Token == rotatedJWT && details.MQTTURL == "mqtt://broker-b.example.com:1883"
+	}, 3*time.Second, 25*time.Millisecond, "monitor should refresh cached connection details before expiry")
+
+	assert.Equal(t, rotatedJWT, fleetManager.connectionDetails.Token,
+		"monitor-driven refresh should update the cached token used by later reconnects")
+	assert.Equal(t, "mqtt://broker-b.example.com:1883", fleetManager.connectionDetails.MQTTURL,
+		"monitor-driven refresh should update the cached MQTT URL used by later reconnects")
+
+	select {
+	case <-fleetManager.reconnectChan:
+		t.Fatal("monitor should refresh cached credentials without sending a reconnect signal")
+	default:
+	}
 }
