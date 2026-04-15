@@ -591,17 +591,9 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 		checkInterval = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenExpiryCheckInterval) * time.Second
 	}
 
-	refreshBuffer := 2 * time.Minute
+	configuredBuffer := 2 * time.Minute
 	if fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer != nil && *fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer > 0 {
-		refreshBuffer = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer) * time.Second
-	}
-
-	// Cap refresh buffer to half the token's effective lifetime so that
-	// short TTLs (e.g. 2m) don't cause "always refreshing" on every tick.
-	if tokenExpiry := fleetManager.authTokenManager.GetTokenExpiryTime(); !tokenExpiry.IsZero() {
-		if ttl := time.Until(tokenExpiry); ttl > 0 && refreshBuffer > ttl/2 {
-			refreshBuffer = ttl / 2
-		}
+		configuredBuffer = time.Duration(*fleetManager.config.OrbAgent.ConfigManager.Sources.Fleet.TokenReconnectBuffer) * time.Second
 	}
 
 	ticker := time.NewTicker(checkInterval)
@@ -609,7 +601,7 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 
 	fleetManager.logger.Info("starting token expiry monitor",
 		"check_interval", checkInterval,
-		"refresh_buffer", refreshBuffer)
+		"configured_refresh_buffer", configuredBuffer)
 
 	for {
 		select {
@@ -617,6 +609,16 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 			fleetManager.logger.Info("token expiry monitor stopped")
 			return
 		case <-ticker.C:
+			// Cap refresh buffer to half the current token's remaining lifetime so
+			// short TTLs don't cause "always refreshing". Recomputed each tick so
+			// the cap stays correct after token refreshes change the TTL.
+			refreshBuffer := configuredBuffer
+			if tokenExpiry := fleetManager.authTokenManager.GetTokenExpiryTime(); !tokenExpiry.IsZero() {
+				if ttl := time.Until(tokenExpiry); ttl > 0 && refreshBuffer > ttl/2 {
+					refreshBuffer = ttl / 2
+				}
+			}
+
 			if fleetManager.authTokenManager.IsTokenExpired() || fleetManager.authTokenManager.IsTokenExpiringSoon(refreshBuffer) {
 				fleetManager.logger.Info("token expiring, refreshing proactively",
 					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
