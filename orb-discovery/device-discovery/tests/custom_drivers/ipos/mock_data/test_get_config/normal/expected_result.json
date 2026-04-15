@@ -1,0 +1,5 @@
+{
+  "running": "context local\n  hostname ipos-router-1\n  subscriber default\n    exit\n  interface loopback lo0\n    ip address 10.255.255.1/32\n    exit\n  port 1/1\n    no shutdown\n    exit\n  port 1/2\n    no shutdown\n    exit\n  ip domain-name example.com\n  exit\n",
+  "candidate": "",
+  "startup": ""
+}

@@ -1,0 +1,5 @@
+Ericsson IPOS Version IPOS-v20.3.1.803.142-Release
+Built by spradmin@ericsson Tue Dec 15 12:49:29 CET 2020
+Copyright (C) 1998-2020, Ericsson AB. All rights reserved.
+Operating System version is Linux 3.14.65-mvista
+Router Up Time -  3 minutes 5 seconds

@@ -1,0 +1,5 @@
+{
+  "running": "context local\n  hostname ipos-router-1\n  subscriber default\n    exit\n  aaa\n    local-user admin\n      password <redacted>\n      exit\n    exit\n  snmp-server community <redacted> ro\n  snmp-server community <redacted> rw\n  radius-server primary\n    key <redacted>\n    exit\n  interface loopback lo0\n    ip address 10.255.255.1/32\n    encrypted-key <redacted>\n    exit\n  port 1/1\n    no shutdown\n    exit\n  exit\n",
+  "candidate": "",
+  "startup": ""
+}
