@@ -1,0 +1,2 @@
+NAME: "APIC-1", DESCR: "Cisco APIC Server"
+PID: APIC-M2         , VID: V01 , SN: FOX2516P100

@@ -1,0 +1,3 @@
+Role         Id   Name    Version
+-----------  ---  ------  --------
+controller   1    apic1   6.0(3f)

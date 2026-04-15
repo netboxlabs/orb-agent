@@ -1,0 +1,14 @@
+{
+  "hostname": "apic1",
+  "vendor": "Cisco",
+  "model": "APIC-M2",
+  "os_version": "6.0(3f)",
+  "serial_number": "FOX2516P100",
+  "uptime": 443564.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "eth2-1",
+    "eth2-2",
+    "lo0"
+  ]
+}

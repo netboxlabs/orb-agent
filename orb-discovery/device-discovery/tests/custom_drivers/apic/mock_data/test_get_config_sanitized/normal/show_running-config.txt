@@ -1,0 +1,35 @@
+!
+! Cisco APIC Running Configuration
+!
+hostname apic1
+!
+username admin
+  password Adm1nP@ssword
+username operator privilege 15 password OpP@ss123
+!
+enable password Enabl3P@ss
+enable secret 5 $1$abc$XYZhashvalue123
+!
+snmp-server community public ro
+snmp-server community private rw
+snmp-server community 7 C0mmStr1ng ro
+!
+radius-server host 10.0.0.10 key R@d1usKey123
+radius-server host 10.0.0.11 key 7 R@d1usKey456
+tacacs-server host 10.0.0.20
+ key T@c@csKey456
+ key 7 H@shedKey789
+!
+key chain MYCHAIN
+ key 1
+  key-string Pl@inSecret
+  key-string 7 Typ3dS3cret
+!
+interface eth2-1
+  ip address 10.0.1.1/24
+  description OOB Management
+!
+interface eth2-2
+  ip address 10.0.2.1/24
+!
+end
