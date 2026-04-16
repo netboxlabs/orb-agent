@@ -1,0 +1,14 @@
+{
+  "100": {
+    "name": "management",
+    "interfaces": [
+      "GPON0/1/0"
+    ]
+  },
+  "200": {
+    "name": "data",
+    "interfaces": [
+      "GPON0/1/1"
+    ]
+  }
+}

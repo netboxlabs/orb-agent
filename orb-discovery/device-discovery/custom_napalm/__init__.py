@@ -28,6 +28,7 @@ from custom_napalm.powerconnect import PowerConnectDriver
 from custom_napalm.procurve import ProcurveDriver
 from custom_napalm.ros import ROSDriver
 from custom_napalm.s300 import S300Driver
+from custom_napalm.smart import SmartDriver
 from custom_napalm.saos import SAOSDriver
 from custom_napalm.sros import SROSDriver
 from custom_napalm.sros_ssh import SROSSSHDriver
@@ -65,6 +66,7 @@ __all__ = [
     "ROSDriver",
     "S300Driver",
     "SAOSDriver",
+    "SmartDriver",
     "SROSDriver",
     "SROSSSHDriver",
     "UniFiSwitchDriver",

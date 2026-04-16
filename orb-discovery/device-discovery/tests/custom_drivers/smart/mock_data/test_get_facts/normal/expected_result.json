@@ -1,0 +1,17 @@
+{
+  "uptime": 873015,
+  "vendor": "Huawei",
+  "os_version": "V100R019C10SPC300",
+  "serial_number": "210235594610A2000001",
+  "model": "MA5800-X17",
+  "hostname": "CE-OLT-01",
+  "fqdn": "Unknown",
+  "interface_list": [
+    "MEth0/0/1",
+    "GE0/0/1",
+    "GE0/0/2",
+    "GPON0/1/0",
+    "GPON0/1/1",
+    "Vlanif100"
+  ]
+}

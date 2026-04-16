@@ -1,0 +1,5 @@
+{
+  "running": "sysname CE-OLT-01\nvlan 100 smart\nvlan 200 smart\nsnmp-agent\nsnmp-agent community read public\ninterface vlanif100\n ip address 192.168.1.100 255.255.255.0\n",
+  "candidate": "",
+  "startup": "sysname CE-OLT-01\nvlan 100 smart\nvlan 200 smart\nsnmp-agent\nsnmp-agent community read public\ninterface vlanif100\n ip address 192.168.1.100 255.255.255.0\n"
+}
