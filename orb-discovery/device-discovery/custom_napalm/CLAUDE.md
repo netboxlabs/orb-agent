@@ -146,7 +146,7 @@ device-discovery/
 ├── custom_napalm/
 │   ├── __init__.py          # re-export convenience only, not required by NAPALM
 │   ├── CLAUDE.md            # this file
-│   ├── huawei_vrp.py        # Netmiko + ntc-templates example
+│   ├── vrp.py               # Netmiko + ntc-templates example
 │   ├── panos.py             # XML API (pan-python) example
 │   └── panos_ssh.py         # Netmiko + ntc-templates example
 └── tests/
@@ -185,7 +185,7 @@ pip install -e .           # from device-discovery/
 ## Approach A — Netmiko + ntc-templates (SSH CLI)
 
 Use this when the device has an SSH CLI and ntc-templates has templates for the needed commands.
-`panos_ssh.py` and `huawei_vrp.py` follow this pattern.
+`panos_ssh.py` and `vrp.py` follow this pattern.
 
 ### Check available ntc-templates
 

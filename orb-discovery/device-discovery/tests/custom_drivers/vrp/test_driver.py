@@ -1,8 +1,8 @@
-"""Unit tests for custom_napalm.huawei_vrp.VRPDriver."""
+"""Unit tests for custom_napalm.vrp.VRPDriver."""
 
 from pathlib import Path
 
-from custom_napalm.huawei_vrp import VRPDriver
+from custom_napalm.vrp import VRPDriver
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
 

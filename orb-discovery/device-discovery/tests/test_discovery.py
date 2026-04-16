@@ -451,7 +451,7 @@ def test_custom_napalm_driver_list(mock_import_module, mock_walk_packages):
     setattr(mock_module, "MockVRPDriver", MockVRPDriver)
 
     mock_package = MagicMock()
-    mock_package.name = "custom_napalm.huawei_vrp"
+    mock_package.name = "custom_napalm.vrp"
 
     mock_import_module.return_value = mock_module
     mock_walk_packages.return_value = [mock_package]
@@ -459,20 +459,20 @@ def test_custom_napalm_driver_list(mock_import_module, mock_walk_packages):
     result = custom_napalm_driver_list()
 
     mock_import_module.assert_any_call("custom_napalm")
-    assert "huawei_vrp" in result
+    assert "vrp" in result
 
 
 def test_supported_drivers_includes_custom_napalm():
     """Test that supported_drivers contains drivers from custom_napalm."""
     pytest.importorskip("custom_napalm")
-    for driver in ("panos", "panos_ssh", "huawei_vrp"):
+    for driver in ("panos", "panos_ssh", "vrp"):
         assert driver in supported_drivers, f"Expected '{driver}' in supported_drivers"
 
 
 def test_default_discovery_drivers_excludes_custom_napalm():
     """Test that _default_discovery_drivers does not include custom_napalm drivers."""
     pytest.importorskip("custom_napalm")
-    for driver in ("panos", "panos_ssh", "huawei_vrp"):
+    for driver in ("panos", "panos_ssh", "vrp"):
         assert driver not in _default_discovery_drivers, (
             f"Custom driver '{driver}' must not appear in default auto-discovery pool"
         )
