@@ -281,3 +281,46 @@ func TestDispatchQueue_NoPanicOnConcurrentShutdown(t *testing.T) {
 		t.Fatalf("detected %d panic(s) from send on closed channel — race condition exists", p)
 	}
 }
+
+// TestDispatchQueue_DrainsOnShutdown verifies that jobs already buffered in the
+// dispatch queue are fully processed before the worker exits, even though we
+// use a stop channel instead of closing the queue.
+func TestDispatchQueue_DrainsOnShutdown(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+
+	var processed atomic.Int32
+	const numJobs = 50
+
+	// Use a group_membership payload with at least one group so the handler
+	// actually calls Subscribe, letting us count processed jobs.
+	payload := []byte(`{"schema_version":"1.0","func":"group_membership","payload":{"full_list":false,"groups":[{"group_id":"drain-test","name":"Drain"}]}}`)
+
+	// Fill the queue WITHOUT starting the worker, so all jobs are buffered.
+	for i := 0; i < numJobs; i++ {
+		connection.dispatchQueue <- dispatchJob{
+			payload: payload,
+			orgID:   "test-org",
+			agentID: "test-agent",
+			topicActions: TopicActions{
+				Subscribe: func(_ string) error {
+					processed.Add(1)
+					return nil
+				},
+				Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+				Unsubscribe: func(_ string) error { return nil },
+			},
+		}
+	}
+
+	// Now start the worker and immediately stop it — the drain loop must
+	// process all 50 buffered jobs before the worker reports done.
+	connection.startDispatchWorker()
+	connection.stopDispatchWorker()
+
+	assert.Equal(t, int32(numJobs), processed.Load(),
+		"all buffered jobs must be drained before worker exits")
+}

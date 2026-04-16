@@ -108,28 +108,42 @@ type MQTTConnector interface {
 // startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially.
 // The worker exits when dispatchStop is closed — dispatchQueue itself is never closed,
 // which eliminates the "send on closed channel" panic that can occur when senders race
-// with shutdown.
+// with shutdown. Any jobs already buffered in dispatchQueue are drained before exit.
 func (connection *MQTTConnection) startDispatchWorker() {
 	go func() {
 		defer close(connection.dispatchWorkerDone)
 		for {
 			select {
 			case job := <-connection.dispatchQueue:
-				err := connection.messaging.DispatchToHandlers(
-					context.Background(),
-					job.payload,
-					job.orgID,
-					job.agentID,
-					job.topicActions,
-				)
-				if err != nil {
-					connection.logger.Error("failed to dispatch to handlers", "error", err)
-				}
+				connection.processJob(job)
 			case <-connection.dispatchStop:
-				return
+				// Drain any jobs buffered in the queue before exiting,
+				// matching the old for-range drain-on-close behaviour.
+				for {
+					select {
+					case job := <-connection.dispatchQueue:
+						connection.processJob(job)
+					default:
+						return
+					}
+				}
 			}
 		}
 	}()
+}
+
+// processJob dispatches a single job to message handlers.
+func (connection *MQTTConnection) processJob(job dispatchJob) {
+	err := connection.messaging.DispatchToHandlers(
+		context.Background(),
+		job.payload,
+		job.orgID,
+		job.agentID,
+		job.topicActions,
+	)
+	if err != nil {
+		connection.logger.Error("failed to dispatch to handlers", "error", err)
+	}
 }
 
 // stopDispatchWorker stops the dispatch worker and waits for it to finish.
