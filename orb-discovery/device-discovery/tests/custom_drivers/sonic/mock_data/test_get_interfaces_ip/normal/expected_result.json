@@ -1,0 +1,40 @@
+{
+  "Ethernet0": {
+    "ipv4": {
+      "10.0.0.1": {
+        "prefix_length": 31
+      }
+    },
+    "ipv6": {
+      "fc00::1": {
+        "prefix_length": 126
+      }
+    }
+  },
+  "Ethernet4": {
+    "ipv4": {
+      "10.0.0.3": {
+        "prefix_length": 31
+      }
+    }
+  },
+  "Loopback0": {
+    "ipv4": {
+      "10.1.0.1": {
+        "prefix_length": 32
+      }
+    },
+    "ipv6": {
+      "fc00:1::1": {
+        "prefix_length": 128
+      }
+    }
+  },
+  "Management0": {
+    "ipv4": {
+      "192.168.1.10": {
+        "prefix_length": 24
+      }
+    }
+  }
+}

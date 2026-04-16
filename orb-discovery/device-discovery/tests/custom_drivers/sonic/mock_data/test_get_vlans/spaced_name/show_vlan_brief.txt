@@ -1,0 +1,4 @@
+VLAN ID    VLAN Name            Member Ports           Status
+---------  -------------------  ---------------------  -------
+100        Server Network       Ethernet0,Ethernet4    active
+200        OOB Management       Management0            active
