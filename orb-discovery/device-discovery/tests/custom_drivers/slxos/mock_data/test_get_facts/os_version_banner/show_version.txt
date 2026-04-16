@@ -1,0 +1,24 @@
+Extreme Networks Routing Operating System Software
+  SLX-OS Operating System Software
+  SLX-OS Operating System Version: 20.2.3
+  Copyright (c) 2010-2021 Extreme Networks Inc.
+
+Stack-unit 0:
+  SW-Version:       SLX-OS_v20.2.3a_SLX_9640
+  Build-Revision:   r
+  HW-Version:       Rev: 00
+  Time-Stamp:       Thu Dec 16 15:58:05 UTC 2021
+  Build-Feature:    SLX-OS
+
+  Power Status:     AC-Only
+
+Chassis information for: SLX_9640
+  SN:               FTX2244H01B3
+  Part Number:      103-000003-07
+  Revision:         01
+
+System uptime: 0 days, 2 hours, 17 minutes, 30 seconds
+
+System Name: slx9640
+System Location:
+System contact: admin@example.com

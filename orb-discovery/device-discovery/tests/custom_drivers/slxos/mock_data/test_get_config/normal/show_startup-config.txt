@@ -1,0 +1,13 @@
+!
+! Extreme Networks Startup Configuration
+!
+hostname slx9640
+!
+username admin privilege 0 password encrypted $1$abc123xyz
+!
+interface Ethernet 0/1
+ no shutdown
+!
+ip route 0.0.0.0/0 192.168.100.254
+!
+end

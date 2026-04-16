@@ -1,0 +1,18 @@
+{
+  "hostname": "slx9640",
+  "vendor": "Extreme",
+  "model": "SLX 9640",
+  "os_version": "20.2.3",
+  "serial_number": "FTX2244H01B3",
+  "uptime": 17542.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "Management 1",
+    "Ethernet 0/1",
+    "Ethernet 0/2",
+    "Ethernet 0/3",
+    "Port-channel 1",
+    "Loopback 1",
+    "Ve 10"
+  ]
+}

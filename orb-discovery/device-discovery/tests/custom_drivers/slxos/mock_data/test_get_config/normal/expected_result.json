@@ -1,0 +1,5 @@
+{
+  "running": "!\n! Extreme Networks Configuration\n!\nhostname slx9640\n!\nusername admin privilege 0 password encrypted $1$abc123xyz\n!\nenable secret sha256 $5$abc123xyz\n!\ninterface Ethernet 0/1\n no shutdown\n description uplink-to-core\n!\ninterface Loopback 1\n ip address 10.1.1.1/32\n!\ninterface Ve 10\n ip address 10.0.10.1/24\n!\nvlan 1\n name Default\n!\nvlan 10\n name Management\n!\nsnmp-server community public ro\nsnmp-server community private rw\n!\nip route 0.0.0.0/0 192.168.100.254\n!\nend\n",
+  "candidate": "",
+  "startup": "!\n! Extreme Networks Startup Configuration\n!\nhostname slx9640\n!\nusername admin privilege 0 password encrypted $1$abc123xyz\n!\ninterface Ethernet 0/1\n no shutdown\n!\nip route 0.0.0.0/0 192.168.100.254\n!\nend\n"
+}

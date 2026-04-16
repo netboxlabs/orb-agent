@@ -1,0 +1,24 @@
+{
+  "1": {
+    "name": "Default",
+    "interfaces": [
+      "Ethernet 0/1",
+      "Ethernet 0/2"
+    ]
+  },
+  "10": {
+    "name": "Management",
+    "interfaces": [
+      "Ethernet 0/3"
+    ]
+  },
+  "20": {
+    "name": "Servers",
+    "interfaces": [
+      "Port-channel 1",
+      "Ethernet 0/4",
+      "Ethernet 0/5",
+      "Ethernet 0/6"
+    ]
+  }
+}
