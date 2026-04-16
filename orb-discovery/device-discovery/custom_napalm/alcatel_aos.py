@@ -171,7 +171,7 @@ def _parse_ipv6_interfaces(output: str, result: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-class AOSDriver(_napalm_base.NetworkDriver):
+class AlcatelAOSDriver(_napalm_base.NetworkDriver):
     """Alcatel-Lucent AOS NAPALM driver (read-only subset for device-discovery)."""
 
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
