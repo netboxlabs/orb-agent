@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -40,9 +39,9 @@ type MQTTConnection struct {
 	connectionTopics         TokenResponseTopics
 	reconnectChan            chan struct{}
 	dispatchQueue            chan dispatchJob
-	dispatchStop             chan struct{} // signal the worker to exit (never close dispatchQueue)
 	dispatchWorkerDone       chan struct{}
-	shuttingDown             atomic.Bool
+	dispatchMu               sync.Mutex // guards shuttingDown + dispatchQueue close
+	shuttingDown             bool
 	capabilitiesFailCount    int
 	groupMembershipFailCount int
 	heartbeatFailCount       int
@@ -62,7 +61,6 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		topicHandlers:      make(map[string]TopicMessageHandler),
 		reconnectChan:      reconnectChan,
 		dispatchQueue:      make(chan dispatchJob, 100), // Buffered channel to prevent blocking MQTT acks
-		dispatchStop:       make(chan struct{}),
 		dispatchWorkerDone: make(chan struct{}),
 	}
 }
@@ -106,28 +104,11 @@ type MQTTConnector interface {
 }
 
 // startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially.
-// The worker exits when dispatchStop is closed — dispatchQueue itself is never closed,
-// which eliminates the "send on closed channel" panic that can occur when senders race
-// with shutdown. Any jobs already buffered in dispatchQueue are drained before exit.
 func (connection *MQTTConnection) startDispatchWorker() {
 	go func() {
 		defer close(connection.dispatchWorkerDone)
-		for {
-			select {
-			case job := <-connection.dispatchQueue:
-				connection.processJob(job)
-			case <-connection.dispatchStop:
-				// Drain any jobs buffered in the queue before exiting,
-				// matching the old for-range drain-on-close behaviour.
-				for {
-					select {
-					case job := <-connection.dispatchQueue:
-						connection.processJob(job)
-					default:
-						return
-					}
-				}
-			}
+		for job := range connection.dispatchQueue {
+			connection.processJob(job)
 		}
 	}()
 }
@@ -147,19 +128,30 @@ func (connection *MQTTConnection) processJob(job dispatchJob) {
 }
 
 // stopDispatchWorker stops the dispatch worker and waits for it to finish.
-// It closes dispatchStop (not dispatchQueue) to signal the worker, so
-// concurrent senders never hit "send on closed channel".
+// All reads of dispatchWorkerDone and dispatchQueue are done under dispatchMu
+// so that senders and concurrent stoppers cannot race with the queue close.
 func (connection *MQTTConnection) stopDispatchWorker() {
-	// If the worker is already done (dispatchWorkerDone is closed), do nothing.
+	connection.dispatchMu.Lock()
+
+	done := connection.dispatchWorkerDone
 	select {
-	case <-connection.dispatchWorkerDone:
+	case <-done:
+		connection.dispatchMu.Unlock()
 		return
 	default:
 	}
 
-	// Signal the worker to exit, then wait for it to finish.
-	close(connection.dispatchStop)
-	<-connection.dispatchWorkerDone
+	if connection.shuttingDown {
+		connection.dispatchMu.Unlock()
+		<-done
+		return
+	}
+
+	connection.shuttingDown = true
+	close(connection.dispatchQueue)
+	connection.dispatchMu.Unlock()
+
+	<-done
 }
 
 // Connect connects to the MQTT broker. It is safe to call after a previous
@@ -184,10 +176,11 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 	}
 
 	// Reinitialize dispatch channels after validation and teardown.
+	connection.dispatchMu.Lock()
 	connection.dispatchQueue = make(chan dispatchJob, 100)
-	connection.dispatchStop = make(chan struct{})
 	connection.dispatchWorkerDone = make(chan struct{})
-	connection.shuttingDown.Store(false)
+	connection.shuttingDown = false
+	connection.dispatchMu.Unlock()
 
 	// Store topics for hook callbacks
 	connection.connectionTopics = details.Topics
@@ -346,28 +339,33 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 					}
 					orgID := parts[1]
 
-					// Check if we're shutting down to avoid sending to a closed channel
-					if connection.shuttingDown.Load() {
-						connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
-						return true, nil
-					}
+						// Hold dispatchMu while checking shuttingDown and sending on
+						// dispatchQueue so stopDispatchWorker cannot close the queue
+						// between the check and the send.
+						connection.dispatchMu.Lock()
+						if connection.shuttingDown {
+							connection.dispatchMu.Unlock()
+							connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
+							return true, nil
+						}
 
-					select {
-					case connection.dispatchQueue <- dispatchJob{
+						select {
+						case connection.dispatchQueue <- dispatchJob{
 						payload: pr.Packet.Payload,
 						orgID:   orgID,
 						agentID: details.AgentID,
 						topicActions: TopicActions{
 							Subscribe:   connection.subscribeToTopic,
-							Publish:     connection.publishToTopic,
-							Unsubscribe: connection.unsubscribeFromTopic,
-						},
-					}:
-						// Job enqueued successfully
-					default:
-						// Queue is full - log warning and process synchronously as fallback
-						connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
-						err := connection.messaging.DispatchToHandlers(
+								Publish:     connection.publishToTopic,
+								Unsubscribe: connection.unsubscribeFromTopic,
+							},
+						}:
+							connection.dispatchMu.Unlock()
+						default:
+							connection.dispatchMu.Unlock()
+							// Queue is full - log warning and process synchronously as fallback
+							connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
+							err := connection.messaging.DispatchToHandlers(
 							context.Background(),
 							pr.Packet.Payload,
 							orgID,
@@ -427,8 +425,6 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 	// Disconnect the existing connection
 	if connection.connectionManager != nil {
 		// Set shutdown flag first to prevent new messages from being enqueued
-		connection.shuttingDown.Store(true)
-
 		disconnectCtx, cancel := context.WithTimeout(ctx, timeout)
 		connection.heartbeater.stop(details.Topics.Heartbeat, connection.publishToTopic)
 		err := connection.connectionManager.Disconnect(disconnectCtx)
@@ -461,8 +457,6 @@ func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic
 	if connection.connectionManager == nil {
 		return nil
 	}
-	// Set shutdown flag first to prevent new messages from being enqueued
-	connection.shuttingDown.Store(true)
 
 	// Only attempt the offline heartbeat if we have a real topic; callers like
 	// the startup retry loop pass "" when no session was ever established.
