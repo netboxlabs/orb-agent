@@ -1,0 +1,21 @@
+{
+  "ethernet-1/1": {
+    "ipv4": {
+      "192.168.0.0": {
+        "prefix_length": 31
+      }
+    },
+    "ipv6": {
+      "2002::c0a8:0": {
+        "prefix_length": 127
+      }
+    }
+  },
+  "mgmt0": {
+    "ipv4": {
+      "172.18.0.6": {
+        "prefix_length": 16
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "running": "    system {\n        aaa {\n            authentication {\n                admin-user {\n                    password <redacted>\n                }\n            }\n        }\n        snmp {\n            community <redacted>\n        }\n        name {\n            host-name srl-test\n        }\n    }",
+  "candidate": "",
+  "startup": ""
+}

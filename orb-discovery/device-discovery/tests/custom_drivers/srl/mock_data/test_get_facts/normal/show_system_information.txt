@@ -1,0 +1,13 @@
+--------------------------------------------------------------------
+  System Information
+--------------------------------------------------------------------
+  System Name     : srl-test
+  Chassis Type    : 7250 IXR-6e
+  Part Number     : Sim Part No.
+  Chassis serial number : SRL0123456789
+  System HW MAC Address : 1A:12:00:FF:FF:FF
+  Software Version      : v23.10.1
+  Uptime                : 2 days 3 hours 15 minutes 30 seconds
+--------------------------------------------------------------------
+
+--{ running }--[  ]--
