@@ -40,6 +40,7 @@ type MQTTConnection struct {
 	connectionTopics         TokenResponseTopics
 	reconnectChan            chan struct{}
 	dispatchQueue            chan dispatchJob
+	dispatchStop             chan struct{} // signal the worker to exit (never close dispatchQueue)
 	dispatchWorkerDone       chan struct{}
 	shuttingDown             atomic.Bool
 	capabilitiesFailCount    int
@@ -61,6 +62,7 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		topicHandlers:      make(map[string]TopicMessageHandler),
 		reconnectChan:      reconnectChan,
 		dispatchQueue:      make(chan dispatchJob, 100), // Buffered channel to prevent blocking MQTT acks
+		dispatchStop:       make(chan struct{}),
 		dispatchWorkerDone: make(chan struct{}),
 	}
 }
@@ -103,26 +105,36 @@ type MQTTConnector interface {
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 }
 
-// startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially
+// startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially.
+// The worker exits when dispatchStop is closed — dispatchQueue itself is never closed,
+// which eliminates the "send on closed channel" panic that can occur when senders race
+// with shutdown.
 func (connection *MQTTConnection) startDispatchWorker() {
 	go func() {
 		defer close(connection.dispatchWorkerDone)
-		for job := range connection.dispatchQueue {
-			err := connection.messaging.DispatchToHandlers(
-				context.Background(),
-				job.payload,
-				job.orgID,
-				job.agentID,
-				job.topicActions,
-			)
-			if err != nil {
-				connection.logger.Error("failed to dispatch to handlers", "error", err)
+		for {
+			select {
+			case job := <-connection.dispatchQueue:
+				err := connection.messaging.DispatchToHandlers(
+					context.Background(),
+					job.payload,
+					job.orgID,
+					job.agentID,
+					job.topicActions,
+				)
+				if err != nil {
+					connection.logger.Error("failed to dispatch to handlers", "error", err)
+				}
+			case <-connection.dispatchStop:
+				return
 			}
 		}
 	}()
 }
 
-// stopDispatchWorker stops the dispatch worker and waits for it to finish
+// stopDispatchWorker stops the dispatch worker and waits for it to finish.
+// It closes dispatchStop (not dispatchQueue) to signal the worker, so
+// concurrent senders never hit "send on closed channel".
 func (connection *MQTTConnection) stopDispatchWorker() {
 	// If the worker is already done (dispatchWorkerDone is closed), do nothing.
 	select {
@@ -131,8 +143,8 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 	default:
 	}
 
-	// First time stopping: close the queue to signal the worker to exit, then wait for it.
-	close(connection.dispatchQueue)
+	// Signal the worker to exit, then wait for it to finish.
+	close(connection.dispatchStop)
 	<-connection.dispatchWorkerDone
 }
 
@@ -159,6 +171,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 
 	// Reinitialize dispatch channels after validation and teardown.
 	connection.dispatchQueue = make(chan dispatchJob, 100)
+	connection.dispatchStop = make(chan struct{})
 	connection.dispatchWorkerDone = make(chan struct{})
 	connection.shuttingDown.Store(false)
 

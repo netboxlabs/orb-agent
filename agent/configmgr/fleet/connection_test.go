@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -213,5 +214,70 @@ func TestDispatchQueue_HandlesQueueFull(t *testing.T) {
 		t.Fatal("Queue should be full")
 	default:
 		// Expected - queue is full
+	}
+}
+
+// TestDispatchQueue_NoPanicOnConcurrentShutdown exercises the race window between
+// sending on dispatchQueue and closing it during shutdown. Before the fix (using a
+// separate stop channel), closing the dispatch channel while senders are in-flight
+// can cause "panic: send on closed channel" — even with the shuttingDown atomic
+// check, because the close can happen between the check and the send.
+//
+// Run with: go test -race -count=100 -run TestDispatchQueue_NoPanicOnConcurrentShutdown
+func TestDispatchQueue_NoPanicOnConcurrentShutdown(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+
+	connection.startDispatchWorker()
+
+	const numSenders = 50
+	const sendsPerGoroutine = 200
+	var wg sync.WaitGroup
+	var panics atomic.Int32
+
+	// Spawn many goroutines that mirror the OnPublishReceived send path
+	for i := 0; i < numSenders; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panics.Add(1)
+				}
+			}()
+			for j := 0; j < sendsPerGoroutine; j++ {
+				// This mirrors connection.go:322-357 exactly
+				if connection.shuttingDown.Load() {
+					return
+				}
+				select {
+				case connection.dispatchQueue <- dispatchJob{
+					payload: []byte(`{}`),
+					orgID:   "test-org",
+					agentID: "test-agent",
+					topicActions: TopicActions{
+						Subscribe:   func(_ string) error { return nil },
+						Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+						Unsubscribe: func(_ string) error { return nil },
+					},
+				}:
+				default:
+				}
+			}
+		}()
+	}
+
+	// Let senders build up pressure, then trigger concurrent shutdown
+	time.Sleep(1 * time.Millisecond)
+	connection.shuttingDown.Store(true)
+	connection.stopDispatchWorker()
+
+	wg.Wait()
+
+	if p := panics.Load(); p > 0 {
+		t.Fatalf("detected %d panic(s) from send on closed channel — race condition exists", p)
 	}
 }
