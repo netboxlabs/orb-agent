@@ -1,0 +1,5 @@
+{
+  "running": "# Managed by ifupdown2\nauto lo\niface lo inet loopback\n    address 10.10.10.1/32\n\nauto eth0\niface eth0 inet dhcp\n\nauto swp1\niface swp1\n    mtu 9216\n    alias to-spine01\n\nauto swp2\niface swp2\n    mtu 9216\n    alias to-spine02\n\nauto bridge\niface bridge\n    bridge-ports swp3\n    bridge-vlan-aware yes\n    bridge-vids 100 200",
+  "candidate": "",
+  "startup": ""
+}

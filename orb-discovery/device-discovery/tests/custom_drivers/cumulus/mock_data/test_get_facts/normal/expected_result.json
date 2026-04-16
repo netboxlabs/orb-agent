@@ -1,0 +1,18 @@
+{
+  "hostname": "leaf01",
+  "vendor": "Nvidia",
+  "model": "SN2410M",
+  "os_version": "Cumulus Linux 5.7.0",
+  "serial_number": "MT2123X07890A",
+  "uptime": 864523.42,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "lo",
+    "eth0",
+    "swp1",
+    "swp2",
+    "swp3",
+    "bridge",
+    "vlan100"
+  ]
+}

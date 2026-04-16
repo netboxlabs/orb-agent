@@ -1,0 +1,23 @@
+TlvInfo Header:
+   Id String:    TlvInfo
+   Version:      1
+   Total Length: 170
+TLV Name             Code Len Value
+-------------------- ---- --- -----
+Product Name         0x21  10 SN2410M
+Part Number          0x22   7 MSN2410
+Serial Number        0x23  13 MT2123X07890A
+Base MAC Address     0x24   6 B8:CE:F6:1A:2B:3C
+Manufacture Date     0x25  19 05/20/2023 10:30:00
+Device Version       0x26   1 1
+Label Revision       0x27   8 A01
+Platform Name        0x28  22 x86_64-mlnx_x86-r0
+ONIE Version         0x29  15 2021.11-v1.0.0
+MAC Addresses        0x2A   2 64
+Manufacturer         0x2B   6 Nvidia
+Country Code         0x2C   2 IL
+Vendor Name          0x2D  11 Mellanox
+Diag Version         0x2E   6 v1.0.0
+Service Tag          0x2F   1 X
+CRC-32               0xFE   4 0x13579BDF
+(checksum valid)
