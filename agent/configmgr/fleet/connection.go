@@ -339,33 +339,33 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 					}
 					orgID := parts[1]
 
-						// Hold dispatchMu while checking shuttingDown and sending on
-						// dispatchQueue so stopDispatchWorker cannot close the queue
-						// between the check and the send.
-						connection.dispatchMu.Lock()
-						if connection.shuttingDown {
-							connection.dispatchMu.Unlock()
-							connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
-							return true, nil
-						}
+					// Hold dispatchMu while checking shuttingDown and sending on
+					// dispatchQueue so stopDispatchWorker cannot close the queue
+					// between the check and the send.
+					connection.dispatchMu.Lock()
+					if connection.shuttingDown {
+						connection.dispatchMu.Unlock()
+						connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
+						return true, nil
+					}
 
-						select {
-						case connection.dispatchQueue <- dispatchJob{
+					select {
+					case connection.dispatchQueue <- dispatchJob{
 						payload: pr.Packet.Payload,
 						orgID:   orgID,
 						agentID: details.AgentID,
 						topicActions: TopicActions{
 							Subscribe:   connection.subscribeToTopic,
-								Publish:     connection.publishToTopic,
-								Unsubscribe: connection.unsubscribeFromTopic,
-							},
-						}:
-							connection.dispatchMu.Unlock()
-						default:
-							connection.dispatchMu.Unlock()
-							// Queue is full - log warning and process synchronously as fallback
-							connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
-							err := connection.messaging.DispatchToHandlers(
+							Publish:     connection.publishToTopic,
+							Unsubscribe: connection.unsubscribeFromTopic,
+						},
+					}:
+						connection.dispatchMu.Unlock()
+					default:
+						connection.dispatchMu.Unlock()
+						// Queue is full - log warning and process synchronously as fallback
+						connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
+						err := connection.messaging.DispatchToHandlers(
 							context.Background(),
 							pr.Packet.Payload,
 							orgID,
