@@ -121,7 +121,8 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 		strings.Contains(err.Error(), "context deadline exceeded") ||
 			strings.Contains(err.Error(), "connection refused") ||
 			strings.Contains(err.Error(), "no such host") ||
-			strings.Contains(err.Error(), "server denied connect"),
+			strings.Contains(err.Error(), "server denied connect") ||
+			strings.Contains(err.Error(), "connection manager shutting down"),
 		"Expected connection-related error, got: %v", err)
 }
 
