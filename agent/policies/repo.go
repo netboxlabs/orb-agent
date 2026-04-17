@@ -22,6 +22,7 @@ type PolicyRepo interface {
 	RemoveDataset(policyID string, datasetID string) (bool, error)
 	EnsureGroupID(policyID string, agentGroupID string) error
 	UpdateRuns(policyName string, runs []RunData) error
+	FailNonTerminalRuns(reason string) error
 }
 
 type policyMemRepo struct {
@@ -175,7 +176,7 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 			// Existing run: always preserve CreatedAt
 			runs[i].CreatedAt = existing.CreatedAt
 
-			if isTerminalStatus(existing.Status) {
+			if IsTerminalRunStatus(existing.Status) {
 				// Run already finished; freeze UpdatedAt so
 				// UpdatedAt − CreatedAt reflects the final run duration.
 				runs[i].UpdatedAt = existing.UpdatedAt
@@ -192,7 +193,7 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 			// For terminal runs seen for the first time (e.g. after agent restart),
 			// preserve the backend's UpdatedAt so UpdatedAt − CreatedAt reflects
 			// actual run duration rather than agent poll time.
-			if runs[i].UpdatedAt.IsZero() || !isTerminalStatus(runs[i].Status) {
+			if runs[i].UpdatedAt.IsZero() || !IsTerminalRunStatus(runs[i].Status) {
 				runs[i].UpdatedAt = now
 			}
 		}
@@ -200,6 +201,31 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 
 	policy.Runs = runs
 	p.db[policyID] = policy
+	return nil
+}
+
+// FailNonTerminalRuns marks every non-terminal run as failed with the given reason.
+// Terminal runs (completed, failed) are unchanged.
+func (p *policyMemRepo) FailNonTerminalRuns(reason string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now().UTC()
+	for policyID, policy := range p.db {
+		changed := false
+		for i := range policy.Runs {
+			if IsTerminalRunStatus(policy.Runs[i].Status) {
+				continue
+			}
+			policy.Runs[i].PolicyID = policyID
+			policy.Runs[i].Status = "failed"
+			policy.Runs[i].Reason = reason
+			policy.Runs[i].UpdatedAt = now
+			changed = true
+		}
+		if changed {
+			p.db[policyID] = policy
+		}
+	}
 	return nil
 }
 
