@@ -19,13 +19,22 @@ import (
 // mockConfigManager implements configmgr.Manager for testing Stop delegation
 type mockConfigManager struct {
 	stopCalled bool
+	// onStop runs at the start of Stop (before stopCalled is set). Use it to
+	// assert ordering relative to other shutdown side effects.
+	onStop func()
 }
 
 func (m *mockConfigManager) Start(_ context.Context, _ config.Config, _ map[string]backend.Backend) error {
 	return nil
 }
 func (m *mockConfigManager) GetContext(ctx context.Context) context.Context { return ctx }
-func (m *mockConfigManager) Stop(_ context.Context) error                   { m.stopCalled = true; return nil }
+func (m *mockConfigManager) Stop(_ context.Context) error {
+	if m.onStop != nil {
+		m.onStop()
+	}
+	m.stopCalled = true
+	return nil
+}
 
 func TestAgentStop_DelegatesToConfigManagerStop(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -58,7 +67,16 @@ func TestAgentStop_FailNonTerminalRunsBeforeConfigManagerStop(t *testing.T) {
 		},
 	}))
 
-	cm := &mockConfigManager{}
+	cm := &mockConfigManager{
+		onStop: func() {
+			pd, err := repo.Get("p1")
+			require.NoError(t, err)
+			require.Len(t, pd.Runs, 1)
+			assert.Equal(t, "failed", pd.Runs[0].Status,
+				"run must already be finalized when configManager.Stop is invoked (FailNonTerminalRuns before Stop)")
+			assert.Equal(t, policies.RunFailureReasonAgentStopped, pd.Runs[0].Reason)
+		},
+	}
 	a := &orbAgent{
 		logger:        logger,
 		backends:      map[string]backend.Backend{},
@@ -67,7 +85,7 @@ func TestAgentStop_FailNonTerminalRunsBeforeConfigManagerStop(t *testing.T) {
 	}
 	a.Stop(context.Background())
 
-	assert.True(t, cm.stopCalled, "configManager.Stop must run after FailNonTerminalRuns")
+	assert.True(t, cm.stopCalled, "expected configManager.Stop to complete")
 	pd, err := repo.Get("p1")
 	require.NoError(t, err)
 	require.Len(t, pd.Runs, 1)
