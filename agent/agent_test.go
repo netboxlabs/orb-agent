@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,6 +42,37 @@ func TestAgentStop_DelegatesToConfigManagerStop(t *testing.T) {
 	a.Stop(context.Background())
 
 	assert.True(t, mockMgr.stopCalled, "expected configManager.Stop to be called")
+}
+
+func TestAgentStop_FailNonTerminalRunsBeforeConfigManagerStop(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, repo.Update(policies.PolicyData{
+		ID:       "p1",
+		Name:     "policy-one",
+		Datasets: map[string]bool{"d1": true},
+		Runs: []policies.RunData{
+			{ID: "run-1", Status: "running", CreatedAt: now, UpdatedAt: now},
+		},
+	}))
+
+	cm := &mockConfigManager{}
+	a := &orbAgent{
+		logger:        logger,
+		backends:      map[string]backend.Backend{},
+		policyManager: &mockPolicyManager{repo: repo},
+		configManager: cm,
+	}
+	a.Stop(context.Background())
+
+	assert.True(t, cm.stopCalled, "configManager.Stop must run after FailNonTerminalRuns")
+	pd, err := repo.Get("p1")
+	require.NoError(t, err)
+	require.Len(t, pd.Runs, 1)
+	assert.Equal(t, "failed", pd.Runs[0].Status)
+	assert.Equal(t, policies.RunFailureReasonAgentStopped, pd.Runs[0].Reason)
 }
 
 // mockPolicyManager implements policymgr.PolicyManager for testing
