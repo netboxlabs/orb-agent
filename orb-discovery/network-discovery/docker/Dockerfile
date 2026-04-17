@@ -1,4 +1,4 @@
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 
@@ -15,7 +15,7 @@ RUN --mount=target=. \
     --mount=type=cache,target=/go/pkg \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -trimpath -o /build/network-discovery ./cmd/main.go
 
-FROM alpine:3.22
+FROM alpine:3.23
 
 RUN apk update && apk add --no-cache nmap
 

@@ -14,7 +14,6 @@ concurrency:
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  GO_VERSION: '1.25'
   APP_NAME: snmp-discovery
 
 permissions:
@@ -131,6 +130,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Extract Go version from go.mod
+        run: echo "GO_VERSION=$(grep '^go ' snmp-discovery/go.mod | awk '{print $2}')" >> $GITHUB_ENV
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@49b3bc8e6bdd4a60e6116a5414239cba5943d3cf #v3.2.0

@@ -1,4 +1,4 @@
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS builder
 
@@ -10,7 +10,7 @@ ARG TARGETOS TARGETARCH
 
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -trimpath -o /build/snmp-discovery ./cmd/main.go
 
-FROM alpine:3.22
+FROM alpine:3.23
 
 # Copy the binary
 COPY --from=builder /build/snmp-discovery /usr/local/bin/snmp-discovery
