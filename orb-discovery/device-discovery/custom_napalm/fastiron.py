@@ -218,6 +218,17 @@ _UNTAGGED_RE = re.compile(r"^\s+untagged\s+(?P<ports>.+)", re.IGNORECASE)
 # "router-interface ve <id>" — 08.x syntax attaching a VE as the L3 interface of a VLAN.
 _ROUTER_INTF_RE = re.compile(r"^\s+router-interface\s+ve\s+(?P<ve>\d+)", re.IGNORECASE)
 
+
+def _add_member_ports(line: str, interfaces: list) -> None:
+    for pattern in (_TAGGED_RE, _UNTAGGED_RE):
+        m = pattern.match(line)
+        if m:
+            for port in _split_port_list(m.group("ports")):
+                if port not in interfaces:
+                    interfaces.append(port)
+            break
+
+
 # ---------------------------------------------------------------------------
 # IP interface regex
 # ---------------------------------------------------------------------------
@@ -602,14 +613,7 @@ class FastIronDriver(_napalm_base.NetworkDriver):
             if current_id is None:
                 continue
 
-            for pattern in (_TAGGED_RE, _UNTAGGED_RE):
-                m = pattern.match(line)
-                if m:
-                    for port in _split_port_list(m.group("ports")):
-                        entry = vlans[current_id]
-                        if port not in entry["interfaces"]:
-                            entry["interfaces"].append(port)
-                    break
+            _add_member_ports(line, vlans[current_id]["interfaces"])
 
             m_ri = _ROUTER_INTF_RE.match(line)
             if m_ri:
