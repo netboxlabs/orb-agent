@@ -19,11 +19,38 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 func init() {
 	heartbeatTickInterval = 50 * time.Millisecond
 }
+
+// testPolicyManagerWithRepo implements policymgr.PolicyManager by delegating
+// GetPolicyState / GetRepo to an in-memory repo (for shutdown / heartbeat payload tests).
+type testPolicyManagerWithRepo struct {
+	repo policies.PolicyRepo
+}
+
+func (t *testPolicyManagerWithRepo) ManagePolicy(_ config.PolicyPayload) {}
+
+func (t *testPolicyManagerWithRepo) RemovePolicyDataset(_ string, _ string, _ backend.Backend) {}
+
+func (t *testPolicyManagerWithRepo) GetPolicyState() ([]policies.PolicyData, error) {
+	return t.repo.GetAll()
+}
+
+func (t *testPolicyManagerWithRepo) GetRepo() policies.PolicyRepo { return t.repo }
+
+func (t *testPolicyManagerWithRepo) ApplyBackendPolicies(_ backend.Backend) error { return nil }
+
+func (t *testPolicyManagerWithRepo) RemoveBackendPolicies(_ backend.Backend, _ bool) error {
+	return nil
+}
+
+func (t *testPolicyManagerWithRepo) RemovePolicy(_ string, _ string, _ string) error { return nil }
+
+var _ policymgr.PolicyManager = (*testPolicyManagerWithRepo)(nil)
 
 // mockPublishFunc is a testify mock for the publish function
 type mockPublishFunc struct {
@@ -171,6 +198,71 @@ func TestHeartbeater_SendSingleHeartbeat_OfflineState(t *testing.T) {
 	require.NoError(t, json.Unmarshal(payload, &hbMsg))
 	assert.Equal(t, messages.State(messages.Offline), hbMsg.State,
 		"Offline heartbeat must carry State=Offline, not State=Online")
+}
+
+// TestHeartbeater_OfflineHeartbeat_IncludesFailedRunsAfterFailNonTerminalRuns verifies that
+// after FailNonTerminalRuns (as in orbAgent.Stop before Fleet shutdown), an offline heartbeat
+// payload includes failed runs with the shutdown reason (OBS-2686).
+func TestHeartbeater_OfflineHeartbeat_IncludesFailedRunsAfterFailNonTerminalRuns(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	before := now.Add(-30 * time.Minute)
+	require.NoError(t, repo.Update(policies.PolicyData{
+		ID:       "pol-id-1",
+		Name:     "network-scan",
+		Backend:  "network-discovery",
+		Version:  1,
+		Datasets: map[string]bool{"ds1": true},
+		GroupIDs: map[string]bool{},
+		State:    policies.Running,
+		Runs: []policies.RunData{
+			{ID: "run-a", Status: "running", CreatedAt: before, UpdatedAt: before},
+			{ID: "run-b", Status: "completed", CreatedAt: before, UpdatedAt: before},
+		},
+	}))
+	require.NoError(t, repo.FailNonTerminalRuns(policies.RunFailureReasonAgentStopped))
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	pm := &testPolicyManagerWithRepo{repo: repo}
+	groupManager := newGroupManager()
+	hb := &heartbeater{
+		logger:         logger,
+		heartbeatCtx:   context.Background(),
+		backendState:   &mockBackendState{},
+		policyManager:  pm,
+		groupRetriever: &groupManager,
+	}
+
+	var captured []byte
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		captured = payload
+		return nil
+	}
+
+	hb.sendSingleHeartbeat(context.Background(), "fleet/hb", publishFunc, "agent-1", time.Now(), messages.Offline, nil)
+	require.NotEmpty(t, captured)
+
+	var msg messages.Heartbeat
+	require.NoError(t, json.Unmarshal(captured, &msg))
+	pi, ok := msg.PolicyState["pol-id-1"]
+	require.True(t, ok, "policy state should include policy id key")
+	require.Len(t, pi.Runs, 2)
+
+	var runA, runB *messages.RunStateInfo
+	for i := range pi.Runs {
+		switch pi.Runs[i].ID {
+		case "run-a":
+			runA = &pi.Runs[i]
+		case "run-b":
+			runB = &pi.Runs[i]
+		}
+	}
+	require.NotNil(t, runA)
+	require.NotNil(t, runB)
+	assert.Equal(t, "failed", runA.Status)
+	assert.Equal(t, policies.RunFailureReasonAgentStopped, runA.Reason)
+	assert.Equal(t, "completed", runB.Status)
 }
 
 func TestHeartbeater_SendSingleHeartbeat_PublishError(t *testing.T) {
