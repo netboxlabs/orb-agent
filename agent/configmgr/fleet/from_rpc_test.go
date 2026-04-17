@@ -112,6 +112,11 @@ func (m *mockPolicyRepo) UpdateRuns(policyName string, runs []policies.RunData) 
 	return args.Error(0)
 }
 
+func (m *mockPolicyRepo) FailNonTerminalRuns(reason string) error {
+	args := m.Called(reason)
+	return args.Error(0)
+}
+
 func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 

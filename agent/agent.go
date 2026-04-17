@@ -14,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
@@ -272,6 +273,13 @@ func (a *orbAgent) Stop(ctx context.Context) {
 		}
 	}
 	a.shutdownOTLP()
+	if a.policyManager != nil {
+		if repo := a.policyManager.GetRepo(); repo != nil {
+			if err := repo.FailNonTerminalRuns(policies.RunFailureReasonAgentStopped); err != nil {
+				a.logger.Error("error while finalizing policy runs on shutdown", slog.Any("error", err))
+			}
+		}
+	}
 	if err := a.configManager.Stop(ctx); err != nil {
 		a.logger.Error("error while stopping config manager", slog.Any("error", err))
 	}

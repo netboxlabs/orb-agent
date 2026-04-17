@@ -81,9 +81,13 @@ func (s *PolicyState) Scan(value any) error {
 // Value returns the value of the PolicyState
 func (s PolicyState) Value() (driver.Value, error) { return s.String(), nil }
 
-// isTerminalStatus returns true if the run status represents a finished run
+// RunFailureReasonAgentStopped is reported when non-terminal runs are finalized
+// because the agent shut down intentionally (e.g. SIGTERM/SIGINT).
+const RunFailureReasonAgentStopped = "Run interrupted: agent was intentionally stopped"
+
+// IsTerminalRunStatus returns true if the run status represents a finished run
 // whose timestamps should no longer be updated.
-func isTerminalStatus(status string) bool {
+func IsTerminalRunStatus(status string) bool {
 	switch status {
 	case "completed", "failed":
 		return true

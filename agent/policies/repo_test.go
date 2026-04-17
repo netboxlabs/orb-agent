@@ -809,3 +809,95 @@ func TestUpdateRuns_GetAllIncludesRuns(t *testing.T) {
 	}
 	assert.True(t, foundPolicy2, "Policy 2 should be found in GetAll()")
 }
+
+func TestIsTerminalRunStatus(t *testing.T) {
+	t.Parallel()
+	assert.True(t, policies.IsTerminalRunStatus("completed"))
+	assert.True(t, policies.IsTerminalRunStatus("failed"))
+	assert.False(t, policies.IsTerminalRunStatus("running"))
+	assert.False(t, policies.IsTerminalRunStatus(""))
+	assert.False(t, policies.IsTerminalRunStatus("pending"))
+}
+
+func TestFailNonTerminalRuns_EmptyRepo(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.FailNonTerminalRuns(policies.RunFailureReasonAgentStopped))
+}
+
+func TestFailNonTerminalRuns_MarksRunningAndPreservesTerminal(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	before := now.Add(-time.Hour)
+	pd := policies.PolicyData{
+		ID:       "policy-a",
+		Name:     "net-pol",
+		Backend:  "network-discovery",
+		Version:  1,
+		Datasets: map[string]bool{"ds1": true},
+		GroupIDs: map[string]bool{},
+		State:    policies.Running,
+		Runs: []policies.RunData{
+			{ID: "run-running", Status: "running", CreatedAt: before, UpdatedAt: before},
+			{ID: "run-custom", Status: "queued", CreatedAt: before, UpdatedAt: before},
+			{ID: "run-done", Status: "completed", CreatedAt: before, UpdatedAt: before},
+			{ID: "run-fail", Status: "failed", Reason: "discovery error", CreatedAt: before, UpdatedAt: before},
+		},
+	}
+	require.NoError(t, repo.Update(pd))
+
+	afterStart := time.Now().UTC()
+	require.NoError(t, repo.FailNonTerminalRuns("custom shutdown reason"))
+
+	out, err := repo.Get("policy-a")
+	require.NoError(t, err)
+	require.Len(t, out.Runs, 4)
+
+	byID := make(map[string]policies.RunData, len(out.Runs))
+	for _, r := range out.Runs {
+		byID[r.ID] = r
+	}
+
+	assert.Equal(t, "failed", byID["run-running"].Status)
+	assert.Equal(t, "custom shutdown reason", byID["run-running"].Reason)
+	assert.True(t, !byID["run-running"].UpdatedAt.Before(afterStart))
+
+	assert.Equal(t, "failed", byID["run-custom"].Status)
+	assert.Equal(t, "custom shutdown reason", byID["run-custom"].Reason)
+
+	assert.Equal(t, "completed", byID["run-done"].Status)
+	assert.Equal(t, before, byID["run-done"].UpdatedAt)
+
+	assert.Equal(t, "failed", byID["run-fail"].Status)
+	assert.Equal(t, "discovery error", byID["run-fail"].Reason)
+	assert.Equal(t, before, byID["run-fail"].UpdatedAt)
+}
+
+func TestFailNonTerminalRuns_MultiplePolicies(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	require.NoError(t, repo.Update(policies.PolicyData{
+		ID:       "p1",
+		Name:     "a",
+		Datasets: map[string]bool{"d": true},
+		Runs:     []policies.RunData{{ID: "r1", Status: "running", CreatedAt: now, UpdatedAt: now}},
+	}))
+	require.NoError(t, repo.Update(policies.PolicyData{
+		ID:       "p2",
+		Name:     "b",
+		Datasets: map[string]bool{"d": true},
+		Runs:     []policies.RunData{{ID: "r2", Status: "running", CreatedAt: now, UpdatedAt: now}},
+	}))
+	require.NoError(t, repo.FailNonTerminalRuns(policies.RunFailureReasonAgentStopped))
+
+	p1, err := repo.Get("p1")
+	require.NoError(t, err)
+	assert.Equal(t, "failed", p1.Runs[0].Status)
+	assert.Equal(t, policies.RunFailureReasonAgentStopped, p1.Runs[0].Reason)
+
+	p2, err := repo.Get("p2")
+	require.NoError(t, err)
+	assert.Equal(t, "failed", p2.Runs[0].Status)
+}
