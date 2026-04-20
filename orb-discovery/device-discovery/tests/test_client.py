@@ -2,12 +2,12 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Client Unit Tests."""
 
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from device_discovery.client import Client
+from device_discovery.policy.models import Defaults
 from device_discovery.translate import translate_data
 
 
@@ -43,7 +43,7 @@ def sample_data():
             2: {"name": "vlan2", "interfaces": []},
         },
         "driver": "ios",
-        "defaults": SimpleNamespace(
+        "defaults": Defaults(
             site="New York",
             role=None,
             tags=None,

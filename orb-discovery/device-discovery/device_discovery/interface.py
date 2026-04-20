@@ -229,8 +229,7 @@ def translate_interface(
         )
     else:
         # Tier 2 & 3: Try pattern matching (user + built-in merged)
-        # Use getattr for backward compatibility with SimpleNamespace in tests
-        user_patterns = getattr(defaults, 'interface_patterns', None)
+        user_patterns = defaults.interface_patterns
         merged_patterns = merge_interface_patterns(user_patterns, include_defaults=True)
 
         # Count user patterns to maintain priority during matching
@@ -374,6 +373,20 @@ def extract_parent_interface_name(interface_name: str) -> str | None:
     return None
 
 
+def _compile_exclude_patterns(patterns: list[str]) -> list[re.Pattern]:
+    compiled = []
+    for p in patterns:
+        p = p.strip()
+        if not p:
+            logger.warning("Empty interface exclude pattern, skipping.")
+            continue
+        try:
+            compiled.append(re.compile(p))
+        except re.error as e:
+            logger.warning(f"Invalid interface exclude pattern '{p}': {e}. Skipping.")
+    return compiled
+
+
 def build_interface_entities(
     device: Device,
     interfaces: dict,
@@ -381,6 +394,13 @@ def build_interface_entities(
     defaults: Defaults,
 ) -> list[Entity]:
     """Create interface entities from interface definitions and IP data."""
+    exclude_patterns = _compile_exclude_patterns(defaults.interface_exclude_patterns or [])
+
+    def is_excluded(name: str) -> bool:
+        # Uses search (not match) so patterns match anywhere in the name.
+        # Use ^ to anchor to start, e.g. "^tap.*"
+        return any(pat.search(name) for pat in exclude_patterns)
+
     interface_entities: dict[str, Interface] = {}
     entities: list[Entity] = []
     defined_interface_names = set(interfaces.keys())
@@ -398,6 +418,8 @@ def build_interface_entities(
     for if_name, interface_info in sorted(
         interfaces.items(), key=lambda item: interface_sort_key(item[0])
     ):
+        if is_excluded(if_name):
+            continue
         parent = resolve_parent(if_name)
         interface = translate_interface(
             device, if_name, interface_info, defaults, parent=parent
@@ -408,6 +430,8 @@ def build_interface_entities(
 
     for if_name in sorted(interfaces_ip.keys(), key=interface_sort_key):
         if if_name in interface_entities:
+            continue
+        if is_excluded(if_name):
             continue
         parent = resolve_parent(if_name)
         interface = translate_interface(device, if_name, {}, defaults, parent=parent)

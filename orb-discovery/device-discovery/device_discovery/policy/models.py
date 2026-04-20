@@ -116,7 +116,19 @@ class Defaults(BaseModel):
         default=None,
         description="Interface type patterns for name-based matching, optional",
     )
+    interface_exclude_patterns: list[str] | None = Field(
+        default=None,
+        description="Interface name patterns (regex) to exclude from ingestion, optional",
+    )
     location: str | None = Field(default=None, description="Location name, optional")
+
+    @field_validator("interface_patterns", "interface_exclude_patterns", mode="before")
+    @classmethod
+    def coerce_empty_list_to_none(cls, v: object) -> object:
+        """Treat an empty list as None so override_defaults does not clear the global list."""
+        if isinstance(v, list) and len(v) == 0:
+            return None
+        return v
     tenant: str | TenantParameters | None = Field(
         default=None, description="Tenant, optional"
     )

@@ -236,6 +236,28 @@ func TestMergeDefaults(t *testing.T) {
 		assert.Equal(t, []string{"default", "policy"}, result.Tags)
 		assert.Len(t, result.InterfacePatterns, 1)
 	})
+
+	t.Run("Override InterfaceExcludePatterns replaces global list", func(t *testing.T) {
+		policyDefaults := &Defaults{
+			InterfaceExcludePatterns: []string{"^eth.*"},
+		}
+		overrideDefaults := &Defaults{
+			InterfaceExcludePatterns: []string{"^tap.*", "^veth.*"},
+		}
+		result := MergeDefaults(policyDefaults, overrideDefaults)
+		assert.Equal(t, []string{"^tap.*", "^veth.*"}, result.InterfaceExcludePatterns)
+	})
+
+	t.Run("Empty override does not replace InterfaceExcludePatterns", func(t *testing.T) {
+		policyDefaults := &Defaults{
+			InterfaceExcludePatterns: []string{"^eth.*"},
+		}
+		overrideDefaults := &Defaults{
+			Site: "Override Site",
+		}
+		result := MergeDefaults(policyDefaults, overrideDefaults)
+		assert.Equal(t, []string{"^eth.*"}, result.InterfaceExcludePatterns)
+	})
 }
 
 func TestTargetNetboxID_parsed(t *testing.T) {

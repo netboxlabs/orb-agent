@@ -5,6 +5,7 @@
 import pytest
 
 from device_discovery.interface import (
+    build_interface_entities,
     match_interface_type,
     translate_interface,
 )
@@ -583,3 +584,90 @@ def test_defaults_without_interface_patterns():
     """Test Defaults model works without interface_patterns (backward compatibility)."""
     defaults = Defaults(site="Test Site", if_type="other")
     assert defaults.interface_patterns is None
+
+
+# Tests for build_interface_entities exclusion filtering
+
+
+@pytest.fixture
+def sample_diode_device(sample_device_info, sample_defaults):
+    """A minimal DiodeDevice for use in interface tests."""
+    return translate_device(sample_device_info, sample_defaults, config_info=None, options=None)
+
+
+def test_build_interface_entities_excludes_matching_interfaces(sample_diode_device):
+    """Interfaces matching exclude patterns and their IPs are not ingested."""
+    interfaces = {
+        "GigabitEthernet0/0": {
+            "is_enabled": True, "mtu": 1500, "speed": 1000,
+            "mac_address": "00:11:22:33:44:55", "description": "Uplink",
+        },
+        "tap103i0": {
+            "is_enabled": True, "mtu": 1500, "speed": 10,
+            "mac_address": "", "description": "",
+        },
+    }
+    interfaces_ip = {
+        "tap103i0": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}, "ipv6": {}},
+        "GigabitEthernet0/0": {"ipv4": {"192.168.1.1": {"prefix_length": 24}}, "ipv6": {}},
+    }
+    defaults = Defaults(interface_exclude_patterns=["^tap.*"])
+    entities = build_interface_entities(sample_diode_device, interfaces, interfaces_ip, defaults)
+
+    interface_names = [
+        e.interface.name
+        for e in entities
+        if e.HasField("interface")
+    ]
+    ip_addresses = [
+        e.ip_address.address
+        for e in entities
+        if e.HasField("ip_address")
+    ]
+
+    assert "GigabitEthernet0/0" in interface_names
+    assert "tap103i0" not in interface_names
+    assert not any("10.0.0.1" in addr for addr in ip_addresses)
+    assert any("192.168.1.1" in addr for addr in ip_addresses)
+
+
+def test_build_interface_entities_no_exclude_patterns(sample_diode_device):
+    """All interfaces are ingested when no exclude patterns are configured."""
+    interfaces = {
+        "tap103i0": {"is_enabled": True, "mtu": 1500, "speed": 10, "mac_address": "", "description": ""},
+    }
+    interfaces_ip = {
+        "tap103i0": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}, "ipv6": {}},
+    }
+    defaults = Defaults()
+    entities = build_interface_entities(sample_diode_device, interfaces, interfaces_ip, defaults)
+
+    interface_names = [e.interface.name for e in entities if e.HasField("interface")]
+    assert "tap103i0" in interface_names
+
+
+def test_build_interface_entities_excludes_ip_only_interface(sample_diode_device):
+    """Excluded interface absent from interfaces dict is also suppressed via ip-only fallback loop."""
+    interfaces = {}
+    interfaces_ip = {
+        "tap103i0": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}, "ipv6": {}},
+    }
+    defaults = Defaults(interface_exclude_patterns=["^tap"])
+    entities = build_interface_entities(sample_diode_device, interfaces, interfaces_ip, defaults)
+    assert not any(e.HasField("interface") for e in entities)
+    assert not any(e.HasField("ip_address") for e in entities)
+
+
+def test_build_interface_entities_invalid_exclude_pattern_skipped(sample_diode_device):
+    """Invalid regex patterns are skipped with a warning; valid ones still apply."""
+    interfaces = {
+        "tap0": {"is_enabled": True, "mtu": 1500, "speed": 10, "mac_address": "", "description": ""},
+        "eth0": {"is_enabled": True, "mtu": 1500, "speed": 1000, "mac_address": "", "description": ""},
+    }
+    defaults = Defaults(interface_exclude_patterns=["[invalid", "^tap"])
+    entities = build_interface_entities(sample_diode_device, interfaces, {}, defaults)
+
+    interface_names = [e.interface.name for e in entities if e.HasField("interface")]
+    # invalid pattern "[invalid" is skipped; valid "^tap" still excludes tap0
+    assert "tap0" not in interface_names
+    assert "eth0" in interface_names

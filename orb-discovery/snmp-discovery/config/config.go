@@ -68,14 +68,15 @@ type DeviceDefaults struct {
 
 // Defaults represents the supported default values for a policy
 type Defaults struct {
-	Tags              []string           `yaml:"tags,omitempty"`
-	Site              string             `yaml:"site,omitempty"`
-	Location          string             `yaml:"location,omitempty"`
-	Role              string             `yaml:"role,omitempty"`
-	IPAddress         IPAddressDefaults  `yaml:"ip_address,omitempty"`
-	Interface         InterfaceDefaults  `yaml:"interface,omitempty"`
-	Device            DeviceDefaults     `yaml:"device,omitempty"`
-	InterfacePatterns []InterfacePattern `yaml:"interface_patterns,omitempty"`
+	Tags                     []string           `yaml:"tags,omitempty"`
+	Site                     string             `yaml:"site,omitempty"`
+	Location                 string             `yaml:"location,omitempty"`
+	Role                     string             `yaml:"role,omitempty"`
+	IPAddress                IPAddressDefaults  `yaml:"ip_address,omitempty"`
+	Interface                InterfaceDefaults  `yaml:"interface,omitempty"`
+	Device                   DeviceDefaults     `yaml:"device,omitempty"`
+	InterfacePatterns        []InterfacePattern `yaml:"interface_patterns,omitempty"`
+	InterfaceExcludePatterns []string           `yaml:"interface_exclude_patterns,omitempty"`
 }
 
 // MergeDefaults merges target-level override defaults with policy-level defaults
@@ -147,6 +148,11 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	// Override InterfacePatterns if provided
 	if len(overrideDefaults.InterfacePatterns) > 0 {
 		merged.InterfacePatterns = overrideDefaults.InterfacePatterns
+	}
+
+	// Override InterfaceExcludePatterns if provided
+	if len(overrideDefaults.InterfaceExcludePatterns) > 0 {
+		merged.InterfaceExcludePatterns = overrideDefaults.InterfaceExcludePatterns
 	}
 
 	return &merged

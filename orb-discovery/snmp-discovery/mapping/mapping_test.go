@@ -28,6 +28,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 		name      string
 		mapping   []config.MappingEntry
 		objectIDs mapping.ObjectIDValueMap
+		defaults  *config.Defaults
 		expected  []diode.Entity
 	}{
 		{
@@ -297,6 +298,52 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 			},
 		},
 		{
+			name: "Excluded interface and its IP are not ingested",
+			mapping: []config.MappingEntry{
+				{
+					OID:            ".1.3.6.1.2.1.2.2.1",
+					Entity:         "interface",
+					Field:          "_id",
+					IdentifierSize: 1,
+					MappingEntries: []config.MappingEntry{
+						{OID: ".1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					},
+				},
+				{
+					OID:            ".1.3.6.1.2.1.4.20.1",
+					Entity:         "ipAddress",
+					Field:          "_id",
+					IdentifierSize: 4,
+					MappingEntries: []config.MappingEntry{
+						{OID: ".1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+						{
+							OID:          ".1.3.6.1.2.1.4.20.1.2",
+							Entity:       "ipAddress",
+							Field:        "assignedObject",
+							Relationship: config.Relationship{Type: "interface", Field: "_id"},
+						},
+					},
+				},
+			},
+			objectIDs: mapping.ObjectIDValueMap{
+				".1.3.6.1.2.1.2.2.1.2.1":         mapping.Value{Value: "eth0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1},
+				".1.3.6.1.2.1.2.2.1.2.2":         mapping.Value{Value: "tap0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1},
+				".1.3.6.1.2.1.4.20.1.1.10.0.0.1": mapping.Value{Value: "10.0.0.1", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4},
+				".1.3.6.1.2.1.4.20.1.2.10.0.0.1": mapping.Value{Value: "2", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 4},
+			},
+			defaults: &config.Defaults{
+				Interface:                config.InterfaceDefaults{Type: "other"},
+				InterfaceExcludePatterns: []string{"^tap.*"},
+			},
+			expected: []diode.Entity{
+				&diode.Interface{
+					Name:   diode.String("eth0"),
+					Type:   diode.String("other"),
+					Device: &diode.Device{},
+				},
+			},
+		},
+		{
 			name: "Device with platform from sysObjectID",
 			mapping: []config.MappingEntry{
 				{
@@ -333,17 +380,50 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Invalid exclude pattern is skipped, valid pattern still applies",
+			mapping: []config.MappingEntry{
+				{
+					OID:            ".1.3.6.1.2.1.2.2.1",
+					Entity:         "interface",
+					Field:          "_id",
+					IdentifierSize: 1,
+					MappingEntries: []config.MappingEntry{
+						{OID: ".1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					},
+				},
+			},
+			objectIDs: mapping.ObjectIDValueMap{
+				".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{Value: "tap0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1},
+				".1.3.6.1.2.1.2.2.1.2.2": mapping.Value{Value: "eth0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1},
+			},
+			defaults: &config.Defaults{
+				Interface:                config.InterfaceDefaults{Type: "other"},
+				InterfaceExcludePatterns: []string{"[invalid", "^tap.*"},
+			},
+			expected: []diode.Entity{
+				&diode.Interface{
+					Name:   diode.String("eth0"),
+					Type:   diode.String("other"),
+					Device: &diode.Device{},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mappingConfig, err := mapping.NewConfig(tt.mapping, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
 			assert.NoError(t, err)
-			mapper := mapping.NewObjectIDMapper(mappingConfig, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), &config.Defaults{
-				Interface: config.InterfaceDefaults{
-					Type: "other",
-				},
-			})
+			defaults := tt.defaults
+			if defaults == nil {
+				defaults = &config.Defaults{
+					Interface: config.InterfaceDefaults{
+						Type: "other",
+					},
+				}
+			}
+			mapper := mapping.NewObjectIDMapper(mappingConfig, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), defaults)
 			entities := mapper.MapObjectIDsToEntity(tt.objectIDs)
 
 			assert.ElementsMatch(t, tt.expected, entities)
