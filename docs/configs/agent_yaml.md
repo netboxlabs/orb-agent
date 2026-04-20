@@ -15,20 +15,17 @@ orb:
   config_manager: ... # How policies are loaded (required)
   backends: ...       # Which backends are enabled (required)
   policies: ...       # Inline policies (only with config_manager.active: local)
-  secrets_manager: .. # Optional: Vault or Fleet secret resolution
-  debug:
-    enable: false     # Optional: verbose debug logging
+  secrets_manager: .. # Optional: Vault secret resolution
 ```
 
 | Key | Required | Description |
 |-----|----------|-------------|
 | `version` | No | Config schema version (informational) |
 | `orb.labels` | No | Key/value pairs that identify this agent instance. Used by the Git config manager to match `selector.yaml` entries |
-| `orb.config_manager` | Yes | Defines where policies come from (`local`, `git`, or `fleet`) |
+| `orb.config_manager` | Yes | Defines where policies come from (`local` or `git`) |
 | `orb.backends` | Yes | Declares which discovery backends to run and their common settings |
-| `orb.policies` | Only with `local` | Inline policy definitions. Ignored when `config_manager.active` is `git` or `fleet` |
-| `orb.secrets_manager` | No | Configures an external secrets source (`vault` or `fleet`) to resolve provider-qualified references (e.g. `${vault://path/to/secret}`) at runtime |
-| `orb.debug.enable` | No | Enables verbose debug logging (default: `false`) |
+| `orb.policies` | Only with `local` | Inline policy definitions. Ignored when `config_manager.active` is `git` |
+| `orb.secrets_manager` | No | Configures Vault to resolve `${vault://...}` references at runtime |
 
 ---
 
@@ -53,16 +50,15 @@ Controls how the agent loads policies. Exactly one source is active at a time.
 ```yaml
 orb:
   config_manager:
-    active: local   # or: git, fleet
+    active: local   # or: git
     sources:
       local: ...
       git: ...
-      fleet: ...
 ```
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `active` | string | Yes | Which source to use: `local`, `git`, or `fleet` |
+| `active` | string | Yes | Which source to use: `local` or `git` |
 
 ### `local`
 
@@ -102,10 +98,6 @@ orb:
 | `password` | string | No | Password or token for basic auth; passphrase for SSH keys |
 | `private_key` | string | No | Path to SSH private key file |
 | `skip_tls` | bool | No | Skip TLS certificate verification (default: `false`) |
-
-### `fleet`
-
-Policies are managed by NetBox Labs Fleet. See your Fleet documentation for connection details.
 
 ---
 
@@ -153,7 +145,7 @@ Optional OpenTelemetry export for backend metrics.
 
 ### Backend keys
 
-Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. Some backends accept optional host/port overrides.
+Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends accept optional `host` and `port` overrides.
 
 | Key | Backend | Default port | Notes |
 |-----|---------|-------------|-------|
@@ -202,19 +194,22 @@ For the full list of parameters per backend, see:
 
 ## `orb.secrets_manager`
 
-Configures an external secrets source. When active, provider-qualified references in policy and config values are resolved at runtime:
+Configures HashiCorp Vault as an external secrets source. When active, `${vault://...}` references in policy and config values are resolved at runtime.
 
-| Provider | Placeholder syntax |
-|----------|--------------------|
-| Vault | `${vault://secret/path#key}` |
-| Fleet | `${fleet://secret-name}` |
+The placeholder format is `${vault://mount/path/to/secret/fieldname}`, where:
+- `mount` is the KV v2 engine mount name
+- `path/to/secret` is the path within that mount
+- `fieldname` is the key within the secret (last path segment)
 
-Plain `${VAR_NAME}` references are **not** resolved by the secrets manager — those are handled by the environment variable substitution mechanism described below.
+```yaml
+# Example: read the "password" key from secret at kv/myapp/db
+password: ${vault://kv/myapp/db/password}
+```
 
 ```yaml
 orb:
   secrets_manager:
-    active: vault   # or: fleet
+    active: vault
     sources:
       vault:
         address: "https://vault.example.com:8200"
@@ -226,6 +221,8 @@ orb:
 
 See the full [Vault secrets manager documentation](../secretsmgr/vault.md) for all parameters and authentication methods.
 
+Plain `${VAR_NAME}` references are **not** resolved by the secrets manager — those are handled by environment variable substitution as described below.
+
 ---
 
 ## Environment Variable Substitution
@@ -235,7 +232,6 @@ Values can reference environment variables using `${VAR_NAME}` syntax. Resolutio
 | Scope | Supported fields | Resolved by |
 |-------|-----------------|-------------|
 | Git config manager | `url`, `password` | Go agent at startup |
-| Fleet config manager | `token_url`, `client_id`, `client_secret` | Go agent at startup |
 | Vault secrets manager `auth_args` | All fields | Go agent at startup |
 | `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
 | `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase` | Go SNMP backend at policy execution |
@@ -251,4 +247,4 @@ scope:
     password: ${DEVICE_PASS}
 ```
 
-For fields not listed above (e.g. `network_discovery` scope), use a secrets manager (`vault` or `fleet`) to inject values at runtime.
+For fields not listed above (e.g. `network_discovery` scope), use the Vault secrets manager to inject values at runtime.
