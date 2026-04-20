@@ -152,9 +152,34 @@ def test_setup_policy_runner_expands_hostname_ranges(
     hostnames, cron_trigger, passed_scope, copied_config = first_call[1]["args"]
     assert hostnames == ["192.0.2.1", "192.0.2.2"]
     assert isinstance(cron_trigger, CronTrigger)
-    assert isinstance(first_call[1]["trigger"], DateTrigger)
+    assert isinstance(first_call[1]["trigger"], CronTrigger)
     assert passed_scope.hostname == ranged_scope.hostname
     assert copied_config.defaults.role == "Router"
+
+
+def test_setup_policy_runner_expands_hostname_ranges_one_shot(
+    policy_runner, run_store
+):
+    """Range scan with no schedule must still use DateTrigger for run_scan."""
+    ranged_scope = Napalm(
+        driver="ios",
+        hostname="192.0.2.1-192.0.2.2",
+        username="admin",
+        password="password",
+    )
+    one_shot_config = Config()  # no schedule
+
+    with (
+        patch.object(policy_runner.scheduler, "start"),
+        patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
+    ):
+        policy_runner.setup("policy1", one_shot_config, [ranged_scope], run_store)
+
+    first_call = mock_add_job.call_args_list[0]
+    assert first_call[0][0] == policy_runner.run_scan
+    assert isinstance(first_call[1]["trigger"], DateTrigger)
+    _, date_trigger_arg, _, _ = first_call[1]["args"]
+    assert isinstance(date_trigger_arg, DateTrigger)
 
 
 def test_setup_with_unsupported_driver_raises_error(
@@ -240,6 +265,21 @@ def test_run_discovered_driver_error(
         mock_logger_error.assert_called_once()
         assert "Not able to discover device driver" in mock_logger_error.call_args[0][0]
         assert policy_runner.status == Status.FAILED
+
+
+def test_run_driver_failure_does_not_remove_job(policy_runner, sample_scopes, sample_config, run_store):
+    """Driver discovery failure must NOT remove the job — the cron should keep firing."""
+    sample_scopes[0].driver = None
+    policy_runner.run_store = run_store
+    policy_runner.name = "test_policy"
+
+    with (
+        patch("device_discovery.policy.runner.discover_device_driver", return_value=None),
+        patch.object(policy_runner.scheduler, "remove_job") as mock_remove,
+    ):
+        policy_runner.run("test_id", sample_scopes[0], sample_config)
+
+    mock_remove.assert_not_called()
 
 
 def test_run_device_with_error_in_job(
@@ -643,3 +683,156 @@ def test_run_with_parent_uses_entity_count_from_collect(policy_runner, run_store
     mock_update.assert_called_once()
     call_kwargs = mock_update.call_args[1]
     assert call_kwargs["entity_count"] == 12
+
+
+def test_run_with_parent_driver_failure_does_not_remove_job(policy_runner, run_store, sample_config):
+    """Driver discovery failure in run_with_parent must NOT remove the job."""
+    scope = Napalm(driver=None, hostname="192.0.2.1", username="admin", password="password")
+    policy_runner.run_store = run_store
+    policy_runner.name = "test_policy"
+
+    with (
+        patch("device_discovery.policy.runner.discover_device_driver", return_value=None),
+        patch.object(policy_runner.scheduler, "remove_job") as mock_remove,
+    ):
+        policy_runner.run_with_parent("test_id", scope, sample_config, "192.0.2.0/24")
+
+    mock_remove.assert_not_called()
+
+
+def test_run_scan_skips_already_active_host(monkeypatch):
+    """run_scan must not schedule a second job for a host that already has one."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    scope = Napalm(driver="ios", hostname="192.168.1.0/24", username="admin", password="password")
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+    trigger = MagicMock(spec=BaseTrigger)
+
+    existing_job = MagicMock()
+    runner.scheduler.get_job.return_value = existing_job
+
+    # Pre-populate active_host_jobs as if host was already scheduled
+    runner.active_host_jobs[("192.168.1.0/24", "192.168.1.1")] = "existing-job-id"
+
+    with patch(
+        "device_discovery.policy.runner.find_reachable_hosts",
+        return_value={"192.168.1.1": True},
+    ):
+        runner.run_scan(["192.168.1.1"], trigger, scope, config)
+
+    runner.scheduler.add_job.assert_not_called()
+    runner.scheduler.get_job.assert_called_once_with("existing-job-id")
+
+
+def test_run_scan_reschedules_host_when_job_no_longer_active(monkeypatch):
+    """When a previous job has finished, run_scan must schedule a new one."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    runner.scheduler.get_job.return_value = None   # job is gone
+
+    runner.active_host_jobs[("192.168.1.0/24", "192.168.1.1")] = "stale-job-id"
+    scope = Napalm(driver="ios", hostname="192.168.1.0/24", username="admin", password="password")
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+    trigger = MagicMock(spec=BaseTrigger)
+
+    with (
+        patch(
+            "device_discovery.policy.runner.find_reachable_hosts",
+            return_value={"192.168.1.1": True},
+        ),
+        patch("uuid.uuid4", side_effect=["scan-run-id", "new-job-id"]),
+    ):
+        runner.run_scan(["192.168.1.1"], trigger, scope, config)
+
+    runner.scheduler.add_job.assert_called_once()
+    assert runner.active_host_jobs[("192.168.1.0/24", "192.168.1.1")] == "new-job-id"
+
+
+def test_run_scan_overlapping_scopes_each_schedule_independently():
+    """Two scopes whose ranges overlap must each schedule their own job for the shared host."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    runner.scheduler.get_job.return_value = None  # no prior jobs
+    trigger = MagicMock(spec=BaseTrigger)
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+
+    scope_a = Napalm(driver="ios", hostname="192.168.1.0/24", username="admin", password="admin")
+    scope_b = Napalm(driver="ios", hostname="192.168.1.1-192.168.1.5", username="ops", password="ops")
+
+    with (
+        patch("device_discovery.policy.runner.find_reachable_hosts", return_value={"192.168.1.1": True}),
+        patch("uuid.uuid4", side_effect=["scan-a", "job-a"]),
+    ):
+        runner.run_scan(["192.168.1.1"], trigger, scope_a, config)
+
+    with (
+        patch("device_discovery.policy.runner.find_reachable_hosts", return_value={"192.168.1.1": True}),
+        patch("uuid.uuid4", side_effect=["scan-b", "job-b"]),
+    ):
+        runner.run_scan(["192.168.1.1"], trigger, scope_b, config)
+
+    assert runner.scheduler.add_job.call_count == 2
+    assert runner.active_host_jobs[("192.168.1.0/24", "192.168.1.1")] == "job-a"
+    assert runner.active_host_jobs[("192.168.1.1-192.168.1.5", "192.168.1.1")] == "job-b"
+
+
+def test_run_scan_stores_failed_run_on_range_when_no_hosts_reachable():
+    """When no host in a range is reachable, the range-level scan run must be FAILED."""
+    from device_discovery.policy.run import RunStatus
+
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    scope = Napalm(driver="ios", hostname="192.168.1.0/24", username="admin", password="password")
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+    trigger = MagicMock(spec=BaseTrigger)
+
+    with patch(
+        "device_discovery.policy.runner.find_reachable_hosts",
+        return_value={"192.168.1.1": False, "192.168.1.2": False},
+    ):
+        runner.run_scan(["192.168.1.1", "192.168.1.2"], trigger, scope, config)
+
+    # Failure reported at range level, not per-host
+    range_runs = runner.run_store.get_runs_for_target("policy1", "192.168.1.0/24")
+    assert len(range_runs) == 1
+    assert range_runs[0].status.value == "failed"
+    assert "No reachable hosts found in range" in range_runs[0].reason
+
+    # No per-host run records created for unreachable hosts
+    assert runner.run_store.get_runs_for_target("policy1", "192.168.1.1") == []
+    assert runner.run_store.get_runs_for_target("policy1", "192.168.1.2") == []
+    runner.scheduler.add_job.assert_not_called()
+
+
+def test_run_scan_stores_completed_run_when_some_hosts_reachable():
+    """When at least one host is reachable, the range-level scan run is COMPLETED."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    scope = Napalm(driver="ios", hostname="192.168.1.0/24", username="admin", password="password")
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+    trigger = MagicMock(spec=BaseTrigger)
+
+    with (
+        patch(
+            "device_discovery.policy.runner.find_reachable_hosts",
+            return_value={"192.168.1.1": True, "192.168.1.2": False},
+        ),
+        patch("uuid.uuid4", side_effect=["scan-run-id", "job-1"]),
+    ):
+        runner.run_scan(["192.168.1.1", "192.168.1.2"], trigger, scope, config)
+
+    range_runs = runner.run_store.get_runs_for_target("policy1", "192.168.1.0/24")
+    assert len(range_runs) == 1
+    assert range_runs[0].status.value == "completed"
+    assert range_runs[0].entity_count == 1
+    runner.scheduler.add_job.assert_called_once()
