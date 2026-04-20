@@ -317,18 +317,22 @@ func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
 // Status represents the status of a policy with its runs
 type Status struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // derived from latest run
+	Status string `json:"status"` // "unknown" if there are no runs, "running" if any run is in-flight, otherwise the latest run's status
 	Runs   []*Run `json:"runs"`
 }
 
-// findLatestRun returns the most recent run from a sorted list
-// Note: GetRunsForPolicy returns runs sorted by CreatedAt descending (newest first)
-func findLatestRun(runs []*Run) *Run {
+// deriveStatus returns "unknown" when runs is empty, "running" if any run is still running,
+// and otherwise the latest run's status. Expects runs sorted newest-first, as returned by RunStore.GetRunsForPolicy.
+func deriveStatus(runs []*Run) string {
 	if len(runs) == 0 {
-		return nil
+		return "unknown"
 	}
-	// Runs are already sorted newest first by GetRunsForPolicy
-	return runs[0]
+	for _, r := range runs {
+		if r.Status == RunStatusRunning {
+			return string(RunStatusRunning)
+		}
+	}
+	return string(runs[0].Status)
 }
 
 // GetPolicyStatuses returns all policies with their status and runs
@@ -340,16 +344,9 @@ func (m *Manager) GetPolicyStatuses() []Status {
 	// Get statuses for all policies that have runners
 	for name := range m.policies {
 		runs := m.runStore.GetRunsForPolicy(name)
-		status := "unknown"
-		if len(runs) > 0 {
-			latestRun := findLatestRun(runs)
-			if latestRun != nil {
-				status = string(latestRun.Status)
-			}
-		}
 		statuses = append(statuses, Status{
 			Name:   name,
-			Status: status,
+			Status: deriveStatus(runs),
 			Runs:   runs,
 		})
 	}
@@ -357,16 +354,9 @@ func (m *Manager) GetPolicyStatuses() []Status {
 	// Also include policies that have runs but no active runner
 	for name, runs := range allRuns {
 		if !m.HasPolicy(name) {
-			status := "unknown"
-			if len(runs) > 0 {
-				latestRun := findLatestRun(runs)
-				if latestRun != nil {
-					status = string(latestRun.Status)
-				}
-			}
 			statuses = append(statuses, Status{
 				Name:   name,
-				Status: status,
+				Status: deriveStatus(runs),
 				Runs:   runs,
 			})
 		}

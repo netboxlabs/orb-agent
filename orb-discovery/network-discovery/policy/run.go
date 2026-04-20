@@ -47,6 +47,30 @@ func NewRunStore() *RunStore {
 	}
 }
 
+// copyRun creates a deep copy of a Run so callers never hold a pointer into the store's internal state.
+func copyRun(r *Run) *Run {
+	if r == nil {
+		return nil
+	}
+	var metadataCopy map[string]string
+	if r.Metadata != nil {
+		metadataCopy = make(map[string]string, len(r.Metadata))
+		for k, v := range r.Metadata {
+			metadataCopy[k] = v
+		}
+	}
+	return &Run{
+		ID:          r.ID,
+		PolicyID:    r.PolicyID,
+		Status:      r.Status,
+		Reason:      r.Reason,
+		EntityCount: r.EntityCount,
+		Metadata:    metadataCopy,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
+	}
+}
+
 // CreateRun creates a new run for the given policy and returns it
 func (rs *RunStore) CreateRun(policyName string, targets []string) *Run {
 	rs.mu.Lock()
@@ -83,7 +107,7 @@ func (rs *RunStore) CreateRun(policyName string, targets []string) *Run {
 	}
 
 	rs.runs[policyName] = runs
-	return run
+	return copyRun(run)
 }
 
 // UpdateRun updates the status of a run
@@ -105,28 +129,30 @@ func (rs *RunStore) UpdateRun(policyName, runID string, status RunStatus, err er
 	}
 }
 
-// GetRunsForPolicy returns all runs for a given policy
+// GetRunsForPolicy returns all runs for a given policy as deep copies.
 func (rs *RunStore) GetRunsForPolicy(policyName string) []*Run {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 
 	runs := rs.runs[policyName]
-	// Return a copy to avoid race conditions
 	result := make([]*Run, len(runs))
-	copy(result, runs)
+	for i, r := range runs {
+		result[i] = copyRun(r)
+	}
 	return result
 }
 
-// GetAllPoliciesWithRuns returns all policies with their runs
+// GetAllPoliciesWithRuns returns all policies with their runs as deep copies.
 func (rs *RunStore) GetAllPoliciesWithRuns() map[string][]*Run {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 
 	result := make(map[string][]*Run)
 	for policyName, runs := range rs.runs {
-		// Return a copy to avoid race conditions
 		runsCopy := make([]*Run, len(runs))
-		copy(runsCopy, runs)
+		for i, r := range runs {
+			runsCopy[i] = copyRun(r)
+		}
 		result[policyName] = runsCopy
 	}
 	return result

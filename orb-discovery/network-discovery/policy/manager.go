@@ -98,8 +98,24 @@ func (m *Manager) GetCapabilities() []string {
 // Status represents the status of a policy with its runs
 type Status struct {
 	Name   string `json:"name"`
-	Status string `json:"status"` // derived from latest run
+	Status string `json:"status"` // "unknown" if there are no runs, "running" if any run is in-flight, otherwise the latest run's status
 	Runs   []*Run `json:"runs"`
+}
+
+// deriveStatus returns "unknown" when runs is empty, "running" if any run is still running,
+// and otherwise the latest run's status. Expects runs in chronological order (oldest first),
+// as stored by RunStore.CreateRun.
+func deriveStatus(runs []*Run) string {
+	if len(runs) == 0 {
+		return "unknown"
+	}
+	for _, r := range runs {
+		if r.Status == RunStatusRunning {
+			return string(RunStatusRunning)
+		}
+	}
+	// Last element is the most recent run (append order = chronological)
+	return string(runs[len(runs)-1].Status)
 }
 
 // GetPolicyStatuses returns all policies with their status and runs
@@ -111,14 +127,9 @@ func (m *Manager) GetPolicyStatuses() []Status {
 	// Get statuses for all policies that have runners
 	for name := range m.policies {
 		runs := m.runStore.GetRunsForPolicy(name)
-		status := "unknown"
-		if len(runs) > 0 {
-			latestRun := runs[len(runs)-1]
-			status = string(latestRun.Status)
-		}
 		statuses = append(statuses, Status{
 			Name:   name,
-			Status: status,
+			Status: deriveStatus(runs),
 			Runs:   runs,
 		})
 	}
@@ -126,15 +137,9 @@ func (m *Manager) GetPolicyStatuses() []Status {
 	// Also include policies that have runs but no active runner
 	for name, runs := range allRuns {
 		if !m.HasPolicy(name) {
-			status := "unknown"
-			if len(runs) > 0 {
-				latestRun := runs[len(runs)-1]
-				status = string(latestRun.Status)
-			}
-
 			statuses = append(statuses, Status{
 				Name:   name,
-				Status: status,
+				Status: deriveStatus(runs),
 				Runs:   runs,
 			})
 		}
