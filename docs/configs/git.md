@@ -81,6 +81,104 @@ ssh-keygen -t ed25519 -f /local/orb/id_ed25519 -N ""
 
 > **Note:** Azure DevOps requires RSA keys. Use `ssh-keygen -t rsa -b 4096` instead.
 
+## What Goes in Git vs. the Local Agent Config
+
+The agent config file (passed with `-c`) and the Git repository serve different purposes and must be kept separate.
+
+| Setting | Where it lives | Reason |
+|---------|---------------|--------|
+| `orb.backends` | **Local agent config only** | Backends are loaded at startup and cannot be reloaded dynamically |
+| `orb.config_manager` | **Local agent config only** | Must be present before the agent can fetch anything from Git |
+| `orb.labels` | **Local agent config only** | Identifies the agent; used to match selectors in the Git repo |
+| Diode target, `client_id`, `client_secret` | **Local agent config only** (use env vars) | Sensitive credentials; must not be committed to Git |
+| Policy files (`device_discovery`, `network_discovery`, …) | **Git repo** | Fetched and applied dynamically according to `selector.yaml` |
+| `selector.yaml` | **Git repo** | Maps agent labels to policy files |
+
+### Handling Secrets
+
+Never commit credentials (Diode secrets, device passwords, API tokens) to Git. Reference them as environment variables using `${VAR_NAME}` syntax in both the local agent config and policy files:
+
+```yaml
+# agent.yaml (local) — Diode credentials via env vars
+orb:
+  backends:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent01
+```
+
+```yaml
+# policy.yaml (in Git) — device credentials via env vars
+device_discovery:
+  discovery_1:
+    scope:
+      - hostname: 192.168.0.5
+        username: admin
+        password: ${DEVICE_PASS}
+```
+
+### End-to-End Example
+
+The following shows how the local agent config, the Git repository's `selector.yaml`, and a policy file all fit together.
+
+**Local `agent.yaml`** (never committed to Git):
+```yaml
+orb:
+  labels:
+    region: EU
+    pop: ams02
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "https://github.com/myorg/policyrepo"
+        schedule: "*/5 * * * *"
+        branch: main
+        auth: basic
+        username: git-user
+        password: ${GIT_TOKEN}
+  backends:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent-eu-ams02
+    device_discovery:
+```
+
+**Git repo `selector.yaml`**:
+```yaml
+eu_agents:
+  selector:
+    region: EU
+    pop: ams02
+  policies:
+    network_policy:
+      path: policies/eu-ams02.yaml
+```
+
+**Git repo `policies/eu-ams02.yaml`**:
+```yaml
+device_discovery:
+  discovery_1:
+    config:
+      schedule: "0 * * * *"
+      defaults:
+        site: Amsterdam AMS02
+        role: switch
+    scope:
+      - driver: ios
+        hostname: 192.168.10.5
+        username: admin
+        password: ${DEVICE_PASS}
+```
+
+When the agent starts, it reads `agent.yaml` locally, connects to Git, and applies the policies that match its labels. Device credentials are resolved from the environment where the agent runs — they are never stored in Git.
+
 ## Git Repository Structure
 
 The Orb Agent requires the Git repository containing its policies to have the following structure:

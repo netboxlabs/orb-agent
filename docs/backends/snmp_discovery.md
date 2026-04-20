@@ -4,13 +4,13 @@ The SNMP discovery backend leverages SNMP (Simple Network Management Protocol) t
 ## Diode Entities
 The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) to ingest the following entities:
 
-* [Device](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Interface](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [IP Address](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Mac Address](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Platform](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Manufacturer](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Site](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [Device](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/device/main.go)
+* [Interface](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/interface_entity/main.go)
+* [IP Address](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/ip_address/main.go)
+* [Mac Address](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/mac_address/main.go)
+* [Platform](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/platform/main.go)
+* [Manufacturer](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/manufacturer/main.go)
+* [Site](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/site/main.go)
 
 ## Configuration
 The `snmp_discovery` backend does not require any special configuration in the backends section. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
