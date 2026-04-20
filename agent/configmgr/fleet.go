@@ -48,9 +48,9 @@ type FleetConfigManager struct {
 	// monitorCtx. monitorCtx cancellation stops background workers; connCtx is
 	// only cancelled after Disconnect() in Stop(), ensuring the heartbeat goroutine
 	// can still publish the offline heartbeat while the connection is alive.
-	connCtx    context.Context
-	connCancel context.CancelFunc
-	connected  atomic.Bool    // true only after connection.Connect() succeeds
+	connCtx      context.Context
+	connCancel   context.CancelFunc
+	connected    atomic.Bool    // true only after connection.Connect() succeeds
 	goroutinesWg sync.WaitGroup // tracks goroutines started in Start(); Wait()ed in Stop() before Disconnect
 }
 

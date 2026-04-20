@@ -108,7 +108,6 @@ func createTestHeartbeater() *heartbeater {
 	groupManager := newGroupManager()
 	return &heartbeater{
 		logger:         logger,
-
 		backendState:   &mockBackendState{},
 		policyManager:  mockPMgr,
 		groupRetriever: &groupManager,
@@ -122,7 +121,6 @@ func createTestHeartbeaterWithBackendState(backendState *mockBackendState) *hear
 	groupManager := newGroupManager()
 	return &heartbeater{
 		logger:         logger,
-
 		backendState:   backendState,
 		policyManager:  mockPMgr,
 		groupRetriever: &groupManager,
@@ -134,7 +132,6 @@ func createTestHeartbeaterWithPolicyManager(backendState *mockBackendState, poli
 	groupManager := newGroupManager()
 	return &heartbeater{
 		logger:         logger,
-
 		backendState:   backendState,
 		policyManager:  policyManager,
 		groupRetriever: &groupManager,
@@ -227,7 +224,6 @@ func TestHeartbeater_OfflineHeartbeat_IncludesFailedRunsAfterFailNonTerminalRuns
 	groupManager := newGroupManager()
 	hb := &heartbeater{
 		logger:         logger,
-
 		backendState:   &mockBackendState{},
 		policyManager:  pm,
 		groupRetriever: &groupManager,
@@ -399,7 +395,6 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 
 	// Assert
 	mockPublish.AssertExpectations(t)
-
 }
 
 func TestHeartbeater_SendHeartbeats_PublishErrors(t *testing.T) {
@@ -1142,7 +1137,6 @@ func createTestHeartbeaterWithGroupManager(groupManager *GroupManager) *heartbea
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
 	return &heartbeater{
 		logger:         logger,
-
 		backendState:   &mockBackendState{},
 		policyManager:  mockPMgr,
 		groupRetriever: groupManager,
@@ -1268,7 +1262,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithCompleteState(t *testing.T) {
 	// Create heartbeater with all components
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	hb := &heartbeater{
-		logger:         logger,
+		logger: logger,
 
 		backendState:   backendState,
 		policyManager:  mockPMgr,
