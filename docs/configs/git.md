@@ -111,7 +111,11 @@ orb:
 ```
 
 ```yaml
-# policy.yaml (in Git) — device credentials via env vars
+# policy.yaml (in Git) — device_discovery credentials via env vars
+# Note: ${VAR} substitution in policy files is backend-specific.
+# device_discovery (Python) resolves it for all scope/defaults fields.
+# snmp_discovery resolves it only for credential fields (community, username, passphrases).
+# network_discovery does not resolve ${VAR} in policy scope — use a secrets manager instead.
 device_discovery:
   discovery_1:
     scope:

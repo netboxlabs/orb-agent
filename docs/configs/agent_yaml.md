@@ -27,7 +27,7 @@ orb:
 | `orb.config_manager` | Yes | Defines where policies come from (`local`, `git`, or `fleet`) |
 | `orb.backends` | Yes | Declares which discovery backends to run and their common settings |
 | `orb.policies` | Only with `local` | Inline policy definitions. Ignored when `config_manager.active` is `git` or `fleet` |
-| `orb.secrets_manager` | No | Configures an external secrets source (`vault` or `fleet`) to resolve `${VAR}` references at runtime |
+| `orb.secrets_manager` | No | Configures an external secrets source (`vault` or `fleet`) to resolve provider-qualified references (e.g. `${vault://path/to/secret}`) at runtime |
 | `orb.debug.enable` | No | Enables verbose debug logging (default: `false`) |
 
 ---
@@ -202,7 +202,14 @@ For the full list of parameters per backend, see:
 
 ## `orb.secrets_manager`
 
-Configures an external secrets source. When active, `${VAR_NAME}` references in the config file and in policies are resolved from the secrets source at runtime, in addition to environment variables.
+Configures an external secrets source. When active, provider-qualified references in policy and config values are resolved at runtime:
+
+| Provider | Placeholder syntax |
+|----------|--------------------|
+| Vault | `${vault://secret/path#key}` |
+| Fleet | `${fleet://secret-name}` |
+
+Plain `${VAR_NAME}` references are **not** resolved by the secrets manager — those are handled by the environment variable substitution mechanism described below.
 
 ```yaml
 orb:
