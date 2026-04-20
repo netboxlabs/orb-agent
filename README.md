@@ -12,7 +12,9 @@ docker pull netboxlabs/orb-agent:latest
 ```
 
 ## Orb Agent Configuration
-The Orb agent requires a configuration file. This file consists of three main sections: `config_manager`, `backends`, and `policies`.
+The Orb agent requires a configuration file (`agent.yaml`). For a full reference of all supported keys see the [Agent Configuration File reference](./docs/configs/agent_yaml.md).
+
+This file consists of three main sections: `config_manager`, `backends`, and `policies`.
 
 ### Config Manager
 The `config_manager` section specifies how Orb agent should retrieve it's configuration information. The configuration manager is responsible for processing the configuration to retrieve policies and pass them to the appropriate backend.
