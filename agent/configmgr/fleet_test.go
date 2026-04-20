@@ -1373,6 +1373,11 @@ func newReconnectWorkerManager(t *testing.T, mockConn *fleet.MockMQTTConnection,
 		},
 	}
 
+	// connCtx is normally created by Start(); initialise it here so
+	// runReconnectWorker can use it as the Disconnect timeout parent.
+	mgr.connCtx, mgr.connCancel = context.WithCancel(context.Background())
+	t.Cleanup(mgr.connCancel)
+
 	return mgr
 }
 

@@ -108,7 +108,7 @@ func createTestHeartbeater() *heartbeater {
 	groupManager := newGroupManager()
 	return &heartbeater{
 		logger:         logger,
-		heartbeatCtx:   context.Background(),
+
 		backendState:   &mockBackendState{},
 		policyManager:  mockPMgr,
 		groupRetriever: &groupManager,
@@ -122,7 +122,7 @@ func createTestHeartbeaterWithBackendState(backendState *mockBackendState) *hear
 	groupManager := newGroupManager()
 	return &heartbeater{
 		logger:         logger,
-		heartbeatCtx:   context.Background(),
+
 		backendState:   backendState,
 		policyManager:  mockPMgr,
 		groupRetriever: &groupManager,
@@ -134,7 +134,7 @@ func createTestHeartbeaterWithPolicyManager(backendState *mockBackendState, poli
 	groupManager := newGroupManager()
 	return &heartbeater{
 		logger:         logger,
-		heartbeatCtx:   context.Background(),
+
 		backendState:   backendState,
 		policyManager:  policyManager,
 		groupRetriever: &groupManager,
@@ -148,7 +148,6 @@ func TestNewHeartbeater_HeartbeaterInitialization(t *testing.T) {
 	// Assert
 	assert.NotNil(t, fleetManager)
 	assert.NotNil(t, fleetManager.logger)
-	assert.NotNil(t, fleetManager.heartbeatCtx, "Heartbeat context should be initialized")
 }
 
 func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
@@ -228,7 +227,7 @@ func TestHeartbeater_OfflineHeartbeat_IncludesFailedRunsAfterFailNonTerminalRuns
 	groupManager := newGroupManager()
 	hb := &heartbeater{
 		logger:         logger,
-		heartbeatCtx:   context.Background(),
+
 		backendState:   &mockBackendState{},
 		policyManager:  pm,
 		groupRetriever: &groupManager,
@@ -323,10 +322,8 @@ func TestHeartbeater_SendHeartbeats_InitialHeartbeat(t *testing.T) {
 	defer cancel()
 	testTopic := "test/heartbeat"
 
-	// Set up expectations for initial heartbeat (Online state)
-	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Once()
-
-	// Set up expectations for final heartbeat (Offline state) when context is cancelled
+	// Only the initial Online heartbeat is expected. The offline heartbeat is sent
+	// by stop(), not by the goroutine reacting to ctx.Done().
 	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Once()
 
 	// Act
@@ -335,12 +332,9 @@ func TestHeartbeater_SendHeartbeats_InitialHeartbeat(t *testing.T) {
 	// Give some time for initial heartbeat
 	time.Sleep(10 * time.Millisecond)
 
-	// Cancel context to trigger cleanup
+	// Cancel context — goroutine exits cleanly without sending an offline heartbeat
 	cancel()
 	hb.wg.Wait()
-
-	// Give time for cleanup
-	time.Sleep(10 * time.Millisecond)
 
 	// Assert
 	mockPublish.AssertExpectations(t)
@@ -355,8 +349,9 @@ func TestHeartbeater_SendHeartbeats_PeriodicHeartbeats(t *testing.T) {
 	defer cancel()
 	testTopic := "test/heartbeat"
 
-	// We expect at least 3 heartbeats: initial + at least 2 periodic + final
-	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Times(4)
+	// We expect at least 3 heartbeats: initial + at least 2 periodic. The offline
+	// heartbeat is sent only by stop(), not by context cancellation.
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Times(3)
 
 	// Act
 	hb.StartHeartbeats(ctx, testTopic, "test-agent-id", mockPublish.Publish, nil)
@@ -388,8 +383,9 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 		return mockPublish.Publish(ctx, topic, payload)
 	}
 
-	// Expect initial heartbeat (Online) and final heartbeat (Offline)
-	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Twice()
+	// Expect only the initial Online heartbeat. Context cancellation no longer
+	// triggers an offline heartbeat from the goroutine — stop() owns that.
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(nil).Once()
 
 	// Act
 	hb.StartHeartbeats(ctx, testTopic, "test-agent-id", publishFunc, nil)
@@ -404,8 +400,6 @@ func TestHeartbeater_SendHeartbeats_ContextCancellation(t *testing.T) {
 	// Assert
 	mockPublish.AssertExpectations(t)
 
-	// Verify context is properly cleaned up (now safe to read after goroutine finished)
-	assert.Nil(t, hb.heartbeatCtx)
 }
 
 func TestHeartbeater_SendHeartbeats_PublishErrors(t *testing.T) {
@@ -419,9 +413,8 @@ func TestHeartbeater_SendHeartbeats_PublishErrors(t *testing.T) {
 
 	publishError := errors.New("network error")
 
-	// Mock publish function to return errors - should not stop the heartbeat loop
-	// Expect initial + periodic + final heartbeat (all with errors)
-	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(publishError).Times(4)
+	// Expect initial + at least 2 periodic (no offline from context cancel).
+	mockPublish.On("Publish", mock.Anything, testTopic, mock.AnythingOfType("[]uint8")).Return(publishError).Times(3)
 
 	// Act
 	hb.StartHeartbeats(ctx, testTopic, "test-agent-id", mockPublish.Publish, nil)
@@ -509,21 +502,18 @@ func TestHeartbeater_SendHeartbeats_HeartbeatStates(t *testing.T) {
 	copy(payloadsCopy, capturedPayloads)
 	mutex.Unlock()
 
-	assert.GreaterOrEqual(t, len(payloadsCopy), 2, "Should have at least initial and final heartbeats")
+	// Context cancellation no longer triggers an offline heartbeat from the goroutine.
+	// Only the initial Online heartbeat is guaranteed here.
+	assert.GreaterOrEqual(t, len(payloadsCopy), 1, "Should have at least the initial heartbeat")
 
-	// Verify all payloads are valid heartbeat messages and contain expected fields
+	// Verify all payloads are valid Online heartbeat messages.
 	for i, payload := range payloadsCopy {
 		var heartbeat messages.Heartbeat
 		err := json.Unmarshal(payload, &heartbeat)
 		require.NoError(t, err, "Heartbeat %d should be valid JSON", i)
 		assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, heartbeat.SchemaVersion)
 		assert.False(t, heartbeat.TimeStamp.IsZero())
-		// Initial heartbeats are Online; final heartbeat on context cancellation should be Offline
-		if i < len(payloadsCopy)-1 {
-			assert.Equal(t, messages.State(messages.Online), heartbeat.State)
-		} else {
-			assert.Equal(t, messages.State(messages.Offline), heartbeat.State)
-		}
+		assert.Equal(t, messages.State(messages.Online), heartbeat.State)
 	}
 }
 
@@ -593,6 +583,62 @@ func TestHeartbeater_Stop_HeartbeatContent(t *testing.T) {
 	// The stop method sends an Offline heartbeat
 	assert.Equal(t, messages.State(messages.Offline), heartbeat.State)
 	assert.False(t, heartbeat.TimeStamp.IsZero())
+}
+
+// TestHeartbeater_ContextDone_OfflineHeartbeatSentByStop is a regression test for the
+// race condition where monitorCtx cancellation caused the heartbeat goroutine to send
+// the offline heartbeat against a simultaneously-closing MQTT connection (OBS-2686).
+//
+// After the fix: the goroutine exits cleanly on ctx.Done() without sending an offline
+// heartbeat. stop() is the sole sender, always called when the connection is still alive.
+func TestHeartbeater_ContextDone_OfflineHeartbeatSentByStop(t *testing.T) {
+	hb := createTestHeartbeater()
+	testTopic := "test/heartbeat"
+
+	var mu sync.Mutex
+	offlineCount := 0
+	stopCalled := make(chan struct{})
+
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		var hbData messages.Heartbeat
+		if err := json.Unmarshal(payload, &hbData); err != nil {
+			return nil
+		}
+		if hbData.State == messages.State(messages.Offline) {
+			mu.Lock()
+			offlineCount++
+			mu.Unlock()
+			// If offline was sent before stop() was called, the goroutine sent it
+			// while the parent context was being cancelled — the race condition.
+			select {
+			case <-stopCalled:
+			default:
+				t.Errorf("offline heartbeat sent by goroutine reacting to ctx.Done(), not by stop()")
+			}
+		}
+		return nil
+	}
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	hb.StartHeartbeats(parentCtx, testTopic, "agent-id", publishFunc, nil)
+	time.Sleep(20 * time.Millisecond) // let initial Online heartbeat send
+
+	// Simulate monitorCtx cancellation — the race window.
+	// Wait on the WaitGroup so we know the goroutine has fully exited before
+	// calling stop(), eliminating the timing dependency.
+	parentCancel()
+	hb.wg.Wait()
+
+	// Now call stop() (simulating Disconnect() in Stop())
+	close(stopCalled)
+	hb.stop(testTopic, publishFunc)
+
+	mu.Lock()
+	got := offlineCount
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("expected exactly 1 offline heartbeat from stop(), got %d", got)
+	}
 }
 
 func TestHeartbeater_SendSingleHeartbeat_WithBackendState(t *testing.T) {
@@ -1084,7 +1130,6 @@ func TestNewHeartbeater_WithPolicyManager(t *testing.T) {
 	// Assert
 	assert.NotNil(t, hb)
 	assert.NotNil(t, hb.logger)
-	assert.NotNil(t, hb.heartbeatCtx)
 	assert.NotNil(t, hb.backendState)
 	assert.NotNil(t, hb.policyManager)
 	assert.Equal(t, mockPMgr, hb.policyManager)
@@ -1097,7 +1142,7 @@ func createTestHeartbeaterWithGroupManager(groupManager *GroupManager) *heartbea
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
 	return &heartbeater{
 		logger:         logger,
-		heartbeatCtx:   context.Background(),
+
 		backendState:   &mockBackendState{},
 		policyManager:  mockPMgr,
 		groupRetriever: groupManager,
@@ -1224,7 +1269,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithCompleteState(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	hb := &heartbeater{
 		logger:         logger,
-		heartbeatCtx:   context.Background(),
+
 		backendState:   backendState,
 		policyManager:  mockPMgr,
 		groupRetriever: &gm,
