@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+	"github.com/google/uuid"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
@@ -41,7 +43,6 @@ type expandedTargetGroup struct {
 type Runner struct {
 	scheduler        gocron.Scheduler
 	ctx              context.Context
-	tasks            []gocron.Task
 	client           diode.Client
 	logger           *slog.Logger
 	timeout          time.Duration
@@ -54,6 +55,8 @@ type Runner struct {
 	mappingConfig    *config.Mapping
 	deviceLookup     data.DeviceRetriever
 	runStore         *RunStore
+	activeHostJobs   map[string]uuid.UUID
+	activeHostJobsMu sync.Mutex
 }
 
 // NewRunner returns a new policy runner
@@ -64,14 +67,15 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	}
 
 	runner := &Runner{
-		scheduler:     s,
-		client:        client,
-		logger:        logger,
-		ClientFactory: ClientFactory,
-		manufacturers: manufacturers,
-		mappingConfig: mappingConfig,
-		deviceLookup:  deviceLookup,
-		runStore:      runStore,
+		scheduler:      s,
+		client:         client,
+		logger:         logger,
+		ClientFactory:  ClientFactory,
+		manufacturers:  manufacturers,
+		mappingConfig:  mappingConfig,
+		deviceLookup:   deviceLookup,
+		runStore:       runStore,
+		activeHostJobs: make(map[string]uuid.UUID),
 	}
 
 	runner.timeout = time.Duration(policy.Config.Timeout) * time.Second
@@ -110,18 +114,21 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			if err != nil {
 				return nil, err
 			}
-			runner.tasks = append(runner.tasks, task)
 			continue
 		}
 		// Create scan task for multiple targets with original target
 		task := gocron.NewTask(runner.runScanWithOriginal, group.targets, group.originalTarget)
-		_, err = runner.scheduler.NewJob(gocron.OneTimeJob(
-			gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), task,
-			gocron.WithSingletonMode(gocron.LimitModeReschedule))
+		if policy.Config.Schedule != nil {
+			_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), task,
+				gocron.WithSingletonMode(gocron.LimitModeReschedule))
+		} else {
+			_, err = runner.scheduler.NewJob(gocron.OneTimeJob(
+				gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), task,
+				gocron.WithSingletonMode(gocron.LimitModeReschedule))
+		}
 		if err != nil {
 			return nil, err
 		}
-		runner.tasks = append(runner.tasks, task)
 	}
 	return runner, nil
 }
@@ -182,6 +189,29 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 		r.logger.Debug("SNMP probe succeeded", "host", target.Host, "port", target.Port, "policy", policyName)
 	}
 
+	// Snapshot live job IDs before the loop to avoid holding two locks simultaneously.
+	// Done here (before early returns) so stale entries are pruned on every probe invocation,
+	// including the zero-responsive and context-timeout paths.
+	jobs := r.scheduler.Jobs()
+	liveIDs := make(map[uuid.UUID]struct{}, len(jobs))
+	for _, j := range jobs {
+		liveIDs[j.ID()] = struct{}{}
+	}
+
+	// Prune stale host->job mappings for this originalTarget only.
+	// Scoped to the current range to avoid deleting entries freshly added by a concurrent
+	// runScanWithOriginal invocation for a different range target in the same policy.
+	keyPrefix := originalTarget + "::"
+	r.activeHostJobsMu.Lock()
+	for jobKey, jobID := range r.activeHostJobs {
+		if strings.HasPrefix(jobKey, keyPrefix) {
+			if _, alive := liveIDs[jobID]; !alive {
+				delete(r.activeHostJobs, jobKey)
+			}
+		}
+	}
+	r.activeHostJobsMu.Unlock()
+
 	// Check if context was canceled or timed out
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		r.logger.Warn("SNMP probe scan interrupted", "policy", policyName, "error", ctxErr, "responsive_target_count", len(responsive))
@@ -189,14 +219,38 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 		return
 	}
 
+	if len(responsive) == 0 {
+		r.logger.Warn("no hosts responded to SNMP probe",
+			"policy", policyName, "target", originalTarget)
+		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID,
+			RunStatusFailed, fmt.Errorf("no hosts responded to SNMP probe"), 0)
+		return
+	}
+
 	var err error
 	for _, target := range responsive {
+		jobKey := fmt.Sprintf("%s::%s:%d", originalTarget, target.Host, target.Port)
+
+		// Check under lock, then unlock before calling scheduler to avoid holding mutex
+		// across scheduler's internal locks.
+		r.activeHostJobsMu.Lock()
+		if existingID, ok := r.activeHostJobs[jobKey]; ok {
+			if _, alive := liveIDs[existingID]; alive {
+				r.activeHostJobsMu.Unlock()
+				r.logger.Debug("crawl job already active, skipping",
+					"host", target.Host, "policy", policyName)
+				continue
+			}
+		}
+		r.activeHostJobsMu.Unlock()
+
 		task := gocron.NewTask(r.runWithMetadata, target, originalTarget)
+		var newJob gocron.Job
 		if r.config.Schedule != nil {
-			_, err = r.scheduler.NewJob(gocron.CronJob(*r.config.Schedule, false), task,
+			newJob, err = r.scheduler.NewJob(gocron.CronJob(*r.config.Schedule, false), task,
 				gocron.WithSingletonMode(gocron.LimitModeReschedule))
 		} else {
-			_, err = r.scheduler.NewJob(gocron.OneTimeJob(
+			newJob, err = r.scheduler.NewJob(gocron.OneTimeJob(
 				gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), task,
 				gocron.WithSingletonMode(gocron.LimitModeReschedule))
 		}
@@ -205,7 +259,11 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 				"host", target.Host, "policy", policyName, "error", err)
 			continue
 		}
-		r.tasks = append(r.tasks, task)
+
+		r.activeHostJobsMu.Lock()
+		r.activeHostJobs[jobKey] = newJob.ID()
+		liveIDs[newJob.ID()] = struct{}{} // keep snapshot current for remaining iterations
+		r.activeHostJobsMu.Unlock()
 	}
 
 	// Update scan run status

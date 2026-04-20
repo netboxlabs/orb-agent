@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+	"github.com/google/uuid"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"github.com/stretchr/testify/assert"
@@ -228,11 +229,12 @@ func TestRunScanSchedulesResponsiveTargets(t *testing.T) {
 	runStore := NewRunStore()
 
 	runner := &Runner{
-		scheduler: scheduler,
-		ctx:       context.WithValue(context.Background(), policyKey, "test-policy"),
-		timeout:   5 * time.Second,
-		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
-		runStore:  runStore,
+		scheduler:      scheduler,
+		ctx:            context.WithValue(context.Background(), policyKey, "test-policy"),
+		timeout:        5 * time.Second,
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runStore:       runStore,
+		activeHostJobs: make(map[string]uuid.UUID),
 	}
 
 	runner.ClientFactory = func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
@@ -248,7 +250,6 @@ func TestRunScanSchedulesResponsiveTargets(t *testing.T) {
 		{Host: "good-2", Port: 161},
 	}, "192.168.1.0/24")
 
-	assert.Len(t, runner.tasks, 2)
 	assert.Len(t, runner.scheduler.Jobs(), 2)
 
 	// Verify scan run was created
@@ -335,4 +336,143 @@ func TestQueryTargetSuccess(t *testing.T) {
 	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	require.NoError(t, err)
 	assert.NotEmpty(t, entities)
+}
+
+func TestRunner_HasActiveHostJobsField(t *testing.T) {
+	cron := "0 * * * *"
+	pol := config.Policy{
+		Config: config.PolicyConfig{Schedule: &cron, Timeout: 120},
+		Scope:  config.Scope{Targets: []config.Target{{Host: "192.168.1.1", Port: 161}}},
+	}
+	runner, err := NewRunner(context.Background(),
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		"test-policy", pol, nil, snmp.NewFakeSNMPWalker, &config.Mapping{}, nil, nil, NewRunStore())
+	require.NoError(t, err)
+	defer func() { _ = runner.Stop() }()
+	assert.NotNil(t, runner.activeHostJobs, "NewRunner must initialize activeHostJobs")
+}
+
+func TestRunScanWithOriginal_SkipsDuplicateCrawlJob(t *testing.T) {
+	scheduler, err := gocron.NewScheduler()
+	require.NoError(t, err)
+
+	// Schedule a pre-existing crawl job with a known ID
+	existingJobID := uuid.New()
+	_, err = scheduler.NewJob(
+		gocron.CronJob("0 * * * *", false),
+		gocron.NewTask(func() {}),
+		gocron.WithIdentifier(existingJobID),
+	)
+	require.NoError(t, err)
+
+	runStore := NewRunStore()
+	runner := &Runner{
+		scheduler: scheduler,
+		ctx:       context.WithValue(context.Background(), policyKey, "test-policy"),
+		timeout:   5 * time.Second,
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runStore:  runStore,
+		activeHostJobs: map[string]uuid.UUID{
+			"192.168.1.0/24::192.168.1.1:161": existingJobID,
+		},
+	}
+	runner.ClientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return &testWalker{}, nil
+	}
+
+	runner.runScanWithOriginal([]config.Target{
+		{Host: "192.168.1.1", Port: 161},
+	}, "192.168.1.0/24")
+
+	// Still only 1 job — the pre-existing one; no duplicate was added
+	assert.Len(t, scheduler.Jobs(), 1)
+}
+
+func TestRunScanWithOriginal_FailsWhenNoResponsiveHosts(t *testing.T) {
+	scheduler, err := gocron.NewScheduler()
+	require.NoError(t, err)
+
+	runStore := NewRunStore()
+	runner := &Runner{
+		scheduler:      scheduler,
+		ctx:            context.WithValue(context.Background(), policyKey, "test-policy"),
+		timeout:        5 * time.Second,
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runStore:       runStore,
+		activeHostJobs: make(map[string]uuid.UUID),
+	}
+	// All hosts fail the SNMP probe
+	runner.ClientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return &testWalker{walkErr: errors.New("no response")}, nil
+	}
+
+	runner.runScanWithOriginal([]config.Target{
+		{Host: "192.168.1.1", Port: 161},
+		{Host: "192.168.1.2", Port: 161},
+	}, "192.168.1.0/24")
+
+	runs := runStore.GetRunsForTarget("test-policy", "192.168.1.0/24", 161)
+	require.Len(t, runs, 1, "scan run should be created")
+	assert.Equal(t, RunStatusFailed, runs[0].Status, "scan run should be FAILED when no hosts respond")
+	assert.Contains(t, runs[0].Reason, "no hosts responded to SNMP probe")
+	assert.Len(t, scheduler.Jobs(), 0, "no crawl jobs should be scheduled")
+}
+
+func TestRunScanWithOriginal_NoDuplicateForRepeatedResponsiveHost(t *testing.T) {
+	scheduler, err := gocron.NewScheduler()
+	require.NoError(t, err)
+
+	runStore := NewRunStore()
+	runner := &Runner{
+		scheduler:      scheduler,
+		ctx:            context.WithValue(context.Background(), policyKey, "test-policy"),
+		timeout:        5 * time.Second,
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		runStore:       runStore,
+		activeHostJobs: make(map[string]uuid.UUID),
+	}
+	runner.ClientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return &testWalker{}, nil
+	}
+
+	// Same host appears twice in the targets list (simulates misconfigured overlapping range)
+	runner.runScanWithOriginal([]config.Target{
+		{Host: "192.168.1.1", Port: 161},
+		{Host: "192.168.1.1", Port: 161},
+	}, "192.168.1.0/24")
+
+	// Only one crawl job should be scheduled despite duplicate in responsive list
+	assert.Len(t, scheduler.Jobs(), 1)
+}
+
+func TestNewRunner_RangeScheduledWithCron(t *testing.T) {
+	cron := "0 * * * *"
+	pol := config.Policy{
+		Config: config.PolicyConfig{
+			Schedule: &cron,
+			Timeout:  120,
+		},
+		Scope: config.Scope{
+			Targets: []config.Target{
+				{Host: "192.168.1.1-2", Port: 161},
+			},
+		},
+	}
+	runStore := NewRunStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	runner, err := NewRunner(context.Background(), logger, "test-policy", pol, nil,
+		snmp.NewFakeSNMPWalker, &config.Mapping{}, nil, nil, runStore)
+	require.NoError(t, err)
+	runner.scheduler.Start()
+	defer func() { _ = runner.Stop() }()
+
+	jobs := runner.scheduler.Jobs()
+	require.Len(t, jobs, 1, "one job for the range scan")
+
+	nextRuns, err := jobs[0].NextRuns(2)
+	require.NoError(t, err)
+	require.Len(t, nextRuns, 2)
+	assert.False(t, nextRuns[1].IsZero(), "second next run must be a real future time, not zero — proves this is a cron job not a one-time job")
+	assert.True(t, nextRuns[1].After(nextRuns[0]), "cron next runs must be strictly increasing")
 }
