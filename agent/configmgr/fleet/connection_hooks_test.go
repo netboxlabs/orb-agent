@@ -65,7 +65,7 @@ func TestConnect_StoresTopicsBeforeConnecting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	_ = conn.Connect(ctx, details, map[string]backend.Backend{}, map[string]string{}, "")
+	_ = conn.Connect(ctx, ctx, details, map[string]backend.Backend{}, map[string]string{}, "")
 
 	if conn.connectionTopics != details.Topics {
 		t.Fatalf("expected connectionTopics to be stored before connect attempt")

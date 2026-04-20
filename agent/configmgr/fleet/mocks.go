@@ -127,7 +127,7 @@ func (m *MockMQTTConnection) LastConnectDetails() ConnectionDetails {
 }
 
 // Connect connects to the MQTT broker
-func (m *MockMQTTConnection) Connect(_ context.Context, details ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string) error {
+func (m *MockMQTTConnection) Connect(_ context.Context, _ context.Context, details ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string) error {
 	m.mu.Lock()
 	m.connectCalled = true
 	m.lastConnectDetails = details
@@ -144,7 +144,7 @@ func (m *MockMQTTConnection) Disconnect(_ context.Context, _ string) error {
 }
 
 // Reconnect reconnects to the MQTT broker
-func (m *MockMQTTConnection) Reconnect(_ context.Context, _ ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string, _ time.Duration) error {
+func (m *MockMQTTConnection) Reconnect(_ context.Context, _ context.Context, _ ConnectionDetails, _ map[string]backend.Backend, _ map[string]string, _ string, _ time.Duration) error {
 	return m.ReconnectError
 }
 

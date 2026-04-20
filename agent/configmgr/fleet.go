@@ -239,9 +239,10 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 					fleetManager.logger.Error("failed to disconnect during reset", "error", err)
 				}
 
-				// Reconnect using connCtx so the new MQTT connection shares the same
-				// independent lifecycle as the initial connection.
-				err = fleetManager.connection.Connect(fleetManager.connCtx, details, fleetManager.backends, fleetManager.labels, fleetManager.configYaml)
+				// Reconnect: connCtx governs the new connection's lifetime; monitorCtx
+				// bounds the AwaitConnection wait so Stop() isn't blocked if the broker
+				// is unreachable during the reset.
+				err = fleetManager.connection.Connect(fleetManager.connCtx, fleetManager.monitorCtx, details, fleetManager.backends, fleetManager.labels, fleetManager.configYaml)
 				if err != nil {
 					fleetManager.logger.Error("failed to reconnect during reset", "error", err)
 				}
@@ -321,11 +322,9 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 	fleetManager.configYaml = string(configYaml)
 	fleetManager.connectionDetails = connectionDetails
 
-	// Use connCtx (not monitorCtx) for the MQTT connection. connCtx is independent of
-	// the background worker lifecycle — it is only cancelled in Stop() after Disconnect(),
-	// ensuring the heartbeat goroutine's parent context remains live until the offline
-	// heartbeat has been sent.
-	return fleetManager.connection.Connect(fleetManager.connCtx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
+	// connCtx governs the connection's lifetime; ctx (the startup context) bounds
+	// the AwaitConnection wait so a cancelled startup doesn't hang indefinitely.
+	return fleetManager.connection.Connect(fleetManager.connCtx, ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
 }
 
 // runReconnectWorker processes signals from reconnectChan, retrying token refresh with exponential
@@ -487,9 +486,10 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 		fleetManager.otlpBridge.ClearPublisher()
 	}
 
-	// Reconnect with new token, using connCtx so the new MQTT connection's parent
-	// context is independent of the background worker lifecycle.
-	err = fleetManager.connection.Reconnect(fleetManager.connCtx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)
+	// connCtx governs the new connection's lifetime; ctx (monitorCtx from the
+	// reconnect worker) bounds the disconnect/AwaitConnection wait so Stop() isn't
+	// blocked by an in-flight reconnect when the broker is unreachable.
+	err = fleetManager.connection.Reconnect(fleetManager.connCtx, ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)
 	if err != nil {
 		return fmt.Errorf("failed to reconnect: %w", err)
 	}

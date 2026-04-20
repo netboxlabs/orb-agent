@@ -1578,7 +1578,7 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 			_ = mgr.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
 			cancel()
 			connectCtx := context.Background()
-			_ = mgr.connection.Connect(connectCtx, details, mgr.backends, mgr.labels, mgr.configYaml)
+			_ = mgr.connection.Connect(connectCtx, connectCtx, details, mgr.backends, mgr.labels, mgr.configYaml)
 		}
 	}()
 
