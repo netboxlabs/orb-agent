@@ -155,14 +155,14 @@ Optional OpenTelemetry export for backend metrics.
 
 Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. Some backends accept optional host/port overrides.
 
-| Key | Backend | Notes |
-|-----|---------|-------|
-| `device_discovery` | NAPALM-based device discovery | Optional `host`/`port` overrides |
-| `snmp_discovery` | SNMP-based discovery | No backend-level config |
-| `network_discovery` | Network/port scan discovery | No backend-level config |
-| `worker` | Custom worker backend | No backend-level config |
-| `pktvisor` | pktvisor packet analytics | See [pktvisor docs](../backends/pktvisor.md) |
-| `opentelemetry_infinity` | OpenTelemetry Infinity | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
+| Key | Backend | Default port | Notes |
+|-----|---------|-------------|-------|
+| `device_discovery` | NAPALM-based device discovery | 8072 | Optional `host`/`port` overrides |
+| `snmp_discovery` | SNMP-based discovery | 8070 | Optional `host`/`port` overrides |
+| `network_discovery` | Network/port scan discovery | 8073 | Optional `host`/`port` overrides |
+| `worker` | Custom worker backend | 8071 | Optional `host`/`port` overrides |
+| `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor.md) |
+| `opentelemetry_infinity` | OpenTelemetry Infinity | — | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
 
 ---
 
@@ -223,11 +223,25 @@ See the full [Vault secrets manager documentation](../secretsmgr/vault.md) for a
 
 ## Environment Variable Substitution
 
-Any value in the config file (and in policy files) can reference an environment variable using `${VAR_NAME}` syntax. The agent resolves these at startup.
+Values can reference environment variables using `${VAR_NAME}` syntax. Resolution is handled at different layers depending on the field:
+
+| Scope | Supported fields | Resolved by |
+|-------|-----------------|-------------|
+| Git config manager | `url`, `password` | Go agent at startup |
+| Fleet config manager | `token_url`, `client_id`, `client_secret` | Go agent at startup |
+| Vault secrets manager `auth_args` | All fields | Go agent at startup |
+| `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
+| `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase` | Go SNMP backend at policy execution |
 
 ```yaml
-password: ${DEVICE_PASS}
-client_secret: ${DIODE_CLIENT_SECRET}
+# Git config (resolved by Go agent)
+password: ${GIT_TOKEN}
+
+# device_discovery policy scope (resolved by Python backend)
+scope:
+  - hostname: 192.168.0.5
+    username: admin
+    password: ${DEVICE_PASS}
 ```
 
-This applies to the local agent config, inline policies, and policy files fetched from Git. Use this for all credentials — never hardcode secrets.
+For fields not listed above (e.g. `network_discovery` scope), use a secrets manager (`vault` or `fleet`) to inject values at runtime.
