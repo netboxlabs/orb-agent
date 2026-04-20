@@ -160,6 +160,46 @@ interface_patterns:
 # User pattern wins over SNMP ifType and built-in patterns
 ```
 
+## Interface Exclusion Patterns
+
+Use `interface_exclude_patterns` to prevent specific interfaces — and their associated IP addresses — from being ingested into NetBox. This is useful for filtering out virtual or host-only interfaces (TAP, veth, loopback, etc.) that are not relevant to your network inventory.
+
+### Configuration
+
+```yaml
+defaults:
+  interface_exclude_patterns:
+    - "^tap.*"      # exclude TAP interfaces (e.g. tap103i0)
+    - "^veth.*"     # exclude veth pairs
+    - "^docker.*"   # exclude Docker bridge interfaces
+```
+
+### Rules
+
+- Patterns are **case-sensitive** regular expressions matched against the full interface name
+- A pattern matches anywhere in the name — use `^` to anchor to the start (e.g. `^tap` matches `tap0` but not `mytap0`)
+- When an interface is excluded, **all IP addresses assigned to it are also suppressed**
+- The `override_defaults` field on a target replaces the global list wholesale (same behaviour as `interface_patterns`)
+
+### Per-Target Override
+
+```yaml
+defaults:
+  interface_exclude_patterns:
+    - "^tap.*"
+scope:
+  targets:
+    - host: "192.168.1.1"
+      override_defaults:
+        interface_exclude_patterns:
+          - "^tap.*"
+          - "^veth.*"   # this target also excludes veth interfaces
+```
+
+### Invalid Patterns
+
+Invalid regex patterns are logged as warnings and skipped. Valid patterns in the same list are still applied.
+
 ## SNMP ifType Mappings
 
 Standard IANA interface types from SNMP `ifType` (`.1.3.6.1.2.1.2.2.1.3`) are automatically mapped:

@@ -69,6 +69,7 @@ Current supported defaults:
 | role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
 | if_type | str | Default interface type when no pattern matches (defaults to 'other' if not specified) |
 | interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./device_discovery_interface.md)) |
+| interface_exclude_patterns | list | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./device_discovery_interface.md#interface-exclusion-patterns)) |
 | location | str | Device location |
 | tenant | str/map | Device tenant |
 | description | str  | General description   |
@@ -169,6 +170,9 @@ orb:
                 type: "10gbase-x-sfpp"
               - match: "^Loopback.*"
                 type: "virtual"
+            interface_exclude_patterns:
+              - "^tap.*"
+              - "^veth.*"
             location: Row A
             tenant: NetBox Labs
             description: for all
