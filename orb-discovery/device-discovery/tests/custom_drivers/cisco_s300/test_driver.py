@@ -1,0 +1,15 @@
+"""Unit tests for custom_napalm.cisco_s300.S300Driver."""
+
+from pathlib import Path
+
+from custom_napalm.cisco_s300 import S300Driver
+from tests.custom_drivers.base_test import BaseDriverTest
+from tests.custom_drivers.mock_device import FakeCLIDevice
+
+
+class TestS300Driver(BaseDriverTest):
+    """Unit tests for S300Driver using file-based CLI mocks."""
+
+    driver_cls = S300Driver
+    fake_device_cls = FakeCLIDevice
+    mock_data_root = Path(__file__).parent / "mock_data"

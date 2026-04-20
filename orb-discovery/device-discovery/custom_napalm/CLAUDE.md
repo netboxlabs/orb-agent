@@ -5,6 +5,11 @@ is a flat Python file (`<driver_name>.py`) that exposes a `NetworkDriver` subcla
 `get_network_driver()` checks `custom_napalm.<name>` before `napalm.<name>`, so no PyPI publishing is
 needed and the driver is available immediately once the package is installed.
 
+Driver files **must** follow the `<vendor>_<os>[_ssh].py` naming convention, matching the
+[netmiko platform string](https://ktbyers.github.io/netmiko/PLATFORMS.html) wherever one exists
+(e.g. `paloalto_panos.py`, `huawei_vrp.py`, `aruba_aoscx_ssh.py`). The only exception is
+`alcatel_aos.py` which predates this convention but already matches the netmiko name.
+
 ---
 
 ## How driver lookup works
@@ -144,16 +149,16 @@ grep -c "MyRawSecret" tests/custom_drivers/my_driver/mock_data/test_get_config_s
 ```
 device-discovery/
 ├── custom_napalm/
-│   ├── __init__.py          # re-export convenience only, not required by NAPALM
-│   ├── CLAUDE.md            # this file
-│   ├── vrp.py               # Netmiko + ntc-templates example
-│   ├── panos.py             # XML API (pan-python) example
-│   └── panos_ssh.py         # Netmiko + ntc-templates example
+│   ├── __init__.py              # re-export convenience only, not required by NAPALM
+│   ├── CLAUDE.md                # this file
+│   ├── huawei_vrp.py            # Netmiko + ntc-templates example
+│   ├── paloalto_panos.py        # XML API (pan-python) example
+│   └── paloalto_panos_ssh.py    # Netmiko + ntc-templates example
 └── tests/
     └── custom_drivers/
         ├── base_test.py           # BaseDriverTest + parametrize_scenarios
         ├── mock_device.py         # FakeCLIDevice, FakeXmlDevice
-        └── <driver_name>/
+        └── <vendor_os>/           # matches driver filename, e.g. paloalto_panos/
             ├── __init__.py
             ├── conftest.py
             ├── test_driver.py
@@ -730,7 +735,7 @@ Common errors:
 
 Before opening a PR with a new driver, confirm all of the following:
 
-- [ ] Driver file is `custom_napalm/<driver_name>.py` (flat file, not a package).
+- [ ] Driver file is `custom_napalm/<vendor>_<os>[_ssh].py` (flat file, not a package; matches the netmiko platform string where one exists).
 - [ ] Class inherits from `_napalm_base.NetworkDriver` (uses `import napalm.base as _napalm_base`).
 - [ ] All five getters are implemented: `get_facts`, `get_interfaces`, `get_interfaces_ip`, `get_config`, `get_vlans`.
 - [ ] `get_facts` returns all required keys including a float `uptime`.
