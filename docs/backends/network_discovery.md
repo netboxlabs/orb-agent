@@ -2,7 +2,11 @@
 The network discovery backend leverages [NMAP](https://nmap.org/) to scan networks and discover IP information.
 
 ## Diode Entities
-The network discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) to ingest discover IP Address entities with Global VRF and allows defining Description, Comments and Tags for them.
+The network discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) to ingest the following entities:
+
+* [IP Address](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/ip_address/main.go)
+
+IP addresses support VRF, Tenant, Role, Description, Comments and Tags via `defaults`.
 
 ## Configuration
 The `network_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
@@ -42,6 +46,9 @@ Current supported defaults:
 
 |  Key  | Type | Description  |
 |:-----:|:----:|:-------------:|
+| vrf | str | VRF name to assign to discovered IP addresses |
+| tenant | str | Tenant name to assign to discovered IP addresses |
+| role | str | Role to assign to discovered IP addresses |
 | comments | str | NetBox Comments information to be added to discovered IP |
 | description | str | NetBox Description data to be added to discovered IP |
 | tags | list | NetBox Tags to be added to discovered IP |

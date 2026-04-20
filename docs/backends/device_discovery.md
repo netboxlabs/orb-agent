@@ -4,16 +4,16 @@ The device discovery backend leverages [NAPALM](https://napalm.readthedocs.io/en
 ## Diode Entities
 The device discovery backend uses [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) to ingest the following entities:
 
-* [Device](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#device)
-* [Interface](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#interface)
-* [Device Type](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#device-type)
-* [Platform](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#platform)
-* [Manufacturer](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#manufacturer)
-* [Site](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#site)
-* [Role](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#role)
-* [IP Address](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#ip-address)
-* [Prefix](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/entities.md#prefix)
-* [VLAN](https://github.com/netboxlabs/diode-sdk-python/blob/develop/README.md#supported-entities-object-types)
+* [Device](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/device.py)
+* [Interface](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/interface_example.py)
+* [Device Type](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/device_type.py)
+* [Platform](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/platform.py)
+* [Manufacturer](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/manufacturer.py)
+* [Site](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/site.py)
+* [Role](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/role.py)
+* [IP Address](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/ip_address.py)
+* [Prefix](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/prefix.py)
+* [VLAN](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/vlan.py)
 
 Interfaces are attached to the device and ip addresses will be attached to the interfaces. Prefixes are added to the same interface site that it belongs to.
 
@@ -264,3 +264,66 @@ orb:
 In this example:
 - The `credentials` section defines reusable credentials using the anchor `&ios_credentials`.
 - The `<<: *ios_credentials` alias is used to include the credentials in multiple devices within the `scope` section.
+
+## What NAPALM Collects Automatically
+
+The tables below show which fields are populated automatically from the device versus which must be provided via `defaults` in the policy configuration.
+
+### Device
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| Name | `get_facts()` → `hostname` | Auto-collected |
+| Model | `get_facts()` → `model` | Auto-collected; overridable via `defaults.device.model` |
+| Manufacturer | `get_facts()` → `vendor` | Auto-collected; overridable via `defaults.device.manufacturer` |
+| Platform | `get_facts()` → `os_version` + driver name | Format: `"<DRIVER> <os_version>"`. Overridable via `defaults.device.platform`. Use `platform_omit_version: true` to use only the driver name |
+| Serial number | `get_facts()` → `serial_number` | Auto-collected |
+| Status | — | Always set to `"active"` |
+| Site | **Not collected** | Must be set via `defaults.site` |
+| Role | **Not collected** | Must be set via `defaults.role` |
+| Location | **Not collected** | Must be set via `defaults.location` |
+| Tenant | **Not collected** | Must be set via `defaults.tenant` |
+| Description | **Not collected** | Must be set via `defaults.device.description` |
+| Comments | **Not collected** | Must be set via `defaults.device.comments` |
+| Tags | **Not collected** | Must be set via `defaults.tags` or `defaults.device.tags` |
+
+### Interface
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| Name | `get_interfaces()` → interface key | Auto-collected |
+| Enabled | `get_interfaces()` → `is_enabled` | Auto-collected |
+| MAC address | `get_interfaces()` → `mac_address` | Auto-collected |
+| Description | `get_interfaces()` → `description` | Auto-collected; falls back to `defaults.interface.description` if empty |
+| Speed | `get_interfaces()` → `speed` (Mbps) | Auto-collected; stored in NetBox as Kbps |
+| MTU | `get_interfaces()` → `mtu` | Auto-collected |
+| Type | Interface name pattern matching + speed | Determined by: (1) user `interface_patterns`, (2) built-in patterns, (3) speed-based detection, (4) `defaults.if_type`. Subinterfaces (`.` or `:` separator) are always `"virtual"` |
+| Tags | **Not collected** | Must be set via `defaults.tags` or `defaults.interface.tags` |
+
+### IP Address
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| Address (with prefix length) | `get_interfaces_ip()` | Auto-collected; IPv4 and IPv6 |
+| Assigned interface | — | Automatically linked to the interface |
+| Role | **Not collected** | Must be set via `defaults.ipaddress.role` |
+| VRF | **Not collected** | Must be set via `defaults.ipaddress.vrf` |
+| Tenant | **Not collected** | Must be set via `defaults.ipaddress.tenant` |
+
+### Prefix
+
+Prefixes are derived from IP addresses discovered on interfaces. The network address is computed automatically from each discovered IP/prefix-length.
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| Prefix (network address) | Derived from IP address | Auto-computed |
+| Site | — | Inherited from the interface's site |
+| VRF / Role / Tenant | **Not collected** | Must be set via `defaults.prefix.*` |
+
+### VLAN
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| VID | `get_vlans()` → VLAN ID | Auto-collected |
+| Name | `get_vlans()` → VLAN name | Auto-collected |
+| Group / Role / Tenant | **Not collected** | Must be set via `defaults.vlan.*` |
