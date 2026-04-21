@@ -80,6 +80,7 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	trt := TokenResponseTopics{Inbox: "test/topic"}
 	err := connection.Connect(
 		context.Background(),
+		context.Background(),
 		ConnectionDetails{MQTTURL: "://invalid-url", Token: "test_token", AgentID: "test-agent-id", Topics: trt, ClientID: "test-agent-id", Zone: "test-zone"},
 		backends,
 		map[string]string{},
@@ -106,7 +107,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	// Timeout after 100ms for faster test execution (connection will fail quickly)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	err := connection.Connect(ctx,
+	err := connection.Connect(ctx, ctx,
 		ConnectionDetails{MQTTURL: "mqtt://localhost:1883", Token: "test_token", AgentID: "test-agent-id", Topics: trt2, ClientID: "test-agent-id", Zone: "test-zone"},
 		backends,
 		map[string]string{},

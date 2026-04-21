@@ -41,10 +41,14 @@ func TestFleetConfigManager_Stop_DisconnectsMQTT(t *testing.T) {
 
 	mgr := newFleetConfigManagerWithConnection(logger, nil, nil, mockConn)
 
-	// Simulate having successfully connected: set connected flag, heartbeat topic, and monitorCtx.
-	ctx, cancel := context.WithCancel(context.Background())
-	mgr.monitorCtx = ctx
-	mgr.monitorCancel = cancel
+	// Simulate having successfully connected: set connected flag, heartbeat topic,
+	// monitorCtx, and connCtx (both are created by Start() in production).
+	monitorCtx, monitorCancel := context.WithCancel(context.Background())
+	connCtx, connCancel := context.WithCancel(context.Background())
+	mgr.monitorCtx = monitorCtx
+	mgr.monitorCancel = monitorCancel
+	mgr.connCtx = connCtx
+	mgr.connCancel = connCancel
 	mgr.connected.Store(true)
 	mgr.connectionDetails = fleet.ConnectionDetails{
 		Topics: fleet.TokenResponseTopics{Heartbeat: "agents/test/heartbeat"},
@@ -56,6 +60,34 @@ func TestFleetConfigManager_Stop_DisconnectsMQTT(t *testing.T) {
 
 	if !mockConn.DisconnectCalled() {
 		t.Error("expected Disconnect() to be called during Stop(), but it was not")
+	}
+}
+
+// TestFleetConfigManager_Stop_ConnCtxCancelledAfterStop verifies that the MQTT
+// connection context (connCtx) is cancelled after Stop() completes, confirming it
+// has a separate lifecycle from monitorCtx and is properly cleaned up.
+func TestFleetConfigManager_Stop_ConnCtxCancelledAfterStop(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	mockConn := &fleet.MockMQTTConnection{}
+
+	mgr := newFleetConfigManagerWithConnection(logger, nil, nil, mockConn)
+	monitorCtx, monitorCancel := context.WithCancel(context.Background())
+	connCtx, connCancel := context.WithCancel(context.Background())
+	mgr.monitorCtx = monitorCtx
+	mgr.monitorCancel = monitorCancel
+	mgr.connCtx = connCtx
+	mgr.connCancel = connCancel
+	mgr.connected.Store(true)
+	mgr.connectionDetails = fleet.ConnectionDetails{
+		Topics: fleet.TokenResponseTopics{Heartbeat: "agents/test/heartbeat"},
+	}
+
+	if err := mgr.Stop(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if connCtx.Err() == nil {
+		t.Error("connCtx should be cancelled after Stop() completes")
 	}
 }
 

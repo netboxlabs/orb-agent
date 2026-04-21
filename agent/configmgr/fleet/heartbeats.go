@@ -22,7 +22,6 @@ var heartbeatTickInterval = heartbeatFreq
 
 type heartbeater struct {
 	logger         *slog.Logger
-	heartbeatCtx   context.Context
 	backendState   backend.StateRetriever
 	policyManager  policymgr.PolicyManager
 	groupRetriever GroupRetriever
@@ -35,7 +34,6 @@ type heartbeater struct {
 func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager, groupRetriever GroupRetriever) *heartbeater {
 	return &heartbeater{
 		logger:         logger,
-		heartbeatCtx:   context.Background(),
 		backendState:   backendState,
 		policyManager:  policyManager,
 		groupRetriever: groupRetriever,
@@ -78,15 +76,15 @@ func (hb *heartbeater) stop(heartbeatTopic string, publishFunc func(ctx context.
 	if cancel != nil {
 		cancel()
 		hb.wg.Wait()
-		return
 	}
 
+	// Always send the offline heartbeat here. The goroutine exits cleanly on
+	// ctx.Done() without sending it, so stop() is the sole sender — called only
+	// when the MQTT connection is still alive (before connectionManager.Disconnect).
 	hb.sendSingleHeartbeat(context.Background(), heartbeatTopic, publishFunc, "", time.Now(), messages.HeartbeatState(messages.Offline), nil)
 }
 
 func (hb *heartbeater) runHeartbeatLoop(ctx context.Context, ticker *time.Ticker, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error, onFailure func()) {
-	hb.heartbeatCtx = ctx
-
 	hb.logger.Debug("start heartbeats routine")
 	hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Online, onFailure)
 
@@ -94,8 +92,6 @@ func (hb *heartbeater) runHeartbeatLoop(ctx context.Context, ticker *time.Ticker
 		select {
 		case <-ctx.Done():
 			hb.logger.Debug("context done, stopping heartbeats routine")
-			hb.sendSingleHeartbeat(context.Background(), heartbeatTopic, publishFunc, agentID, time.Now(), messages.Offline, nil)
-			hb.heartbeatCtx = nil
 			return
 		case t := <-ticker.C:
 			hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, t, messages.Online, onFailure)

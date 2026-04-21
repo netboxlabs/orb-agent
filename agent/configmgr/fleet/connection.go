@@ -94,11 +94,18 @@ type ConnectionDetails struct {
 	Zone     string
 }
 
-// MQTTConnector defines the interface for MQTT connection operations
+// MQTTConnector defines the interface for MQTT connection operations.
+//
+// Connect and Reconnect take two distinct contexts:
+//   - ctx (lifecycle): passed to autopaho.NewConnection; must remain live until
+//     the connection is intentionally torn down (typically connCtx in fleet.go).
+//   - waitCtx (wait): governs the AwaitConnection call and, for Reconnect, the
+//     disconnect-before-reconnect timeout; should be cancellable by shutdown
+//     (typically monitorCtx) so Stop() is not blocked by in-flight connect attempts.
 type MQTTConnector interface {
-	Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error
+	Connect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error
 	Disconnect(ctx context.Context, heartbeatTopic string) error
-	Reconnect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error
+	Reconnect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error
 	AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics))
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 }
@@ -157,7 +164,7 @@ func (connection *MQTTConnection) stopDispatchWorker() {
 // Connect connects to the MQTT broker. It is safe to call after a previous
 // failed Connect (e.g. from a startup retry loop): any existing dispatch
 // worker and connection manager are torn down before reinitializing.
-func (connection *MQTTConnection) Connect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
+func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string) error {
 	// Parse the ORB URL
 	serverURL, err := url.Parse(details.MQTTURL)
 	if err != nil {
@@ -402,12 +409,12 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 		return err
 	}
 
-	// Wait for the initial connection; bound this operation with a timeout that
-	// is still cancellable from the parent.
-	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Wait for the initial connection using waitCtx so the caller can interrupt
+	// this wait independently of the connection's lifecycle context.
+	awaitCtx, cancel := context.WithTimeout(waitCtx, 30*time.Second)
 	defer cancel()
 
-	err = connection.connectionManager.AwaitConnection(waitCtx)
+	err = connection.connectionManager.AwaitConnection(awaitCtx)
 	if err != nil {
 		connection.logger.Error("failed to establish initial MQTT connection", "error", err)
 		connection.stopDispatchWorker()
@@ -419,13 +426,13 @@ func (connection *MQTTConnection) Connect(ctx context.Context, details Connectio
 }
 
 // Reconnect reconnects to the MQTT broker with new connection details (e.g., refreshed JWT)
-func (connection *MQTTConnection) Reconnect(ctx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error {
+func (connection *MQTTConnection) Reconnect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error {
 	connection.logger.Info("reconnecting to MQTT broker with refreshed credentials")
 
 	// Disconnect the existing connection
 	if connection.connectionManager != nil {
-		// Set shutdown flag first to prevent new messages from being enqueued
-		disconnectCtx, cancel := context.WithTimeout(ctx, timeout)
+		// Use waitCtx for the disconnect timeout so shutdown can interrupt it.
+		disconnectCtx, cancel := context.WithTimeout(waitCtx, timeout)
 		connection.heartbeater.stop(details.Topics.Heartbeat, connection.publishToTopic)
 		err := connection.connectionManager.Disconnect(disconnectCtx)
 		cancel()
@@ -441,8 +448,8 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, details Connect
 	connection.groupMembershipFailCount = 0
 	connection.heartbeatFailCount = 0
 
-	// Connect with new details
-	err := connection.Connect(ctx, details, backends, labels, configFile)
+	// Connect with new details; thread both contexts through.
+	err := connection.Connect(ctx, waitCtx, details, backends, labels, configFile)
 	if err != nil {
 		return fmt.Errorf("failed to connect during reconnect: %w", err)
 	}
