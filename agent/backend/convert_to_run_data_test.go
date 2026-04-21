@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -97,4 +98,33 @@ func TestNsToTime_NonZeroConvertsCorrectly(t *testing.T) {
 func TestConvertToRunData_EmptyInput(t *testing.T) {
 	runs := convertToRunData(nil)
 	require.Len(t, runs, 0)
+}
+
+func TestPolicyStatusRun_TargetsOmittedWhenEmptyOnWire(t *testing.T) {
+	// Incoming backend JSON with NO targets field must unmarshal cleanly and leave Targets nil.
+	payload := []byte(`{"id":"run-1","status":"running","created_at":0,"updated_at":0}`)
+
+	var r PolicyStatusRun
+	require.NoError(t, json.Unmarshal(payload, &r))
+
+	assert.Nil(t, r.Targets)
+}
+
+func TestPolicyStatusRun_TargetsUnmarshaledWhenPresent(t *testing.T) {
+	payload := []byte(`{"id":"run-1","status":"completed","targets":["10.0.0.1","10.0.0.2"],"created_at":0,"updated_at":0}`)
+
+	var r PolicyStatusRun
+	require.NoError(t, json.Unmarshal(payload, &r))
+
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, r.Targets)
+}
+
+func TestPolicyStatusRun_TargetsMarshaledAsOmitempty(t *testing.T) {
+	// Constructing a PolicyStatusRun with no Targets must omit the key entirely.
+	r := PolicyStatusRun{ID: "run-1", Status: "running"}
+
+	body, err := json.Marshal(r)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(body), "targets")
 }

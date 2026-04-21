@@ -12,12 +12,13 @@ import (
 
 // PolicyStatusRun represents a run in the backend status response
 type PolicyStatusRun struct {
-	ID          string `json:"id"`
-	Status      string `json:"status"`
-	Reason      string `json:"reason"`
-	EntityCount int64  `json:"entity_count,omitzero"`
-	CreatedAt   int64  `json:"created_at"` // nanoseconds since epoch
-	UpdatedAt   int64  `json:"updated_at"` // nanoseconds since epoch
+	ID          string   `json:"id"`
+	Status      string   `json:"status"`
+	Reason      string   `json:"reason"`
+	EntityCount int64    `json:"entity_count,omitzero"`
+	CreatedAt   int64    `json:"created_at"` // nanoseconds since epoch
+	UpdatedAt   int64    `json:"updated_at"` // nanoseconds since epoch
+	Targets     []string `json:"targets,omitempty"`
 }
 
 // PolicyStatus represents policy status from backend status endpoint
