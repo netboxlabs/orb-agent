@@ -71,8 +71,6 @@ A policy can belong to multiple *datasets* (fleet groups). `PolicyRepo.EnsureDat
 
 **Git:** Polls a git repo on a schedule; diffs policy state between polls.
 
-**Fleet:** MQTT-based (paho autopaho).
-
 ### Secret Solving
 
 Secrets are solved at *apply time*, not at *store time*. `SolvePolicySecrets` is called each time a policy is applied to a backend. This allows dynamic secret rotation: when the secret manager refreshes credentials, it fires a callback → policy manager re-applies all affected policies.
