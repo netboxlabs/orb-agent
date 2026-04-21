@@ -1603,3 +1603,96 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 	assert.Equal(t, "refreshed-token", mockConn.LastConnectDetails().Token,
 		"reset goroutine should use the refreshed token, not the stale initial token")
 }
+
+// newResetHandlerManager creates a FleetConfigManager wired with a mock MQTT connection and
+// pre-initialised contexts so that runResetHandler can be invoked directly in tests.
+func newResetHandlerManager(t *testing.T, mockConn *fleet.MockMQTTConnection) *FleetConfigManager {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mgr := newFleetConfigManagerWithConnection(logger, nil, &mockBackendState{}, mockConn)
+
+	mgr.monitorCtx, mgr.monitorCancel = context.WithCancel(context.Background())
+	mgr.connCtx, mgr.connCancel = context.WithCancel(context.Background())
+	t.Cleanup(mgr.monitorCancel)
+	t.Cleanup(mgr.connCancel)
+
+	mgr.connectionDetails = fleet.ConnectionDetails{
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test/heartbeat",
+		},
+	}
+	mgr.backends = make(map[string]backend.Backend)
+	return mgr
+}
+
+// TestFleetConfigManager_ResetHandler_DisconnectsAndReconnectsOnReset verifies that when a
+// reset signal is received, runResetHandler calls Disconnect then Connect using the stored
+// connection details.
+func TestFleetConfigManager_ResetHandler_DisconnectsAndReconnectsOnReset(t *testing.T) {
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newResetHandlerManager(t, mockConn)
+
+	go mgr.runResetHandler(5 * time.Second)
+
+	mgr.resetChan <- struct{}{}
+
+	require.Eventually(t, mockConn.ConnectCalled, time.Second, 10*time.Millisecond,
+		"runResetHandler should call Connect after receiving a reset signal")
+	assert.True(t, mockConn.DisconnectCalled(),
+		"runResetHandler should call Disconnect before reconnecting")
+}
+
+// TestFleetConfigManager_ResetHandler_ExitsOnMonitorCtxCancel verifies that runResetHandler
+// returns promptly when monitorCtx is cancelled, even when idle waiting for a signal.
+func TestFleetConfigManager_ResetHandler_ExitsOnMonitorCtxCancel(t *testing.T) {
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newResetHandlerManager(t, mockConn)
+
+	done := make(chan struct{})
+	go func() {
+		mgr.runResetHandler(5 * time.Second)
+		close(done)
+	}()
+
+	mgr.monitorCancel()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("runResetHandler did not exit after monitorCtx was cancelled")
+	}
+}
+
+// TestFleetConfigManager_ResetHandler_StopAfterResetNoDeadlock verifies that calling Stop()
+// after a reset completes does not deadlock. connCtx must remain alive during the reset so the
+// offline heartbeat can publish, and must be cancelled only after Stop() finishes its own
+// Disconnect call.
+func TestFleetConfigManager_ResetHandler_StopAfterResetNoDeadlock(t *testing.T) {
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newResetHandlerManager(t, mockConn)
+	mgr.connected.Store(true)
+
+	mgr.goroutinesWg.Add(1)
+	go func() {
+		defer mgr.goroutinesWg.Done()
+		mgr.runResetHandler(5 * time.Second)
+	}()
+
+	// Trigger and wait for a reset to complete before calling Stop.
+	mgr.resetChan <- struct{}{}
+	require.Eventually(t, mockConn.ConnectCalled, time.Second, 10*time.Millisecond,
+		"reset should complete before Stop() is called")
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- mgr.Stop(context.Background()) }()
+
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Stop() deadlocked after a reset")
+	}
+
+	assert.ErrorIs(t, mgr.connCtx.Err(), context.Canceled,
+		"connCtx should be cancelled after Stop() completes")
+}
