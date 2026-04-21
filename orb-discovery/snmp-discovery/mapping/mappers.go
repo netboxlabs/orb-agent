@@ -306,11 +306,6 @@ func (m *InterfaceMapper) applyDefaults(entity *diode.Interface, defaults *confi
 	}
 	entityDefaults := defaults.Interface
 
-	// Apply entity-specific defaults
-	if entityDefaults.Description != "" {
-		entity.Description = &entityDefaults.Description
-	}
-
 	// Collect tags from both entity-specific and global defaults
 	var tags []*diode.Tag
 	if len(entityDefaults.Tags) > 0 {
@@ -362,15 +357,20 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				m.logger.Debug("mapping value to interface entity with mapper", "object_id", objectID, "value", value)
 				switch propertyMappingEntry.Field {
 				case "name":
-					interfaceEntity.Name = &value.Value
-					fieldFound = true
-				case "description":
-					description := strings.TrimRight(value.Value, " \t\n\r")
-					if len(description) > 200 {
-						description = description[:197] + "..."
+					name := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					if name != "" {
+						interfaceEntity.Name = &name
+						fieldFound = true
 					}
-					interfaceEntity.Description = &description
-					fieldFound = true
+				case "description":
+					description := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					if description != "" {
+						if len(description) > 200 {
+							description = description[:197] + "..."
+						}
+						interfaceEntity.Description = &description
+						fieldFound = true
+					}
 				case "type":
 					// Store SNMP ifType but defer type resolution until after all fields are processed
 					// This ensures name and speed are available for pattern matching
@@ -549,14 +549,6 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 	}
 	entityDefaults := defaults.Device
 
-	// Apply entity-specific defaults
-	if entityDefaults.Description != "" {
-		entity.Description = &entityDefaults.Description
-	}
-	if entityDefaults.Comments != "" {
-		entity.Comments = &entityDefaults.Comments
-	}
-
 	// Collect tags from both entity-specific and global defaults
 	var tags []*diode.Tag
 	if len(entityDefaults.Tags) > 0 {
@@ -631,15 +623,20 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 				m.logger.Debug("mapping value to device entity with mapper", "object_id", objectID, "value", value, "mapping_entry", propertyMappingEntry)
 				switch propertyMappingEntry.Field {
 				case "name":
-					deviceEntity.Name = &value.Value
-					fieldFound = true
-				case "description":
-					description := strings.TrimRight(value.Value, " \t\n\r")
-					if len(description) > 200 {
-						description = description[:197] + "..."
+					name := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					if name != "" {
+						deviceEntity.Name = &name
+						fieldFound = true
 					}
-					deviceEntity.Description = &description
-					fieldFound = true
+				case "description":
+					description := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					if description != "" {
+						if len(description) > 200 {
+							description = description[:197] + "..."
+						}
+						deviceEntity.Description = &description
+						fieldFound = true
+					}
 				case "platform":
 					manufacturerID, err := m.getManufacturerID(value.Value)
 					if err != nil {
