@@ -6,7 +6,7 @@ import (
 )
 
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
-const CurrentHeartbeatSchemaVersion = "1.0"
+const CurrentHeartbeatSchemaVersion = "1.1"
 
 var (
 	// ErrSchemaVersion a message was received indicating a version we don't support
@@ -39,6 +39,7 @@ type RunStateInfo struct {
 	EntityCount int64     `json:"entity_count,omitzero"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	Targets     []string  `json:"targets,omitempty"`
 }
 
 // PolicyStateInfo contains state information for a policy
