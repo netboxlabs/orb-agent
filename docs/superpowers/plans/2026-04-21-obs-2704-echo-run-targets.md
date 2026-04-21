@@ -2,9 +2,25 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the orb-agent echo per-run `targets` strings in heartbeats by reading the `target:` field that orb-pro injects into policy scope entries, and bump the heartbeat schema version from `"1.0"` to `"1.1"`.
+**Goal:** Propagate per-run `Targets []string` from the external discovery backends' `/api/v1/status` response all the way through to orb-pro via the agent heartbeat, and bump the heartbeat schema version from `"1.0"` to `"1.1"`.
 
-**Architecture:** The agent does not parse policy scope today — policy `Data` flows through as `map[string]any` from MQTT YAML into the policy manager and then verbatim into backend binaries. We add a small target-extraction helper in the fleet package that inspects `PolicyData.Data` (already an `any`) per-backend to pull out canonical target strings. At heartbeat construction time, `getPolicyState` computes the targets once per policy and attaches the same list to every `RunStateInfo` for that policy. Because a run currently covers the whole scope (external backends don't yet track per-target runs), policy-scope-level attribution is correct. The schema version is bumped to `"1.1"` in one constant.
+**Architecture (end-to-end data flow):**
+
+```
+external discovery binary       /api/v1/status  →  backend.PolicyStatusRun.Targets      [agent/backend/backend.go]
+          ↓ (polled every 10s by agent)
+backend state manager            convertToRunData  →  policies.RunData.Targets          [agent/backend/backend_state.go]
+          ↓
+policy repo                      UpdateRuns  →  merges with last-non-empty rule          [agent/policies/repo.go]
+          ↓
+heartbeat construction           convertRunsToStateInfo  →  messages.RunStateInfo.Targets [agent/configmgr/fleet/heartbeats.go]
+          ↓
+MQTT heartbeat payload           "targets": [...]  (omitempty)
+          ↓
+orb-pro fleet manager            stores last non-empty targets per run ID
+```
+
+Each layer adds or copies the field. The agent itself does not parse policy scope — that's the backend's responsibility. The agent is a faithful pipe.
 
 **Tech Stack:** Go, testify (`github.com/stretchr/testify`), standard library. No new dependencies.
 
@@ -12,207 +28,328 @@
 
 ## Background (read this before starting)
 
-**The `target:` field is canonical.** orb-pro injects it into each scope entry of the policy YAML. Never derive the target string from `hostname` / `host` — those may be CIDR-stripped (e.g. `192.168.1.0/24` → `192.168.1.0`) so they are *not* suitable as identifiers.
+**Task 1 already landed in commit `ab32c60`** — the heartbeat schema constant is at `"1.1"` and `messages.RunStateInfo` has the `Targets []string \`json:"targets,omitempty"\`` field. This plan revision covers only the per-run propagation work still to do.
 
-**Three backends, three scope shapes:**
+**The wire contract from backends to agent:**
 
-- **`device-discovery`** — `scope` is a top-level list; each entry has a `target` string:
-  ```yaml
-  scope:
-    - hostname: 192.168.1.1
-      target: "192.168.1.1"      # use THIS
-      username: admin
-      password: secret
-      netbox_id: 42
-      driver: ios
-  ```
+Each external discovery backend emits run status like:
 
-- **`snmp-discovery`** — `scope.targets` is a list of objects with `target` strings:
-  ```yaml
-  scope:
-    targets:
-      - host: 10.0.0.5
-        target: "10.0.0.5"       # use THIS
-        port: 161
-    authentication:
-      protocol_version: "2c"
-      community: public
-  ```
+```json
+{
+  "policies": [{
+    "name": "my-policy",
+    "status": "running",
+    "runs": [{
+      "id": "<run-uuid>",
+      "status": "running|completed|failed",
+      "reason": "...",
+      "entity_count": 42,
+      "created_at": 1700000000000000000,
+      "updated_at": 1700000000000000000,
+      "targets": ["192.168.1.1", "10.0.0.5"]
+    }]
+  }]
+}
+```
 
-- **`network-discovery`** — `scope.targets` is a plain `[]string` (each element IS the canonical target, no `target:` sub-field):
-  ```yaml
-  scope:
-    targets:
-      - "10.0.0.0/24"
-      - "10.0.1.0/24"
-  ```
+`targets` is a plain `[]string` of canonical target identifiers and is `omitempty` at this layer — a backend that hasn't started reporting targets simply won't include the field. The agent must tolerate both shapes.
 
-**`omitempty` is required.** A run with no targets (unsupported backend, malformed scope, empty list) must omit the field entirely — do NOT emit `"targets": null` or `"targets": []` for a "no information" case. Empty `[]` is reserved for "the run genuinely covered no targets".
+**The `UpdateRuns` merge rule we're adopting:** if a backend reports a run with `targets == nil` (field absent), we preserve the previously-stored non-empty targets for that run ID. This mirrors the guarantee orb-pro applies on its side and protects against:
+- A backend that reports targets once, then drops the field on subsequent status polls (would otherwise erase known state).
+- Older backend builds that haven't been updated to emit targets (never clears the slot so a future update can populate it).
 
-**Data shape.** `PolicyData.Data` is set by `agent/configmgr/fleet/from_rpc.go:166-181` which yaml-unmarshals the payload into `map[string]any`. So in Go, after unmarshal:
-- objects become `map[string]any`
-- arrays become `[]any`
-- strings stay `string`
+If a backend reports `targets == []` (empty but non-nil), that signals "run genuinely covered no targets" — we store empty as-is and don't preserve a stale value. In practice the JSON `omitempty` tag means `nil` and `[]` are indistinguishable on the wire (both omit the field), so on the Go side we treat "field absent" as `nil`; the merge rule reduces to: non-empty incoming wins, empty/nil incoming preserves existing.
 
-Defensively check types — a malformed `Data` must never panic the heartbeat goroutine.
-
-**Backend names.** The task description above uses human-friendly hyphenated names (`device-discovery`, `snmp-discovery`, `network-discovery`), but the **actual backend identifier strings used over the wire and stored in `policies.PolicyData.Backend`** are underscored:
-
-- `device_discovery` — registered at `agent/backend/devicediscovery/device_discovery.go:67`
-- `snmp_discovery` — registered at `agent/backend/snmpdiscovery/snmp_discovery.go:69`
-- `network_discovery` — registered at `agent/backend/networkdiscovery/network_discovery.go:69`
-
-The `policyState.Backend` value you'll be switching on is whatever the fleet RPC delivered, which must match one of these registry keys (otherwise `ApplyPolicy` would never find the backend to run). So **match on the underscore form** in `extractTargets`.
+**What gets deleted from the previous approach:**
+- `agent/configmgr/fleet/targets.go` — scope-parsing helper (wrong layer).
+- `agent/configmgr/fleet/targets_test.go` — its tests.
+- The `targets` parameter added to `convertRunsToStateInfo` (goes back to one argument, reads `run.Targets` directly).
 
 ---
 
 ## File Structure
 
 **Modify:**
-- `agent/configmgr/fleet/messages/fleet_messages.go` — bump schema constant, add `Targets` field to `RunStateInfo`.
-- `agent/configmgr/fleet/heartbeats.go` — compute targets per policy in `getPolicyState`, thread through `convertRunsToStateInfo`.
+- `agent/backend/backend.go` — add `Targets []string` field to `PolicyStatusRun`.
+- `agent/backend/backend_state.go` — copy `Targets` through `convertToRunData`.
+- `agent/backend/convert_to_run_data_test.go` — extend existing test to cover targets.
+- `agent/policies/types.go` — add `Targets []string` field to `RunData`.
+- `agent/policies/repo.go` — `UpdateRuns` preserves last non-empty targets.
+- `agent/policies/repo_test.go` — add tests for preservation behavior.
+- `agent/configmgr/fleet/heartbeats.go` — `convertRunsToStateInfo` reads `run.Targets` directly (no separate parameter).
+- `agent/configmgr/fleet/heartbeats_test.go` — tests exercise the propagation path (runs with `Targets` set on `RunData`).
 
-**Create:**
-- `agent/configmgr/fleet/targets.go` — extraction helpers, one exported entry point + three internal per-backend helpers.
-- `agent/configmgr/fleet/targets_test.go` — unit tests for each backend's extractor plus the dispatch function.
-
-**Test:**
-- `agent/configmgr/fleet/heartbeats_test.go` — update existing tests that assert schema version, add new tests for targets round-tripping through JSON.
-
-Responsibilities:
-- `targets.go` owns all scope-shape knowledge. `heartbeats.go` stays free of backend-specific logic — it just calls `extractTargets(backend, data)`.
-- `RunStateInfo`'s `Targets` field is emitted with `omitempty`; the struct stays the single source of truth for the wire shape.
+Each file change is self-contained and lands in its own commit. This produces a reviewable, per-layer history.
 
 ---
 
 ## Before starting: verify current state
 
-- [ ] **Run the existing heartbeat tests to confirm a clean baseline**
+- [ ] **Confirm we are on the feature branch at the Task 1 commit**
 
 ```bash
 cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/... -count=1
+git log --oneline -3
 ```
 
-Expected: PASS. If any test fails before you've made changes, stop and investigate — something in the tree is already broken.
+Expected: `HEAD` is `ab32c60` (Task 1). Prior commit is `6c84e3d` (plan). Tracking branch is `origin/feat/OBS-2704-echo-run-targets`.
 
-- [ ] **Confirm the backend registry keys you'll match on**
+- [ ] **Confirm `agent/configmgr/fleet/targets.go` and `targets_test.go` do NOT exist**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-grep -n 'backend.Register(' agent/backend/devicediscovery/device_discovery.go agent/backend/snmpdiscovery/snmp_discovery.go agent/backend/networkdiscovery/network_discovery.go
+ls agent/configmgr/fleet/targets*.go 2>&1
 ```
 
-Expected output (underscored names):
-```
-agent/backend/devicediscovery/device_discovery.go:67:	backend.Register("device_discovery", ...
-agent/backend/snmpdiscovery/snmp_discovery.go:69:	backend.Register("snmp_discovery", ...
-agent/backend/networkdiscovery/network_discovery.go:69:	backend.Register("network_discovery", ...
+Expected: `ls: No such file or directory`. If present, the reset didn't take — investigate before continuing.
+
+- [ ] **Run baseline tests for packages we'll touch**
+
+```bash
+go test ./agent/backend/... ./agent/policies/... ./agent/configmgr/fleet/... -count=1
 ```
 
-These are the exact strings you match against in Task 2's dispatch.
+Expected: all PASS.
 
 ---
 
-## Task 1: Add `Targets` field to `RunStateInfo` and bump schema version
+## Task 2: Propagate `Targets` through the backend layer
 
 **Files:**
-- Modify: `agent/configmgr/fleet/messages/fleet_messages.go` (lines 9, 34-42)
+- Modify: `agent/backend/backend.go` (`PolicyStatusRun` struct, ~line 14)
+- Modify: `agent/backend/backend_state.go` (`convertToRunData`, ~line 174)
+- Modify: `agent/backend/convert_to_run_data_test.go` (append tests)
 
-- [ ] **Step 1: Write failing tests for the wire-shape contract**
+- [ ] **Step 1: Extend existing conversion test to cover Targets**
 
-Append to `agent/configmgr/fleet/messages/fleet_messages_test.go` (create the file if it doesn't exist — there is no existing test file for this package; check with `ls agent/configmgr/fleet/messages/`):
+Find `agent/backend/convert_to_run_data_test.go` and append these tests (adapt struct initialization to match whatever import alias the existing file uses — don't rewrite imports, just add tests):
 
 ```go
-package messages
-
-import (
-	"encoding/json"
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-)
-
-func TestCurrentHeartbeatSchemaVersion_IsOneOne(t *testing.T) {
-	assert.Equal(t, "1.1", CurrentHeartbeatSchemaVersion)
-}
-
-func TestRunStateInfo_TargetsOmittedWhenNil(t *testing.T) {
-	r := RunStateInfo{ID: "run-1", PolicyID: "policy-1", Status: "running"}
-
-	body, err := json.Marshal(r)
-	require.NoError(t, err)
-
-	assert.NotContains(t, string(body), "targets")
-}
-
-func TestRunStateInfo_TargetsOmittedWhenEmptySlice(t *testing.T) {
-	r := RunStateInfo{ID: "run-1", PolicyID: "policy-1", Status: "running", Targets: []string{}}
-
-	body, err := json.Marshal(r)
-	require.NoError(t, err)
-
-	// omitempty on a slice omits both nil AND empty — this is what the contract requires.
-	assert.NotContains(t, string(body), "targets")
-}
-
-func TestRunStateInfo_TargetsIncludedWhenPresent(t *testing.T) {
-	r := RunStateInfo{
-		ID:       "run-1",
-		PolicyID: "policy-1",
-		Status:   "completed",
-		Targets:  []string{"10.0.0.1", "10.0.0.2"},
+func TestConvertToRunData_CopiesTargets(t *testing.T) {
+	statusRuns := []PolicyStatusRun{
+		{
+			ID:      "run-1",
+			Status:  "completed",
+			Targets: []string{"10.0.0.1", "10.0.0.2"},
+		},
 	}
 
-	body, err := json.Marshal(r)
-	require.NoError(t, err)
+	runs := convertToRunData(statusRuns)
 
-	var decoded map[string]any
-	require.NoError(t, json.Unmarshal(body, &decoded))
+	require.Len(t, runs, 1)
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, runs[0].Targets)
+}
 
-	targets, ok := decoded["targets"].([]any)
-	require.True(t, ok, "expected targets to be a JSON array")
-	require.Len(t, targets, 2)
-	assert.Equal(t, "10.0.0.1", targets[0])
-	assert.Equal(t, "10.0.0.2", targets[1])
+func TestConvertToRunData_NilTargetsStaysNil(t *testing.T) {
+	statusRuns := []PolicyStatusRun{
+		{ID: "run-1", Status: "running"}, // no Targets
+	}
+
+	runs := convertToRunData(statusRuns)
+
+	require.Len(t, runs, 1)
+	assert.Nil(t, runs[0].Targets)
+}
+
+func TestPolicyStatusRun_TargetsOmittedWhenEmptyOnWire(t *testing.T) {
+	// Incoming backend JSON with NO targets field must unmarshal cleanly and leave Targets nil.
+	payload := []byte(`{"id":"run-1","status":"running","created_at":0,"updated_at":0}`)
+
+	var r PolicyStatusRun
+	require.NoError(t, json.Unmarshal(payload, &r))
+
+	assert.Nil(t, r.Targets)
+}
+
+func TestPolicyStatusRun_TargetsUnmarshaledWhenPresent(t *testing.T) {
+	payload := []byte(`{"id":"run-1","status":"completed","targets":["10.0.0.1","10.0.0.2"],"created_at":0,"updated_at":0}`)
+
+	var r PolicyStatusRun
+	require.NoError(t, json.Unmarshal(payload, &r))
+
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, r.Targets)
 }
 ```
+
+If the existing test file doesn't already import `encoding/json`, `testify/assert`, `testify/require`, add those to the import block. If you need the exact existing imports, read the file first.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/messages/... -run 'TestCurrentHeartbeatSchemaVersion_IsOneOne|TestRunStateInfo_Targets' -v
+go test ./agent/backend/ -run 'TestConvertToRunData_CopiesTargets|TestConvertToRunData_NilTargetsStaysNil|TestPolicyStatusRun_Targets' -v
 ```
 
-Expected: FAIL — `TestCurrentHeartbeatSchemaVersion_IsOneOne` fails because the constant is still `"1.0"`; the `Targets` tests fail to compile because the field doesn't exist yet.
+Expected: FAIL — `PolicyStatusRun.Targets` field doesn't exist yet; `RunData.Targets` doesn't either so the assignment in Task 2 Step 3 wouldn't compile. (Actually, this step's tests reference `runs[0].Targets` which will fail to compile until Task 3 adds the field to `RunData`.) So expected failure in Step 2 is a compile error.
 
-- [ ] **Step 3: Bump the schema version constant**
+Note: this is a cross-task compile dependency. It's OK to land Task 2 with the struct fields in both layers added together; alternatively, land the `PolicyStatusRun.Targets` field first, verify the unmarshal tests pass, then complete Task 3 which adds `RunData.Targets` and makes the conversion tests compile. The plan takes the second path for cleanest per-layer commits — see Task 2 Step 3a.
 
-Edit `agent/configmgr/fleet/messages/fleet_messages.go`. Change line 9 from:
+- [ ] **Step 3a: Add `Targets` to `PolicyStatusRun` (wire-shape only)**
+
+Edit `agent/backend/backend.go`. Change:
 
 ```go
-// CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
-const CurrentHeartbeatSchemaVersion = "1.0"
+// PolicyStatusRun represents a run in the backend status response
+type PolicyStatusRun struct {
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	Reason      string `json:"reason"`
+	EntityCount int64  `json:"entity_count,omitzero"`
+	CreatedAt   int64  `json:"created_at"` // nanoseconds since epoch
+	UpdatedAt   int64  `json:"updated_at"` // nanoseconds since epoch
+}
 ```
 
 to:
 
 ```go
-// CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
-const CurrentHeartbeatSchemaVersion = "1.1"
+// PolicyStatusRun represents a run in the backend status response
+type PolicyStatusRun struct {
+	ID          string   `json:"id"`
+	Status      string   `json:"status"`
+	Reason      string   `json:"reason"`
+	EntityCount int64    `json:"entity_count,omitzero"`
+	CreatedAt   int64    `json:"created_at"` // nanoseconds since epoch
+	UpdatedAt   int64    `json:"updated_at"` // nanoseconds since epoch
+	Targets     []string `json:"targets,omitempty"`
+}
 ```
 
-- [ ] **Step 4: Add `Targets` field to `RunStateInfo`**
+(Note the struct-tag alignment — Go's gofmt will normalize, but use the shape above as a starting point.)
 
-Edit `agent/configmgr/fleet/messages/fleet_messages.go`. Replace the `RunStateInfo` struct (lines 33-42):
+- [ ] **Step 3b: Run just the unmarshal tests to verify the wire shape**
+
+```bash
+go test ./agent/backend/ -run 'TestPolicyStatusRun_Targets' -v
+```
+
+Expected: PASS. The conversion tests will still fail to compile because `RunData.Targets` doesn't exist yet — that's fine, Task 3 adds it.
+
+- [ ] **Step 4: Commit the backend-layer wire-shape change**
+
+```bash
+git add agent/backend/backend.go agent/backend/convert_to_run_data_test.go
+git commit -m "$(cat <<'EOF'
+feat(OBS-2704): accept Targets on PolicyStatusRun from backend status
+
+Co-Authored-By: Claude Sonnet 4.6 (1M context) <noreply@anthropic.com>
+EOF
+)"
+```
+
+---
+
+## Task 3: Store `Targets` in the policies layer with last-non-empty merge
+
+**Files:**
+- Modify: `agent/policies/types.go` (`RunData` struct, ~line 9)
+- Modify: `agent/backend/backend_state.go` (`convertToRunData`, ~line 174)
+- Modify: `agent/policies/repo.go` (`UpdateRuns`, ~line 153)
+- Modify: `agent/policies/repo_test.go` (append merge tests)
+
+- [ ] **Step 1: Write failing tests for the policies layer**
+
+Append to `agent/policies/repo_test.go`:
 
 ```go
-// RunStateInfo contains state information for a run
-type RunStateInfo struct {
+func TestUpdateRuns_NewRunStoresTargets(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1", "10.0.0.2"}},
+	})
+	require.NoError(t, err)
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, got.Runs[0].Targets)
+}
+
+func TestUpdateRuns_PreservesTargetsWhenBackendOmitsThem(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	// First update: run reports targets.
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1"}},
+	}))
+
+	// Second update: same run, NO targets reported (backend omitted them).
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "completed"}, // Targets is nil
+	}))
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, "completed", got.Runs[0].Status)
+	assert.Equal(t, []string{"10.0.0.1"}, got.Runs[0].Targets, "targets should be preserved when backend omits the field")
+}
+
+func TestUpdateRuns_UpdatesTargetsWhenBackendReportsNewNonEmptyList(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1"}},
+	}))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}},
+	}))
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, got.Runs[0].Targets, "non-empty update should replace existing")
+}
+```
+
+(Note: `repo_test.go` is in `package policies_test`, so reference types via the `policies.` qualifier. `NewMemRepo()` takes no arguments and returns `(PolicyRepo, error)`.)
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+go test ./agent/policies/ -run 'TestUpdateRuns_NewRunStoresTargets|TestUpdateRuns_PreservesTargetsWhenBackendOmitsThem|TestUpdateRuns_UpdatesTargetsWhenBackendReportsNewNonEmptyList' -v
+```
+
+Expected: FAIL — `RunData.Targets` field doesn't exist.
+
+- [ ] **Step 3: Add `Targets` to `RunData`**
+
+Edit `agent/policies/types.go`. Change:
+
+```go
+// RunData represents run information for a policy
+type RunData struct {
 	ID          string    `json:"id"`
-	PolicyID    string    `json:"policy_id"`
+	PolicyID    string    `json:"policy_id,omitempty"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
 	EntityCount int64     `json:"entity_count,omitzero"`
@@ -221,13 +358,13 @@ type RunStateInfo struct {
 }
 ```
 
-with:
+to:
 
 ```go
-// RunStateInfo contains state information for a run
-type RunStateInfo struct {
+// RunData represents run information for a policy
+type RunData struct {
 	ID          string    `json:"id"`
-	PolicyID    string    `json:"policy_id"`
+	PolicyID    string    `json:"policy_id,omitempty"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
 	EntityCount int64     `json:"entity_count,omitzero"`
@@ -237,404 +374,101 @@ type RunStateInfo struct {
 }
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 4: Thread `Targets` through `convertToRunData`**
 
-```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/messages/... -v
+Edit `agent/backend/backend_state.go`. In `convertToRunData`, add the `Targets: sr.Targets` field copy:
+
+```go
+// convertToRunData converts backend PolicyStatusRun to policies.RunData.
+// All discovery backends emit created_at/updated_at as nanoseconds since epoch;
+// convert them to time.Time here so the rest of the agent works with time.Time.
+func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
+	runs := make([]policies.RunData, len(statusRuns))
+	for i, sr := range statusRuns {
+		runs[i] = policies.RunData{
+			ID:          sr.ID,
+			Status:      sr.Status,
+			Reason:      sr.Reason,
+			EntityCount: sr.EntityCount,
+			CreatedAt:   nsToTime(sr.CreatedAt),
+			UpdatedAt:   nsToTime(sr.UpdatedAt),
+			Targets:     sr.Targets,
+		}
+	}
+	return runs
+}
 ```
 
-Expected: PASS for all three new tests.
+- [ ] **Step 5: Implement last-non-empty merge in `UpdateRuns`**
 
-- [ ] **Step 6: Run the full fleet package to catch regressions**
+Edit `agent/policies/repo.go`. In `UpdateRuns`, inside the `if existing, ok := existingByID[runs[i].ID]; ok {` branch (which currently preserves `CreatedAt` and handles `UpdatedAt`), add target preservation. After the existing timestamp logic:
 
-```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/... -count=1
+```go
+if existing, ok := existingByID[runs[i].ID]; ok {
+	// Existing run: always preserve CreatedAt
+	runs[i].CreatedAt = existing.CreatedAt
+
+	if IsTerminalRunStatus(existing.Status) {
+		runs[i].UpdatedAt = existing.UpdatedAt
+	} else {
+		runs[i].UpdatedAt = now
+	}
+
+	// Preserve last-known non-empty Targets when the backend omits them.
+	// Orb-pro applies the same rule server-side; this keeps agent and fleet
+	// manager in sync during transient / partial status updates.
+	if len(runs[i].Targets) == 0 {
+		runs[i].Targets = existing.Targets
+	}
+} else {
+	// ... existing new-run logic unchanged ...
+}
 ```
 
-Expected: PASS. Heartbeat-test assertions already reference the constant (`messages.CurrentHeartbeatSchemaVersion`) at `heartbeats_test.go:174, 307, 509, 577`, so they automatically follow the bump. If any test does fail, investigate — don't just rewrite assertions to match.
+Note: the comparison is `len(runs[i].Targets) == 0` — this covers both `nil` (field absent from JSON) and `[]` (explicit empty slice). The orb-pro contract says both cases preserve existing state; we match that.
 
-The hard-coded `"1.0"` strings in `connection_test.go` and `from_rpc_test.go` are **RPC schema version** payloads (`CurrentRPCSchemaVersion`), a separate constant. Leave them alone.
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Run policies-layer tests to verify they pass**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-git add agent/configmgr/fleet/messages/fleet_messages.go agent/configmgr/fleet/messages/fleet_messages_test.go
-git commit -m "feat(OBS-2704): bump heartbeat schema to 1.1 and add Targets to RunStateInfo"
+go test ./agent/policies/ -run 'TestUpdateRuns' -v -count=1
+```
+
+Expected: all existing `TestUpdateRuns_*` tests PASS (no regressions), new three tests PASS.
+
+- [ ] **Step 7: Run backend-layer conversion tests (should now compile and pass)**
+
+```bash
+go test ./agent/backend/ -run 'TestConvertToRunData' -v -count=1
+```
+
+Expected: all PASS, including the new `TestConvertToRunData_CopiesTargets` and `TestConvertToRunData_NilTargetsStaysNil`.
+
+- [ ] **Step 8: Commit the policies-layer change**
+
+```bash
+git add agent/policies/types.go agent/policies/repo.go agent/policies/repo_test.go agent/backend/backend_state.go
+git commit -m "$(cat <<'EOF'
+feat(OBS-2704): add per-run Targets on RunData and preserve last non-empty across merges
+
+Co-Authored-By: Claude Sonnet 4.6 (1M context) <noreply@anthropic.com>
+EOF
+)"
 ```
 
 ---
 
-## Task 2: Create target-extraction helpers
+## Task 4: Emit `run.Targets` in the heartbeat
 
 **Files:**
-- Create: `agent/configmgr/fleet/targets.go`
-- Create: `agent/configmgr/fleet/targets_test.go`
+- Modify: `agent/configmgr/fleet/heartbeats.go` (`convertRunsToStateInfo`, ~line 166)
+- Modify: `agent/configmgr/fleet/heartbeats_test.go` (update tests to use `RunData.Targets`)
 
-The extractor is deliberately defensive: it takes `any`-typed scope data (from YAML-to-`map[string]any` unmarshal) and returns `[]string`. Any malformed input → empty result, never a panic.
-
-- [ ] **Step 1: Write failing tests for the extractor**
-
-Create `agent/configmgr/fleet/targets_test.go`:
-
-```go
-package fleet
-
-import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-)
-
-// --- device-discovery ---
-
-func TestExtractTargets_DeviceDiscovery_SingleEntry(t *testing.T) {
-	data := map[string]any{
-		"scope": []any{
-			map[string]any{
-				"hostname": "192.168.1.0",
-				"target":   "192.168.1.0/24",
-				"username": "admin",
-			},
-		},
-	}
-
-	got := extractTargets("device_discovery", data)
-
-	assert.Equal(t, []string{"192.168.1.0/24"}, got)
-}
-
-func TestExtractTargets_DeviceDiscovery_MultipleEntries(t *testing.T) {
-	data := map[string]any{
-		"scope": []any{
-			map[string]any{"target": "10.0.0.1"},
-			map[string]any{"target": "10.0.0.2"},
-			map[string]any{"target": "10.0.0.3"},
-		},
-	}
-
-	got := extractTargets("device_discovery", data)
-
-	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, got)
-}
-
-func TestExtractTargets_DeviceDiscovery_SkipsEntryMissingTarget(t *testing.T) {
-	data := map[string]any{
-		"scope": []any{
-			map[string]any{"target": "10.0.0.1"},
-			map[string]any{"hostname": "10.0.0.2"}, // no target — skip
-			map[string]any{"target": "10.0.0.3"},
-		},
-	}
-
-	got := extractTargets("device_discovery", data)
-
-	assert.Equal(t, []string{"10.0.0.1", "10.0.0.3"}, got)
-}
-
-func TestExtractTargets_DeviceDiscovery_EmptyScope(t *testing.T) {
-	data := map[string]any{"scope": []any{}}
-
-	got := extractTargets("device_discovery", data)
-
-	assert.Empty(t, got)
-}
-
-func TestExtractTargets_DeviceDiscovery_MissingScope(t *testing.T) {
-	data := map[string]any{"config": map[string]any{}}
-
-	got := extractTargets("device_discovery", data)
-
-	assert.Empty(t, got)
-}
-
-// --- snmp-discovery ---
-
-func TestExtractTargets_SNMPDiscovery_SingleTarget(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{
-			"targets": []any{
-				map[string]any{
-					"host":   "10.0.0.5",
-					"target": "10.0.0.5",
-					"port":   161,
-				},
-			},
-		},
-	}
-
-	got := extractTargets("snmp_discovery", data)
-
-	assert.Equal(t, []string{"10.0.0.5"}, got)
-}
-
-func TestExtractTargets_SNMPDiscovery_MultipleTargets(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{
-			"targets": []any{
-				map[string]any{"target": "10.0.0.1"},
-				map[string]any{"target": "10.0.0.2"},
-			},
-		},
-	}
-
-	got := extractTargets("snmp_discovery", data)
-
-	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, got)
-}
-
-func TestExtractTargets_SNMPDiscovery_SkipsEntryMissingTarget(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{
-			"targets": []any{
-				map[string]any{"host": "10.0.0.1"}, // no target — skip
-				map[string]any{"target": "10.0.0.2"},
-			},
-		},
-	}
-
-	got := extractTargets("snmp_discovery", data)
-
-	assert.Equal(t, []string{"10.0.0.2"}, got)
-}
-
-func TestExtractTargets_SNMPDiscovery_EmptyTargets(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{"targets": []any{}},
-	}
-
-	got := extractTargets("snmp_discovery", data)
-
-	assert.Empty(t, got)
-}
-
-func TestExtractTargets_SNMPDiscovery_MissingScope(t *testing.T) {
-	data := map[string]any{"config": map[string]any{}}
-
-	got := extractTargets("snmp_discovery", data)
-
-	assert.Empty(t, got)
-}
-
-// --- network-discovery ---
-
-func TestExtractTargets_NetworkDiscovery_SingleTarget(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{
-			"targets": []any{"10.0.0.0/24"},
-		},
-	}
-
-	got := extractTargets("network_discovery", data)
-
-	assert.Equal(t, []string{"10.0.0.0/24"}, got)
-}
-
-func TestExtractTargets_NetworkDiscovery_MultipleTargets(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{
-			"targets": []any{"10.0.0.0/24", "10.0.1.0/24", "example.com"},
-		},
-	}
-
-	got := extractTargets("network_discovery", data)
-
-	assert.Equal(t, []string{"10.0.0.0/24", "10.0.1.0/24", "example.com"}, got)
-}
-
-func TestExtractTargets_NetworkDiscovery_SkipsNonStringElements(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{
-			"targets": []any{"10.0.0.1", 42, "10.0.0.2", nil},
-		},
-	}
-
-	got := extractTargets("network_discovery", data)
-
-	// Defensive: non-string elements are silently skipped, not a panic.
-	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, got)
-}
-
-func TestExtractTargets_NetworkDiscovery_EmptyTargets(t *testing.T) {
-	data := map[string]any{
-		"scope": map[string]any{"targets": []any{}},
-	}
-
-	got := extractTargets("network_discovery", data)
-
-	assert.Empty(t, got)
-}
-
-// --- dispatch and malformed-input defense ---
-
-func TestExtractTargets_UnknownBackend(t *testing.T) {
-	data := map[string]any{"scope": []any{map[string]any{"target": "x"}}}
-
-	got := extractTargets("pktvisor", data)
-
-	assert.Empty(t, got)
-}
-
-func TestExtractTargets_NilData(t *testing.T) {
-	got := extractTargets("device_discovery", nil)
-
-	assert.Empty(t, got)
-}
-
-func TestExtractTargets_StringDataFallsThrough(t *testing.T) {
-	// If YAML unmarshal failed upstream, Data may still be a raw string.
-	// We must not panic — just return empty.
-	got := extractTargets("device_discovery", "scope:\n  - target: 10.0.0.1")
-
-	assert.Empty(t, got)
-}
-
-func TestExtractTargets_WrongScopeType(t *testing.T) {
-	// device_discovery expects scope to be a list, not a map
-	data := map[string]any{"scope": map[string]any{"not": "a list"}}
-
-	got := extractTargets("device_discovery", data)
-
-	assert.Empty(t, got)
-}
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/... -run TestExtractTargets -v
-```
-
-Expected: FAIL — `extractTargets` is not defined.
-
-- [ ] **Step 3: Write the extractor**
-
-Create `agent/configmgr/fleet/targets.go`:
-
-```go
-package fleet
-
-// extractTargets pulls canonical target strings out of a policy's scope data.
-// Returns nil when the backend is unsupported, data shape is unexpected, or no
-// targets are present. The caller must emit the heartbeat field with omitempty.
-func extractTargets(backend string, data any) []string {
-	root, ok := data.(map[string]any)
-	if !ok {
-		return nil
-	}
-
-	switch backend {
-	case "device_discovery":
-		return extractDeviceDiscoveryTargets(root)
-	case "snmp_discovery":
-		return extractSNMPDiscoveryTargets(root)
-	case "network_discovery":
-		return extractNetworkDiscoveryTargets(root)
-	default:
-		return nil
-	}
-}
-
-// device-discovery: scope is a top-level []any of map[string]any, each with "target".
-func extractDeviceDiscoveryTargets(root map[string]any) []string {
-	scope, ok := root["scope"].([]any)
-	if !ok {
-		return nil
-	}
-	return collectTargetField(scope)
-}
-
-// snmp-discovery: scope.targets is a []any of map[string]any, each with "target".
-func extractSNMPDiscoveryTargets(root map[string]any) []string {
-	scope, ok := root["scope"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	targets, ok := scope["targets"].([]any)
-	if !ok {
-		return nil
-	}
-	return collectTargetField(targets)
-}
-
-// network-discovery: scope.targets is a []any of strings — each element IS the canonical target.
-func extractNetworkDiscoveryTargets(root map[string]any) []string {
-	scope, ok := root["scope"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	targets, ok := scope["targets"].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(targets))
-	for _, t := range targets {
-		if s, ok := t.(string); ok {
-			out = append(out, s)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// collectTargetField walks a list of scope entries (each an object) and pulls
-// out the "target" string field. Entries missing the field or with the wrong
-// type are silently skipped.
-func collectTargetField(entries []any) []string {
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
-		obj, ok := e.(map[string]any)
-		if !ok {
-			continue
-		}
-		t, ok := obj["target"].(string)
-		if !ok {
-			continue
-		}
-		out = append(out, t)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/... -run TestExtractTargets -v
-```
-
-Expected: PASS for all 18 extractor tests.
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-git add agent/configmgr/fleet/targets.go agent/configmgr/fleet/targets_test.go
-git commit -m "feat(OBS-2704): add scope target extraction for discovery backends"
-```
-
----
-
-## Task 3: Wire extractor into heartbeat construction
-
-**Files:**
-- Modify: `agent/configmgr/fleet/heartbeats.go` (lines 144-183)
-
-- [ ] **Step 1: Write a failing heartbeat integration test for targets**
+- [ ] **Step 1: Write failing heartbeat test**
 
 Append to `agent/configmgr/fleet/heartbeats_test.go`:
 
 ```go
-func TestHeartbeater_GetPolicyState_PopulatesTargetsForDeviceDiscovery(t *testing.T) {
+func TestHeartbeater_GetPolicyState_PropagatesTargetsFromRunData(t *testing.T) {
 	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
@@ -644,16 +478,29 @@ func TestHeartbeater_GetPolicyState_PopulatesTargetsForDeviceDiscovery(t *testin
 			Backend: "device_discovery",
 			Version: 1,
 			State:   policies.Running,
-			Data: map[string]any{
-				"scope": []any{
-					map[string]any{"target": "192.168.1.1", "hostname": "192.168.1.0"},
-					map[string]any{"target": "10.0.0.5"},
+			Runs: []policies.RunData{
+				{
+					ID:        "run-a",
+					Status:    "running",
+					CreatedAt: testTime,
+					UpdatedAt: testTime,
+					Targets:   []string{"192.168.1.1"},
+				},
+				{
+					ID:        "run-b",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
+					Targets:   []string{"10.0.0.5", "10.0.0.6"},
+				},
+				{
+					ID:        "run-c",
+					Status:    "running",
+					CreatedAt: testTime,
+					UpdatedAt: testTime,
+					// No Targets — must be nil in the heartbeat.
 				},
 			},
-			Runs: []policies.RunData{
-				{ID: "run-1", Status: "running", CreatedAt: testTime, UpdatedAt: testTime},
-				{ID: "run-2", Status: "completed", CreatedAt: testTime, UpdatedAt: testTime.Add(5 * time.Minute)},
-			},
 		},
 	}, nil)
 
@@ -661,107 +508,15 @@ func TestHeartbeater_GetPolicyState_PopulatesTargetsForDeviceDiscovery(t *testin
 
 	ps := hb.getPolicyState()
 
-	require.Len(t, ps, 1)
-	require.Len(t, ps["policy-1"].Runs, 2)
-	assert.Equal(t, []string{"192.168.1.1", "10.0.0.5"}, ps["policy-1"].Runs[0].Targets)
-	assert.Equal(t, []string{"192.168.1.1", "10.0.0.5"}, ps["policy-1"].Runs[1].Targets)
+	require.Len(t, ps["policy-1"].Runs, 3)
+	assert.Equal(t, []string{"192.168.1.1"}, ps["policy-1"].Runs[0].Targets)
+	assert.Equal(t, []string{"10.0.0.5", "10.0.0.6"}, ps["policy-1"].Runs[1].Targets)
+	assert.Nil(t, ps["policy-1"].Runs[2].Targets)
 
 	mockPMgr.AssertExpectations(t)
 }
 
-func TestHeartbeater_GetPolicyState_PopulatesTargetsForSNMPDiscovery(t *testing.T) {
-	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	mockPMgr := &mockPolicyManagerForHeartbeat{}
-	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
-		{
-			ID:      "policy-1",
-			Name:    "snmp-policy",
-			Backend: "snmp_discovery",
-			Version: 1,
-			State:   policies.Running,
-			Data: map[string]any{
-				"scope": map[string]any{
-					"targets": []any{
-						map[string]any{"target": "10.0.0.1", "host": "10.0.0.1", "port": 161},
-						map[string]any{"target": "10.0.0.2"},
-					},
-				},
-			},
-			Runs: []policies.RunData{
-				{ID: "run-1", Status: "running", CreatedAt: testTime, UpdatedAt: testTime},
-			},
-		},
-	}, nil)
-
-	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
-
-	ps := hb.getPolicyState()
-
-	require.Len(t, ps["policy-1"].Runs, 1)
-	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, ps["policy-1"].Runs[0].Targets)
-
-	mockPMgr.AssertExpectations(t)
-}
-
-func TestHeartbeater_GetPolicyState_PopulatesTargetsForNetworkDiscovery(t *testing.T) {
-	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	mockPMgr := &mockPolicyManagerForHeartbeat{}
-	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
-		{
-			ID:      "policy-1",
-			Name:    "net-policy",
-			Backend: "network_discovery",
-			Version: 1,
-			State:   policies.Running,
-			Data: map[string]any{
-				"scope": map[string]any{
-					"targets": []any{"10.0.0.0/24", "10.0.1.0/24"},
-				},
-			},
-			Runs: []policies.RunData{
-				{ID: "run-1", Status: "completed", CreatedAt: testTime, UpdatedAt: testTime},
-			},
-		},
-	}, nil)
-
-	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
-
-	ps := hb.getPolicyState()
-
-	require.Len(t, ps["policy-1"].Runs, 1)
-	assert.Equal(t, []string{"10.0.0.0/24", "10.0.1.0/24"}, ps["policy-1"].Runs[0].Targets)
-
-	mockPMgr.AssertExpectations(t)
-}
-
-func TestHeartbeater_GetPolicyState_OmitsTargetsForUnsupportedBackend(t *testing.T) {
-	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	mockPMgr := &mockPolicyManagerForHeartbeat{}
-	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
-		{
-			ID:      "policy-1",
-			Name:    "pkt-policy",
-			Backend: "pktvisor",
-			Version: 1,
-			State:   policies.Running,
-			Data:    map[string]any{"scope": []any{map[string]any{"target": "ignored"}}},
-			Runs: []policies.RunData{
-				{ID: "run-1", Status: "running", CreatedAt: testTime, UpdatedAt: testTime},
-			},
-		},
-	}, nil)
-
-	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
-
-	ps := hb.getPolicyState()
-
-	require.Len(t, ps["policy-1"].Runs, 1)
-	assert.Nil(t, ps["policy-1"].Runs[0].Targets)
-
-	mockPMgr.AssertExpectations(t)
-}
-
-func TestHeartbeater_SendSingleHeartbeat_SerializesTargets(t *testing.T) {
+func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
 	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
 	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
@@ -771,11 +526,14 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesTargets(t *testing.T) {
 			Backend: "device_discovery",
 			Version: 1,
 			State:   policies.Running,
-			Data: map[string]any{
-				"scope": []any{map[string]any{"target": "10.0.0.1"}},
-			},
 			Runs: []policies.RunData{
-				{ID: "run-1", Status: "completed", CreatedAt: testTime, UpdatedAt: testTime},
+				{
+					ID:        "run-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime,
+					Targets:   []string{"10.0.0.1"},
+				},
 			},
 		},
 	}, nil)
@@ -798,78 +556,23 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesTargets(t *testing.T) {
 	assert.Equal(t, "1.1", hb2.SchemaVersion)
 	require.Len(t, hb2.PolicyState["policy-1"].Runs, 1)
 	assert.Equal(t, []string{"10.0.0.1"}, hb2.PolicyState["policy-1"].Runs[0].Targets)
-
-	// And confirm the omitempty contract on the raw JSON: the field IS present
-	// because the slice is non-empty.
 	assert.Contains(t, string(capturedPayload), `"targets":["10.0.0.1"]`)
 
 	mockPMgr.AssertExpectations(t)
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Run to confirm they fail**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/ -run 'TestHeartbeater_GetPolicyState_PopulatesTargets|TestHeartbeater_GetPolicyState_OmitsTargets|TestHeartbeater_SendSingleHeartbeat_SerializesTargets' -v
+go test ./agent/configmgr/fleet/ -run 'TestHeartbeater_GetPolicyState_PropagatesTargetsFromRunData|TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets' -v
 ```
 
-Expected: FAIL — `Runs[i].Targets` is always empty because `convertRunsToStateInfo` doesn't set it.
+Expected: FAIL — `convertRunsToStateInfo` doesn't copy `Targets` from `RunData` to `RunStateInfo`.
 
-- [ ] **Step 3: Thread targets through `getPolicyState` and `convertRunsToStateInfo`**
+- [ ] **Step 3: Update `convertRunsToStateInfo` to read per-run Targets**
 
-Edit `agent/configmgr/fleet/heartbeats.go`. Replace `getPolicyState` (lines 144-163):
-
-```go
-func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
-	policyStates, err := hb.policyManager.GetPolicyState()
-	if err != nil {
-		hb.logger.Error("error getting policy state", "error", err)
-		return make(map[string]messages.PolicyStateInfo)
-	}
-	ps := make(map[string]messages.PolicyStateInfo)
-	for _, policyState := range policyStates {
-		ps[policyState.ID] = messages.PolicyStateInfo{
-			Name:     policyState.Name,
-			Datasets: policyState.GetDatasetIDs(),
-			State:    policyState.State.String(),
-			Error:    policyState.BackendErr,
-			Version:  policyState.Version,
-			Backend:  policyState.Backend,
-			Runs:     convertRunsToStateInfo(policyState.Runs),
-		}
-	}
-	return ps
-}
-```
-
-with:
-
-```go
-func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
-	policyStates, err := hb.policyManager.GetPolicyState()
-	if err != nil {
-		hb.logger.Error("error getting policy state", "error", err)
-		return make(map[string]messages.PolicyStateInfo)
-	}
-	ps := make(map[string]messages.PolicyStateInfo)
-	for _, policyState := range policyStates {
-		targets := extractTargets(policyState.Backend, policyState.Data)
-		ps[policyState.ID] = messages.PolicyStateInfo{
-			Name:     policyState.Name,
-			Datasets: policyState.GetDatasetIDs(),
-			State:    policyState.State.String(),
-			Error:    policyState.BackendErr,
-			Version:  policyState.Version,
-			Backend:  policyState.Backend,
-			Runs:     convertRunsToStateInfo(policyState.Runs, targets),
-		}
-	}
-	return ps
-}
-```
-
-Now replace `convertRunsToStateInfo` (lines 165-183):
+Edit `agent/configmgr/fleet/heartbeats.go`. Replace:
 
 ```go
 // convertRunsToStateInfo converts policies.RunData to messages.RunStateInfo
@@ -897,9 +600,10 @@ with:
 
 ```go
 // convertRunsToStateInfo converts policies.RunData to messages.RunStateInfo.
-// targets is the per-policy canonical target list echoed into every run; pass
-// nil to omit the field entirely from the emitted heartbeat.
-func convertRunsToStateInfo(runs []policies.RunData, targets []string) []messages.RunStateInfo {
+// Targets is copied through verbatim; the policies repo is responsible for
+// preserving last-known-non-empty targets across backend status polls, so by
+// the time runs reach this function they carry the authoritative list.
+func convertRunsToStateInfo(runs []policies.RunData) []messages.RunStateInfo {
 	if len(runs) == 0 {
 		return nil
 	}
@@ -913,105 +617,117 @@ func convertRunsToStateInfo(runs []policies.RunData, targets []string) []message
 			EntityCount: run.EntityCount,
 			CreatedAt:   run.CreatedAt,
 			UpdatedAt:   run.UpdatedAt,
-			Targets:     targets,
+			Targets:     run.Targets,
 		}
 	}
 	return runInfos
 }
 ```
 
-- [ ] **Step 4: Run the new tests to verify they pass**
+(The function signature is unchanged from the original — we did not introduce the `targets []string` parameter at all. The earlier draft that did is being discarded.)
+
+- [ ] **Step 4: Run new heartbeat tests to verify they pass**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/ -run 'TestHeartbeater_GetPolicyState_PopulatesTargets|TestHeartbeater_GetPolicyState_OmitsTargets|TestHeartbeater_SendSingleHeartbeat_SerializesTargets' -v
+go test ./agent/configmgr/fleet/ -run 'TestHeartbeater_GetPolicyState_PropagatesTargetsFromRunData|TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets' -v
 ```
 
-Expected: PASS for all 5 new tests.
+Expected: both PASS.
 
-- [ ] **Step 5: Run the full fleet package to catch regressions**
+- [ ] **Step 5: Run the full fleet + backend + policies packages for regressions**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-go test ./agent/configmgr/fleet/... -count=1
+go test ./agent/configmgr/fleet/... ./agent/backend/... ./agent/policies/... -count=1
 ```
 
-Expected: PASS. `convertRunsToStateInfo` has only one call site (`heartbeats.go:159`, which you just updated); nothing else needs touching.
+Expected: all PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
 git add agent/configmgr/fleet/heartbeats.go agent/configmgr/fleet/heartbeats_test.go
-git commit -m "feat(OBS-2704): echo canonical scope targets in heartbeat run state"
+git commit -m "$(cat <<'EOF'
+feat(OBS-2704): emit per-run Targets in heartbeat run state
+
+Co-Authored-By: Claude Sonnet 4.6 (1M context) <noreply@anthropic.com>
+EOF
+)"
 ```
 
 ---
 
-## Task 4: End-to-end validation
+## Task 5: End-to-end validation
 
-**Files:**
-- No new code. Just verification.
-
-- [ ] **Step 1: Run the full agent test suite**
+- [ ] **Step 1: Full agent test suite**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
 go test ./... -count=1
 ```
 
-Expected: PASS. If anything unrelated to the fleet package fails because of the schema bump, investigate — nothing else should be coupled to the heartbeat constant.
+Expected: PASS for every package we touched (`agent/backend/...`, `agent/policies/...`, `agent/configmgr/fleet/...`). Pre-existing Docker-dependent Vault failures in `agent/secretsmgr` are unrelated and may remain.
 
-- [ ] **Step 2: Run `go vet` and the linter**
+- [ ] **Step 2: `go vet`**
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
 go vet ./...
 ```
 
-Expected: no output. If the repo uses `golangci-lint`, run it as well:
+Expected: no output.
+
+- [ ] **Step 3: Force-push the draft PR branch**
+
+The branch `feat/OBS-2704-echo-run-targets` was force-reset during this rework. Update origin:
 
 ```bash
-command -v golangci-lint && golangci-lint run ./agent/configmgr/fleet/... || echo "golangci-lint not installed locally — relying on CI"
+git push --force-with-lease origin feat/OBS-2704-echo-run-targets
 ```
 
-- [ ] **Step 3: Manually inspect a heartbeat payload**
+`--force-with-lease` is safer than `--force`: it refuses the push if someone else has updated the remote since our last fetch.
 
-Start the agent against a fleet config that has at least one discovery policy applied, and watch the debug logs:
+- [ ] **Step 4: Update the PR description**
+
+The PR description should now reference per-run backend propagation, not scope parsing. Use the `gh pr edit` command to sync:
 
 ```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-# Adjust this to whatever local fleet harness the team uses; the important part
-# is the debug log line "heartbeat sent" in agent/configmgr/fleet/heartbeats.go:124
-go run ./cmd/orb-agent -c ./docs/sample-fleet-config.yaml --log-level debug 2>&1 | grep -A1 'heartbeat sent'
+gh pr edit <PR-number> --body-file <(cat <<'EOF'
+## Summary
+
+Implements the agent-side half of [OBS-2704](https://linear.app/netboxlabs/issue/OBS-2704): propagate per-run canonical target strings from the external discovery backends' status API through the agent heartbeat to orb-pro.
+
+- Bump heartbeat `schema_version` from `"1.0"` to `"1.1"`.
+- Add `Targets []string` to `backend.PolicyStatusRun`, `policies.RunData`, and `messages.RunStateInfo` — all with `json:"targets,omitempty"`.
+- `UpdateRuns` preserves the last-known non-empty targets when a backend update omits them (matches orb-pro's server-side contract).
+- `convertRunsToStateInfo` copies `run.Targets` into each emitted `RunStateInfo`.
+
+## Wire contract
+
+Each discovery backend's `/api/v1/status` response must emit `targets` on each run. Agents with this change will propagate them unchanged:
+
+```json
+{"id":"<run>","status":"completed","targets":["10.0.0.1","10.0.0.2"]}
 ```
 
-Expected: the logged `payload` includes `"schema_version":"1.1"` and, for any policy whose scope parsed correctly, each run in `policy_state.<id>.runs[]` contains a `"targets":[...]` array of canonical strings matching the `target:` fields orb-pro injected.
+orb-pro accepts `"1.0"` and `"1.1"` during rollout. Agents whose backends haven't started emitting targets yet will send `"1.1"` with no targets field — forward-compatible.
 
-**If no local fleet harness is available**, skip this step and note it in the PR description. CI + the unit tests cover the wire shape.
+## Plan
 
-- [ ] **Step 4: Final commit sweep**
+`docs/superpowers/plans/2026-04-21-obs-2704-echo-run-targets.md`.
 
-Confirm no stray changes are unstaged:
+## Test plan
 
-```bash
-cd /Users/jamesjeffries/workspace/orb-agent
-git status
+- [x] `go test ./agent/backend/... ./agent/policies/... ./agent/configmgr/fleet/... -count=1` — PASS
+- [x] `go vet ./...` — clean
+- [ ] Manual: run agent against a fleet policy whose discovery backend emits `targets`; confirm heartbeat payload contains `"schema_version":"1.1"` and per-run `"targets":[...]`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+EOF
+)
 ```
-
-Expected: clean working tree. If anything is outstanding (test tweaks, lint fixes), commit with a `chore(OBS-2704): …` message.
 
 ---
 
 ## Out of scope
 
-The task description mentions:
-
-> The backend stores the last non-empty `targets` value it receives for a given run ID, so partial updates are safe — a later heartbeat with no `targets` will not clear a previously reported value.
-
-That's a backend (orb-pro) guarantee, not an agent responsibility. The agent always emits the best information it has on every heartbeat; idempotency is handled server-side.
-
-We are also explicitly NOT:
-- Changing the external discovery binaries (device-discovery / snmp-discovery / network-discovery) to emit per-run target breakdowns. Per-run (as opposed to per-policy) target attribution is a future change that would require extending `backend.PolicyStatusRun` and the `/api/v1/status` response shape in each external backend.
-- Touching `policies.RunData` — targets are a heartbeat-shape concern only, not persisted state.
-- Modifying CIDR parsing or hostname handling anywhere. `target:` is a verbatim echo.
+- Modifying external discovery binaries (device-discovery / snmp-discovery / network-discovery) to start emitting `targets` — handled by the backend teams separately.
+- Any scope YAML parsing in the agent. The previous approach that did this (commits `811195a` and `e335faf` on an earlier state of this branch) has been discarded.
+- Persisting runs across agent restarts. `policies.RunData` still lives in the in-memory repo (`policyMemRepo`), same as before.
