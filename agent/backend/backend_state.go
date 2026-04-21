@@ -181,6 +181,7 @@ func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 			EntityCount: sr.EntityCount,
 			CreatedAt:   nsToTime(sr.CreatedAt),
 			UpdatedAt:   nsToTime(sr.UpdatedAt),
+			Targets:     sr.Targets,
 		}
 	}
 	return runs

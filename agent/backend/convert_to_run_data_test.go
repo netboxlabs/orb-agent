@@ -128,3 +128,24 @@ func TestPolicyStatusRun_TargetsMarshaledAsOmitempty(t *testing.T) {
 
 	assert.NotContains(t, string(body), "targets")
 }
+
+func TestConvertToRunData_CopiesTargets(t *testing.T) {
+	statusRuns := []PolicyStatusRun{
+		{
+			ID:      "run-1",
+			Status:  "completed",
+			Targets: []string{"10.0.0.1", "10.0.0.2"},
+		},
+		{
+			ID:     "run-2",
+			Status: "running",
+			// No Targets — nil should pass through unchanged.
+		},
+	}
+
+	runs := convertToRunData(statusRuns)
+
+	require.Len(t, runs, 2)
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, runs[0].Targets)
+	assert.Nil(t, runs[1].Targets)
+}

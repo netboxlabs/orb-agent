@@ -810,6 +810,86 @@ func TestUpdateRuns_GetAllIncludesRuns(t *testing.T) {
 	assert.True(t, foundPolicy2, "Policy 2 should be found in GetAll()")
 }
 
+func TestUpdateRuns_NewRunStoresTargets(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1", "10.0.0.2"}},
+	})
+	require.NoError(t, err)
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, got.Runs[0].Targets)
+}
+
+func TestUpdateRuns_PreservesTargetsWhenBackendOmitsThem(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	// First update: run reports targets.
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1"}},
+	}))
+
+	// Second update: same run, NO targets reported (backend omitted them).
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "completed"}, // Targets is nil
+	}))
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, "completed", got.Runs[0].Status)
+	assert.Equal(t, []string{"10.0.0.1"}, got.Runs[0].Targets, "targets should be preserved when backend omits the field")
+}
+
+func TestUpdateRuns_UpdatesTargetsWhenBackendReportsNewNonEmptyList(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1"}},
+	}))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Targets: []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}},
+	}))
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, got.Runs[0].Targets, "non-empty update should replace existing")
+}
+
 func TestIsTerminalRunStatus(t *testing.T) {
 	t.Parallel()
 	assert.True(t, policies.IsTerminalRunStatus("completed"))
