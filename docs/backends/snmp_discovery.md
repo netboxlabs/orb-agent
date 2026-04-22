@@ -50,6 +50,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | location | string | no | Default location for discovered devices |
 | role | string | no | Default role for discovered devices |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./snmp_discovery_interface.md)) |
+| interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./snmp_discovery_interface.md#interface-exclusion-patterns)) |
 
 ##### Nested Defaults
 | Parameter | Type | Description |
@@ -126,6 +127,9 @@ config:
         type: "1000base-t"
       - match: "^(TenGigE|Te).*"
         type: "10gbase-x-sfpp"
+    interface_exclude_patterns:
+      - "^tap.*"
+      - "^veth.*"
     device:
       description: "SNMP discovered device"
       comments: "Automatically discovered via SNMP"
