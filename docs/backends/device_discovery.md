@@ -70,6 +70,7 @@ Current supported defaults:
 | if_type | str | Default interface type when no pattern matches (defaults to 'other' if not specified) |
 | interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./device_discovery_interface.md)) |
 | location | str | Device location |
+| rack  | str | Rack name to associate the device with |
 | tenant | str/map | Device tenant |
 | description | str  | General description   |
 | comments   | str  | General comments       |
@@ -86,6 +87,7 @@ Current supported defaults:
 | ├─ description | str  | Device description           |
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
+| ├─ asset_tag | str  | Device asset tag                      |
 | tenant | map | Tenant-specific defaults              |
 | ├─ name | str | Tenant name                          |
 | ├─ group | str | Tenant group                        |
@@ -97,17 +99,23 @@ Current supported defaults:
 | ipaddress    | map  | IP address-specific defaults  |
 | ├─ role   | str  | IP address role                  |
 | ├─ tenant   | str  | IP address tenant              |
-| ├─ vrf   | str  | IP address vrf                    |
+| ├─ vrf   | str/map  | IP address VRF name, or VRF object with route distinguisher |
 | ├─ description | str  | IP address description      |
 | ├─ comments   | str  | IP address comments          |
 | ├─ tags       | list | IP address tags              |
 | prefix       | map  | Prefix-specific defaults      |
 | ├─ role   | str  | Prefix role                    |
 | ├─ tenant   | str  | Prefix tenant                |
-| ├─ vrf   | str  | Prefix vrf                      |
+| ├─ vrf   | str/map  | Prefix VRF name, or VRF object with route distinguisher |
 | ├─ description | str  | Prefix description        |
 | ├─ comments   | str  | Prefix comments            |
 | ├─ tags       | list | Prefix tags                |
+| vrf | map | VRF-specific defaults (used within ipaddress and prefix) |
+| ├─ name | str | VRF name |
+| ├─ rd | str | Route distinguisher (e.g. `65000:100`) |
+| ├─ description | str | VRF description |
+| ├─ comments | str | VRF comments |
+| ├─ tags | list | VRF tags |
 | vlan       | map  | VLAN-specific defaults        |
 | ├─ group   | str  | VLAN group                    |
 | ├─ tenant   | str  | VLAN tenant                  |
@@ -170,6 +178,7 @@ orb:
               - match: "^Loopback.*"
                 type: "virtual"
             location: Row A
+            rack: Rack-01
             tenant: NetBox Labs
             description: for all
             comments: comment all
@@ -177,6 +186,7 @@ orb:
             device:
               model: C9200-48P
               manufacturer: Cisco
+              asset_tag: ASSET-001
               description: device description
               comments: this device
               tags: [tag3, tag4]
@@ -187,10 +197,16 @@ orb:
               description: my ip
               comments: my comment
               tags: [tag6]
+              vrf:
+                name: VRF-A
+                rd: "65000:100"
             prefix:
               description:
               comments:
               tags: [tag7]
+              vrf:
+                name: VRF-A
+                rd: "65000:100"
             vlan:
               role: role
         scope:
