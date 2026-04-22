@@ -1,6 +1,7 @@
 package configmgr_test
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"testing"
@@ -51,7 +52,7 @@ func TestLocalConfigManager(t *testing.T) {
 
 		// Create and start the manager
 		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
-		err := mgr.Start(testConfig, backends)
+		err := mgr.Start(context.Background(), testConfig, backends)
 
 		// Verify
 		assert.NoError(t, err)
@@ -70,7 +71,7 @@ func TestLocalConfigManager(t *testing.T) {
 
 		// Create the manager
 		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
-		err := mgr.Start(testConfig, backends)
+		err := mgr.Start(context.Background(), testConfig, backends)
 
 		// Should return an error
 		assert.Error(t, err)
@@ -99,7 +100,7 @@ func TestLocalConfigManager(t *testing.T) {
 
 		// Create the manager
 		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
-		err := mgr.Start(testConfig, backends)
+		err := mgr.Start(context.Background(), testConfig, backends)
 
 		// Should return an error
 		assert.Error(t, err)

@@ -21,12 +21,12 @@ func (messaging *Messaging) sendGroupMembershipsRequest(ctx context.Context, pub
 		return
 	}
 
-	messaging.logger.Info("sending group memberships request", "value", string(body))
+	messaging.logger.Debug("sending group memberships request", "value", string(body))
 	err = publishFunc(ctx, body)
 	if err != nil {
 		messaging.logger.Error("error sending group memberships request", "error", err)
 	}
-	messaging.logger.Info("group memberships request sent", "value", string(body))
+	messaging.logger.Debug("group memberships request sent", "value", string(body))
 }
 
 func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, labels map[string]string, config string, publishFunc func(ctx context.Context, payload []byte) error) {
@@ -52,7 +52,11 @@ func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[s
 		SchemaVersion: messages.CurrentCapabilitiesSchemaVersion,
 		AgentLabels:   labels,
 		OrbAgent: messages.OrbAgentInfo{
-			Version: version.GetBuildVersion(),
+			Version:   version.GetBuildVersion(),
+			Branch:    version.GetBuildBranch(),
+			Commit:    version.GetBuildCommit(),
+			Modified:  version.GetBuildModified(),
+			BuildTime: version.GetBuildTime(),
 		},
 		Backends:    backendsInfo,
 		AgentConfig: config,
@@ -64,7 +68,7 @@ func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[s
 		return
 	}
 
-	messaging.logger.Info("sending capabilities", "value", string(body))
+	messaging.logger.Debug("sending capabilities", "value", string(body))
 	err = publishFunc(ctx, body)
 	if err != nil {
 		messaging.logger.Error("error sending capabilities", "error", err)

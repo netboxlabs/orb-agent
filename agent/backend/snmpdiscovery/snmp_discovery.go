@@ -279,13 +279,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 func (d *snmpDiscoveryBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop snmp-discovery", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
-	err := d.proc.Stop()
-	finalStatus := <-d.statusChan
-	if err != nil {
-		d.logger.Error("snmp-discovery shutdown error", "error", err)
-	}
-	d.logger.Info("snmp-discovery process stopped", "pid", finalStatus.PID,
-		"exit_code", finalStatus.Exit)
+	backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "snmp_discovery")
 	return nil
 }
 

@@ -286,12 +286,7 @@ func (d *deviceDiscoveryBackend) logDeviceDiscoveryOutput(line string, fallback 
 func (d *deviceDiscoveryBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop device-discovery", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
-	err := d.proc.Stop()
-	finalStatus := <-d.statusChan
-	if err != nil {
-		d.logger.Error("device-discovery shutdown error", "error", err)
-	}
-	d.logger.Info("device-discovery process stopped", "pid", finalStatus.PID, "exit_code", finalStatus.Exit)
+	backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "device_discovery")
 	return nil
 }
 

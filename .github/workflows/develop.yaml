@@ -16,69 +16,103 @@ on:
 
 permissions:
   contents: write
-  id-token: write
 
 env:
-  GO_VERSION: '1.25'
+  REGISTRY: docker.io
+  IMAGE_NAME: netboxlabs/orb-agent
 
 jobs:
-    build-and-push:
-      runs-on: ubuntu-latest
-      steps:
-        - name: Checkout
-          uses: actions/checkout@v4
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: blacksmith-2vcpu-ubuntu-2404
+          - platform: linux/arm64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-        - name: Set up QEMU
-          uses: docker/setup-qemu-action@4574d27a4764455b42196d70a065bc6853246a25 #v3.4.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
-        - name: Set up Docker Buildx
-          uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca #v3.9.0
+      - name: Login to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 #v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-        - name: Login to Docker Hub
-          uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3.3.0
-          with:
-            username: ${{ secrets.DOCKERHUB_USERNAME }}
-            password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Extract Go version from go.mod
+        run: echo "GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}' | cut -d. -f1,2)" >> $GITHUB_ENV
 
-        - name: Setup JFrog CLI
-          id: setup-jfrog-cli
-          uses: jfrog/setup-jfrog-cli@ff5cb544114ffc152db9cea1cd3d5978d5074946 # v4.5.11
-          env:
-            JF_URL: https://netboxlabs.jfrog.io
-            JF_PROJECT: obs
-          with:
-            oidc-provider-name: github-ci
+      - name: Set build info
+        run: |
+          echo ${GITHUB_SHA::7} > ./agent/version/BUILD_COMMIT.txt
+          LATEST_RELEASE=$(curl --silent "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.tag_name')
+          echo $LATEST_RELEASE > ./agent/version/BUILD_VERSION.txt
 
-        - name: Login to JFrog Artifactory
-          uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 #v3
-          with:
-            registry: netboxlabs.jfrog.io
-            username: ${{ steps.setup-jfrog-cli.outputs.oidc-user }}
-            password: ${{ steps.setup-jfrog-cli.outputs.oidc-token }}
+      - name: Build image and push by digest
+        id: build
+        uses: docker/build-push-action@1dc73863535b631f98b2378be8619f83b136f4a0 # v6.17.0
+        with:
+          context: .
+          file: agent/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,scope=${{ matrix.platform }},mode=max
+          no-cache-filters: python-builder
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
-        - name: Verify QEMU installation
-          run: |
-              docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-              docker run --rm --platform linux/arm64 debian:latest uname -m
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
 
-        - name: Set build info
-          run: |
-            echo ${GITHUB_SHA::7} > ./agent/version/BUILD_COMMIT.txt
-            LATEST_RELEASE=$(curl --silent "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.tag_name')
-            echo $LATEST_RELEASE > ./agent/version/BUILD_VERSION.txt
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.runner }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
-        - name: Build image and push
-          uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 #v6.14.0
-          with:
-            context: .
-            file: agent/docker/Dockerfile
-            platforms: linux/amd64, linux/arm64
-            push: true
-            cache-from: type=gha
-            cache-to: type=gha,mode=max
-            no-cache-filters: python-builder
-            tags: |
-              netboxlabs/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
-              netboxlabs.jfrog.io/obs-builds/orb-agent:${{ github.event.inputs.docker_tag || 'develop' }}
-            build-args: |
-              GO_VERSION=${{ env.GO_VERSION }}  
+  merge:
+    name: Merge multi-arch manifest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 #v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.docker_tag || 'develop' }} \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)

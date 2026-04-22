@@ -2,18 +2,35 @@ package otlpbridge
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
+	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 const diodePolicyNameAttributeKey = "diode.metadata.policy_name"
+
+// isIngestRequest reports whether any of the provided resources carry the
+// diode.metadata.policy_name attribute, indicating the payload is Diode data
+// that should be routed to the ingest topic rather than the telemetry topic.
+func isIngestRequest(resources []*resourcev1.Resource) bool {
+	for _, r := range resources {
+		if r == nil {
+			continue
+		}
+		for _, attr := range r.Attributes {
+			if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Trace service handler
 type traceServer struct {
@@ -22,20 +39,18 @@ type traceServer struct {
 }
 
 func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
-	pub := s.bridge.GetPublisher()
-	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
-	}
-	topic := s.bridge.GetIngestTopic()
-	if topic == "" {
-		return nil, fmt.Errorf("topic not yet initialized")
+	resources := make([]*resourcev1.Resource, 0, len(req.ResourceSpans))
+	for _, rs := range req.ResourceSpans {
+		if rs != nil {
+			resources = append(resources, rs.Resource)
+		}
 	}
 
 	payload, err := s.bridge.enc.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := pub.Publish(ctx, topic, payload); err != nil {
+	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload); err != nil {
 		return nil, err
 	}
 	return &collectortrace.ExportTraceServiceResponse{}, nil
@@ -48,20 +63,18 @@ type metricsServer struct {
 }
 
 func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.ExportMetricsServiceRequest) (*collectormetrics.ExportMetricsServiceResponse, error) {
-	pub := s.bridge.GetPublisher()
-	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
-	}
-	topic := s.bridge.GetIngestTopic()
-	if topic == "" {
-		return nil, fmt.Errorf("topic not yet initialized")
+	resources := make([]*resourcev1.Resource, 0, len(req.ResourceMetrics))
+	for _, rm := range req.ResourceMetrics {
+		if rm != nil {
+			resources = append(resources, rm.Resource)
+		}
 	}
 
 	payload, err := s.bridge.enc.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := pub.Publish(ctx, topic, payload); err != nil {
+	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload); err != nil {
 		return nil, err
 	}
 	return &collectormetrics.ExportMetricsServiceResponse{}, nil
@@ -74,42 +87,40 @@ type logsServer struct {
 }
 
 func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
-	pub := s.bridge.GetPublisher()
-	if pub == nil {
-		return nil, fmt.Errorf("publisher not yet initialized")
-	}
-	if s.isIngestRequest(req) {
+	isIngest := s.isIngestRequest(req)
+	if isIngest {
 		repo := s.bridge.GetPolicyRepo()
 		enrichLogsWithDatasets(req, repo)
 		s.bridge.logger.Info("ingesting enriched logs with dataset_ids", "request", req)
-		err := s.publishToIngestTopic(ctx, req, pub)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		err := s.publishToTelemetryTopic(ctx, req, pub)
-		if err != nil {
-			return nil, err
-		}
+	}
+
+	payload, err := s.bridge.enc.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.bridge.Enqueue(ctx, isIngest, payload); err != nil {
+		return nil, err
 	}
 	return &collectorlogs.ExportLogsServiceResponse{}, nil
 }
 
-// isIngestRequest checks if the request contains a policy_name attribute in resource or scope attributes
+// isIngestRequest checks if the request contains a policy_name attribute in
+// resource attributes or, for backward compatibility, in scope attributes.
 func (s *logsServer) isIngestRequest(req *collectorlogs.ExportLogsServiceRequest) bool {
+	resources := make([]*resourcev1.Resource, 0, len(req.ResourceLogs))
+	for _, rl := range req.ResourceLogs {
+		if rl != nil {
+			resources = append(resources, rl.Resource)
+		}
+	}
+	if isIngestRequest(resources) {
+		return true
+	}
+	// Backward compatibility: also check ScopeLogs attributes.
 	for _, rl := range req.ResourceLogs {
 		if rl == nil {
 			continue
 		}
-		// Check Resource attributes first
-		if rl.Resource != nil && rl.Resource.Attributes != nil {
-			for _, attr := range rl.Resource.Attributes {
-				if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
-					return true
-				}
-			}
-		}
-		// Also check Scope attributes for backward compatibility
 		for _, sl := range rl.ScopeLogs {
 			if sl == nil || sl.Scope == nil || sl.Scope.Attributes == nil {
 				continue
@@ -122,35 +133,6 @@ func (s *logsServer) isIngestRequest(req *collectorlogs.ExportLogsServiceRequest
 		}
 	}
 	return false
-}
-
-func (s *logsServer) publishToIngestTopic(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher) error {
-	topic := s.bridge.GetIngestTopic()
-	if topic == "" {
-		return fmt.Errorf("ingest topic not yet initialized")
-	}
-
-	return s.publish(ctx, req, pub, topic)
-}
-
-func (s *logsServer) publishToTelemetryTopic(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher) error {
-	topic := s.bridge.GetTelemetryTopic()
-	if topic == "" {
-		return fmt.Errorf("telemetry topic not yet initialized")
-	}
-
-	return s.publish(ctx, req, pub, topic)
-}
-
-func (s *logsServer) publish(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest, pub Publisher, topic string) error {
-	payload, err := s.bridge.enc.Marshal(req)
-	if err != nil {
-		return err
-	}
-	if err := pub.Publish(ctx, topic, payload); err != nil {
-		return err
-	}
-	return nil
 }
 
 // enrichLogsWithDatasets adds dataset_ids to ScopeLogs attributes based on policy_name.

@@ -2,8 +2,11 @@ package configmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -23,21 +26,32 @@ var _ Manager = (*FleetConfigManager)(nil)
 
 // FleetConfigManager implements the Manager interface for Fleet-based configuration
 type FleetConfigManager struct {
-	logger            *slog.Logger
-	connection        fleet.MQTTConnector
-	authTokenManager  *fleet.AuthTokenManager
-	resetChan         chan struct{}
-	reconnectChan     chan struct{}
-	backendState      backend.StateRetriever
-	policyManager     policymgr.PolicyManager
-	otlpBridge        *otlpbridge.BridgeServer
-	config            config.Config
-	backends          map[string]backend.Backend
-	labels            map[string]string
-	configYaml        string
+	logger           *slog.Logger
+	connection       fleet.MQTTConnector
+	authTokenManager *fleet.AuthTokenManager
+	resetChan        chan struct{}
+	reconnectChan    chan struct{}
+	backendState     backend.StateRetriever
+	policyManager    policymgr.PolicyManager
+	otlpBridge       *otlpbridge.BridgeServer
+	config           config.Config
+	backends         map[string]backend.Backend
+	labels           map[string]string
+	configYaml       string
+	// connMu guards connectionDetails, which is written by refreshAndReconnect and read
+	// concurrently by the reset goroutine and the reconnect worker.
+	connMu            sync.RWMutex
 	connectionDetails fleet.ConnectionDetails
 	monitorCtx        context.Context
 	monitorCancel     context.CancelFunc
+	// connCtx/connCancel control the MQTT connection lifetime independently of
+	// monitorCtx. monitorCtx cancellation stops background workers; connCtx is
+	// only cancelled after Disconnect() in Stop(), ensuring the heartbeat goroutine
+	// can still publish the offline heartbeat while the connection is alive.
+	connCtx      context.Context
+	connCancel   context.CancelFunc
+	connected    atomic.Bool    // true only after connection.Connect() succeeds
+	goroutinesWg sync.WaitGroup // tracks goroutines started in Start(); Wait()ed in Stop() before Disconnect
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
@@ -70,9 +84,7 @@ func newFleetConfigManagerWithConnection(logger *slog.Logger, pMgr policymgr.Pol
 }
 
 // Start initializes and starts the Fleet configuration manager
-func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[string]backend.Backend) error {
-	ctx := context.Background()
-
+func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL, err = config.ResolveEnv(cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL)
 	if err != nil {
@@ -91,11 +103,140 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		"token_url", cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
 		"client_id", cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID)
 
-	// call the token url to get the token
 	timeout := 30 * time.Second
 	if cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout != nil && *cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout > 0 {
 		timeout = time.Duration(*cfg.OrbAgent.ConfigManager.Sources.Fleet.Timeout) * time.Second
 	}
+
+	// Start OTLP bridge server early, before MQTT connection.
+	// Port binding errors are local/permanent so we fail immediately.
+	grpcPort := 4317
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+	}
+	bridgeConfig := otlpbridge.BridgeConfig{
+		ListenAddr: fmt.Sprintf(":%d", grpcPort),
+		Encoding:   "json",
+	}
+	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+	if err != nil {
+		return fmt.Errorf("failed to create OTLP bridge: %w", err)
+	}
+	if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
+		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
+	}
+	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
+
+	// Create a shared cancellable context for the reconnect worker, token expiry
+	// monitor, and reset handler so that Stop() can terminate all goroutines with
+	// a single monitorCancel() call.
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+
+	// connCtx is independent of monitorCtx: it controls the MQTT connection and
+	// is the parent for heartbeat goroutines. It is cancelled by Stop() only after
+	// Disconnect() returns, so the offline heartbeat is always sent on a live connection.
+	fleetManager.connCtx, fleetManager.connCancel = context.WithCancel(context.Background())
+
+	// Register OnReadyHook before the retry loop so it fires on the initial
+	// connection (OnConnectionUp runs synchronously before Connect returns).
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		if fleetManager.otlpBridge == nil {
+			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
+			return
+		}
+
+		// Create publisher adapter and bind to bridge
+		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		fleetManager.otlpBridge.SetPublisher(pub)
+		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
+		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
+		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
+			slog.String("ingest_topic", topics.Ingest),
+			slog.String("telemetry_topic", topics.Telemetry))
+	})
+
+	// Retry loop for token fetch + MQTT connect. These depend on external services
+	// (token endpoint, MQTT broker) that may not be up yet at agent startup.
+	// AuthError (401/403) is permanent — bad credentials won't be fixed by retrying.
+	const maxStartupRetries = 0 // 0 = unlimited; agent retries until ctx is cancelled
+	startupBackoff := 5 * time.Second
+	const maxStartupBackoff = 2 * time.Minute
+	var attempt int
+	for {
+		attempt++
+		startupErr := fleetManager.startConnection(ctx, cfg, backends, timeout)
+		if startupErr == nil {
+			break
+		}
+
+		// Non-retriable: bad credentials
+		var authErr *fleet.AuthError
+		if errors.As(startupErr, &authErr) {
+			_ = fleetManager.otlpBridge.Stop(context.Background())
+			return fmt.Errorf("startup aborted, credentials rejected: %w", startupErr)
+		}
+
+		if maxStartupRetries > 0 && attempt >= maxStartupRetries {
+			_ = fleetManager.otlpBridge.Stop(context.Background())
+			return fmt.Errorf("startup failed after %d attempts: %w", attempt, startupErr)
+		}
+
+		// Defense-in-depth: tear down any lingering connection manager from the
+		// failed attempt before retrying. Connect() has its own guard, but an
+		// explicit teardown here ensures no leaked manager can reconnect in the
+		// background. Disconnect is nil-safe.
+		disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = fleetManager.connection.Disconnect(disconnectCtx, "")
+		disconnectCancel()
+
+		fleetManager.logger.Warn("startup attempt failed, retrying",
+			"attempt", attempt,
+			"error", startupErr,
+			"retry_in", startupBackoff)
+
+		select {
+		case <-ctx.Done():
+			_ = fleetManager.otlpBridge.Stop(context.Background())
+			return fmt.Errorf("startup cancelled: %w", ctx.Err())
+		case <-time.After(startupBackoff):
+		}
+
+		startupBackoff = min(startupBackoff*2, maxStartupBackoff)
+	}
+	fleetManager.connected.Store(true)
+
+	// Start goroutine to handle agent reset requests
+	fleetManager.goroutinesWg.Add(1)
+	go func() {
+		defer fleetManager.goroutinesWg.Done()
+		fleetManager.runResetHandler(timeout)
+	}()
+
+	// Start goroutine to handle reconnect requests (JWT refresh)
+	fleetManager.goroutinesWg.Add(1)
+	go func() {
+		defer fleetManager.goroutinesWg.Done()
+		fleetManager.runReconnectWorker(fleetManager.monitorCtx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second)
+	}()
+
+	// Start background goroutine to monitor token expiry and trigger proactive reconnection
+	fleetManager.goroutinesWg.Add(1)
+	go func() {
+		defer fleetManager.goroutinesWg.Done()
+		fleetManager.monitorTokenExpiry()
+	}()
+
+	return nil
+}
+
+// startConnection performs the token fetch, JWT parse, topic generation, and MQTT connect.
+// It is called by Start's retry loop. Transient failures (network, broker down) return a
+// plain error that the caller retries; permanent failures (bad credentials) return an
+// *fleet.AuthError that the caller surfaces immediately.
+//
+// ctx is used for short-lived startup work (token fetch, JWT parse). The MQTT connection
+// itself uses fleetManager.connCtx so it outlives the startup context.
+func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg config.Config, backends map[string]backend.Backend, timeout time.Duration) error {
 	token, err := fleetManager.authTokenManager.GetToken(ctx,
 		cfg.OrbAgent.ConfigManager.Sources.Fleet.TokenURL,
 		cfg.OrbAgent.ConfigManager.Sources.Fleet.SkipTLS, timeout,
@@ -110,7 +251,6 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 		return fmt.Errorf("failed to parse JWT claims: %w", err)
 	}
 
-	// generate topics from JWT claims and config agent_id using hardcoded templates
 	topics, err := fleet.GenerateTopicsFromTemplate(jwtClaims)
 	if err != nil {
 		return fmt.Errorf("failed to generate topics: %w", err)
@@ -144,85 +284,125 @@ func (fleetManager *FleetConfigManager) Start(cfg config.Config, backends map[st
 	fleetManager.configYaml = string(configYaml)
 	fleetManager.connectionDetails = connectionDetails
 
-	// Start OTLP bridge server early, before MQTT connection
-	// This ensures port binding errors are detected immediately and propagate to fail the agent startup
-	grpcPort := 4317
-	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
-		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
-	}
-	bridgeConfig := otlpbridge.BridgeConfig{
-		ListenAddr: fmt.Sprintf(":%d", grpcPort),
-		Encoding:   "json",
-	}
-	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
-	if err != nil {
-		return fmt.Errorf("failed to create OTLP bridge: %w", err)
-	}
-	if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
-		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
-	}
-	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
+	// connCtx governs the connection's lifetime; ctx (the startup context) bounds
+	// the AwaitConnection wait so a cancelled startup doesn't hang indefinitely.
+	return fleetManager.connection.Connect(fleetManager.connCtx, ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
+}
 
-	err = fleetManager.connection.Connect(ctx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
-	if err != nil {
-		return err
-	}
-
-	// Start goroutine to handle agent reset requests
-	go func() {
-		for range fleetManager.resetChan {
+// runResetHandler processes signals from resetChan, performing a clean MQTT disconnect followed
+// by reconnect using the latest stored connection details. It uses connCtx (not monitorCtx) as
+// the disconnect timeout parent so the offline heartbeat goroutine still has a live context.
+// monitorCtx bounds the AwaitConnection wait during reconnect, so Stop() is never blocked by an
+// in-flight reset when the broker is unreachable.
+func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
+	for {
+		select {
+		case <-fleetManager.monitorCtx.Done():
+			fleetManager.logger.Info("reset handler stopped")
+			return
+		case _, ok := <-fleetManager.resetChan:
+			if !ok {
+				return
+			}
 			fleetManager.logger.Info("agent reset requested, reconnecting MQTT connection")
 
-			// Disconnect first
-			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
-			err := fleetManager.connection.Disconnect(disconnectCtx, topics.Heartbeat)
+			// Snapshot connection details under the read lock so we get a consistent view
+			// even if the reconnect worker is concurrently writing after a token refresh.
+			fleetManager.connMu.RLock()
+			details := fleetManager.connectionDetails
+			fleetManager.connMu.RUnlock()
+
+			if fleetManager.otlpBridge != nil {
+				fleetManager.otlpBridge.ClearPublisher()
+			}
+
+			// Disconnect first. Use connCtx for timeout so the offline heartbeat
+			// inside Disconnect() still has a live parent context.
+			disconnectCtx, cancel := context.WithTimeout(fleetManager.connCtx, timeout)
+			err := fleetManager.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
 			cancel()
 			if err != nil {
 				fleetManager.logger.Error("failed to disconnect during reset", "error", err)
 			}
 
-			// Reconnect
-			connectCtx := context.Background()
-			err = fleetManager.connection.Connect(connectCtx, connectionDetails, backends, cfg.OrbAgent.Labels, string(configYaml))
+			// Reconnect: connCtx governs the new connection's lifetime; monitorCtx
+			// bounds the AwaitConnection wait so Stop() isn't blocked if the broker
+			// is unreachable during the reset.
+			err = fleetManager.connection.Connect(fleetManager.connCtx, fleetManager.monitorCtx, details, fleetManager.backends, fleetManager.labels, fleetManager.configYaml)
 			if err != nil {
 				fleetManager.logger.Error("failed to reconnect during reset", "error", err)
 			}
 		}
-	}()
+	}
+}
 
-	// Register MQTTOnReadyHook to bind publisher and topics to the OTLP bridge
-	// The bridge server is already started earlier in Start(), so we only need to bind MQTT here
-	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
-		if fleetManager.otlpBridge == nil {
-			fleetManager.logger.Error("OTLP bridge not initialized, cannot bind to MQTT")
+// runReconnectWorker processes signals from reconnectChan, retrying token refresh with exponential
+// backoff. After all retries are exhausted it disconnects the MQTT connection (Fix 2) so the server
+// sees the agent as Offline rather than Stale, then schedules a fast re-signal (Fix 3) so recovery
+// does not have to wait for the next full monitor tick. Timing parameters are injected so tests can
+// use millisecond-scale values without slowing the test suite.
+func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, timeout time.Duration, maxRetries int, baseBackoff, maxBackoff, retryDelay time.Duration) {
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case <-fleetManager.reconnectChan:
 		}
+		fleetManager.logger.Debug("JWT refresh and reconnection requested")
 
-		// Create publisher adapter and bind to bridge
-		pub := otlpbridge.NewCMAdapterPublisher(cm)
-		fleetManager.otlpBridge.SetPublisher(pub)
-		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
-		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
-		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
-			slog.String("ingest_topic", topics.Ingest),
-			slog.String("telemetry_topic", topics.Telemetry))
-	})
+		backoff := baseBackoff
+		var lastErr error
 
-	// Start goroutine to handle reconnect requests (JWT refresh)
-	go func() {
-		for range fleetManager.reconnectChan {
-			fleetManager.logger.Info("JWT refresh and reconnection requested")
-			if err := fleetManager.refreshAndReconnect(ctx, timeout); err != nil {
-				fleetManager.logger.Error("failed to refresh and reconnect", "error", err)
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			if lastErr = fleetManager.refreshAndReconnect(ctx, timeout); lastErr == nil {
+				break
+			}
+			fleetManager.logger.Error("refresh and reconnect attempt failed",
+				"attempt", attempt, "max_retries", maxRetries,
+				"error", lastErr, "retry_in", backoff)
+			if attempt < maxRetries {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
+				if backoff*2 < maxBackoff {
+					backoff *= 2
+				} else {
+					backoff = maxBackoff
+				}
 			}
 		}
-	}()
 
-	// Start background goroutine to monitor token expiry and trigger proactive reconnection
-	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
-	go fleetManager.monitorTokenExpiry()
-
-	return nil
+		if lastErr != nil {
+			fleetManager.logger.Error("all refresh and reconnect attempts exhausted, disconnecting agent",
+				"error", lastErr)
+			// Use connCtx (not the worker's monitorCtx-derived ctx) as the timeout
+			// parent so the disconnect isn't dead-on-arrival if Stop() has already
+			// cancelled monitorCtx concurrently.
+			fleetManager.connMu.RLock()
+			heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
+			fleetManager.connMu.RUnlock()
+			if fleetManager.otlpBridge != nil {
+				fleetManager.otlpBridge.ClearPublisher()
+			}
+			disconnectCtx, disconnectCancel := context.WithTimeout(fleetManager.connCtx, timeout)
+			if err := fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic); err != nil {
+				fleetManager.logger.Error("failed to disconnect after exhausted retries", "error", err)
+			}
+			disconnectCancel()
+			time.AfterFunc(retryDelay, func() {
+				if ctx.Err() != nil {
+					return
+				}
+				select {
+				case fleetManager.reconnectChan <- struct{}{}:
+					fleetManager.logger.Debug("scheduled retry signal sent after refresh failure")
+				default:
+				}
+			})
+		}
+	}
 }
 
 // BindSecretsManager binds a fleet secrets manager to the MQTT connection
@@ -285,7 +465,7 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 		return fmt.Errorf("failed to generate topics: %w", err)
 	}
 
-	fleetManager.logger.Info("refreshed JWT and generated new topics",
+	fleetManager.logger.Debug("refreshed JWT and generated new topics",
 		"heartbeat_topic", topics.Heartbeat,
 		"capabilities_topic", topics.Capabilities,
 		"inbox_topic", topics.Inbox,
@@ -301,11 +481,24 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 		Zone:     jwtClaims.Zone,
 	}
 
-	// Store updated connection details
+	// Store updated connection details under write lock so the reset goroutine and
+	// reconnect worker always observe a fully initialised value.
+	fleetManager.connMu.Lock()
 	fleetManager.connectionDetails = newConnectionDetails
+	fleetManager.connMu.Unlock()
 
-	// Reconnect with new token
-	err = fleetManager.connection.Reconnect(ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)
+	// Clear the OTLP bridge publisher before tearing down the old MQTT connection
+	// so the writer goroutine stops publishing into a dead connection manager and
+	// instead waits (without consuming retry budget) for the OnReadyHook to bind
+	// a fresh publisher after reconnect.
+	if fleetManager.otlpBridge != nil {
+		fleetManager.otlpBridge.ClearPublisher()
+	}
+
+	// connCtx governs the new connection's lifetime; ctx (monitorCtx from the
+	// reconnect worker) bounds the disconnect/AwaitConnection wait so Stop() isn't
+	// blocked by an in-flight reconnect when the broker is unreachable.
+	err = fleetManager.connection.Reconnect(fleetManager.connCtx, ctx, newConnectionDetails, fleetManager.backends, fleetManager.labels, fleetManager.configYaml, timeout)
 	if err != nil {
 		return fmt.Errorf("failed to reconnect: %w", err)
 	}
@@ -391,9 +584,35 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 
 // Stop gracefully shuts down the OTLP bridge and token expiry monitor.
 func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
-	// Stop token expiry monitor
+	// Cancel all background goroutines (reconnect worker, token monitor, reset handler).
 	if fleetManager.monitorCancel != nil {
 		fleetManager.monitorCancel()
+	}
+
+	// Wait for all goroutines started in Start() to exit before calling Disconnect.
+	// This prevents a race where a goroutine is mid-Disconnect when Stop() also calls Disconnect.
+	fleetManager.goroutinesWg.Wait()
+
+	// Send a clean MQTT DISCONNECT only when Start() successfully connected.
+	// Swap to false so a second Stop() call does not attempt a second Disconnect.
+	if fleetManager.connected.Swap(false) {
+		fleetManager.connMu.RLock()
+		heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
+		fleetManager.connMu.RUnlock()
+
+		if heartbeatTopic != "" {
+			disconnectCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			if err := fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic); err != nil {
+				fleetManager.logger.Warn("MQTT disconnect during Stop returned error", slog.Any("error", err))
+			}
+			cancel()
+		}
+	}
+
+	// Cancel connCtx after Disconnect so the heartbeat goroutine's parent context
+	// remains alive until the offline heartbeat has been sent.
+	if fleetManager.connCancel != nil {
+		fleetManager.connCancel()
 	}
 
 	if fleetManager.otlpBridge != nil {

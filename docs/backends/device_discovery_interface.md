@@ -63,6 +63,47 @@ interface_patterns:
 # User pattern wins even though built-in is more specific
 ```
 
+## Interface Exclusion Patterns
+
+Use `interface_exclude_patterns` to prevent specific interfaces — and their associated IP addresses — from being ingested into NetBox. This is useful for filtering out virtual or host-only interfaces (TAP, veth, loopback, etc.) that are not relevant to your network inventory.
+
+### Configuration
+
+```yaml
+defaults:
+  interface_exclude_patterns:
+    - "^tap.*"      # exclude TAP interfaces (e.g. tap103i0)
+    - "^veth.*"     # exclude veth pairs
+    - "^docker.*"   # exclude Docker bridge interfaces
+```
+
+### Rules
+
+- Patterns are **case-sensitive** regular expressions matched against the full interface name
+- A pattern matches anywhere in the name — use `^` to anchor to the start (e.g. `^tap` matches `tap0` but not `mytap0`)
+- When an interface is excluded, **all IP addresses assigned to it are also suppressed**
+- The `override_defaults` field on a device replaces the global list wholesale (same behaviour as `interface_patterns`)
+
+### Per-Device Override
+
+```yaml
+defaults:
+  interface_exclude_patterns:
+    - "^tap.*"
+scope:
+  - hostname: 192.168.1.1
+    username: admin
+    password: secret
+    override_defaults:
+      interface_exclude_patterns:
+        - "^tap.*"
+        - "^veth.*"   # this device also excludes veth interfaces
+```
+
+### Invalid Patterns
+
+Invalid regex patterns are logged as warnings and skipped. Valid patterns in the same list are still applied.
+
 ## Built-In Patterns
 
 When no user patterns are configured (or none match), the system automatically applies built-in patterns for common network equipment:

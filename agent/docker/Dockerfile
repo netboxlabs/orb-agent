@@ -2,7 +2,7 @@ ARG PKTVISOR_TAG=develop
 ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
 ARG SNMP_DISCOVERY_TAG=latest
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 
 ########################################################################
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS builder
@@ -18,7 +18,7 @@ ARG TARGETOS TARGETARCH
 RUN --mount=target=. \
     --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o /build/orb-agent ./cmd/main.go
+    GOOS=$TARGETOS GOARCH=$TARGETARCH EXTRA_LDFLAGS="-s -w" BUILD_DIR=/build make agent_bin
 
 ########################################################################
 FROM netboxlabs/opentelemetry-infinity:${OTEL_TAG} AS otlpinf
@@ -47,7 +47,8 @@ FROM python:3.14-slim-trixie
 
 RUN \
     apt update && \
-    apt install --yes --no-install-recommends nmap openssh-client tini && \
+    apt install --yes --no-install-recommends ca-certificates git nmap openssh-client tini && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/orb

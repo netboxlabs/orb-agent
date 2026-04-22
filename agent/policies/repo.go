@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // ErrPolicyNotFound is returned when a policy cannot be found by name or ID.
@@ -21,6 +22,7 @@ type PolicyRepo interface {
 	RemoveDataset(policyID string, datasetID string) (bool, error)
 	EnsureGroupID(policyID string, agentGroupID string) error
 	UpdateRuns(policyName string, runs []RunData) error
+	FailNonTerminalRuns(reason string) error
 }
 
 type policyMemRepo struct {
@@ -159,8 +161,78 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyID)
 	}
+
+	// Index existing runs for change detection and timestamp preservation
+	existingByID := make(map[string]RunData, len(policy.Runs))
+	for _, r := range policy.Runs {
+		existingByID[r.ID] = r
+	}
+
+	now := time.Now().UTC()
+	for i := range runs {
+		runs[i].PolicyID = policyID
+
+		if existing, ok := existingByID[runs[i].ID]; ok {
+			// Existing run: always preserve CreatedAt
+			runs[i].CreatedAt = existing.CreatedAt
+
+			if IsTerminalRunStatus(existing.Status) {
+				// Run already finished; freeze UpdatedAt so
+				// UpdatedAt − CreatedAt reflects the final run duration.
+				runs[i].UpdatedAt = existing.UpdatedAt
+			} else {
+				// Run is still in progress; always advance UpdatedAt so
+				// UpdatedAt − CreatedAt reflects the current elapsed time.
+				runs[i].UpdatedAt = now
+			}
+
+			// Preserve last-known non-empty Targets when the backend omits them.
+			// Orb-pro applies the same rule server-side; this keeps agent and fleet
+			// manager in sync during transient / partial status updates.
+			if len(runs[i].Targets) == 0 {
+				runs[i].Targets = existing.Targets
+			}
+		} else {
+			// New run: use the backend's timestamps if provided; fall back to now.
+			if runs[i].CreatedAt.IsZero() {
+				runs[i].CreatedAt = now
+			}
+			// For terminal runs seen for the first time (e.g. after agent restart),
+			// preserve the backend's UpdatedAt so UpdatedAt − CreatedAt reflects
+			// actual run duration rather than agent poll time.
+			if runs[i].UpdatedAt.IsZero() || !IsTerminalRunStatus(runs[i].Status) {
+				runs[i].UpdatedAt = now
+			}
+		}
+	}
+
 	policy.Runs = runs
 	p.db[policyID] = policy
+	return nil
+}
+
+// FailNonTerminalRuns marks every non-terminal run as failed with the given reason.
+// Terminal runs (completed, failed) are unchanged.
+func (p *policyMemRepo) FailNonTerminalRuns(reason string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now().UTC()
+	for policyID, policy := range p.db {
+		changed := false
+		for i := range policy.Runs {
+			if IsTerminalRunStatus(policy.Runs[i].Status) {
+				continue
+			}
+			policy.Runs[i].PolicyID = policyID
+			policy.Runs[i].Status = "failed"
+			policy.Runs[i].Reason = reason
+			policy.Runs[i].UpdatedAt = now
+			changed = true
+		}
+		if changed {
+			p.db[policyID] = policy
+		}
+	}
 	return nil
 }
 

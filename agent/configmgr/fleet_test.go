@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,8 +112,12 @@ func TestFleetConfigManager_Start_TokenError(t *testing.T) {
 
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Act
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// Assert
 	assert.Error(t, err)
@@ -170,13 +175,15 @@ func TestFleetConfigManager_Start_ConnectError(t *testing.T) {
 
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Act
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// Assert
 	assert.Error(t, err)
-	// Verify the error is from the mock connection (no 30s wait)
-	assert.Contains(t, err.Error(), "mqtt connection failed")
 }
 
 func TestFleetConfigManager_GetContext(t *testing.T) {
@@ -260,20 +267,26 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 	// Mock backends
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// The Start method should succeed in generating topics from JWT claims,
 	// but fail at the MQTT connection step (which is mocked to return an error)
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// We expect an error because the mock connection returns an error,
 	// but we want to verify that topic generation succeeded
 	// (The error should be related to MQTT connection, not JWT parsing)
 	require.Error(t, err)
-	// The error should be the mocked connection error
+	// The error may be the mocked connection error or context cancellation from the retry loop.
 	errorMsg := strings.ToLower(err.Error())
 	assert.True(t,
 		strings.Contains(errorMsg, "mqtt") ||
-			strings.Contains(errorMsg, "connection"),
-		"Expected connection-related error, got: %s", err.Error())
+			strings.Contains(errorMsg, "connection") ||
+			strings.Contains(errorMsg, "cancelled") ||
+			strings.Contains(errorMsg, "deadline"),
+		"Expected connection-related or cancellation error, got: %s", err.Error())
 }
 
 func TestFleetConfigManager_configToSafeString(t *testing.T) {
@@ -729,6 +742,86 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testi
 	}
 }
 
+// TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedToken verifies that
+// the monitor does NOT trigger a reconnect for a short-lived but valid token where the effective
+// lifetime (after the proportional buffer) is greater than the reconnect buffer.
+//
+// Scenario (reproduces OBS-2248 at the monitor layer):
+//   - Token TTL = 5 minutes → after proportional buffer (30s) → ~4m30s effective lifetime
+//   - Configured reconnectBuffer = 2 minutes
+//   - 4m30s remaining > 2m reconnect buffer → IsTokenExpiringSoon(2m) is FALSE → no reconnect
+//
+// The ticker interval is set to 1 second so the monitor loop actually executes within the test
+// window. We wait 1.5 seconds to guarantee at least one full tick fires before asserting.
+func TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedToken(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+
+	// Use a 1-second check interval so the ticker fires within the test window.
+	// The default is 30 seconds which would never tick during a short test.
+	checkInterval := 1
+	reconnectBuffer := 120 // 2 minutes in seconds
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			ConfigManager: config.ManagerConfig{
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						TokenURL:                 "https://example.com/token",
+						ClientID:                 "test-client-id",
+						ClientSecret:             "test-secret",
+						TokenExpiryCheckInterval: &checkInterval,
+						TokenReconnectBuffer:     &reconnectBuffer,
+					},
+				},
+			},
+		},
+	}
+	fleetManager.config = cfg
+
+	// Token expires in 5 minutes; proportional buffer = 10% of 5m = 30s → effective lifetime ≈ 4m30s.
+	// This is well above the 2-minute reconnect buffer, so IsTokenExpiringSoon must return false.
+	fiveMinExpiry := time.Now().Add(5 * time.Minute)
+	jwtToken := fleet.RawJWTWithClaims(map[string]any{
+		"exp": fiveMinExpiry.Unix(),
+		"iat": time.Now().Unix(),
+	})
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		response := fleet.TokenResponse{
+			AccessToken: jwtToken,
+			MQTTURL:     "mqtt://test.example.com:1883",
+			ExpiresIn:   300,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	_, err := fleetManager.authTokenManager.GetToken(ctx, server.URL, true, 60*time.Second, "test_client_id", "test_client_secret")
+	require.NoError(t, err)
+
+	// Pre-flight: confirm the auth manager state is correct before starting the monitor.
+	assert.False(t, fleetManager.authTokenManager.IsTokenExpired(), "token should not be expired")
+	assert.False(t, fleetManager.authTokenManager.IsTokenExpiringSoon(2*time.Minute),
+		"5-minute token with ~4m30s effective lifetime should not be expiring soon with 2m buffer")
+
+	// Start the monitor and wait 1.5 seconds — enough for at least one 1-second tick to fire.
+	// If the monitor loop is broken and emits a reconnect, the test will catch it.
+	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
+	defer fleetManager.monitorCancel()
+
+	go fleetManager.monitorTokenExpiry()
+
+	select {
+	case <-fleetManager.reconnectChan:
+		t.Fatal("reconnect was triggered spuriously for a healthy 5-minute token after at least one monitor tick")
+	case <-time.After(1500 * time.Millisecond):
+		// At least one tick fired with no spurious reconnect — correct behaviour
+	}
+}
+
 func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.T) {
 	// Test that OnReadyHook initializes the bridge when called the first time
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -1089,8 +1182,8 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	}
 	fleetManager := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
 
-	// Act
-	err = fleetManager.Start(cfg, backends)
+	// Act — port binding is before the retry loop, so this fails immediately.
+	err = fleetManager.Start(context.Background(), cfg, backends)
 
 	// Assert
 	require.Error(t, err, "Start() should fail when port is in use")
@@ -1152,15 +1245,19 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 
 	backends := make(map[string]backend.Backend)
 
+	// Use a short-lived context so the startup retry loop exits quickly.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	// Act
-	err := fleetManager.Start(cfg, backends)
+	err := fleetManager.Start(ctx, cfg, backends)
 
 	// Assert
 	// Even though MQTT connection fails, we should verify that:
 	// 1. OTLP bridge was started (it should exist)
 	// 2. Connect() was called (indicating we got past bridge startup)
 	require.Error(t, err, "Start() should fail due to MQTT connection error")
-	assert.True(t, mockConn.ConnectCalled, "MQTT Connect() should have been called")
+	assert.True(t, mockConn.ConnectCalled(), "MQTT Connect() should have been called")
 	// The bridge should have been created and started before Connect() was called
 	// Since Connect() was called, the bridge must have started successfully
 	assert.NotNil(t, fleetManager.otlpBridge, "OTLP bridge should be initialized before MQTT connection")
@@ -1169,4 +1266,433 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 	if fleetManager.otlpBridge != nil {
 		_ = fleetManager.otlpBridge.Stop(context.Background())
 	}
+}
+
+// controlledTokenServer is a test HTTP server whose response can switch from failure to success
+// after a configurable number of requests. Thread-safe.
+type controlledTokenServer struct {
+	t            *testing.T
+	mu           sync.Mutex
+	failForCount int // requests 1..failForCount return 500; subsequent requests return a valid token
+	requestCount int
+	validJWT     string
+	mqttURL      string
+}
+
+func (s *controlledTokenServer) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	s.requestCount++
+	count := s.requestCount
+	s.mu.Unlock()
+
+	// Request 1 is the credential-priming GetToken call — always succeed.
+	// Requests 2..failForCount+1 fail; requests failForCount+2 onward succeed again.
+	if count > 1 && count <= s.failForCount+1 {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(fleet.TokenResponse{
+		AccessToken: s.validJWT,
+		MQTTURL:     s.mqttURL,
+		ExpiresIn:   3600,
+	})
+}
+
+func (s *controlledTokenServer) RequestCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requestCount
+}
+
+// newControlledTokenServer wraps a controlledTokenServer in a TLS httptest.Server.
+// failForCount requests will return HTTP 500 before switching to valid responses.
+func newControlledTokenServer(t *testing.T, failForCount int) (*httptest.Server, *controlledTokenServer) {
+	t.Helper()
+	mqttURL := "mqtt://test.example.com:1883"
+	validJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id":   "test-org",
+		"orb:zone":     "default",
+		"orb:agent_id": "test-agent",
+		"client_id":    "test-client",
+		"iat":          1516239022,
+		"ext": map[string]any{
+			"orb:mqtt_url": mqttURL,
+		},
+	})
+	handler := &controlledTokenServer{
+		t:            t,
+		failForCount: failForCount,
+		validJWT:     validJWT,
+		mqttURL:      mqttURL,
+	}
+	return httptest.NewTLSServer(handler), handler
+}
+
+// newReconnectWorkerManager creates a FleetConfigManager wired with a mock MQTT connection and a
+// pre-fetched valid token so that runReconnectWorker can be invoked directly in tests.
+func newReconnectWorkerManager(t *testing.T, mockConn *fleet.MockMQTTConnection, tokenServerURL string) *FleetConfigManager {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	mgr := &FleetConfigManager{
+		logger:           logger,
+		connection:       mockConn,
+		authTokenManager: fleet.NewAuthTokenManager(logger),
+		resetChan:        resetChan,
+		reconnectChan:    reconnectChan,
+		policyManager:    mockPMgr,
+		config: config.Config{
+			OrbAgent: config.OrbAgent{
+				ConfigManager: config.ManagerConfig{
+					Sources: config.Sources{
+						Fleet: config.FleetManager{
+							TokenURL:     tokenServerURL,
+							SkipTLS:      true,
+							ClientID:     "test_client",
+							ClientSecret: "test_secret",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Pre-fetch a token so the manager has stored credentials for RefreshToken.
+	ctx := context.Background()
+	_, err := mgr.authTokenManager.GetToken(ctx, tokenServerURL, true, 10*time.Second, "test_client", "test_secret")
+	require.NoError(t, err, "initial GetToken must succeed to prime credentials")
+
+	// Set a heartbeat topic so Disconnect has a valid topic string.
+	mgr.connectionDetails = fleet.ConnectionDetails{
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test-agent/heartbeat",
+		},
+	}
+
+	// connCtx is normally created by Start(); initialise it here so
+	// runReconnectWorker can use it as the Disconnect timeout parent.
+	mgr.connCtx, mgr.connCancel = context.WithCancel(context.Background())
+	t.Cleanup(mgr.connCancel)
+
+	return mgr
+}
+
+// TestFleetConfigManager_ReconnectWorker_RetriesOnTransientFailure verifies that when the token
+// endpoint fails for fewer attempts than maxRetries, refreshAndReconnect eventually succeeds,
+// Disconnect is NOT called, and no re-signal timer is scheduled.
+func TestFleetConfigManager_ReconnectWorker_RetriesOnTransientFailure(t *testing.T) {
+	// Token server fails for the first 2 requests, then succeeds.
+	// With maxRetries=5 the worker should succeed on attempt 3.
+	server, handler := newControlledTokenServer(t, 2)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{
+		ReconnectError: nil, // Reconnect succeeds after token refresh
+	}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Run worker with very short backoffs so the test completes quickly.
+	go mgr.runReconnectWorker(ctx, 10*time.Second, 5, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond)
+
+	// Trigger one reconnect.
+	mgr.reconnectChan <- struct{}{}
+
+	// Wait long enough for 2 failures + backoffs + 1 success (generous upper bound).
+	time.Sleep(300 * time.Millisecond)
+
+	assert.False(t, mockConn.DisconnectCalled(), "Disconnect should NOT be called when refresh eventually succeeds")
+	// Request 1 = prime, requests 2-3 = failures, request 4 = success → at least 4 total.
+	assert.GreaterOrEqual(t, handler.RequestCount(), 4, "token endpoint should have been called at least 4 times (1 prime + 2 failures + 1 success)")
+
+	// reconnectChan should be empty (no re-signal scheduled).
+	select {
+	case <-mgr.reconnectChan:
+		t.Fatal("reconnectChan should be empty after a successful retry")
+	default:
+	}
+}
+
+// TestFleetConfigManager_ReconnectWorker_DisconnectsAfterAllRetriesFail verifies that when the
+// token endpoint fails on every request, the worker calls Disconnect after exhausting maxRetries.
+func TestFleetConfigManager_ReconnectWorker_DisconnectsAfterAllRetriesFail(t *testing.T) {
+	// Token server always fails (failForCount > maxRetries).
+	server, _ := newControlledTokenServer(t, 100)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	// Override the token URL with the always-failing server AFTER priming credentials,
+	// so RefreshToken uses this URL.
+	mgr.config.OrbAgent.ConfigManager.Sources.Fleet.TokenURL = server.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// maxRetries=3, very short backoffs to keep test fast.
+	const testMaxRetries = 3
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, 5*time.Second)
+
+	mgr.reconnectChan <- struct{}{}
+
+	// Wait long enough for 3 attempts + backoffs + disconnect.
+	// 3 attempts: 10ms + 20ms backoffs between them = ~50ms total; add generous buffer.
+	require.Eventually(t, func() bool {
+		return mockConn.DisconnectCalled()
+	}, 2*time.Second, 20*time.Millisecond, "Disconnect should be called after all retries are exhausted")
+}
+
+// TestFleetConfigManager_ReconnectWorker_ExitsOnContextCancel verifies that runReconnectWorker
+// exits promptly when its context is cancelled, even while idle waiting for a signal.
+func TestFleetConfigManager_ReconnectWorker_ExitsOnContextCancel(t *testing.T) {
+	server, _ := newControlledTokenServer(t, 0)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		mgr.runReconnectWorker(ctx, 10*time.Second, 3, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond)
+		close(done)
+	}()
+
+	// Cancel the context — worker should exit without any signal on reconnectChan.
+	cancel()
+
+	select {
+	case <-done:
+		// Worker exited as expected.
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("runReconnectWorker did not exit after context cancellation")
+	}
+}
+
+// TestFleetConfigManager_ReconnectWorker_ReschedulesAfterExhaustion verifies that after all retries
+// fail, the worker schedules a re-signal on reconnectChan so recovery does not depend solely on the
+// 30-second monitor tick.
+func TestFleetConfigManager_ReconnectWorker_ReschedulesAfterExhaustion(t *testing.T) {
+	// Token server always fails.
+	server, _ := newControlledTokenServer(t, 100)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// maxRetries=2, very short retry delay (50ms) so the re-signal arrives quickly.
+	const testMaxRetries = 2
+	const testRetryDelay = 50 * time.Millisecond
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, testRetryDelay)
+
+	// Send first signal; the worker will exhaust retries and schedule a re-signal.
+	mgr.reconnectChan <- struct{}{}
+
+	// Drain the first signal that was consumed by the worker (it's already gone).
+	// Now wait for the re-signal to arrive within retryDelay + a generous buffer.
+	select {
+	case <-mgr.reconnectChan:
+		// Re-signal received — correct behaviour.
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a re-signal on reconnectChan after retry exhaustion but none arrived")
+	}
+}
+
+// TestFleetConfigManager_ReconnectWorker_AfterFuncSuppressedOnContextCancel verifies that
+// when the context is cancelled before the retryDelay elapses, the time.AfterFunc callback
+// does not send a re-signal on reconnectChan.
+func TestFleetConfigManager_ReconnectWorker_AfterFuncSuppressedOnContextCancel(t *testing.T) {
+	// Token server always fails so the worker exhausts retries and schedules a re-signal.
+	server, _ := newControlledTokenServer(t, 100)
+	defer server.Close()
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	const testMaxRetries = 2
+	const testRetryDelay = 200 * time.Millisecond
+
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 5*time.Millisecond, 20*time.Millisecond, testRetryDelay)
+
+	// Trigger one reconnect attempt.
+	mgr.reconnectChan <- struct{}{}
+
+	// Wait for retries to exhaust (2 attempts with tiny backoffs take ~25ms).
+	// Then cancel the context before retryDelay (200ms) elapses.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	// Now wait past the retryDelay and verify no re-signal was sent.
+	select {
+	case <-mgr.reconnectChan:
+		t.Fatal("AfterFunc callback should have been suppressed by context cancellation")
+	case <-time.After(testRetryDelay + 100*time.Millisecond):
+		// No re-signal — correct behaviour.
+	}
+}
+
+// TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails verifies that the reset
+// goroutine reads the current fleetManager.connectionDetails rather than the stale closure
+// values captured at Start() time.
+func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	// Simulate Start() having stored an initial set of connection details.
+	initialDetails := fleet.ConnectionDetails{
+		Token: "initial-token",
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test-agent/heartbeat",
+		},
+	}
+	mgr.connectionDetails = initialDetails
+	mgr.backends = make(map[string]backend.Backend)
+	mgr.labels = map[string]string{"env": "test"}
+	mgr.configYaml = "initial-config"
+
+	// Launch the reset goroutine (mirrors what Start() does, including the connMu snapshot).
+	timeout := 5 * time.Second
+	go func() {
+		for range mgr.resetChan {
+			mgr.connMu.RLock()
+			details := mgr.connectionDetails
+			mgr.connMu.RUnlock()
+
+			disconnectCtx, cancel := context.WithTimeout(context.Background(), timeout)
+			_ = mgr.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
+			cancel()
+			connectCtx := context.Background()
+			_ = mgr.connection.Connect(connectCtx, connectCtx, details, mgr.backends, mgr.labels, mgr.configYaml)
+		}
+	}()
+
+	// Simulate a successful token refresh updating connectionDetails on the struct.
+	refreshedDetails := fleet.ConnectionDetails{
+		Token: "refreshed-token",
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test-agent/heartbeat",
+		},
+	}
+	mgr.connMu.Lock()
+	mgr.connectionDetails = refreshedDetails
+	mgr.connMu.Unlock()
+
+	// Signal a reset and wait for the goroutine to call Connect.
+	mgr.resetChan <- struct{}{}
+
+	require.Eventually(t, func() bool {
+		return mockConn.ConnectCalled()
+	}, time.Second, 10*time.Millisecond, "Connect should have been called by the reset goroutine")
+
+	assert.Equal(t, "refreshed-token", mockConn.LastConnectDetails().Token,
+		"reset goroutine should use the refreshed token, not the stale initial token")
+}
+
+// newResetHandlerManager creates a FleetConfigManager wired with a mock MQTT connection and
+// pre-initialised contexts so that runResetHandler can be invoked directly in tests.
+func newResetHandlerManager(t *testing.T, mockConn *fleet.MockMQTTConnection) *FleetConfigManager {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mgr := newFleetConfigManagerWithConnection(logger, nil, &mockBackendState{}, mockConn)
+
+	mgr.monitorCtx, mgr.monitorCancel = context.WithCancel(context.Background())
+	mgr.connCtx, mgr.connCancel = context.WithCancel(context.Background())
+	t.Cleanup(mgr.monitorCancel)
+	t.Cleanup(mgr.connCancel)
+
+	mgr.connectionDetails = fleet.ConnectionDetails{
+		Topics: fleet.TokenResponseTopics{
+			Heartbeat: "agents/test/heartbeat",
+		},
+	}
+	mgr.backends = make(map[string]backend.Backend)
+	return mgr
+}
+
+// TestFleetConfigManager_ResetHandler_DisconnectsAndReconnectsOnReset verifies that when a
+// reset signal is received, runResetHandler calls Disconnect then Connect using the stored
+// connection details.
+func TestFleetConfigManager_ResetHandler_DisconnectsAndReconnectsOnReset(t *testing.T) {
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newResetHandlerManager(t, mockConn)
+
+	go mgr.runResetHandler(5 * time.Second)
+
+	mgr.resetChan <- struct{}{}
+
+	require.Eventually(t, mockConn.ConnectCalled, time.Second, 10*time.Millisecond,
+		"runResetHandler should call Connect after receiving a reset signal")
+	assert.True(t, mockConn.DisconnectCalled(),
+		"runResetHandler should call Disconnect before reconnecting")
+}
+
+// TestFleetConfigManager_ResetHandler_ExitsOnMonitorCtxCancel verifies that runResetHandler
+// returns promptly when monitorCtx is cancelled, even when idle waiting for a signal.
+func TestFleetConfigManager_ResetHandler_ExitsOnMonitorCtxCancel(t *testing.T) {
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newResetHandlerManager(t, mockConn)
+
+	done := make(chan struct{})
+	go func() {
+		mgr.runResetHandler(5 * time.Second)
+		close(done)
+	}()
+
+	mgr.monitorCancel()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("runResetHandler did not exit after monitorCtx was cancelled")
+	}
+}
+
+// TestFleetConfigManager_ResetHandler_StopAfterResetNoDeadlock verifies that calling Stop()
+// after a reset completes does not deadlock. connCtx must remain alive during the reset so the
+// offline heartbeat can publish, and must be cancelled only after Stop() finishes its own
+// Disconnect call.
+func TestFleetConfigManager_ResetHandler_StopAfterResetNoDeadlock(t *testing.T) {
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newResetHandlerManager(t, mockConn)
+	mgr.connected.Store(true)
+
+	mgr.goroutinesWg.Add(1)
+	go func() {
+		defer mgr.goroutinesWg.Done()
+		mgr.runResetHandler(5 * time.Second)
+	}()
+
+	// Trigger and wait for a reset to complete before calling Stop.
+	mgr.resetChan <- struct{}{}
+	require.Eventually(t, mockConn.ConnectCalled, time.Second, 10*time.Millisecond,
+		"reset should complete before Stop() is called")
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- mgr.Stop(context.Background()) }()
+
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("Stop() deadlocked after a reset")
+	}
+
+	assert.ErrorIs(t, mgr.connCtx.Err(), context.Canceled,
+		"connCtx should be cancelled after Stop() completes")
 }

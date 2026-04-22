@@ -6,7 +6,7 @@ import (
 )
 
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
-const CurrentHeartbeatSchemaVersion = "1.0"
+const CurrentHeartbeatSchemaVersion = "1.1"
 
 var (
 	// ErrSchemaVersion a message was received indicating a version we don't support
@@ -36,9 +36,10 @@ type RunStateInfo struct {
 	PolicyID    string    `json:"policy_id"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
-	EntityCount *int64    `json:"entity_count,omitempty"`
+	EntityCount int64     `json:"entity_count,omitzero"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	Targets     []string  `json:"targets,omitempty"`
 }
 
 // PolicyStateInfo contains state information for a policy
@@ -88,7 +89,11 @@ const (
 
 // OrbAgentInfo contains information about the Orb agent itself
 type OrbAgentInfo struct {
-	Version string `json:"version"`
+	Version   string    `json:"version"`
+	Branch    string    `json:"branch,omitempty"`
+	Commit    string    `json:"commit,omitempty"`
+	Modified  bool      `json:"modified,omitempty"`
+	BuildTime time.Time `json:"build_time,omitzero"`
 }
 
 // BackendInfo contains version and configuration data for a specific backend

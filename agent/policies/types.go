@@ -8,12 +8,13 @@ import (
 // RunData represents run information for a policy
 type RunData struct {
 	ID          string    `json:"id"`
-	PolicyID    string    `json:"policy_id"`
+	PolicyID    string    `json:"policy_id,omitempty"`
 	Status      string    `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
-	EntityCount *int64    `json:"entity_count,omitempty"`
+	EntityCount int64     `json:"entity_count,omitzero"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	Targets     []string  `json:"targets,omitempty"`
 }
 
 // PolicyData represents a policy
@@ -80,3 +81,18 @@ func (s *PolicyState) Scan(value any) error {
 
 // Value returns the value of the PolicyState
 func (s PolicyState) Value() (driver.Value, error) { return s.String(), nil }
+
+// RunFailureReasonAgentStopped is reported when non-terminal runs are finalized
+// because the agent shut down intentionally (e.g. SIGTERM/SIGINT).
+const RunFailureReasonAgentStopped = "Run interrupted: agent was intentionally stopped"
+
+// IsTerminalRunStatus returns true if the run status represents a finished run
+// whose timestamps should no longer be updated.
+func IsTerminalRunStatus(status string) bool {
+	switch status {
+	case "completed", "failed":
+		return true
+	default:
+		return false
+	}
+}

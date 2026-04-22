@@ -26,6 +26,7 @@ type ProtoMessage interface {
 
 // BridgeConfig holds runtime configuration for the OTLP → MQTT bridge.
 type BridgeConfig struct {
-	ListenAddr string
-	Encoding   string // "protobuf" | "json"
+	ListenAddr      string
+	Encoding        string // "protobuf" | "json"
+	MaxPendingQueue int    // max queued messages before MQTT is ready; 0 = default (1000)
 }

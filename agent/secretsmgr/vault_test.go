@@ -46,7 +46,7 @@ func setupSharedVault(t *testing.T) {
 	sharedVaultSetup.Do(func() {
 		opts := &docker.DockerClusterOptions{
 			ImageRepo:    "hashicorp/vault",
-			ImageTag:     "latest",
+			ImageTag:     "1.19",
 			DisableMlock: true,
 			DisableTLS:   true,
 			ClusterOptions: testcluster.ClusterOptions{

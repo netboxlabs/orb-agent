@@ -4,13 +4,13 @@ The SNMP discovery backend leverages SNMP (Simple Network Management Protocol) t
 ## Diode Entities
 The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) to ingest the following entities:
 
-* [Device](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Interface](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [IP Address](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Mac Address](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Platform](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Manufacturer](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
-* [Site](https://github.com/netboxlabs/diode-sdk-go?tab=readme-ov-file#supported-entities-object-types)
+* [Device](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/device/main.go)
+* [Interface](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/interface_entity/main.go)
+* [IP Address](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/ip_address/main.go)
+* [Mac Address](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/mac_address/main.go)
+* [Platform](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/platform/main.go)
+* [Manufacturer](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/manufacturer/main.go)
+* [Site](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/site/main.go)
 
 ## Configuration
 The `snmp_discovery` backend does not require any special configuration in the backends section. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
@@ -50,6 +50,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | location | string | no | Default location for discovered devices |
 | role | string | no | Default role for discovered devices |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./snmp_discovery_interface.md)) |
+| interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./snmp_discovery_interface.md#interface-exclusion-patterns)) |
 
 ##### Nested Defaults
 | Parameter | Type | Description |
@@ -81,6 +82,7 @@ Each target in the `targets` list can include:
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
 | override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
+| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
@@ -125,6 +127,9 @@ config:
         type: "1000base-t"
       - match: "^(TenGigE|Te).*"
         type: "10gbase-x-sfpp"
+    interface_exclude_patterns:
+      - "^tap.*"
+      - "^veth.*"
     device:
       description: "SNMP discovered device"
       comments: "Automatically discovered via SNMP"
@@ -135,6 +140,7 @@ scope:
     - host: "192.168.2.2-10" # range support
     - host: "10.0.0.1"
       port: 162  # Non-standard SNMP port
+      netbox_id: 42
       override_defaults:
         role: "switch"
         tags: ["custom"]

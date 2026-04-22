@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -13,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
@@ -35,14 +37,15 @@ type Agent interface {
 }
 
 type orbAgent struct {
-	logger         *slog.Logger
-	config         config.Config
-	backends       map[string]backend.Backend
-	backendsCommon config.BackendCommons
-	debug          bool
-	ctx            context.Context
-	cancelFunction context.CancelFunc
-	otlpShutdown   func(context.Context) error
+	logger           *slog.Logger
+	config           config.Config
+	backends         map[string]backend.Backend
+	backendsCommon   config.BackendCommons
+	debug            bool
+	ctx              context.Context
+	cancelFunction   context.CancelFunc
+	otlpShutdown     func(context.Context) error
+	otlpShutdownOnce sync.Once
 
 	policyManager       policymgr.PolicyManager
 	configManager       configmgr.Manager
@@ -123,7 +126,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 			a.otlpShutdown = otlpShutdown
 			defer func() {
 				if err != nil {
-					a.shutdownOTLP(agentCtx)
+					a.shutdownOTLP()
 				}
 			}()
 		}
@@ -252,7 +255,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
-	if err = a.configManager.Start(a.config, a.backends); err != nil {
+	if err = a.configManager.Start(agentCtx, a.config, a.backends); err != nil {
 		return err
 	}
 
@@ -269,6 +272,14 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			}
 		}
 	}
+	a.shutdownOTLP()
+	if a.policyManager != nil {
+		if repo := a.policyManager.GetRepo(); repo != nil {
+			if err := repo.FailNonTerminalRuns(policies.RunFailureReasonAgentStopped); err != nil {
+				a.logger.Error("error while finalizing policy runs on shutdown", slog.Any("error", err))
+			}
+		}
+	}
 	if err := a.configManager.Stop(ctx); err != nil {
 		a.logger.Error("error while stopping config manager", slog.Any("error", err))
 	}
@@ -276,7 +287,6 @@ func (a *orbAgent) Stop(ctx context.Context) {
 	if a.cancelFunction != nil {
 		a.cancelFunction()
 	}
-	a.shutdownOTLP(ctx)
 	a.logger.Debug("stopping agent with number of go routines and go calls", "goroutines", runtime.NumGoroutine(), "gocalls", runtime.NumCgoCall())
 	defer func() {
 		if a.cancelFunction != nil {
@@ -285,24 +295,22 @@ func (a *orbAgent) Stop(ctx context.Context) {
 	}()
 }
 
-func (a *orbAgent) shutdownOTLP(ctx context.Context) {
-	shutdown := a.otlpShutdown
-	if shutdown == nil {
-		return
-	}
-	a.otlpShutdown = nil
+func (a *orbAgent) shutdownOTLP() {
+	a.otlpShutdownOnce.Do(func() {
+		shutdown := a.otlpShutdown
+		if shutdown == nil {
+			return
+		}
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	shutdownCtx, cancel := context.WithTimeout(ctx, otlpShutdownTimeout)
-	defer cancel()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), otlpShutdownTimeout)
+		defer cancel()
 
-	if err := shutdown(shutdownCtx); err != nil {
-		a.logger.Error("error while shutting down OTLP log exporter", "error", err)
-		return
-	}
-	a.logger.Debug("shut down OTLP log exporter")
+		if err := shutdown(shutdownCtx); err != nil {
+			a.logger.Error("error while shutting down OTLP log exporter", "error", err)
+			return
+		}
+		a.logger.Debug("shut down OTLP log exporter")
+	})
 }
 
 func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {
