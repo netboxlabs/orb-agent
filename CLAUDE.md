@@ -59,7 +59,7 @@ All four subsystems are consumed through interfaces, making them easily swappabl
 
 ### Backend Plugin Registry
 
-Backends register themselves at `init()` time via `backend.Register()`. `cmd/main.go` blank-imports each backend package to trigger registration. When adding a new backend, add a blank import there.
+`cmd/main.go` has its own `init()` that explicitly calls each backend's `Register()` function. When adding a new backend, import its package and add a `Register()` call there.
 
 ### Policy Federation via Datasets
 
