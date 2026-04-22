@@ -75,6 +75,7 @@ class DeviceParameters(ObjectParameters):
     platform: str | None = Field(
         default=None, description="Device platform override, optional"
     )
+    asset_tag: str | None = Field(default=None, description="Asset tag, optional")
 
 
 class TenantParameters(ObjectParameters):
@@ -82,6 +83,13 @@ class TenantParameters(ObjectParameters):
 
     name: str
     group: str | None = Field(default=None, description="Tenant group, optional")
+
+
+class VrfParameters(ObjectParameters):
+    """Model for VRF parameters."""
+
+    name: str
+    rd: str | None = Field(default=None, description="Route distinguisher, optional")
 
 
 class VlanParameters(ObjectParameters):
@@ -101,7 +109,7 @@ class IpamParameters(ObjectParameters):
     tenant: str | TenantParameters | None = Field(
         default=None, description="IPAM tenant, optional"
     )
-    vrf: str | None = Field(default=None, description="IPAM VRF, optional")
+    vrf: str | VrfParameters | None = Field(default=None, description="IPAM VRF, optional")
 
 
 class Defaults(BaseModel):
@@ -121,6 +129,7 @@ class Defaults(BaseModel):
         description="Interface name patterns (regex) to exclude from ingestion, optional",
     )
     location: str | None = Field(default=None, description="Location name, optional")
+    rack: str | None = Field(default=None, description="Rack name, optional")
 
     @field_validator("interface_patterns", "interface_exclude_patterns", mode="before")
     @classmethod

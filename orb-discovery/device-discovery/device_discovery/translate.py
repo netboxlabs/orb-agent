@@ -8,18 +8,20 @@ from collections.abc import Iterable
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import (
     VLAN,
+    VRF,
     Device,
     DeviceConfig,
     DeviceType,
     Entity,
     Location,
     Platform,
+    Rack,
     Tenant,
     TenantGroup,
 )
 
 from device_discovery.interface import build_interface_entities
-from device_discovery.policy.models import Defaults, Options, TenantParameters
+from device_discovery.policy.models import Defaults, Options, TenantParameters, VrfParameters
 
 
 def translate_tenant(
@@ -40,6 +42,25 @@ def translate_tenant(
         )
 
     return Tenant(name=tenant)
+
+
+def translate_vrf(
+    vrf: str | VrfParameters | pb.VRF | None,
+) -> pb.VRF | None:
+    """Convert vrf input into a Diode VRF message."""
+    if vrf is None or isinstance(vrf, pb.VRF):
+        return vrf
+
+    if isinstance(vrf, VrfParameters):
+        return VRF(
+            name=vrf.name,
+            rd=vrf.rd,
+            comments=vrf.comments,
+            description=vrf.description,
+            tags=vrf.tags,
+        )
+
+    return VRF(name=vrf)
 
 
 def translate_device(
@@ -114,10 +135,12 @@ def translate_device(
         "platform": Platform(name=platform, manufacturer=manufacturer),
         "role": defaults.role,
         "serial": serial_number,
+        "asset_tag": defaults.device.asset_tag if defaults.device else None,
         "status": "active",
         "site": defaults.site,
         "tags": tags,
         "location": location,
+        "rack": Rack(name=defaults.rack, site=defaults.site) if defaults.rack else None,
         "tenant": translate_tenant(defaults.tenant),
         "description": description,
         "comments": comments,

@@ -287,7 +287,7 @@ def translate_interface_ips(
         Iterable[Entity]: Iterable of translated IP address and Prefixes entities.
 
     """
-    from device_discovery.translate import translate_tenant
+    from device_discovery.translate import translate_tenant, translate_vrf
 
     tags = defaults.tags if defaults.tags else []
     ip_tags = list(tags)
@@ -310,7 +310,7 @@ def translate_interface_ips(
         ip_description = defaults.ipaddress.description
         ip_role = defaults.ipaddress.role
         ip_tenant = translate_tenant(defaults.ipaddress.tenant)
-        ip_vrf = defaults.ipaddress.vrf
+        ip_vrf = translate_vrf(defaults.ipaddress.vrf)
 
     if defaults.prefix:
         prefix_tags.extend(defaults.prefix.tags or [])
@@ -318,7 +318,7 @@ def translate_interface_ips(
         prefix_description = defaults.prefix.description
         prefix_role = defaults.prefix.role
         prefix_tenant = translate_tenant(defaults.prefix.tenant)
-        prefix_vrf = defaults.prefix.vrf
+        prefix_vrf = translate_vrf(defaults.prefix.vrf)
 
     ip_entities = []
 

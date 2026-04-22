@@ -17,12 +17,14 @@ from device_discovery.policy.models import (
     Options,
     TenantParameters,
     VlanParameters,
+    VrfParameters,
 )
 from device_discovery.translate import (
     translate_data,
     translate_device,
     translate_device_config,
     translate_vlan,
+    translate_vrf,
 )
 
 
@@ -123,10 +125,116 @@ def sample_tenant_parameters():
 
 
 @pytest.fixture
+def sample_vrf_parameters():
+    """Sample VRF parameters for testing."""
+    return VrfParameters(
+        name="VRF-A",
+        rd="65000:100",
+        description="VRF description",
+        comments="VRF comments",
+        tags=["vrf-tag"],
+    )
+
+
+@pytest.fixture
 def sample_override_defaults(sample_defaults):
     """Sample defaults with device overrides."""
     sample_defaults.device.model = "Catalyst"
     return sample_defaults
+
+
+def test_translate_vrf_none_returns_none():
+    """Ensure translate_vrf returns None for None input."""
+    assert translate_vrf(None) is None
+
+
+def test_translate_vrf_string_returns_vrf():
+    """Ensure translate_vrf wraps a string into a VRF with just the name."""
+    from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
+    vrf = translate_vrf("my-vrf")
+    assert isinstance(vrf, pb.VRF)
+    assert vrf.name == "my-vrf"
+    assert vrf.rd == ""
+
+
+def test_translate_device_with_asset_tag(sample_device_info, sample_defaults):
+    """Ensure device asset_tag is translated correctly."""
+    sample_defaults.device = DeviceParameters(asset_tag="ASSET-001")
+    device = translate_device(sample_device_info, sample_defaults)
+    assert device.asset_tag == "ASSET-001"
+
+
+def test_translate_device_asset_tag_none_by_default(sample_device_info, sample_defaults):
+    """Ensure device asset_tag is None when not set."""
+    device = translate_device(sample_device_info, sample_defaults)
+    assert device.asset_tag == ""
+
+
+def test_translate_device_with_rack(sample_device_info, sample_defaults):
+    """Ensure device is associated with rack, reusing defaults.site."""
+    sample_defaults.rack = "Rack-01"
+    device = translate_device(sample_device_info, sample_defaults)
+    assert device.rack.name == "Rack-01"
+    assert device.rack.site.name == "New York"
+
+
+def test_translate_device_rack_none_by_default(sample_device_info, sample_defaults):
+    """Ensure device rack is not set when not configured."""
+    device = translate_device(sample_device_info, sample_defaults)
+    assert not device.HasField("rack")
+
+
+def test_translate_interface_ips_with_vrf_parameters(
+    sample_device_info,
+    sample_interface_info,
+    sample_interfaces_ip,
+    sample_defaults,
+    sample_vrf_parameters,
+):
+    """Ensure VRF parameters translate into VRF entities with route distinguisher."""
+    sample_defaults.ipaddress = IpamParameters(vrf=sample_vrf_parameters)
+    sample_defaults.prefix = IpamParameters(vrf=VrfParameters(name="Prefix-VRF", rd="65000:200"))
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device,
+        "GigabitEthernet0/0/1",
+        sample_interface_info["GigabitEthernet0/0/1"],
+        sample_defaults,
+    )
+    ip_entities = list(
+        translate_interface_ips(interface, sample_interfaces_ip, sample_defaults)
+    )
+
+    assert len(ip_entities) == 2
+    assert ip_entities[0].prefix.vrf.name == "Prefix-VRF"
+    assert ip_entities[0].prefix.vrf.rd == "65000:200"
+    assert ip_entities[1].ip_address.vrf.name == "VRF-A"
+    assert ip_entities[1].ip_address.vrf.rd == "65000:100"
+
+
+def test_translate_interface_ips_with_vrf_string(
+    sample_device_info,
+    sample_interface_info,
+    sample_interfaces_ip,
+    sample_defaults,
+):
+    """Ensure plain string VRF still works (backwards compatibility)."""
+    sample_defaults.ipaddress = IpamParameters(vrf="plain-vrf")
+    sample_defaults.prefix = IpamParameters(vrf="plain-prefix-vrf")
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device,
+        "GigabitEthernet0/0/1",
+        sample_interface_info["GigabitEthernet0/0/1"],
+        sample_defaults,
+    )
+    ip_entities = list(
+        translate_interface_ips(interface, sample_interfaces_ip, sample_defaults)
+    )
+
+    assert len(ip_entities) == 2
+    assert ip_entities[0].prefix.vrf.name == "plain-prefix-vrf"
+    assert ip_entities[1].ip_address.vrf.name == "plain-vrf"
 
 
 def test_translate_device(sample_device_info, sample_defaults):
