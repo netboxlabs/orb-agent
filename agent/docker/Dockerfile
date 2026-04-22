@@ -47,7 +47,8 @@ FROM python:3.14-slim-trixie
 
 RUN \
     apt update && \
-    apt install --yes --no-install-recommends git nmap openssh-client tini && \
+    apt install --yes --no-install-recommends ca-certificates git nmap openssh-client tini && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/orb
