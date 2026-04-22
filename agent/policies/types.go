@@ -14,6 +14,7 @@ type RunData struct {
 	EntityCount int64     `json:"entity_count,omitzero"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	Targets     []string  `json:"targets,omitempty"`
 }
 
 // PolicyData represents a policy

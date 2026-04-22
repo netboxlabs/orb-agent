@@ -162,7 +162,10 @@ func (hb *heartbeater) getPolicyState() map[string]messages.PolicyStateInfo {
 	return ps
 }
 
-// convertRunsToStateInfo converts policies.RunData to messages.RunStateInfo
+// convertRunsToStateInfo converts policies.RunData to messages.RunStateInfo.
+// Targets is copied through verbatim; the policies repo is responsible for
+// preserving last-known-non-empty targets across backend status polls, so by
+// the time runs reach this function they carry the authoritative list.
 func convertRunsToStateInfo(runs []policies.RunData) []messages.RunStateInfo {
 	if len(runs) == 0 {
 		return nil
@@ -177,6 +180,7 @@ func convertRunsToStateInfo(runs []policies.RunData) []messages.RunStateInfo {
 			EntityCount: run.EntityCount,
 			CreatedAt:   run.CreatedAt,
 			UpdatedAt:   run.UpdatedAt,
+			Targets:     run.Targets,
 		}
 	}
 	return runInfos

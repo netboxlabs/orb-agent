@@ -185,6 +185,13 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 				// UpdatedAt − CreatedAt reflects the current elapsed time.
 				runs[i].UpdatedAt = now
 			}
+
+			// Preserve last-known non-empty Targets when the backend omits them.
+			// Orb-pro applies the same rule server-side; this keeps agent and fleet
+			// manager in sync during transient / partial status updates.
+			if len(runs[i].Targets) == 0 {
+				runs[i].Targets = existing.Targets
+			}
 		} else {
 			// New run: use the backend's timestamps if provided; fall back to now.
 			if runs[i].CreatedAt.IsZero() {

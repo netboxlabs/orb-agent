@@ -1782,3 +1782,96 @@ func TestHeartbeater_StartHeartbeats_ReplacesPriorSession(t *testing.T) {
 	hb.stop(testTopic, mockPublish.Publish)
 	mockPublish.AssertExpectations(t)
 }
+
+func TestHeartbeater_GetPolicyState_PropagatesTargetsFromRunData(t *testing.T) {
+	testTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:      "policy-1",
+			Name:    "dev-policy",
+			Backend: "device_discovery",
+			Version: 1,
+			State:   policies.Running,
+			Runs: []policies.RunData{
+				{
+					ID:        "run-a",
+					Status:    "running",
+					CreatedAt: testTime,
+					UpdatedAt: testTime,
+					Targets:   []string{"192.168.1.1"},
+				},
+				{
+					ID:        "run-b",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime.Add(5 * time.Minute),
+					Targets:   []string{"10.0.0.5", "10.0.0.6"},
+				},
+				{
+					ID:        "run-c",
+					Status:    "running",
+					CreatedAt: testTime,
+					UpdatedAt: testTime,
+					// No Targets — must be nil in the heartbeat.
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+
+	ps := hb.getPolicyState()
+
+	require.Len(t, ps["policy-1"].Runs, 3)
+	assert.Equal(t, []string{"192.168.1.1"}, ps["policy-1"].Runs[0].Targets)
+	assert.Equal(t, []string{"10.0.0.5", "10.0.0.6"}, ps["policy-1"].Runs[1].Targets)
+	assert.Nil(t, ps["policy-1"].Runs[2].Targets)
+
+	mockPMgr.AssertExpectations(t)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	mockPMgr := &mockPolicyManagerForHeartbeat{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{
+		{
+			ID:      "policy-1",
+			Name:    "dev-policy",
+			Backend: "device_discovery",
+			Version: 1,
+			State:   policies.Running,
+			Runs: []policies.RunData{
+				{
+					ID:        "run-1",
+					Status:    "completed",
+					CreatedAt: testTime,
+					UpdatedAt: testTime,
+					Targets:   []string{"10.0.0.1"},
+				},
+			},
+		},
+	}, nil)
+
+	hb := createTestHeartbeaterWithPolicyManager(&mockBackendState{}, mockPMgr)
+
+	var capturedPayload []byte
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	hb.sendSingleHeartbeat(context.Background(), "test/topic", publishFunc, "agent-id", testTime, messages.Online, nil)
+
+	require.NotNil(t, capturedPayload)
+
+	var hb2 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &hb2))
+
+	assert.Equal(t, "1.1", hb2.SchemaVersion)
+	require.Len(t, hb2.PolicyState["policy-1"].Runs, 1)
+	assert.Equal(t, []string{"10.0.0.1"}, hb2.PolicyState["policy-1"].Runs[0].Targets)
+	assert.Contains(t, string(capturedPayload), `"targets":["10.0.0.1"]`)
+
+	mockPMgr.AssertExpectations(t)
+}
