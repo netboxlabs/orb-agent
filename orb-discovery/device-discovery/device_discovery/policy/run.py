@@ -3,6 +3,7 @@
 """Device Discovery Run Store."""
 
 import ipaddress
+import json
 import threading
 import time
 
@@ -90,8 +91,8 @@ class RunStore:
         with self._lock:
             normalized_target = self._normalize_target(target)
 
-            # Build metadata with target information
-            metadata = {"target": target}  # Store original, not normalized
+            # Build metadata with targets as JSON array
+            metadata = {"targets": json.dumps([target])}
             if parent_target:
                 metadata["parent_target"] = parent_target
 

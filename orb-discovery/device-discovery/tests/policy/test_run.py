@@ -13,7 +13,7 @@ def test_run_creation():
     run = Run(
         policy_id="test-policy",
         status=RunStatus.RUNNING,
-        metadata={"target": "router1.example.com"},
+        metadata={"targets": '["router1.example.com"]'},
     )
 
     assert run.id  # UUID should be generated
@@ -21,7 +21,7 @@ def test_run_creation():
     assert run.status == RunStatus.RUNNING
     assert run.reason == ""
     assert run.entity_count == 0
-    assert run.metadata["target"] == "router1.example.com"
+    assert run.metadata["targets"] == '["router1.example.com"]'
     assert run.created_at
     assert run.updated_at
 
@@ -32,12 +32,12 @@ def test_run_with_parent():
         policy_id="test-policy",
         status=RunStatus.RUNNING,
         metadata={
-            "target": "192.168.1.5",
+            "targets": '["192.168.1.5"]',
             "parent_target": "192.168.1.0/24",
         },
     )
 
-    assert run.metadata["target"] == "192.168.1.5"
+    assert run.metadata["targets"] == '["192.168.1.5"]'
     assert run.metadata["parent_target"] == "192.168.1.0/24"
 
 
@@ -48,7 +48,8 @@ def test_create_run_basic():
 
     assert run.policy_id == "policy1"
     assert run.status == RunStatus.RUNNING
-    assert run.metadata["target"] == "192.168.1.1"
+    assert run.metadata["targets"] == '["192.168.1.1"]'
+    assert "target" not in run.metadata
     assert "parent_target" not in run.metadata
 
 
@@ -57,7 +58,8 @@ def test_create_run_with_parent():
     store = RunStore()
     run = store.create_run("policy1", "192.168.1.5", "192.168.1.0/24")
 
-    assert run.metadata["target"] == "192.168.1.5"
+    assert run.metadata["targets"] == '["192.168.1.5"]'
+    assert "target" not in run.metadata
     assert run.metadata["parent_target"] == "192.168.1.0/24"
 
 
@@ -305,18 +307,18 @@ def test_parent_child_relationship():
     # Verify parent run
     parent_runs = store.get_runs_for_target("policy1", "192.168.1.0/24")
     assert len(parent_runs) == 1
-    assert parent_runs[0].metadata["target"] == "192.168.1.0/24"
+    assert parent_runs[0].metadata["targets"] == '["192.168.1.0/24"]'
     assert "parent_target" not in parent_runs[0].metadata
 
     # Verify child runs have parent reference
     child1_runs = store.get_runs_for_target("policy1", "192.168.1.5")
     assert len(child1_runs) == 1
-    assert child1_runs[0].metadata["target"] == "192.168.1.5"
+    assert child1_runs[0].metadata["targets"] == '["192.168.1.5"]'
     assert child1_runs[0].metadata["parent_target"] == "192.168.1.0/24"
 
     child2_runs = store.get_runs_for_target("policy1", "192.168.1.10")
     assert len(child2_runs) == 1
-    assert child2_runs[0].metadata["target"] == "192.168.1.10"
+    assert child2_runs[0].metadata["targets"] == '["192.168.1.10"]'
     assert child2_runs[0].metadata["parent_target"] == "192.168.1.0/24"
 
 
@@ -327,6 +329,6 @@ def test_metadata_preserved():
     # Create run with IP that will be normalized
     store.create_run("policy1", "Router1.Example.COM", "")
 
-    # Verify metadata contains original (not normalized)
+    # Verify metadata contains original (not normalized) target in targets JSON
     retrieved = store.get_runs_for_target("policy1", "router1.example.com")[0]
-    assert retrieved.metadata["target"] == "Router1.Example.COM"
+    assert retrieved.metadata["targets"] == '["Router1.Example.COM"]'
