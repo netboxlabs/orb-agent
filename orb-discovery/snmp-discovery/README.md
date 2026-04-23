@@ -425,6 +425,12 @@ When snmp-discovery encounters a device during scanning, it:
 
 This provides much more meaningful device identification in your discovery results, making it easier to understand what equipment has been discovered on your network.
 
+### Primary IP Assignment
+
+When an SNMP discovery scan completes, `snmp-discovery` populates the device's `primary_ip4` field with the target host address — **but only if that address was also discovered as an interface IP during the walk**. The verification step avoids recording unreachable or unvalidated addresses in NetBox.
+
+Hostname targets are resolved via DNS once per scan (2s timeout); only IPv4 results are considered for matching. If the target cannot be resolved, is IPv6, or no discovered interface IP matches, the device is emitted with `primary_ip4` left unset. Only IPv4 is supported today.
+
 ## Run snmp-discovery
 snmp-discovery can be run by cloning it's git repo
 ```sh

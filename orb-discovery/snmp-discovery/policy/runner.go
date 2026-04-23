@@ -413,9 +413,11 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		return nil, err
 	}
 	objectIDs := mappingConfig.ObjectIDs()
-	r.logger.Info("querying target", "host", target.Host, "port", target.Port, "object_count", len(objectIDs))
+	targetHost := strings.TrimSpace(target.Host)
+	r.logger.Info("querying target", "host", targetHost, "port", target.Port, "object_count", len(objectIDs))
 
-	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, targetDefaults)
+	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, targetDefaults, targetHost)
+	mapper.SetContext(ctx)
 	policyName := r.ctx.Value(policyKey).(string)
 	// Track discovery attempt
 	if rMetric := metrics.GetDiscoveryAttempts(); rMetric != nil {
@@ -429,7 +431,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 
 	auth := r.resolveTargetAuthentication(target)
 
-	host := snmp.NewHost(target.Host, target.Port, r.config.Retries, r.snmpTimeout, auth, r.logger, r.ClientFactory)
+	host := snmp.NewHost(targetHost, target.Port, r.config.Retries, r.snmpTimeout, auth, r.logger, r.ClientFactory)
 
 	type walkResult struct {
 		oids mapping.ObjectIDValueMap
@@ -457,7 +459,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		return nil, ctx.Err()
 	case res := <-resultCh:
 		if res.err != nil {
-			r.logger.Warn("error crawling host", "host", target.Host, "error", res.err)
+			r.logger.Warn("error crawling host", "host", targetHost, "error", res.err)
 			if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
 				rMetric.Add(r.ctx, 1,
 					metric.WithAttributes(

@@ -1,8 +1,11 @@
 package mapping_test
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -423,7 +426,7 @@ func TestMapObjectIDsToEntity(t *testing.T) {
 					},
 				}
 			}
-			mapper := mapping.NewObjectIDMapper(mappingConfig, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), defaults)
+			mapper := mapping.NewObjectIDMapper(mappingConfig, slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false})), defaults, "")
 			entities := mapper.MapObjectIDsToEntity(tt.objectIDs)
 
 			assert.ElementsMatch(t, tt.expected, entities)
@@ -679,7 +682,7 @@ func TestIPAddressIdentifierSizeInheritance(t *testing.T) {
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 			mappingConfig, err := mapping.NewConfig(tt.mapping, logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
 			assert.NoError(t, err)
-			objectIDMapper := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{})
+			objectIDMapper := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "")
 
 			entities := objectIDMapper.MapObjectIDsToEntity(tt.objectIDs)
 
@@ -785,4 +788,393 @@ func TestObjectIDsMethodWithIdentifierSizeInheritance(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- OBS-1896: primary IP assignment tests ---
+
+// primaryIPFixture is the minimal mapping config the primary-IP tests reuse:
+// one interface entry + one ipAddress entry that assigns itself to the
+// interface. The ipAddress index carries the full IPv4 address (IdentifierSize
+// = 4) so different discovered IPs live under different ObjectIDIndex keys.
+func primaryIPFixture() []config.MappingEntry {
+	return []config.MappingEntry{
+		{
+			OID:            ".1.3.6.1.2.1.2.2.1",
+			Entity:         "interface",
+			Field:          "_id",
+			IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: ".1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+			},
+		},
+		{
+			OID:            ".1.3.6.1.2.1.4.20.1",
+			Entity:         "ipAddress",
+			Field:          "_id",
+			IdentifierSize: 4,
+			MappingEntries: []config.MappingEntry{
+				{OID: ".1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+				{
+					OID:          ".1.3.6.1.2.1.4.20.1.2",
+					Entity:       "ipAddress",
+					Field:        "assignedObject",
+					Relationship: config.Relationship{Type: "interface"},
+				},
+			},
+		},
+	}
+}
+
+// primaryIPOneInterfaceOIDs seeds one interface named "Gi0" (ifIndex 1) and
+// one IP address at the given literal address, assigned to that interface.
+func primaryIPOneInterfaceOIDs(address, ifName string) mapping.ObjectIDValueMap {
+	return mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: ifName, Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		},
+		".1.3.6.1.2.1.4.20.1.1." + address: mapping.Value{
+			Value: address, Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4,
+		},
+		".1.3.6.1.2.1.4.20.1.2." + address: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 4,
+		},
+	}
+}
+
+// findDevice returns the first non-nil device pointer reachable through the
+// emitted entities. It prefers a standalone diode.Device entity but falls
+// back to an Interface's Device reference (the same currentDevice pointer).
+func findDevice(entities []diode.Entity) *diode.Device {
+	for _, e := range entities {
+		if d, ok := e.(*diode.Device); ok {
+			return d
+		}
+	}
+	for _, e := range entities {
+		if iface, ok := e.(*diode.Interface); ok && iface.Device != nil {
+			return iface.Device
+		}
+		if ip, ok := e.(*diode.IPAddress); ok {
+			if iface, ok := ip.AssignedObject.(*diode.Interface); ok && iface.Device != nil {
+				return iface.Device
+			}
+		}
+	}
+	return nil
+}
+
+func TestAssignPrimaryIP_DirectIPv4Match(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"))
+
+	device := findDevice(entities)
+	assert.NotNil(t, device, "device reference must be reachable")
+	assert.NotNil(t, device.PrimaryIp4, "primary IP must be assigned")
+	if device.PrimaryIp4 != nil {
+		assert.Equal(t, "10.0.0.1/32", *device.PrimaryIp4.Address)
+	}
+}
+
+func TestAssignPrimaryIP_NoMatch(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	// Target 10.0.0.1, discovered only 10.0.0.2.
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.2", "Gi0"))
+
+	device := findDevice(entities)
+	assert.NotNil(t, device)
+	assert.Nil(t, device.PrimaryIp4, "primary IP must not be set when no match")
+}
+
+// bufferHandler captures slog records for assertion.
+type bufferHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *bufferHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *bufferHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// r.Clone() is required per slog docs: the Record's contents may be
+	// reused by the caller after Handle returns.
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *bufferHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *bufferHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func (h *bufferHandler) find(level slog.Level, msg string) *slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i := range h.records {
+		if h.records[i].Level == level && h.records[i].Message == msg {
+			return &h.records[i]
+		}
+	}
+	return nil
+}
+
+type fakeResolver struct {
+	addrs []string
+	err   error
+}
+
+func (f *fakeResolver) LookupHost(_ context.Context, _ string) ([]string, error) {
+	return f.addrs, f.err
+}
+
+func TestAssignPrimaryIP_HostnameResolvesToIPv4(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	resolver := &fakeResolver{addrs: []string{"10.0.0.1"}}
+	m := mapping.NewObjectIDMapperForTest(mappingConfig, logger, &config.Defaults{}, "router.example", resolver)
+
+	entities := m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"))
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp4)
+	assert.Equal(t, "10.0.0.1/32", *device.PrimaryIp4.Address)
+}
+
+func TestAssignPrimaryIP_HostnameResolvesToIPv6Only(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	resolver := &fakeResolver{addrs: []string{"2001:db8::1"}}
+	m := mapping.NewObjectIDMapperForTest(mappingConfig, logger, &config.Defaults{}, "router.example", resolver)
+
+	entities := m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"))
+	device := findDevice(entities)
+	assert.NotNil(t, device)
+	assert.Nil(t, device.PrimaryIp4, "IPv6-only DNS result must not yield a PrimaryIp4")
+}
+
+func TestAssignPrimaryIP_InvalidHost(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	resolver := &fakeResolver{err: errors.New("nxdomain")}
+	m := mapping.NewObjectIDMapperForTest(mappingConfig, logger, &config.Defaults{}, "nope.invalid", resolver)
+
+	entities := m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"))
+	device := findDevice(entities)
+	assert.NotNil(t, device)
+	assert.Nil(t, device.PrimaryIp4)
+}
+
+func TestAssignPrimaryIP_MultipleMatches(t *testing.T) {
+	handler := &bufferHandler{}
+	logger := slog.New(handler)
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+
+	// Build two IPAddress entities sharing the same stripped address but
+	// assigned to two distinct interfaces, so primaryIPSortKey differs.
+	ip1Name := "Loopback0"
+	ip2Name := "GigabitEthernet0/1"
+	addr := "10.0.0.1/32"
+	ip1 := &diode.IPAddress{
+		Address:        &addr,
+		AssignedObject: &diode.Interface{Name: &ip1Name},
+	}
+	ip2 := &diode.IPAddress{
+		Address:        &addr,
+		AssignedObject: &diode.Interface{Name: &ip2Name},
+	}
+
+	entities := map[diode.Entity]bool{ip1: true, ip2: true}
+	device := m.CurrentDevice()
+
+	m.AssignPrimaryIPForTest(device, entities)
+
+	assert.NotNil(t, device.PrimaryIp4)
+	// Lexicographically smaller key wins:
+	//   "10.0.0.1/32|GigabitEthernet0/1" < "10.0.0.1/32|Loopback0"
+	assert.Equal(t, ip2, device.PrimaryIp4, "deterministic selection must prefer the smaller sort key")
+
+	rec := handler.find(slog.LevelWarn, "multiple IP candidates for primary IP assignment; picking deterministic first")
+	assert.NotNil(t, rec, "expected Warn log for multi-match")
+}
+
+// TestAssignPrimaryIP_MultipleMatches_EqualCompositeKey exercises the
+// content-based tiebreaker when two entries have the same primaryIPSortKey
+// (same address, same assigned interface name). Deterministic selection
+// must still hold via primaryIPContentKey.
+func TestAssignPrimaryIP_MultipleMatches_EqualCompositeKey(t *testing.T) {
+	handler := &bufferHandler{}
+	logger := slog.New(handler)
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+
+	// Identical address and interface name: composite sort key collides.
+	// The entities differ by Description so the content-based tiebreaker
+	// picks the lexicographically-smaller JSON serialization.
+	ifName := "Loopback0"
+	addr := "10.0.0.1/32"
+	descA := "alpha"
+	descB := "bravo"
+	ipA := &diode.IPAddress{
+		Address:        &addr,
+		AssignedObject: &diode.Interface{Name: &ifName},
+		Description:    &descA,
+	}
+	ipB := &diode.IPAddress{
+		Address:        &addr,
+		AssignedObject: &diode.Interface{Name: &ifName},
+		Description:    &descB,
+	}
+	entities := map[diode.Entity]bool{ipA: true, ipB: true}
+	device := m.CurrentDevice()
+
+	m.AssignPrimaryIPForTest(device, entities)
+
+	assert.NotNil(t, device.PrimaryIp4)
+	// JSON of ipA contains "alpha" which is < "bravo"; deterministic pick: ipA.
+	assert.Equal(t, ipA, device.PrimaryIp4)
+
+	rec := handler.find(slog.LevelWarn, "multiple IP candidates for primary IP assignment; picking deterministic first")
+	assert.NotNil(t, rec, "expected Warn log for multi-match")
+}
+
+// TestAssignPrimaryIP_UnassignedIPIgnored verifies the "verified interface
+// IP" guarantee: a discovered IPAddress whose AssignedObject is not an
+// Interface is not a valid primary-IP candidate even if its address matches
+// the target.
+func TestAssignPrimaryIP_UnassignedIPIgnored(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+
+	addr := "10.0.0.1/32"
+	unassigned := &diode.IPAddress{Address: &addr} // AssignedObject is nil
+	entities := map[diode.Entity]bool{unassigned: true}
+	device := m.CurrentDevice()
+
+	m.AssignPrimaryIPForTest(device, entities)
+
+	assert.Nil(t, device.PrimaryIp4, "primary IP must not be set from an IPAddress without an Interface assignment")
+}
+
+func TestAssignPrimaryIP_ExcludedInterfaceIP(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	// The IP is assigned to an interface whose name matches the exclusion
+	// pattern; filterExcludedEntities drops the IPAddress, so primary-IP
+	// must remain nil.
+	defaults := &config.Defaults{
+		InterfaceExcludePatterns: []string{"^Null.*"},
+	}
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, defaults)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, defaults, "10.0.0.1")
+	_ = m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.1", "Null0"))
+
+	// Interface+IP are both excluded from the output, so reach the device
+	// directly via the test helper.
+	device := m.CurrentDevice()
+	assert.NotNil(t, device)
+	assert.Nil(t, device.PrimaryIp4, "primary IP must not point to an IPAddress on an excluded interface")
+}
+
+func TestAssignPrimaryIP_PrefixStripping(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	// Reuses the default /32 emission: verifies stripPrefix drops "/32"
+	// before comparing to the bare target literal.
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"))
+
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp4)
+	assert.Equal(t, "10.0.0.1/32", *device.PrimaryIp4.Address)
+}
+
+// TestAssignPrimaryIP_NonDefaultPrefix exercises the stripPrefix path with a
+// real subnet-mask-derived prefix (/24) rather than the default /32.
+func TestAssignPrimaryIP_NonDefaultPrefix(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	// Extend the default fixture with addressPrefixSize so the emitted
+	// IPAddress carries /24.
+	entries := []config.MappingEntry{
+		{
+			OID:            ".1.3.6.1.2.1.2.2.1",
+			Entity:         "interface",
+			Field:          "_id",
+			IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: ".1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+			},
+		},
+		{
+			OID:            ".1.3.6.1.2.1.4.20.1",
+			Entity:         "ipAddress",
+			Field:          "_id",
+			IdentifierSize: 4,
+			MappingEntries: []config.MappingEntry{
+				{OID: ".1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+				{OID: ".1.3.6.1.2.1.4.20.1.3", Entity: "ipAddress", Field: "addressPrefixSize"},
+				{
+					OID:          ".1.3.6.1.2.1.4.20.1.2",
+					Entity:       "ipAddress",
+					Field:        "assignedObject",
+					Relationship: config.Relationship{Type: "interface"},
+				},
+			},
+		},
+	}
+	mappingConfig, err := mapping.NewConfig(entries, logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	oids := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		},
+		".1.3.6.1.2.1.4.20.1.1.10.0.0.1": mapping.Value{
+			Value: "10.0.0.1", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4,
+		},
+		".1.3.6.1.2.1.4.20.1.3.10.0.0.1": mapping.Value{
+			Value: "255.255.255.0", Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4,
+		},
+		".1.3.6.1.2.1.4.20.1.2.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 4,
+		},
+	}
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(oids)
+
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp4)
+	assert.Equal(t, "10.0.0.1/24", *device.PrimaryIp4.Address,
+		"primary IP must carry the discovered /24 prefix, and stripPrefix must still match against the bare target")
 }

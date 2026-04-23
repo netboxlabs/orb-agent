@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
+	"github.com/gosnmp/gosnmp"
+	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"github.com/stretchr/testify/assert"
@@ -335,6 +337,108 @@ func TestQueryTargetSuccess(t *testing.T) {
 	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	require.NoError(t, err)
 	assert.NotEmpty(t, entities)
+}
+
+// staticWalker emits a fixed PDU set per walked OID. Used by the OBS-1896
+// integration test so we can seed properly-indexed interface + ipAddress
+// PDUs that the mapping pipeline will group correctly.
+type staticWalker struct {
+	pdus map[string]map[string]snmp.PDU
+}
+
+func (w *staticWalker) Connect() error { return nil }
+func (w *staticWalker) Close() error   { return nil }
+func (w *staticWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
+	if p, ok := w.pdus[oid]; ok {
+		return p, nil
+	}
+	return map[string]snmp.PDU{}, nil
+}
+
+// TestQueryTargetAssignsPrimaryIPFromTarget is the OBS-1896 end-to-end check:
+// when the SNMP target host equals a discovered interface IP, the emitted
+// Device (reachable via any Interface entity) must carry that IPAddress as
+// its PrimaryIp4.
+func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
+	// Walker emits the same OIDs as production mapping.yaml: one interface
+	// (ifIndex=1, name=Gi0), one IPv4 address 10.0.0.1 assigned to that
+	// interface via ipAdEntIfIndex=1.
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					Value: "Gi0", Type: gosnmp.OctetString, IdentifierSize: 1,
+				},
+			},
+			"1.3.6.1.2.1.4.20.1.1": {
+				"1.3.6.1.2.1.4.20.1.1.10.0.0.1": {
+					Value: "10.0.0.1", Type: gosnmp.IPAddress, IdentifierSize: 4,
+				},
+			},
+			"1.3.6.1.2.1.4.20.1.2": {
+				"1.3.6.1.2.1.4.20.1.2.10.0.0.1": {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 4,
+				},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+
+	entries := []config.MappingEntry{
+		{
+			OID:            "1.3.6.1.2.1.2.2.1",
+			Entity:         "interface",
+			Field:          "_id",
+			IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+			},
+		},
+		{
+			OID:            "1.3.6.1.2.1.4.20.1",
+			Entity:         "ipAddress",
+			Field:          "_id",
+			IdentifierSize: 4,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+				{
+					OID:          "1.3.6.1.2.1.4.20.1.2",
+					Entity:       "ipAddress",
+					Field:        "assignedObject",
+					Relationship: config.Relationship{Type: "interface"},
+				},
+			},
+		},
+	}
+
+	runner := queryTargetRunner(factory, entries)
+	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	require.NoError(t, err)
+	require.NotEmpty(t, entities)
+
+	// Locate the emitted IPAddress and confirm it is wired to the Gi0
+	// interface — this is the "verified interface IP" guarantee the
+	// primary-IP assignment depends on.
+	var primaryIP *diode.IPAddress
+	for _, e := range entities {
+		if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil && *ip.Address == "10.0.0.1/32" {
+			primaryIP = ip
+			break
+		}
+	}
+	require.NotNil(t, primaryIP, "expected IPAddress 10.0.0.1/32 in emitted entities")
+	iface, ok := primaryIP.AssignedObject.(*diode.Interface)
+	require.True(t, ok, "IPAddress must be assigned to an Interface")
+	require.NotNil(t, iface.Name)
+	assert.Equal(t, "Gi0", *iface.Name)
+
+	// The Device is reached via the assigned interface's Device pointer;
+	// device.PrimaryIp4 must reference the exact same IPAddress entity.
+	require.NotNil(t, iface.Device, "assigned interface must carry a device reference")
+	require.NotNil(t, iface.Device.PrimaryIp4, "device.PrimaryIp4 must be set from target host")
+	assert.Same(t, primaryIP, iface.Device.PrimaryIp4, "device.PrimaryIp4 must point at the matched IPAddress entity")
 }
 
 func TestRunner_HasActiveHostJobsField(t *testing.T) {
