@@ -1,6 +1,8 @@
 # Device Discovery
 The device discovery backend leverages [NAPALM](https://napalm.readthedocs.io/en/latest/index.html) to connect to network devices and collect network information.
 
+For the full list of vendors and NAPALM drivers supported by this backend (standard and custom), see [Device Discovery — Supported Platforms](./device_discovery_supported_platforms.md).
+
 ## Diode Entities
 The device discovery backend uses [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) to ingest the following entities:
 

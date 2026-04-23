@@ -1,6 +1,8 @@
 # SNMP Discovery
 The SNMP discovery backend leverages SNMP (Simple Network Management Protocol) to connect to network devices and collect network information.
 
+This backend works with any SNMPv1/v2c/v3 capable device. For the list of vendors with bundled device model lookup coverage, see [SNMP Discovery — Supported Platforms](./snmp_discovery_supported_platforms.md).
+
 ## Diode Entities
 The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) to ingest the following entities:
 
