@@ -160,3 +160,36 @@ scope:
     protocol_version: "SNMPv2c"
     community: "public"
 ```
+
+## Device Model Lookup
+
+The `lookup_extensions_dir` config option points to a directory of YAML files that map SNMP `sysObjectID` OIDs to human-readable device model names. Without these files, snmp-discovery would ingest raw OIDs (for example `.1.3.6.1.4.1.9.1.489`) instead of recognizable model names (for example `catalyst2955C12`).
+
+A curated set of vendor lookup files ships with the orb-agent and orb-discovery images (see [SNMP Discovery — Supported Platforms](./snmp_discovery_supported_platforms.md)), and `lookup_extensions_dir` only needs to be set when you want to add extra files or override the bundled ones.
+
+### File format
+
+Lookup files must have a `.yaml` or `.yml` extension and contain a `devices` section keyed by OID (note the leading `.`):
+
+```yaml
+devices:
+  .1.3.6.1.4.1.9.1.1215: ciscoMwr2941DCA
+  .1.3.6.1.4.1.9.1.489: catalyst2955C12
+  .1.3.6.1.4.1.9.1.2101: ciscoASR92024TZM
+```
+
+### Overriding or extending coverage
+
+To add your own OIDs or override a bundled file:
+
+1. Identify the `sysObjectID` for your equipment (typically in vendor MIB files).
+2. Create a YAML file in the format above with OIDs prefixed by `.`.
+3. Drop the file into the directory referenced by `lookup_extensions_dir`.
+
+```sh
+# Seed a local override directory from the bundled files
+git clone https://github.com/netboxlabs/orb-discovery.git
+cp orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb/snmp-extensions/
+```
+
+When snmp-discovery encounters a device, it reads the device's `sysObjectID`, searches the YAML files in `lookup_extensions_dir` for a match, and falls back to the raw OID when no match is found.

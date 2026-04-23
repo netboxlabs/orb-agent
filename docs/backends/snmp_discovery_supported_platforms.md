@@ -84,4 +84,4 @@ Manufacturer-level resolution (SNMP enterprise number → vendor name) is handle
 
 ## Extending device coverage
 
-You can add or override lookup data without rebuilding the agent. See the [Device Model Lookup](./snmp_discovery.md) section of the SNMP Discovery docs for the `lookup_extensions_dir` option and the YAML format for custom files.
+You can add or override lookup data without rebuilding the agent. See the [Device Model Lookup](./snmp_discovery.md#device-model-lookup) section of the SNMP Discovery docs for the `lookup_extensions_dir` option and the YAML format for custom files.
