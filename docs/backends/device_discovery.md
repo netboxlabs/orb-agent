@@ -60,7 +60,7 @@ Current supported options:
 | capture_running_config | bool | If True, collects the running configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 | capture_startup_config | bool | If True, collects the startup/saved configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 | sanitize_config | bool | If False, captured configuration is stored as-is without redacting sensitive values such as passwords and pre-shared keys (defaults to 'True' if not specified) |
-| discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`panos`, `panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. |
+| discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[paloalto_panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`paloalto_panos`, `paloalto_panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. See the [supported platforms page](./device_discovery_supported_platforms.md) for the full list. |
 
 #### Defaults
 Current supported defaults:
@@ -234,7 +234,7 @@ orb:
 
 ### Custom Driver Discovery Example
 
-Use `discovery_drivers` to limit auto-discovery to a specific set of drivers. This is useful when you know the device type in advance or when using custom NAPALM drivers shipped with device-discovery (`panos`, `panos_ssh`, `huawei_vrp`).
+Use `discovery_drivers` to limit auto-discovery to a specific set of drivers. This is useful when you know the device type in advance or when using custom NAPALM drivers shipped with device-discovery (`paloalto_panos`, `paloalto_panos_ssh`, `huawei_vrp`).
 
 ```yaml
 orb:
@@ -246,8 +246,8 @@ orb:
           schedule: "0 * * * *"
           options:
             discovery_drivers:
-              - panos
-              - panos_ssh
+              - paloalto_panos
+              - paloalto_panos_ssh
           defaults:
             site: DC1
         scope:
@@ -256,7 +256,7 @@ orb:
             password: ${PANOS_PASS}
 ```
 
-In this example, only the `panos` and `panos_ssh` drivers are tried during auto-discovery for devices in this policy. If you set `driver` explicitly on a scope entry, `discovery_drivers` is ignored for that entry.
+In this example, only the `paloalto_panos` and `paloalto_panos_ssh` drivers are tried during auto-discovery for devices in this policy. If you set `driver` explicitly on a scope entry, `discovery_drivers` is ignored for that entry.
 
 ### Advanced Sample
 
