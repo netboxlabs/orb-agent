@@ -149,3 +149,49 @@ func TestConvertToRunData_CopiesTargets(t *testing.T) {
 	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, runs[0].Targets)
 	assert.Nil(t, runs[1].Targets)
 }
+
+func TestConvertToRunData_FallsBackToMetadataTargets(t *testing.T) {
+	// network-discovery v1.x encodes targets inside metadata as a JSON-array string.
+	statusRuns := []PolicyStatusRun{
+		{
+			ID:       "run-meta",
+			Status:   "running",
+			Metadata: map[string]string{"targets": `["192.168.1.0/24","10.0.0.0/8"]`},
+		},
+	}
+
+	runs := convertToRunData(statusRuns)
+
+	require.Len(t, runs, 1)
+	assert.Equal(t, []string{"192.168.1.0/24", "10.0.0.0/8"}, runs[0].Targets)
+}
+
+func TestConvertToRunData_TopLevelTargetsTakePrecedenceOverMetadata(t *testing.T) {
+	statusRuns := []PolicyStatusRun{
+		{
+			ID:       "run-both",
+			Status:   "running",
+			Targets:  []string{"172.16.0.0/12"},
+			Metadata: map[string]string{"targets": `["192.168.1.0/24"]`},
+		},
+	}
+
+	runs := convertToRunData(statusRuns)
+
+	require.Len(t, runs, 1)
+	assert.Equal(t, []string{"172.16.0.0/12"}, runs[0].Targets)
+}
+
+func TestTargetsFromMetadata_InvalidJSON(t *testing.T) {
+	meta := map[string]string{"targets": "not-valid-json"}
+	assert.Nil(t, targetsFromMetadata(meta))
+}
+
+func TestTargetsFromMetadata_MissingKey(t *testing.T) {
+	meta := map[string]string{"other": "value"}
+	assert.Nil(t, targetsFromMetadata(meta))
+}
+
+func TestTargetsFromMetadata_Nil(t *testing.T) {
+	assert.Nil(t, targetsFromMetadata(nil))
+}
