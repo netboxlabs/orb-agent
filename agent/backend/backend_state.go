@@ -176,7 +176,7 @@ func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 	runs := make([]policies.RunData, len(statusRuns))
 	for i, sr := range statusRuns {
 		targets := sr.Targets
-		if len(targets) == 0 {
+		if sr.Targets == nil {
 			targets = targetsFromMetadata(sr.Metadata)
 		}
 		runs[i] = policies.RunData{

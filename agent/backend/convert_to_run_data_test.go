@@ -182,6 +182,23 @@ func TestConvertToRunData_TopLevelTargetsTakePrecedenceOverMetadata(t *testing.T
 	assert.Equal(t, []string{"172.16.0.0/12"}, runs[0].Targets)
 }
 
+func TestConvertToRunData_ExplicitEmptyTargetsNotOverriddenByMetadata(t *testing.T) {
+	// An explicit "targets": [] on the wire must NOT fall back to metadata.
+	statusRuns := []PolicyStatusRun{
+		{
+			ID:       "run-empty",
+			Status:   "running",
+			Targets:  []string{},
+			Metadata: map[string]string{"targets": `["192.168.1.0/24"]`},
+		},
+	}
+
+	runs := convertToRunData(statusRuns)
+
+	require.Len(t, runs, 1)
+	assert.Empty(t, runs[0].Targets)
+}
+
 func TestTargetsFromMetadata_InvalidJSON(t *testing.T) {
 	meta := map[string]string{"targets": "not-valid-json"}
 	assert.Nil(t, targetsFromMetadata(meta))
