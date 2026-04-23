@@ -20,6 +20,9 @@ from device_discovery.policy.models import (
     VrfParameters,
 )
 from device_discovery.translate import (
+    _strip_prefix,
+    _target_ipv4_candidate,
+    assign_primary_ip,
     translate_data,
     translate_device,
     translate_device_config,
@@ -932,3 +935,219 @@ def test_translate_data_with_config_disabled(sample_device_info):
     # Device should be created but without config
     device_entities = [e for e in entities if e.WhichOneof("entity") == "device"]
     assert len(device_entities) == 1
+
+
+def test_strip_prefix_returns_address_without_cidr():
+    """StripPrefix drops the /prefix suffix (helper sanity)."""
+    assert _strip_prefix("192.0.2.10/24") == "192.0.2.10"
+    assert _strip_prefix("10.0.0.1") == "10.0.0.1"
+
+
+def test_target_ipv4_candidate_ipv4_literal():
+    """IPv4 literal is returned canonicalized."""
+    assert _target_ipv4_candidate("10.0.0.1") == "10.0.0.1"
+
+
+def test_target_ipv4_candidate_ipv6_literal_ignored():
+    """IPv6 literals are not eligible for primary-IPv4 matching."""
+    assert _target_ipv4_candidate("2001:db8::1") is None
+
+
+def test_target_ipv4_candidate_hostname_ignored():
+    """Hostnames are deliberately not re-resolved for primary-IP matching."""
+    assert _target_ipv4_candidate("router.example.com") is None
+
+
+def test_target_ipv4_candidate_blank_host():
+    """Empty / whitespace-only hosts yield no candidate."""
+    assert _target_ipv4_candidate(None) is None
+    assert _target_ipv4_candidate("") is None
+    assert _target_ipv4_candidate("   ") is None
+
+
+def test_translate_data_sets_primary_ip_when_target_matches(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """End-to-end: hostname equal to a discovered interface IP populates primary_ip4."""
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+        "target_hostname": "192.0.2.1",
+    }
+    entities = list(translate_data(data))
+    device_entity = next(e for e in entities if e.WhichOneof("entity") == "device")
+    assert device_entity.device.HasField("primary_ip4")
+    assert device_entity.device.primary_ip4.address == "192.0.2.1/24"
+    # The primary IP must be attached to the interface that holds it.
+    assert device_entity.device.primary_ip4.HasField("assigned_object_interface")
+    assert (
+        device_entity.device.primary_ip4.assigned_object_interface.name
+        == "GigabitEthernet0/0/1"
+    )
+
+
+def test_translate_data_no_primary_ip_when_target_does_not_match(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """No match leaves primary_ip4 unset."""
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+        "target_hostname": "198.51.100.99",
+    }
+    entities = list(translate_data(data))
+    device_entity = next(e for e in entities if e.WhichOneof("entity") == "device")
+    assert not device_entity.device.HasField("primary_ip4")
+
+
+def test_translate_data_no_primary_ip_without_hostname(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """Missing hostname is a no-op (backwards compatible)."""
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+    }
+    entities = list(translate_data(data))
+    device_entity = next(e for e in entities if e.WhichOneof("entity") == "device")
+    assert not device_entity.device.HasField("primary_ip4")
+
+
+def test_translate_data_hostname_target_is_noop(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """
+    Hostname targets do not trigger DNS re-resolution.
+
+    Device-discovery deliberately matches only IPv4 literals because
+    re-resolving a hostname can pick a different address than the one
+    NAPALM actually connected to, which would silently mis-associate the
+    primary IP.
+    """
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+        "target_hostname": "router.example",
+    }
+    entities = list(translate_data(data))
+    device_entity = next(e for e in entities if e.WhichOneof("entity") == "device")
+    assert not device_entity.device.HasField("primary_ip4")
+
+
+def test_translate_data_ipv6_literal_target_is_noop(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """IPv6 targets do not set primary_ip4 (IPv4-only)."""
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "driver": "ios",
+        "target_hostname": "2001:db8::1",
+    }
+    entities = list(translate_data(data))
+    device_entity = next(e for e in entities if e.WhichOneof("entity") == "device")
+    assert not device_entity.device.HasField("primary_ip4")
+
+
+def test_translate_data_device_config_only_on_top_level_device(
+    sample_device_info, sample_interface_info, sample_interfaces_ip, sample_defaults
+):
+    """
+    Config lives only on the top-level Device entity.
+
+    ``translate_data`` deep-copies the Device for the interface entities and
+    clears ``config`` on the copy (``device_for_interfaces.ClearField("config")``),
+    so the Device reference embedded in each Interface must carry no config
+    even when the top-level Device does. Guards against regressions in the
+    ordering of deep-copy / ClearField / assign_primary_ip / Entity wrap.
+    """
+    config_info = {
+        "running": "hostname router1\n",
+        "startup": "hostname router1\n",
+    }
+    options = Options(capture_running_config=True, capture_startup_config=True)
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": sample_interfaces_ip,
+        "config": config_info,
+        "driver": "ios",
+        "defaults": sample_defaults,
+        "options": options,
+        "target_hostname": "192.0.2.1",
+    }
+    entities = list(translate_data(data))
+
+    device_entity = next(e for e in entities if e.WhichOneof("entity") == "device")
+    assert device_entity.device.HasField("config"), (
+        "top-level Device must carry the captured config"
+    )
+
+    interface_entities = [e for e in entities if e.WhichOneof("entity") == "interface"]
+    assert interface_entities, "expected at least one Interface in the output"
+    for e in interface_entities:
+        assert not e.interface.device.HasField("config"), (
+            f"Interface {e.interface.name!r} must not carry device.config; "
+            "ClearField('config') on device_for_interfaces was skipped"
+        )
+
+    # primary_ip4 also references a Device (via assigned_object_interface ->
+    # device). That Device is the interface-scoped copy, so it must also be
+    # config-free.
+    assert device_entity.device.HasField("primary_ip4")
+    primary_ip4 = device_entity.device.primary_ip4
+    assert primary_ip4.HasField("assigned_object_interface")
+    assert not primary_ip4.assigned_object_interface.device.HasField("config"), (
+        "primary_ip4's assigned interface must not carry device.config"
+    )
+
+
+def test_assign_primary_ip_ignores_ip_without_interface_assignment():
+    """Enforce the "verified interface IP" guarantee directly on the helper."""
+    from netboxlabs.diode.sdk.ingester import Device, Entity, IPAddress
+
+    device = Device(name="router")
+    unassigned = Entity(ip_address=IPAddress(address="10.0.0.1/32"))
+    assign_primary_ip(device, [unassigned], "10.0.0.1")
+    assert not device.HasField("primary_ip4")
+
+
+def test_assign_primary_ip_multiple_matches_deterministic_warn(caplog):
+    """Two matching entries resolve to the lexicographically smaller key + Warn log."""
+    from netboxlabs.diode.sdk.ingester import (
+        Device,
+        Entity,
+        Interface,
+        IPAddress,
+    )
+
+    device = Device(name="router")
+    ip_high = Entity(
+        ip_address=IPAddress(
+            address="10.0.0.1/32",
+            assigned_object_interface=Interface(name="Loopback1"),
+        )
+    )
+    ip_low = Entity(
+        ip_address=IPAddress(
+            address="10.0.0.1/32",
+            assigned_object_interface=Interface(name="Loopback0"),
+        )
+    )
+    with caplog.at_level("WARNING"):
+        assign_primary_ip(device, [ip_high, ip_low], "10.0.0.1")
+    assert device.HasField("primary_ip4")
+    # Lexicographic tie-break picks "Loopback0" over "Loopback1".
+    assert device.primary_ip4.assigned_object_interface.name == "Loopback0"
+    assert any(
+        "multiple candidates match target" in rec.message for rec in caplog.records
+    )

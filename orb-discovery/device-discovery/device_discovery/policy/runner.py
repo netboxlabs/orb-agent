@@ -265,6 +265,7 @@ class PolicyRunner:
                 "defaults": config.defaults,
                 "options": config.options,
                 "netbox_id": scope.netbox_id,
+                "target_hostname": sanitized_hostname,
             }
             # Only retrieve config if at least one capture flag is enabled
             if config.options and (

@@ -3,6 +3,8 @@
 """Translate from NAPALM output format to Diode SDK entities."""
 
 import copy
+import ipaddress
+import logging
 from collections.abc import Iterable
 
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
@@ -22,6 +24,8 @@ from netboxlabs.diode.sdk.ingester import (
 
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import Defaults, Options, TenantParameters, VrfParameters
+
+logger = logging.getLogger(__name__)
 
 
 def translate_tenant(
@@ -252,6 +256,112 @@ def translate_device_config(config_info: dict, options: Options) -> DeviceConfig
     )
 
 
+def _target_ipv4_candidate(hostname: str | None) -> str | None:
+    """
+    Return the IPv4 literal candidate for the NAPALM target host.
+
+    Only IPv4 literals are matched for primary-IP assignment. Hostnames are
+    deliberately NOT re-resolved here: re-resolving can pick a different
+    address than the one NAPALM actually connected to (DNS load-balancing,
+    address-family preference), and in practice NAPALM inventories are
+    overwhelmingly keyed by IP. Users who need primary-IP populated for
+    name-keyed devices should set it through another source.
+
+    Args:
+    ----
+        hostname: The sanitized target host as configured on the policy.
+
+    Returns:
+    -------
+        The canonicalized IPv4 address, or ``None`` if the host is empty,
+        an IPv6 literal, or a DNS name.
+
+    """
+    if not hostname:
+        return None
+    hostname = hostname.strip()
+    if not hostname:
+        return None
+    try:
+        parsed = ipaddress.ip_address(hostname)
+    except ValueError:
+        return None
+    if isinstance(parsed, ipaddress.IPv4Address):
+        return str(parsed)
+    return None
+
+
+def _strip_prefix(address: str) -> str:
+    """Return the IP portion of a CIDR or plain IP string."""
+    return address.split("/", 1)[0]
+
+
+def assign_primary_ip(
+    device: Device,
+    entities: list[Entity],
+    target_hostname: str | None,
+) -> None:
+    """
+    Set ``device.primary_ip4`` when the target host matches a discovered IP.
+
+    The target host must be an IPv4 literal — DNS names are not re-resolved
+    here because re-resolution can pick a different address than the one
+    NAPALM actually connected to, and NAPALM inventories are predominantly
+    IP-keyed. Scans the emitted ``ip_address`` entities and picks the
+    IPAddress whose address matches the target IPv4, restricted to entities
+    whose ``assigned_object_interface`` is set.
+
+    Args:
+    ----
+        device: The Device entity to mutate in place.
+        entities: The list of translated entities; only IPAddress entities
+            whose ``assigned_object_interface`` is set are eligible.
+        target_hostname: The scan target host (policy's ``scope.hostname``),
+            distinct from the device's own name reported in NAPALM facts.
+            Only IPv4 literals produce a match.
+
+    """
+    if device is None:
+        return
+    target_ipv4 = _target_ipv4_candidate(target_hostname)
+    if target_ipv4 is None:
+        return
+
+    hits = []
+    for entity in entities:
+        if not entity.HasField("ip_address"):
+            continue
+        ip = entity.ip_address
+        if not ip.address:
+            continue
+        if not ip.HasField("assigned_object_interface"):
+            continue
+        if _strip_prefix(ip.address) != target_ipv4:
+            continue
+        iface_name = ip.assigned_object_interface.name or ""
+        # Primary sort key is ``<address>|<interface-name>``; content key is
+        # the full IPAddress serialization as a stable, data-derived
+        # tiebreaker when two entries share a primary key.
+        primary_key = f"{ip.address}|{iface_name}"
+        content_key = ip.SerializeToString(deterministic=True)
+        hits.append((primary_key, content_key, ip))
+
+    if not hits:
+        return
+
+    hits.sort(key=lambda h: (h[0], h[1]))
+    if len(hits) > 1:
+        logger.warning(
+            "Primary-IP: multiple candidates match target; picking deterministic first",
+            extra={
+                "target": target_hostname,
+                "candidates": [h[0] for h in hits],
+            },
+        )
+
+    device.primary_ip4.CopyFrom(hits[0][2])
+
+
 def translate_data(data: dict) -> Iterable[Entity]:
     """
     Translate data from NAPALM format to Diode SDK entities.
@@ -274,6 +384,10 @@ def translate_data(data: dict) -> Iterable[Entity]:
     interfaces = data.get("interface") or {}
     interfaces_ip = data.get("interface_ip") or {}
     netbox_id = data.get("netbox_id")
+    # ``target_hostname`` is the policy's scan target; device_info["hostname"]
+    # is the device's own name reported by NAPALM — the two concepts must
+    # not be conflated.
+    target_hostname = data.get("target_hostname")
     if device_info:
         if options.platform_omit_version:
             device_info["platform"] = data.get("driver")
@@ -284,12 +398,16 @@ def translate_data(data: dict) -> Iterable[Entity]:
             if len(device_info["platform"]) > 100:
                 device_info["platform"] = device_info.get("os_version")[:100]
         device = translate_device(device_info, defaults, config_info, options, netbox_id=netbox_id)
-        entities.append(Entity(device=device))
         device_for_interfaces = copy.deepcopy(device)
         device_for_interfaces.ClearField("config")
         interface_related_entities = build_interface_entities(
             device_for_interfaces, interfaces, interfaces_ip, defaults
         )
+        # assign_primary_ip must run before the Device is wrapped into Entity
+        # because Entity(device=...) copies the message; subsequent mutations
+        # on `device` would not propagate to the wrapped copy.
+        assign_primary_ip(device, interface_related_entities, target_hostname)
+        entities.append(Entity(device=device))
         entities.extend(interface_related_entities)
 
     if data.get("vlan"):
