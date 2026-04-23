@@ -28,6 +28,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge ``override`` into ``base``; override wins on non-dict conflicts."""
+    merged = dict(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class PolicyRunner:
     """Policy Runner class."""
 
@@ -118,9 +133,13 @@ class PolicyRunner:
 
             config = self.config.model_copy(deep=True)
             if scope.override_defaults is not None:
-                config.defaults = config.defaults.model_copy(
-                    update=scope.override_defaults.model_dump(exclude_none=True)
+                merged = _deep_merge(
+                    config.defaults.model_dump(),
+                    scope.override_defaults.model_dump(
+                        exclude_unset=True, exclude_none=True
+                    ),
                 )
+                config.defaults = Defaults.model_validate(merged)
             hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
 
             if parsed_as_range:
