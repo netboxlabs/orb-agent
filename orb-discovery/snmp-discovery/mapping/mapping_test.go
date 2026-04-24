@@ -880,6 +880,104 @@ func TestAssignPrimaryIP_DirectIPv4Match(t *testing.T) {
 	}
 }
 
+// TestAssignPrimaryIP_DeviceIsProtoSerializable is the regression test for
+// the reference-cycle bug that caused a stack overflow during ingestion
+// against a real diode target. Before the fix, device.PrimaryIp4 shared a
+// pointer with an IPAddress whose assigned Interface pointed back at the
+// same Device -- the diode SDK's proto serializer recursed forever.
+func TestAssignPrimaryIP_DeviceIsProtoSerializable(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"))
+
+	device := m.CurrentDevice()
+	assert.NotNil(t, device.PrimaryIp4)
+
+	// Converting every emitted entity to its proto form must complete
+	// without recursing into the primary_ip4 -> interface -> device cycle.
+	for _, e := range entities {
+		proto := e.ConvertToProtoEntity()
+		assert.NotNil(t, proto)
+	}
+	// The device itself is constructed on the fly by the caller; exercise
+	// the path that crashed in the lab (marshal a live Device entity).
+	proto := device.ConvertToProtoEntity()
+	assert.NotNil(t, proto)
+
+	// The snapshot must keep the nested Device reference (Diode requires
+	// Interface.device to be set) but that nested Device must have
+	// PrimaryIp4 cleared so the graph is a tree, not a cycle.
+	if iface, ok := device.PrimaryIp4.AssignedObject.(*diode.Interface); ok && iface != nil {
+		assert.NotNil(t, iface.Device, "PrimaryIp4 snapshot must keep a Device on the assigned interface")
+		if iface.Device != nil {
+			assert.Nil(t, iface.Device.PrimaryIp4, "nested Device must have PrimaryIp4 cleared to break the cycle")
+		}
+	}
+}
+
+// TestAssignPrimaryIP_DeviceIsProtoSerializable_WithSubinterfaceParent
+// covers the specific regression flagged by the PR #368 review: if the
+// matched IPAddress is assigned to a subinterface (which has a Parent
+// pointer back into the interface graph), a shallow-only copy still
+// serializes into a cycle unless the relationship pointers are cleared.
+// We seed the scenario directly via the test helper.
+func TestAssignPrimaryIP_DeviceIsProtoSerializable_WithSubinterfaceParent(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mappingConfig, err := mapping.NewConfig(primaryIPFixture(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+	device := m.CurrentDevice()
+
+	// Build: subinterface "Gi0.10" with back-references on every cycle-prone
+	// field -- Parent, Bridge, Lag, and Module all point at entities whose
+	// Device is the owning `device` (which carries PrimaryIp4 once
+	// assignPrimaryIP runs). Without the relationship-pointer prune in
+	// detachForPrimaryIP, ConvertToProtoEntity would recurse forever via
+	// PrimaryIp4 -> subinterface copy -> (any of those pointers) ->
+	// Device (same) -> PrimaryIp4 -> ...
+	parentName := "Gi0"
+	parent := &diode.Interface{Name: &parentName, Device: device}
+	bridgeName := "br0"
+	bridge := &diode.Interface{Name: &bridgeName, Device: device}
+	lagName := "Port-Channel1"
+	lag := &diode.Interface{Name: &lagName, Device: device}
+	module := &diode.Module{Device: device}
+	subName := "Gi0.10"
+	sub := &diode.Interface{
+		Name:   &subName,
+		Device: device,
+		Parent: parent,
+		Bridge: bridge,
+		Lag:    lag,
+		Module: module,
+	}
+	addr := "10.0.0.1/32"
+	ip := &diode.IPAddress{Address: &addr, AssignedObject: sub}
+
+	entities := map[diode.Entity]bool{ip: true}
+	m.AssignPrimaryIPForTest(device, entities)
+
+	assert.NotNil(t, device.PrimaryIp4)
+	// Serialization must terminate.
+	proto := device.ConvertToProtoEntity()
+	assert.NotNil(t, proto)
+
+	// Snapshot must not retain the Parent / Bridge / Lag / Module
+	// back-references.
+	snap, ok := device.PrimaryIp4.AssignedObject.(*diode.Interface)
+	assert.True(t, ok)
+	assert.Nil(t, snap.Parent, "snapshot interface must not retain Parent back-edge")
+	assert.Nil(t, snap.Bridge, "snapshot interface must not retain Bridge back-edge")
+	assert.Nil(t, snap.Lag, "snapshot interface must not retain Lag back-edge")
+	assert.Nil(t, snap.Module, "snapshot interface must not retain Module back-edge")
+}
+
 func TestAssignPrimaryIP_NoMatch(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
@@ -1006,10 +1104,15 @@ func TestAssignPrimaryIP_MultipleMatches(t *testing.T) {
 
 	m.AssignPrimaryIPForTest(device, entities)
 
-	assert.NotNil(t, device.PrimaryIp4)
-	// Lexicographically smaller key wins:
-	//   "10.0.0.1/32|GigabitEthernet0/1" < "10.0.0.1/32|Loopback0"
-	assert.Equal(t, ip2, device.PrimaryIp4, "deterministic selection must prefer the smaller sort key")
+	if assert.NotNil(t, device.PrimaryIp4) && assert.NotNil(t, device.PrimaryIp4.Address) {
+		// Lexicographically smaller key wins:
+		//   "10.0.0.1/32|GigabitEthernet0/1" < "10.0.0.1/32|Loopback0"
+		assert.Equal(t, "10.0.0.1/32", *device.PrimaryIp4.Address)
+		if snapshotIface, ok := device.PrimaryIp4.AssignedObject.(*diode.Interface); assert.True(t, ok) && assert.NotNil(t, snapshotIface.Name) {
+			assert.Equal(t, ip2Name, *snapshotIface.Name,
+				"deterministic selection must prefer the smaller sort key")
+		}
+	}
 
 	rec := handler.find(slog.LevelWarn, "multiple IP candidates for primary IP assignment; picking deterministic first")
 	assert.NotNil(t, rec, "expected Warn log for multi-match")
@@ -1050,9 +1153,10 @@ func TestAssignPrimaryIP_MultipleMatches_EqualCompositeKey(t *testing.T) {
 
 	m.AssignPrimaryIPForTest(device, entities)
 
-	assert.NotNil(t, device.PrimaryIp4)
-	// JSON of ipA contains "alpha" which is < "bravo"; deterministic pick: ipA.
-	assert.Equal(t, ipA, device.PrimaryIp4)
+	if assert.NotNil(t, device.PrimaryIp4) && assert.NotNil(t, device.PrimaryIp4.Description) {
+		// JSON of ipA contains "alpha" which is < "bravo"; deterministic pick: ipA.
+		assert.Equal(t, "alpha", *device.PrimaryIp4.Description)
+	}
 
 	rec := handler.find(slog.LevelWarn, "multiple IP candidates for primary IP assignment; picking deterministic first")
 	assert.NotNil(t, rec, "expected Warn log for multi-match")

@@ -435,10 +435,19 @@ func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
 	assert.Equal(t, "Gi0", *iface.Name)
 
 	// The Device is reached via the assigned interface's Device pointer;
-	// device.PrimaryIp4 must reference the exact same IPAddress entity.
+	// device.PrimaryIp4 is a detached snapshot of the matched IPAddress
+	// (see detachForPrimaryIP) — compare by content, not by pointer.
 	require.NotNil(t, iface.Device, "assigned interface must carry a device reference")
 	require.NotNil(t, iface.Device.PrimaryIp4, "device.PrimaryIp4 must be set from target host")
-	assert.Same(t, primaryIP, iface.Device.PrimaryIp4, "device.PrimaryIp4 must point at the matched IPAddress entity")
+	assert.Equal(t, *primaryIP.Address, *iface.Device.PrimaryIp4.Address)
+	snapshotIface, ok := iface.Device.PrimaryIp4.AssignedObject.(*diode.Interface)
+	require.True(t, ok, "PrimaryIp4 snapshot must preserve the interface assignment")
+	require.NotNil(t, snapshotIface.Name)
+	assert.Equal(t, "Gi0", *snapshotIface.Name)
+	require.NotNil(t, snapshotIface.Device,
+		"PrimaryIp4 snapshot's interface must carry a Device (Diode validation)")
+	assert.Nil(t, snapshotIface.Device.PrimaryIp4,
+		"nested Device must have PrimaryIp4 cleared to break the cycle")
 }
 
 func TestRunner_HasActiveHostJobsField(t *testing.T) {

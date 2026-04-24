@@ -562,7 +562,52 @@ func (m *ObjectIDMapper) assignPrimaryIP(device *diode.Device, entities map[diod
 			"target", m.targetHost, "candidates", all)
 	}
 
-	device.PrimaryIp4 = hits[0].ip
+	// Break the reference cycle before attaching. The matched IPAddress is
+	// also emitted as a standalone entity whose AssignedObject points at an
+	// Interface whose Device points back at the same currentDevice. Sharing
+	// that pointer graph into device.PrimaryIp4 would make the diode SDK's
+	// proto serializer recurse forever (device -> primary_ip4 -> ip ->
+	// interface -> device -> ...). We detach with a shallow snapshot: copy
+	// the IPAddress and (if present) the assigned Interface, then replace
+	// the interface's Device with a Device copy that has PrimaryIp4 nil.
+	// The snapshot is then a tree (no back-edge), and the nested Device
+	// still satisfies Diode's validation requirement that an Interface
+	// reference a Device. The standalone emitted entities keep their full
+	// graph untouched.
+	device.PrimaryIp4 = detachForPrimaryIP(hits[0].ip, device)
+}
+
+// detachForPrimaryIP returns a shallow copy of the matched IPAddress
+// suitable to attach as Device.PrimaryIp4 without introducing a reference
+// cycle. The assigned Interface (if any) is copied; its Device pointer is
+// replaced with a copy of the owning Device that has PrimaryIp4 cleared,
+// and all *Interface / *Module relationship fields (Parent, Bridge, Lag,
+// Module) are cleared -- otherwise a subinterface's Parent (or similar
+// back-reference) would point at another *diode.Interface whose Device
+// still carries PrimaryIp4, reintroducing the cycle. The standalone
+// emitted Interface entities keep their full graph; only the snapshot is
+// pruned.
+func detachForPrimaryIP(ip *diode.IPAddress, owner *diode.Device) *diode.IPAddress {
+	if ip == nil {
+		return nil
+	}
+	snapshot := *ip
+	if iface, ok := snapshot.AssignedObject.(*diode.Interface); ok && iface != nil {
+		ifaceCopy := *iface
+		if owner != nil {
+			deviceCopy := *owner
+			deviceCopy.PrimaryIp4 = nil
+			ifaceCopy.Device = &deviceCopy
+		}
+		// Prune relationship pointers that can transitively reach a
+		// Device with PrimaryIp4 set. See the function doc for why.
+		ifaceCopy.Parent = nil
+		ifaceCopy.Bridge = nil
+		ifaceCopy.Lag = nil
+		ifaceCopy.Module = nil
+		snapshot.AssignedObject = &ifaceCopy
+	}
+	return &snapshot
 }
 
 // primaryIPSortKey returns a stable composite ordering key for an IPAddress
