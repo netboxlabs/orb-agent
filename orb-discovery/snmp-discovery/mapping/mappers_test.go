@@ -1485,6 +1485,127 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			},
 			expectError: false,
 		},
+		{
+			name: "ifName fallback when ifDescr is empty",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "mgmt",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("mgmt"),
+			},
+			expectError: false,
+		},
+		{
+			name: "ifName fallback when ifDescr PDU is absent",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "port1",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("port1"),
+			},
+			expectError: false,
+		},
+		{
+			name: "ifDescr wins when both are populated",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "GigabitEthernet1/0/1",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "Gi1/0/1",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("GigabitEthernet1/0/1"),
+			},
+			expectError: false,
+		},
+		{
+			name: "both name sources empty leaves default unknown",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr(mapping.DefaultInterfaceName),
+			},
+			expectError: false,
+		},
 	}
 
 	for _, tt := range tests {

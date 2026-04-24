@@ -169,6 +169,12 @@ func (r *EntityRegistry) GetOrCreateEntity(entityType EntityType, index ObjectID
 	return r.entities[entityType][index]
 }
 
+// DefaultInterfaceName is the placeholder assigned to a freshly created
+// Interface entity before any PDU has populated its name. Mapper
+// fallback handlers (e.g. ifName → name_alternate) treat this sentinel
+// as "not yet populated" so they can overwrite it safely.
+const DefaultInterfaceName = "unknown"
+
 func createEntity(entityType EntityType) (diode.Entity, error) {
 	switch entityType {
 	case "ipAddress":
@@ -177,7 +183,7 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 		}, nil
 	case "interface":
 		return &diode.Interface{
-			Name: StringPtr("unknown"),
+			Name: StringPtr(DefaultInterfaceName),
 		}, nil
 	case "device":
 		return &diode.Device{}, nil
@@ -447,7 +453,7 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 	uniqueEntities := make(map[diode.Entity]bool)
 	for index, value := range objectIDIndexMap {
 		m.logger.Debug("mapping object ID index", "object_id_index", index, "values", value.Values)
-		entry, err := m.mappingConfig.getMappingEntry(value.Index)
+		entry, err := m.resolveMappingEntry(value)
 		if err != nil {
 			m.logger.Warn("error finding mapping entry", "error", err, "object_id", value.Index)
 			continue
@@ -775,6 +781,32 @@ func (*ObjectIDMapper) getAssignedInterfaces(uniqueEntities map[diode.Entity]boo
 		}
 	}
 	return assignedInterfaceIndices
+}
+
+// resolveMappingEntry returns the top-level mapping Entry for a group of
+// PDUs sharing an ObjectIDIndex. groupByObjectIDIndex captures only the
+// Parent OID of the FIRST PDU iterated per index; when that parent's
+// subtree has no registered top-level entry (e.g. ifXTable-only OIDs
+// like .1.3.6.1.2.1.31.1.1.1.* are registered as CHILDREN of the
+// interface entry .1.3.6.1.2.1.2.2.1, not as top-level parents
+// themselves), getMappingEntry on it fails. Go map iteration is
+// randomised, so relying on whichever Parent landed first is
+// nondeterministic. Fall back to trying each PDU's Parent until one
+// resolves.
+func (m *ObjectIDMapper) resolveMappingEntry(details *ObjectIDIndexDetails) (*Entry, error) {
+	entry, err := m.mappingConfig.getMappingEntry(details.Index)
+	if err == nil {
+		return entry, nil
+	}
+	for _, pdu := range details.Values {
+		if pdu.Parent == details.Index {
+			continue
+		}
+		if e, e2 := m.mappingConfig.getMappingEntry(pdu.Parent); e2 == nil {
+			return e, nil
+		}
+	}
+	return nil, err
 }
 
 func (m *ObjectIDMapper) groupByObjectIDIndex(objectIDs ObjectIDValueMap) map[ObjectIDIndex]*ObjectIDIndexDetails {
