@@ -35,8 +35,8 @@ FROM orbcommunity/pktvisor:${PKTVISOR_TAG} AS pktvisor
 ########################################################################
 FROM python:3.14-slim-trixie AS python-builder
 
-# Upgrade pip to latest version (25.3) with fewer vulnerabilities
-RUN python -m pip install --upgrade --no-cache-dir pip==25.3 && \
+# Upgrade pip to latest version (26.0) with fewer vulnerabilities
+RUN python -m pip install --upgrade --no-cache-dir pip==26.0 && \
     rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
 # Install Python packages
