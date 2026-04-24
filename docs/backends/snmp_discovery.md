@@ -215,12 +215,12 @@ No extra SNMP traffic is generated — the referenced OID must already be collec
 
 ### Manufacturer overrides
 
-Manufacturers are derived from the Private Enterprise Number (PEN) segment of `sysObjectID` against a mechanically generated IANA catalog, which produces strings such as `ciscoSystems` or `Aruba a Hewlett Packard Enterprise company`. For NetBox deployments that already hold `Cisco Systems` / `Aruba` `Manufacturer` objects, any lookup-extension YAML file may also include a `manufacturers:` block keyed by IANA PEN (as a string):
+Manufacturers are derived from the Private Enterprise Number (PEN) segment of `sysObjectID` against a mechanically generated IANA catalog, which produces strings such as `ciscoSystems` or `Aruba a Hewlett Packard Enterprise company`. For NetBox deployments that already hold `Cisco Systems` / `Aruba` `Manufacturer` objects, any lookup-extension YAML file may also include a `manufacturers:` block keyed by IANA PEN. The schema mirrors the bundled `manufacturers.yaml` — unquoted integer keys and unquoted values:
 
 ```yaml
 manufacturers:
-  "9":     "Cisco Systems"   # PEN 9 (Cisco)
-  "14823": "Aruba"           # PEN 14823 (Aruba/HPE)
+  9: Cisco Systems       # PEN 9 (Cisco)
+  14823: Aruba           # PEN 14823 (Aruba/HPE)
 devices:
   .1.3.6.1.4.1.9.1.2495: c9300-48p
 ```
