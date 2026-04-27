@@ -3,6 +3,7 @@ package data
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 
@@ -171,9 +172,9 @@ func TestManufacturerLookup_EdgeCases(t *testing.T) {
 func TestDeviceLookup_GetDevice(t *testing.T) {
 	// Create a test DeviceLookup with sample data
 	deviceLookup := &DeviceLookup{
-		devicesByVendor: &map[string]string{
-			"1.3.6.1.4.1.9.1.1234": "Test Device A",
-			"1.3.6.1.4.1.9.1.4321": "Test Device B",
+		devicesByVendor: map[string]deviceRef{
+			"1.3.6.1.4.1.9.1.1234": {kind: devRefStatic, literal: "Test Device A"},
+			"1.3.6.1.4.1.9.1.4321": {kind: devRefStatic, literal: "Test Device B"},
 		},
 	}
 
@@ -314,7 +315,11 @@ func TestLoadDeviceLookupExtensions(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, deviceLookup)
-				assert.Equal(t, tt.expected["1.3.6.1.4.1.9.1.1234"], (*deviceLookup.devicesByVendor)["1.3.6.1.4.1.9.1.1234"])
+				if wantModel, ok := tt.expected["1.3.6.1.4.1.9.1.1234"]; ok {
+					got, getErr := deviceLookup.GetDevice("1.3.6.1.4.1.9.1.1234")
+					assert.NoError(t, getErr)
+					assert.Equal(t, wantModel, got)
+				}
 			}
 		})
 	}
@@ -376,10 +381,9 @@ func TestLoadDeviceLookupExtensions_InvalidYAML(t *testing.T) {
 	assert.NotNil(t, deviceLookup)
 
 	// Should only contain data from valid file
-	expected := map[string]string{
-		"1.3.6.1.4.1.9.1.1234": "Valid Device",
-	}
-	assert.Equal(t, expected["1.3.6.1.4.1.9.1.1234"], (*deviceLookup.devicesByVendor)["1.3.6.1.4.1.9.1.1234"])
+	got, getErr := deviceLookup.GetDevice("1.3.6.1.4.1.9.1.1234")
+	assert.NoError(t, getErr)
+	assert.Equal(t, "Valid Device", got)
 }
 
 func TestIsLookupExtensionFile(t *testing.T) {
@@ -483,7 +487,7 @@ func TestEmbeddedLookupExtensions_DataIntegrity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, deviceLookup)
 
-	count := len(*deviceLookup.devicesByVendor)
+	count := len(deviceLookup.devicesByVendor)
 	assert.Greater(t, count, 500, "Expected at least 500 device entries across all embedded lookup files")
 }
 
@@ -498,7 +502,7 @@ func TestEmbeddedLookupExtensions_NoDuplicateOIDs(t *testing.T) {
 			continue
 		}
 
-		filePath := filepath.Join("lookup_extensions", file.Name())
+		filePath := path.Join("lookup_extensions", file.Name())
 		data, err := lookupExtensionsData.ReadFile(filePath)
 		require.NoError(t, err, "file %s should be readable", file.Name())
 
@@ -530,7 +534,7 @@ func TestEmbeddedLookupExtensions_AllOIDsMappedCorrectly(t *testing.T) {
 			continue
 		}
 
-		filePath := filepath.Join("lookup_extensions", file.Name())
+		filePath := path.Join("lookup_extensions", file.Name())
 		data, err := lookupExtensionsData.ReadFile(filePath)
 		require.NoError(t, err, "file %s should be readable", file.Name())
 
@@ -541,6 +545,11 @@ func TestEmbeddedLookupExtensions_AllOIDsMappedCorrectly(t *testing.T) {
 
 		for oid, expectedModel := range fileData.Devices {
 			oid, expectedModel := oid, expectedModel // capture loop vars
+			// Dynamic entries (YAML value is itself an OID) cannot be
+			// resolved by GetDevice alone; skip them here.
+			if oidPattern.MatchString(expectedModel) {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s/%s", file.Name(), oid), func(t *testing.T) {
 				got, err := deviceLookup.GetDevice(oid)
 				assert.NoError(t, err, "OID %s from %s should be found in the lookup", oid, file.Name())
@@ -548,6 +557,223 @@ func TestEmbeddedLookupExtensions_AllOIDsMappedCorrectly(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestManufacturerResolver_UserOverrideWins(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`
+manufacturers:
+  "9": "Cisco Systems"
+  "14823": "Aruba"
+`), 0o644)
+	require.NoError(t, err)
+
+	builtin, err := NewManufacturerLookup()
+	require.NoError(t, err)
+
+	resolver, err := NewManufacturerResolver(builtin, dir, nil)
+	require.NoError(t, err)
+
+	got, err := resolver.GetManufacturer("9")
+	require.NoError(t, err)
+	assert.Equal(t, "Cisco Systems", got)
+
+	got, err = resolver.GetManufacturer("14823")
+	require.NoError(t, err)
+	assert.Equal(t, "Aruba", got)
+}
+
+func TestManufacturerResolver_FallsBackToBuiltin(t *testing.T) {
+	dir := t.TempDir()
+	builtin, err := NewManufacturerLookup()
+	require.NoError(t, err)
+
+	resolver, err := NewManufacturerResolver(builtin, dir, nil)
+	require.NoError(t, err)
+
+	// PEN 9 is ciscoSystems in the shipped manufacturers.yaml; no user
+	// override was written, so the built-in value must flow through.
+	got, err := resolver.GetManufacturer("9")
+	require.NoError(t, err)
+	assert.Equal(t, "ciscoSystems", got)
+}
+
+func TestManufacturerResolver_NoUserDirFallsBackToBuiltinCatalog(t *testing.T) {
+	// With no user override directory and no shipped manufacturers:
+	// block, the resolver must still answer lookups from the base
+	// IANA catalog. This guards against the resolver wrapping the
+	// base catalog in a way that hides its entries.
+	builtin, err := NewManufacturerLookup()
+	require.NoError(t, err)
+
+	resolver, err := NewManufacturerResolver(builtin, "", nil)
+	require.NoError(t, err)
+
+	got, err := resolver.GetManufacturer("9")
+	require.NoError(t, err)
+	assert.Equal(t, "ciscoSystems", got)
+}
+
+func TestManufacturerResolver_UnknownPENBubblesError(t *testing.T) {
+	builtin, err := NewManufacturerLookup()
+	require.NoError(t, err)
+	resolver, err := NewManufacturerResolver(builtin, "", nil)
+	require.NoError(t, err)
+
+	_, err = resolver.GetManufacturer("999999999")
+	require.Error(t, err)
+}
+
+func TestManufacturerResolver_MissingUserDirIsSoftError(t *testing.T) {
+	builtin, err := NewManufacturerLookup()
+	require.NoError(t, err)
+
+	// A directory that does not exist must not fail construction —
+	// the resolver should degrade to built-in-only.
+	resolver, err := NewManufacturerResolver(builtin, "/this/path/does/not/exist/snmp-discovery-test", nil)
+	require.NoError(t, err)
+	require.NotNil(t, resolver)
+
+	// Built-in catalog still works.
+	got, err := resolver.GetManufacturer("9")
+	require.NoError(t, err)
+	assert.Equal(t, "ciscoSystems", got)
+}
+
+func TestDeviceLookup_GetDeviceModel_Static(t *testing.T) {
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+
+	got, err := deviceLookup.GetDeviceModel(".1.3.6.1.4.1.3375.2.1.3.4.113", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "f5BIGIPi10800", got)
+}
+
+func TestDeviceLookup_GetDeviceModel_DynamicRef(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`
+devices:
+  ".1.3.6.1.4.1.99999.1": .1.3.6.1.2.1.1.1.0
+`), 0o644)
+	require.NoError(t, err)
+
+	deviceLookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	walked := map[string]string{
+		".1.3.6.1.2.1.1.1.0": "RouterOS CCR2004-16G-2S+",
+	}
+	got, err := deviceLookup.GetDeviceModel(".1.3.6.1.4.1.99999.1", walked)
+	require.NoError(t, err)
+	assert.Equal(t, "RouterOS CCR2004-16G-2S+", got)
+}
+
+func TestDeviceLookup_GetDeviceModel_DynamicRefMissingFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`
+devices:
+  ".1.3.6.1.4.1.99998.1": .1.3.6.1.2.1.1.1.0
+`), 0o644)
+	require.NoError(t, err)
+
+	deviceLookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	_, err = deviceLookup.GetDeviceModel(".1.3.6.1.4.1.99998.1", map[string]string{})
+	require.Error(t, err)
+}
+
+func TestDeviceLookup_GetDeviceModel_DynamicRefEmptyValueFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`
+devices:
+  ".1.3.6.1.4.1.99997.1": .1.3.6.1.2.1.1.1.0
+`), 0o644)
+	require.NoError(t, err)
+
+	deviceLookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	walked := map[string]string{".1.3.6.1.2.1.1.1.0": "   \x00  "}
+	_, err = deviceLookup.GetDeviceModel(".1.3.6.1.4.1.99997.1", walked)
+	require.Error(t, err, "whitespace/null-only source value must not be returned as a model")
+}
+
+func TestDeviceLookup_GetDeviceModel_StripsLeadingNullByte(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`
+devices:
+  ".1.3.6.1.4.1.99996.1": .1.3.6.1.2.1.1.1.0
+`), 0o644)
+	require.NoError(t, err)
+
+	deviceLookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	walked := map[string]string{".1.3.6.1.2.1.1.1.0": "\x00\x00RouterOS 7.18"}
+	got, err := deviceLookup.GetDeviceModel(".1.3.6.1.4.1.99996.1", walked)
+	require.NoError(t, err)
+	assert.Equal(t, "RouterOS 7.18", got)
+}
+
+func TestDeviceLookup_GetDeviceModel_DynamicRefLeadingDotNormalization(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`
+devices:
+  ".1.3.6.1.4.1.99995.1": .1.3.6.1.2.1.1.1.0
+  ".1.3.6.1.4.1.99995.2": .1.3.6.1.2.1.1.1.0
+`), 0o644)
+	require.NoError(t, err)
+
+	deviceLookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	walkedNoDot := map[string]string{"1.3.6.1.2.1.1.1.0": "RouterOS A"}
+	got, err := deviceLookup.GetDeviceModel(".1.3.6.1.4.1.99995.1", walkedNoDot)
+	require.NoError(t, err, "resolver must find walked entry whose key lacks the leading dot present in YAML")
+	assert.Equal(t, "RouterOS A", got)
+
+	walkedWithDot := map[string]string{".1.3.6.1.2.1.1.1.0": "RouterOS B"}
+	got, err = deviceLookup.GetDeviceModel(".1.3.6.1.4.1.99995.2", walkedWithDot)
+	require.NoError(t, err)
+	assert.Equal(t, "RouterOS B", got)
+}
+
+func TestDeviceLookup_GetDevice_BackwardCompatibleLiteral(t *testing.T) {
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	got, err := deviceLookup.GetDevice(".1.3.6.1.4.1.3375.2.1.3.4.113")
+	require.NoError(t, err)
+	assert.Equal(t, "f5BIGIPi10800", got)
+}
+
+// Embedded YAML keys carry leading dots (e.g. ".1.3.6.1.4.1...") but
+// callers may pass either spelling depending on how their SNMP layer
+// formats OIDs. Both Get* methods must normalize.
+func TestDeviceLookup_GetDevice_NoLeadingDotMatches(t *testing.T) {
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	got, err := deviceLookup.GetDevice("1.3.6.1.4.1.3375.2.1.3.4.113")
+	require.NoError(t, err, "GetDevice should accept the no-leading-dot spelling for a YAML key written with a leading dot")
+	assert.Equal(t, "f5BIGIPi10800", got)
+}
+
+func TestDeviceLookup_GetDeviceModel_DeviceOIDNoLeadingDotMatches(t *testing.T) {
+	dir := t.TempDir()
+	err := os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`
+devices:
+  ".1.3.6.1.4.1.99994.1": .1.3.6.1.2.1.1.1.0
+`), 0o644)
+	require.NoError(t, err)
+
+	deviceLookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	walked := map[string]string{".1.3.6.1.2.1.1.1.0": "RouterOS X"}
+	// Caller passes deviceOID *without* the leading dot present in YAML.
+	got, err := deviceLookup.GetDeviceModel("1.3.6.1.4.1.99994.1", walked)
+	require.NoError(t, err, "GetDeviceModel must normalize deviceOID dot spelling against the loaded keys")
+	assert.Equal(t, "RouterOS X", got)
 }
 
 func TestLoadYAMLFile(t *testing.T) {
@@ -561,19 +787,19 @@ func TestLoadYAMLFile(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name     string
-		content  string
-		initial  map[string]string
-		expected map[string]string
-		wantErr  bool
+		name            string
+		content         string
+		initialLiterals map[string]string // pre-seeded static entries
+		expectedLiteral map[string]string // oid -> expected literal for static entries
+		wantErr         bool
 	}{
 		{
 			name: "valid YAML file",
 			content: `devices:
     "1.3.6.1.4.1.9.1.1234": "Device A"
     "1.3.6.1.4.1.9.1.4321": "Device B"`,
-			initial: make(map[string]string),
-			expected: map[string]string{
+			initialLiterals: make(map[string]string),
+			expectedLiteral: map[string]string{
 				"1.3.6.1.4.1.9.1.1234": "Device A",
 				"1.3.6.1.4.1.9.1.4321": "Device B",
 			},
@@ -584,10 +810,10 @@ func TestLoadYAMLFile(t *testing.T) {
 			content: `devices:
     "1.3.6.1.4.1.9.1.1234": "Device A"
     "1.3.6.1.4.1.9.1.4321": "Device B"`,
-			initial: map[string]string{
+			initialLiterals: map[string]string{
 				"1.3.6.1.4.1.9.1.1234": "Device A",
 			},
-			expected: map[string]string{
+			expectedLiteral: map[string]string{
 				"1.3.6.1.4.1.9.1.1234": "Device A",
 				"1.3.6.1.4.1.9.1.4321": "Device B",
 			},
@@ -600,34 +826,41 @@ func TestLoadYAMLFile(t *testing.T) {
     "5678": [unclosed list
       - item1
       - item2`,
-			initial:  make(map[string]string),
-			expected: make(map[string]string),
-			wantErr:  true,
+			initialLiterals: make(map[string]string),
+			expectedLiteral: make(map[string]string),
+			wantErr:         true,
 		},
 		{
-			name:     "empty file",
-			content:  "",
-			initial:  make(map[string]string),
-			expected: make(map[string]string),
-			wantErr:  false,
+			name:            "empty file",
+			content:         "",
+			initialLiterals: make(map[string]string),
+			expectedLiteral: make(map[string]string),
+			wantErr:         false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create initial devicesByVendor map
-			devicesByVendor := make(map[string]string)
-			for k, v := range tt.initial {
-				devicesByVendor[k] = v
+			// Create initial devicesByVendor map using the internal type.
+			devicesByVendor := make(map[string]deviceRef)
+			for k, v := range tt.initialLiterals {
+				devicesByVendor[k] = deviceRef{kind: devRefStatic, literal: v}
 			}
 
 			// Test loadYAMLFile
-			err = loadYAMLFile([]byte(tt.content), &devicesByVendor)
+			err = loadYAMLFile([]byte(tt.content), devicesByVendor)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, devicesByVendor)
+				// Verify each expected static entry.
+				for oid, want := range tt.expectedLiteral {
+					ref, ok := devicesByVendor[oid]
+					if assert.True(t, ok, "OID %s should be present", oid) {
+						assert.Equal(t, devRefStatic, ref.kind)
+						assert.Equal(t, want, ref.literal)
+					}
+				}
 			}
 		})
 	}

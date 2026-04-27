@@ -61,9 +61,12 @@ type InterfacePattern struct {
 
 // DeviceDefaults represents default values for a specific entity type
 type DeviceDefaults struct {
-	Description string   `yaml:"description,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Comments    string   `yaml:"comments,omitempty"`
+	Description  string   `yaml:"description,omitempty"`
+	Tags         []string `yaml:"tags,omitempty"`
+	Comments     string   `yaml:"comments,omitempty"`
+	Model        string   `yaml:"model,omitempty"`
+	Manufacturer string   `yaml:"manufacturer,omitempty"`
+	Platform     string   `yaml:"platform,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy
@@ -143,6 +146,15 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	}
 	if overrideDefaults.Device.Comments != "" {
 		merged.Device.Comments = overrideDefaults.Device.Comments
+	}
+	if overrideDefaults.Device.Model != "" {
+		merged.Device.Model = overrideDefaults.Device.Model
+	}
+	if overrideDefaults.Device.Manufacturer != "" {
+		merged.Device.Manufacturer = overrideDefaults.Device.Manufacturer
+	}
+	if overrideDefaults.Device.Platform != "" {
+		merged.Device.Platform = overrideDefaults.Device.Platform
 	}
 
 	// Override InterfacePatterns if provided

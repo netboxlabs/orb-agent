@@ -260,6 +260,59 @@ func TestMergeDefaults(t *testing.T) {
 	})
 }
 
+func TestMergeDefaults_DeviceModelManufacturerPlatform(t *testing.T) {
+	policy := &Defaults{
+		Device: DeviceDefaults{
+			Description: "policy-desc",
+		},
+	}
+	override := &Defaults{
+		Device: DeviceDefaults{
+			Model:        "C9300-48P",
+			Manufacturer: "Cisco Systems",
+			Platform:     "IOS-XE 17.09.04a",
+		},
+	}
+	merged := MergeDefaults(policy, override)
+	assert.Equal(t, "C9300-48P", merged.Device.Model)
+	assert.Equal(t, "Cisco Systems", merged.Device.Manufacturer)
+	assert.Equal(t, "IOS-XE 17.09.04a", merged.Device.Platform)
+	assert.Equal(t, "policy-desc", merged.Device.Description, "description must survive the override")
+}
+
+func TestMergeDefaults_DeviceOverrideFieldLevel(t *testing.T) {
+	policy := &Defaults{
+		Device: DeviceDefaults{
+			Model:        "policy-model",
+			Manufacturer: "policy-mfr",
+			Platform:     "policy-plat",
+		},
+	}
+	override := &Defaults{
+		Device: DeviceDefaults{
+			Model: "override-model",
+		},
+	}
+	merged := MergeDefaults(policy, override)
+	assert.Equal(t, "override-model", merged.Device.Model, "Model is overridden")
+	assert.Equal(t, "policy-mfr", merged.Device.Manufacturer, "Manufacturer preserved (override was empty)")
+	assert.Equal(t, "policy-plat", merged.Device.Platform, "Platform preserved (override was empty)")
+}
+
+func TestMergeDefaults_PolicyDeviceModelManufacturerPlatformSurviveNilOverride(t *testing.T) {
+	policy := &Defaults{
+		Device: DeviceDefaults{
+			Model:        "policy-model",
+			Manufacturer: "policy-mfr",
+			Platform:     "policy-plat",
+		},
+	}
+	merged := MergeDefaults(policy, nil)
+	assert.Equal(t, "policy-model", merged.Device.Model)
+	assert.Equal(t, "policy-mfr", merged.Device.Manufacturer)
+	assert.Equal(t, "policy-plat", merged.Device.Platform)
+}
+
 func TestTargetNetboxID_parsed(t *testing.T) {
 	input := `
 host: "192.168.1.1"

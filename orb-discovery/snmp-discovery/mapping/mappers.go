@@ -632,6 +632,14 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 	m.logger.Debug("mapping values to device entity", "values", values, "mapping_entry", mappingEntry)
 	deviceEntity := entityRegistry.GetOrCreateEntity(EntityType(mappingEntry.Entity), CurrentDeviceIndex).(*diode.Device)
 
+	// Build the walked OID->value map once per Map() call so the
+	// "platform" branch (and any future dynamic-ref consumer) reuses
+	// the same snapshot instead of rebuilding it on every iteration.
+	walked := make(map[string]string, len(values))
+	for _, w := range values {
+		walked[w.OID] = w.Value
+	}
+
 	fieldFound := false
 	for objectID, value := range values {
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
@@ -665,20 +673,45 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 						manufacturer = value.Value
 					}
 
-					manufacturerEntity := diode.Manufacturer{
-						Name: &manufacturer,
-					}
-
-					deviceEntity.Platform = &diode.Platform{
-						Name:         &manufacturer,
-						Slug:         toSlug(&manufacturer),
-						Manufacturer: &manufacturerEntity,
-					}
-
-					deviceModel, err := m.deviceLookup.GetDevice(value.Value)
+					// Resolve the device model against the walked OID
+					// snapshot built at the top of Map(). Dynamic
+					// devices[] refs (e.g. MikroTik's shared sysObjectID
+					// pointing at sysDescr) read from this snapshot
+					// without any extra SNMP traffic — the MIB-II
+					// system-group scalars sysObjectID and sysDescr
+					// share ifIndex "0" under the device mapping's
+					// identifier_size=1, so sysDescr IS present.
+					deviceModel, err := m.deviceLookup.GetDeviceModel(value.Value, walked)
 					if err != nil {
 						m.logger.Warn("error getting device model falling back to OID", "error", err, "device_oid", value.Value)
 						deviceModel = value.Value
+					}
+
+					// Apply per-target overrides (config.DeviceDefaults)
+					// after auto-discovery so a policy author can hard-pin
+					// any subset of {Model, Manufacturer, Platform}.
+					// Order matters: apply Manufacturer first so a
+					// Manufacturer-only override also flows into Platform.Name
+					// (which defaults to the manufacturer string). An
+					// explicit Platform override then wins over that.
+					if defaults != nil && defaults.Device.Manufacturer != "" {
+						manufacturer = defaults.Device.Manufacturer
+					}
+					platformName := manufacturer
+					if defaults != nil && defaults.Device.Platform != "" {
+						platformName = defaults.Device.Platform
+					}
+					if defaults != nil && defaults.Device.Model != "" {
+						deviceModel = defaults.Device.Model
+					}
+
+					manufacturerEntity := diode.Manufacturer{
+						Name: &manufacturer,
+					}
+					deviceEntity.Platform = &diode.Platform{
+						Name:         &platformName,
+						Slug:         toSlug(&platformName),
+						Manufacturer: &manufacturerEntity,
 					}
 					deviceEntity.DeviceType = &diode.DeviceType{
 						Model:        &deviceModel,

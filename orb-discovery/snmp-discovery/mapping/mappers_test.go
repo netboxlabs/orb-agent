@@ -3,6 +3,7 @@ package mapping_test
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -2707,6 +2708,45 @@ func (m *MockDeviceLookup) GetDevice(deviceOID string) (string, error) {
 	return args.Get(0).(string), args.Error(1)
 }
 
+func (m *MockDeviceLookup) GetDeviceModel(deviceOID string, walked map[string]string) (string, error) {
+	// If an explicit GetDeviceModel expectation is registered, honour it.
+	// Otherwise fall back to GetDevice so that tests written against the
+	// old interface continue to work without modification.
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GetDeviceModel" {
+			args := m.Called(deviceOID, walked)
+			return args.Get(0).(string), args.Error(1)
+		}
+	}
+	return m.GetDevice(deviceOID)
+}
+
+// FakeDynamicDeviceLookup resolves GetDeviceModel by looking up sourceOID
+// in the walked map that the mapper passes in. GetDevice is unused.
+type FakeDynamicDeviceLookup struct {
+	sourceOID string
+}
+
+func (f *FakeDynamicDeviceLookup) GetDevice(_ string) (string, error) {
+	return "", fmt.Errorf("dynamic ref; use GetDeviceModel")
+}
+
+func (f *FakeDynamicDeviceLookup) GetDeviceModel(_ string, walked map[string]string) (string, error) {
+	// Accept both leading-dot and no-leading-dot spellings, mirroring the
+	// real DeviceLookup.GetDeviceModel normalisation.
+	if v, ok := walked[f.sourceOID]; ok {
+		return v, nil
+	}
+	alt := strings.TrimPrefix(f.sourceOID, ".")
+	if v, ok := walked[alt]; ok {
+		return v, nil
+	}
+	if v, ok := walked["."+alt]; ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("not found")
+}
+
 // Helper functions to create pointers
 func int64Ptr(i int64) *int64 {
 	return &i
@@ -3537,4 +3577,152 @@ func TestIPAddressMapper_Map_InvalidCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeviceMapper_Map_OverrideDeviceModelManufacturerPlatform(t *testing.T) {
+	logger := slog.Default()
+	registry := mapping.NewEntityRegistry(logger)
+	mapper := mapping.NewDeviceMapper(&FakeManufacturers{}, &FakeDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.2.0": {
+			OID:    "1.3.6.1.2.1.1.2.0",
+			Parent: "1.3.6.1.2.1.1.2",
+			Value:  ".1.3.6.1.4.1.9.1.2495",
+			Type:   mapping.ObjectIdentifier,
+		},
+	}
+	entry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1.2",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.2", Entity: "device", Field: "platform"},
+		},
+	}
+	defaults := &config.Defaults{
+		Device: config.DeviceDefaults{
+			Model:        "C9300-48P",
+			Manufacturer: "Cisco Systems",
+			Platform:     "IOS-XE 17.9",
+		},
+	}
+	entity := mapper.Map(values, entry, registry, defaults)
+	device, ok := entity.(*diode.Device)
+	assert.True(t, ok)
+	assert.NotNil(t, device.DeviceType)
+	assert.Equal(t, "C9300-48P", *device.DeviceType.Model)
+	assert.Equal(t, "Cisco Systems", *device.DeviceType.Manufacturer.Name)
+	assert.Equal(t, "IOS-XE 17.9", *device.Platform.Name)
+	assert.Equal(t, "Cisco Systems", *device.Platform.Manufacturer.Name,
+		"Platform.Manufacturer must also follow the Manufacturer override")
+}
+
+func TestDeviceMapper_Map_OverrideModelOnlyPreservesAutoManufacturer(t *testing.T) {
+	logger := slog.Default()
+	registry := mapping.NewEntityRegistry(logger)
+	mapper := mapping.NewDeviceMapper(&FakeManufacturers{}, &FakeDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.2.0": {
+			OID:    "1.3.6.1.2.1.1.2.0",
+			Parent: "1.3.6.1.2.1.1.2",
+			Value:  ".1.3.6.1.4.1.9.1.2495",
+			Type:   mapping.ObjectIdentifier,
+		},
+	}
+	entry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1.2",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.2", Entity: "device", Field: "platform"},
+		},
+	}
+	defaults := &config.Defaults{
+		Device: config.DeviceDefaults{
+			Model: "custom-model",
+			// Manufacturer + Platform intentionally unset
+		},
+	}
+	entity := mapper.Map(values, entry, registry, defaults)
+	device := entity.(*diode.Device)
+	assert.Equal(t, "custom-model", *device.DeviceType.Model)
+	// FakeManufacturers.GetManufacturer returns "Cisco"; that should flow
+	// through unchanged because Manufacturer override is empty.
+	assert.Equal(t, "Cisco", *device.DeviceType.Manufacturer.Name)
+}
+
+func TestDeviceMapper_Map_OverrideManufacturerOnlyFlowsIntoPlatformName(t *testing.T) {
+	logger := slog.Default()
+	registry := mapping.NewEntityRegistry(logger)
+	mapper := mapping.NewDeviceMapper(&FakeManufacturers{}, &FakeDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.2.0": {
+			OID:    "1.3.6.1.2.1.1.2.0",
+			Parent: "1.3.6.1.2.1.1.2",
+			Value:  ".1.3.6.1.4.1.9.1.2495",
+			Type:   mapping.ObjectIdentifier,
+		},
+	}
+	entry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1.2",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.2", Entity: "device", Field: "platform"},
+		},
+	}
+	defaults := &config.Defaults{
+		Device: config.DeviceDefaults{
+			Manufacturer: "Cisco Systems",
+			// Platform intentionally unset: spec says Manufacturer
+			// override should also flow into Platform.Name.
+		},
+	}
+	entity := mapper.Map(values, entry, registry, defaults)
+	device := entity.(*diode.Device)
+	assert.Equal(t, "Cisco Systems", *device.DeviceType.Manufacturer.Name)
+	assert.Equal(t, "Cisco Systems", *device.Platform.Manufacturer.Name)
+	assert.Equal(t, "Cisco Systems", *device.Platform.Name,
+		"Platform.Name must track the Manufacturer override when Platform override is unset")
+}
+
+func TestDeviceMapper_Map_DynamicModelRefResolvedFromWalked(t *testing.T) {
+	logger := slog.Default()
+	registry := mapping.NewEntityRegistry(logger)
+	mapper := mapping.NewDeviceMapper(&FakeManufacturers{}, &FakeDynamicDeviceLookup{
+		sourceOID: ".1.3.6.1.2.1.1.1.0",
+	}, logger)
+
+	// The group for ifIndex "0" (all MIB-II system group scalars) contains
+	// both the sysObjectID PDU and the sysDescr PDU; the mapper must
+	// pass the walked map through to GetDeviceModel so the dynamic ref
+	// resolves.
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.2.0": {
+			OID:    "1.3.6.1.2.1.1.2.0",
+			Parent: "1.3.6.1.2.1.1.2",
+			Value:  ".1.3.6.1.4.1.14988.1",
+			Type:   mapping.ObjectIdentifier,
+		},
+		"1.3.6.1.2.1.1.1.0": {
+			OID:    "1.3.6.1.2.1.1.1.0",
+			Parent: "1.3.6.1.2.1.1.1",
+			Value:  "RouterOS CCR2004-16G-2S+",
+			Type:   mapping.OctetString,
+		},
+	}
+	entry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1.2",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.2", Entity: "device", Field: "platform"},
+		},
+	}
+	entity := mapper.Map(values, entry, registry, nil)
+	device := entity.(*diode.Device)
+	assert.Equal(t, "RouterOS CCR2004-16G-2S+", *device.DeviceType.Model)
 }

@@ -26,6 +26,10 @@ func (f *FakeDeviceLookup) GetDevice(_ string) (string, error) {
 	return "cisco4000", nil
 }
 
+func (f *FakeDeviceLookup) GetDeviceModel(_ string, _ map[string]string) (string, error) {
+	return "cisco4000", nil
+}
+
 func TestMapObjectIDsToEntity(t *testing.T) {
 	tests := []struct {
 		name      string
