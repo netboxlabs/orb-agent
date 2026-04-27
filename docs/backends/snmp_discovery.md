@@ -211,7 +211,7 @@ devices:
   .1.3.6.1.4.1.14988.2: mikrotikSwOSSwitch   # Static literal (unchanged behavior)
 ```
 
-No extra SNMP traffic is generated — the referenced OID must already be collected by the policy's walk set. `sysDescr` (`.1.3.6.1.2.1.1.1.0`) is always walked. If the referenced OID is missing or empty for a given device, snmp-discovery falls back to using the raw `sysObjectID`. The bundled `mikrotik.yaml` is shipped with the sysDescr reference wired up, so MikroTik fleets benefit on upgrade without configuration changes.
+No extra SNMP traffic is generated — the referenced OID must already be collected by the policy's walk set. `sysDescr` (`.1.3.6.1.2.1.1.1.0`) is always walked. If the referenced OID is missing or empty for a given device, snmp-discovery falls back to using the raw `sysObjectID`. The bundled `mikrotik.yaml` keeps the historical static `mikrotikRouter` model string by default for backward compatibility; operators who want per-device MikroTik model names can opt in by adding the override above to their `lookup_extensions_dir`.
 
 ### Manufacturer overrides
 
