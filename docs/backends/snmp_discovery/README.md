@@ -1,7 +1,7 @@
 # SNMP Discovery
 The SNMP discovery backend leverages SNMP (Simple Network Management Protocol) to connect to network devices and collect network information.
 
-This backend works with any SNMPv1/v2c/v3 capable device. For the list of vendors with bundled device model lookup coverage, see [SNMP Discovery — Supported Platforms](./snmp_discovery_supported_platforms.md).
+This backend works with any SNMPv1/v2c/v3 capable device. For the list of vendors with bundled device model lookup coverage, see [SNMP Discovery — Supported Platforms](./supported_platforms.md).
 
 ## Diode Entities
 The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/diode-sdk-go) to ingest the following entities:
@@ -51,8 +51,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | site | string | no | Default site name for discovered devices |
 | location | string | no | Default location for discovered devices |
 | role | string | no | Default role for discovered devices |
-| interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./snmp_discovery_interface.md)) |
-| interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./snmp_discovery_interface.md#interface-exclusion-patterns)) |
+| interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
+| interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 
 ##### Nested Defaults
 | Parameter | Type | Description |
@@ -172,7 +172,7 @@ scope:
 
 The `lookup_extensions_dir` config option points to a directory of YAML files that map SNMP `sysObjectID` OIDs to human-readable device model names. Without these files, snmp-discovery would ingest raw OIDs (for example `.1.3.6.1.4.1.9.1.489`) instead of recognizable model names (for example `catalyst2955C12`).
 
-A curated set of vendor lookup files ships with the orb-agent and orb-discovery images (see [SNMP Discovery — Supported Platforms](./snmp_discovery_supported_platforms.md)), and `lookup_extensions_dir` only needs to be set when you want to add extra files or override the bundled ones.
+A curated set of vendor lookup files ships with the orb-agent and orb-discovery images (see [SNMP Discovery — Supported Platforms](./supported_platforms.md)), and `lookup_extensions_dir` only needs to be set when you want to add extra files or override the bundled ones.
 
 ### File format
 

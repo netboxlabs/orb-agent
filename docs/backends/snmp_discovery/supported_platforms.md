@@ -1,6 +1,6 @@
 # SNMP Discovery — Supported Platforms
 
-This page lists the vendors with bundled device model coverage for the [SNMP discovery](./snmp_discovery.md) backend.
+This page lists the vendors with bundled device model coverage for the [SNMP discovery](./README.md) backend.
 
 The backend works with **any SNMPv1, SNMPv2c, or SNMPv3 capable device**. Entity discovery (interfaces, IP addresses, VLANs, LAG membership) is derived from standard MIBs (IF-MIB, IP-MIB, LLDP-MIB, BRIDGE-MIB, etc.) and is therefore vendor-agnostic.
 
@@ -84,4 +84,4 @@ Manufacturer-level resolution (SNMP enterprise number → vendor name) is handle
 
 ## Extending device coverage
 
-You can add or override lookup data without rebuilding the agent. See the [Device Model Lookup](./snmp_discovery.md#device-model-lookup) section of the SNMP Discovery docs for the `lookup_extensions_dir` option and the YAML format for custom files.
+You can add or override lookup data without rebuilding the agent. See the [Device Model Lookup](./README.md#device-model-lookup) section of the SNMP Discovery docs for the `lookup_extensions_dir` option and the YAML format for custom files.

@@ -185,8 +185,8 @@ orb:
 ```
 
 For the full list of parameters per backend, see:
-- [Device Discovery](../backends/device_discovery.md)
-- [SNMP Discovery](../backends/snmp_discovery.md)
+- [Device Discovery](../backends/device_discovery/README.md)
+- [SNMP Discovery](../backends/snmp_discovery/README.md)
 - [Network Discovery](../backends/network_discovery.md)
 - [Worker](../backends/worker.md)
 

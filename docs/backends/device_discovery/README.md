@@ -1,7 +1,7 @@
 # Device Discovery
 The device discovery backend leverages [NAPALM](https://napalm.readthedocs.io/en/latest/index.html) to connect to network devices and collect network information.
 
-For the full list of vendors and NAPALM drivers supported by this backend (standard and custom), see [Device Discovery — Supported Platforms](./device_discovery_supported_platforms.md).
+For the full list of vendors and NAPALM drivers supported by this backend (standard and custom), see [Device Discovery — Supported Platforms](./supported_platforms.md).
 
 ## Diode Entities
 The device discovery backend uses [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) to ingest the following entities:
@@ -60,7 +60,7 @@ Current supported options:
 | capture_running_config | bool | If True, collects the running configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 | capture_startup_config | bool | If True, collects the startup/saved configuration from the device and ingests it as a DeviceConfig entity (defaults to 'False' if not specified) |
 | sanitize_config | bool | If False, captured configuration is stored as-is without redacting sensitive values such as passwords and pre-shared keys (defaults to 'True' if not specified) |
-| discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[paloalto_panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`paloalto_panos`, `paloalto_panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. See the [supported platforms page](./device_discovery_supported_platforms.md) for the full list. |
+| discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[paloalto_panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`paloalto_panos`, `paloalto_panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. See the [supported platforms page](./supported_platforms.md) for the full list. |
 
 #### Defaults
 Current supported defaults:
@@ -70,8 +70,8 @@ Current supported defaults:
 | site  | str | NetBox Site Name (defaults to 'undefined' if not specified) |
 | role  | str  | Device role (e.g., switch) (defaults to 'undefined' if not specified) |
 | if_type | str | Default interface type when no pattern matches (defaults to 'other' if not specified) |
-| interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./device_discovery_interface.md)) |
-| interface_exclude_patterns | list | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./device_discovery_interface.md#interface-exclusion-patterns)) |
+| interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
+| interface_exclude_patterns | list | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 | location | str | Device location |
 | rack  | str | Rack name to associate the device with |
 | tenant | str/map | Device tenant |
@@ -137,13 +137,13 @@ The scope defines a list of devices that can be accessed and pulled data.
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
 | driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
-| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./device_discovery_ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
+| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when hostname is a subnet or IP range. |
 
 ### SSH Configuration and Jumphost Support
 
-For advanced SSH scenarios including bastion/jumphost connectivity, VRF-aware connections, and multi-hop SSH configurations, see the dedicated guide: [SSH Configuration and Jumphost Support](./device_discovery_ssh.md).
+For advanced SSH scenarios including bastion/jumphost connectivity, VRF-aware connections, and multi-hop SSH configurations, see the dedicated guide: [SSH Configuration and Jumphost Support](./ssh.md).
 
 The `ssh_config_file` optional argument allows you to specify a standard OpenSSH configuration file for connecting to devices through intermediate jump servers:
 
@@ -157,7 +157,7 @@ scope:
       ssh_config_file: /opt/orb/ssh-napalm.conf
 ```
 
-See the [SSH Configuration guide](./device_discovery_ssh.md) for complete examples, security best practices, and troubleshooting.
+See the [SSH Configuration guide](./ssh.md) for complete examples, security best practices, and troubleshooting.
 
 ### Sample
 A sample policy including all parameters supported by the device discovery backend.
