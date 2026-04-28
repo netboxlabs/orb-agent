@@ -21,6 +21,8 @@ Drivers that implement `get_interfaces_vlans()` populate per-interface switching
 
 Additional vendors will land in follow-up changes. See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option.
 
+**Cisco IOS voice-VLAN quirk:** an access port carrying a voice VLAN is reported as `mode=tagged` (NetBox's `tagged-with-untagged-native` semantics) with the data VLAN as untagged and the voice VLAN as tagged — because NetBox's strict `access` mode disallows tagged VLANs. This only fires when the voice VLAN differs from the access VLAN; same-VLAN configurations stay as plain `mode=access`.
+
 ## Standard NAPALM drivers
 
 These drivers ship with the [NAPALM](https://napalm.readthedocs.io/en/latest/support/) library and are eligible for auto-discovery.
