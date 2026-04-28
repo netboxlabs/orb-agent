@@ -60,6 +60,9 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | device      | map  | Device-specific defaults        |
 | ├─ description | string  | Device description           |
 | ├─ comments   | string  | Device comments               |
+| ├─ model   | string  | Override the auto-discovered device model (see [Device Model Lookup](#device-model-lookup)) |
+| ├─ manufacturer | string  | Override the auto-discovered manufacturer name |
+| ├─ platform   | string  | Override the auto-discovered platform name   |
 | interface    | map  | Interface-specific defaults    |
 | ├─ description | string  | Interface description        |
 | ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
@@ -146,6 +149,10 @@ scope:
       override_defaults:
         role: "switch"
         tags: ["custom"]
+        device:
+          model: "CCR2004-16G-2S+"     # Hard-override auto-discovered model
+          manufacturer: "MikroTik"      # Hard-override auto-discovered manufacturer
+          platform: "RouterOS"          # Hard-override auto-discovered platform
     - host: "10.0.0.10"
       port: 161
       authentication:  # Per-target authentication (optional)
@@ -193,3 +200,38 @@ cp orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb/snmp-exte
 ```
 
 When snmp-discovery encounters a device, it reads the device's `sysObjectID`, searches the YAML files in `lookup_extensions_dir` for a match, and falls back to the raw OID when no match is found.
+
+### Dynamic model resolution (shared sysObjectID)
+
+Some vendors return the same `sysObjectID` for every model in their catalog (for example MikroTik uses `.1.3.6.1.4.1.14988.1` across RouterOS devices), so a single static mapping cannot distinguish the actual model. The `devices:` map accepts OID references as values: instead of a literal model name, use an OID string (format `.1.3.6.1...`) that points to another OID already in the SNMP walk. At discovery time, snmp-discovery dereferences the walked value for that OID and uses it as the model name.
+
+```yaml
+devices:
+  .1.3.6.1.4.1.14988.1: .1.3.6.1.2.1.1.1.0   # MikroTik: resolve model from sysDescr
+  .1.3.6.1.4.1.14988.2: mikrotikSwOSSwitch   # Static literal (unchanged behavior)
+```
+
+No extra SNMP traffic is generated — the referenced OID must already be collected by the policy's walk set. `sysDescr` (`.1.3.6.1.2.1.1.1.0`) is always walked. If the referenced OID is missing or empty for a given device, snmp-discovery falls back to using the raw `sysObjectID`. The bundled `mikrotik.yaml` keeps the historical static `mikrotikRouter` model string by default for backward compatibility; operators who want per-device MikroTik model names can opt in by adding the override above to their `lookup_extensions_dir`.
+
+### Manufacturer overrides
+
+Manufacturers are derived from the Private Enterprise Number (PEN) segment of `sysObjectID` against a mechanically generated IANA catalog, which produces strings such as `ciscoSystems` or `Aruba a Hewlett Packard Enterprise company`. For NetBox deployments that already hold `Cisco Systems` / `Aruba` `Manufacturer` objects, any lookup-extension YAML file may also include a `manufacturers:` block keyed by IANA PEN:
+
+```yaml
+manufacturers:
+  9: Cisco Systems       # PEN 9 (Cisco)
+  14823: Aruba           # PEN 14823 (Aruba/HPE)
+devices:
+  .1.3.6.1.4.1.9.1.2495: c9300-48p
+```
+
+Overrides are layered — a value from `lookup_extensions_dir` wins over a value from the bundled files, which wins over the raw IANA name. The built-in `manufacturers.yaml` remains IANA-sourced; renames are strictly opt-in via lookup-extension files.
+
+### Override precedence
+
+When multiple sources can supply a device's `manufacturer`, `model`, or `platform`, the highest-priority non-empty value wins:
+
+1. Per-target `override_defaults.device.{model,manufacturer,platform}` (hard override)
+2. User `lookup_extensions_dir/*.yaml` (`manufacturers:` and `devices:` including dynamic refs)
+3. Bundled `lookup_extensions/*.yaml` (`manufacturers:` and `devices:`)
+4. Raw IANA manufacturer name / raw `sysObjectID` model
