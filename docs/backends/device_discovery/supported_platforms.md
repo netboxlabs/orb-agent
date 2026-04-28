@@ -1,6 +1,6 @@
 # Device Discovery — Supported Platforms
 
-This page lists the vendors, operating systems, and NAPALM drivers supported by the [device discovery](./device_discovery.md) backend.
+This page lists the vendors, operating systems, and NAPALM drivers supported by the [device discovery](./README.md) backend.
 
 The backend connects to network devices over SSH / NETCONF / vendor APIs via [NAPALM](https://napalm.readthedocs.io/). Support is driver-bound: a device is supported only if a corresponding NAPALM driver exists.
 
@@ -8,7 +8,7 @@ The backend connects to network devices over SSH / NETCONF / vendor APIs via [NA
 
 ## Auto-discovery behavior
 
-When a scope entry does not specify a `driver`, device-discovery attempts driver detection automatically. Only the **standard NAPALM drivers** below are tried during auto-discovery. Custom drivers must be used explicitly by either setting `driver:` on the scope entry, or by listing them in the `discovery_drivers` option (see [Custom Driver Discovery Example](./device_discovery.md#custom-driver-discovery-example)).
+When a scope entry does not specify a `driver`, device-discovery attempts driver detection automatically. Only the **standard NAPALM drivers** below are tried during auto-discovery. Custom drivers must be used explicitly by either setting `driver:` on the scope entry, or by listing them in the `discovery_drivers` option (see [Custom Driver Discovery Example](./README.md#custom-driver-discovery-example)).
 
 ## Standard NAPALM drivers
 

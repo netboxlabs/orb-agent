@@ -65,10 +65,10 @@ orb:
 
 #### Discovery Backends
 Only the `network_discovery`, `device_discovery`, `worker` and `snmp_discovery` backends are currently supported. They do not require any special configuration.
-- [Device Discovery](./docs/backends/device_discovery.md) ([supported platforms](./docs/backends/device_discovery_supported_platforms.md))
+- [Device Discovery](./docs/backends/device_discovery/README.md) ([supported platforms](./docs/backends/device_discovery/supported_platforms.md))
 - [Network Discovery](./docs/backends/network_discovery.md)
 - [Worker](./docs/backends/worker.md)
-- [SNMP Discovery](./docs/backends/snmp_discovery.md) ([supported platforms](./docs/backends/snmp_discovery_supported_platforms.md))
+- [SNMP Discovery](./docs/backends/snmp_discovery/README.md) ([supported platforms](./docs/backends/snmp_discovery/supported_platforms.md))
 
 #### Observability Backends
 Observability backends focus on collecting and exporting rich telemetry from network traffic or probes so you can feed metrics into your monitoring stack.
@@ -107,7 +107,7 @@ orb:
   policies:
     device_discovery:
       device_policy_1:
-        # see docs/backends/device_discovery.md
+        # see docs/backends/device_discovery/README.md
     network_discovery:
       network_policy_1:
        # see docs/backends/network_discovery.md
