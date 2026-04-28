@@ -10,6 +10,17 @@ The backend connects to network devices over SSH / NETCONF / vendor APIs via [NA
 
 When a scope entry does not specify a `driver`, device-discovery attempts driver detection automatically. Only the **standard NAPALM drivers** below are tried during auto-discovery. Custom drivers must be used explicitly by either setting `driver:` on the scope entry, or by listing them in the `discovery_drivers` option (see [Custom Driver Discovery Example](./README.md#custom-driver-discovery-example)).
 
+## Interface ↔ VLAN associations
+
+Drivers that implement `get_interfaces_vlans()` populate per-interface switching configuration on the emitted `Interface` entities (mode, untagged/access VLAN, tagged VLAN list). Drivers without the method continue to emit interfaces without VLAN associations — this is opt-in per driver.
+
+| Driver | Status |
+|--------|--------|
+| `ios` | Supported (Cisco IOS, IOS-XE) |
+| `cisco_s300` | Supported (Cisco Small Business 300/350/550) |
+
+Additional vendors will land in follow-up changes. See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option.
+
 ## Standard NAPALM drivers
 
 These drivers ship with the [NAPALM](https://napalm.readthedocs.io/en/latest/support/) library and are eligible for auto-discovery.
