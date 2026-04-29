@@ -31,6 +31,7 @@ from custom_napalm.hp_comware import ComwareDriver
 from custom_napalm.hp_procurve import ProcurveDriver
 from custom_napalm.huawei_smartax import SmartDriver
 from custom_napalm.huawei_vrp import VRPDriver
+from custom_napalm.mellanox_mlnxos import MLNXOSDriver
 from custom_napalm.mikrotik_routeros import ROSDriver
 from custom_napalm.nokia_srl import SRLDriver
 from custom_napalm.nokia_sros import SROSDriver
@@ -63,6 +64,7 @@ __all__ = [
     "FXOSDriver",
     "GaiaDriver",
     "IPOSDriver",
+    "MLNXOSDriver",
     "NetIronDriver",
     "PANOSDriver",
     "PANOSSHDriver",

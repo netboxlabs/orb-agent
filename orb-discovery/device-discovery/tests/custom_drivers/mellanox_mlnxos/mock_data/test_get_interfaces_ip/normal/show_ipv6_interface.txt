@@ -1,0 +1,7 @@
+Interface vlan10
+IPv6 address: 2001:db8:10::1/64
+Interface status: UP
+
+mgmt0:
+  IPv6 address: 2001:db01::2  /64
+  Interface status: UP
