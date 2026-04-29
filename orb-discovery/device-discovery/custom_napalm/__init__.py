@@ -22,6 +22,7 @@ from custom_napalm.cumulus_linux import CumulusDriver
 from custom_napalm.dell_ftos import FTOSDriver
 from custom_napalm.dell_powerconnect import PowerConnectDriver
 from custom_napalm.dell_sonic import SONiCDriver
+from custom_napalm.eos import EOSDriver
 from custom_napalm.ericsson_ipos import IPOSDriver
 from custom_napalm.extreme_exos import ExosDriver
 from custom_napalm.extreme_slx import SLXOSDriver
@@ -32,11 +33,14 @@ from custom_napalm.hp_procurve import ProcurveDriver
 from custom_napalm.huawei_smartax import SmartDriver
 from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.ios import IOSDriver
+from custom_napalm.junos import JunOSDriver
 from custom_napalm.mellanox_mlnxos import MLNXOSDriver
 from custom_napalm.mikrotik_routeros import ROSDriver
 from custom_napalm.nokia_srl import SRLDriver
 from custom_napalm.nokia_sros import SROSDriver
 from custom_napalm.nokia_sros_ssh import SROSSSHDriver
+from custom_napalm.nxos import NXOSDriver
+from custom_napalm.nxos_ssh import NXOSSSHDriver
 from custom_napalm.paloalto_panos import PANOSDriver
 from custom_napalm.paloalto_panos_ssh import PANOSSHDriver
 from custom_napalm.ubiquiti_edgerouter import EdgeRouterDriver
@@ -56,6 +60,7 @@ __all__ = [
     "CumulusDriver",
     "EdgeRouterDriver",
     "EdgeSwitchDriver",
+    "EOSDriver",
     "ERSDriver",
     "ExosDriver",
     "FastIronDriver",
@@ -66,8 +71,11 @@ __all__ = [
     "GaiaDriver",
     "IOSDriver",
     "IPOSDriver",
+    "JunOSDriver",
     "MLNXOSDriver",
     "NetIronDriver",
+    "NXOSDriver",
+    "NXOSSSHDriver",
     "PANOSDriver",
     "PANOSSHDriver",
     "PowerConnectDriver",

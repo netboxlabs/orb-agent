@@ -517,9 +517,13 @@ def test_discover_device_driver_defaults_to_standard_napalm_only(mock_get_networ
 
     driver = discover_device_driver(info)  # no drivers= arg
     assert driver in _default_discovery_drivers
-    # custom_napalm drivers must not be tried by default
-    custom_drivers = custom_napalm_driver_list()
+    # custom_napalm-ONLY drivers (not also in the standard NAPALM list) must not
+    # be tried by default.  Drivers like 'eos' and 'ios' appear in both lists
+    # because custom_napalm ships subclasses that override the upstream driver;
+    # those are intentionally included in _default_discovery_drivers.
+    custom_drivers = set(custom_napalm_driver_list())
+    custom_only_drivers = custom_drivers - set(_default_discovery_drivers)
     for call in mock_get_network_driver.call_args_list:
-        assert call.args[0] not in custom_drivers, (
+        assert call.args[0] not in custom_only_drivers, (
             f"Custom driver '{call.args[0]}' was tried during default auto-discovery"
         )

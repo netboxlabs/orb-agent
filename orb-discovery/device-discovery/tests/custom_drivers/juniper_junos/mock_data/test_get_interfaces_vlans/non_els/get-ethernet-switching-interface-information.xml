@@ -1,0 +1,24 @@
+<ethernet-switching-interface-information>
+  <interface>
+    <interface-name>ge-0/0/10</interface-name>
+    <interface-port-mode>Access</interface-port-mode>
+    <interface-vlan-member-list>
+      <interface-vlan-member>
+        <interface-vlan-name>mgmt</interface-vlan-name>
+        <interface-vlan-member-tagid>300</interface-vlan-member-tagid>
+        <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+      </interface-vlan-member>
+    </interface-vlan-member-list>
+  </interface>
+  <interface>
+    <interface-name>ge-0/0/11</interface-name>
+    <interface-port-mode>Trunk</interface-port-mode>
+    <interface-vlan-member-list>
+      <interface-vlan-member>
+        <interface-vlan-name>vlan30</interface-vlan-name>
+        <interface-vlan-member-tagid>30</interface-vlan-member-tagid>
+        <interface-vlan-member-tagness>tagged</interface-vlan-member-tagness>
+      </interface-vlan-member>
+    </interface-vlan-member-list>
+  </interface>
+</ethernet-switching-interface-information>

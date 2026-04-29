@@ -2,9 +2,24 @@
 
 from pathlib import Path
 
-from custom_napalm.ios import IOSDriver
+from custom_napalm.ios import IOSDriver, _maybe_int
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
+
+
+def test_ios_maybe_int_rejects_bool_true():
+    """Reject ``bool`` (int subclass) so it does not coerce to VID 1."""
+    assert _maybe_int(True) is None
+
+
+def test_ios_maybe_int_rejects_bool_false():
+    """Mirrors True case: False must not coerce to VID 0."""
+    assert _maybe_int(False) is None
+
+
+def test_ios_maybe_int_passes_through_string_int():
+    """Plain string-int still coerces normally."""
+    assert _maybe_int("42") == 42
 
 
 class TestIOSDriver(BaseDriverTest):
@@ -32,15 +47,15 @@ class TestIOSDriver(BaseDriverTest):
         assert result["GigabitEthernet1/0/1"]["mode"] == "access"
         assert result["GigabitEthernet1/0/1"]["untagged"] == 10
 
-    def test_expand_ios_vlan_list_clamps_huge_range(self) -> None:
+    def test_expand_vlan_range_string_clamps_huge_range(self) -> None:
         """A range like 1-100000 is clamped to 1..4094 (then collapsed to wildcard)."""
-        from custom_napalm.ios import _expand_ios_vlan_list
+        from custom_napalm._vlan import parse_vlan_range_string
         # Single huge range whose hi is clamped to 4094 and lo is 1 → wildcard.
-        assert _expand_ios_vlan_list(["1-100000"]) == ([], True)
+        assert parse_vlan_range_string("1-100000") == ([], True)
         # Plain explicit list → not a wildcard, returns expanded VIDs.
-        assert _expand_ios_vlan_list(["10-12"]) == ([10, 11, 12], False)
+        assert parse_vlan_range_string("10-12") == ([10, 11, 12], False)
         # Out-of-range-only input → empty list, NOT a wildcard.
-        assert _expand_ios_vlan_list(["5000-9000"]) == ([], False)
+        assert parse_vlan_range_string("5000-9000") == ([], False)
 
     def test_get_interfaces_vlans_trunk_all_emits_distinct_mode(self) -> None:
         """A trunk advertising ALL VLANs emits mode='trunk-all', not 'trunk'."""
@@ -54,7 +69,8 @@ class TestIOSDriver(BaseDriverTest):
 
     def test_get_interfaces_vlans_numeric_full_range_is_trunk_all(self) -> None:
         """A numeric full-range trunk (e.g. 1-4094) collapses to trunk-all, same as literal ALL."""
-        from custom_napalm.ios import _classify_ios_switchport_row
+        from custom_napalm._vlan import classify_switchport
+        from custom_napalm.ios import _ios_row_to_switchport_info
         row = {
             "interface": "Gi1/0/48",
             "switchport": "Enabled",
@@ -65,12 +81,13 @@ class TestIOSDriver(BaseDriverTest):
             "voice_vlan": "none",
             "trunking_vlans": ["1-4094"],
         }
-        result = _classify_ios_switchport_row(row)
+        result = classify_switchport(_ios_row_to_switchport_info(row))
         assert result == {"mode": "trunk-all", "tagged": [], "untagged": 99}
 
     def test_get_interfaces_vlans_explicit_none_stays_plain_trunk(self) -> None:
         """A trunk explicitly with NONE allowed stays mode=trunk, not trunk-all."""
-        from custom_napalm.ios import _classify_ios_switchport_row
+        from custom_napalm._vlan import classify_switchport
+        from custom_napalm.ios import _ios_row_to_switchport_info
         row = {
             "interface": "Gi1/0/48",
             "switchport": "Enabled",
@@ -81,14 +98,15 @@ class TestIOSDriver(BaseDriverTest):
             "voice_vlan": "none",
             "trunking_vlans": ["NONE"],
         }
-        result = _classify_ios_switchport_row(row)
+        result = classify_switchport(_ios_row_to_switchport_info(row))
         assert result == {"mode": "trunk", "tagged": [], "untagged": 1}
 
     def test_get_interfaces_vlans_malformed_trunk_does_not_promote(self, caplog) -> None:
         """Junk trunking_vlans input must NOT silently widen the trunk to all VLANs."""
         import logging
 
-        from custom_napalm.ios import _classify_ios_switchport_row
+        from custom_napalm._vlan import classify_switchport
+        from custom_napalm.ios import _ios_row_to_switchport_info
         row = {
             "interface": "Gi1/0/48",
             "switchport": "Enabled",
@@ -100,14 +118,15 @@ class TestIOSDriver(BaseDriverTest):
             "trunking_vlans": ["5000-9000"],  # all out of range after clamp
         }
         with caplog.at_level(logging.WARNING, logger="custom_napalm.ios"):
-            result = _classify_ios_switchport_row(row)
+            result = classify_switchport(_ios_row_to_switchport_info(row))
         # NOT trunk-all — falls back to plain trunk with empty tagged list.
         assert result == {"mode": "trunk", "tagged": [], "untagged": 99}
         assert any("could not be parsed" in r.message for r in caplog.records)
 
     def test_get_interfaces_vlans_explicit_all_still_trunk_all(self) -> None:
         """Sanity: literal ALL still maps to trunk-all even with the typed-signal refactor."""
-        from custom_napalm.ios import _classify_ios_switchport_row
+        from custom_napalm._vlan import classify_switchport
+        from custom_napalm.ios import _ios_row_to_switchport_info
         row = {
             "interface": "Gi1/0/48",
             "switchport": "Enabled",
@@ -118,12 +137,13 @@ class TestIOSDriver(BaseDriverTest):
             "voice_vlan": "none",
             "trunking_vlans": ["ALL"],
         }
-        result = _classify_ios_switchport_row(row)
+        result = classify_switchport(_ios_row_to_switchport_info(row))
         assert result == {"mode": "trunk-all", "tagged": [], "untagged": 99}
 
     def test_get_interfaces_vlans_voice_equal_access_stays_access(self) -> None:
         """When voice VLAN equals access VLAN, keep mode=access (don't promote)."""
-        from custom_napalm.ios import _classify_ios_switchport_row
+        from custom_napalm._vlan import classify_switchport
+        from custom_napalm.ios import _ios_row_to_switchport_info
         row = {
             "interface": "Gi1/0/5",
             "switchport": "Enabled",
@@ -134,6 +154,6 @@ class TestIOSDriver(BaseDriverTest):
             "voice_vlan": "10",  # same as access_vlan — operator quirk
             "trunking_vlans": ["ALL"],
         }
-        result = _classify_ios_switchport_row(row)
+        result = classify_switchport(_ios_row_to_switchport_info(row))
         # NOT mode=trunk — promotion is suppressed when voice == access.
         assert result == {"mode": "access", "tagged": [], "untagged": 10}

@@ -16,6 +16,8 @@ from napalm.base import models
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output as _parse_output_raw
 
+from custom_napalm._vlan import SwitchportInfo, classify_switchport, parse_vlan_range_string
+
 logger = logging.getLogger(__name__)
 
 # Config sanitization — S300 sensitive CLI fields:
@@ -154,101 +156,78 @@ def _parse_portchannel_status_raw(raw: str) -> dict[str, dict]:
     return result
 
 
-def _expand_s300_chunk(chunk: str) -> list[int]:
-    """
-    Expand a single S300 VLAN list chunk ("10" or "10-12") into VIDs.
-
-    Out-of-range / inverted / unparseable chunks return ``[]``. Lo/hi are
-    clamped to the dot1q range 1..4094 so callers can detect wildcards
-    on the aggregated output.
-    """
-    chunk = chunk.strip()
-    if not chunk:
-        return []
-    if "-" in chunk:
-        lo_s, hi_s = chunk.split("-", 1)
-        try:
-            lo, hi = int(lo_s), int(hi_s)
-        except ValueError:
-            return []
-        lo = max(lo, 1)
-        hi = min(hi, 4094)
-        if lo > hi:
-            return []
-        return list(range(lo, hi + 1))
-    try:
-        return [int(chunk)]
-    except ValueError:
-        return []
-
-
-def _parse_s300_vlan_list(value: str) -> tuple[list[int], bool]:
-    """
-    Expand "1,10-12,20" -> ``([1, 10, 11, 12, 20], False)``.
-
-    Returns ``([], True)`` for genuine wildcards: literal ``all`` /
-    ``"1-4094"`` / multi-range expansions covering the full 1-4094 dot1q
-    range. Returns ``([], False)`` for empty/none/unparseable input.
-    Callers must NOT treat the ``([], False)`` case as a wildcard, since
-    that path is reached by junk tokens too.
-    """
-    if not value:
-        return [], False
-    raw = value.strip().lower()
-    if raw == "all":
-        return [], True
-    if raw == "none":
-        return [], False
-    out: list[int] = []
-    for chunk in value.split(","):
-        out.extend(_expand_s300_chunk(chunk))
-    out = [v for v in out if 1 <= v <= 4094]
-    is_full_range = (
-        bool(out) and min(out) <= 1 and max(out) >= 4094 and len(set(out)) >= 4094
-    )
-    if is_full_range:
-        return [], True
-    return out, False
-
-
 _S300_BLOCK_RE = re.compile(r"^Name:\s*(\S+)\s*$", re.MULTILINE)
 
 
-def _s300_switchport_block_to_entry(fields: dict[str, str]) -> dict:
-    """Map a parsed ``show interfaces switchport`` block to the NAPALM #919 jobec shape."""
+def _maybe_int(s: object) -> int | None:
+    """
+    Convert a string/int to int, returning None on failure.
+
+    Rejects ``bool`` explicitly: ``bool`` is a subclass of ``int`` in Python,
+    so ``int(True) == 1`` — without this guard a buggy upstream parser
+    passing a bool would slip past the classifier's bool-rejection in
+    ``_vlan.coerce_vid``.
+    """
+    if isinstance(s, bool):
+        return None
+    try:
+        return int(s)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return None
+
+
+def _s300_block_to_switchport_info(fields: dict[str, str]) -> SwitchportInfo:
+    """
+    Build a SwitchportInfo from one parsed ``show interfaces switchport`` block.
+
+    The S300 CLI emits multi-line key:value blocks per interface; this function
+    consumes the parsed dict (key strings exactly as printed by the device).
+    """
     if fields.get("Switchport", "").lower() != "enable":
-        return {"mode": "routed", "tagged": [], "untagged": None}
+        return SwitchportInfo(
+            enabled=False, admin_mode=None, oper_mode=None,
+            access_vlan=None, native_vlan=None, allowed_vlans=None,
+        )
 
-    admin_mode = fields.get("Administrative Mode", "").lower()
-    try:
-        access_vid: int | None = int(fields.get("Access Mode VLAN", ""))
-    except (ValueError, TypeError):
-        access_vid = None
-    try:
-        native_vid: int | None = int(fields.get("Trunking Native Mode VLAN", ""))
-    except (ValueError, TypeError):
-        native_vid = None
+    admin_raw = fields.get("Administrative Mode", "").lower()
+    if admin_raw == "access":
+        admin: str | None = "access"
+    elif admin_raw in ("trunk", "general"):
+        admin = "trunk"  # 'general' collapses to trunk semantics
+    else:
+        admin = None
 
-    if admin_mode == "access":
-        return {"mode": "access", "tagged": [], "untagged": access_vid}
-    if admin_mode in {"trunk", "general"}:
-        trunk_vlans = fields.get("Trunking VLANs Enabled", "")
-        expanded, is_wildcard = _parse_s300_vlan_list(trunk_vlans or "")
-        # Only promote to trunk-all when the helper signals a real wildcard
-        # (literal "all" or a numeric full-range expansion). Junk tokens
-        # collapse to ``([], False)`` and must NOT silently widen the trunk.
+    access_vid = _maybe_int(fields.get("Access Mode VLAN", ""))
+    native_vid = _maybe_int(fields.get("Trunking Native Mode VLAN", ""))
+
+    trunk_spec = fields.get("Trunking VLANs Enabled", "")
+    if trunk_spec:
+        vids, is_wildcard = parse_vlan_range_string(trunk_spec)
         if is_wildcard:
-            return {"mode": "trunk-all", "tagged": [], "untagged": native_vid}
-        raw = (trunk_vlans or "").strip().lower()
-        if raw and raw != "none" and not expanded:
-            logger.warning(
-                "Trunking VLANs Enabled=%r could not be parsed; "
-                "treating as plain trunk with no tagged VLANs",
-                trunk_vlans,
-            )
-        tagged = [v for v in expanded if v != native_vid]
-        return {"mode": "trunk", "tagged": tagged, "untagged": native_vid}
-    return {"mode": "routed", "tagged": [], "untagged": None}
+            allowed: list[int] | str | None = "all"
+        else:
+            allowed = vids
+            # Malformed trunk input must NOT silently widen to trunk-all.
+            # Warn from the cisco_s300 logger so operators can spot vendor
+            # output drift.
+            raw_lower = trunk_spec.strip().lower()
+            if raw_lower and raw_lower != "none" and not vids:
+                logger.warning(
+                    "Trunking VLANs Enabled=%r could not be parsed; "
+                    "treating as plain trunk with no tagged VLANs",
+                    trunk_spec,
+                )
+    else:
+        allowed = None
+
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode=admin,  # type: ignore[arg-type]
+        oper_mode=None,    # S300 doesn't expose oper-mode separately
+        access_vlan=access_vid,
+        native_vlan=native_vid,
+        allowed_vlans=allowed,
+    )
 
 
 def _parse_vlan_ports_raw(raw: str) -> dict[str, list[str]]:
@@ -508,10 +487,10 @@ class S300Driver(_napalm_base.NetworkDriver):
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """
-        Return per-interface VLAN config (NAPALM #919 jobec shape).
+        Return per-interface VLAN config.
 
-        Parses ``show interfaces switchport`` from the S300 CLI.
-        Modes: access | trunk | trunk-all | routed (PVLAN/customer/etc. -> routed in v1).
+        Parses ``show interfaces switchport`` from the S300 CLI. Modes:
+        access | trunk | trunk-all | routed (PVLAN/customer/etc. → routed in v1).
         General mode collapses to trunk with explicit untagged + tagged sets.
         """
         output = self.device.send_command("show interfaces switchport")
@@ -536,11 +515,13 @@ class S300Driver(_napalm_base.NetworkDriver):
                 blocks[current][last_key] = v.strip()
             elif last_key is not None and line.strip():
                 # Continuation of the previous field's value. S300 wraps long
-                # `Trunking VLANs Enabled` values across indented lines; the
-                # downstream `_parse_s300_vlan_list` splits on commas and
-                # tolerates extra whitespace so we just concatenate.
+                # `Trunking VLANs Enabled` values across indented lines.
                 blocks[current][last_key] = (
                     blocks[current][last_key] + line.strip()
                 )
 
-        return {ifname: _s300_switchport_block_to_entry(fields) for ifname, fields in blocks.items()}
+        result: dict[str, dict] = {}
+        for ifname, fields in blocks.items():
+            info = _s300_block_to_switchport_info(fields)
+            result[ifname] = classify_switchport(info)
+        return result

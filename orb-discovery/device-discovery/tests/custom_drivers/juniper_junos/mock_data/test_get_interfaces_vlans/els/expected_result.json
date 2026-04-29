@@ -1,0 +1,12 @@
+{
+  "xe-0/0/0": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 50
+  },
+  "xe-0/0/1": {
+    "mode": "trunk",
+    "tagged": [100, 200],
+    "untagged": 1
+  }
+}

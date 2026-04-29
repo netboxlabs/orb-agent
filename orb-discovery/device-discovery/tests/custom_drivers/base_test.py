@@ -198,12 +198,20 @@ class BaseDriverTest:
             assert info.get("mode") in ("access", "trunk", "trunk-all", "routed"), (
                 f"{ifname}: invalid mode {info.get('mode')!r}"
             )
-            tagged = info.get("tagged", [])
+            assert "tagged" in info, f"{ifname}: missing 'tagged' key"
+            assert "untagged" in info, f"{ifname}: missing 'untagged' key"
+            tagged = info["tagged"]
             assert isinstance(tagged, list)
             for v in tagged:
-                assert isinstance(v, int) and 1 <= v <= 4094, f"{ifname}: bad tagged VID {v}"
-            untagged = info.get("untagged")
-            assert untagged is None or (isinstance(untagged, int) and 1 <= untagged <= 4094)
+                assert isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 4094, (
+                    f"{ifname}: bad tagged VID {v}"
+                )
+            untagged = info["untagged"]
+            assert untagged is None or (
+                isinstance(untagged, int)
+                and not isinstance(untagged, bool)
+                and 1 <= untagged <= 4094
+            )
 
         expected = _load_expected(mock_dir)
         if expected is not None:

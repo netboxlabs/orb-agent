@@ -342,3 +342,113 @@ class FakeRestDevice:
 
     def close_session(self) -> None:
         """No-op stub — no real session to close."""
+
+
+class FakeJsonRpcDevice:
+    """
+    Drop-in replacement for pyeapi (Arista EOS) and NX-API (Cisco NX-OS) clients.
+
+    Both vendors expose a "send a command, get JSON back" surface, just under
+    different method names. This fake serves both shapes from the same JSON
+    file convention so EOS and NX-OS tests share infrastructure.
+
+    File-name mapping reuses ``_cli_filename`` from the CLI fake — i.e. the
+    command string is sanitized into a filename and ``.json`` appended.
+
+    Methods
+    -------
+    run_commands(commands, encoding="json")
+        EOS shape. ``commands`` is a list of strings. Returns a list of dicts,
+        one per command, each loaded from ``<sanitized>.json`` or ``{}`` if
+        missing.
+
+    show(command, raw_text=False)
+        NX-OS shape. Single-command. Returns a dict loaded from
+        ``<sanitized>.json`` or ``{}`` if missing.
+
+    cli(command)
+        NX-OS-SSH compatibility hook (rarely used by NX-API drivers — present
+        for completeness). Returns the loaded dict directly.
+
+    """
+
+    def __init__(self, mock_dir: Path) -> None:
+        """Store the directory containing mock JSON response files."""
+        self._mock_dir = mock_dir
+
+    def _load_json(self, command: str) -> dict:
+        filename = _cli_filename(command).replace(".txt", ".json")
+        path = self._mock_dir / filename
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def run_commands(self, commands: list[str], encoding: str = "json", **kwargs) -> list[dict]:
+        """Pyeapi-shaped multi-command call. Returns list of per-command results."""
+        return [self._load_json(cmd) for cmd in commands]
+
+    def show(self, command: str, raw_text: bool = False, **kwargs) -> dict:
+        """NX-API-shaped single-command call."""
+        return self._load_json(command)
+
+    def cli(self, command: str, **kwargs) -> dict:
+        """NX-API ``cli()`` alias used by some drivers — returns the same dict."""
+        return self._load_json(command)
+
+
+class _FakePyEZRpc:
+    """Backing object for FakePyEZDevice.rpc — turns attribute access into RPC calls."""
+
+    def __init__(self, mock_dir: Path) -> None:
+        self._mock_dir = mock_dir
+
+    def __getattr__(self, name: str):
+        if name.startswith("__") and name.endswith("__"):
+            # Don't intercept dunder lookups — let Python fall back to the
+            # default AttributeError so introspection (deepcopy, repr, etc.)
+            # behaves correctly and isn't accidentally turned into a callable
+            # that returns <data/>.
+            raise AttributeError(name)
+        # PyEZ converts python_name → rpc-name. We accept both "snake_name" and
+        # "rpc-name". Try the kebab-case form first (matches PyEZ wire names),
+        # fall back to the underscore form.
+        from lxml import etree  # local import: lxml is a junos/pyez dep already
+
+        kebab = name.replace("_", "-")
+        candidates = [f"{kebab}.xml", f"{name}.xml"]
+
+        def _call(*_args, **_kwargs):
+            for fname in candidates:
+                path = self._mock_dir / fname
+                if path.exists():
+                    return etree.fromstring(path.read_text(encoding="utf-8").encode("utf-8"))
+            return etree.fromstring(b"<data/>")
+
+        return _call
+
+
+class FakePyEZDevice:
+    """
+    Drop-in replacement for ``napalm.junos.junos.JunOSDriver.device`` (a PyEZ Device).
+
+    Exposes ``.rpc.<rpc_name>(...)`` whose attribute access is mapped to
+    ``<rpc-name>.xml`` files in the scenario directory (snake_case → kebab-case
+    conversion, matching PyEZ's wire convention). Returns an lxml ``Element``
+    parsed from the file content, or ``<data/>`` when the file is missing.
+
+    File-name mapping example::
+
+        device.rpc.get_ethernet_switching_interface_information()
+            → get-ethernet-switching-interface-information.xml
+    """
+
+    def __init__(self, mock_dir: Path) -> None:
+        """Store the directory and create the RPC proxy."""
+        self._mock_dir = mock_dir
+        self.rpc = _FakePyEZRpc(mock_dir)
+
+    def cli(self, command: str = "", **kwargs) -> str:
+        """Optional CLI fallback — reads ``<sanitized>.txt`` like FakeCLIDevice."""
+        filename = _cli_filename(command)
+        path = self._mock_dir / filename
+        return path.read_text(encoding="utf-8") if path.exists() else ""

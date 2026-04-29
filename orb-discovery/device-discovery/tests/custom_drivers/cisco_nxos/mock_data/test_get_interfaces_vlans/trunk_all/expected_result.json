@@ -1,0 +1,7 @@
+{
+  "Ethernet1/4": {
+    "mode": "trunk-all",
+    "tagged": [],
+    "untagged": 1
+  }
+}

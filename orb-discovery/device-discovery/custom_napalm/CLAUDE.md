@@ -66,6 +66,75 @@ hostname, vendor, model, os_version, serial_number, uptime (float, seconds), fqd
 
 ---
 
+## Optional method: `get_interfaces_vlans`
+
+A driver MAY implement `get_interfaces_vlans()` to populate NetBox
+`Interface.mode` / `untagged_vlan` / `tagged_vlans`. The runner calls it via
+`getattr(...)` so drivers without it are silently skipped.
+
+**Output shape** (per interface):
+
+```python
+{
+    "mode":     "access" | "trunk" | "trunk-all" | "routed",
+    "tagged":   list[int],          # VIDs in 1..4094, never the untagged VID
+    "untagged": int | None,         # VID in 1..4094, None for routed
+}
+```
+
+`device_discovery.translate.apply_interface_vlans()` maps these to NetBox:
+`access` → `access`, `trunk` → `tagged`, `trunk-all` → `tagged-all`,
+`routed` → no change (Diode PATCH semantics — see translate.py docstring).
+
+**Use the generic classifier — do NOT reimplement.** `custom_napalm/_vlan.py`
+exposes `SwitchportInfo` (vendor-neutral intermediate) and
+`classify_switchport()` (the pure-function classifier that handles voice-VLAN
+promotion, DTP fallback, wildcard signaling, VID clamping, and bool-rejection).
+
+**The driver only does field extraction:**
+
+```python
+from custom_napalm._vlan import SwitchportInfo, classify_switchport, parse_vlan_range_string
+
+def get_interfaces_vlans(self) -> dict[str, dict]:
+    raw = self.device.send_command("show interfaces switchport")  # or RPC, or eAPI
+    rows = parse_output(...)  # or vendor JSON / XML
+    result: dict[str, dict] = {}
+    for row in rows:
+        info = SwitchportInfo(
+            enabled=...,
+            admin_mode=...,    # "access" | "trunk" | "dynamic" | None
+            oper_mode=...,     # for DTP fallback; None if not applicable
+            access_vlan=...,
+            native_vlan=...,
+            allowed_vlans=...,  # list[int] | "all" | None
+            voice_vlan=...,
+        )
+        result[ifname] = classify_switchport(info)
+    return result
+```
+
+For Cisco NX-OS, both the NX-API and SSH paths share
+`custom_napalm/_nxos_common.nxos_row_to_switchport_info()` — pass it the
+NX-API/ntc-templates row dict directly.
+
+## Mock fakes for structured-API drivers
+
+For drivers that use a non-CLI transport, use these test fakes:
+
+| Transport | Fake | File convention |
+|---|---|---|
+| Netmiko (SSH CLI) | `FakeCLIDevice` | `<sanitized-cmd>.txt` |
+| pyeapi (Arista eAPI) / NX-API JSON | `FakeJsonRpcDevice` | `<sanitized-cmd>.json` |
+| PyEZ (Juniper NETCONF) | `FakePyEZDevice` | `<rpc-name>.xml` (kebab-case) |
+| Pure NETCONF (ncclient) | `FakeNetconfConn` | `response.xml`, `<source>_config.xml` |
+| pan.xapi (PAN-OS XML API) | `FakeXmlDevice` | `<sanitized-xml>.xml` |
+| ArubaOS-Switch REST | `FakeHTTPSession` | `<endpoint>.json` |
+| pyaoscx | `FakePyaoscxSession` | `<path>.json` |
+| Cisco ASA REST | `FakeRestDevice` | `<path>.json` |
+
+---
+
 ## Config sanitization
 
 `runner.py` calls `get_config(sanitized=True)` by default (operators can set `sanitize_config: false`

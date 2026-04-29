@@ -1,0 +1,25 @@
+{
+  "switchports": {
+    "Ethernet1": {
+      "enabled": true,
+      "switchportInfo": {
+        "mode": "access",
+        "accessVlanId": 100,
+        "trunkingNativeVlanId": 1,
+        "trunkAllowedVlans": "ALL"
+      }
+    },
+    "Ethernet2": {
+      "enabled": true,
+      "switchportInfo": {
+        "mode": "trunk",
+        "trunkingNativeVlanId": 99,
+        "trunkAllowedVlans": "10,20,30"
+      }
+    },
+    "Ethernet5": {
+      "enabled": false,
+      "switchportInfo": {}
+    }
+  }
+}

@@ -1,0 +1,8 @@
+Name: Ethernet1/4
+  Switchport: Enabled
+  Switchport Monitor: Not enabled
+  Operational Mode: trunk
+  Access Mode VLAN: 1 (default)
+  Trunking Native Mode VLAN: 1 (default)
+  Voice VLAN: none
+  Trunking VLANs Allowed: 1-4094
