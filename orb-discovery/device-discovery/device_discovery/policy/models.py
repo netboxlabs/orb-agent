@@ -186,6 +186,15 @@ class Options(BaseModel):
         default=None,
         description="Restrict auto-discovery to this driver list. If not set, all supported drivers are tried.",
     )
+    create_unknown_vlans: bool = Field(
+        default=True,
+        description=(
+            "Auto-emit VLAN entities for VIDs referenced on interfaces "
+            "but absent from the device's VLAN database. Stubs inherit "
+            "attributes from defaults.vlan for stable matching. Set "
+            "False to drop unknown VIDs from associations."
+        ),
+    )
 
 
 class Config(BaseModel):

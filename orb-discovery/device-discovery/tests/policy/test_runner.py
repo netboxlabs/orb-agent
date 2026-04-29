@@ -926,3 +926,90 @@ def test_setup_policy_runner_override_defaults_empty_list_preserves_parent(
     assert len(passed_config.defaults.interface_patterns) == 1
     assert passed_config.defaults.interface_patterns[0].match == r"^Gi"
     assert passed_config.defaults.interface_exclude_patterns is None
+
+
+def test_collect_device_data_includes_interfaces_vlans(
+    policy_runner, sample_scopes, sample_config, run_store
+):
+    """When driver exposes get_interfaces_vlans(), result lands in data['interfaces_vlans']."""
+    with (
+        patch("device_discovery.policy.runner.get_network_driver") as mock_get_driver,
+        patch("device_discovery.client.Client.ingest") as mock_ingest,
+    ):
+        mock_driver_instance = MagicMock()
+        mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
+        mock_driver_instance.get_facts.return_value = {"model": "SampleModel"}
+        mock_driver_instance.get_interfaces.return_value = {}
+        mock_driver_instance.get_interfaces_ip.return_value = {}
+        mock_driver_instance.get_vlans.return_value = {"10": {"name": "DATA", "interfaces": []}}
+        mock_driver_instance.get_interfaces_vlans.return_value = {
+            "Gi1/0/1": {"mode": "access", "tagged": [], "untagged": 10},
+        }
+
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
+        policy_runner.run("test_id", sample_scopes[0], sample_config)
+
+        mock_ingest.assert_called_once()
+        _metadata, data = mock_ingest.call_args[0]
+        assert data["interfaces_vlans"] == {
+            "Gi1/0/1": {"mode": "access", "tagged": [], "untagged": 10},
+        }
+
+
+def test_collect_device_data_handles_interfaces_vlans_failure(
+    policy_runner, sample_scopes, sample_config, run_store, caplog
+):
+    """A failing get_interfaces_vlans() is logged and discovery continues without it."""
+    import logging
+
+    with (
+        patch("device_discovery.policy.runner.get_network_driver") as mock_get_driver,
+        patch("device_discovery.client.Client.ingest") as mock_ingest,
+        caplog.at_level(logging.WARNING),
+    ):
+        mock_driver_instance = MagicMock()
+        mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
+        mock_driver_instance.get_facts.return_value = {"model": "SampleModel"}
+        mock_driver_instance.get_interfaces.return_value = {}
+        mock_driver_instance.get_interfaces_ip.return_value = {}
+        mock_driver_instance.get_vlans.return_value = {}
+        mock_driver_instance.get_interfaces_vlans.side_effect = RuntimeError("boom")
+
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
+        policy_runner.run("test_id", sample_scopes[0], sample_config)
+
+        mock_ingest.assert_called_once()
+        _metadata, data = mock_ingest.call_args[0]
+        assert "interfaces_vlans" not in data
+        assert any(
+            "Error getting interface VLANs" in r.message for r in caplog.records
+        )
+
+
+def test_collect_device_data_no_get_interfaces_vlans_method(
+    policy_runner, sample_scopes, sample_config, run_store
+):
+    """Driver lacking get_interfaces_vlans is silently fine; key absent from data."""
+    with (
+        patch("device_discovery.policy.runner.get_network_driver") as mock_get_driver,
+        patch("device_discovery.client.Client.ingest") as mock_ingest,
+    ):
+        # Spec only the methods the runner actually calls — no get_interfaces_vlans.
+        mock_driver_instance = MagicMock(spec=[
+            "get_facts", "get_interfaces", "get_interfaces_ip", "get_vlans",
+        ])
+        mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
+        mock_driver_instance.get_facts.return_value = {"model": "SampleModel"}
+        mock_driver_instance.get_interfaces.return_value = {}
+        mock_driver_instance.get_interfaces_ip.return_value = {}
+        mock_driver_instance.get_vlans.return_value = {}
+
+        policy_runner.run_store = run_store
+        policy_runner.name = "test_policy"
+        policy_runner.run("test_id", sample_scopes[0], sample_config)
+
+        mock_ingest.assert_called_once()
+        _metadata, data = mock_ingest.call_args[0]
+        assert "interfaces_vlans" not in data

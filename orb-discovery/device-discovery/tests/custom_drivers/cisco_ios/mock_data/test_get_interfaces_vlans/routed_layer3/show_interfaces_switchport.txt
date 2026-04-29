@@ -1,0 +1,2 @@
+Name: Gi1/0/2
+Switchport: Disabled

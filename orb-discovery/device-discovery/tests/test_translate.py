@@ -3,6 +3,7 @@
 """NetBox Labs - Translate Unit Tests."""
 
 import pytest
+from netboxlabs.diode.sdk.ingester import Device, Entity, Interface
 
 from device_discovery.interface import (
     translate_interface,
@@ -20,8 +21,11 @@ from device_discovery.policy.models import (
     VrfParameters,
 )
 from device_discovery.translate import (
+    _build_vlan_cache,
+    _ensure_vlan,
     _strip_prefix,
     _target_ipv4_candidate,
+    apply_interface_vlans,
     assign_primary_ip,
     translate_data,
     translate_device,
@@ -1151,3 +1155,522 @@ def test_assign_primary_ip_multiple_matches_deterministic_warn(caplog):
     assert any(
         "multiple candidates match target" in rec.message for rec in caplog.records
     )
+
+
+def test_build_vlan_cache_from_get_vlans():
+    """_build_vlan_cache produces vid->VLAN map from get_vlans() shape."""
+    raw = {"10": {"name": "DATA"}, "20": {"name": "VOICE"}}
+    cache = _build_vlan_cache(raw, Defaults())
+    assert set(cache.keys()) == {10, 20}
+    assert cache[10].vid == 10
+    assert cache[10].name == "DATA"
+    assert cache[20].name == "VOICE"
+
+
+def test_build_vlan_cache_empty():
+    """_build_vlan_cache returns empty dict for None or empty input."""
+    assert _build_vlan_cache({}, Defaults()) == {}
+    assert _build_vlan_cache(None, Defaults()) == {}
+
+
+def test_ensure_vlan_returns_cached():
+    """_ensure_vlan returns the cached VLAN without creating a stub."""
+    defaults = Defaults()
+    cache = _build_vlan_cache({"10": {"name": "DATA"}}, defaults)
+    new_stubs: list = []
+    vlan = _ensure_vlan(10, cache, defaults, Options(), new_stubs)
+    assert vlan.vid == 10
+    assert vlan.name == "DATA"
+    assert new_stubs == []
+
+
+def test_ensure_vlan_creates_stub_when_unknown_and_flag_true():
+    """_ensure_vlan synthesizes a stub VLAN when the VID is unknown and the flag is True."""
+    cache: dict = {}
+    new_stubs: list = []
+    vlan = _ensure_vlan(99, cache, Defaults(), Options(create_unknown_vlans=True), new_stubs)
+    assert vlan.vid == 99
+    assert vlan.name == "VLAN99"
+    assert len(new_stubs) == 1
+    assert new_stubs[0].vid == 99
+    assert new_stubs[0].name == "VLAN99"
+    assert cache[99].vid == 99
+
+
+def test_ensure_vlan_returns_none_when_unknown_and_flag_false():
+    """_ensure_vlan returns None when the VID is unknown and create_unknown_vlans is False."""
+    cache: dict = {}
+    new_stubs: list = []
+    vlan = _ensure_vlan(99, cache, Defaults(), Options(create_unknown_vlans=False), new_stubs)
+    assert vlan is None
+    assert new_stubs == []
+    assert 99 not in cache
+
+
+def _make_iface_entity(name: str) -> Entity:
+    """Build a minimal Interface Entity for tests."""
+    return Entity(
+        interface=Interface(
+            device=Device(name="sw1"),
+            name=name,
+            type="1000base-t",
+        )
+    )
+
+
+def test_apply_interface_vlans_access():
+    """Access mode sets Interface.mode='access' with untagged_vlan, no tagged."""
+    entities = [_make_iface_entity("Gi1/0/1")]
+    defaults = Defaults()
+    options = Options()
+    cache = _build_vlan_cache({"10": {"name": "DATA"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/1": {"mode": "access", "tagged": [], "untagged": 10}},
+        cache, defaults, options, new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == "access"
+    assert iface.untagged_vlan.vid == 10
+    assert list(iface.tagged_vlans) == []
+    assert new_stubs == []
+
+
+def test_apply_interface_vlans_trunk_with_native():
+    """Trunk mode maps to Interface.mode='tagged' with native + tagged list."""
+    entities = [_make_iface_entity("Gi1/0/24")]
+    defaults = Defaults()
+    options = Options()
+    cache = _build_vlan_cache(
+        {"1": {"name": "default"}, "10": {"name": "DATA"}, "20": {"name": "VOICE"}},
+        defaults,
+    )
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/24": {"mode": "trunk", "tagged": [10, 20], "untagged": 1}},
+        cache, defaults, options, new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == "tagged"
+    assert iface.untagged_vlan.vid == 1
+    assert sorted(v.vid for v in iface.tagged_vlans) == [10, 20]
+
+
+def test_apply_interface_vlans_drops_native_from_tagged_defensively():
+    """If a driver leaks the native VID into 'tagged', it must be filtered out."""
+    entities = [_make_iface_entity("Gi1/0/24")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"1": {"name": "default"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/24": {"mode": "trunk", "tagged": [1, 10], "untagged": 1}},
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert sorted(v.vid for v in iface.tagged_vlans) == [10]
+
+
+def test_apply_interface_vlans_routed_no_op():
+    """Routed mode leaves Interface.mode/untagged_vlan/tagged_vlans untouched."""
+    entities = [_make_iface_entity("Gi1/0/2")]
+    defaults = Defaults()
+    cache = {}
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/2": {"mode": "routed", "tagged": [], "untagged": None}},
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == ""
+    assert not iface.HasField("untagged_vlan")
+    assert list(iface.tagged_vlans) == []
+
+
+def test_apply_interface_vlans_unknown_vid_creates_stub():
+    """Unknown tagged VIDs are stubbed when create_unknown_vlans is True."""
+    entities = [_make_iface_entity("Gi1/0/24")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"1": {"name": "default"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/24": {"mode": "trunk", "tagged": [99], "untagged": 1}},
+        cache, defaults, Options(create_unknown_vlans=True), new_stubs,
+    )
+    iface = entities[0].interface
+    assert sorted(v.vid for v in iface.tagged_vlans) == [99]
+    assert [s.vid for s in new_stubs] == [99]
+
+
+def test_apply_interface_vlans_unknown_vid_dropped_when_flag_false():
+    """Unknown tagged VIDs are dropped (no association, no stub) when flag is False."""
+    entities = [_make_iface_entity("Gi1/0/24")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"1": {"name": "default"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/24": {"mode": "trunk", "tagged": [99], "untagged": 1}},
+        cache, defaults, Options(create_unknown_vlans=False), new_stubs,
+    )
+    iface = entities[0].interface
+    assert list(iface.tagged_vlans) == []
+    assert new_stubs == []
+
+
+def test_apply_interface_vlans_iface_not_in_entities_is_skipped():
+    """Driver-returned interface names not present in emitted entities are skipped."""
+    entities = [_make_iface_entity("Gi1/0/1")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"10": {"name": "DATA"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi9/9/9": {"mode": "access", "tagged": [], "untagged": 10}},
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == ""
+    assert not iface.HasField("untagged_vlan")
+
+
+def test_apply_interface_vlans_handles_empty_input():
+    """Empty interfaces_vlans dict is a no-op."""
+    entities = [_make_iface_entity("Gi1/0/1")]
+    new_stubs: list = []
+    apply_interface_vlans(entities, {}, {}, Defaults(), Options(), new_stubs)
+    assert new_stubs == []
+
+
+def test_translate_data_emits_interface_vlan_associations():
+    """translate_data() applies interface↔VLAN associations and emits stub VLANs."""
+    data = {
+        "driver": "ios",
+        "device": {
+            "hostname": "sw1",
+            "vendor": "Cisco",
+            "model": "C9300",
+            "os_version": "17.6",
+            "serial_number": "ABC123",
+            "uptime": 1000,
+            "interface_list": ["Gi1/0/1", "Gi1/0/24"],
+            "fqdn": "sw1.example.com",
+        },
+        "interface": {
+            "Gi1/0/1": {"is_up": True, "is_enabled": True, "description": "",
+                         "last_flapped": 0.0, "mtu": 1500, "speed": 1000, "mac_address": ""},
+            "Gi1/0/24": {"is_up": True, "is_enabled": True, "description": "",
+                          "last_flapped": 0.0, "mtu": 1500, "speed": 1000, "mac_address": ""},
+        },
+        "interface_ip": {},
+        "vlan": {"1": {"name": "default"}, "10": {"name": "DATA"}},
+        "interfaces_vlans": {
+            "Gi1/0/1":  {"mode": "access", "tagged": [], "untagged": 10},
+            "Gi1/0/24": {"mode": "trunk",  "tagged": [10, 99], "untagged": 1},
+        },
+        "defaults": Defaults(),
+        "options": Options(),
+    }
+
+    entities = list(translate_data(data))
+
+    iface_by_name = {
+        e.interface.name: e.interface
+        for e in entities if e.HasField("interface")
+    }
+    assert iface_by_name["Gi1/0/1"].mode == "access"
+    assert iface_by_name["Gi1/0/1"].untagged_vlan.vid == 10
+    assert iface_by_name["Gi1/0/24"].mode == "tagged"
+    assert iface_by_name["Gi1/0/24"].untagged_vlan.vid == 1
+    assert sorted(v.vid for v in iface_by_name["Gi1/0/24"].tagged_vlans) == [10, 99]
+
+    vlan_vids = sorted(e.vlan.vid for e in entities if e.HasField("vlan"))
+    assert 99 in vlan_vids, "stub VLAN(vid=99) must be emitted alongside known VLANs"
+
+
+def test_apply_interface_vlans_skips_non_int_untagged():
+    """Non-int untagged value (driver bug) is silently dropped, not raised."""
+    entities = [_make_iface_entity("Gi1/0/1")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"10": {"name": "DATA"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/1": {"mode": "access", "tagged": [], "untagged": "not-a-vid"}},
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == "access"
+    assert not iface.HasField("untagged_vlan")
+    assert new_stubs == []
+
+
+def test_apply_interface_vlans_filters_out_of_range_tagged_vids():
+    """Tagged VIDs outside 1..4094 are dropped (defensive)."""
+    entities = [_make_iface_entity("Gi1/0/24")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"1": {"name": "default"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/24": {"mode": "trunk", "tagged": [10, 0, 5000, "bad", 99], "untagged": 1}},
+        cache, defaults, Options(create_unknown_vlans=True), new_stubs,
+    )
+    iface = entities[0].interface
+    # Only 10 and 99 survive (0 out-of-range, 5000 out-of-range, "bad" non-int)
+    assert sorted(v.vid for v in iface.tagged_vlans) == [10, 99]
+
+
+def test_apply_interface_vlans_handles_non_list_tagged():
+    """Non-list 'tagged' value (driver bug) is treated as empty, not raised."""
+    entities = [_make_iface_entity("Gi1/0/1")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"10": {"name": "DATA"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/1": {"mode": "access", "tagged": None, "untagged": 10}},
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == "access"
+    assert iface.untagged_vlan.vid == 10
+    assert list(iface.tagged_vlans) == []
+
+
+def test_apply_interface_vlans_trunk_all_maps_to_tagged_all():
+    """mode=trunk-all from the driver maps to NetBox 'tagged-all'."""
+    entities = [_make_iface_entity("Gi1/0/48")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"99": {"name": "MGMT"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/48": {"mode": "trunk-all", "tagged": [], "untagged": 99}},
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == "tagged-all"
+    assert iface.untagged_vlan.vid == 99
+    assert list(iface.tagged_vlans) == []
+
+
+def test_apply_interface_vlans_is_idempotent_on_tagged_vlans():
+    """Calling apply_interface_vlans twice doesn't duplicate tagged VLANs."""
+    entities = [_make_iface_entity("Gi1/0/24")]
+    defaults = Defaults()
+    cache = _build_vlan_cache(
+        {"1": {"name": "default"}, "10": {"name": "DATA"}, "20": {"name": "VOICE"}},
+        defaults,
+    )
+    new_stubs: list = []
+    payload = {"Gi1/0/24": {"mode": "trunk", "tagged": [10, 20], "untagged": 1}}
+    apply_interface_vlans(entities, payload, cache, defaults, Options(), new_stubs)
+    apply_interface_vlans(entities, payload, cache, defaults, Options(), new_stubs)
+    iface = entities[0].interface
+    # Without the clear-before-append, this would be [10, 10, 20, 20].
+    assert sorted(v.vid for v in iface.tagged_vlans) == [10, 20]
+
+
+def test_apply_interface_vlans_clears_stale_untagged_when_new_has_none():
+    """Switching an interface from access (untagged=10) to a trunk with no native clears the stale link."""
+    entities = [_make_iface_entity("Gi1/0/1")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"10": {"name": "DATA"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/1": {"mode": "access", "tagged": [], "untagged": 10}},
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.HasField("untagged_vlan")
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/1": {"mode": "trunk", "tagged": [10], "untagged": None}},
+        cache, defaults, Options(), new_stubs,
+    )
+    assert not iface.HasField("untagged_vlan")
+    assert sorted(v.vid for v in iface.tagged_vlans) == [10]
+
+
+def test_apply_interface_vlans_skips_non_dict_payload(caplog):
+    """A non-dict interfaces_vlans payload (e.g. list) is logged and skipped, not raised."""
+    import logging
+    entities = [_make_iface_entity("Gi1/0/1")]
+    new_stubs: list = []
+    with caplog.at_level(logging.WARNING):
+        apply_interface_vlans(
+            entities,
+            ["malformed", "list"],
+            {}, Defaults(), Options(), new_stubs,
+        )
+    iface = entities[0].interface
+    assert iface.mode == ""
+    assert not iface.HasField("untagged_vlan")
+    assert list(iface.tagged_vlans) == []
+    assert any("not a dict" in r.message for r in caplog.records)
+
+
+def test_apply_interface_vlans_skips_non_dict_per_entry(caplog):
+    """A non-dict value for a single interface key is logged and skipped."""
+    import logging
+    entities = [_make_iface_entity("Gi1/0/1"), _make_iface_entity("Gi1/0/2")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"10": {"name": "DATA"}}, defaults)
+    new_stubs: list = []
+    with caplog.at_level(logging.WARNING):
+        apply_interface_vlans(
+            entities,
+            {
+                "Gi1/0/1": {"mode": "access", "tagged": [], "untagged": 10},
+                "Gi1/0/2": "broken-string-value",
+            },
+            cache, defaults, Options(), new_stubs,
+        )
+    iface1 = entities[0].interface
+    iface2 = entities[1].interface
+    # The good entry processed normally
+    assert iface1.mode == "access"
+    assert iface1.untagged_vlan.vid == 10
+    # The bad entry left untouched
+    assert iface2.mode == ""
+    assert not iface2.HasField("untagged_vlan")
+    # Warning logged
+    assert any(
+        "is not a dict" in r.message and "Gi1/0/2" in r.message
+        for r in caplog.records
+    )
+
+
+def test_apply_interface_vlans_skips_none_per_entry(caplog):
+    """A None value for a single interface key is logged and skipped (treated as malformed)."""
+    import logging
+    entities = [_make_iface_entity("Gi1/0/1")]
+    defaults = Defaults()
+    cache = {}
+    new_stubs: list = []
+    with caplog.at_level(logging.WARNING):
+        apply_interface_vlans(
+            entities,
+            {"Gi1/0/1": None},
+            cache, defaults, Options(), new_stubs,
+        )
+    iface = entities[0].interface
+    assert iface.mode == ""
+    assert not iface.HasField("untagged_vlan")
+    assert any("is not a dict" in r.message for r in caplog.records)
+
+
+def test_apply_interface_vlans_routed_leaves_stale_state_untouched():
+    """
+    Documented limitation: routed mode is a no-op.
+
+    Diode plugin's PATCH semantics don't propagate field clears, so prior
+    VLAN associations remain in NetBox. Operators must clear manually
+    until Diode supports explicit field clearing.
+    """
+    from netboxlabs.diode.sdk.ingester import VLAN
+    entities = [_make_iface_entity("Gi1/0/1")]
+    iface = entities[0].interface
+    iface.mode = "access"
+    iface.untagged_vlan.CopyFrom(VLAN(vid=10, name="DATA"))
+    iface.tagged_vlans.append(VLAN(vid=20, name="OTHER"))
+
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/1": {"mode": "routed", "tagged": [], "untagged": None}},
+        {}, Defaults(), Options(), [],
+    )
+
+    # Stale state intentionally preserved (see comment in apply_interface_vlans).
+    assert iface.mode == "access"
+    assert iface.untagged_vlan.vid == 10
+    assert [v.vid for v in iface.tagged_vlans] == [20]
+
+
+def test_apply_interface_vlans_unknown_mode_leaves_stale_state_untouched():
+    """Same documented limitation for unknown driver modes."""
+    from netboxlabs.diode.sdk.ingester import VLAN
+    entities = [_make_iface_entity("Gi1/0/1")]
+    iface = entities[0].interface
+    iface.mode = "tagged"
+    iface.untagged_vlan.CopyFrom(VLAN(vid=1))
+    iface.tagged_vlans.append(VLAN(vid=10))
+
+    apply_interface_vlans(
+        entities,
+        {"Gi1/0/1": {"mode": "private-vlan-host", "tagged": [], "untagged": None}},
+        {}, Defaults(), Options(), [],
+    )
+    assert iface.mode == "tagged"
+    assert iface.untagged_vlan.vid == 1
+    assert [v.vid for v in iface.tagged_vlans] == [10]
+
+
+def test_apply_interface_vlans_clears_stale_untagged_when_create_unknown_vlans_false():
+    """
+    Verify stale untagged_vlan is cleared when stub creation is refused.
+
+    When create_unknown_vlans=False AND the new untagged VID is unknown,
+    a previously-set untagged_vlan on the entity is cleared at the proto layer.
+    """
+    from netboxlabs.diode.sdk.ingester import VLAN
+    entities = [_make_iface_entity("Gi1/0/1")]
+    iface = entities[0].interface
+    # Pre-populate as if a prior translation left an untagged_vlan link.
+    iface.untagged_vlan.CopyFrom(VLAN(vid=10, name="DATA"))
+    assert iface.untagged_vlan.vid == 10
+
+    apply_interface_vlans(
+        entities,
+        # New payload references vid=99, which isn't in the cache.
+        # With create_unknown_vlans=False, _ensure_vlan returns None and the
+        # untagged_vlan should be cleared at the proto level.
+        {"Gi1/0/1": {"mode": "access", "tagged": [], "untagged": 99}},
+        {},
+        Defaults(),
+        Options(create_unknown_vlans=False),
+        [],
+    )
+
+    iface = entities[0].interface
+    assert iface.mode == "access"
+    assert not iface.HasField("untagged_vlan"), (
+        "untagged_vlan must be cleared when the new VID is unknown and "
+        "create_unknown_vlans=False — otherwise the Interface keeps a stale link."
+    )
+
+
+def test_apply_interface_vlans_rejects_bool_vids():
+    """
+    Booleans pretending to be VIDs (Python: bool is a subclass of int) are rejected.
+
+    Without an explicit isinstance(bool) guard in _safe_vid, True would coerce
+    to int(1) and silently associate VLAN 1.
+    """
+    entities = [_make_iface_entity("Gi1/0/1")]
+    defaults = Defaults()
+    cache = _build_vlan_cache({"1": {"name": "default"}}, defaults)
+    new_stubs: list = []
+    apply_interface_vlans(
+        entities,
+        {
+            "Gi1/0/1": {
+                "mode": "trunk",
+                "tagged": [True, False, 10],  # bool entries should be dropped
+                "untagged": True,             # bool untagged should also be rejected
+            },
+        },
+        cache, defaults, Options(), new_stubs,
+    )
+    iface = entities[0].interface
+    assert iface.mode == "tagged"
+    # untagged was True (rejected) → no untagged_vlan should be set
+    assert not iface.HasField("untagged_vlan")
+    # tagged was [True, False, 10] → only 10 survives the bool rejection
+    assert sorted(v.vid for v in iface.tagged_vlans) == [10]

@@ -1,0 +1,9 @@
+Name: gi5
+Switchport: enable
+Administrative Mode: access
+Operational Mode: access
+Access Mode VLAN: 100
+Access Multicast TV VLAN: none
+Trunking Native Mode VLAN: 1
+Trunking VLANs Enabled: 1
+Protected: Disabled

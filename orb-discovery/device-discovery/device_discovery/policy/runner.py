@@ -285,6 +285,16 @@ class PolicyRunner:
                 logger.warning(
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}. Continuing without VLAN data."
                 )
+            get_iface_vlans = getattr(device, "get_interfaces_vlans", None)
+            if callable(get_iface_vlans):
+                try:
+                    data["interfaces_vlans"] = get_iface_vlans()
+                except Exception as e:
+                    logger.warning(
+                        f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                        f"Error getting interface VLANs: {e}. "
+                        "Continuing without interface-VLAN data."
+                    )
             metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
             entity_count = Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")

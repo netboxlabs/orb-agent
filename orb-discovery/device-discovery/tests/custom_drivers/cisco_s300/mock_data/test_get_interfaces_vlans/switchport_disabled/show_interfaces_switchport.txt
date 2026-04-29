@@ -1,0 +1,2 @@
+Name: gi3
+Switchport: disable

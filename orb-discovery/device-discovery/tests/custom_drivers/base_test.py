@@ -28,6 +28,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 
 def parametrize_scenarios(metafunc, mock_data_root: Path) -> None:
     """
@@ -178,6 +180,30 @@ class BaseDriverTest:
             assert "name" in data, f"VLAN {vlan_id}: missing 'name'"
             assert "interfaces" in data, f"VLAN {vlan_id}: missing 'interfaces'"
             assert isinstance(data["interfaces"], list)
+
+        expected = _load_expected(mock_dir)
+        if expected is not None:
+            assert result == expected
+
+    def test_get_interfaces_vlans(self, scenario: str) -> None:
+        """Verify get_interfaces_vlans returns valid per-iface VLAN config (driver-optional)."""
+        mock_dir = self._mock_dir("test_get_interfaces_vlans", scenario)
+        driver = self._build_driver(mock_dir)
+        if not hasattr(driver, "get_interfaces_vlans"):
+            pytest.skip(f"{self.driver_cls.__name__} does not expose get_interfaces_vlans")
+
+        result = driver.get_interfaces_vlans()
+        assert isinstance(result, dict), "get_interfaces_vlans must return a dict"
+        for ifname, info in result.items():
+            assert info.get("mode") in ("access", "trunk", "trunk-all", "routed"), (
+                f"{ifname}: invalid mode {info.get('mode')!r}"
+            )
+            tagged = info.get("tagged", [])
+            assert isinstance(tagged, list)
+            for v in tagged:
+                assert isinstance(v, int) and 1 <= v <= 4094, f"{ifname}: bad tagged VID {v}"
+            untagged = info.get("untagged")
+            assert untagged is None or (isinstance(untagged, int) and 1 <= untagged <= 4094)
 
         expected = _load_expected(mock_dir)
         if expected is not None:

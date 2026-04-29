@@ -5,7 +5,8 @@
 import copy
 import ipaddress
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import (
@@ -203,6 +204,221 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
     return vlan
 
 
+def _build_vlan_cache(
+    raw_vlans: dict | None,
+    defaults: Defaults,
+) -> dict[int, pb.VLAN]:
+    """Build vid -> pb.VLAN cache using the same rules as translate_vlan()."""
+    cache: dict[int, pb.VLAN] = {}
+    for vid_str, info in (raw_vlans or {}).items():
+        vlan = translate_vlan(vid_str, (info or {}).get("name", ""), defaults)
+        if vlan is not None:
+            cache[vlan.vid] = vlan
+    return cache
+
+
+def _ensure_vlan(
+    vid: int,
+    cache: dict[int, pb.VLAN],
+    defaults: Defaults,
+    options: Options,
+    new_stubs: list[pb.VLAN],
+) -> pb.VLAN | None:
+    """
+    Return the cached VLAN for ``vid``, or synthesize a stub when allowed.
+
+    Stubs use the placeholder name ``"VLAN<vid>"`` because NetBox's
+    ipam.vlan.name field is required (non-blank). Operators or sibling
+    switches can later overwrite the placeholder with a real name via the
+    same vid+group matcher.
+    """
+    if vid in cache:
+        return cache[vid]
+    if not getattr(options, "create_unknown_vlans", True):
+        return None
+    stub = translate_vlan(str(vid), f"VLAN{vid}", defaults)
+    if stub is None:
+        return None
+    cache[vid] = stub
+    new_stubs.append(stub)
+    return stub
+
+
+_NAPALM_TO_NETBOX_MODE = {
+    "access": "access",
+    "trunk": "tagged",
+    "trunk-all": "tagged-all",
+}
+
+
+def _safe_vid(value: object) -> int | None:
+    """
+    Coerce a driver-supplied VID to an int in [1, 4094], or return None.
+
+    Drivers occasionally emit malformed values; clamping/coercing here keeps
+    discovery resilient instead of aborting on a bad row. Booleans are
+    rejected explicitly because ``bool`` is a subclass of ``int`` in Python
+    (``int(True) == 1``) — without this guard a driver accidentally emitting
+    ``True``/``False`` for a VID would silently map to VLAN 1.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        vid = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if vid < 1 or vid > 4094:
+        return None
+    return vid
+
+
+def _apply_iface_vlan_mutation(
+    iface: pb.Interface,
+    info: dict,
+    netbox_mode: str,
+    vlan_cache: dict[int, pb.VLAN],
+    defaults: Defaults,
+    options: Options,
+    new_stubs: list[pb.VLAN],
+) -> None:
+    """Apply a single interface's VLAN association based on driver-supplied info."""
+    iface.mode = netbox_mode
+
+    untagged = info.get("untagged")
+
+    # Defensive: ``tagged`` may not be a list when a custom driver
+    # returns malformed data — coerce to an iterable.
+    raw_tagged = info.get("tagged")
+    if not isinstance(raw_tagged, (list, tuple)):
+        raw_tagged = []
+
+    # Defensive: filter unparseable VIDs (and out-of-range) silently.
+    untagged_vid = _safe_vid(untagged) if untagged is not None else None
+    tagged_vids = []
+    for v in raw_tagged:
+        vid = _safe_vid(v)
+        if vid is not None and vid != untagged_vid:
+            tagged_vids.append(vid)
+
+    # Defensive idempotency: clear any pre-existing untagged_vlan up front.
+    # We then re-set it only if (a) the new payload supplies a VID and
+    # (b) _ensure_vlan returns a usable VLAN (which honors
+    # `Options.create_unknown_vlans` for unknown VIDs).
+    # NOTE: at the Diode/NetBox layer this clear is currently cosmetic
+    # because the plugin uses PATCH semantics on omitted fields — the
+    # proto state is correct but won't propagate as a clear to NetBox.
+    # See the Round 9 limitation note in the routed branch and the PR
+    # description.
+    iface.ClearField("untagged_vlan")
+    if untagged_vid is not None:
+        vlan = _ensure_vlan(untagged_vid, vlan_cache, defaults, options, new_stubs)
+        if vlan is not None:
+            iface.untagged_vlan.CopyFrom(vlan)
+
+    # Defensive idempotency: clear any pre-existing tagged VLANs before
+    # rebuilding the list. Without this, calling apply_interface_vlans()
+    # twice on the same Interface entity (or handing in an entity that
+    # already has tagged_vlans set) would accumulate duplicates.
+    del iface.tagged_vlans[:]
+    for vid in tagged_vids:
+        vlan = _ensure_vlan(vid, vlan_cache, defaults, options, new_stubs)
+        if vlan is not None:
+            iface.tagged_vlans.append(vlan)
+
+
+def _apply_interface_vlan_associations(
+    data: dict,
+    interface_related_entities: list[Entity],
+    defaults: Defaults,
+    options: Options,
+    new_stubs: list[pb.VLAN],
+) -> None:
+    """
+    Apply interface↔VLAN associations from custom-driver method, if available.
+
+    Builds a vid→VLAN cache from ``data["vlan"]`` and mutates Interface entities
+    in ``interface_related_entities`` to set mode/untagged_vlan/tagged_vlans
+    when ``data["interfaces_vlans"]`` is present. Stubs are appended to
+    ``new_stubs`` for VIDs not in the cache when ``options.create_unknown_vlans``
+    is True.
+    """
+    ifaces_vlans = data.get("interfaces_vlans") or {}
+    if not ifaces_vlans:
+        return
+    vlan_cache = _build_vlan_cache(data.get("vlan") or {}, defaults)
+    apply_interface_vlans(
+        interface_related_entities,
+        ifaces_vlans,
+        vlan_cache,
+        defaults,
+        options,
+        new_stubs,
+    )
+
+
+def apply_interface_vlans(
+    entities: list[Entity],
+    interfaces_vlans: Mapping[str, Any] | object,
+    vlan_cache: dict[int, pb.VLAN],
+    defaults: Defaults,
+    options: Options,
+    new_stubs: list[pb.VLAN],
+) -> None:
+    """Mutate Interface entities in place with mode/untagged_vlan/tagged_vlans."""
+    if not interfaces_vlans:
+        return
+    if not isinstance(interfaces_vlans, dict):
+        # A custom driver may return a non-dict (list, None, str, etc.) when
+        # its parser hits an unexpected shape. Skip silently rather than
+        # aborting the whole device's ingestion with an AttributeError.
+        logger.warning(
+            "interfaces_vlans payload is not a dict (got %s); skipping interface↔VLAN mapping",
+            type(interfaces_vlans).__name__,
+        )
+        return
+
+    by_name: dict[str, pb.Interface] = {
+        entity.interface.name: entity.interface
+        for entity in entities
+        if entity.HasField("interface")
+    }
+
+    for if_name, info in interfaces_vlans.items():
+        iface = by_name.get(if_name)
+        if iface is None:
+            logger.debug(
+                "interfaces_vlans: skipping %r — not present among emitted Interface entities",
+                if_name,
+            )
+            continue
+
+        if not isinstance(info, dict):
+            logger.warning(
+                "interfaces_vlans[%r] is not a dict (got %s); skipping interface VLAN mapping",
+                if_name,
+                type(info).__name__,
+            )
+            continue
+
+        netbox_mode = _NAPALM_TO_NETBOX_MODE.get(info.get("mode"))
+        if netbox_mode is None:
+            # routed / unknown / disabled — leave the Interface entity
+            # untouched. Note: ClearField()-ing mode/untagged_vlan/
+            # tagged_vlans here would NOT propagate to NetBox: the Diode
+            # plugin's apply-change-set endpoint uses PATCH semantics on
+            # the diff `data` payload, and proto3 default-value fields
+            # are omitted from serialization, so they get treated as
+            # "no change" rather than "clear". Operators converting a
+            # switchport to L3 must currently clear the stale VLAN
+            # association in NetBox manually, or wait for Diode-plugin
+            # support for explicit field clearing.
+            continue
+
+        _apply_iface_vlan_mutation(
+            iface, info, netbox_mode, vlan_cache, defaults, options, new_stubs
+        )
+
+
 def translate_device_config(config_info: dict, options: Options) -> DeviceConfig | None:
     """
     Translate device configuration from NAPALM format to Diode SDK DeviceConfig entity.
@@ -376,6 +592,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
 
     """
     entities = []
+    new_stubs: list[pb.VLAN] = []
 
     defaults = data.get("defaults") or Defaults()
     options = data.get("options") or Options()
@@ -407,6 +624,9 @@ def translate_data(data: dict) -> Iterable[Entity]:
         # because Entity(device=...) copies the message; subsequent mutations
         # on `device` would not propagate to the wrapped copy.
         assign_primary_ip(device, interface_related_entities, target_hostname)
+        _apply_interface_vlan_associations(
+            data, interface_related_entities, defaults, options, new_stubs,
+        )
         entities.append(Entity(device=device))
         entities.extend(interface_related_entities)
 
@@ -415,5 +635,14 @@ def translate_data(data: dict) -> Iterable[Entity]:
             vlan = translate_vlan(vid, vlan_info.get("name"), defaults)
             if vlan:
                 entities.append(Entity(vlan=vlan))
+
+    # Emit any auto-stubbed VLANs (referenced on interfaces but absent from
+    # get_vlans()). De-dup against VIDs already emitted above.
+    if new_stubs:
+        already_emitted = {e.vlan.vid for e in entities if e.HasField("vlan")}
+        for stub in new_stubs:
+            if stub.vid not in already_emitted:
+                entities.append(Entity(vlan=stub))
+                already_emitted.add(stub.vid)
 
     return entities
