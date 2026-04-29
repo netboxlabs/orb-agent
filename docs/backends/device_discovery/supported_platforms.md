@@ -16,12 +16,20 @@ Drivers that implement `get_interfaces_vlans()` populate per-interface switching
 
 | Driver | Status |
 |--------|--------|
+| `eos` | Supported (Arista EOS) — via eAPI JSON; works over `transport=ssh` or `transport=https` |
 | `ios` | Supported (Cisco IOS, IOS-XE) |
+| `nxos` | Supported (Cisco NX-OS) — via NX-API JSON |
+| `nxos_ssh` | Supported (Cisco NX-OS) — via SSH + ntc-templates |
+| `junos` | Supported (Juniper Junos) — EX/QFX switching, handles ELS and non-ELS configurations |
 | `cisco_s300` | Supported (Cisco Small Business 300/350/550) |
 
-Additional vendors will land in follow-up changes. See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option.
+See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option. Additional vendors land as follow-up PRs as the underlying drivers gain support.
 
-**Cisco IOS voice-VLAN quirk:** an access port carrying a voice VLAN is reported as `mode=tagged` (NetBox's `tagged-with-untagged-native` semantics) with the data VLAN as untagged and the voice VLAN as tagged — because NetBox's strict `access` mode disallows tagged VLANs. This only fires when the voice VLAN differs from the access VLAN; same-VLAN configurations stay as plain `mode=access`.
+**Cisco IOS / NX-OS voice-VLAN quirk:** an access port carrying a voice VLAN is reported as `mode=tagged` (NetBox's `tagged-with-untagged-native` semantics) with the data VLAN as untagged and the voice VLAN as tagged — because NetBox's strict `access` mode disallows tagged VLANs. This only fires when the voice VLAN differs from the access VLAN; same-VLAN configurations stay as plain `mode=access`.
+
+**Junos VLAN-name members:** v1 reads `<interface-vlan-member-tagid>` directly from the PyEZ RPC response. Members emitted with only a name (no tagid) are skipped with a warning; resolution against `get_vlans()` is deferred to a follow-up. Voice-VLAN promotion is also deferred for Junos — VOIP semantics differ from the Cisco family.
+
+**EOS, NX-OS-NX-API, Junos:** unlike IOS/S300/NX-OS-SSH, these drivers fetch via structured APIs (eAPI/NX-API/NETCONF) rather than CLI scrape. No ntc-templates dependency on those paths.
 
 ## Standard NAPALM drivers
 
