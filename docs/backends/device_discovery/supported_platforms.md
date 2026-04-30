@@ -4,7 +4,7 @@ This page lists the vendors, operating systems, and NAPALM drivers supported by 
 
 The backend connects to network devices over SSH / NETCONF / vendor APIs via [NAPALM](https://napalm.readthedocs.io/). Support is driver-bound: a device is supported only if a corresponding NAPALM driver exists.
 
-> Compatibility note: driver presence does not guarantee that every feature on every OS version works. Vendors regularly change CLI/API behavior across releases. Report gaps via a GitHub issue against [orb-discovery](https://github.com/netboxlabs/orb-discovery/issues).
+> Compatibility note: driver presence does not guarantee that every feature on every OS version works. Vendors regularly change CLI/API behavior across releases. Report gaps via a GitHub issue against [orb-agent](https://github.com/netboxlabs/orb-agent/issues).
 
 ## Auto-discovery behavior
 
@@ -56,7 +56,7 @@ These drivers ship with the [NAPALM](https://napalm.readthedocs.io/en/latest/sup
 | `nxos` | Cisco | NX-OS (NX-API) |
 | `nxos_ssh` | Cisco | NX-OS (SSH) |
 
-## Custom NAPALM drivers (orb-discovery)
+## Custom NAPALM drivers
 
 These drivers are bundled with device-discovery. They are **not** tried during auto-discovery unless explicitly listed in `discovery_drivers`; otherwise set `driver:` on the scope entry.
 
