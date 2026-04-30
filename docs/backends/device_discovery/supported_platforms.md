@@ -4,11 +4,43 @@ This page lists the vendors, operating systems, and NAPALM drivers supported by 
 
 The backend connects to network devices over SSH / NETCONF / vendor APIs via [NAPALM](https://napalm.readthedocs.io/). Support is driver-bound: a device is supported only if a corresponding NAPALM driver exists.
 
-> Compatibility note: driver presence does not guarantee that every feature on every OS version works. Vendors regularly change CLI/API behavior across releases. Report gaps via a GitHub issue against [orb-discovery](https://github.com/netboxlabs/orb-discovery/issues).
+> Compatibility note: driver presence does not guarantee that every feature on every OS version works. Vendors regularly change CLI/API behavior across releases. Report gaps via a GitHub issue against [orb-agent](https://github.com/netboxlabs/orb-agent/issues).
 
 ## Auto-discovery behavior
 
 When a scope entry does not specify a `driver`, device-discovery attempts driver detection automatically. Only the **standard NAPALM drivers** below are tried during auto-discovery. Custom drivers must be used explicitly by either setting `driver:` on the scope entry, or by listing them in the `discovery_drivers` option (see [Custom Driver Discovery Example](./README.md#custom-driver-discovery-example)).
+
+## Interface ↔ VLAN associations
+
+Drivers that implement `get_interfaces_vlans()` populate per-interface switching configuration on the emitted `Interface` entities (mode, untagged/access VLAN, tagged VLAN list). Drivers without the method continue to emit interfaces without VLAN associations — this is opt-in per driver.
+
+| Driver | Status |
+|--------|--------|
+| `eos` | Supported (Arista EOS) — via eAPI JSON; works over `transport=ssh` or `transport=https` |
+| `ios` | Supported (Cisco IOS, IOS-XE) |
+| `nxos` | Supported (Cisco NX-OS) — via NX-API JSON |
+| `nxos_ssh` | Supported (Cisco NX-OS) — via SSH + ntc-templates |
+| `junos` | Supported (Juniper Junos) — EX/QFX switching, handles ELS and non-ELS configurations |
+| `cisco_s300` | Supported (Cisco Small Business 300/350/550) |
+| `mellanox_mlnxos` | Supported (Mellanox MLNX-OS) — via SSH; hybrid mode collapses to trunk (native + tagged) |
+| `dell_sonic` | Supported (Dell Enterprise SONiC) — via SSH; parses `show interface switchport` |
+| `cumulus_linux` | Supported (Cumulus Linux / NVIDIA) — via SSH using `bridge -j vlan show` JSON |
+| `aruba_aoscx` | Supported (HPE Aruba AOS-CX) — via pyaoscx REST API |
+| `aruba_osswitch` | Supported (HPE ArubaOS-Switch / ex-ProCurve) — via REST; per-VLAN→per-port inversion |
+
+See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option. Additional vendors land as follow-up PRs as the underlying drivers gain support.
+
+**Cisco IOS / NX-OS voice-VLAN quirk:** an access port carrying a voice VLAN is reported as `mode=tagged` (NetBox's `tagged-with-untagged-native` semantics) with the data VLAN as untagged and the voice VLAN as tagged — because NetBox's strict `access` mode disallows tagged VLANs. This only fires when the voice VLAN differs from the access VLAN; same-VLAN configurations stay as plain `mode=access`.
+
+**Junos VLAN-name members:** v1 reads `<interface-vlan-member-tagid>` directly from the PyEZ RPC response. Members emitted with only a name (no tagid) are skipped with a warning; resolution against `get_vlans()` is deferred to a follow-up. Voice-VLAN promotion is also deferred for Junos — VOIP semantics differ from the Cisco family.
+
+**Structured-API vs CLI:** `eos`, `nxos`, `junos`, and `aruba_aoscx` fetch via structured APIs (eAPI / NX-API / NETCONF / pyaoscx REST) and have no ntc-templates dependency. The CLI-scrape paths (`ios`, `cisco_s300`, `nxos_ssh`, `mellanox_mlnxos`, `dell_sonic`, `cumulus_linux`) parse vendor-specific output with regex or, in Cumulus's case, the iproute2 JSON format.
+
+**ArubaOS-Switch (`aruba_osswitch`)** has no first-class "all VLANs" wildcard in its REST model, so the driver never emits `mode=tagged-all`; restricted trunks always carry an explicit tagged VLAN list.
+
+**Cumulus Linux (`cumulus_linux`)** uses the Linux bridge VLAN model: a port with PVID-only is reported as `mode=access`; PVID + additional VIDs becomes `mode=tagged` with the PVID as untagged; VIDs without PVID becomes `mode=tagged` with no untagged. The driver does not emit `mode=tagged-all` because the kernel requires explicit VID lists.
+
+**AOS-CX (`aruba_aoscx`)** distinguishes `vlan_mode=native-untagged` (native VID untagged on the wire — emits `untagged_vlan`) from `vlan_mode=native-tagged` (native VID is also tagged on egress — the native VID is folded into `tagged_vlans` and no `untagged_vlan` is emitted). The REST convention "empty `vlan_trunks` under `vlan_mode=trunk` means all VLANs allowed" is honoured and produces `mode=tagged-all`.
 
 ## Standard NAPALM drivers
 
@@ -24,7 +56,7 @@ These drivers ship with the [NAPALM](https://napalm.readthedocs.io/en/latest/sup
 | `nxos` | Cisco | NX-OS (NX-API) |
 | `nxos_ssh` | Cisco | NX-OS (SSH) |
 
-## Custom NAPALM drivers (orb-discovery)
+## Custom NAPALM drivers
 
 These drivers are bundled with device-discovery. They are **not** tried during auto-discovery unless explicitly listed in `discovery_drivers`; otherwise set `driver:` on the scope entry.
 
