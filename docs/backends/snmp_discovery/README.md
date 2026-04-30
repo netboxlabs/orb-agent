@@ -127,12 +127,12 @@ Values are case-sensitive and must be passed as one of the strings in the tables
 | `NoPriv` | No privacy |
 | `DES` | CBC-DES |
 | `AES` | CFB128-AES-128 |
-| `AES192` | CFB128-AES-192 (RFC 3826 key localization) |
-| `AES256` | CFB128-AES-256 (RFC 3826 key localization) |
-| `AES192C` | CFB128-AES-192 (Cisco / Blumenthal-draft key localization) |
-| `AES256C` | CFB128-AES-256 (Cisco / Blumenthal-draft key localization) |
+| `AES192` | CFB128-AES-192 (Blumenthal-draft key localization) |
+| `AES256` | CFB128-AES-256 (Blumenthal-draft key localization) |
+| `AES192C` | CFB128-AES-192 (Reeder-draft key localization, Cisco) |
+| `AES256C` | CFB128-AES-256 (Reeder-draft key localization, Cisco) |
 
-**Note:** `SHA` is SHA-1 and `AES` is AES-128 — both kept for backward compatibility. For modern deployments, prefer `SHA256` (or stronger) and `AES256`. Use the `*C` privacy variants only when interoperating with Cisco devices that follow the Blumenthal AES key-localization draft instead of RFC 3826.
+**Note:** `SHA` is SHA-1 and `AES` is AES-128 — both kept for backward compatibility. For modern deployments, prefer `SHA256` (or stronger) and `AES256`. Use the `*C` privacy variants when interoperating with Cisco devices that follow the Reeder AES key-localization draft instead of the Blumenthal draft.
 
 ### Sample
 A sample policy including all parameters supported by the SNMP discovery backend.
