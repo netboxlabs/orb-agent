@@ -16,6 +16,12 @@ import napalm.base as _napalm_base
 from napalm.base import models
 from napalm.base.netmiko_helpers import netmiko_args
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    parse_vlan_range_string,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -497,6 +503,123 @@ class SONiCDriver(_napalm_base.NetworkDriver):
         if not output:
             return {}
         return _parse_vlan_output(output)
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from ``show interface[s] switchport``."""
+        try:
+            raw = _send_first_nonempty(
+                self.device,
+                ("show interfaces switchport", "show interface switchport"),
+            )
+        except Exception:
+            logger.debug("SONiC show interface[s] switchport failed", exc_info=True)
+            return {}
+        rows = _parse_show_interface_switchport(raw)
+        result: dict[str, dict] = {}
+        for row in rows:
+            ifname = row.get("interface")
+            if not ifname:
+                continue
+            info = _sonic_row_to_switchport_info(row)
+            result[ifname] = classify_switchport(info)
+        return result
+
+
+_SONIC_SWITCHPORT_HEADER_RE = re.compile(
+    r"^\s*Interface\s+Mode\s+Untagged\s+Tagged\s*$",
+    re.IGNORECASE,
+)
+_SONIC_SEPARATOR_RE = re.compile(r"^[-\s]+$")
+
+
+def _parse_show_interface_switchport(text: str) -> list[dict]:
+    """
+    Parse SONiC ``show interface switchport`` table into row dicts.
+
+    Returns a list of ``{interface, mode, untagged, tagged}`` dicts with the
+    raw string values verbatim (including ``-`` / ``all`` tokens).
+    """
+    rows: list[dict] = []
+    seen_header = False
+    for line in text.splitlines():
+        if not seen_header:
+            if _SONIC_SWITCHPORT_HEADER_RE.match(line):
+                seen_header = True
+            continue
+        stripped = line.strip()
+        if not stripped or _SONIC_SEPARATOR_RE.match(stripped):
+            continue
+        parts = re.split(r"\s{2,}", stripped)
+        if len(parts) < 4:
+            parts = stripped.split()
+        if len(parts) < 4:
+            continue
+        # Defensive: drop rows where the interface column is a dash-run
+        # (table separators with internal whitespace).
+        if set(parts[0]) <= {"-"}:
+            continue
+        rows.append({
+            "interface": parts[0],
+            "mode": parts[1],
+            "untagged": parts[2],
+            "tagged": parts[3],
+        })
+    return rows
+
+
+def _sonic_row_to_switchport_info(row: dict) -> SwitchportInfo:
+    """Map a SONiC switchport row to a SwitchportInfo."""
+    mode_raw = (row.get("mode") or "").strip().lower()
+    if mode_raw not in ("access", "trunk"):
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    untagged_raw = (row.get("untagged") or "").strip()
+    tagged_raw = (row.get("tagged") or "").strip()
+
+    def _vid(s: str) -> int | None:
+        if not s or s == "-":
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            return None
+
+    untagged_vid = _vid(untagged_raw)
+
+    if mode_raw == "access":
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged_vid,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    if tagged_raw and tagged_raw != "-":
+        if tagged_raw.lower() == "all":
+            allowed: list[int] | str | None = "all"
+        else:
+            vids, is_wildcard = parse_vlan_range_string(tagged_raw)
+            allowed = "all" if is_wildcard else vids
+    else:
+        allowed = None
+
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=untagged_vid,
+        allowed_vlans=allowed,
+    )
 
 
 def _members_from_str(members_str: str) -> list[str]:

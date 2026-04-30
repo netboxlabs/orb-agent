@@ -23,7 +23,144 @@ from napalm.base.exceptions import ConnectionException
 from napalm.base.helpers import mac as normalize_mac
 from pyaoscx.session import Session
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+)
+
 logger = logging.getLogger(__name__)
+
+_VLAN_URI_RE = re.compile(r".*/system/vlans/(\d+)\b")
+
+
+def _vlan_uri_to_vid(value: object) -> int | None:
+    """
+    Extract an integer VID from a vlan_tag/vlan_trunks entry.
+
+    Accepts AOS-CX REST reference shapes:
+      - URI string: ``"/rest/v10.04/system/vlans/10"``
+      - Stringified or native int VID
+      - Single-entry dict reference: ``{"/rest/v10.04/system/vlans/10": ...}``
+        (returned by pyaoscx at depth >= 1; the value side may be a URI
+        string or the expanded VLAN object dict at depth 2).
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        m = _VLAN_URI_RE.match(value)
+        if m:
+            try:
+                return int(m.group(1))
+            except ValueError:
+                return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    if isinstance(value, dict) and len(value) == 1:
+        # Reference dict: {uri: uri-or-object}. The KEY carries the URI.
+        only_key = next(iter(value.keys()))
+        return _vlan_uri_to_vid(only_key)
+    return None
+
+
+def _normalize_vlan_trunks(trunks_raw: object) -> list[int]:
+    """Normalize a vlan_trunks value (list/dict/None) to a list of integer VIDs."""
+    if isinstance(trunks_raw, dict):
+        trunk_iter: list = list(trunks_raw.keys())
+    elif isinstance(trunks_raw, list):
+        trunk_iter = trunks_raw
+    else:
+        trunk_iter = []
+    return [v for v in (_vlan_uri_to_vid(t) for t in trunk_iter) if v is not None]
+
+
+def _aoscx_iface_to_switchport_info(intf: dict) -> SwitchportInfo:
+    """Map an AOS-CX system/interfaces entry to a SwitchportInfo."""
+    if intf.get("routing") is True:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    vlan_mode = intf.get("vlan_mode")
+    if vlan_mode in (None, ""):
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    vlan_tag_vid = _vlan_uri_to_vid(intf.get("vlan_tag"))
+    trunk_vids = _normalize_vlan_trunks(intf.get("vlan_trunks"))
+
+    if vlan_mode == "access":
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=vlan_tag_vid,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if vlan_mode == "native-untagged":
+        allowed: list[int] | str | None = trunk_vids if trunk_vids else "all"
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=vlan_tag_vid,
+            allowed_vlans=allowed,
+        )
+    if vlan_mode == "native-tagged":
+        merged: list[int] = list(trunk_vids)
+        if vlan_tag_vid is not None and vlan_tag_vid not in merged:
+            merged.append(vlan_tag_vid)
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=merged if merged else "all",
+        )
+    if vlan_mode == "trunk":
+        if not trunk_vids:
+            return SwitchportInfo(
+                enabled=True,
+                admin_mode="trunk",
+                oper_mode="trunk",
+                access_vlan=None,
+                native_vlan=None,
+                allowed_vlans="all",
+            )
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=trunk_vids,
+        )
+
+    return SwitchportInfo(
+        enabled=False,
+        admin_mode=None,
+        oper_mode=None,
+        access_vlan=None,
+        native_vlan=None,
+        allowed_vlans=None,
+    )
 
 _API_VERSION = "10.04"
 
@@ -305,4 +442,23 @@ class AOSCXDriver(_napalm_base.NetworkDriver):
                 "interfaces": interface_list,
             }
 
+        return result
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from system/interfaces REST endpoint."""
+        try:
+            data = self._get(
+                "system/interfaces?attributes=name,vlan_mode,vlan_tag,vlan_trunks,routing&depth=2"
+            )
+        except Exception:
+            logger.debug("AOS-CX system/interfaces fetch failed", exc_info=True)
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        result: dict[str, dict] = {}
+        for name, intf in data.items():
+            if not isinstance(intf, dict):
+                continue
+            info = _aoscx_iface_to_switchport_info(intf)
+            result[name] = classify_switchport(info)
         return result

@@ -1,0 +1,1 @@
+[{"ifname": "swp5", "vlans": [{"vlan": 100, "flags": []}, {"vlan": 200, "flags": []}, {"vlan": 300, "flags": []}]}]

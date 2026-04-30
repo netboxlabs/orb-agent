@@ -14,6 +14,7 @@ hardware.
 """
 
 import ipaddress
+import json as _json
 import logging
 import re
 
@@ -22,6 +23,11 @@ from napalm.base import models
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
+
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -423,6 +429,125 @@ class CumulusDriver(_napalm_base.NetworkDriver):
                     entry["interfaces"].append(current_port)
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from ``bridge -j vlan show``."""
+        try:
+            raw = self.device.send_command("bridge -j vlan show")
+        except Exception:
+            logger.debug("Cumulus bridge -j vlan show failed", exc_info=True)
+            return {}
+        if not raw or not raw.strip():
+            return {}
+        try:
+            entries = _json.loads(raw)
+        except _json.JSONDecodeError:
+            logger.debug("Cumulus bridge JSON parse failed: %r", raw[:200])
+            return {}
+        if not isinstance(entries, list):
+            return {}
+        result: dict[str, dict] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            ifname = entry.get("ifname")
+            if not ifname:
+                continue
+            info = _bridge_json_to_switchport_info(entry)
+            result[ifname] = classify_switchport(info)
+        return result
+
+
+def _split_bridge_vlans(vlans: list) -> tuple[int | None, list[int]]:
+    """
+    Split a ``bridge -j vlan show`` vlans list into ``(pvid, tagged_vids)``.
+
+    Rejects bool VIDs (bool is a subclass of int) and silently drops malformed
+    rows. The PVID flag — when present — moves a VID into the pvid slot;
+    everything else accumulates into the tagged list.
+    """
+    pvid: int | None = None
+    tagged: list[int] = []
+    for v in vlans:
+        if not isinstance(v, dict):
+            continue
+        vid_raw = v.get("vlan")
+        if isinstance(vid_raw, bool):
+            continue
+        try:
+            vid = int(vid_raw)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        flags = v.get("flags") or []
+        is_pvid = any(f == "PVID" for f in flags) if isinstance(flags, list) else False
+        if is_pvid:
+            pvid = vid
+        else:
+            tagged.append(vid)
+    return pvid, tagged
+
+
+def _bridge_json_to_switchport_info(entry: dict) -> SwitchportInfo:
+    """
+    Map a ``bridge -j vlan show`` entry to a SwitchportInfo.
+
+    Linux bridge VLAN model — no Cisco-style 'switchport mode'. We infer:
+      - PVID-only with no tagged VIDs → access
+      - PVID + tagged VIDs            → trunk with native = PVID
+      - No PVID + ≥1 tagged VIDs      → trunk with no native
+      - No VIDs                       → routed
+    """
+    vlans = entry.get("vlans") or []
+    if not isinstance(vlans, list) or not vlans:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    pvid, tagged = _split_bridge_vlans(vlans)
+
+    if pvid is not None:
+        tagged = [v for v in tagged if v != pvid]
+
+    if pvid is not None and not tagged:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=pvid,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if pvid is not None and tagged:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=pvid,
+            allowed_vlans=tagged,
+        )
+    if pvid is None and tagged:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=tagged,
+        )
+    return SwitchportInfo(
+        enabled=False,
+        admin_mode=None,
+        oper_mode=None,
+        access_vlan=None,
+        native_vlan=None,
+        allowed_vlans=None,
+    )
 
 
 def _expand_vlan_token(token: str) -> list[int]:

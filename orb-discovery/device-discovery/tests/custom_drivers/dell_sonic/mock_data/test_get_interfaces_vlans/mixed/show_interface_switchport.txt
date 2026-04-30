@@ -1,0 +1,4 @@
+Interface     Mode    Untagged    Tagged
+Ethernet0     access  10          -
+Ethernet1     trunk   99          100,200
+Ethernet2     routed  -           -

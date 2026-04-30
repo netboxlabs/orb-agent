@@ -1,0 +1,5 @@
+{
+  "swp1": {"mode": "access", "tagged": [], "untagged": 10},
+  "swp2": {"mode": "trunk", "tagged": [100], "untagged": 20},
+  "swp3": {"mode": "routed", "tagged": [], "untagged": null}
+}

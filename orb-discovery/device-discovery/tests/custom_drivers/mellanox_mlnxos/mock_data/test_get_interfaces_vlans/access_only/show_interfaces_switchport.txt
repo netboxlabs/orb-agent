@@ -1,0 +1,8 @@
+Eth1/1
+  Admin Mode             : access
+  Operational Mode       : access
+  Access VLAN            : 10
+  Native VLAN            : 1
+  Allowed VLANs          : 1
+  Hybrid Allowed VLANs   :
+  Voice VLAN             :

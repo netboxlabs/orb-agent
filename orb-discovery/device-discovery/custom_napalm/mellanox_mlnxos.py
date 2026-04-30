@@ -18,6 +18,12 @@ from napalm.base import models
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    parse_vlan_range_string,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -102,6 +108,92 @@ def _split_sections(text: str, header_re: re.Pattern) -> list[tuple[str, str]]:
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         sections.append((match.group(0), text[match.end():end]))
     return sections
+
+
+# ---------------------------------------------------------------------------
+# Switchport parsing for get_interfaces_vlans
+# ---------------------------------------------------------------------------
+_SWITCHPORT_FIELD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z ]+?)\s*:\s*(.*?)\s*$")
+_SWITCHPORT_HEADER_RE = re.compile(r"^(Eth\d+(?:/\d+)*|Po\d+|Mlag\d+)\s*$")
+
+
+def _parse_switchport_sections(text: str) -> list[dict]:
+    """
+    Parse ``show interfaces switchport`` into a list of row dicts.
+
+    Each section starts with an interface header line (e.g. ``Eth1/1``) and
+    is followed by ``Field : Value`` lines. Empty lines separate sections.
+    """
+    rows: list[dict] = []
+    current: dict | None = None
+    for line in text.splitlines():
+        header = _SWITCHPORT_HEADER_RE.match(line)
+        if header:
+            if current is not None:
+                rows.append(current)
+            current = {"interface": header.group(1)}
+            continue
+        if current is None:
+            continue
+        m = _SWITCHPORT_FIELD_RE.match(line)
+        if m:
+            key = m.group(1).strip().lower().replace(" ", "_")
+            current[key] = m.group(2).strip()
+    if current is not None:
+        rows.append(current)
+    return rows
+
+
+def _maybe_int(value: str) -> int | None:
+    """Coerce a possibly-blank string to int, returning None on failure."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _mlnx_row_to_switchport_info(row: dict) -> SwitchportInfo:
+    """Map a parsed MLNX-OS switchport section to a SwitchportInfo."""
+    admin_raw = (row.get("admin_mode") or "").strip().lower()
+    oper_raw = (row.get("operational_mode") or "").strip().lower()
+    if admin_raw in ("disabled", "off"):
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if admin_raw == "hybrid":
+        admin: str | None = "trunk"
+    elif admin_raw in ("access", "trunk", "dynamic"):
+        admin = admin_raw
+    else:
+        admin = None
+    if oper_raw in ("access", "trunk", "routed"):
+        oper: str | None = oper_raw
+    elif oper_raw == "hybrid":
+        oper = "trunk"
+    else:
+        oper = None
+
+    raw_allowed = row.get("hybrid_allowed_vlans") or row.get("allowed_vlans") or ""
+    if raw_allowed:
+        vids, is_wildcard = parse_vlan_range_string(raw_allowed)
+        allowed: list[int] | str | None = "all" if is_wildcard else vids
+    else:
+        allowed = None
+
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode=admin,  # type: ignore[arg-type]
+        oper_mode=oper,    # type: ignore[arg-type]
+        access_vlan=_maybe_int(row.get("access_vlan") or ""),
+        native_vlan=_maybe_int(row.get("native_vlan") or ""),
+        allowed_vlans=allowed,
+        voice_vlan=_maybe_int(row.get("voice_vlan") or ""),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +316,23 @@ class MLNXOSDriver(_napalm_base.NetworkDriver):
         """Return VLAN information keyed by VLAN ID string."""
         out = self.device.send_command("show vlan")
         return _parse_vlan_table(out)
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from ``show interfaces switchport``."""
+        try:
+            raw = self.device.send_command("show interfaces switchport")
+        except Exception:
+            logger.debug("MLNX-OS show interfaces switchport failed", exc_info=True)
+            return {}
+        rows = _parse_switchport_sections(raw)
+        result: dict[str, dict] = {}
+        for row in rows:
+            ifname = row.get("interface")
+            if not ifname:
+                continue
+            info = _mlnx_row_to_switchport_info(row)
+            result[ifname] = classify_switchport(info)
+        return result
 
 
 # ---------------------------------------------------------------------------

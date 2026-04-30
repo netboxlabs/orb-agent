@@ -1,0 +1,5 @@
+[
+  {"ifname": "swp1", "vlans": [{"vlan": 10, "flags": ["PVID", "Egress Untagged"]}]},
+  {"ifname": "swp2", "vlans": [{"vlan": 20, "flags": ["PVID", "Egress Untagged"]}, {"vlan": 100, "flags": []}]},
+  {"ifname": "swp3", "vlans": []}
+]

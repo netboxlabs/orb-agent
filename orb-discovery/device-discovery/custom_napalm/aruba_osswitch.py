@@ -22,7 +22,73 @@ import napalm.base as _napalm_base
 from napalm.base import models
 from napalm.base.exceptions import ConnectionException
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _invert_vlan_port_rows(rows: list[dict]) -> dict[str, dict]:
+    """
+    Invert per-VLAN port rows into a per-port aggregate.
+
+    Returns ``{port_id: {"untagged": int|None, "tagged": list[int],
+    "forbidden": list[int]}}``. Tolerates upper- and lower-case POM_*
+    enum values and silently skips malformed rows.
+    """
+    out: dict[str, dict] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        port = row.get("port_id")
+        vid = row.get("vlan_id")
+        mode = (row.get("port_mode") or "").upper()
+        if not port or not isinstance(vid, int) or isinstance(vid, bool):
+            continue
+        bucket = out.setdefault(port, {"untagged": None, "tagged": [], "forbidden": []})
+        if mode == "POM_UNTAGGED":
+            bucket["untagged"] = vid
+        elif mode == "POM_TAGGED":
+            if vid not in bucket["tagged"]:
+                bucket["tagged"].append(vid)
+        elif mode == "POM_FORBIDDEN":
+            if vid not in bucket["forbidden"]:
+                bucket["forbidden"].append(vid)
+    return out
+
+
+def _osswitch_port_to_switchport_info(bucket: dict) -> SwitchportInfo:
+    """Map an inverted-port bucket to a SwitchportInfo."""
+    untagged = bucket.get("untagged")
+    tagged = bucket.get("tagged") or []
+    if untagged is None and not tagged:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if untagged is not None and not tagged:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=untagged,
+        allowed_vlans=list(tagged),
+    )
 
 _DEFAULT_API = "v6"
 
@@ -393,3 +459,23 @@ class ArubaOSSDriver(_napalm_base.NetworkDriver):
             vlans[vlan_id] = {"name": name, "interfaces": []}
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-port VLAN config from /rest/vN/vlans-ports."""
+        try:
+            resp = self.device.get("vlans-ports")
+        except Exception:
+            logger.debug("ArubaOS-Switch vlans-ports fetch failed", exc_info=True)
+            return {}
+        if not getattr(resp, "ok", False):
+            return {}
+        body = resp.json() or {}
+        rows = body.get("vlans_port_element") or []
+        if not isinstance(rows, list):
+            return {}
+        per_port = _invert_vlan_port_rows(rows)
+        result: dict[str, dict] = {}
+        for port_id, bucket in per_port.items():
+            info = _osswitch_port_to_switchport_info(bucket)
+            result[port_id] = classify_switchport(info)
+        return result
