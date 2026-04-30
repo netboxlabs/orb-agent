@@ -51,3 +51,26 @@ func TestRunStateInfo_TargetsIncludedWhenPresent(t *testing.T) {
 	assert.Equal(t, "10.0.0.1", targets[0])
 	assert.Equal(t, "10.0.0.2", targets[1])
 }
+
+func TestRunStateInfo_DriverOmittedWhenEmpty(t *testing.T) {
+	r := RunStateInfo{ID: "run-1", PolicyID: "policy-1", Status: "running"}
+
+	body, err := json.Marshal(r)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(body), "driver")
+}
+
+func TestRunStateInfo_DriverIncludedWhenPresent(t *testing.T) {
+	r := RunStateInfo{
+		ID:       "run-1",
+		PolicyID: "policy-1",
+		Status:   "completed",
+		Driver:   "junos",
+	}
+
+	body, err := json.Marshal(r)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(body), `"driver":"junos"`)
+}

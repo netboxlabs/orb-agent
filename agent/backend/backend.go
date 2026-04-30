@@ -19,6 +19,7 @@ type PolicyStatusRun struct {
 	CreatedAt   int64             `json:"created_at"` // nanoseconds since epoch
 	UpdatedAt   int64             `json:"updated_at"` // nanoseconds since epoch
 	Targets     []string          `json:"targets,omitempty"`
+	Driver      string            `json:"driver,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
