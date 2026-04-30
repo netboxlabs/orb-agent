@@ -96,14 +96,43 @@ Each target in the `targets` list can include:
 | community | string | yes* | SNMP community string for v1/v2c authentication |
 | username | string | no | SNMPv3 username |
 | security_level | string | no | SNMPv3 security level ("noAuthNoPriv", "authNoPriv", "authPriv") |
-| auth_protocol | string | no | SNMPv3 authentication protocol ("SHA", "MD5") |
+| auth_protocol | string | no | SNMPv3 authentication protocol (see [SNMPv3 auth/priv protocols](#snmpv3-authpriv-protocols)) |
 | auth_passphrase | string | no | SNMPv3 authentication passphrase |
-| priv_protocol | string | no | SNMPv3 privacy protocol ("AES", "DES") |
+| priv_protocol | string | no | SNMPv3 privacy protocol (see [SNMPv3 auth/priv protocols](#snmpv3-authpriv-protocols)) |
 | priv_passphrase | string | no | SNMPv3 privacy passphrase |
 
 *Required for SNMPv1/v2c, optional for SNMPv3
 
 **Note:** Authentication can be specified at the policy level (under `scope.authentication`) as a fallback, or per-target (under each target's `authentication` field). Targets without authentication use the policy-level authentication. Environment variables are supported using `${VAR}` syntax for `community`, `username`, `auth_passphrase`, and `priv_passphrase` fields.
+
+#### SNMPv3 auth/priv protocols
+Values are case-sensitive and must be passed as one of the strings in the tables below.
+
+`auth_protocol`:
+
+| Value | Algorithm |
+|:-----:|:---------:|
+| `NoAuth` | No authentication |
+| `MD5` | HMAC-MD5-96 |
+| `SHA` | HMAC-SHA-1-96 (SHA-1) |
+| `SHA224` | HMAC-SHA-224 |
+| `SHA256` | HMAC-SHA-256 |
+| `SHA384` | HMAC-SHA-384 |
+| `SHA512` | HMAC-SHA-512 |
+
+`priv_protocol`:
+
+| Value | Algorithm |
+|:-----:|:---------:|
+| `NoPriv` | No privacy |
+| `DES` | CBC-DES |
+| `AES` | CFB128-AES-128 |
+| `AES192` | CFB128-AES-192 (Blumenthal-draft key localization) |
+| `AES256` | CFB128-AES-256 (Blumenthal-draft key localization) |
+| `AES192C` | CFB128-AES-192 (Reeder-draft key localization, Cisco) |
+| `AES256C` | CFB128-AES-256 (Reeder-draft key localization, Cisco) |
+
+**Note:** `SHA` is SHA-1 and `AES` is AES-128 — both kept for backward compatibility. For modern deployments, prefer `SHA256` (or stronger) and `AES256`. Use the `*C` privacy variants when interoperating with Cisco devices that follow the Reeder AES key-localization draft instead of the Blumenthal draft.
 
 ### Sample
 A sample policy including all parameters supported by the SNMP discovery backend.
