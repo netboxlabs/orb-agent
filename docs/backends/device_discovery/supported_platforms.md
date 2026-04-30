@@ -22,6 +22,11 @@ Drivers that implement `get_interfaces_vlans()` populate per-interface switching
 | `nxos_ssh` | Supported (Cisco NX-OS) — via SSH + ntc-templates |
 | `junos` | Supported (Juniper Junos) — EX/QFX switching, handles ELS and non-ELS configurations |
 | `cisco_s300` | Supported (Cisco Small Business 300/350/550) |
+| `mellanox_mlnxos` | Supported (Mellanox MLNX-OS) — via SSH; hybrid mode collapses to trunk (native + tagged) |
+| `dell_sonic` | Supported (Dell Enterprise SONiC) — via SSH; parses `show interface switchport` |
+| `cumulus_linux` | Supported (Cumulus Linux / NVIDIA) — via SSH using `bridge -j vlan show` JSON |
+| `aruba_aoscx` | Supported (HPE Aruba AOS-CX) — via pyaoscx REST API |
+| `aruba_osswitch` | Supported (HPE ArubaOS-Switch / ex-ProCurve) — via REST; per-VLAN→per-port inversion |
 
 See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option. Additional vendors land as follow-up PRs as the underlying drivers gain support.
 
@@ -29,7 +34,13 @@ See the [device discovery README](./README.md#diode-entities) for the contract a
 
 **Junos VLAN-name members:** v1 reads `<interface-vlan-member-tagid>` directly from the PyEZ RPC response. Members emitted with only a name (no tagid) are skipped with a warning; resolution against `get_vlans()` is deferred to a follow-up. Voice-VLAN promotion is also deferred for Junos — VOIP semantics differ from the Cisco family.
 
-**EOS, NX-OS-NX-API, Junos:** unlike IOS/S300/NX-OS-SSH, these drivers fetch via structured APIs (eAPI/NX-API/NETCONF) rather than CLI scrape. No ntc-templates dependency on those paths.
+**Structured-API vs CLI:** `eos`, `nxos`, `junos`, and `aruba_aoscx` fetch via structured APIs (eAPI / NX-API / NETCONF / pyaoscx REST) and have no ntc-templates dependency. The CLI-scrape paths (`ios`, `cisco_s300`, `nxos_ssh`, `mellanox_mlnxos`, `dell_sonic`, `cumulus_linux`) parse vendor-specific output with regex or, in Cumulus's case, the iproute2 JSON format.
+
+**ArubaOS-Switch (`aruba_osswitch`)** has no first-class "all VLANs" wildcard in its REST model, so the driver never emits `mode=tagged-all`; restricted trunks always carry an explicit tagged VLAN list.
+
+**Cumulus Linux (`cumulus_linux`)** uses the Linux bridge VLAN model: a port with PVID-only is reported as `mode=access`; PVID + additional VIDs becomes `mode=tagged` with the PVID as untagged; VIDs without PVID becomes `mode=tagged` with no untagged. The driver does not emit `mode=tagged-all` because the kernel requires explicit VID lists.
+
+**AOS-CX (`aruba_aoscx`)** distinguishes `vlan_mode=native-untagged` (native VID untagged on the wire — emits `untagged_vlan`) from `vlan_mode=native-tagged` (native VID is also tagged on egress — the native VID is folded into `tagged_vlans` and no `untagged_vlan` is emitted). The REST convention "empty `vlan_trunks` under `vlan_mode=trunk` means all VLANs allowed" is honoured and produces `mode=tagged-all`.
 
 ## Standard NAPALM drivers
 
