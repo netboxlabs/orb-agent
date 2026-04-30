@@ -280,6 +280,10 @@ class Run(BaseModel):
     status: RunStatus
     reason: str = ""
     entity_count: int = 0
+    driver: str | None = Field(
+        default=None,
+        description="Resolved NAPALM driver after a successful device session",
+    )
     metadata: dict[str, str] = Field(default_factory=dict)
     created_at: int = Field(default_factory=time.time_ns)
     updated_at: int = Field(default_factory=time.time_ns)

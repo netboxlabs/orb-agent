@@ -144,7 +144,7 @@ def read_status():
         policies=policy_statuses,
     )
 
-    return response.model_dump()
+    return response.model_dump(mode="json", exclude_none=True)
 
 
 @app.get("/api/v1/capabilities")

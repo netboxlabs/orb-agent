@@ -6,11 +6,15 @@ import ipaddress
 import json
 import threading
 import time
+from typing import Any
 
 from device_discovery.policy.models import Run, RunStatus
 
 # Maximum number of runs to keep per target
 MAX_RUNS_PER_TARGET = 3
+
+# Sentinel: omit ``driver`` argument to ``update_run`` to leave the field unchanged.
+_MISSING_DRIVER = object()
 
 
 class RunStore:
@@ -128,6 +132,7 @@ class RunStore:
         status: RunStatus,
         error: Exception | None,
         entity_count: int,
+        driver: Any = _MISSING_DRIVER,
     ) -> None:
         """
         Update an existing run's status.
@@ -140,6 +145,8 @@ class RunStore:
             status: New status.
             error: Error if failed, None otherwise.
             entity_count: Number of entities discovered.
+            driver: Resolved NAPALM driver after a successful session; None clears
+                the field. Omit (use default) to leave the existing value unchanged.
 
         """
         with self._lock:
@@ -161,6 +168,9 @@ class RunStore:
                         run.reason = str(error)
                     else:
                         run.reason = ""  # Clear reason when no error
+
+                    if driver is not _MISSING_DRIVER:
+                        run.driver = driver
 
                     return
 

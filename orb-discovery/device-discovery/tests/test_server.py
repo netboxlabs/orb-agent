@@ -423,6 +423,7 @@ def test_read_status_with_policies(mock_version_semver):
         policy_id="test_policy",
         status=RunStatus.COMPLETED,
         entity_count=10,
+        driver="ios",
         created_at=int(datetime(2026, 1, 27, 10, 0, 0).timestamp() * 1e9),
         updated_at=int(datetime(2026, 1, 27, 10, 5, 0).timestamp() * 1e9),
     )
@@ -456,6 +457,7 @@ def test_read_status_with_policies(mock_version_semver):
         assert run["policy_id"] == "test_policy"
         assert run["status"] == "completed"
         assert run["entity_count"] == 10
+        assert run["driver"] == "ios"
         assert "id" in run
         assert "created_at" in run
         assert "updated_at" in run

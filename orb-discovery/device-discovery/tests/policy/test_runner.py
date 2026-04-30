@@ -245,6 +245,7 @@ def test_run_device_with_discovered_driver(
         }
         run = run_store.get_runs_for_policy(policy_runner.name)[0]
         assert kwargs["run_id"] == run.id
+        assert run.driver == "ios"
         assert data["driver"] == "ios"
         assert data["device"] == {"model": "SampleModel"}
         assert data["interface"] == {"eth0": "up"}
@@ -273,6 +274,8 @@ def test_run_discovered_driver_error(
         mock_logger_error.assert_called_once()
         assert "Not able to discover device driver" in mock_logger_error.call_args[0][0]
         assert policy_runner.status == Status.FAILED
+        failed_run = run_store.get_runs_for_policy(policy_runner.name)[0]
+        assert failed_run.driver is None
 
 
 def test_run_driver_failure_does_not_remove_job(policy_runner, sample_scopes, sample_config, run_store):
@@ -669,6 +672,7 @@ def test_run_uses_entity_count_from_collect(policy_runner, run_store):
     mock_update.assert_called_once()
     call_kwargs = mock_update.call_args[1]
     assert call_kwargs["entity_count"] == 5
+    assert call_kwargs["driver"] == "ios"
 
 
 def test_run_with_parent_uses_entity_count_from_collect(policy_runner, run_store):
@@ -691,6 +695,7 @@ def test_run_with_parent_uses_entity_count_from_collect(policy_runner, run_store
     mock_update.assert_called_once()
     call_kwargs = mock_update.call_args[1]
     assert call_kwargs["entity_count"] == 12
+    assert call_kwargs["driver"] == "ios"
 
 
 def test_run_with_parent_driver_failure_does_not_remove_job(policy_runner, run_store, sample_config):

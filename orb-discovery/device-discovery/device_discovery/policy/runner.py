@@ -347,6 +347,7 @@ class PolicyRunner:
                     status=RunStatus.FAILED,
                     error=Exception("No reachable hosts found in range"),
                     entity_count=0,
+                    driver=None,
                 )
                 return
 
@@ -397,6 +398,7 @@ class PolicyRunner:
                 status=RunStatus.FAILED,
                 error=e,
                 entity_count=0,
+                driver=None,
             )
 
     def run(self, id: str, scope: Napalm, config: Config):
@@ -431,6 +433,7 @@ class PolicyRunner:
                 status=RunStatus.FAILED,
                 error=Exception("Not able to discover device driver"),
                 entity_count=0,
+                driver=None,
             )
             return
 
@@ -454,6 +457,7 @@ class PolicyRunner:
                 status=RunStatus.COMPLETED,
                 error=None,
                 entity_count=entity_count,
+                driver=scope.driver,
             )
 
             # Record total discovery duration
@@ -478,6 +482,7 @@ class PolicyRunner:
                 status=RunStatus.FAILED,
                 error=e,
                 entity_count=0,
+                driver=None,
             )
 
             discovery_failure = get_metric("discovery_failure")
@@ -538,6 +543,7 @@ class PolicyRunner:
                 status=RunStatus.FAILED,
                 error=Exception("Not able to discover device driver"),
                 entity_count=0,
+                driver=None,
             )
             return
 
@@ -561,6 +567,7 @@ class PolicyRunner:
                 status=RunStatus.COMPLETED,
                 error=None,
                 entity_count=entity_count,
+                driver=scope.driver,
             )
 
             # Record total discovery duration
@@ -585,6 +592,7 @@ class PolicyRunner:
                 status=RunStatus.FAILED,
                 error=e,
                 entity_count=0,
+                driver=None,
             )
 
             discovery_failure = get_metric("discovery_failure")

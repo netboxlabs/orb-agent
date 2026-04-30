@@ -24,6 +24,7 @@ def test_run_creation():
     assert run.metadata["targets"] == '["router1.example.com"]'
     assert run.created_at
     assert run.updated_at
+    assert run.driver is None
 
 
 def test_run_with_parent():
@@ -76,6 +77,52 @@ def test_update_run_success():
     assert updated.status == RunStatus.COMPLETED
     assert updated.entity_count == 42
     assert updated.reason == ""
+    assert updated.driver is None
+
+
+def test_update_run_sets_driver():
+    """Resolved NAPALM driver is persisted when passed to update_run."""
+    store = RunStore()
+    run = store.create_run("policy1", "router1.example.com", "")
+
+    store.update_run(
+        "policy1",
+        "router1.example.com",
+        run.id,
+        RunStatus.COMPLETED,
+        None,
+        3,
+        driver="eos",
+    )
+
+    updated = store.get_runs_for_target("policy1", "router1.example.com")[0]
+    assert updated.driver == "eos"
+
+
+def test_update_run_omit_driver_preserves_existing():
+    """Omitting driver leaves the previous value unchanged."""
+    store = RunStore()
+    run = store.create_run("policy1", "192.168.1.1", "")
+    store.update_run(
+        "policy1",
+        "192.168.1.1",
+        run.id,
+        RunStatus.COMPLETED,
+        None,
+        1,
+        driver="junos",
+    )
+    store.update_run(
+        "policy1",
+        "192.168.1.1",
+        run.id,
+        RunStatus.FAILED,
+        Exception("device closed"),
+        0,
+    )
+
+    updated = store.get_runs_for_target("policy1", "192.168.1.1")[0]
+    assert updated.driver == "junos"
 
 
 def test_update_run_failure():
@@ -92,6 +139,62 @@ def test_update_run_failure():
     assert updated.status == RunStatus.FAILED
     assert updated.entity_count == 0
     assert "Connection timeout" in updated.reason
+
+
+def test_update_run_sets_and_preserves_driver():
+    """Resolved driver is stored; omitting driver on a later update preserves it."""
+    store = RunStore()
+    run = store.create_run("policy1", "router1.example.com", "")
+
+    store.update_run(
+        "policy1",
+        "router1.example.com",
+        run.id,
+        RunStatus.COMPLETED,
+        None,
+        5,
+        driver="ios",
+    )
+    updated = store.get_runs_for_target("policy1", "router1.example.com")[0]
+    assert updated.driver == "ios"
+
+    store.update_run(
+        "policy1",
+        "router1.example.com",
+        run.id,
+        RunStatus.COMPLETED,
+        None,
+        7,
+    )
+    updated = store.get_runs_for_target("policy1", "router1.example.com")[0]
+    assert updated.driver == "ios"
+    assert updated.entity_count == 7
+
+
+def test_update_run_clears_driver_with_none():
+    """Clearing driver with None sets driver to None."""
+    store = RunStore()
+    run = store.create_run("policy1", "router1.example.com", "")
+    store.update_run(
+        "policy1",
+        "router1.example.com",
+        run.id,
+        RunStatus.COMPLETED,
+        None,
+        1,
+        driver="ios",
+    )
+    store.update_run(
+        "policy1",
+        "router1.example.com",
+        run.id,
+        RunStatus.FAILED,
+        Exception("fail"),
+        0,
+        driver=None,
+    )
+    updated = store.get_runs_for_target("policy1", "router1.example.com")[0]
+    assert updated.driver is None
 
 
 def test_normalize_target_ip():
