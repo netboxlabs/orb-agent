@@ -19,7 +19,74 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    coerce_vid,
+    parse_vlan_range_string,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def _huawei_row_to_switchport_info(row: dict) -> SwitchportInfo:
+    """
+    Map an ntc-templates ``display port vlan`` row to a SwitchportInfo.
+
+    LINK_TYPE values from VRP: access, trunk, hybrid, desirable, auto.
+    Hybrid collapses to trunk (native + tagged set). LNP-negotiated link
+    types (``auto`` / ``desirable``) still carry VLAN state — mode is
+    inferred from membership shape (any trunk VLAN list ⇒ trunk;
+    otherwise access). Unknown / blank link-types map to routed.
+    """
+    link_type = (row.get("link_type") or "").strip().lower()
+    pvid = coerce_vid(row.get("vlan_id"))
+
+    trunk_list = row.get("trunk_vlan_list") or []
+    if isinstance(trunk_list, str):
+        trunk_list = [trunk_list]
+    spec = ",".join(str(v) for v in trunk_list if v)
+    if spec:
+        vids, is_wildcard = parse_vlan_range_string(spec)
+        allowed: list[int] | str | None = "all" if is_wildcard else vids
+    else:
+        allowed = None
+
+    if link_type in ("auto", "desirable"):
+        # LNP-negotiated: trunk if there's a tagged-VLAN list, otherwise access.
+        link_type = "trunk" if (allowed not in (None, [])) else "access"
+    elif link_type == "dot1q-tunnel":
+        # QinQ tunnel ports are L2 access ports on the service VID. Q-in-Q
+        # outer/inner tagging is out of scope for v1, but treat the port
+        # as access on the PVID rather than dropping VLAN data entirely.
+        link_type = "access"
+
+    if link_type == "access":
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=pvid,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if link_type in ("trunk", "hybrid"):
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=pvid,
+            allowed_vlans=allowed,
+        )
+    return SwitchportInfo(
+        enabled=False,
+        admin_mode=None,
+        oper_mode=None,
+        access_vlan=None,
+        native_vlan=None,
+        allowed_vlans=None,
+    )
 
 # "password cipher <hash>" / "psk cipher <hash>" / "key cipher <hash>"
 # Excludes algorithm-list lines like "ssh server cipher aes256_ctr" where
@@ -309,3 +376,26 @@ class VRPDriver(_napalm_base.NetworkDriver):
                     entry["interfaces"].append(intf)
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from ``display port vlan``."""
+        try:
+            raw = self.device.send_command("display port vlan")
+        except Exception:
+            logger.debug("VRP display port vlan failed", exc_info=True)
+            return {}
+        try:
+            rows = parse_output(
+                platform="huawei_vrp", command="display port vlan", data=raw
+            )
+        except Exception:
+            logger.debug("VRP display port vlan ntc parse failed", exc_info=True)
+            return {}
+        result: dict[str, dict] = {}
+        for row in rows or []:
+            ifname = row.get("interface")
+            if not ifname:
+                continue
+            info = _huawei_row_to_switchport_info(row)
+            result[ifname] = classify_switchport(info)
+        return result

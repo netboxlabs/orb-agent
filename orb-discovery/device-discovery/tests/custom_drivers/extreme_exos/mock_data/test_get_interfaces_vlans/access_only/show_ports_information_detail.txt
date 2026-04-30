@@ -1,0 +1,4 @@
+Port:	1
+	VLAN cfg:
+		 Name: vlan10, Internal Tag = 10, MAC-limit = No-limit, Virtual router:   VR-Default
+

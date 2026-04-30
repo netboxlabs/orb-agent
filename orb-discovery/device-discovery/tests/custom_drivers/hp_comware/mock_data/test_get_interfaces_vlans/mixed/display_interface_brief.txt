@@ -1,0 +1,7 @@
+Brief information of interfaces in bridge mode:
+Link: ADM - administratively down; Stby - standby
+Speed or Duplex: (a)/A - auto; H - half; F - full
+Type: A - access; T - trunk; H - hybrid
+Interface            Link Speed   Duplex Type PVID Description
+GE1/0/1              UP   1G(a)   F(a)   A    10
+GE1/0/2              UP   1G(a)   F(a)   T    99

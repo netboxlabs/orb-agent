@@ -17,7 +17,93 @@ from napalm.base import models
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+)
+
 logger = logging.getLogger(__name__)
+
+
+_EXOS_DOT1Q_TAG_RE = re.compile(r"802\.1Q\s+Tag\s*=\s*(\d+)", re.IGNORECASE)
+
+
+def _parse_exos_show_ports_membership(text: str) -> dict[str, dict]:
+    """
+    Parse EXOS ``show ports information detail`` into per-port VLAN membership.
+
+    Each per-port section starts with ``Port: <id>`` and exposes:
+      - ``Internal Tag = <vid>`` — the port's untagged/PVID VLAN.
+      - ``802.1Q Tag = <vid>`` — one entry per tagged VLAN membership.
+
+    Returns ``{port: {tagged: list[int], untagged: list[int]}}``. Reuses the
+    same regex anchors as the existing ``get_vlans()`` path
+    (``_PORT_SECTION_RE``, ``_PORT_NUM_RE``, ``_INTERNAL_TAG_RE``) so per-port
+    enrichment matches the per-VLAN view exactly.
+    """
+    out: dict[str, dict] = {}
+    for section in _PORT_SECTION_RE.split(text):
+        port_m = _PORT_NUM_RE.search(section)
+        if not port_m:
+            continue
+        port = port_m.group(1)
+        bucket = out.setdefault(port, {"tagged": [], "untagged": []})
+        for tag_m in _INTERNAL_TAG_RE.finditer(section):
+            try:
+                vid = int(tag_m.group(1))
+            except ValueError:
+                continue
+            if vid not in bucket["untagged"]:
+                bucket["untagged"].append(vid)
+        for tag_m in _EXOS_DOT1Q_TAG_RE.finditer(section):
+            try:
+                vid = int(tag_m.group(1))
+            except ValueError:
+                continue
+            if vid not in bucket["tagged"]:
+                bucket["tagged"].append(vid)
+    return out
+
+
+def _exos_merge_to_switchport_info(membership: dict) -> SwitchportInfo:
+    """
+    Map per-port EXOS membership to a SwitchportInfo.
+
+    EXOS does not have an explicit access/trunk mode field — we derive mode
+    from membership shape:
+      - exactly one untagged, no tagged   → access
+      - one untagged + ≥1 tagged          → trunk with native
+      - no untagged + ≥1 tagged           → trunk with no native
+      - no membership                     → routed
+    """
+    untagged = membership.get("untagged") or []
+    tagged = membership.get("tagged") or []
+    if not untagged and not tagged:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if untagged and not tagged:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged[0],
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=untagged[0] if untagged else None,
+        allowed_vlans=list(tagged),
+    )
 
 # --- config sanitization -------------------------------------------------- #
 # "create account admin encrypted-secret "$1$xxx""
@@ -369,6 +455,20 @@ class ExosDriver(_napalm_base.NetworkDriver):
             self._add_untagged_vlan_ports(vlans, ports_output)
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from ``show ports information detail``."""
+        try:
+            raw = self.device.send_command("show ports information detail")
+        except Exception:
+            logger.debug("EXOS show ports information detail failed", exc_info=True)
+            return {}
+        membership = _parse_exos_show_ports_membership(raw or "")
+        result: dict[str, dict] = {}
+        for port, member in membership.items():
+            info = _exos_merge_to_switchport_info(member)
+            result[port] = classify_switchport(info)
+        return result
 
     def _add_tagged_vlan_ports(self, vlans: dict, ports_output: str) -> None:
         """

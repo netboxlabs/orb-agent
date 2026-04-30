@@ -1,0 +1,7 @@
+
+Name: GigabitEthernet 0/3
+802.1QTagged: Hybrid
+Vlan membership:
+Vlan 1, Vlan 100, Vlan 200
+
+Native VlanId: 1.

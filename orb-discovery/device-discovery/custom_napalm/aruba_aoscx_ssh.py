@@ -22,7 +22,152 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    coerce_vid,
+    parse_vlan_range_string,
+)
+
 logger = logging.getLogger(__name__)
+
+
+_AOSCX_VLAN_PORT_ROW_RE = re.compile(
+    r"^\s*(?P<port>\S+)\s+"
+    r"(?P<mode>access|native-untagged|native-tagged|trunk|routed)\s+"
+    r"(?P<native>\d+|--|-)\s+"
+    r"(?P<tagged>.*?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_aoscx_show_vlan_port_config(text: str) -> list[dict]:
+    """
+    Parse AOS-CX ``show vlan port-config`` into per-port dicts.
+
+    Output format (10.x):
+        Port    Mode             Native VLAN   Tagged VLAN(s)
+        -----   --------------   -----------   ------------------
+        1/1/1   access           10            --
+        1/1/2   native-untagged  99            100, 200
+        1/1/3   trunk            --            100, 200
+        1/1/5   routed           --            --
+    """
+    rows: list[dict] = []
+    saw_header = False
+    for line in text.splitlines():
+        if not saw_header:
+            if "mode" in line.lower() and "tagged" in line.lower():
+                saw_header = True
+            continue
+        stripped = line.strip()
+        if not stripped or set(stripped) <= {"-", " "}:
+            continue
+        m = _AOSCX_VLAN_PORT_ROW_RE.match(line)
+        if not m:
+            continue
+        rows.append({
+            "port": m.group("port"),
+            "mode": m.group("mode").lower(),
+            "native": m.group("native"),
+            "tagged": m.group("tagged").strip(),
+        })
+    return rows
+
+
+def _aoscx_ssh_row_to_switchport_info(row: dict) -> SwitchportInfo:
+    """
+    Map a parsed ``show vlan port-config`` row to a SwitchportInfo.
+
+    AOS-CX vlan_mode semantics — same as the REST counterpart from batch 2:
+      - access            : untagged-only on a single VLAN
+      - native-untagged   : native VLAN + tagged list
+      - native-tagged     : native VID also tagged on egress; folded into
+                            tagged list with no untagged emitted
+      - trunk             : tagged-only; empty tagged list ⇒ all VLANs
+      - routed            : L3 (no switchport)
+    """
+    mode = (row.get("mode") or "").lower()
+    if mode in ("routed", ""):
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    native_raw = row.get("native")
+    native_str = native_raw.strip() if isinstance(native_raw, str) else native_raw
+    native_vid = coerce_vid(native_str)
+
+    tagged_raw = (row.get("tagged") or "").strip()
+    if tagged_raw and tagged_raw not in ("--", "-"):
+        spec = tagged_raw.replace(" ", "")
+        vids, is_wildcard = parse_vlan_range_string(spec)
+    else:
+        vids, is_wildcard = [], False
+
+    if mode == "access":
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=native_vid,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if mode == "native-untagged":
+        allowed: list[int] | str | None = (
+            "all" if is_wildcard else (vids or None)
+        )
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=native_vid,
+            allowed_vlans=allowed,
+        )
+    if mode == "native-tagged":
+        merged: list[int] = list(vids)
+        if native_vid is not None and native_vid not in merged:
+            merged.append(native_vid)
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=merged if merged else "all",
+        )
+    if mode == "trunk":
+        if not vids and not is_wildcard:
+            return SwitchportInfo(
+                enabled=True,
+                admin_mode="trunk",
+                oper_mode="trunk",
+                access_vlan=None,
+                native_vlan=None,
+                allowed_vlans="all",
+            )
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans="all" if is_wildcard else vids,
+        )
+    return SwitchportInfo(
+        enabled=False,
+        admin_mode=None,
+        oper_mode=None,
+        access_vlan=None,
+        native_vlan=None,
+        allowed_vlans=None,
+    )
 
 _PLATFORM = "aruba_aoscx"
 
@@ -291,4 +436,23 @@ class AOSCXSSHDriver(_napalm_base.NetworkDriver):
                 if intf and intf not in entry["interfaces"]:
                     entry["interfaces"].append(intf)
 
+        return result
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from ``show vlan port-config``."""
+        try:
+            raw = self.device.send_command("show vlan port-config")
+        except Exception:
+            logger.debug(
+                "AOS-CX-SSH show vlan port-config failed", exc_info=True
+            )
+            return {}
+        rows = _parse_aoscx_show_vlan_port_config(raw)
+        result: dict[str, dict] = {}
+        for row in rows:
+            port = row.get("port")
+            if not port:
+                continue
+            info = _aoscx_ssh_row_to_switchport_info(row)
+            result[port] = classify_switchport(info)
         return result

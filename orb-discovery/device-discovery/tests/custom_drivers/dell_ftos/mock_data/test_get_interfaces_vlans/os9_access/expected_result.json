@@ -1,0 +1,3 @@
+{
+  "GigabitEthernet 0/1": {"mode": "access", "tagged": [], "untagged": 10}
+}

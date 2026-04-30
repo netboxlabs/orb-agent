@@ -1,0 +1,3 @@
+Port    Mode             Native VLAN   Tagged VLAN(s)
+-----   --------------   -----------   ------------------
+1/1/1   routed           --            --

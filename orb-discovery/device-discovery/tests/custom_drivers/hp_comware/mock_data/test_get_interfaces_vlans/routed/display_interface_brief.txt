@@ -1,0 +1,5 @@
+Brief information of interfaces in route mode:
+Link: ADM - administratively down; Stby - standby
+Protocol: (s) - spoofing
+Interface            Link Protocol Main IP         Description
+Vlan-interface1      UP   UP       192.0.2.1
