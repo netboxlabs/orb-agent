@@ -40,6 +40,7 @@ type RunStateInfo struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	Targets     []string  `json:"targets,omitempty"`
+	Driver      string    `json:"driver,omitempty"`
 }
 
 // PolicyStateInfo contains state information for a policy
