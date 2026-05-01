@@ -2689,6 +2689,325 @@ func TestDeviceMapper_Map(t *testing.T) {
 	}
 }
 
+func TestDeviceMapper_Map_SerialNumber(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	serialMappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{
+				OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+				Entity: "device",
+				Field:  "serialNumber",
+			},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		values         map[mapping.ObjectIDIndex]*mapping.ObjectIDValue
+		mappingEntry   *mapping.Entry
+		expectedSerial *string
+	}{
+		{
+			name: "single chassis serial maps to Serial field",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "FTX1234ABCD",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: mapping.StringPtr("FTX1234ABCD"),
+		},
+		{
+			name: "empty value is skipped and Serial remains nil",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: nil,
+		},
+		{
+			name: "whitespace-only value is skipped",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "   \t\n",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: nil,
+		},
+		{
+			name: "leading and trailing whitespace is trimmed from valid value",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "  FTX1234ABCD\t\n",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: mapping.StringPtr("FTX1234ABCD"),
+		},
+		{
+			name: "empty entry skipped, non-empty entry recorded",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.47.1.1.1.1.11.2": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.2",
+					Index:  "2",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "MOD-SERIAL-7777",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: mapping.StringPtr("MOD-SERIAL-7777"),
+		},
+		{
+			name:           "empty values map leaves Serial nil",
+			values:         map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: nil,
+		},
+		{
+			name: "NUL-padded serial is trimmed to valid value",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "SER123\x00",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: mapping.StringPtr("SER123"),
+		},
+		{
+			name: "NUL-only value is skipped and does not block later valid row",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "\x00\x00",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.47.1.1.1.1.11.2": {
+					OID:    "1.3.6.1.2.1.47.1.1.1.1.11.2",
+					Index:  "2",
+					Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+					Value:  "VALID-SERIAL",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry:   serialMappingEntry,
+			expectedSerial: mapping.StringPtr("VALID-SERIAL"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := mapping.NewEntityRegistry(logger)
+			entity := mapper.Map(tt.values, tt.mappingEntry, registry, nil)
+
+			assert.NotNil(t, entity)
+			device, ok := entity.(*diode.Device)
+			assert.True(t, ok)
+			assert.Equal(t, tt.expectedSerial, device.Serial)
+		})
+	}
+}
+
+// TestDeviceMapper_Map_SerialNumber_LowestIndexWins verifies that when the
+// entPhysicalSerialNum walk returns multiple non-empty values, the mapper
+// deterministically picks the lowest-indexed row (typically the chassis at
+// entPhysicalIndex .1) regardless of Go's randomized map iteration order.
+// The mapper sorts value keys ascending before iterating so this is stable.
+func TestDeviceMapper_Map_SerialNumber_LowestIndexWins(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+			Index:  "1",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "CHASSIS-SERIAL-001",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.47.1.1.1.1.11.2": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.2",
+			Index:  "2",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "MODULE-SERIAL-002",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.47.1.1.1.1.11.3": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.3",
+			Index:  "3",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "SFP-SERIAL-003",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{
+				OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+				Entity: "device",
+				Field:  "serialNumber",
+			},
+		},
+	}
+
+	// Run multiple times to flush out any reliance on map iteration order.
+	for i := 0; i < 50; i++ {
+		registry := mapping.NewEntityRegistry(logger)
+		entity := mapper.Map(values, mappingEntry, registry, nil)
+		device, ok := entity.(*diode.Device)
+		assert.True(t, ok)
+		assert.Equal(t, mapping.StringPtr("CHASSIS-SERIAL-001"), device.Serial)
+	}
+}
+
+// TestDeviceMapper_Map_SerialNumber_LowestIndexEmpty verifies that when the
+// chassis row (lowest index) is empty, the mapper falls through to the next
+// non-empty row deterministically.
+func TestDeviceMapper_Map_SerialNumber_LowestIndexEmpty(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.47.1.1.1.1.11.1": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.1",
+			Index:  "1",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.47.1.1.1.1.11.2": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.2",
+			Index:  "2",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "MODULE-SERIAL-002",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.47.1.1.1.1.11.3": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.3",
+			Index:  "3",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "SFP-SERIAL-003",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{
+				OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+				Entity: "device",
+				Field:  "serialNumber",
+			},
+		},
+	}
+
+	for i := 0; i < 50; i++ {
+		registry := mapping.NewEntityRegistry(logger)
+		entity := mapper.Map(values, mappingEntry, registry, nil)
+		device, ok := entity.(*diode.Device)
+		assert.True(t, ok)
+		assert.Equal(t, mapping.StringPtr("MODULE-SERIAL-002"), device.Serial)
+	}
+}
+
+// TestDeviceMapper_Map_SerialNumber_NumericSortOrder verifies that OID suffixes
+// are sorted numerically, not lexicographically. Lexicographic order would visit
+// .11.10 before .11.2, causing a module serial to win over the chassis serial.
+func TestDeviceMapper_Map_SerialNumber_NumericSortOrder(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.47.1.1.1.1.11.2": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.2",
+			Index:  "2",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "CHASSIS-SERIAL-002",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.47.1.1.1.1.11.10": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.10",
+			Index:  "10",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "MODULE-SERIAL-010",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.47.1.1.1.1.11.11": {
+			OID:    "1.3.6.1.2.1.47.1.1.1.1.11.11",
+			Index:  "11",
+			Parent: "1.3.6.1.2.1.47.1.1.1.1.11",
+			Value:  "SFP-SERIAL-011",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{
+				OID:    "1.3.6.1.2.1.47.1.1.1.1.11",
+				Entity: "device",
+				Field:  "serialNumber",
+			},
+		},
+	}
+
+	// Run multiple times to eliminate any map iteration luck.
+	for i := 0; i < 50; i++ {
+		registry := mapping.NewEntityRegistry(logger)
+		entity := mapper.Map(values, mappingEntry, registry, nil)
+		device, ok := entity.(*diode.Device)
+		assert.True(t, ok)
+		// Numeric sort: .2 < .10 < .11 → chassis serial at .2 wins.
+		// Lexicographic sort would give .10 < .11 < .2 → MODULE-SERIAL-010 incorrectly wins.
+		assert.Equal(t, mapping.StringPtr("CHASSIS-SERIAL-002"), device.Serial,
+			"iteration %d: expected lowest numeric index (.2) to win over .10 and .11", i)
+	}
+}
+
 // MockManufacturerDataRetriever is a mock implementation of ManufacturerDataRetriever
 type MockManufacturerDataRetriever struct {
 	mock.Mock

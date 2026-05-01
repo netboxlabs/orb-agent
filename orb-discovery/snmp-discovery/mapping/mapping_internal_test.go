@@ -86,3 +86,25 @@ func TestResolveMappingEntry_FallsBackThroughPDUs(t *testing.T) {
 	_, err = m.resolveMappingEntry(details2)
 	assert.Error(t, err, "when no PDU parent resolves, the original error must propagate")
 }
+
+// TestGroupByObjectIDIndex_SerialDoesNotCollideWithIfIndex verifies that
+// identifier_size:2 on the entPhysicalSerialNum entry produces an index
+// ("11.1") that is disjoint from single-component ifIndex values ("1"),
+// preventing groupByObjectIDIndex from merging serial PDUs into interface
+// index buckets.
+func TestGroupByObjectIDIndex_SerialDoesNotCollideWithIfIndex(t *testing.T) {
+	// With identifier_size:2, entPhysicalSerialNum.1 gets index "11.1",
+	// not "1", so it is never merged into the ifIndex "1" bucket.
+	objectIDs := ObjectIDValueMap{
+		".1.3.6.1.2.1.2.2.1.2.1":       {Value: "eth0", Type: OctetString, IdentifierSize: 1},
+		".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SER001", Type: OctetString, IdentifierSize: 2},
+	}
+	mapper := &ObjectIDMapper{logger: slog.Default()}
+	groups := mapper.groupByObjectIDIndex(objectIDs)
+
+	assert.Len(t, groups, 2)
+	_, hasIfIndex := groups["1"]
+	_, hasSerialIndex := groups["11.1"]
+	assert.True(t, hasIfIndex, "ifIndex group '1' should exist")
+	assert.True(t, hasSerialIndex, "serial group '11.1' should exist")
+}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -451,7 +452,13 @@ func NewObjectIDIndexDetails(index string) *ObjectIDIndexDetails {
 func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diode.Entity {
 	objectIDIndexMap := m.groupByObjectIDIndex(objectIDs)
 	uniqueEntities := make(map[diode.Entity]bool)
-	for index, value := range objectIDIndexMap {
+	sortedIndexes := make([]ObjectIDIndex, 0, len(objectIDIndexMap))
+	for index := range objectIDIndexMap {
+		sortedIndexes = append(sortedIndexes, index)
+	}
+	slices.SortFunc(sortedIndexes, compareOIDsNumerically)
+	for _, index := range sortedIndexes {
+		value := objectIDIndexMap[index]
 		m.logger.Debug("mapping object ID index", "object_id_index", index, "values", value.Values)
 		entry, err := m.resolveMappingEntry(value)
 		if err != nil {

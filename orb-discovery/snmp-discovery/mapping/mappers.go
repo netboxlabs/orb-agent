@@ -641,7 +641,20 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 	}
 
 	fieldFound := false
-	for objectID, value := range values {
+	// Iterate values in sorted-OID order (ascending) instead of relying on
+	// Go's randomized map iteration. For table-valued mappings such as
+	// entPhysicalSerialNum (.1.3.6.1.2.1.47.1.1.1.1.11.X), this means the
+	// lowest entPhysicalIndex — typically the chassis at .1 — is visited
+	// first. Combined with "skip if already set" guards in cases like
+	// serialNumber, this yields deterministic "lowest-index non-empty wins"
+	// behaviour. Scalar fields (sysName etc.) are unaffected by ordering.
+	valueKeys := make([]ObjectIDIndex, 0, len(values))
+	for objectID := range values {
+		valueKeys = append(valueKeys, objectID)
+	}
+	slices.SortFunc(valueKeys, compareOIDsNumerically)
+	for _, objectID := range valueKeys {
+		value := values[objectID]
 		for _, propertyMappingEntry := range mappingEntry.MappingEntries {
 			if objectID.HasParent(propertyMappingEntry.OID) {
 				m.logger.Debug("mapping value to device entity with mapper", "object_id", objectID, "value", value, "mapping_entry", propertyMappingEntry)
@@ -718,6 +731,20 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 						Manufacturer: &manufacturerEntity,
 					}
 					fieldFound = true
+				case "serialNumber":
+					serial := strings.TrimRight(strings.TrimSpace(value.Value), "\x00")
+					if serial == "" {
+						m.logger.Debug("empty serial number, skipping", "object_id", objectID)
+						continue
+					}
+					// entPhysicalSerialNum is a table — keep the first non-empty
+					// value (chassis at entPhysicalIndex .1) so module/SFP
+					// serials don't overwrite it.
+					if deviceEntity.Serial != nil && *deviceEntity.Serial != "" {
+						continue
+					}
+					deviceEntity.Serial = &serial
+					fieldFound = true
 				default:
 					m.logger.Warn("unknown field", "field", propertyMappingEntry.Field)
 				}
@@ -773,4 +800,29 @@ func toSlug(input *string) *string {
 	slug = strings.Trim(slug, "-")
 
 	return &slug
+}
+
+// compareOIDsNumerically compares two OID strings by their numeric components,
+// not lexicographically. This ensures .11.2 sorts before .11.10.
+func compareOIDsNumerically(a, b ObjectIDIndex) int {
+	partsA := strings.Split(strings.Trim(string(a), "."), ".")
+	partsB := strings.Split(strings.Trim(string(b), "."), ".")
+	for i := 0; i < len(partsA) && i < len(partsB); i++ {
+		na, errA := strconv.Atoi(partsA[i])
+		nb, errB := strconv.Atoi(partsB[i])
+		if errA != nil || errB != nil {
+			// Fall back to string comparison for non-numeric components
+			if partsA[i] != partsB[i] {
+				if partsA[i] < partsB[i] {
+					return -1
+				}
+				return 1
+			}
+			continue
+		}
+		if na != nb {
+			return na - nb
+		}
+	}
+	return len(partsA) - len(partsB)
 }
