@@ -3,8 +3,11 @@ package mapping_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -640,11 +643,11 @@ func TestIPAddressIdentifierSizeInheritance(t *testing.T) {
 					IdentifierSize: 2, // Should use child's explicit size
 				},
 			},
-			expected: []diode.Entity{
-				&diode.IPAddress{
-					Address: nil, // Invalid IP format "1.2" is rejected by validation
-				},
-			},
+			// IPAddressMapper now drops invalid/empty rows by returning
+			// nil rather than emitting an IPAddress with no Address.
+			// MapObjectIDsToEntity therefore yields no IPAddress
+			// entities for this row.
+			expected:    []diode.Entity{},
 			description: "This test verifies that child mappings can override parent identifier size, but invalid IPs are still rejected",
 		},
 		{
@@ -672,11 +675,9 @@ func TestIPAddressIdentifierSizeInheritance(t *testing.T) {
 					IdentifierSize: 0, // This would default to 1 in ObjectIDs() function
 				},
 			},
-			expected: []diode.Entity{
-				&diode.IPAddress{
-					Address: nil, // Invalid IP format (incomplete) is rejected by validation
-				},
-			},
+			// Same drop semantics as above: invalid/empty rows are no
+			// longer emitted as nil-Address entities.
+			expected:    []diode.Entity{},
 			description: "This test verifies behavior when parent has zero identifier size - invalid IPs are rejected",
 		},
 	}
@@ -919,6 +920,44 @@ func TestAssignPrimaryIP_DeviceIsProtoSerializable(t *testing.T) {
 		assert.NotNil(t, iface.Device, "PrimaryIp4 snapshot must keep a Device on the assigned interface")
 		if iface.Device != nil {
 			assert.Nil(t, iface.Device.PrimaryIp4, "nested Device must have PrimaryIp4 cleared to break the cycle")
+		}
+	}
+}
+
+// TestAssignPrimaryIP_DeviceIsProtoSerializable_IPv6 mirrors
+// TestAssignPrimaryIP_DeviceIsProtoSerializable for the v6 path. The
+// detachForPrimaryIP6 helper is duplicated from its v4 sibling and
+// could drift independently, reintroducing the cycle bug for
+// PrimaryIp6 without tripping any existing PrimaryIp4 coverage.
+func TestAssignPrimaryIP_DeviceIsProtoSerializable_IPv6(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mappingConfig, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "2001:db8::1")
+	entities := m.MapObjectIDsToEntity(primaryIPModernIPv6OIDs("2001:db8::1", "Gi0", 64))
+
+	device := m.CurrentDevice()
+	assert.NotNil(t, device.PrimaryIp6, "v6 literal target must yield PrimaryIp6")
+
+	// Every emitted entity must serialize without recursing into the
+	// primary_ip6 -> interface -> device cycle.
+	for _, e := range entities {
+		proto := e.ConvertToProtoEntity()
+		assert.NotNil(t, proto)
+	}
+	proto := device.ConvertToProtoEntity()
+	assert.NotNil(t, proto)
+
+	// The snapshot keeps the nested Device reference but that nested
+	// Device must have BOTH primary IPs cleared so the graph is a
+	// tree, not a cycle (regardless of evaluation order between v4
+	// and v6 passes).
+	if iface, ok := device.PrimaryIp6.AssignedObject.(*diode.Interface); ok && iface != nil {
+		assert.NotNil(t, iface.Device, "PrimaryIp6 snapshot must keep a Device on the assigned interface")
+		if iface.Device != nil {
+			assert.Nil(t, iface.Device.PrimaryIp4, "nested Device must have PrimaryIp4 cleared to break the cycle")
+			assert.Nil(t, iface.Device.PrimaryIp6, "nested Device must have PrimaryIp6 cleared to break the cycle")
 		}
 	}
 }
@@ -1285,4 +1324,626 @@ func TestAssignPrimaryIP_NonDefaultPrefix(t *testing.T) {
 	assert.NotNil(t, device.PrimaryIp4)
 	assert.Equal(t, "10.0.0.1/24", *device.PrimaryIp4.Address,
 		"primary IP must carry the discovered /24 prefix, and stripPrefix must still match against the bare target")
+}
+
+// --- RFC 4293 ipAddressTable + dedup integration (OBS-2798) ---
+
+// primaryIPFixtureBothTables returns a mapping config with both the legacy
+// ipAddrTable and the modern ipAddressTable wired up against the shared
+// interface entry. Used by dedup and primary-IP integration tests.
+func primaryIPFixtureBothTables() []config.MappingEntry {
+	entries := primaryIPFixture()
+	entries = append(entries, config.MappingEntry{
+		OID:       ".1.3.6.1.2.1.4.34.1",
+		Entity:    "ipAddress",
+		Field:     "_id",
+		IndexKind: "inet_address",
+		MappingEntries: []config.MappingEntry{
+			{
+				OID: ".1.3.6.1.2.1.4.34.1.3", Entity: "ipAddress", Field: "assignedObject",
+				Relationship: config.Relationship{Type: "interface"},
+			},
+			{OID: ".1.3.6.1.2.1.4.34.1.4", Entity: "ipAddress", Field: "addressType"},
+			{OID: ".1.3.6.1.2.1.4.34.1.5", Entity: "ipAddress", Field: "addressPrefix"},
+			{OID: ".1.3.6.1.2.1.4.34.1.7", Entity: "ipAddress", Field: "addressStatus"},
+			{OID: ".1.3.6.1.2.1.4.34.1.10", Entity: "ipAddress", Field: "addressRowStatus"},
+		},
+	})
+	return entries
+}
+
+// ipv4NetworkOctets returns the dotted network address (host bits
+// zeroed) for an IPv4 address + prefix length, formatted as decimal
+// octets joined by dots. Used to build RFC 4293-compliant test
+// RowPointers into ipAddressPrefixTable.
+func ipv4NetworkOctets(addr string, plen int) string {
+	ip := net.ParseIP(addr).To4()
+	if ip == nil {
+		panic("ipv4NetworkOctets requires an IPv4 literal: " + addr)
+	}
+	mask := net.CIDRMask(plen, 32)
+	network := ip.Mask(mask)
+	return fmt.Sprintf("%d.%d.%d.%d", network[0], network[1], network[2], network[3])
+}
+
+// ipv6NetworkBytes returns the 16-byte network address (host bits
+// zeroed) for an IPv6 address + prefix length, formatted as decimal
+// octets joined by dots. IPv4-mapped IPv6 inputs (e.g. ::ffff:10.0.0.1)
+// are accepted — they're encoded as addrType=2/addrLen=16 in
+// ipAddressTable, so callers building RowPointers for them still need
+// 16-byte network output.
+func ipv6NetworkBytes(addr string, plen int) string {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		panic("ipv6NetworkBytes requires a parseable IP literal: " + addr)
+	}
+	ip = ip.To16()
+	if ip == nil {
+		panic("ipv6NetworkBytes requires a 16-byte address: " + addr)
+	}
+	mask := net.CIDRMask(plen, 128)
+	network := ip.Mask(mask)
+	parts := make([]string, 16)
+	for i, b := range network {
+		parts[i] = fmt.Sprintf("%d", b)
+	}
+	return strings.Join(parts, ".")
+}
+
+// modernIPv4PDUs adds RFC 4293 ipAddressTable PDUs for the given IPv4
+// address assigned to ifIndex 1, with the given prefix length. The
+// RowPointer encodes ipAddressPrefixEntry's index per RFC 4293:
+// <ifIndex=1>.<addrType=1>.<addrLen=4>.<prefixBytes>.<prefixLen>,
+// where prefixBytes is the network address (host bits zeroed).
+func modernIPv4PDUs(addr string, plen int) mapping.ObjectIDValueMap {
+	octets := strings.Split(addr, ".")
+	rowSuffix := "1.4." + strings.Join(octets, ".")
+	prefixOctets := ipv4NetworkOctets(addr, plen)
+	rowPtr := fmt.Sprintf(".1.3.6.1.2.1.4.32.1.5.1.1.4.%s.%d", prefixOctets, plen)
+	return mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.4.34.1.3." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.4." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5." + rowSuffix: mapping.Value{
+			Value: rowPtr, Type: mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+}
+
+// modernIPv6PDUs is the IPv6 sibling of modernIPv4PDUs. Encodes addrType=2
+// addrLen=16 followed by 16 decimal bytes. The RowPointer's prefix
+// portion uses the network bytes (host bits zeroed) per RFC 4293.
+func modernIPv6PDUs(addr string, plen int) mapping.ObjectIDValueMap {
+	ip := net.ParseIP(addr)
+	if ip == nil || ip.To4() != nil {
+		panic("modernIPv6PDUs requires an IPv6 literal: " + addr)
+	}
+	ip = ip.To16()
+	bytes := make([]string, 16)
+	for i, b := range ip {
+		bytes[i] = fmt.Sprintf("%d", b)
+	}
+	rowSuffix := "2.16." + strings.Join(bytes, ".")
+	rowPtr := fmt.Sprintf(".1.3.6.1.2.1.4.32.1.5.1.2.16.%s.%d", ipv6NetworkBytes(addr, plen), plen)
+	return mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.4.34.1.3." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.4." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5." + rowSuffix: mapping.Value{
+			Value: rowPtr, Type: mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+}
+
+// mergeOIDs combines several ObjectIDValueMaps into one. Later entries
+// overwrite earlier ones on key collision (intentional for tests that
+// want to override a default).
+func mergeOIDs(maps ...mapping.ObjectIDValueMap) mapping.ObjectIDValueMap {
+	out := mapping.ObjectIDValueMap{}
+	for _, m := range maps {
+		for k, v := range m {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// primaryIPModernOIDs seeds one interface "Gi0" (ifIndex 1) plus an
+// inet_address-indexed ipAddressTable row at the given v4 address with
+// the chosen prefix length. Used to exercise the new IPv4 primary-IP
+// path through ipAddressTable.
+func primaryIPModernOIDs(addr, ifName string, plen int) mapping.ObjectIDValueMap {
+	out := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: ifName, Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		},
+	}
+	for k, v := range modernIPv4PDUs(addr, plen) {
+		out[k] = v
+	}
+	return out
+}
+
+// primaryIPModernIPv6OIDs is the v6 sibling of primaryIPModernOIDs.
+func primaryIPModernIPv6OIDs(addr, ifName string, plen int) mapping.ObjectIDValueMap {
+	out := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: ifName, Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		},
+	}
+	for k, v := range modernIPv6PDUs(addr, plen) {
+		out[k] = v
+	}
+	return out
+}
+
+// primaryIPModernDualStackOIDs combines modern v4 + v6 rows on ifIndex 1.
+func primaryIPModernDualStackOIDs(v4, v6, ifName string, v4Plen, v6Plen int) mapping.ObjectIDValueMap {
+	out := primaryIPModernOIDs(v4, ifName, v4Plen)
+	for k, v := range modernIPv6PDUs(v6, v6Plen) {
+		out[k] = v
+	}
+	return out
+}
+
+func TestAssignPrimaryIP_IPv6Literal_FromIpAddressTable(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapperForTest(cfg, logger, &config.Defaults{}, "2001:db8::1", &fakeResolver{})
+	entities := m.MapObjectIDsToEntity(primaryIPModernIPv6OIDs("2001:db8::1", "Gi0", 64))
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp6, "v6 literal target must yield PrimaryIp6")
+	if device.PrimaryIp6 != nil {
+		assert.Equal(t, "2001:db8::1/64", *device.PrimaryIp6.Address)
+	}
+	assert.Nil(t, device.PrimaryIp4, "no v4 candidates → PrimaryIp4 stays nil")
+}
+
+func TestAssignPrimaryIP_HostnameResolvesToIPv6_AssignsPrimaryIp6(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	resolver := &fakeResolver{addrs: []string{"2001:db8::1"}}
+	m := mapping.NewObjectIDMapperForTest(cfg, logger, &config.Defaults{}, "router.example", resolver)
+	entities := m.MapObjectIDsToEntity(primaryIPModernIPv6OIDs("2001:db8::1", "Gi0", 64))
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp6, "v6 DNS-only target must yield PrimaryIp6")
+	assert.Nil(t, device.PrimaryIp4)
+}
+
+func TestAssignPrimaryIP_DualStackHostname_AssignsBoth(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	resolver := &fakeResolver{addrs: []string{"10.0.0.1", "2001:db8::1"}}
+	m := mapping.NewObjectIDMapperForTest(cfg, logger, &config.Defaults{}, "router.example", resolver)
+	entities := m.MapObjectIDsToEntity(primaryIPModernDualStackOIDs("10.0.0.1", "2001:db8::1", "Gi0", 24, 64))
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp4, "dual-stack target must yield PrimaryIp4")
+	assert.NotNil(t, device.PrimaryIp6, "dual-stack target must yield PrimaryIp6")
+}
+
+// TestAssignPrimaryIP_IPv4MappedIPv6Target_AssignsPrimaryIp6 covers
+// the candidate side of the mapped-IPv6 family-detection bug: when the
+// SNMP target is given as `::ffff:10.0.0.1`, resolveTargetIPs must put
+// it in the v6 candidate list (not collapse to v4) so a discovered
+// v6 entity emitted as `::ffff:10.0.0.1/N` matches and PrimaryIp6 is
+// set.
+func TestAssignPrimaryIP_IPv4MappedIPv6Target_AssignsPrimaryIp6(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	// Build a single ipAddressTable row for ::ffff:10.0.0.1. The row's
+	// suffix uses the host bytes; the RowPointer to ipAddressPrefixTable
+	// uses the prefix's network bytes (host bits zeroed) per RFC 4293.
+	v6Bytes := []string{"0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "255", "255", "10", "0", "0", "1"}
+	rowSuffix := "2.16." + strings.Join(v6Bytes, ".")
+	rowPtr := fmt.Sprintf(".1.3.6.1.2.1.4.32.1.5.1.2.16.%s.%d", ipv6NetworkBytes("::ffff:10.0.0.1", 96), 96)
+	pdus := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		},
+		".1.3.6.1.2.1.4.34.1.3." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.4." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5." + rowSuffix: mapping.Value{
+			Value: rowPtr, Type: mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "::ffff:10.0.0.1")
+	entities := m.MapObjectIDsToEntity(pdus)
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp6, "mapped-IPv6 literal target must yield PrimaryIp6")
+	assert.Nil(t, device.PrimaryIp4, "mapped-IPv6 literal target must not be collapsed to PrimaryIp4")
+}
+
+// TestAssignPrimaryIP_IPv4MappedIPv6_NotMisclassifiedAsIPv4 is the
+// regression test for the family-detection bug Codex flagged: a row
+// decoded as ipv6:::ffff:10.0.0.1 had `parsed.To4() != nil`, so
+// pickPrimaryIPHit treated it as IPv4 and could match a v4 candidate
+// (or skip a legitimate v6 hit). Family detection now reads the
+// textual address.
+func TestAssignPrimaryIP_IPv4MappedIPv6_NotMisclassifiedAsIPv4(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	// Build an ipAddressTable row for ::ffff:10.0.0.1 with addrType=2,
+	// addrLen=16. The row's suffix uses the host bytes; the RowPointer
+	// uses the prefix's network bytes (host bits zeroed) per RFC 4293.
+	v6Bytes := []string{"0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "255", "255", "10", "0", "0", "1"}
+	rowSuffix := "2.16." + strings.Join(v6Bytes, ".")
+	rowPtr := fmt.Sprintf(".1.3.6.1.2.1.4.32.1.5.1.2.16.%s.%d", ipv6NetworkBytes("::ffff:10.0.0.1", 96), 96)
+	pdus := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		},
+		".1.3.6.1.2.1.4.34.1.3." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.4." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5." + rowSuffix: mapping.Value{
+			Value: rowPtr, Type: mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10." + rowSuffix: mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+
+	// SNMP target is an IPv4 literal (10.0.0.1). The ONLY discovered IP
+	// is the IPv4-mapped IPv6 entity ::ffff:10.0.0.1 (modern table,
+	// addrType=2). Pre-fix: pickPrimaryIPHit's parsed.To4() != nil
+	// marked this as v4 and the v4 candidate would match. Post-fix:
+	// the textual ":" classifies the row as v6, so the v4 pass skips
+	// it entirely and PrimaryIp4 stays nil.
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(pdus)
+	device := findDevice(entities)
+	assert.Nil(t, device.PrimaryIp4,
+		"IPv4-mapped IPv6 row must not be assigned to PrimaryIp4")
+}
+
+func TestAssignPrimaryIP_ModernIPv4_FromIpAddressTable(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(primaryIPModernOIDs("10.0.0.1", "Gi0", 24))
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp4)
+	if device.PrimaryIp4 != nil {
+		assert.Equal(t, "10.0.0.1/24", *device.PrimaryIp4.Address)
+	}
+}
+
+// TestOBS2798_ModernOnlyDevice_PopulatesPrimaryIPs reproduces the bug
+// described in https://linear.app/netboxlabs/issue/OBS-2798. A device
+// that does not respond to ipAddrTable but does populate ipAddressTable
+// must still yield IP entities and have its PrimaryIp4 (and PrimaryIp6
+// where applicable) set when the SNMP target host matches.
+func TestOBS2798_ModernOnlyDevice_PopulatesPrimaryIPs(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "10.0.0.1")
+	// Deliberately ipAddressTable PDUs only — no ipAddrTable rows.
+	entities := m.MapObjectIDsToEntity(primaryIPModernDualStackOIDs("10.0.0.1", "2001:db8::1", "Gi0", 24, 64))
+
+	device := findDevice(entities)
+	assert.NotNil(t, device, "device entity must be reachable")
+	assert.NotNil(t, device.PrimaryIp4, "PrimaryIp4 must be set from ipAddressTable")
+	if device.PrimaryIp4 != nil {
+		assert.Equal(t, "10.0.0.1/24", *device.PrimaryIp4.Address)
+	}
+
+	v4Count, v6Count := 0, 0
+	for _, e := range entities {
+		ip, ok := e.(*diode.IPAddress)
+		if !ok || ip.Address == nil {
+			continue
+		}
+		if strings.HasPrefix(*ip.Address, "10.0.0.1") {
+			v4Count++
+		}
+		if strings.HasPrefix(*ip.Address, "2001:db8::1") {
+			v6Count++
+		}
+	}
+	assert.Equal(t, 1, v4Count, "exactly one IPv4 entity must be emitted from ipAddressTable")
+	assert.Equal(t, 1, v6Count, "exactly one IPv6 entity must be emitted from ipAddressTable")
+}
+
+func TestMapObjectIDsToEntity_LegacyAndModernSameAddress_Deduplicates(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mappingConfig, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "")
+	pdus := mergeOIDs(
+		primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"),
+		modernIPv4PDUs("10.0.0.1", 24),
+	)
+	entities := m.MapObjectIDsToEntity(pdus)
+
+	count := 0
+	var survivingIP *diode.IPAddress
+	for _, e := range entities {
+		if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil &&
+			strings.HasPrefix(*ip.Address, "10.0.0.1") {
+			count++
+			survivingIP = ip
+		}
+	}
+	assert.Equal(t, 1, count, "duplicate IP entities must be deduped to one")
+	// The legacy fixture emits 10.0.0.1/32 (host-route default from
+	// address-only PDU); the modern fixture emits 10.0.0.1/24 (RowPointer
+	// prefix). Asserting /24 proves the modern row won the dedup.
+	if assert.NotNil(t, survivingIP, "deduped IP entity must be present") {
+		assert.Equal(t, "10.0.0.1/24", *survivingIP.Address,
+			"modern ipAddressTable row must win over legacy ipAddrTable row")
+	}
+}
+
+// TestAssignPrimaryIP_RejectsPlaceholderInterface verifies the
+// "verified interface IP" guarantee tightening Copilot flagged: a
+// modern row whose ipAddressIfIndex column referenced an ifIndex that
+// never had a corresponding ifTable row walked produces a placeholder
+// Interface with Name=DefaultInterfaceName ("unknown"). That
+// placeholder must NOT count as a verified interface for primary-IP
+// selection — otherwise device.PrimaryIp4 would point at an
+// interface that wasn't actually discovered.
+func TestAssignPrimaryIP_RejectsPlaceholderInterface(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	// Modern row references ifIndex=99 but no ifTable PDU is included,
+	// so GetOrCreateEntity fabricates an Interface with Name="unknown".
+	pdus := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.4.34.1.3.1.4.10.0.0.1": mapping.Value{
+			Value: "99", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.4.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5.1.4.10.0.0.1": mapping.Value{
+			Value: ".1.3.6.1.2.1.4.32.1.5.1.1.4." + ipv4NetworkOctets("10.0.0.1", 24) + ".24",
+			Type:  mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(pdus)
+	// Use CurrentDevice so we observe the device pointer even when no
+	// emitted entity carries it back to findDevice.
+	device := m.CurrentDevice()
+	if assert.NotNil(t, device) {
+		assert.Nil(t, device.PrimaryIp4,
+			"placeholder Interface (Name=DefaultInterfaceName) must not satisfy the verified-interface check")
+	}
+	_ = entities
+}
+
+// TestMapObjectIDsToEntity_DedupTreatsPlaceholderAsUnassigned ensures
+// the same hardening applies in dedup: a modern row whose Interface
+// is the placeholder "unknown" must not displace a legacy row that
+// has a real ifDescr-named interface binding.
+func TestMapObjectIDsToEntity_DedupTreatsPlaceholderAsUnassigned(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	// Legacy row provides interface "Gi0" (real, named). Modern row
+	// references ifIndex=99 (placeholder, no ifTable PDU). Without
+	// the verified-interface check, modern would win dedup; with it,
+	// the legacy real-interface row wins.
+	modernPlaceholder := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.4.34.1.3.1.4.10.0.0.1": mapping.Value{
+			Value: "99", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.4.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5.1.4.10.0.0.1": mapping.Value{
+			Value: ".1.3.6.1.2.1.4.32.1.5.1.1.4." + ipv4NetworkOctets("10.0.0.1", 24) + ".24",
+			Type:  mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+	pdus := mergeOIDs(
+		primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"),
+		modernPlaceholder,
+	)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(pdus)
+
+	count := 0
+	var survivingIP *diode.IPAddress
+	for _, e := range entities {
+		if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil &&
+			strings.HasPrefix(*ip.Address, "10.0.0.1") {
+			count++
+			survivingIP = ip
+		}
+	}
+	assert.Equal(t, 1, count)
+	if assert.NotNil(t, survivingIP) {
+		// Legacy row wins because its "Gi0" interface is real, while
+		// the modern row's "99" is just a placeholder.
+		iface, ok := survivingIP.AssignedObject.(*diode.Interface)
+		if assert.True(t, ok) && assert.NotNil(t, iface.Name) {
+			assert.Equal(t, "Gi0", *iface.Name,
+				"legacy entry with real interface must win when modern has only a placeholder")
+		}
+	}
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp4,
+		"PrimaryIp4 must be assigned via the legacy row's real interface")
+}
+
+// TestMapObjectIDsToEntity_ExcludedInterfaceDropsBothLegacyAndModern
+// verifies the dedup-before-exclude ordering: when the legacy row is
+// bound to an excluded interface and the modern row is missing
+// AssignedObject, an exclude-then-dedup order would have removed the
+// legacy row first and left the unassigned modern duplicate behind,
+// emitting an IP that should have been suppressed. With dedup first,
+// assigned-wins consolidates to the legacy row, then the exclusion
+// sweep drops both copies.
+func TestMapObjectIDsToEntity_ExcludedInterfaceDropsBothLegacyAndModern(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	defaults := &config.Defaults{
+		InterfaceExcludePatterns: []string{"^Gi0$"},
+	}
+	mappingConfig, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, defaults)
+	assert.NoError(t, err)
+
+	// Legacy row binds to "Gi0" (will be excluded). Modern row carries
+	// the same IP but no ipAddressIfIndex (so AssignedObject stays
+	// nil).
+	modernNoIfIndex := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.4.34.1.4.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5.1.4.10.0.0.1": mapping.Value{
+			Value: ".1.3.6.1.2.1.4.32.1.5.1.1.4." + ipv4NetworkOctets("10.0.0.1", 24) + ".24",
+			Type:  mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+	pdus := mergeOIDs(
+		primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"),
+		modernNoIfIndex,
+	)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, defaults, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(pdus)
+
+	for _, e := range entities {
+		ip, ok := e.(*diode.IPAddress)
+		if !ok || ip.Address == nil {
+			continue
+		}
+		assert.NotContains(t, *ip.Address, "10.0.0.1",
+			"IP from excluded interface must not survive via the unassigned modern duplicate")
+	}
+}
+
+// TestMapObjectIDsToEntity_LegacyKeptWhenModernLacksInterface verifies
+// that the dedup pass keeps the legacy row when the modern row is
+// missing AssignedObject (e.g. partial walk where ipAddressIfIndex was
+// not returned). Without this priority, the legacy row would be
+// dropped, both candidates leaving pickPrimaryIPHit empty-handed and
+// primary-IP selection regressing for the device.
+func TestMapObjectIDsToEntity_LegacyKeptWhenModernLacksInterface(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	mappingConfig, err := mapping.NewConfig(primaryIPFixtureBothTables(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil)
+	assert.NoError(t, err)
+
+	// Build a modern row WITHOUT the .3 (ipAddressIfIndex) PDU, so
+	// AssignedObject stays nil for that entity. Filter columns are
+	// still present so the row isn't dropped.
+	modernNoIfIndex := mapping.ObjectIDValueMap{
+		".1.3.6.1.2.1.4.34.1.4.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.5.1.4.10.0.0.1": mapping.Value{
+			Value: ".1.3.6.1.2.1.4.32.1.5.1.1.4." + ipv4NetworkOctets("10.0.0.1", 24) + ".24",
+			Type:  mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.7.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+		".1.3.6.1.2.1.4.34.1.10.1.4.10.0.0.1": mapping.Value{
+			Value: "1", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+	pdus := mergeOIDs(
+		primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"),
+		modernNoIfIndex,
+	)
+
+	m := mapping.NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "10.0.0.1")
+	entities := m.MapObjectIDsToEntity(pdus)
+
+	count := 0
+	var survivingIP *diode.IPAddress
+	for _, e := range entities {
+		if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil &&
+			strings.HasPrefix(*ip.Address, "10.0.0.1") {
+			count++
+			survivingIP = ip
+		}
+	}
+	assert.Equal(t, 1, count, "exactly one IP entity must survive dedup")
+	if assert.NotNil(t, survivingIP) {
+		// The legacy row carries the interface binding (host-route /32);
+		// the modern row would be /24 but has no AssignedObject.
+		assert.Equal(t, "10.0.0.1/32", *survivingIP.Address,
+			"legacy entry with interface binding must win when modern lacks one")
+		_, assigned := survivingIP.AssignedObject.(*diode.Interface)
+		assert.True(t, assigned, "surviving entity must keep its interface assignment")
+	}
+
+	// Sanity: pickPrimaryIPHit can now find the surviving entity, so
+	// PrimaryIp4 is set despite the modern row's missing ifIndex.
+	device := findDevice(entities)
+	assert.NotNil(t, device.PrimaryIp4,
+		"PrimaryIp4 must still be assigned via the legacy row")
 }

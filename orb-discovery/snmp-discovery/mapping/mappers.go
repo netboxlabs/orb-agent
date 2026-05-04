@@ -102,15 +102,25 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	fieldFound := false
 	var extractedIP string // Store the IP address extracted from any field
 
+	isInetAddress := mappingEntry.IndexKind == "inet_address"
+
+	// Lenient defaults match the "missing column" semantics so devices
+	// that omit one of the filter columns are not rejected.
+	addrType := 1   // unicast
+	addrStatus := 1 // preferred
+	rowStatus := 1  // active
+
 	extractIPFromIndex := func(value *ObjectIDValue, field string) {
 		if extractedIP != "" {
 			return
 		}
-		if value.Index != "" {
-			if ip := net.ParseIP(string(value.Index)); ip != nil && ip.To4() != nil {
-				extractedIP = ip.String()
-				m.logger.Debug("extracted IP address", "field", field, "ip", extractedIP)
-			}
+		if value.Index == "" {
+			return
+		}
+		raw := stripIndexFamilyPrefix(string(value.Index))
+		if ip := net.ParseIP(raw); ip != nil {
+			extractedIP = ip.String()
+			m.logger.Debug("extracted IP address", "field", field, "ip", extractedIP)
 		}
 	}
 
@@ -120,7 +130,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 		}
 		// Try to extract from value field first
 		if value.Value != "" {
-			if ip := net.ParseIP(value.Value); ip != nil && ip.To4() != nil {
+			if ip := net.ParseIP(value.Value); ip != nil {
 				extractedIP = ip.String()
 				m.logger.Debug("extracted IP address", "field", field, "ip", extractedIP)
 				return true
@@ -133,6 +143,26 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 
 	setOrUpdateAddress := func(newAddress string) {
 		ipAddress.Address = &newAddress
+	}
+
+	// inet_address-indexed rows derive the address from the (already
+	// decoded) index, not from a separate column. Set it once up front
+	// with a host-route default; the addressPrefix handler may overwrite.
+	if isInetAddress {
+		for _, v := range values {
+			canonical := stripIndexFamilyPrefix(string(v.Index))
+			if canonical == "" {
+				continue
+			}
+			if strings.Contains(canonical, ":") {
+				setOrUpdateAddress(fmt.Sprintf("%s/128", canonical))
+			} else {
+				setOrUpdateAddress(fmt.Sprintf("%s/32", canonical))
+			}
+			extractedIP = canonical
+			fieldFound = true
+			break
+		}
 	}
 
 	for objectID, value := range values {
@@ -180,8 +210,99 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						}
 						fieldFound = true
 					}
+				case "addressPrefix":
+					// RFC 4293 ipAddressTable .5 is a RowPointer into
+					// ipAddressPrefixTable; the last sub-OID is the
+					// prefix length. zeroDotZero, malformed pointers,
+					// and pointers outside the prefix table fall back
+					// to the host-route default already set above.
+					if ipAddress.Address == nil || *ipAddress.Address == "" {
+						continue
+					}
+					prefixLen, pointerIsV6, pointerIfIndex, networkBytes, ok := parseAddressPrefixRowPointer(value.Value)
+					if !ok {
+						m.logger.Debug("addressPrefix not usable, keeping host route",
+							"value", value.Value, "address", *ipAddress.Address)
+						fieldFound = true
+						continue
+					}
+					canonical := stripPrefix(*ipAddress.Address)
+					rowIsV6 := strings.Contains(canonical, ":")
+					if pointerIsV6 != rowIsV6 {
+						// A row that points at a prefix entry of a
+						// different family is structurally invalid
+						// (e.g. an IPv6 row pointing at an IPv4
+						// prefix entry). Keep the host-route default
+						// rather than emitting a wrong prefix.
+						m.logger.Debug("addressPrefix family mismatch, keeping host route",
+							"value", value.Value, "address", *ipAddress.Address,
+							"pointer_v6", pointerIsV6, "row_v6", rowIsV6)
+						fieldFound = true
+						continue
+					}
+					// Verify the pointer's <ifIndex> component matches
+					// the row's own ipAddressIfIndex. Without this
+					// check, a row could silently borrow another
+					// interface's prefix length on devices with
+					// overlapping subnets. The companion .3 PDU lives
+					// at the same row OID with the column bit
+					// rewritten from .5 to .3; missing or "0" ifIndex
+					// is treated as "no constraint" since the row
+					// itself is unbound (per RFC 4293
+					// InterfaceIndexOrZero).
+					rowIfIndex := lookupSiblingValue(values, value.OID, ".5.", ".3.")
+					if rowIfIndex != "" && rowIfIndex != "0" && pointerIfIndex != rowIfIndex {
+						m.logger.Debug("addressPrefix ifIndex mismatch, keeping host route",
+							"value", value.Value, "address", *ipAddress.Address,
+							"pointer_ifindex", pointerIfIndex, "row_ifindex", rowIfIndex)
+						fieldFound = true
+						continue
+					}
+					maxLen := 32
+					if rowIsV6 {
+						maxLen = 128
+					}
+					// Verify the row's address actually falls within
+					// the prefix described by the pointer. RFC 4293
+					// indexes ipAddressPrefixTable rows by the
+					// network address (host bits zeroed), so a
+					// pointer with addrBytes=192.168.0.0/16 attached
+					// to a row whose address is 10.0.0.1 is
+					// structurally wrong — fall back to the host
+					// route rather than emitting a bogus prefix. A
+					// length-clamped value is treated as the
+					// family's maximum for the containment check.
+					checkLen := prefixLen
+					if checkLen > maxLen {
+						checkLen = maxLen
+					}
+					if !addressInsidePrefix(canonical, networkBytes, checkLen) {
+						m.logger.Debug("addressPrefix points at an unrelated prefix row, keeping host route",
+							"value", value.Value, "address", *ipAddress.Address)
+						fieldFound = true
+						continue
+					}
+					if prefixLen > maxLen {
+						m.logger.Debug("addressPrefix length clamped",
+							"raw", prefixLen, "clamped", maxLen, "address", canonical)
+						prefixLen = maxLen
+					}
+					setOrUpdateAddress(fmt.Sprintf("%s/%d", canonical, prefixLen))
+					fieldFound = true
 				case "assignedObject":
 					extractIPFromIndex(value, propertyMappingEntry.Field)
+					// RFC 4293 ipAddressIfIndex is InterfaceIndexOrZero;
+					// 0 means the address is not associated with any
+					// interface (e.g. a globally-scoped address that
+					// has not been bound, or a partial walk where the
+					// agent could not resolve the binding). Skip the
+					// relationship in that case so we don't fabricate
+					// a placeholder Interface for ifIndex 0.
+					if propertyMappingEntry.Relationship.Type == "interface" && (value.Value == "" || value.Value == "0") {
+						m.logger.Debug("ipAddressIfIndex is zero; leaving address unassigned",
+							"index", string(value.Index))
+						continue
+					}
 					if propertyMappingEntry.Relationship != (config.Relationship{}) {
 						linkedEntity := entityRegistry.GetOrCreateEntity(EntityType(propertyMappingEntry.Relationship.Type), ObjectIDIndex(value.Value))
 						if linkedEntity == nil {
@@ -194,32 +315,263 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 							fieldFound = true
 						}
 					}
+				case "addressType":
+					if n, err := strconv.Atoi(value.Value); err == nil {
+						addrType = n
+						fieldFound = true
+					}
+				case "addressStatus":
+					if n, err := strconv.Atoi(value.Value); err == nil {
+						addrStatus = n
+						fieldFound = true
+					}
+				case "addressRowStatus":
+					if n, err := strconv.Atoi(value.Value); err == nil {
+						rowStatus = n
+						fieldFound = true
+					}
 				default:
-					m.logger.Warn("unknown field", "field", mappingEntry.Field)
+					m.logger.Warn("unknown field",
+						"field", propertyMappingEntry.Field,
+						"object_id", propertyMappingEntry.OID)
 				}
 			}
 		}
 	}
 
-	// Validate the final IP/CIDR before storage
+	// Validate the final IP/CIDR before storage. inet_address rows can
+	// be IPv4 or IPv6; legacy ipAddrTable rows must remain IPv4.
 	if ipAddress.Address != nil && *ipAddress.Address != "" {
-		if !ValidateIPv4CIDR(*ipAddress.Address) {
+		valid := false
+		if isInetAddress {
+			valid = ValidateIPCIDR(*ipAddress.Address)
+		} else {
+			valid = ValidateIPv4CIDR(*ipAddress.Address)
+		}
+		if !valid {
 			m.logger.Warn("invalid IP/CIDR format, skipping",
 				"address", *ipAddress.Address)
-			return &diode.IPAddress{} // Empty entity won't be added
+			// Return nil to drop the row outright. An empty
+			// &diode.IPAddress{} is still added by MapObjectIDsToEntity
+			// (the nil check there is on the entity pointer, not its
+			// fields), which would emit a malformed entity downstream.
+			return nil
 		}
 	}
 
-	if fieldFound {
-		m.applyDefaults(&ipAddress, defaults)
-		if ipAddress.Address != nil {
-			m.logger.Debug("successfully mapped IP address", "address", *ipAddress.Address)
-		} else {
-			m.logger.Debug("successfully mapped IP address (address field empty)")
+	// RFC 4293 row filtering: drop non-unicast, non-preferred/deprecated,
+	// or non-active rows. Returning nil drops the row outright; an empty
+	// &diode.IPAddress{} would still be added by MapObjectIDsToEntity.
+	if isInetAddress {
+		if addrType != 1 {
+			m.logger.Debug("dropping non-unicast row", "addrType", addrType, "address", derefAddr(ipAddress.Address))
+			return nil
+		}
+		// Accept preferred(1), deprecated(2), and optimistic(8). The
+		// last is "may be used freely with caveats" per RFC 4862;
+		// rejecting it while keeping deprecated would be inconsistent.
+		// Reject tentative(6) / invalid(3) / inaccessible(4) /
+		// unknown(5) / duplicate(7).
+		if addrStatus != 1 && addrStatus != 2 && addrStatus != 8 {
+			m.logger.Debug("dropping row by status", "status", addrStatus, "address", derefAddr(ipAddress.Address))
+			return nil
+		}
+		if rowStatus != 1 {
+			m.logger.Debug("dropping inactive row", "rowStatus", rowStatus, "address", derefAddr(ipAddress.Address))
+			return nil
 		}
 	}
+
+	// An IPAddress entity without a valid Address is meaningless to
+	// downstream consumers. Drop it (return nil) so MapObjectIDsToEntity
+	// doesn't emit a malformed entity. This covers the case where no
+	// PDU populated the address — an extractIPFromIndex/Value miss for
+	// legacy rows, or an unrecognized value for modern rows.
+	if !fieldFound || ipAddress.Address == nil || *ipAddress.Address == "" {
+		return nil
+	}
+
+	m.applyDefaults(&ipAddress, defaults)
+	m.logger.Debug("successfully mapped IP address", "address", *ipAddress.Address)
+
+	source := "legacy"
+	if isInetAddress {
+		source = "modern"
+	}
+	entityRegistry.MarkIPSource(&ipAddress, source)
 
 	return &ipAddress
+}
+
+func derefAddr(s *string) string {
+	if s == nil {
+		return "<nil>"
+	}
+	return *s
+}
+
+// lookupSiblingValue returns the .Value of the PDU whose OID matches
+// the given OID with one column-substitution applied. Used by the
+// addressPrefix handler to fetch the companion ipAddressIfIndex (.3)
+// PDU value from the same ipAddressTable row. Empty string when no
+// sibling PDU is present.
+func lookupSiblingValue(values map[ObjectIDIndex]*ObjectIDValue, sourceOID, fromColumn, toColumn string) string {
+	siblingOID := strings.Replace(sourceOID, fromColumn, toColumn, 1)
+	if pdu, ok := values[ObjectIDIndex(siblingOID)]; ok && pdu != nil {
+		return pdu.Value
+	}
+	return ""
+}
+
+// addressInsidePrefix returns true if (1) the encoded network bytes
+// are already a valid prefix-table row index — i.e. all host bits are
+// zero — and (2) the canonical IP address falls within that prefix.
+//
+// RFC 4293 specifies that ipAddressPrefixTable rows are indexed by
+// the network address with host bits zeroed; a pointer carrying the
+// host-bits-set form (e.g. addrBytes=10.0.0.1 with prefixLen=24
+// instead of addrBytes=10.0.0.0) is structurally invalid even if the
+// row's own address would fall inside the masked prefix. We treat
+// such pointers as malformed and let the caller fall back to the
+// host-route default.
+func addressInsidePrefix(canonical string, networkBytes []byte, prefixLen int) bool {
+	ip := net.ParseIP(canonical)
+	if ip == nil {
+		return false
+	}
+	var ipBytes []byte
+	switch len(networkBytes) {
+	case 4:
+		v4 := ip.To4()
+		if v4 == nil {
+			return false
+		}
+		ipBytes = v4
+	case 16:
+		// To16() returns the 16-byte representation, but a v4-mapped
+		// v6 like ::ffff:10.0.0.1 will then carry the same 16 bytes
+		// as the embedded prefix encoding — exactly what we need to
+		// compare against an addrType=2/addrLen=16 pointer.
+		ipBytes = ip.To16()
+		if ipBytes == nil {
+			return false
+		}
+	default:
+		return false
+	}
+	bits := len(networkBytes) * 8
+	if prefixLen < 0 || prefixLen > bits {
+		return false
+	}
+	mask := net.CIDRMask(prefixLen, bits)
+	// (1) Reject pointers whose addrBytes still carry host bits.
+	for i := range networkBytes {
+		if networkBytes[i]&^mask[i] != 0 {
+			return false
+		}
+	}
+	// (2) Confirm the row's address falls within that prefix.
+	for i := range networkBytes {
+		if (ipBytes[i] & mask[i]) != networkBytes[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// parseAddressPrefixRowPointer extracts the prefix length, family,
+// pointed-to ifIndex, and network bytes from an ipAddressPrefix
+// RowPointer value (.5 column of ipAddressTable).
+//
+// Expected shape (RFC 4293):
+//
+//	.1.3.6.1.2.1.4.32.1.5.<ifIndex>.<addrType>.<addrLen>.<addrBytes...>.<prefixLen>
+//
+// Per RFC 4293 the addrBytes are the prefix's network address — i.e.
+// the row's address with the host bits zeroed. Callers can use the
+// returned bytes to verify that the IP being mapped actually falls
+// within the prefix described by the pointer; a pointer to an
+// unrelated prefix row is treated as malformed. The returned ifIndex
+// lets callers verify the prefix row belongs to the same interface
+// as the source ipAddressTable row — without that check, a row could
+// silently pick up another interface's prefix length when subnets
+// overlap.
+//
+// Returns ok=false for:
+//   - "0.0" / ".0.0" (zeroDotZero — RFC 4293 sentinel for "no prefix
+//     row exists")
+//   - any pointer that does not begin with .1.3.6.1.2.1.4.32.1.5
+//   - the bare column OID with no row index appended
+//   - empty / non-numeric tail
+//   - addrType not in {1 (ipv4), 2 (ipv6)}, addrLen mismatch with the
+//     declared family, or a byte-count that doesn't match addrLen.
+//     Only structurally valid pointers are accepted; misshapen ones
+//     fall back to the host-route default upstream rather than
+//     silently producing a bogus prefix length.
+func parseAddressPrefixRowPointer(pointer string) (prefixLen int, isV6 bool, ifIndex string, networkBytes []byte, ok bool) {
+	if pointer == "" {
+		return 0, false, "", nil, false
+	}
+	trimmed := strings.TrimPrefix(pointer, ".")
+	if trimmed == "0.0" || trimmed == "" {
+		return 0, false, "", nil, false
+	}
+	const prefixTablePrefix = "1.3.6.1.2.1.4.32.1.5"
+	if !strings.HasPrefix(trimmed, prefixTablePrefix+".") {
+		return 0, false, "", nil, false
+	}
+	suffix := trimmed[len(prefixTablePrefix)+1:]
+	suffixParts := strings.Split(suffix, ".")
+	// Layout positions: [0]=ifIndex, [1]=addrType, [2]=addrLen,
+	// [3 .. 3+addrLen-1]=addrBytes, [last]=prefixLen.
+	if len(suffixParts) < 4 {
+		return 0, false, "", nil, false
+	}
+	// Validate ifIndex parses as a non-negative integer. We surface
+	// the textual form so callers can compare it against the row's
+	// own ipAddressIfIndex value, which is also a string.
+	if iv, err := strconv.Atoi(suffixParts[0]); err != nil || iv < 0 {
+		return 0, false, "", nil, false
+	}
+	addrType, err := strconv.Atoi(suffixParts[1])
+	if err != nil {
+		return 0, false, "", nil, false
+	}
+	addrLen, err := strconv.Atoi(suffixParts[2])
+	if err != nil {
+		return 0, false, "", nil, false
+	}
+	// Reject scoped (3=ipv4z, 4=ipv6z) and dns(16); their lengths are
+	// not 4 or 16 and the spec already excludes them from the modern
+	// ipAddressTable handling we support.
+	var pointerIsV6 bool
+	switch {
+	case addrType == 1 && addrLen == 4:
+		pointerIsV6 = false
+	case addrType == 2 && addrLen == 16:
+		pointerIsV6 = true
+	default:
+		return 0, false, "", nil, false
+	}
+	// Total expected sub-OIDs: 1 ifIndex + 1 addrType + 1 addrLen +
+	// addrLen address bytes + 1 prefixLen.
+	if len(suffixParts) != addrLen+4 {
+		return 0, false, "", nil, false
+	}
+	tail := suffixParts[len(suffixParts)-1]
+	n, err := strconv.Atoi(tail)
+	if err != nil || n < 0 {
+		return 0, false, "", nil, false
+	}
+	bytes := make([]byte, addrLen)
+	for i := 0; i < addrLen; i++ {
+		b, err := strconv.Atoi(suffixParts[3+i])
+		if err != nil || b < 0 || b > 255 {
+			return 0, false, "", nil, false
+		}
+		bytes[i] = byte(b)
+	}
+	return n, pointerIsV6, suffixParts[0], bytes, true
 }
 
 func maskToPrefixSize(maskStr string) (int, error) {
@@ -247,7 +599,9 @@ func maskToPrefixSize(maskStr string) (int, error) {
 }
 
 // ValidateIPv4CIDR validates an IPv4 address in CIDR notation (e.g., "192.168.1.1/24").
-// Returns true if the format is valid, false otherwise.
+// Returns true if the format is valid, false otherwise. Used by the legacy
+// ipAddrTable path; for tables that may carry IPv6 (RFC 4293 ipAddressTable)
+// use ValidateIPCIDR instead.
 func ValidateIPv4CIDR(cidr string) bool {
 	ip, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
@@ -266,6 +620,17 @@ func ValidateIPv4CIDR(cidr string) bool {
 	}
 
 	return true
+}
+
+// ValidateIPCIDR validates an IPv4 or IPv6 address in CIDR notation
+// (e.g., "192.168.1.1/24" or "2001:db8::1/64"). Used by the
+// inet_address-indexed ipAddressTable path which produces both families.
+func ValidateIPCIDR(cidr string) bool {
+	ip, _, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+	return ip != nil
 }
 
 // InterfaceMapper is a struct that maps interfaces to entities
@@ -514,6 +879,13 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 			m.logger.Debug("successfully mapped interface (name field empty)")
 		}
 	}
+
+	// Mark this interface as actually walked (regardless of whether
+	// ifDescr/ifName populated the Name). Downstream code uses this
+	// to distinguish a real ifTable row from the placeholder Interface
+	// fabricated by GetOrCreateEntity when ipAddressIfIndex references
+	// an ifIndex whose ifTable row was never walked.
+	entityRegistry.MarkInterfaceVerified(interfaceEntity)
 
 	return interfaceEntity
 }

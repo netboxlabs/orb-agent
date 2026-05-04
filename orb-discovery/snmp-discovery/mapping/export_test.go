@@ -28,9 +28,19 @@ func (m *ObjectIDMapper) CurrentDevice() *diode.Device {
 	return nil
 }
 
-// AssignPrimaryIPForTest invokes the unexported primary-IP assignment with
-// a synthetic entities set, so tests can construct multi-match scenarios
-// that are hard to trigger through the real OID pipeline.
+// AssignPrimaryIPForTest invokes the unexported primary-IP assignment
+// with a synthetic entities set, so tests can construct multi-match
+// scenarios that are hard to trigger through the real OID pipeline.
+// Synthetic Interface entities reachable through the IP entities are
+// marked verified so the registry's verified-interface gate accepts
+// them without the test having to weave through InterfaceMapper.
 func (m *ObjectIDMapper) AssignPrimaryIPForTest(device *diode.Device, entities map[diode.Entity]bool) {
+	for entity := range entities {
+		if ip, ok := entity.(*diode.IPAddress); ok {
+			if iface, ok := ip.AssignedObject.(*diode.Interface); ok {
+				m.registry.MarkInterfaceVerified(iface)
+			}
+		}
+	}
 	m.assignPrimaryIP(device, entities)
 }

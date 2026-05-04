@@ -205,6 +205,7 @@ type MappingEntry struct {
 	Description    string         `yaml:"description"`
 	MappingEntries []MappingEntry `yaml:"mapping_entries"`
 	IdentifierSize int            `yaml:"identifier_size"`
+	IndexKind      string         `yaml:"index_kind"`
 	Relationship   Relationship   `yaml:"relationship"`
 }
 

@@ -332,3 +332,31 @@ func TestTargetNetboxID_optional(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, target.NetboxID)
 }
+
+func TestMappingEntry_IndexKind(t *testing.T) {
+	yamlBody := []byte(`
+entries:
+  - oid: ".1.3.6.1.2.1.4.34.1"
+    entity: "ipAddress"
+    field: "_id"
+    index_kind: "inet_address"
+`)
+	var m Mapping
+	require.NoError(t, yaml.Unmarshal(yamlBody, &m))
+	require.Len(t, m.Entries, 1)
+	assert.Equal(t, "inet_address", m.Entries[0].IndexKind)
+}
+
+func TestMappingEntry_IndexKind_DefaultEmpty(t *testing.T) {
+	yamlBody := []byte(`
+entries:
+  - oid: ".1.3.6.1.2.1.4.20.1"
+    entity: "ipAddress"
+    field: "_id"
+    identifier_size: 4
+`)
+	var m Mapping
+	require.NoError(t, yaml.Unmarshal(yamlBody, &m))
+	require.Len(t, m.Entries, 1)
+	assert.Equal(t, "", m.Entries[0].IndexKind)
+}

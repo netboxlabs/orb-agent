@@ -33,7 +33,7 @@ entries:
         entity: "interface"
         field: "description"
 
-  # IP Address mappings
+  # IP Address mappings — legacy ipAddrTable (RFC 1213; IPv4 only)
   - oid: ".1.3.6.1.2.1.4.20.1"
     entity: "ipAddress"
     field: "_id"
@@ -51,6 +51,31 @@ entries:
         relationship:
           type: "interface"
           field: "_id"
+
+  # IP Address mappings — RFC 4293 ipAddressTable (IPv4 + IPv6)
+  - oid: ".1.3.6.1.2.1.4.34.1"
+    entity: "ipAddress"
+    field: "_id"
+    index_kind: "inet_address"
+    mapping_entries:
+      - oid: ".1.3.6.1.2.1.4.34.1.3"
+        entity: "ipAddress"
+        field: "assignedObject"
+        relationship:
+          type: "interface"
+          field: "_id"
+      - oid: ".1.3.6.1.2.1.4.34.1.4"
+        entity: "ipAddress"
+        field: "addressType"
+      - oid: ".1.3.6.1.2.1.4.34.1.5"
+        entity: "ipAddress"
+        field: "addressPrefix"
+      - oid: ".1.3.6.1.2.1.4.34.1.7"
+        entity: "ipAddress"
+        field: "addressStatus"
+      - oid: ".1.3.6.1.2.1.4.34.1.10"
+        entity: "ipAddress"
+        field: "addressRowStatus"
 
   # Device mappings
   - oid: ".1.3.6.1.2.1.1"

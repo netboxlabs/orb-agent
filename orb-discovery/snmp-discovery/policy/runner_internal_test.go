@@ -450,6 +450,152 @@ func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
 		"nested Device must have PrimaryIp4 cleared to break the cycle")
 }
 
+// TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable is the
+// runner-level integration check for OBS-2798: a device that returns
+// only RFC 4293 ipAddressTable rows (no legacy ipAddrTable) must
+// still emit IP entities and have device.PrimaryIp4 / PrimaryIp6
+// populated when the SNMP target matches a discovered address. This
+// test exercises Config.ObjectIDs() on the inet_address-indexed
+// entries and the SNMP walking + grouping path end-to-end through
+// the runner, which the mapper-only unit tests don't cover.
+func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T) {
+	// Walker emits ipAddressTable PDUs only — zero ipAddrTable rows.
+	// Both an IPv4 and an IPv6 address are bound to ifIndex=1.
+	// IPv4: 10.0.0.1/24
+	//   ipAddressIfIndex.1.4.10.0.0.1 = 1
+	//   ipAddressType.1.4.10.0.0.1 = 1 (unicast)
+	//   ipAddressPrefix.1.4.10.0.0.1 = .1.3.6.1.2.1.4.32.1.5.1.1.4.10.0.0.0.24
+	//   ipAddressStatus.1.4.10.0.0.1 = 1 (preferred)
+	//   ipAddressRowStatus.1.4.10.0.0.1 = 1 (active)
+	// IPv6: 2001:db8::1/64
+	//   ipAddressIfIndex.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1 = 1
+	//   ipAddressType.* = 1, ipAddressStatus.* = 1, ipAddressRowStatus.* = 1
+	//   ipAddressPrefix.* = .1.3.6.1.2.1.4.32.1.5.1.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.0.64
+	v6Suffix := "2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1"
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					Value: "Gi0", Type: gosnmp.OctetString, IdentifierSize: 1,
+				},
+			},
+			"1.3.6.1.2.1.4.34.1.3": {
+				"1.3.6.1.2.1.4.34.1.3.1.4.10.0.0.1": {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+				"1.3.6.1.2.1.4.34.1.3." + v6Suffix: {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+			},
+			"1.3.6.1.2.1.4.34.1.4": {
+				"1.3.6.1.2.1.4.34.1.4.1.4.10.0.0.1": {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+				"1.3.6.1.2.1.4.34.1.4." + v6Suffix: {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+			},
+			"1.3.6.1.2.1.4.34.1.5": {
+				"1.3.6.1.2.1.4.34.1.5.1.4.10.0.0.1": {
+					Value: ".1.3.6.1.2.1.4.32.1.5.1.1.4.10.0.0.0.24",
+					Type:  gosnmp.ObjectIdentifier, IdentifierSize: 0,
+				},
+				"1.3.6.1.2.1.4.34.1.5." + v6Suffix: {
+					Value: ".1.3.6.1.2.1.4.32.1.5.1.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.0.64",
+					Type:  gosnmp.ObjectIdentifier, IdentifierSize: 0,
+				},
+			},
+			"1.3.6.1.2.1.4.34.1.7": {
+				"1.3.6.1.2.1.4.34.1.7.1.4.10.0.0.1": {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+				"1.3.6.1.2.1.4.34.1.7." + v6Suffix: {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+			},
+			"1.3.6.1.2.1.4.34.1.10": {
+				"1.3.6.1.2.1.4.34.1.10.1.4.10.0.0.1": {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+				"1.3.6.1.2.1.4.34.1.10." + v6Suffix: {
+					Value: 1, Type: gosnmp.Integer, IdentifierSize: 0,
+				},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+
+	entries := []config.MappingEntry{
+		{
+			OID: "1.3.6.1.2.1.2.2.1", Entity: "interface", Field: "_id", IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+			},
+		},
+		{
+			OID: "1.3.6.1.2.1.4.34.1", Entity: "ipAddress", Field: "_id",
+			IndexKind: "inet_address",
+			MappingEntries: []config.MappingEntry{
+				{
+					OID: "1.3.6.1.2.1.4.34.1.3", Entity: "ipAddress", Field: "assignedObject",
+					Relationship: config.Relationship{Type: "interface"},
+				},
+				{OID: "1.3.6.1.2.1.4.34.1.4", Entity: "ipAddress", Field: "addressType"},
+				{OID: "1.3.6.1.2.1.4.34.1.5", Entity: "ipAddress", Field: "addressPrefix"},
+				{OID: "1.3.6.1.2.1.4.34.1.7", Entity: "ipAddress", Field: "addressStatus"},
+				{OID: "1.3.6.1.2.1.4.34.1.10", Entity: "ipAddress", Field: "addressRowStatus"},
+			},
+		},
+	}
+
+	// Run twice — once for IPv4 target, once for IPv6 — using a fresh
+	// runner each time so the mapping registry doesn't carry state
+	// between scans.
+	t.Run("IPv4 target -> PrimaryIp4", func(t *testing.T) {
+		runner := queryTargetRunner(factory, entries)
+		entities, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+		require.NoError(t, err)
+		require.NotEmpty(t, entities)
+
+		var primaryIP *diode.IPAddress
+		for _, e := range entities {
+			if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil && *ip.Address == "10.0.0.1/24" {
+				primaryIP = ip
+				break
+			}
+		}
+		require.NotNil(t, primaryIP, "expected IPAddress 10.0.0.1/24 in emitted entities")
+		iface, ok := primaryIP.AssignedObject.(*diode.Interface)
+		require.True(t, ok)
+		require.NotNil(t, iface.Device)
+		require.NotNil(t, iface.Device.PrimaryIp4, "PrimaryIp4 must be set from ipAddressTable target")
+		assert.Equal(t, "10.0.0.1/24", *iface.Device.PrimaryIp4.Address)
+	})
+
+	t.Run("IPv6 target -> PrimaryIp6", func(t *testing.T) {
+		runner := queryTargetRunner(factory, entries)
+		entities, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
+		require.NoError(t, err)
+		require.NotEmpty(t, entities)
+
+		var primaryIP *diode.IPAddress
+		for _, e := range entities {
+			if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil && *ip.Address == "2001:db8::1/64" {
+				primaryIP = ip
+				break
+			}
+		}
+		require.NotNil(t, primaryIP, "expected IPAddress 2001:db8::1/64 in emitted entities")
+		iface, ok := primaryIP.AssignedObject.(*diode.Interface)
+		require.True(t, ok)
+		require.NotNil(t, iface.Device)
+		require.NotNil(t, iface.Device.PrimaryIp6, "PrimaryIp6 must be set from ipAddressTable target")
+		assert.Equal(t, "2001:db8::1/64", *iface.Device.PrimaryIp6.Address)
+	})
+}
+
 func TestRunner_HasActiveHostJobsField(t *testing.T) {
 	cron := "0 * * * *"
 	pol := config.Policy{
