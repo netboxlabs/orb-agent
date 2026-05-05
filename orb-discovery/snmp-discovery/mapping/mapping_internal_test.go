@@ -38,7 +38,7 @@ func TestResolveMappingEntry_FallsBackThroughPDUs(t *testing.T) {
 			},
 		},
 	}
-	mappingConfig, err := NewConfig(entries, logger, nil, nil, nil)
+	mappingConfig, err := NewConfig(entries, logger, nil, nil, nil, config.Options{})
 	require.NoError(t, err)
 
 	m := NewObjectIDMapper(mappingConfig, logger, &config.Defaults{}, "")
@@ -180,7 +180,7 @@ func TestNewConfig_RejectsUnknownIndexKind(t *testing.T) {
 			IndexKind: "InetAddress", // wrong case — typo
 		},
 	}
-	_, err := NewConfig(entries, logger, nil, nil, nil)
+	_, err := NewConfig(entries, logger, nil, nil, nil, config.Options{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid index_kind")
 }
@@ -203,7 +203,7 @@ func TestNewConfig_RejectsInetAddressOnChildlessTopLevel(t *testing.T) {
 			// without the column boundary the parser assumes.
 		},
 	}
-	_, err := NewConfig(entries, logger, nil, nil, nil)
+	_, err := NewConfig(entries, logger, nil, nil, nil, config.Options{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "at least one child mapping_entry")
 }
@@ -244,7 +244,7 @@ func TestNewConfig_RejectsChildIndexKindOverridingParent(t *testing.T) {
 					},
 				},
 			}
-			_, err := NewConfig(entries, logger, nil, nil, nil)
+			_, err := NewConfig(entries, logger, nil, nil, nil, config.Options{})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "must be declared only on the top-level")
 		})

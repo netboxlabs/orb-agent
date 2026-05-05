@@ -47,7 +47,7 @@ func setDeviceSourceMatch(d *diode.Device, netboxID int, seen map[unsafe.Pointer
 }
 
 // annotateEntitiesWithRunID sets per-entity Diode metadata key "run_id" on each entity
-// in the batch and on nested Device, Interface, and IPAddress references.
+// in the batch and on nested Device, Interface, IPAddress, and VLAN references.
 func annotateEntitiesWithRunID(entities []diode.Entity, runID string) {
 	seen := make(map[unsafe.Pointer]struct{})
 	for _, e := range entities {
@@ -58,6 +58,8 @@ func annotateEntitiesWithRunID(entities []diode.Entity, runID string) {
 			annotateInterface(v, runID, seen)
 		case *diode.IPAddress:
 			annotateIPAddress(v, runID, seen)
+		case *diode.VLAN:
+			annotateVLAN(v, runID, seen)
 		}
 	}
 }
@@ -98,6 +100,10 @@ func annotateInterface(iface *diode.Interface, runID string, seen map[unsafe.Poi
 	annotateInterface(iface.Parent, runID, seen)
 	annotateInterface(iface.Bridge, runID, seen)
 	annotateInterface(iface.Lag, runID, seen)
+	annotateVLAN(iface.UntaggedVlan, runID, seen)
+	for _, v := range iface.TaggedVlans {
+		annotateVLAN(v, runID, seen)
+	}
 }
 
 func annotateIPAddress(ip *diode.IPAddress, runID string, seen map[unsafe.Pointer]struct{}) {
@@ -123,4 +129,16 @@ func annotateIPAddress(ip *diode.IPAddress, runID string, seen map[unsafe.Pointe
 	if ip.NatInside != nil {
 		annotateIPAddress(ip.NatInside, runID, seen)
 	}
+}
+
+func annotateVLAN(vlan *diode.VLAN, runID string, seen map[unsafe.Pointer]struct{}) {
+	if vlan == nil {
+		return
+	}
+	p := unsafe.Pointer(vlan)
+	if _, ok := seen[p]; ok {
+		return
+	}
+	seen[p] = struct{}{}
+	mergeRunID(&vlan.Metadata, runID)
 }

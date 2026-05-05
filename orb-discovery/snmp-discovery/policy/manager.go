@@ -119,6 +119,11 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 	if policy.Config.Defaults.Site == "" {
 		policy.Config.Defaults.Site = "undefined"
 	}
+
+	if policy.Config.Options.CreateUnknownVlans == nil {
+		trueVal := true
+		policy.Config.Options.CreateUnknownVlans = &trueVal
+	}
 }
 
 // validateAuthentication validates a single authentication configuration

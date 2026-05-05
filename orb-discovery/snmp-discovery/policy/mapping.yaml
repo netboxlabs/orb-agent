@@ -106,3 +106,70 @@ entries:
       - oid: ".1.3.6.1.2.1.47.1.1.1.1.11"
         entity: "device"
         field: "serialNumber"
+  # BRIDGE-MIB dot1dBasePortIfIndex — bridge port -> ifIndex translation.
+  # Required by VlanMapper bitmap decoding.
+  - oid: ".1.3.6.1.2.1.17.1.4.1"
+    entity: "interface_vlan"
+    field: "_id"
+    identifier_size: 1
+    description: "BRIDGE-MIB dot1dBasePortTable (bridge-port -> ifIndex map)"
+    mapping_entries:
+      - oid: ".1.3.6.1.2.1.17.1.4.1.2"
+        entity: "interface_vlan"
+        field: "ifIndex"
+
+  # Q-BRIDGE-MIB dot1qVlanStaticTable — VLAN names + egress/untagged port masks.
+  - oid: ".1.3.6.1.2.1.17.7.1.4.3"
+    entity: "vlan"
+    field: "_id"
+    identifier_size: 1
+    description: "Q-BRIDGE-MIB dot1qVlanStaticTable (VLAN catalog + per-VLAN egress masks)"
+    mapping_entries:
+      - oid: ".1.3.6.1.2.1.17.7.1.4.3.1.1"
+        entity: "vlan"
+        field: "name"
+      - oid: ".1.3.6.1.2.1.17.7.1.4.3.1.2"
+        entity: "vlan"
+        field: "egressPorts"
+      - oid: ".1.3.6.1.2.1.17.7.1.4.3.1.4"
+        entity: "vlan"
+        field: "untaggedPorts"
+      - oid: ".1.3.6.1.2.1.17.7.1.4.3.1.5"
+        entity: "vlan"
+        field: "rowStatus"
+
+  # Q-BRIDGE-MIB dot1qPortVlanTable — per-port PVID.
+  - oid: ".1.3.6.1.2.1.17.7.1.4.5"
+    entity: "interface_vlan"
+    field: "_id"
+    identifier_size: 1
+    description: "Q-BRIDGE-MIB dot1qPortVlanTable (PVID + acceptable frame types)"
+    mapping_entries:
+      - oid: ".1.3.6.1.2.1.17.7.1.4.5.1.1"
+        entity: "interface_vlan"
+        field: "pvid"
+
+  # CISCO-VLAN-MEMBERSHIP-MIB vmMembershipTable — non-trunk access VLAN per ifIndex.
+  - oid: ".1.3.6.1.4.1.9.9.68.1.2.2.1"
+    entity: "interface_vlan"
+    field: "_id"
+    identifier_size: 1
+    vendor: "cisco"
+    description: "CISCO-VLAN-MEMBERSHIP-MIB vmMembershipTable (access VLAN refinement)"
+    mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.9.68.1.2.2.1.2"
+        entity: "interface_vlan"
+        field: "vmVlan"
+
+  # CISCO-VOICE-VLAN-MIB vmVoiceVlanTable — per-port voice VLAN.
+  # Sentinels: 0 = none, 4095 = dot1p-only, 4096 = untagged.
+  - oid: ".1.3.6.1.4.1.9.9.68.1.5.1"
+    entity: "interface_vlan"
+    field: "_id"
+    identifier_size: 1
+    vendor: "cisco"
+    description: "CISCO-VOICE-VLAN-MIB vmVoiceVlanTable (voice VLAN promotion)"
+    mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.9.68.1.5.1.1"
+        entity: "interface_vlan"
+        field: "vmVoiceVlanId"

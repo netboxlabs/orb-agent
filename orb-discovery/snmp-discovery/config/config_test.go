@@ -260,6 +260,39 @@ func TestMergeDefaults(t *testing.T) {
 	})
 }
 
+func TestPolicyOptions_Defaults(t *testing.T) {
+	yamlBody := []byte(`
+schedule: "0 */6 * * *"
+defaults: {}
+timeout: 300
+snmp_timeout: 5
+options:
+  create_unknown_vlans: true
+`)
+	var pc PolicyConfig
+	if err := yaml.Unmarshal(yamlBody, &pc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	if pc.Options.CreateUnknownVlans == nil || !*pc.Options.CreateUnknownVlans {
+		t.Error("CreateUnknownVlans: got nil or false, want *true")
+	}
+}
+
+func TestPolicyOptions_Omitted(t *testing.T) {
+	yamlBody := []byte(`
+schedule: "0 */6 * * *"
+defaults: {}
+timeout: 300
+`)
+	var pc PolicyConfig
+	if err := yaml.Unmarshal(yamlBody, &pc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	if pc.Options.CreateUnknownVlans != nil {
+		t.Errorf("CreateUnknownVlans: got %v, want nil (omitted)", pc.Options.CreateUnknownVlans)
+	}
+}
+
 func TestMergeDefaults_DeviceModelManufacturerPlatform(t *testing.T) {
 	policy := &Defaults{
 		Device: DeviceDefaults{
@@ -359,4 +392,59 @@ entries:
 	require.NoError(t, yaml.Unmarshal(yamlBody, &m))
 	require.Len(t, m.Entries, 1)
 	assert.Equal(t, "", m.Entries[0].IndexKind)
+}
+
+func TestMergeDefaults_VLAN(t *testing.T) {
+	policy := &Defaults{
+		VLAN: VLANDefaults{
+			Description: "policy desc",
+			Tags:        []string{"policy-tag"},
+			Group:       "policy-group",
+			Tenant:      "policy-tenant",
+			Status:      "active",
+		},
+	}
+	override := &Defaults{
+		VLAN: VLANDefaults{
+			Description: "override desc",
+			Tags:        []string{"override-tag"},
+			Tenant:      "override-tenant",
+		},
+	}
+	merged := MergeDefaults(policy, override)
+
+	assert.Equal(t, "override desc", merged.VLAN.Description)
+	assert.Equal(t, []string{"override-tag"}, merged.VLAN.Tags)
+	assert.Equal(t, "policy-group", merged.VLAN.Group, "Group should be preserved from policy")
+	assert.Equal(t, "override-tenant", merged.VLAN.Tenant)
+	assert.Equal(t, "active", merged.VLAN.Status, "Status should be preserved from policy")
+}
+
+func TestMappingEntry_VendorField(t *testing.T) {
+	yamlBody := []byte(`
+oid: ".1.3.6.1.4.1.9.9.68.1.2.2.1"
+entity: "interface_vlan"
+vendor: "cisco"
+`)
+	var m MappingEntry
+	if err := yaml.Unmarshal(yamlBody, &m); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	if m.Vendor != "cisco" {
+		t.Errorf("Vendor: got %q, want %q", m.Vendor, "cisco")
+	}
+}
+
+func TestMappingEntry_VendorOmitted(t *testing.T) {
+	yamlBody := []byte(`
+oid: ".1.3.6.1.2.1.2.2.1"
+entity: "interface"
+`)
+	var m MappingEntry
+	if err := yaml.Unmarshal(yamlBody, &m); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	if m.Vendor != "" {
+		t.Errorf("Vendor: got %q, want empty (generic)", m.Vendor)
+	}
 }

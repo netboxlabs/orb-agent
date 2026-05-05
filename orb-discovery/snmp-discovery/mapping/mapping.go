@@ -206,6 +206,15 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 	}
 }
 
+// GetEntity returns the entity for (entityType, index), or nil if absent.
+// Differs from GetOrCreateEntity in that it never creates a new entity.
+func (r *EntityRegistry) GetEntity(entityType EntityType, index ObjectIDIndex) diode.Entity {
+	if r.entities[entityType] == nil {
+		return nil
+	}
+	return r.entities[entityType][index]
+}
+
 // GetOrCreateEntity returns an entity from the EntityRegistry or creates a new one if it doesn't exist
 func (r *EntityRegistry) GetOrCreateEntity(entityType EntityType, index ObjectIDIndex) diode.Entity {
 	r.logger.Debug("getting entity", "entity_type", entityType, "index", index, "from", r.entities)
@@ -242,6 +251,10 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 		}, nil
 	case "device":
 		return &diode.Device{}, nil
+	case "vlan":
+		return &diode.VLAN{}, nil
+	case "interface_vlan":
+		return nil, fmt.Errorf("entity type %q is post-pass only and has no row entity", entityType)
 	}
 	return nil, fmt.Errorf("unimplemented entity type: %s", entityType)
 }
@@ -264,6 +277,13 @@ const (
 	InterfaceEntityType EntityType = "interface"
 	// IPAddressEntityType is the type of the IP address entity
 	IPAddressEntityType EntityType = "ipAddress"
+	// VLANEntityType is the type of the VLAN entity (Q-BRIDGE-MIB derived).
+	VLANEntityType EntityType = "vlan"
+	// InterfaceVLANEntityType is a pseudo-entity that flags an OID as
+	// belonging to the VlanMapper PostMap pipeline (e.g., Cisco-overlay
+	// rows). createEntity returns an error for this type — there is no
+	// row-scoped entity to construct.
+	InterfaceVLANEntityType EntityType = "interface_vlan"
 )
 
 // ObjectIDMapper is a struct that maps ObjectIDs to entities
@@ -276,6 +296,7 @@ type ObjectIDMapper struct {
 	targetHost      string
 	resolver        hostResolver
 	ctx             context.Context
+	postPassMappers []postPassMapper
 }
 
 // SetContext stores the scan's context on the mapper. If set, the primary-IP
@@ -302,6 +323,7 @@ type Entry struct {
 	IdentifierSize int
 	IndexKind      string
 	Relationship   config.Relationship
+	Vendor         string
 }
 
 // MapToEntity maps a value to an entity
@@ -334,11 +356,21 @@ type Config struct {
 	// per-PDU getMappingEntry call (an O(depth) prefix walk) when the
 	// OID falls outside any inet_address-using table.
 	inetAddressEntries map[string]*Entry
+	// postPassPrefixes is the pre-computed list of OID prefixes that
+	// belong to post-pass-only entity types (vlan, interface_vlan).
+	// groupByObjectIDIndex consults this slice via HasPrefix per PDU
+	// instead of resolving the parent entry for every walked OID
+	// (which would defeat the inet_address fast-path optimization).
+	// Each prefix ends with a literal "." so a parent OID does not
+	// accidentally match a sibling sharing a numeric prefix.
+	postPassPrefixes []string
+	postPassMappers  []postPassMapper
+	options          config.Options
 }
 
 // NewConfig creates a new Config
 func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturers data.ManufacturerRetriever,
-	deviceLookup data.DeviceRetriever, defaults *config.Defaults,
+	deviceLookup data.DeviceRetriever, defaults *config.Defaults, options config.Options,
 ) (*Config, error) {
 	// Create InterfaceMapper with pattern support
 	var interfacePatterns []config.InterfacePattern
@@ -351,6 +383,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		return nil, fmt.Errorf("failed to create interface mapper: %w", err)
 	}
 
+	vlanMapper := NewVlanMapper(logger, options)
 	entityMappers := map[string]orbToEntityMapper{
 		"ipAddress": &IPAddressMapper{
 			logger: logger,
@@ -361,7 +394,10 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 			manufacturers: manufacturers,
 			deviceLookup:  deviceLookup,
 		},
+		"vlan":           vlanMapper,
+		"interface_vlan": vlanMapper,
 	}
+	postPassMappers := []postPassMapper{vlanMapper}
 	// Validate index_kind on every entry (top-level and nested). A typo
 	// would otherwise silently fall through to the legacy fixed-size
 	// path and could regress modern-only devices to "no IPs discovered"
@@ -372,6 +408,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 
 	mapping := make(map[string]*Entry)
 	inetAddressEntries := make(map[string]*Entry)
+	var postPassPrefixes []string
 	for _, m := range mappings {
 		logger.Debug("adding mapping", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
 		Entry := newMappingEntry(m, logger, entityMappers)
@@ -388,10 +425,21 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		if Entry.IndexKind == "inet_address" {
 			inetAddressEntries[m.OID] = Entry
 		}
+		// Cache top-level OID prefixes for post-pass-only entity types
+		// so groupByObjectIDIndex can skip these PDUs without doing a
+		// per-PDU getMappingEntry walk. Adding the trailing "." prevents
+		// a parent OID from accidentally matching a sibling whose OID
+		// starts with the same numeric prefix.
+		if Entry.Entity == string(VLANEntityType) || Entry.Entity == string(InterfaceVLANEntityType) {
+			postPassPrefixes = append(postPassPrefixes, m.OID+".")
+		}
 	}
 	return &Config{
 		mapping:            mapping,
 		inetAddressEntries: inetAddressEntries,
+		postPassPrefixes:   postPassPrefixes,
+		postPassMappers:    postPassMappers,
+		options:            options,
 	}, nil
 }
 
@@ -466,6 +514,7 @@ func newObjectIDMapperWithResolver(mappingConfig *Config, logger *slog.Logger, d
 		excludePatterns: compileExcludePatterns(defaults, logger),
 		targetHost:      targetHost,
 		resolver:        resolver,
+		postPassMappers: mappingConfig.postPassMappers,
 	}
 }
 
@@ -494,6 +543,22 @@ type orbToEntityMapper interface {
 	Map(pdus map[ObjectIDIndex]*ObjectIDValue, Entry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity
 }
 
+// postPassMapper is the optional second-pass interface implemented by
+// mappers that need full host context (every Map() call already complete)
+// before they can do their work — typically because they cross-reference
+// entities the per-row Map pipeline produces.
+//
+// PostMap runs once per host, after every registered mapper's Map has been
+// called for every row, and after the standard dedup/exclusion sweep
+// inside MapObjectIDsToEntity. It can both mutate registry-resident
+// entities in place AND return new entities to append to the host output.
+//
+// Ordering: post-pass mappers run in the order they were registered in
+// ObjectIDMapper.postPassMappers (see post_pass_test.go).
+type postPassMapper interface {
+	PostMap(allObjectIDs ObjectIDValueMap, entityRegistry *EntityRegistry, defaults *config.Defaults) []diode.Entity
+}
+
 func getIndex(values map[ObjectIDIndex]*ObjectIDValue) ObjectIDIndex {
 	for _, pdu := range values {
 		return pdu.Index
@@ -516,6 +581,7 @@ func newMappingEntry(m config.MappingEntry, logger *slog.Logger, entityMappers m
 		IndexKind:      m.IndexKind,
 		MappingEntries: newChildMappingEntries(m.MappingEntries, logger, m.IdentifierSize, m.IndexKind),
 		Relationship:   m.Relationship,
+		Vendor:         m.Vendor,
 	}
 }
 
@@ -656,6 +722,15 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 	}
 
 	m.assignPrimaryIP(currentDevice, uniqueEntities)
+
+	// Phase 2: PostMap pass. Mappers that need cross-row / cross-mapper
+	// context (e.g., VlanMapper which must see all *diode.Interface
+	// instances before it can emit VLAN refs) run here. Order is
+	// registration order; new mappers append to the slice.
+	for _, ppm := range m.postPassMappers {
+		extra := ppm.PostMap(objectIDs, m.registry, m.defaults)
+		entities = append(entities, extra...)
+	}
 
 	return entities
 }
@@ -1154,6 +1229,23 @@ func (m *ObjectIDMapper) resolveMappingEntry(details *ObjectIDIndexDetails) (*En
 func (m *ObjectIDMapper) groupByObjectIDIndex(objectIDs ObjectIDValueMap) map[ObjectIDIndex]*ObjectIDIndexDetails {
 	objectIDIndexMap := make(map[ObjectIDIndex]*ObjectIDIndexDetails)
 	for objectID, value := range objectIDs {
+		// Skip PDUs that belong to a post-pass-only entity (vlan,
+		// interface_vlan). Their entries are walked but not row-mapped:
+		// VlanMapper.PostMap reads directly from the full
+		// ObjectIDValueMap and consumes them itself.
+		//
+		// Without this skip, a VLAN VID and an ifIndex with the same
+		// numeric value (e.g., VID 10 + GigabitEthernet0/10 → ifIndex 10)
+		// would collide in this index-keyed map, and Go map iteration
+		// would nondeterministically pick one parent's entry to dispatch,
+		// silently dropping the other table's data.
+		//
+		// Uses the pre-computed postPassPrefixes slice — typically 5-7
+		// short prefixes — so this stays O(k) per PDU and preserves
+		// the inet_address fast-path below (no getMappingEntry call).
+		if m.mappingConfig.isPostPassOIDPrefix(objectID) {
+			continue
+		}
 		// Fast path: only inet_address-indexed tables need an Entry to
 		// switch on IndexKind during parsing. The legacy fixed-size
 		// path uses value.IdentifierSize and ignores entry. Skipping
@@ -1183,6 +1275,28 @@ func (m *ObjectIDMapper) groupByObjectIDIndex(objectIDs ObjectIDValueMap) map[Ob
 		objectIDIndexMap[objectIDValue.Index].Values[ObjectIDIndex(objectID)] = objectIDValue
 	}
 	return objectIDIndexMap
+}
+
+// isPostPassOIDPrefix reports whether the given OID belongs to an
+// entity type that is consumed exclusively by a postPassMapper (today:
+// vlan and interface_vlan, both routed through VlanMapper).
+//
+// Uses the pre-computed postPassPrefixes slice (populated in NewConfig)
+// instead of resolving the parent entry via getMappingEntry, which
+// would be an O(depth) prefix walk per PDU on the hot path. Today the
+// slice has ~5-7 short prefixes, so the linear scan stays cheaper than
+// a single map lookup against the full mapping. Nil receiver / empty
+// slice short-circuits to false.
+func (m *Config) isPostPassOIDPrefix(objectID string) bool {
+	if m == nil || len(m.postPassPrefixes) == 0 {
+		return false
+	}
+	for _, p := range m.postPassPrefixes {
+		if strings.HasPrefix(objectID, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // newObjectIDValueForEntry parses an OID and its value into an ObjectIDValue.
@@ -1317,4 +1431,56 @@ func (m *Config) ObjectIDs() map[string]int {
 		}
 	}
 	return objectIDs
+}
+
+// GenericObjectIDs returns the OIDs to walk on every host (entries with
+// empty Vendor field). It applies the same child-expansion logic as
+// ObjectIDs: when an entry has child MappingEntries, the child OIDs are
+// emitted rather than the parent OID.
+func (m *Config) GenericObjectIDs() map[string]int {
+	return m.objectIDsForVendor("", true)
+}
+
+// VendorObjectIDs returns the OIDs to walk for a specific vendor key.
+// Returns an empty map when no entries are scoped to the vendor.
+func (m *Config) VendorObjectIDs(vendor string) map[string]int {
+	if vendor == "" {
+		return make(map[string]int)
+	}
+	return m.objectIDsForVendor(vendor, false)
+}
+
+// objectIDsForVendor is the shared implementation behind GenericObjectIDs
+// and VendorObjectIDs. When generic==true it selects entries with an empty
+// Vendor field; otherwise it selects entries matching the given vendor string.
+// Child-expansion follows the same rules as ObjectIDs.
+func (m *Config) objectIDsForVendor(vendor string, generic bool) map[string]int {
+	out := make(map[string]int)
+	for _, entry := range m.mapping {
+		if generic {
+			if entry.Vendor != "" {
+				continue
+			}
+		} else {
+			if entry.Vendor != vendor {
+				continue
+			}
+		}
+		if len(entry.MappingEntries) > 0 {
+			for _, childEntry := range entry.MappingEntries {
+				if childEntry.IdentifierSize == 0 {
+					out[childEntry.OID] = 1
+				} else {
+					out[childEntry.OID] = childEntry.IdentifierSize
+				}
+			}
+		} else {
+			if entry.IdentifierSize == 0 {
+				out[entry.OID] = 1
+			} else {
+				out[entry.OID] = entry.IdentifierSize
+			}
+		}
+	}
+	return out
 }

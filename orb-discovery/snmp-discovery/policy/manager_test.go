@@ -1275,3 +1275,79 @@ func TestManagerParsePoliciesWithOverrideDefaults(t *testing.T) {
 		assert.Equal(t, "router", target.OverrideDefaults.Role)
 	})
 }
+
+func TestManagerApplyDefaults_CreateUnknownVlans(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	require.NoError(t, err)
+
+	t.Run("Omitted options block defaults CreateUnknownVlans to true", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults: {}
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		require.NoError(t, err)
+		require.Contains(t, policies, "policy1")
+		opt := policies["policy1"].Config.Options.CreateUnknownVlans
+		require.NotNil(t, opt, "CreateUnknownVlans should be *true after applyDefaults, got nil")
+		assert.True(t, *opt, "CreateUnknownVlans should default to true when options block is omitted")
+	})
+
+	t.Run("Explicit create_unknown_vlans: true is preserved", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults: {}
+              options:
+                create_unknown_vlans: true
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		require.NoError(t, err)
+		require.Contains(t, policies, "policy1")
+		opt := policies["policy1"].Config.Options.CreateUnknownVlans
+		require.NotNil(t, opt)
+		assert.True(t, *opt)
+	})
+
+	t.Run("Explicit create_unknown_vlans: false is preserved", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              defaults: {}
+              options:
+                create_unknown_vlans: false
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		require.NoError(t, err)
+		require.Contains(t, policies, "policy1")
+		opt := policies["policy1"].Config.Options.CreateUnknownVlans
+		require.NotNil(t, opt)
+		assert.False(t, *opt, "Explicit false must be preserved — applyDefaults must not overwrite it")
+	})
+}
