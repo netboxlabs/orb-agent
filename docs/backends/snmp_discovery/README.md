@@ -13,6 +13,11 @@ The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/dio
 * [Platform](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/platform/main.go)
 * [Manufacturer](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/manufacturer/main.go)
 * [Site](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/site/main.go)
+* [VLAN](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/vlan/main.go)
+
+When a device exposes the relevant MIBs, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. VLAN discovery uses Q-BRIDGE-MIB (RFC 4363) as the generic source and a Cisco-specific overlay (CISCO-VLAN-MEMBERSHIP-MIB, CISCO-VOICE-VLAN-MIB) on Cisco devices that don't fully implement Q-BRIDGE — see [SNMP Discovery — Supported Platforms](./supported_platforms.md#interface--vlan-associations) for which device classes are covered.
+
+Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately. The same caveat applies on device-discovery.
 
 ## Configuration
 The `snmp_discovery` backend does not require any special configuration in the backends section. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
@@ -43,6 +48,12 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | retries | integer | no | Number of retries for SNMP operations (defaults to 0) |
 | lookup_extensions_dir | string | no | Directory containing device model lookup files |
 | defaults | map | no | Default values for entities (description, comments, tags, etc.) |
+| options | map | no | Per-policy behavior toggles (see [Options Parameters](#options-parameters)) |
+
+#### Options Parameters
+| Parameter | Type | Required | Description |
+|:---------:|:----:|:--------:|:-----------:|
+| create_unknown_vlans | bool | no | Auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's `dot1qVlanStaticTable`. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `true`. Set `false` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). |
 
 #### Defaults Parameters
 | Parameter | Type | Required | Description |
@@ -71,6 +82,12 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ vrf   | string  | IP address vrf                    |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
+| vlan    | map  | VLAN-specific defaults  |
+| ├─ description | string  | VLAN description |
+| ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ipaddress` defaults pattern. |
+| ├─ group | string | VLAN group name |
+| ├─ tenant | string | VLAN tenant |
+| ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
 
 ### Scope Section
 | Parameter | Type | Required | Description |
@@ -167,6 +184,12 @@ config:
     device:
       description: "SNMP discovered device"
       comments: "Automatically discovered via SNMP"
+    vlan:
+      tags: ["snmp-discovery"]
+      group: "datacenter-01"
+      tenant: "network-ops"
+  options:
+    create_unknown_vlans: true # Default; set false to drop unknown VIDs from interface associations
   lookup_extensions_dir: "/opt/orb/snmp-extensions" # Specifies a directory containing device data yaml files (see below)
 scope:
   targets:

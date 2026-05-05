@@ -85,3 +85,32 @@ Manufacturer-level resolution (SNMP enterprise number → vendor name) is handle
 ## Extending device coverage
 
 You can add or override lookup data without rebuilding the agent. See the [Device Model Lookup](./README.md#device-model-lookup) section of the SNMP Discovery docs for the `lookup_extensions_dir` option and the YAML format for custom files.
+
+## Interface ↔ VLAN associations
+
+Switchport-to-VLAN association discovery is built on standard MIBs with one vendor overlay:
+
+| Layer | MIB / OID root | What it provides |
+|-------|----------------|------------------|
+| **Generic** | Q-BRIDGE-MIB (RFC 4363, `1.3.6.1.2.1.17.7.1.4`) + BRIDGE-MIB `dot1dBasePortIfIndex` | VLAN catalog (`dot1qVlanStaticTable` — names + admin status), per-port PVID (`dot1qPvid`), per-VLAN egress + untagged port masks (`dot1qVlanStatic{Egress,Untagged}Ports`). Required for trunk classification. |
+| **Cisco overlay** | CISCO-VLAN-MEMBERSHIP-MIB `vmMembershipTable`, CISCO-VOICE-VLAN-MIB `vmVoiceVlanId` | Access VLAN refinement on non-trunk ports + voice-VLAN promotion. Walked only when `sysObjectID` falls under enterprise prefix `1.3.6.1.4.1.9.` (Cisco Systems) or `1.3.6.1.4.1.29671.` (Meraki). |
+
+When a switchport has both Q-BRIDGE membership and the Cisco overlay rows, the overlay layers on top of the generic classification (vmMembership refines the access VLAN for non-trunk ports; vmVoiceVlanId is promoted into the tagged VLAN list per Cisco's voice-on-access semantics). When a device exposes only the Cisco overlay (classic Cisco IOS without Q-BRIDGE), the overlay alone is sufficient to classify access ports — but trunk allowed/native VLANs cannot be reconstructed from `vmMembershipTable` (which is non-trunk by spec).
+
+### Device coverage
+
+| Device class | Generic Q-BRIDGE | Cisco overlay | Result |
+|--------------|------------------|---------------|--------|
+| Arista EOS, Aruba CX, Juniper Junos ELS, MikroTik RouterOS, HPE Comware, Extreme EXOS (recent), Cumulus Linux / SONiC, Dell OS10 | ✅ Full | n/a | Access + trunk classification, real VLAN names |
+| Classic Cisco IOS (e.g. Catalyst 2960, 2950) | ⚠️ None or partial | ✅ Available | Access classification via `vmMembershipTable`; trunk ports remain unclassified |
+| Cisco IOS-XE (e.g. Catalyst 3850, 9400) | ⚠️ Sometimes empty pre-16.x | ✅ Available | As above; access ports classify, trunks unclassified unless Q-BRIDGE is also present |
+| Cisco NX-OS | ⚠️ Q-BRIDGE present, trunk membership often vendor-only | ✅ Available | Access via overlay; trunks may rely on Q-BRIDGE membership masks |
+| Pre-ELS Junos | ⚠️ Incomplete | n/a | Limited — defer to a future Junos overlay |
+| Cisco WLC (e.g. 9800), routers, anything without `dot1dBasePortIfIndex` | n/a | n/a | No interface mutations emitted (refused by design — see Bridge-port translation below); VLAN catalog still emitted if `dot1qVlanStaticTable` is present |
+
+**Voice VLAN (Cisco):** when `vmVoiceVlanId` returns a valid VID (in 1..4094), an access port is promoted to `mode=tagged` with the access VLAN as untagged and the voice VLAN as tagged — same NetBox-mapping convention as device-discovery. Sentinel values are filtered: `0` (no voice), `4095` (dot1p-only / priority-tagged), `4096` (untagged voice rides the access VLAN). Voice-on-trunk is not promoted (would create double-tagging).
+
+**Bridge-port translation:** Q-BRIDGE port masks are encoded by `dot1dBasePort`, not `ifIndex`. snmp-discovery walks `BRIDGE-MIB::dot1dBasePortIfIndex` (`1.3.6.1.2.1.17.1.4.1.2`) and translates bridge-port → ifIndex before emitting Interface mutations. **If this table is missing**, snmp-discovery refuses to mutate Interface entities (VLAN entities are still emitted from the static catalog) — there is no "bridge-port == ifIndex" fallback because that assumption silently produces wrong cross-references on switches that allocate bridge ports separately from ifIndex.
+
+**Trunk-allowed-all detection:** trunks are marked `tagged-all` only when the membership-derived allowed set covers the full active 1..4094 range. Q-BRIDGE exposes membership, not the operator's configured intent — so a trunk explicitly configured with `1-4094` and one currently a member of all VLANs look identical at the SNMP layer.
+
