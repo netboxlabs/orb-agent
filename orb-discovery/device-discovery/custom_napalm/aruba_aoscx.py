@@ -363,7 +363,8 @@ class AOSCXDriver(_napalm_base.NetworkDriver):
                     intf_ips.setdefault("ipv4", {})[addr] = {"prefix_length": int(prefix)}
 
         # IPv6
-        for ip6 in (intf.get("ip6_addresses") or {}).keys():
+        ip6_addresses = intf.get("ip6_addresses")
+        for ip6 in (ip6_addresses if isinstance(ip6_addresses, dict) else {}).keys():
             if "/" in ip6:
                 addr, prefix = ip6.rsplit("/", 1)
                 if prefix.isdigit():
