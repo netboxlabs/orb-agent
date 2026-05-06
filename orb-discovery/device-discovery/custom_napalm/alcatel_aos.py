@@ -22,6 +22,12 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    coerce_vid,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -164,6 +170,102 @@ def _parse_ipv6_interfaces(output: str, result: dict) -> None:
         result.setdefault(intf_name, {}).setdefault("ipv6", {})[ipv6_addr] = {
             "prefix_length": prefix_length
         }
+
+
+# ---------------------------------------------------------------------------
+# show vlan port aggregation (per-port view for get_interfaces_vlans)
+# ---------------------------------------------------------------------------
+
+
+def _alcatel_aos_aggregate_vlan_port(rows: list[dict]) -> dict[str, dict]:
+    """
+    Group ntc-template ``show vlan port`` rows by port.
+
+    Returns a mapping ``port -> {"untagged": list[int], "tagged": list[int]}``.
+
+    AOS emits one row per (vlan, port) pairing with a TYPE column whose values
+    are typically ``untagged`` or ``qtagged`` (older releases use ``tagged``).
+    Any TYPE other than ``untagged`` is treated as tagged. Rows whose STATUS is
+    ``forbidden`` are skipped — that membership is administratively excluded
+    rather than active. Other STATUS values (including ``inactive``) are kept
+    so we honour explicit operator intent.
+    """
+    aggregated: dict[str, dict] = {}
+    for row in rows:
+        port = row.get("port", "")
+        if not port:
+            continue
+        status = (row.get("status", "") or "").strip().lower()
+        if status == "forbidden":
+            continue
+        vid = coerce_vid(row.get("vlan_id"))
+        if vid is None:
+            continue
+        type_val = (row.get("type", "") or "").strip().lower()
+        bucket = aggregated.setdefault(port, {"untagged": [], "tagged": []})
+        if type_val == "untagged":
+            if vid not in bucket["untagged"]:
+                bucket["untagged"].append(vid)
+        else:
+            if vid not in bucket["tagged"]:
+                bucket["tagged"].append(vid)
+    return aggregated
+
+
+def _alcatel_aos_port_to_switchport_info(port_data: dict) -> SwitchportInfo:
+    """
+    Map an aggregated per-port ``{untagged, tagged}`` dict to a SwitchportInfo.
+
+    Resolution rules:
+      - untagged on exactly one VLAN, no tagged → access on that VLAN.
+      - untagged on one VLAN + tagged on others → trunk with native + tagged.
+      - tagged only (no untagged row) → trunk with no native.
+      - multiple untagged VLANs (rare/misconfig) → trunk; first untagged wins
+        as native, the rest are folded into the tagged list for visibility.
+      - empty bucket → routed (caller normally wouldn't include such a port).
+    """
+    untagged = list(port_data.get("untagged", []))
+    tagged = list(port_data.get("tagged", []))
+
+    if not untagged and not tagged:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    if untagged and not tagged and len(untagged) == 1:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged[0],
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    native_vid: int | None
+    if untagged:
+        native_vid = untagged[0]
+        # Fold any extra untagged VIDs into the tagged list so they show up
+        # as members rather than being silently dropped.
+        for extra in untagged[1:]:
+            if extra not in tagged:
+                tagged.append(extra)
+    else:
+        native_vid = None
+
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=native_vid,
+        allowed_vlans=tagged if tagged else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -403,3 +505,18 @@ class AlcatelAOSDriver(_napalm_base.NetworkDriver):
                 vlan["interfaces"].append(port)
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-port VLAN config from ``show vlan port``."""
+        try:
+            raw = self.device.send_command("show vlan port")
+        except Exception:
+            logger.debug("Alcatel AOS show vlan port failed", exc_info=True)
+            return {}
+        rows = _ntc_parse("alcatel_aos", "show vlan port", raw)
+        aggregated = _alcatel_aos_aggregate_vlan_port(rows)
+        result: dict[str, dict] = {}
+        for port, port_data in aggregated.items():
+            info = _alcatel_aos_port_to_switchport_info(port_data)
+            result[port] = classify_switchport(info)
+        return result

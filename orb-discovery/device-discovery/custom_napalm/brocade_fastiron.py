@@ -23,6 +23,12 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    coerce_vid,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -132,10 +138,10 @@ def _expand_port_range(start: str, end: str) -> list[str]:
     """
     Expand a FastIron port range into individual port IDs.
 
-    Only expands same-prefix ranges where just the last component varies
-    (e.g. "1/1/1 to 1/1/4" → ["1/1/1", "1/1/2", "1/1/3", "1/1/4"]).
-    Cross-module or cross-unit ranges fall back to returning only the
-    two endpoints.
+    Handles both stacked ports (``1/1/1 to 1/1/4``) and the single-component
+    form used by older CES/CER hardware (``11 to 14`` → ``["11", "12",
+    "13", "14"]``). Cross-module or cross-unit ranges fall back to
+    returning only the two endpoints.
     """
     s_parts = start.split("/")
     e_parts = end.split("/")
@@ -145,7 +151,8 @@ def _expand_port_range(start: str, end: str) -> list[str]:
         s_num, e_num = int(s_parts[-1]), int(e_parts[-1])
     except ValueError:
         return [start, end]
-    prefix = "/".join(s_parts[:-1]) + "/"
+    head = s_parts[:-1]
+    prefix = "/".join(head) + "/" if head else ""
     return [f"{prefix}{p}" for p in range(s_num, e_num + 1)]
 
 
@@ -303,6 +310,108 @@ def _normalize_intf_name(name: str) -> str:
         parts = stripped.split()
         stripped = parts[0].lower() + "".join(parts[1:])
     return stripped
+
+
+# ---------------------------------------------------------------------------
+# get_interfaces_vlans helpers
+# ---------------------------------------------------------------------------
+
+
+def _expand_fastiron_ports(text: str) -> list[str]:
+    """
+    Expand a FastIron port-list string from `show running-config vlan` into bare port IDs.
+
+    Examples::
+
+        "ethe 1/1/1 to 1/1/4"          → ["1/1/1", "1/1/2", "1/1/3", "1/1/4"]
+        "ethe 1/1/1 ethe 1/1/3"        → ["1/1/1", "1/1/3"]
+        "lag 15 to 17"                 → ["lag15", "lag16", "lag17"]
+        "ethe 1/1/1 ethe 1/2/4:1"      → ["1/1/1", "1/2/4:1"]
+
+    Returns the canonical port form used by ``get_vlans()`` and
+    ``get_interfaces()`` (bare port IDs for physical ports, ``lag<N>`` for
+    LAGs, ``ve<N>`` for VEs).
+    """
+    if not text:
+        return []
+    return _split_port_list(text)
+
+
+def _invert_fastiron_vlan_config(raw: str) -> dict[str, dict]:
+    """
+    Invert ``show running-config vlan`` into ``{port: {untagged, tagged}}``.
+
+    Walks the line stream tracking the active VLAN ID and, within each block,
+    folds ``untagged ...`` and ``tagged ...`` member lines into per-port
+    aggregates. Uses the regex helpers shared with ``get_vlans()`` so LAGs
+    (``lag <N>``) and VEs are captured alongside physical ``ethe`` ports.
+    """
+    per_port: dict[str, dict] = {}
+    current_vid: int | None = None
+    for line in raw.splitlines():
+        m_hdr = _VLAN_HDR_RE.match(line)
+        if m_hdr:
+            current_vid = coerce_vid(m_hdr.group("id"))
+            continue
+        if current_vid is None:
+            continue
+        m_un = _UNTAGGED_RE.match(line)
+        if m_un:
+            for port in _split_port_list(m_un.group("ports")):
+                entry = per_port.setdefault(port, {"untagged": None, "tagged": []})
+                entry["untagged"] = current_vid
+            continue
+        m_tg = _TAGGED_RE.match(line)
+        if m_tg:
+            for port in _split_port_list(m_tg.group("ports")):
+                entry = per_port.setdefault(port, {"untagged": None, "tagged": []})
+                if current_vid not in entry["tagged"]:
+                    entry["tagged"].append(current_vid)
+    return per_port
+
+
+def _fastiron_aggregate_to_switchport(per_port: dict) -> SwitchportInfo:
+    """
+    Map a per-port aggregate ``{untagged: int|None, tagged: list[int]}`` to a SwitchportInfo.
+
+    FastIron has no explicit access/trunk admin field at the port level — mode
+    is derived from the membership shape:
+
+      - exactly one untagged, no tagged   → access on the untagged VID
+      - one untagged + ≥1 tagged          → trunk with the untagged as native
+        (this is the dual-mode trunk pattern)
+      - no untagged + ≥1 tagged           → trunk with no native
+      - no membership at all              → routed (caller normally omits)
+    """
+    untagged_vid = coerce_vid(per_port.get("untagged"))
+    tagged_vids = [v for v in (per_port.get("tagged") or []) if coerce_vid(v) is not None]
+
+    if untagged_vid is None and not tagged_vids:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if untagged_vid is not None and not tagged_vids:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged_vid,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=untagged_vid,
+        allowed_vlans=list(tagged_vids),
+    )
 
 
 class FastIronDriver(_napalm_base.NetworkDriver):
@@ -623,3 +732,36 @@ class FastIronDriver(_napalm_base.NetworkDriver):
                     entry["interfaces"].append(ve)
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """
+        Return per-interface VLAN configuration from ``show running-config vlan``.
+
+        FastIron uses per-VLAN config blocks (``vlan <id> ... untagged ethe ...
+        tagged ethe ...``); we invert that into per-port membership and then
+        derive the access/trunk mode from the membership shape:
+
+        - Port appears only as ``untagged`` in VLAN X         → access on X.
+        - Port appears as ``untagged`` in X **and** ``tagged`` → trunk with
+          native=X, tagged=[Y, Z] (dual-mode pattern).
+        - Port appears only as ``tagged`` in some VLANs       → trunk with
+          native=None, tagged=[...].
+        - Port not seen anywhere → omitted (no first-class wildcard).
+
+        Parsing uses regex (the same path as ``get_vlans()``) rather than the
+        ``brocade_fastiron`` ntc-template, because that template only emits
+        ``ethe`` ports — LAG members declared as ``tagged lag <N>`` /
+        ``untagged lag <N>`` would be silently dropped by the template.
+        """
+        try:
+            raw = self.device.send_command("show running-config vlan")
+        except Exception:
+            logger.debug("FastIron show running-config vlan failed", exc_info=True)
+            return {}
+
+        per_port = _invert_fastiron_vlan_config(raw)
+        result: dict[str, dict] = {}
+        for port, data in per_port.items():
+            info = _fastiron_aggregate_to_switchport(data)
+            result[port] = classify_switchport(info)
+        return result

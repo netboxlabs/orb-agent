@@ -22,6 +22,13 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    coerce_vid,
+    parse_vlan_range_string,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -230,6 +237,119 @@ def _parse_vlans(output: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Per-port VLAN parsing  (show interfaces <speed> vlan)
+# ---------------------------------------------------------------------------
+# Match data rows from ``show interfaces gigabitethernet vlan`` (and the
+# 10/40/100 Gbps variants). Row shape::
+#
+#     PORT     VLAN_IDS                              UNTAGGED_VID
+#     1/1      1                                     1
+#     1/5      1,100,200                             100
+#     1/9      100-105,200                           0
+#
+# - PORT is a slot/port token (``1/1``, ``2/24`` …); ``\S+`` matches.
+# - VLAN_IDS is a comma/range list of VIDs; whitespace between commas is
+#   tolerated, but the field as a whole has no internal blocks of >1 space.
+# - UNTAGGED_VID is a single integer (``0`` means "all-tagged trunk, no native").
+#
+# Header lines (``VLAN_IDS``/``UNTAGGED_VID``) and dash separators are rejected
+# because they don't end with a bare integer in the third column.
+_VSP_PORT_VLAN_RE = re.compile(
+    r"^\s*(\S+)\s+([\d,\-\s]+?)\s+(\d+)\s*$",
+    re.MULTILINE,
+)
+
+
+def _parse_vsp_port_vlans(text: str) -> list[dict]:
+    """
+    Parse ``show interfaces ... vlan`` rows.
+
+    Returns a list of ``{"port": str, "vlan_ids": list[int] | "all",
+    "untagged_vid": int}``. ``vlan_ids`` is the literal string ``"all"``
+    when the source row encoded the full 1-4094 range (wildcard); the
+    classifier promotes that to ``trunk-all``. Header rows and rows whose
+    port token is a header keyword are filtered out.
+    """
+    rows: list[dict] = []
+    for m in _VSP_PORT_VLAN_RE.finditer(text):
+        port = m.group(1)
+        # Reject header lines: the regex's ``\S+`` would otherwise match
+        # tokens like "PORT" or "VLAN" if the header somehow ended in digits.
+        if not re.match(r"^\d+/\d+", port):
+            continue
+        vlan_field = m.group(2)
+        try:
+            untagged_vid = int(m.group(3))
+        except ValueError:
+            continue
+        vlan_ids, is_wildcard = parse_vlan_range_string(vlan_field.replace(" ", ""))
+        rows.append({
+            "port": port,
+            "vlan_ids": "all" if is_wildcard else vlan_ids,
+            "untagged_vid": untagged_vid,
+        })
+    return rows
+
+
+def _vsp_row_to_switchport_info(row: dict) -> SwitchportInfo:
+    """
+    Map one VSP per-port row to a :class:`SwitchportInfo`.
+
+    Classification rules (UNTAGGED_VID = 0 means "all-tagged trunk"):
+
+    - empty VLAN list                                     → routed (omit)
+    - vlan_ids == "all" (full 1-4094 range)               → trunk-all (native = untagged_vid or None)
+    - one VLAN listed AND UNTAGGED_VID matches it         → access on that VID
+    - multiple VLANs listed AND untagged_vid in the list  → trunk + native
+    - multiple VLANs listed AND untagged_vid == 0         → trunk, no native
+    - any other shape (e.g. one VLAN, untagged_vid=0)     → trunk, no native
+    """
+    vlan_ids_raw = row.get("vlan_ids")
+    untagged_raw = row.get("untagged_vid")
+    untagged = coerce_vid(untagged_raw)  # None when 0 or out-of-range
+
+    if vlan_ids_raw == "all":
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=untagged,
+            allowed_vlans="all",
+        )
+
+    vlan_ids = list(vlan_ids_raw or [])
+    if not vlan_ids:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    if len(vlan_ids) == 1 and untagged is not None and untagged == vlan_ids[0]:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=vlan_ids[0],
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=untagged,
+        allowed_vlans=list(vlan_ids),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 
@@ -394,3 +514,40 @@ class VSPDriver(_napalm_base.NetworkDriver):
         if not output:
             return {}
         return _parse_vlans(output)
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """
+        Return per-interface VLAN config from ``show interfaces ... vlan``.
+
+        VOSS splits per-port VLAN config across speed-specific commands
+        (gigabitethernet, tengigabitethernet, etc.); this driver issues
+        the same two that ``get_interfaces()`` and ``get_facts()`` use,
+        so VLAN entries always line up with discovered Interface entities.
+        ``apply_interface_vlans()`` skips VLAN data for interfaces that
+        weren't emitted, so the 40/100G variants would be silently
+        dropped — collecting them here would just waste a CLI roundtrip.
+        Extending coverage requires extending interface discovery first.
+
+        Commands for speeds the device doesn't have return empty/error
+        and are skipped silently.
+        """
+        rows: list[dict] = []
+        for cmd in (
+            "show interfaces gigabitethernet vlan",
+            "show interfaces tengigabitethernet vlan",
+        ):
+            try:
+                raw = self.device.send_command(cmd)
+            except Exception:
+                logger.debug("VSP %s failed", cmd, exc_info=True)
+                continue
+            rows.extend(_parse_vsp_port_vlans(raw or ""))
+
+        result: dict[str, dict] = {}
+        for row in rows:
+            port = row.get("port")
+            if not port:
+                continue
+            info = _vsp_row_to_switchport_info(row)
+            result[port] = classify_switchport(info)
+        return result

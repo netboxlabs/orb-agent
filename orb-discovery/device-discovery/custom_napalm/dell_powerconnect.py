@@ -20,6 +20,8 @@ from napalm.base import models
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import SwitchportInfo, classify_switchport, coerce_vid
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -220,6 +222,174 @@ def _make_interface_entry(link_state: str, speed_raw: str, description: str) -> 
         "speed": speed,
         "mac_address": "",
     }
+
+
+# ---------------------------------------------------------------------------
+# show interfaces switchport — parser + row → SwitchportInfo mapper
+# ---------------------------------------------------------------------------
+
+# Section header line, e.g. ``Port  : gi1/0/1`` (two spaces is common but we
+# accept any whitespace). The membership block reference line
+# ``Port gi1/0/3 is member in:`` deliberately does NOT match this regex
+# because it has no colon after ``Port``.
+_PC_PORT_HEADER_RE = re.compile(r"^\s*Port\s*:\s*(\S+)\s*$", re.MULTILINE)
+
+# Membership block reference line, e.g. ``Port gi1/0/1 is member in:``.
+# Matched and skipped explicitly because for port names without slashes
+# (e.g. stacked aliases like ``Te1`` or port-channels like ``Po10``) the
+# generic ``Field: Value`` regex would otherwise match it and pollute
+# the section dict with a spurious key.
+_PC_MEMBERSHIP_REF_RE = re.compile(r"^\s*Port\s+\S+\s+is\s+member\s+in\s*:\s*$")
+
+# ``Field: Value`` lines inside a port section. Restrict the key to start
+# with a letter so VLAN-row lines (``1   default ...``) and the dashes
+# separator do not match.
+_PC_FIELD_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9 ]+?)\s*:\s*(.*?)\s*$")
+
+# Membership table row, e.g. ``1   default   Untagged   System`` or
+# ``100  DATA      Tagged    Static`` or, when the VLAN name is blank,
+# ``99            Untagged   Static``. Only the leading VID, the
+# ``Untagged|Tagged`` egress rule, and the trailing ``Type`` token are
+# mandatory; the name column is optional and may include spaces.
+_PC_VLAN_ROW_RE = re.compile(
+    r"^\s*(\d+)\s+(?:.*?\s+)?(Untagged|Tagged)\s+\S+\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_pc_show_interfaces_switchport(text: str) -> list[dict]:
+    """
+    Parse PowerConnect ``show interfaces switchport`` into per-port dicts.
+
+    Each port section starts with ``Port  : <name>`` and runs until the next
+    ``Port  :`` header or EOF. Captures ``Port Mode``, ``Default VLAN`` and
+    the membership table rows (vid + Untagged/Tagged egress rule).
+    """
+    rows: list[dict] = []
+    current: dict | None = None
+    for line in text.splitlines():
+        header = _PC_PORT_HEADER_RE.match(line)
+        if header:
+            if current is not None:
+                rows.append(current)
+            current = {
+                "interface": header.group(1).strip(),
+                "untagged": [],
+                "tagged": [],
+            }
+            continue
+        if current is None:
+            continue
+        # Skip the membership block reference line before falling through
+        # to the generic Field: Value regex (which would otherwise match
+        # it for port names without slashes).
+        if _PC_MEMBERSHIP_REF_RE.match(line):
+            continue
+        # Field: Value lines (Port Mode, Default VLAN, Protected, etc.).
+        # Match before the VLAN row regex because both can share leading
+        # whitespace; the Field regex requires the key to start with a letter.
+        fm = _PC_FIELD_RE.match(line)
+        if fm:
+            key = fm.group(1).strip().lower().replace(" ", "_")
+            current[key] = fm.group(2).strip()
+            continue
+        # VLAN membership table row.
+        vm = _PC_VLAN_ROW_RE.match(line)
+        if vm:
+            try:
+                vid = int(vm.group(1))
+            except ValueError:
+                continue
+            bucket = "untagged" if vm.group(2).lower() == "untagged" else "tagged"
+            current[bucket].append(vid)
+    if current is not None:
+        rows.append(current)
+    return rows
+
+
+def _pc_routed() -> SwitchportInfo:
+    """SwitchportInfo for a routed/unknown port."""
+    return SwitchportInfo(
+        enabled=False,
+        admin_mode=None,
+        oper_mode=None,
+        access_vlan=None,
+        native_vlan=None,
+        allowed_vlans=None,
+    )
+
+
+def _pc_row_to_switchport_info(row: dict) -> SwitchportInfo:
+    """
+    Map one parsed PowerConnect port section to a SwitchportInfo.
+
+    PowerConnect modes:
+
+    * ``Access``  – exactly one Untagged VID, no Tagged.
+    * ``Trunk``   – Tagged VIDs plus VLAN 1 shown as Untagged when
+      ``Default VLAN: enabled`` (the default native). When ``Default VLAN:
+      disabled`` the port carries no native VLAN.
+    * ``General`` – like Trunk but the Untagged VID may be any port-VLAN.
+      Collapses to trunk with native=Untagged-VID.
+    * Anything else (or no Port Mode field) maps to routed.
+    """
+    mode_raw = (row.get("port_mode") or "").strip().lower()
+    untagged: list[int] = [
+        v for v in row.get("untagged", []) if coerce_vid(v) is not None
+    ]
+    tagged: list[int] = [
+        v for v in row.get("tagged", []) if coerce_vid(v) is not None
+    ]
+
+    if mode_raw == "access":
+        if len(untagged) != 1 or tagged:
+            # Mode declared as Access but the membership shape disagrees
+            # (no Untagged row, multiple Untagged rows, or unexpected
+            # Tagged rows). Fall back to routed rather than guess —
+            # apply_interface_vlans() would otherwise clobber the
+            # existing NetBox untagged_vlan via PATCH with whichever VID
+            # we happened to pick first.
+            return _pc_routed()
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged[0],
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+
+    if mode_raw == "trunk":
+        # ``Default VLAN: enabled`` (or absent → assumed enabled) keeps the
+        # untagged native; ``Default VLAN: disabled`` strips it.
+        default_vlan_raw = (row.get("default_vlan") or "").strip().lower()
+        if default_vlan_raw == "disabled":
+            native_vid: int | None = None
+        else:
+            native_vid = untagged[0] if untagged else None
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=native_vid,
+            allowed_vlans=tagged if tagged else None,
+        )
+
+    if mode_raw == "general":
+        native_vid = untagged[0] if untagged else None
+        if native_vid is None and not tagged:
+            return _pc_routed()
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=native_vid,
+            allowed_vlans=tagged if tagged else None,
+        )
+
+    return _pc_routed()
 
 
 class PowerConnectDriver(_napalm_base.NetworkDriver):
@@ -606,6 +776,23 @@ class PowerConnectDriver(_napalm_base.NetworkDriver):
             current_vlan_id = vlan_id
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from ``show interfaces switchport``."""
+        try:
+            raw = self.device.send_command("show interfaces switchport")
+        except Exception:
+            logger.debug("PowerConnect show interfaces switchport failed", exc_info=True)
+            return {}
+        rows = _parse_pc_show_interfaces_switchport(raw)
+        result: dict[str, dict] = {}
+        for row in rows:
+            ifname = row.get("interface")
+            if not ifname:
+                continue
+            info = _pc_row_to_switchport_info(row)
+            result[ifname] = classify_switchport(info)
+        return result
 
 
 # ---------------------------------------------------------------------------

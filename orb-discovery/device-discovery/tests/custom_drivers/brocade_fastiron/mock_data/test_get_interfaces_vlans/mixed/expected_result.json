@@ -1,0 +1,33 @@
+{
+  "1/1/3": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 1
+  },
+  "1/1/4": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 1
+  },
+  "1/1/1": {
+    "mode": "trunk",
+    "tagged": [
+      20,
+      30
+    ],
+    "untagged": 10
+  },
+  "1/1/2": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 20
+  },
+  "1/1/5": {
+    "mode": "trunk",
+    "tagged": [
+      20,
+      30
+    ],
+    "untagged": null
+  }
+}

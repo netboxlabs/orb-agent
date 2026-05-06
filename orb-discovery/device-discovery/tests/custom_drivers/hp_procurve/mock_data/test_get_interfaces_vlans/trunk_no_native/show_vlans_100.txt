@@ -1,0 +1,11 @@
+ Status and Counters - VLAN Information - VLAN 100
+
+  VLAN ID : 100
+  Name : DATA
+  Status : Port-based
+  Voice : No
+  Jumbo : No
+
+  Port Information  Mode      Unknown VLAN  Status
+  ----------------- --------- ------------- ----------
+  Trk1              Tagged    Learn         Up

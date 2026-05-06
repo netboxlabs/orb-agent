@@ -1,0 +1,11 @@
+ Status and Counters - VLAN Information - VLAN 10
+
+  VLAN ID : 10
+  Name : NATIVE
+  Status : Port-based
+  Voice : No
+  Jumbo : No
+
+  Port Information  Mode      Unknown VLAN  Status
+  ----------------- --------- ------------- ----------
+  1                 Untagged  Learn         Up

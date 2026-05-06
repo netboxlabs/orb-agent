@@ -1,0 +1,31 @@
+{
+  "gi1/0/1": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 100
+  },
+  "gi1/0/3": {
+    "mode": "trunk",
+    "tagged": [
+      20,
+      30
+    ],
+    "untagged": 10
+  },
+  "gi1/0/5": {
+    "mode": "trunk",
+    "tagged": [
+      100,
+      200
+    ],
+    "untagged": 1
+  },
+  "gi1/0/6": {
+    "mode": "trunk",
+    "tagged": [
+      300,
+      400
+    ],
+    "untagged": null
+  }
+}
