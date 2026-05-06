@@ -27,6 +27,16 @@ Drivers that implement `get_interfaces_vlans()` populate per-interface switching
 | `cumulus_linux` | Supported (Cumulus Linux / NVIDIA) — via SSH using `bridge -j vlan show` JSON |
 | `aruba_aoscx` | Supported (HPE Aruba AOS-CX) — via pyaoscx REST API |
 | `aruba_osswitch` | Supported (HPE ArubaOS-Switch / ex-ProCurve) — via REST; per-VLAN→per-port inversion |
+| `huawei_vrp` | Supported (Huawei VRP) — via SSH + ntc-templates `display port vlan`; hybrid collapses to trunk |
+| `dell_ftos` | Supported (Dell Force10 / FTOS) — via SSH; handles OS9 and OS10/IOS-style `show interfaces switchport` |
+| `aruba_aoscx_ssh` | Supported (HPE Aruba AOS-CX) — via SSH; same `vlan_mode` semantics as the REST counterpart |
+| `hp_comware` | Supported (HPE / H3C Comware) — via SSH; merges `display interface brief` + `display vlan all` |
+| `extreme_exos` | Supported (Extreme EXOS) — via SSH; per-port `show ports information detail` parsing |
+| `alcatel_aos` | Supported (Alcatel-Lucent OmniSwitch / AOS) — via SSH + ntc-templates `show vlan port` |
+| `hp_procurve` | Supported (HPE ProCurve / ArubaOS-Switch CLI) — via SSH; `show vlans` enumeration + per-VLAN membership |
+| `brocade_fastiron` | Supported (Ruckus / Brocade FastIron / ICX) — via SSH; per-VLAN inversion (handles `ethe`, `lag`, `ve`) |
+| `dell_powerconnect` | Supported (Dell PowerConnect) — via SSH; `show interfaces switchport` section parser |
+| `extreme_vsp` | Supported (Extreme VSP / VOSS, ex-Avaya) — via SSH; aggregates `show interfaces <speed>ethernet vlan` across modules |
 
 See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option. Additional vendors land as follow-up PRs as the underlying drivers gain support.
 
@@ -34,13 +44,31 @@ See the [device discovery README](./README.md#diode-entities) for the contract a
 
 **Junos VLAN-name members:** v1 reads `<interface-vlan-member-tagid>` directly from the PyEZ RPC response. Members emitted with only a name (no tagid) are skipped with a warning; resolution against `get_vlans()` is deferred to a follow-up. Voice-VLAN promotion is also deferred for Junos — VOIP semantics differ from the Cisco family.
 
-**Structured-API vs CLI:** `eos`, `nxos`, `junos`, and `aruba_aoscx` fetch via structured APIs (eAPI / NX-API / NETCONF / pyaoscx REST) and have no ntc-templates dependency. The CLI-scrape paths (`ios`, `cisco_s300`, `nxos_ssh`, `mellanox_mlnxos`, `dell_sonic`, `cumulus_linux`) parse vendor-specific output with regex or, in Cumulus's case, the iproute2 JSON format.
+**Structured-API vs CLI:** `eos`, `nxos`, `junos`, and `aruba_aoscx` fetch via structured APIs (eAPI / NX-API / NETCONF / pyaoscx REST) and have no ntc-templates dependency. The CLI-scrape paths (`ios`, `cisco_s300`, `nxos_ssh`, `mellanox_mlnxos`, `dell_sonic`, `cumulus_linux`, `huawei_vrp`, `dell_ftos`, `aruba_aoscx_ssh`, `hp_comware`, `extreme_exos`, `alcatel_aos`, `hp_procurve`, `brocade_fastiron`, `dell_powerconnect`, `extreme_vsp`) parse vendor-specific output with regex or ntc-templates.
 
 **ArubaOS-Switch (`aruba_osswitch`)** has no first-class "all VLANs" wildcard in its REST model, so the driver never emits `mode=tagged-all`; restricted trunks always carry an explicit tagged VLAN list.
 
 **Cumulus Linux (`cumulus_linux`)** uses the Linux bridge VLAN model: a port with PVID-only is reported as `mode=access`; PVID + additional VIDs becomes `mode=tagged` with the PVID as untagged; VIDs without PVID becomes `mode=tagged` with no untagged. The driver does not emit `mode=tagged-all` because the kernel requires explicit VID lists.
 
 **AOS-CX (`aruba_aoscx`)** distinguishes `vlan_mode=native-untagged` (native VID untagged on the wire — emits `untagged_vlan`) from `vlan_mode=native-tagged` (native VID is also tagged on egress — the native VID is folded into `tagged_vlans` and no `untagged_vlan` is emitted). The REST convention "empty `vlan_trunks` under `vlan_mode=trunk` means all VLANs allowed" is honoured and produces `mode=tagged-all`.
+
+**Huawei VRP (`huawei_vrp`)** collapses `hybrid` link-type to trunk (PVID native + Trunk VLAN List tagged). LNP-negotiated link-types (`auto`, `desirable`) infer mode from membership shape: empty trunk-VLAN list → access on PVID; non-empty → trunk with PVID as native. `dot1q-tunnel` ports keep their PVID as access. The full `1-4094` range is emitted as `tagged-all`.
+
+**Dell FTOS (`dell_ftos`)** supports both OS10/IOS-style (`Administrative mode`, `Trunking VLANs Enabled`) and OS9-style (`802.1QTagged`, `Vlan membership` block — both `U/T <vids>` and `Vlan <vid>` token forms) outputs. FTOS `general` mode collapses to trunk.
+
+**HP Comware (`hp_comware`)** merges per-port mode + PVID from `display interface brief` with per-VLAN tagged/untagged port lists from `display vlan all`. Hybrid collapses to trunk. Abbreviated interface names (`GE`, `XGE`, `25GE/40GE/100GE/...`, `BAGG`, `RAGG`, `Vlan-int`) are expanded to full names so they match `get_interfaces()` keys. Comware does not render an "all VLANs" wildcard, so trunk-all is never emitted.
+
+**Extreme EXOS (`extreme_exos`)** parses per-port `show ports information detail` (using `Internal Tag` for untagged + `802.1Q Tag` for tagged). EXOS does not emit a first-class wildcard; tagged lists are always explicit and the driver never emits `mode=tagged-all`.
+
+**Alcatel-Lucent AOS (`alcatel_aos`)** uses ntc-templates `show vlan port` which emits one row per (VLAN, port) with TYPE in `untagged`/`qtagged`. STATUS=`forbidden` rows are filtered. Port keys preserve the AOS `slot/port` form verbatim.
+
+**HP ProCurve (`hp_procurve`)** has no admin-mode keyword on the port — mode is inferred from membership shape across `show vlans <vid>` outputs (1× Untagged + 0 Tagged → access; 1× Untagged + ≥1 Tagged → trunk-with-native; Tagged-only → trunk-no-native). `GVRP` and `Forbid` rows are skipped. There is no first-class wildcard; trunks always carry an explicit list.
+
+**Brocade FastIron (`brocade_fastiron`)** uses regex-based parsing of `show running-config vlan` (rather than ntc-templates, which only emit `ethe` ports) so that LAG (`lag <N>`) and VE (`ve <N>`) memberships are captured alongside physical ports. `dual-mode` is implicit — a port that appears as `untagged` in one VLAN and `tagged` in others classifies as trunk with that as native. No first-class wildcard.
+
+**Dell PowerConnect (`dell_powerconnect`)** parses `show interfaces switchport` per-port sections. `General` mode collapses to trunk (matches the FTOS / Mellanox / AOS-CX general→trunk pattern). On Trunk ports, `Default VLAN: disabled` strips the native VLAN regardless of any Untagged row in the membership table. Membership rows with a blank VLAN-name column are still captured. `Layer3` and other non-A/T/G modes map to routed.
+
+**Extreme VSP / VOSS (`extreme_vsp`)** iterates four speed-specific commands (`show interfaces gigabitethernet/tengigabitethernet/fortygigabitethernet/hundredgigabitethernet vlan`) so a mixed-module switch is captured in a single getter call; missing/empty modules are tolerated. `UNTAGGED_VID=0` signals "no native"; the full `1-4094` range is promoted to `mode=tagged-all`.
 
 ## Standard NAPALM drivers
 
