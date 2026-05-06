@@ -36,7 +36,12 @@ Drivers that implement `get_interfaces_vlans()` populate per-interface switching
 | `hp_procurve` | Supported (HPE ProCurve / ArubaOS-Switch CLI) — via SSH; `show vlans` enumeration + per-VLAN membership |
 | `brocade_fastiron` | Supported (Ruckus / Brocade FastIron / ICX) — via SSH; per-VLAN inversion (handles `ethe`, `lag`, `ve`) |
 | `dell_powerconnect` | Supported (Dell PowerConnect) — via SSH; `show interfaces switchport` section parser |
-| `extreme_vsp` | Supported (Extreme VSP / VOSS, ex-Avaya) — via SSH; aggregates `show interfaces <speed>ethernet vlan` across modules |
+| `extreme_vsp` | Supported (Extreme VSP / VOSS, ex-Avaya) — via SSH; aggregates `show interfaces gigabitethernet vlan` + tengigabit variant |
+| `brocade_netiron` | Supported (Brocade / Extreme NetIron MLX/CES/CER) — via SSH; per-VLAN regex inversion of `show running-config vlan` (handles `ethe`, `lag`, `ve`); canonical-name remap to `GigabitEthernet`/`10GigabitEthernet`/etc via `show interfaces` cross-reference |
+| `avaya_ers` | Supported (Avaya / Extreme ERS) — via SSH + ntc-templates; `show vlan interface info` (driver-local parser) + `show vlan` inversion; UntagAll → access; UntagPvidOnly → trunk-with-native; TagAll → trunk-no-native |
+| `extreme_slx` | Supported (Extreme SLX-OS) — via SSH; driver-local parser of `show vlan brief` `(u)`/`(t)` flags; reuses existing `_expand_vlan_port` for `Eth`/`Po` name canonicalisation |
+| `ubiquiti_edgeswitch` | Supported (Ubiquiti EdgeSwitch / Broadcom-fastpath) — via SSH; `show interfaces switchport` summary + `show running-config` `vlan participation`/`vlan tagging` directives |
+| `ubiquiti_unifiswitch` | Supported (Ubiquiti UniFi Switch) — via SSH; `show vlan` enumeration + per-VID `show vlan id <N>` membership parsing |
 
 See the [device discovery README](./README.md#diode-entities) for the contract and the `create_unknown_vlans` option. Additional vendors land as follow-up PRs as the underlying drivers gain support.
 
@@ -44,7 +49,7 @@ See the [device discovery README](./README.md#diode-entities) for the contract a
 
 **Junos VLAN-name members:** v1 reads `<interface-vlan-member-tagid>` directly from the PyEZ RPC response. Members emitted with only a name (no tagid) are skipped with a warning; resolution against `get_vlans()` is deferred to a follow-up. Voice-VLAN promotion is also deferred for Junos — VOIP semantics differ from the Cisco family.
 
-**Structured-API vs CLI:** `eos`, `nxos`, `junos`, and `aruba_aoscx` fetch via structured APIs (eAPI / NX-API / NETCONF / pyaoscx REST) and have no ntc-templates dependency. The CLI-scrape paths (`ios`, `cisco_s300`, `nxos_ssh`, `mellanox_mlnxos`, `dell_sonic`, `cumulus_linux`, `huawei_vrp`, `dell_ftos`, `aruba_aoscx_ssh`, `hp_comware`, `extreme_exos`, `alcatel_aos`, `hp_procurve`, `brocade_fastiron`, `dell_powerconnect`, `extreme_vsp`) parse vendor-specific output with regex or ntc-templates.
+**Structured-API vs CLI:** `eos`, `nxos`, `junos`, and `aruba_aoscx` fetch via structured APIs (eAPI / NX-API / NETCONF / pyaoscx REST) and have no ntc-templates dependency. The CLI-scrape paths (`ios`, `cisco_s300`, `nxos_ssh`, `mellanox_mlnxos`, `dell_sonic`, `cumulus_linux`, `huawei_vrp`, `dell_ftos`, `aruba_aoscx_ssh`, `hp_comware`, `extreme_exos`, `alcatel_aos`, `hp_procurve`, `brocade_fastiron`, `dell_powerconnect`, `extreme_vsp`, `brocade_netiron`, `avaya_ers`, `extreme_slx`, `ubiquiti_edgeswitch`, `ubiquiti_unifiswitch`) parse vendor-specific output with regex or ntc-templates.
 
 **ArubaOS-Switch (`aruba_osswitch`)** has no first-class "all VLANs" wildcard in its REST model, so the driver never emits `mode=tagged-all`; restricted trunks always carry an explicit tagged VLAN list.
 
@@ -68,7 +73,17 @@ See the [device discovery README](./README.md#diode-entities) for the contract a
 
 **Dell PowerConnect (`dell_powerconnect`)** parses `show interfaces switchport` per-port sections. `General` mode collapses to trunk (matches the FTOS / Mellanox / AOS-CX general→trunk pattern). On Trunk ports, `Default VLAN: disabled` strips the native VLAN regardless of any Untagged row in the membership table. Membership rows with a blank VLAN-name column are still captured. `Layer3` and other non-A/T/G modes map to routed.
 
-**Extreme VSP / VOSS (`extreme_vsp`)** iterates four speed-specific commands (`show interfaces gigabitethernet/tengigabitethernet/fortygigabitethernet/hundredgigabitethernet vlan`) so a mixed-module switch is captured in a single getter call; missing/empty modules are tolerated. `UNTAGGED_VID=0` signals "no native"; the full `1-4094` range is promoted to `mode=tagged-all`.
+**Extreme VSP / VOSS (`extreme_vsp`)** issues two speed-specific commands (`show interfaces gigabitethernet vlan` + `show interfaces tengigabitethernet vlan`) — the same speeds `get_interfaces()` and `get_facts()` enumerate, so VLAN entries always line up with discovered Interface entities. Missing/empty modules are tolerated. `UNTAGGED_VID=0` signals "no native"; the full `1-4094` range is promoted to `mode=tagged-all`.
+
+**Brocade/Extreme NetIron (`brocade_netiron`)** uses regex parsing of `show running-config vlan` (the same path as `get_vlans()`) so LAG (`lag <N>`) and VE (`ve <N>`) memberships are captured alongside physical `ethe` ports. Bare port IDs (`1/1`, `3/4`) are remapped to the canonical speed-prefixed form `get_interfaces()` emits (`GigabitEthernet1/1`, `10GigabitEthernet3/4`) via a `show interfaces` cross-reference — without this `apply_interface_vlans()` would silently drop every entry due to exact-name mismatch. `dual-mode` is implicit (port untagged in one VLAN + tagged in others → trunk-with-native). Multi-untagged on a single port → routed (anomalous; 802.1Q forbids).
+
+**Avaya/Extreme ERS (`avaya_ers`)** uses `show vlan interface info` (driver-local parser) for the per-port `Tagging` column plus `show vlan` (ntc-template) inverted for membership lists. Tagging modes: `UntagAll` → access on PVID (membership churn ignored — operator intent is encoded in the tagging mode); `UntagPvidOnly` → trunk with PVID native + tagged from members; `TagAll` → trunk no native, PVID stays in tagged list when a member; `Disable` / unknown → routed. Trunk modes with empty membership data → routed (defensive; avoids clobbering NetBox `tagged_vlans` via PATCH).
+
+**Extreme SLX-OS (`extreme_slx`)** uses driver-local parsing of `show vlan brief` with `(u)`/`(t)` flags driving membership-shape mode inference (no admin-mode column on SLX-OS). Reuses the existing `_expand_vlan_port` helper for `Eth`/`Po` token canonicalisation so port keys match `get_interfaces()`. Multi-untagged → routed; out-of-range VIDs dropped via `coerce_vid()`.
+
+**Ubiquiti EdgeSwitch (`ubiquiti_edgeswitch`)** combines `show interfaces switchport` summary (Mode + PVID column) with running-config `vlan participation`/`vlan tagging` directives — the bundled `ubiquiti_edgeswitch_show_vlan` ntc-template does not capture per-port tagging. `Access` requires exactly one untagged member (no PVID-only fallback — mirrors the dell_powerconnect tightening); `General` collapses to trunk; `Trunk` with no membership data → routed.
+
+**Ubiquiti UniFi Switch (`ubiquiti_unifiswitch`)** shares the Broadcom-fastpath CLI base with EdgeSwitch but its `show vlan` output is a simple list with no port column. The driver enumerates VIDs via `show vlan` and queries each with `show vlan id <N>` (mirrors the ProCurve approach), then aggregates per-port and infers mode from membership shape (no admin-mode keyword exists in this CLI).
 
 ## Standard NAPALM drivers
 
