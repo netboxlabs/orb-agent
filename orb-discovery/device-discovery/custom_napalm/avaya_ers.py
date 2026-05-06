@@ -22,6 +22,12 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    coerce_vid,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -136,6 +142,288 @@ _IP_SECTION_RE = re.compile(
 def _mask_to_prefix(mask: str) -> int:
     """Convert dotted-quad netmask to prefix length."""
     return sum(bin(int(octet)).count("1") for octet in mask.split("."))
+
+
+# ---------------------------------------------------------------------------
+# Per-port VLAN helpers (get_interfaces_vlans)
+# ---------------------------------------------------------------------------
+# ``show vlan interface info`` row format (variable column widths):
+#
+#                 Filter Filter
+#                 Untagged   Unregistered                                 PVID
+#   Port   Frames     Frames     STG  PVID  Tagging       Name           Pri
+#   ----   ----       ----       ---  ----  -------       ----           ---
+#   1/1    No         Yes        1    10    UntagAll      USER-1         0
+#
+# We anchor on the leading port token, the PVID integer, and the Tagging keyword
+# rather than fixed columns — the ``Name`` column may be blank or contain spaces.
+# ---------------------------------------------------------------------------
+_ERS_PORT_TOKEN = r"(?:\d+(?:/\d+)?|Trk\d+|MLT\d+|Lag\d+)"
+# ERS firmware variants emit different column orders:
+#   v1: Port  FilterUF FilterUR  STG  PVID  Tagging       Name  Pri
+#   v2: Port  FilterUF FilterUR  PVID PRI   Tagging       Name
+# Both layouts have exactly two numeric columns between the Filter pair
+# and the Tagging keyword. Capture both as ``i1``/``i2`` and let the
+# parser pick the right one based on whether the header carries an
+# ``STG`` column. (Codex P1 #391: anchoring on a fixed offset from
+# Tagging produced the wrong PVID on v2 outputs.)
+_ERS_TAGGING_KEYWORDS = (
+    r"UntagAll|UntagPvidOnly|TagAll|TagPvidOnly|Hybrid|Disable|None"
+)
+_ERS_VLAN_INTF_INFO_RE = re.compile(
+    r"^\s*(?P<port>" + _ERS_PORT_TOKEN + r")\s+"
+    r"\S+\s+\S+"                                # FilterUF FilterUR (Yes/No)
+    r"\s+(?P<i1>\d+)"                           # first int (STG in v1, PVID in v2)
+    r"\s+(?P<i2>\d+)"                           # second int (PVID in v1, PRI in v2)
+    r"\s+(?P<tagging>" + _ERS_TAGGING_KEYWORDS + r")",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ERS_HEADER_HAS_STG_RE = re.compile(
+    r"^\s*Port\b.*\bSTG\b.*\bPVID\b.*\bTagging\b", re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _parse_ers_show_vlan_interface_info(text: str) -> dict[str, dict]:
+    """
+    Parse ``show vlan interface info`` into per-port ``{pvid, tagging}`` dict.
+
+    Detects whether the header carries an ``STG`` column. v1 layout
+    (``STG PVID Tagging``) puts PVID in the second numeric column; v2
+    layout (``PVID PRI Tagging``) puts PVID in the first.
+    """
+    if not text:
+        return {}
+    has_stg = bool(_ERS_HEADER_HAS_STG_RE.search(text))
+    out: dict[str, dict] = {}
+    for m in _ERS_VLAN_INTF_INFO_RE.finditer(text):
+        port = m.group("port")
+        try:
+            pvid = int(m.group("i2") if has_stg else m.group("i1"))
+        except ValueError:
+            continue
+        out[port] = {"pvid": pvid, "tagging": m.group("tagging")}
+    return out
+
+
+def _ers_aggregate_to_switchport(
+    port_info: dict, member_vids: list[int]
+) -> SwitchportInfo:
+    """
+    Map per-port info + VLAN-membership list to ``SwitchportInfo``.
+
+    Tagging interpretation (ERS):
+      - ``UntagAll``      → access on PVID (port carries only PVID, untagged)
+      - ``UntagPvidOnly`` → trunk with native=PVID, tagged=members minus PVID
+      - ``Hybrid``        → same NetBox-aligned semantics as ``UntagPvidOnly``
+                            (PVID untagged native, others tagged egress)
+      - ``TagAll``        → trunk, no native; tagged=full membership list
+                            (every egress frame is tagged, PVID included —
+                            so PVID stays in the tagged list when reported)
+      - ``TagPvidOnly``   → same NetBox shape as ``TagAll`` (trunk-no-native,
+                            members tagged). ERS allows multiple untagged-egress
+                            VLANs in this mode which 802.1Q forbids and NetBox
+                            can't represent; trunk-no-native is the safest
+                            mapping (Codex P1 #391 round-6).
+      - ``UntagPvidOnly``/``TagAll``/``TagPvidOnly``/``Hybrid`` with empty
+                            membership data → routed (defensive; avoids
+                            clobbering NetBox tagged_vlans via PATCH)
+      - anything else (``Disable``, etc.) → routed
+    """
+    tagging = (port_info.get("tagging") or "").lower()
+    pvid = coerce_vid(port_info.get("pvid"))
+    members = [v for v in member_vids if coerce_vid(v) is not None]
+
+    if tagging == "untagall":
+        # Access on PVID requires a valid PVID. ``coerce_vid`` returns None
+        # for missing or out-of-range (1..4094) values — emitting
+        # ``access_vlan=None`` would clobber the existing NetBox
+        # untagged_vlan via PATCH, so fall back to routed defensively.
+        # (Copilot P1 #391 round-11; matches the dell_powerconnect /
+        # batch-4 tightening pattern.)
+        if pvid is None:
+            return SwitchportInfo(
+                enabled=False,
+                admin_mode=None,
+                oper_mode=None,
+                access_vlan=None,
+                native_vlan=None,
+                allowed_vlans=None,
+            )
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=pvid,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if tagging in ("untagpvidonly", "hybrid"):
+        # Trunk-with-native. ERS Hybrid is the same NetBox-aligned semantics
+        # as UntagPvidOnly: PVID is the untagged native, all other member
+        # VLANs are tagged egress. Both require membership data — without
+        # it, fall back to routed rather than emit a no-tagged-VLAN trunk
+        # that would clobber the existing NetBox tagged_vlans via PATCH.
+        if not members:
+            return SwitchportInfo(
+                enabled=False,
+                admin_mode=None,
+                oper_mode=None,
+                access_vlan=None,
+                native_vlan=None,
+                allowed_vlans=None,
+            )
+        tagged = [v for v in members if v != pvid]
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=pvid,
+            allowed_vlans=tagged if tagged else None,
+        )
+    if tagging in ("tagall", "tagpvidonly"):
+        # tagall: every egress frame is tagged, PVID included.
+        # tagpvidonly: PVID frames are tagged on egress, other VLANs egress
+        #   untagged. ERS allows multiple untagged-egress VLANs in this
+        #   mode, which IEEE 802.1Q forbids and NetBox can't represent —
+        #   the safest NetBox-aligned mapping is the same as TagAll
+        #   (trunk, no untagged native, every member VLAN in the tagged
+        #   list). Operators using TagPvidOnly for QinQ-style edge cases
+        #   should expect a trunk-no-native NetBox shape, not access.
+        # Both modes need membership data; without it → routed.
+        if not members:
+            return SwitchportInfo(
+                enabled=False,
+                admin_mode=None,
+                oper_mode=None,
+                access_vlan=None,
+                native_vlan=None,
+                allowed_vlans=None,
+            )
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="trunk",
+            oper_mode="trunk",
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=members,
+        )
+
+    # Disable / unknown → routed
+    return SwitchportInfo(
+        enabled=False,
+        admin_mode=None,
+        oper_mode=None,
+        access_vlan=None,
+        native_vlan=None,
+        allowed_vlans=None,
+    )
+
+
+def _ers_row_port_tokens(row: dict) -> list[str]:
+    """
+    Return the raw port-list tokens from a parsed ``show vlan`` row.
+
+    The ntc-template's ``vlan_port_members`` (List) field holds the
+    actual port-member tokens, captured from the ``Port Members:``
+    continuation line. The ``vlan_pid`` field is the **Protocol ID**
+    column (a hex value like ``0x0000``) — explicitly NOT a port
+    identifier despite the misleading name. (Copilot review #391
+    round-10: the previous implementation treated ``vlan_pid`` as a
+    port token, polluting the per-port aggregate with bogus entries.)
+    """
+    return [str(member) for member in (row.get("vlan_port_members", []) or [])]
+
+
+def _expand_ers_wildcard(token: str, known_ports: set[str] | None) -> list[str] | None:
+    """
+    Resolve ``ALL`` / ``<unit>/ALL`` wildcards. Returns None on no match.
+
+    Without ``known_ports`` wildcards always return ``[]`` (back-compat).
+    """
+    upper = token.strip().upper()
+    if upper == "ALL":
+        return sorted(known_ports) if known_ports else []
+    if upper.endswith("/ALL"):
+        if not known_ports:
+            return []
+        prefix = f"{upper[: -len('/ALL')]}/"
+        return sorted(p for p in known_ports if p.startswith(prefix))
+    return None
+
+
+def _expand_ers_dashed_range(part: str) -> list[str]:
+    """Expand a ``lo-hi`` range chunk; returns ``[part]`` on parse failure."""
+    lo, _, hi = part.partition("-")
+    if "/" in part:
+        u_lo, _, p_lo = lo.partition("/")
+        if "/" in hi:
+            u_hi, _, p_hi = hi.partition("/")
+            if u_lo != u_hi:
+                return [part]
+            hi_port_str = p_hi
+        else:
+            hi_port_str = hi
+        try:
+            return [f"{u_lo}/{p}" for p in range(int(p_lo), int(hi_port_str) + 1)]
+        except ValueError:
+            return [part]
+    try:
+        return [str(i) for i in range(int(lo), int(hi) + 1)]
+    except ValueError:
+        return [part]
+
+
+def _expand_ers_port_chunk(part: str, known_ports: set[str] | None = None) -> list[str]:
+    """
+    Expand a single comma-separated chunk of an ERS port-list.
+
+    ``known_ports`` is the set of canonical port keys discovered from
+    ``show vlan interface info``. When provided, the chassis-wide ``ALL``
+    keyword expands to every known port and the unit-wide ``<unit>/ALL``
+    form expands to every known port whose token starts with ``<unit>/``.
+    Without it (e.g. unit tests calling the helper directly) wildcards
+    return an empty list, preserving back-compat (Codex P1 #391 round-7).
+    """
+    if not part or part.upper() == "NONE":
+        return []
+    wildcard = _expand_ers_wildcard(part, known_ports)
+    if wildcard is not None:
+        return wildcard
+    if "-" not in part:
+        return [part]
+    return _expand_ers_dashed_range(part)
+
+
+def _expand_ers_port_list(
+    token: str, known_ports: set[str] | None = None,
+) -> list[str]:
+    """
+    Expand the ``PortMembers`` / ``PID`` value of ``show vlan`` into port tokens.
+
+    Accepts comma-separated lists, ``unit/start-unit/end`` ranges (``1/1-1/4``),
+    same-unit ``unit/start-end`` ranges (``1/2-8``), bare-digit ranges, the
+    literal ``ALL``/``NONE`` keywords, and the unit-wide ``<unit>/ALL`` form.
+
+    ``ALL`` and ``<unit>/ALL`` resolve against ``known_ports`` (the set of
+    ports discovered by ``show vlan interface info``) when provided —
+    that's the source of truth for what the device actually has, so we
+    never invent fake ports. Without ``known_ports`` (back-compat for
+    direct-call unit tests) wildcards return an empty list.
+    """
+    if not token:
+        return []
+    upper = token.strip().upper()
+    if upper == "NONE":
+        return []
+    if upper == "ALL":
+        return sorted(known_ports) if known_ports else []
+    if upper.endswith("/ALL") and "," not in token:
+        return _expand_ers_port_chunk(token.strip(), known_ports)
+    ports: list[str] = []
+    for part in token.split(","):
+        ports.extend(_expand_ers_port_chunk(part.strip(), known_ports))
+    return ports
 
 
 class ERSDriver(_napalm_base.NetworkDriver):
@@ -364,6 +652,67 @@ class ERSDriver(_napalm_base.NetworkDriver):
                         entry["interfaces"].append(port)
 
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """
+        Return per-interface VLAN config keyed by ERS port token.
+
+        Combines two CLI commands:
+
+        - ``show vlan interface info`` — per-port PVID and tagging mode
+          (``UntagAll``, ``UntagPvidOnly``, ``TagAll``, ``Disable``).
+        - ``show vlan`` — per-VLAN port membership (used to build per-port
+          tagged-VLAN lists by inverting the per-VLAN view).
+        """
+        try:
+            info_raw = self.device.send_command("show vlan interface info")
+        except Exception:
+            logger.debug("ERS show vlan interface info failed", exc_info=True)
+            return {}
+        per_port_info = _parse_ers_show_vlan_interface_info(info_raw or "")
+        if not per_port_info:
+            return {}
+
+        per_port_members = self._collect_ers_per_port_membership(set(per_port_info))
+
+        result: dict[str, dict] = {}
+        for port, info in per_port_info.items():
+            members = per_port_members.get(port, [])
+            sw = _ers_aggregate_to_switchport(info, members)
+            result[port] = classify_switchport(sw)
+        return result
+
+    def _collect_ers_per_port_membership(
+        self, known_ports: set[str],
+    ) -> dict[str, list[int]]:
+        """
+        Invert ``show vlan`` to produce ``{port: [vid, ...]}`` membership.
+
+        ``known_ports`` is the set of ports discovered from
+        ``show vlan interface info`` and acts as the catalog used to
+        expand chassis-wide (``ALL``) and unit-wide (``<unit>/ALL``)
+        wildcards into concrete port keys (Codex P1 #391 round-7).
+        """
+        try:
+            vlan_raw = self.device.send_command("show vlan")
+            parsed = parse_output(
+                platform="avaya_ers", command="show vlan", data=vlan_raw
+            )
+        except Exception:
+            logger.debug("ERS show vlan failed", exc_info=True)
+            parsed = []
+
+        per_port_members: dict[str, list[int]] = {}
+        for row in parsed or []:
+            vid = coerce_vid(row.get("vlan_id", ""))
+            if vid is None:
+                continue
+            for token in _ers_row_port_tokens(row):
+                for port in _expand_ers_port_list(token, known_ports):
+                    members = per_port_members.setdefault(port, [])
+                    if vid not in members:
+                        members.append(vid)
+        return per_port_members
 
 
 # ---------------------------------------------------------------------------

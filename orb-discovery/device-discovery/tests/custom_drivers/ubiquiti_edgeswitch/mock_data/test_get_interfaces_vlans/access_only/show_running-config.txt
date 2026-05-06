@@ -1,0 +1,9 @@
+!Current Configuration:
+!
+hostname edgeswitch-24
+!
+interface 0/1
+ vlan pvid 100
+ vlan participation include 100
+ vlan participation exclude 1
+!

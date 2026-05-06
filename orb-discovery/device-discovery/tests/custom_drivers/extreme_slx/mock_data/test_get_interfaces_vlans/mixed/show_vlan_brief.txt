@@ -1,0 +1,8 @@
+VLAN  Name                Type     State    Ports
+                                            (u)-Untagged
+                                            (t)-Tagged
+====  ==================  =======  =======  ===========================
+1     DEFAULT             STATIC   ACTIVE   Eth 0/4(u)
+10    USERS               STATIC   ACTIVE   Eth 0/1(u) Po 1(t)
+20    DATA                STATIC   ACTIVE   Eth 0/1(t) Eth 0/3(t)
+100   GUESTS              STATIC   ACTIVE   Eth 0/2(t) Po 1(u)

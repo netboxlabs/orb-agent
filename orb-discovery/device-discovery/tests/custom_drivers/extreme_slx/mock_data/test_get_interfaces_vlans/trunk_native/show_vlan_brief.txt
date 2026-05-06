@@ -1,0 +1,7 @@
+VLAN  Name                Type     State    Ports
+                                            (u)-Untagged
+                                            (t)-Tagged
+====  ==================  =======  =======  ===========================
+10    USERS               STATIC   ACTIVE   Eth 0/1(u)
+20    DATA                STATIC   ACTIVE   Eth 0/1(t)
+30    VOICE               STATIC   ACTIVE   Eth 0/1(t)

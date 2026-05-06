@@ -1,0 +1,6 @@
+VLAN  Name                Type     State    Ports
+                                            (u)-Untagged
+                                            (t)-Tagged
+====  ==================  =======  =======  ===========================
+100   GUESTS              STATIC   ACTIVE   Eth 0/2(t)
+200   IOT                 STATIC   ACTIVE   Eth 0/2(t)

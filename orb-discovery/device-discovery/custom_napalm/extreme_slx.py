@@ -19,6 +19,12 @@ from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import ParsingException, parse_output
 from textfsm import TextFSMError
 
+from custom_napalm._vlan import (
+    SwitchportInfo,
+    classify_switchport,
+    coerce_vid,
+)
+
 # socket.error is an alias for OSError in Python 3; no socket import needed.
 
 logger = logging.getLogger(__name__)
@@ -236,6 +242,143 @@ def _expand_vlan_port(token: str) -> str:
     if prefix == "PO":
         return f"Port-channel {rest}"
     return token
+
+
+# --- vlan brief tagged/untagged token parsing ----------------------------- #
+# Match a port token together with its trailing "(u)"/"(t)" state flag, e.g.
+# "Eth 0/1(u)" or "Po 1(t)". Captures (token_with_no_flag_after_expand_call,
+# flag_letter).  We deliberately keep a SEPARATE regex from _VLAN_PORT_RE so
+# the existing get_vlans() path (which does not need the flag) is untouched.
+_VLAN_PORT_FLAG_RE = re.compile(
+    r"((?:Eth|Po)\s+\S+?)\(([ut])\)",
+    re.IGNORECASE,
+)
+
+
+def _parse_slx_vlan_brief(text: str) -> list[dict]:
+    """
+    Parse `show vlan brief` into ``[{vlan_id: int, ports: [(name, flag), ...]}, ...]``.
+
+    Each ``ports`` entry is ``(canonical_port_name, "u"|"t")`` so the inverter
+    can decide tagging without re-running the port regex. Continuation lines
+    (port lists wrapping onto subsequent lines) extend the previously seen
+    VLAN's port list, mirroring the wrap handling in ``get_vlans()``.
+
+    Tokens without an explicit ``(u)``/``(t)`` flag are ignored — SLX-OS
+    always emits a flag for member ports in this command output.
+    """
+    rows: list[dict] = []
+    current: dict | None = None
+    for line in text.splitlines():
+        m = _VLAN_ROW_RE.match(line)
+        if m:
+            try:
+                vlan_id = int(m.group(1))
+            except ValueError:
+                current = None
+                continue
+            port_str = m.group(3) or ""
+            ports = [
+                (_expand_vlan_port(tok), flag.lower())
+                for tok, flag in _VLAN_PORT_FLAG_RE.findall(port_str)
+            ]
+            current = {"vlan_id": vlan_id, "ports": ports}
+            rows.append(current)
+        elif current is not None and _VLAN_PORT_FLAG_RE.search(line):
+            current["ports"].extend(
+                (_expand_vlan_port(tok), flag.lower())
+                for tok, flag in _VLAN_PORT_FLAG_RE.findall(line)
+            )
+    return rows
+
+
+def _slx_invert_vlan_brief(rows: list[dict]) -> dict[str, dict]:
+    """
+    Invert per-VLAN port-membership rows into per-port aggregates.
+
+    Returns ``{port_name: {"untagged": list[int], "tagged": list[int]}}`` keyed
+    by canonical interface names (already expanded by :func:`_expand_vlan_port`).
+    Each list is deduplicated. VLAN IDs are clamped to 1..4094 via
+    :func:`coerce_vid`; out-of-range values are dropped silently.
+
+    The aggregator (:func:`_slx_aggregate_to_switchport`) treats >1 untagged
+    VIDs for the same port as anomalous → routed, so we preserve the full
+    list rather than picking last-seen.
+    """
+    per_port: dict[str, dict] = {}
+    for row in rows:
+        vid = coerce_vid(row.get("vlan_id"))
+        if vid is None:
+            continue
+        for name, flag in row.get("ports", []):
+            entry = per_port.setdefault(name, {"untagged": [], "tagged": []})
+            if flag == "u":
+                if vid not in entry["untagged"]:
+                    entry["untagged"].append(vid)
+            elif flag == "t" and vid not in entry["tagged"]:
+                entry["tagged"].append(vid)
+    return per_port
+
+
+def _slx_aggregate_to_switchport(per_port: dict) -> SwitchportInfo:
+    """
+    Map a single port's aggregated ``{untagged, tagged}`` to a SwitchportInfo.
+
+    Membership shape implies the mode (SLX-OS ``show vlan brief`` does not
+    carry an admin-mode column):
+
+    * exactly one untagged + no tagged → access on the untagged VID.
+    * exactly one untagged + ≥1 tagged → trunk with that VID as native.
+    * tagged-only → trunk with no native VLAN.
+    * >1 untagged → routed (anomalous; IEEE 802.1Q forbids it).
+    * neither → routed/excluded (caller omits the port from output).
+
+    Accepts the legacy scalar-untagged shape (``untagged: int|None``) for
+    backwards compatibility; the inversion helper now emits the list shape.
+    """
+    raw_untagged = per_port.get("untagged")
+    if isinstance(raw_untagged, list):
+        untagged = [v for v in raw_untagged if coerce_vid(v) is not None]
+    else:
+        single = coerce_vid(raw_untagged)
+        untagged = [single] if single is not None else []
+    tagged = [v for v in (per_port.get("tagged") or []) if coerce_vid(v) is not None]
+
+    if len(untagged) > 1:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if not untagged and not tagged:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if untagged and not tagged:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged[0],
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=untagged[0] if untagged else None,
+        allowed_vlans=tagged if tagged else None,
+    )
 
 
 class SLXOSDriver(_napalm_base.NetworkDriver):
@@ -461,3 +604,20 @@ class SLXOSDriver(_napalm_base.NetworkDriver):
                     _expand_vlan_port(tok) for tok in _VLAN_PORT_RE.findall(line)
                 )
         return vlans
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """Return per-interface VLAN config from `show vlan brief`."""
+        try:
+            raw = self.device.send_command("show vlan brief")
+        except Exception:
+            logger.debug("SLX show vlan brief failed", exc_info=True)
+            return {}
+        if not raw:
+            return {}
+        rows = _parse_slx_vlan_brief(raw)
+        per_port = _slx_invert_vlan_brief(rows)
+        result: dict[str, dict] = {}
+        for port, data in per_port.items():
+            info = _slx_aggregate_to_switchport(data)
+            result[port] = classify_switchport(info)
+        return result

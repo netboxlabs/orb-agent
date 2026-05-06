@@ -19,6 +19,8 @@ import napalm.base as _napalm_base
 from napalm.base import models
 from napalm.base.netmiko_helpers import netmiko_args
 
+from custom_napalm._vlan import SwitchportInfo, classify_switchport, coerce_vid
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -187,6 +189,132 @@ def _parse_vlan_members(config: str) -> dict[str, list[str]]:
                 for vid in _expand_vlan_tokens(m_vlan.group(1)):
                     result.setdefault(vid, []).append(current_intf)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Per-VID membership parsing — `show vlan id <vid>` (driver-local regex)
+# ---------------------------------------------------------------------------
+
+# `show vlan` (no id) emits a simple VID/name/type table. The simpler form is
+# the only one UniFiSwitch produces (no per-port tagging detail), so we
+# enumerate VIDs here and then issue `show vlan id <vid>` per VID to obtain
+# per-port tagging — same approach hp_procurve's batch-4 driver uses.
+_UNIFI_VLAN_LIST_RE = re.compile(r"^\s*(?P<vid>\d+)\s+\S")
+
+# Per-VID detail table row. Columns:
+#   Interface  Current  Configured  Tagging
+#   0/1        Include  Autodetect  Untagged
+#   0/2        Include  Autodetect  Tagged
+#   0/3        Exclude  Autodetect  Tagged
+# We only care about rows whose Current column is `Include` — those are the
+# actual VLAN members. The Tagging column then tells us how (Tagged or
+# Untagged); anything else (e.g. blank) is ignored.
+_UNIFI_VLAN_MEMBER_RE = re.compile(
+    r"^\s*(?P<port>\S+)\s+(?P<current>Include|Exclude|Autodetect)\s+"
+    r"\S+\s+(?P<tagging>Tagged|Untagged)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_unifi_vlan_list(text: str) -> list[int]:
+    """Return the list of VIDs declared by `show vlan` (simple list form)."""
+    vids: list[int] = []
+    for line in text.splitlines():
+        m = _UNIFI_VLAN_LIST_RE.match(line)
+        if not m:
+            continue
+        vid = coerce_vid(m.group("vid"))
+        if vid is not None and vid not in vids:
+            vids.append(vid)
+    return vids
+
+
+def _parse_unifi_vlan_detail(text: str) -> list[tuple[str, str]]:
+    """
+    Parse `show vlan id <vid>` membership table → ``[(port, tagging), ...]``.
+
+    Only rows whose Current column equals ``Include`` are returned; Exclude
+    rows mean the port is not a member of this VLAN. The header,
+    blank lines, and the dashes separator line are skipped because they
+    do not match the four-column row regex.
+    """
+    out: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Skip the dashes separator line.
+        if set(stripped) <= set("- "):
+            continue
+        m = _UNIFI_VLAN_MEMBER_RE.match(line)
+        if not m:
+            continue
+        if m.group("current").lower() != "include":
+            continue
+        out.append((m.group("port"), m.group("tagging").capitalize()))
+    return out
+
+
+def _unifi_aggregate_to_switchport(per_port: dict) -> SwitchportInfo:
+    """
+    Map a single port's aggregated ``{untagged, tagged}`` to a SwitchportInfo.
+
+    UniFiSwitch (Broadcom-fastpath derived) carries no separate Access/Trunk/
+    General keyword in the per-VLAN detail; the membership shape is the only
+    signal we have. Same rules as HP ProCurve:
+
+    * exactly one untagged + no tagged → access on the untagged VID.
+    * exactly one untagged + ≥1 tagged → trunk with that as native.
+    * tagged-only → trunk with no native VLAN.
+    * >1 untagged → routed (anomalous; IEEE 802.1Q forbids it).
+    * neither → routed/excluded.
+
+    Accepts the legacy scalar-untagged shape (``untagged: int|None``) for
+    backwards compatibility; the inversion helper now emits the list shape.
+    """
+    raw_untagged = per_port.get("untagged")
+    if isinstance(raw_untagged, list):
+        untagged = [v for v in raw_untagged if coerce_vid(v) is not None]
+    else:
+        single = coerce_vid(raw_untagged)
+        untagged = [single] if single is not None else []
+    tagged = [v for v in (per_port.get("tagged") or []) if coerce_vid(v) is not None]
+
+    if len(untagged) > 1:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if not untagged and not tagged:
+        return SwitchportInfo(
+            enabled=False,
+            admin_mode=None,
+            oper_mode=None,
+            access_vlan=None,
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    if untagged and not tagged:
+        return SwitchportInfo(
+            enabled=True,
+            admin_mode="access",
+            oper_mode="access",
+            access_vlan=untagged[0],
+            native_vlan=None,
+            allowed_vlans=None,
+        )
+    return SwitchportInfo(
+        enabled=True,
+        admin_mode="trunk",
+        oper_mode="trunk",
+        access_vlan=None,
+        native_vlan=untagged[0] if untagged else None,
+        allowed_vlans=tagged,
+    )
 
 
 class UniFiSwitchDriver(_napalm_base.NetworkDriver):
@@ -389,3 +517,52 @@ class UniFiSwitchDriver(_napalm_base.NetworkDriver):
                 vlans[vid] = {"name": vid, "interfaces": intfs}
 
         return vlans
+
+    def _unifi_collect_per_port(self, vids: list[int]) -> dict[str, dict]:
+        """Issue ``show vlan id <vid>`` per VID and return per-port aggregates."""
+        per_port: dict[str, dict] = {}
+        for vid in vids:
+            try:
+                detail = self.device.send_command(f"show vlan id {vid}")
+            except Exception:
+                logger.debug("UnifiSwitch show vlan id %s failed", vid, exc_info=True)
+                continue
+            if not detail:
+                continue
+            for port, tagging in _parse_unifi_vlan_detail(detail):
+                entry = per_port.setdefault(port, {"untagged": [], "tagged": []})
+                if tagging == "Untagged":
+                    if vid not in entry["untagged"]:
+                        entry["untagged"].append(vid)
+                elif tagging == "Tagged" and vid not in entry["tagged"]:
+                    entry["tagged"].append(vid)
+        return per_port
+
+    def get_interfaces_vlans(self) -> dict[str, dict]:
+        """
+        Return per-interface VLAN config aggregated from per-VLAN port lists.
+
+        UniFiSwitch shares the Broadcom-fastpath CLI with EdgeSwitch and
+        emits only the simple ``show vlan`` list (VID/name/type) — there is
+        no per-port tagging detail in that single command. We therefore
+        enumerate VIDs from ``show vlan`` and issue ``show vlan id <vid>``
+        per VID to read the membership table, then aggregate per-port and
+        infer mode from the membership shape. This mirrors the batch-4
+        ProCurve approach.
+        """
+        try:
+            vlan_list_raw = self.device.send_command("show vlan")
+        except Exception:
+            logger.debug("UnifiSwitch show vlan failed", exc_info=True)
+            return {}
+        vids = _parse_unifi_vlan_list(vlan_list_raw)
+        if not vids:
+            return {}
+
+        per_port = self._unifi_collect_per_port(vids)
+
+        result: dict[str, dict] = {}
+        for port, data in per_port.items():
+            info = _unifi_aggregate_to_switchport(data)
+            result[port] = classify_switchport(info)
+        return result

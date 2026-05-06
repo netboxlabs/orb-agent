@@ -1,0 +1,22 @@
+{
+  "0/1": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 100
+  },
+  "0/2": {
+    "mode": "trunk",
+    "tagged": [10, 20],
+    "untagged": 1
+  },
+  "0/3": {
+    "mode": "trunk",
+    "tagged": [200, 300],
+    "untagged": 100
+  },
+  "0/4": {
+    "mode": "routed",
+    "tagged": [],
+    "untagged": null
+  }
+}

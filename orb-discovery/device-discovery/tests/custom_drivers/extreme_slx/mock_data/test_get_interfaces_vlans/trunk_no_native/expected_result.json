@@ -1,0 +1,7 @@
+{
+  "Ethernet 0/2": {
+    "mode": "trunk",
+    "tagged": [100, 200],
+    "untagged": null
+  }
+}
