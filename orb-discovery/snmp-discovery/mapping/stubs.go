@@ -61,11 +61,16 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 // for dcim.device, this stub must grow to match — otherwise the rich
 // entity and the stub will resolve via different matcher precedence
 // paths or fail validation on the first cycle.
+//
+// Metadata.source_match (e.g. netbox_id) is the diode-netbox-plugin's
+// PK-based match path, so it must not diverge between rich and stub.
+// Annotation metadata such as run_id is intentionally NOT copied —
+// stubs are matcher-only.
 func newDeviceStub(d *diode.Device) *diode.Device {
 	if d == nil {
 		return nil
 	}
-	return &diode.Device{
+	stub := &diode.Device{
 		Name:       d.Name,
 		Site:       d.Site,
 		Tenant:     d.Tenant,
@@ -74,6 +79,10 @@ func newDeviceStub(d *diode.Device) *diode.Device {
 		PrimaryIp4: newIPMatchStub(d.PrimaryIp4),
 		PrimaryIp6: newIPMatchStub(d.PrimaryIp6),
 	}
+	if sm, ok := d.Metadata["source_match"]; ok {
+		stub.Metadata = diode.Metadata{"source_match": sm}
+	}
+	return stub
 }
 
 // newInterfaceStub returns an Interface populated with matcher fields

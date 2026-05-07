@@ -812,8 +812,22 @@ func TestRunnerAnnotateThenPrune(t *testing.T) {
 	assert.Nil(t, stubIface.Metadata, "stub Interface must not carry annotation Metadata")
 	require.NotNil(t, stubIface.Device, "Interface stub must keep a Device reference for matching")
 	assert.NotSame(t, richDevice, stubIface.Device, "nested Device must be a stub, not the rich pointer")
-	assert.Nil(t, stubIface.Device.Metadata, "stub Device must not carry annotation Metadata")
 	assert.Nil(t, stubIface.Device.Serial, "stub Device must not carry rich fields")
+
+	// stub Device may carry source_match (PK-based match path — preserved
+	// intentionally) but must never carry run_id annotation.
+	if stubIface.Device.Metadata != nil {
+		_, hasRunID := stubIface.Device.Metadata["run_id"]
+		assert.False(t, hasRunID, "stub Device must not carry run_id annotation")
+		// source_match is allowed: when annotateDeviceWithSourceMatch
+		// runs first (NetboxID != nil), the stub carries it for the
+		// plugin's PK-based matcher.
+		if sm, ok := stubIface.Device.Metadata["source_match"]; ok {
+			smMap, isMap := sm.(diode.Metadata)
+			assert.True(t, isMap, "source_match value must be a Metadata map")
+			assert.Equal(t, netboxID, smMap["netbox_id"])
+		}
+	}
 
 	// PrimaryIp4 cycle-break: only exercised if the rich Device's PrimaryIp4 was set
 	// by mappers. This walker doesn't populate it (no SNMP target IP / interface match

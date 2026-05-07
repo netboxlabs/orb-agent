@@ -121,6 +121,40 @@ func TestNewDeviceStub_NilPrimaryIPs(t *testing.T) {
 	assert.Nil(t, stub.PrimaryIp6)
 }
 
+func TestNewDeviceStub_PreservesSourceMatchDropsRunID(t *testing.T) {
+	rich := &diode.Device{
+		Name: strPtr("sw1"),
+		Metadata: diode.Metadata{
+			"source_match": diode.Metadata{"netbox_id": 42},
+			"run_id":       "run-abc",
+		},
+	}
+
+	stub := newDeviceStub(rich)
+
+	// source_match is the diode-netbox-plugin's PK-based match path —
+	// MUST flow to the stub or rich and stub diverge.
+	assert.NotNil(t, stub.Metadata)
+	sm, ok := stub.Metadata["source_match"].(diode.Metadata)
+	assert.True(t, ok, "source_match must be a nested Metadata map on the stub")
+	assert.Equal(t, 42, sm["netbox_id"])
+
+	// Annotation metadata (run_id) is intentionally NOT on the stub —
+	// stubs are matcher-only and must not carry per-run annotation.
+	_, hasRunID := stub.Metadata["run_id"]
+	assert.False(t, hasRunID, "stub must not carry run_id annotation")
+}
+
+func TestNewDeviceStub_NoMetadataWhenSourceMatchAbsent(t *testing.T) {
+	rich := &diode.Device{
+		Name:     strPtr("sw1"),
+		Metadata: diode.Metadata{"run_id": "run-abc"}, // only annotation
+	}
+	stub := newDeviceStub(rich)
+	// run_id is annotation, not a matcher — stub stays metadata-free.
+	assert.Nil(t, stub.Metadata)
+}
+
 func TestNewInterfaceStub_Nil(t *testing.T) {
 	assert.Nil(t, newInterfaceStub(nil, nil))
 }
