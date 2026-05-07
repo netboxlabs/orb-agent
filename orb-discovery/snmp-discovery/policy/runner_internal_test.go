@@ -14,6 +14,7 @@ import (
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -701,6 +702,127 @@ func TestRunScanWithOriginal_NoDuplicateForRepeatedResponsiveHost(t *testing.T) 
 
 	// Only one crawl job should be scheduled despite duplicate in responsive list
 	assert.Len(t, scheduler.Jobs(), 1)
+}
+
+// TestRunnerAnnotateThenPrune locks in the runner-level contract:
+// after annotation + prune, the top-level Device keeps full payload
+// and Metadata (source_match, run_id); nested Device/Interface refs
+// are matcher-only stubs with no Metadata; IP.AssignedObject is a
+// stub Interface; the Device stub's PrimaryIp4 has no AssignedObject.
+func TestRunnerAnnotateThenPrune(t *testing.T) {
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			// sysName — triggers DeviceMapper and emits a top-level Device.
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "router-1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {Value: "Gi0", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.4.20.1.1": {
+				"1.3.6.1.2.1.4.20.1.1.10.0.0.1": {Value: "10.0.0.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
+			},
+			"1.3.6.1.2.1.4.20.1.2": {
+				"1.3.6.1.2.1.4.20.1.2.10.0.0.1": {Value: 1, Type: gosnmp.Integer, IdentifierSize: 4},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	entries := []config.MappingEntry{
+		{
+			OID: "1.3.6.1.2.1.1", Entity: "device", Field: "_id", IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.1.5", Entity: "device", Field: "name"},
+			},
+		},
+		{
+			OID:            "1.3.6.1.2.1.2.2.1",
+			Entity:         "interface",
+			Field:          "_id",
+			IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+			},
+		},
+		{
+			OID:            "1.3.6.1.2.1.4.20.1",
+			Entity:         "ipAddress",
+			Field:          "_id",
+			IdentifierSize: 4,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+				{
+					OID:          "1.3.6.1.2.1.4.20.1.2",
+					Entity:       "ipAddress",
+					Field:        "assignedObject",
+					Relationship: config.Relationship{Type: "interface"},
+				},
+			},
+		},
+	}
+
+	runner := queryTargetRunner(factory, entries)
+	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	require.NoError(t, err)
+	require.NotEmpty(t, entities)
+
+	// Mirror the production sequence: annotate, then prune.
+	netboxID := 42
+	annotateDeviceWithSourceMatch(entities, netboxID)
+	annotateEntitiesWithRunID(entities, "run-abc")
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities))
+
+	// Find the rich top-level Device.
+	var richDevice *diode.Device
+	for _, e := range entities {
+		if d, ok := e.(*diode.Device); ok {
+			richDevice = d
+			break
+		}
+	}
+	require.NotNil(t, richDevice, "expected a top-level Device in entities")
+
+	// Top-level Device keeps annotation Metadata.
+	require.NotNil(t, richDevice.Metadata)
+	assert.Equal(t, "run-abc", richDevice.Metadata["run_id"])
+	sourceMatch, ok := richDevice.Metadata["source_match"].(diode.Metadata)
+	require.True(t, ok, "source_match should be a nested Metadata map")
+	assert.Equal(t, netboxID, sourceMatch["netbox_id"])
+
+	// Find the IPAddress and confirm AssignedObject is a stub Interface.
+	// This is the primary way Interfaces reach the entities list — via the
+	// ipAddress.assignedObject relationship. The mapper groups interfaces
+	// by their SNMP index (ifIndex) and only emits top-level Interface
+	// entities when they appear independently of IP assignments; in this
+	// fixture, the interface is only discovered via the IP's relationship.
+	var ip *diode.IPAddress
+	for _, e := range entities {
+		if a, ok := e.(*diode.IPAddress); ok && a.Address != nil && *a.Address == "10.0.0.1/32" {
+			ip = a
+			break
+		}
+	}
+	require.NotNil(t, ip, "expected IPAddress 10.0.0.1/32 in entities")
+	stubIface, ok := ip.AssignedObject.(*diode.Interface)
+	require.True(t, ok, "IPAddress.AssignedObject must be a *diode.Interface stub after prune")
+
+	// Confirm the stub Interface has no annotation and its Device is a stub.
+	assert.Nil(t, stubIface.Metadata, "stub Interface must not carry annotation Metadata")
+	require.NotNil(t, stubIface.Device, "Interface stub must keep a Device reference for matching")
+	assert.NotSame(t, richDevice, stubIface.Device, "nested Device must be a stub, not the rich pointer")
+	assert.Nil(t, stubIface.Device.Metadata, "stub Device must not carry annotation Metadata")
+	assert.Nil(t, stubIface.Device.Serial, "stub Device must not carry rich fields")
+
+	// PrimaryIp4 cycle-break: only exercised if the rich Device's PrimaryIp4 was set
+	// by mappers. This walker doesn't populate it (no SNMP target IP / interface match
+	// in this fixture), so the inner block is a no-op here. The stubs_test.go golden
+	// covers the cycle-break property directly.
+	if stubIface.Device.PrimaryIp4 != nil {
+		assert.Nil(t, stubIface.Device.PrimaryIp4.AssignedObject,
+			"stub Device's PrimaryIp4 must have AssignedObject == nil")
+	}
 }
 
 func TestNewRunner_RangeScheduledWithCron(t *testing.T) {

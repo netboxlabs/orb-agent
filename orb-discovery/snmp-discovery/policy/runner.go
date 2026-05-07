@@ -377,6 +377,12 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	annotateEntitiesWithRunID(entities, run.ID)
 	r.logEntitiesForIngestion(entities)
 
+	// Strip nested Device/Interface refs to matcher-only stubs to shrink
+	// the wire payload. Runs after annotation so the annotators can walk
+	// the rich shared graph with their unsafe.Pointer dedup intact —
+	// otherwise every stub would need its own metadata pass.
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities))
+
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
