@@ -29,7 +29,7 @@ func TestRunStore_CreateRun(t *testing.T) {
 
 	// Verify metadata
 	assert.NotNil(t, run.Metadata)
-	assert.Equal(t, `["192.168.1.10:161"]`, run.Metadata["targets"])
+	assert.Equal(t, `["192.168.1.10"]`, run.Metadata["targets"])
 	assert.NotContains(t, run.Metadata, "target")
 	assert.NotContains(t, run.Metadata, "port")
 	assert.Equal(t, parentTarget, run.Metadata["parent_target"])
@@ -54,7 +54,7 @@ func TestRunStore_CreateRun_NoParentTarget(t *testing.T) {
 
 	// Verify metadata has targets but not parent_target, target, or port
 	assert.NotNil(t, run.Metadata)
-	assert.Equal(t, `["192.168.1.10:161"]`, run.Metadata["targets"])
+	assert.Equal(t, `["192.168.1.10"]`, run.Metadata["targets"])
 	assert.NotContains(t, run.Metadata, "target")
 	assert.NotContains(t, run.Metadata, "port")
 	assert.NotContains(t, run.Metadata, "parent_target")
@@ -148,11 +148,11 @@ func TestRunStore_MaxThreeRunsPerTarget_MultipleTargets(t *testing.T) {
 
 	// Verify runs have correct metadata
 	for _, run := range runs1 {
-		assert.Equal(t, `["192.168.1.10:161"]`, run.Metadata["targets"])
+		assert.Equal(t, `["192.168.1.10"]`, run.Metadata["targets"])
 		assert.Equal(t, parentTarget, run.Metadata["parent_target"])
 	}
 	for _, run := range runs2 {
-		assert.Equal(t, `["192.168.1.11:161"]`, run.Metadata["targets"])
+		assert.Equal(t, `["192.168.1.11"]`, run.Metadata["targets"])
 		assert.Equal(t, parentTarget, run.Metadata["parent_target"])
 	}
 
@@ -186,10 +186,10 @@ func TestRunStore_GetRunsForTarget(t *testing.T) {
 
 	// Verify runs are for correct target
 	for _, run := range runs1 {
-		assert.Equal(t, `["192.168.1.10:161"]`, run.Metadata["targets"])
+		assert.Equal(t, `["192.168.1.10"]`, run.Metadata["targets"])
 	}
 	for _, run := range runs2 {
-		assert.Equal(t, `["192.168.1.11:161"]`, run.Metadata["targets"])
+		assert.Equal(t, `["192.168.1.11"]`, run.Metadata["targets"])
 	}
 }
 
@@ -389,8 +389,8 @@ func TestRunStore_TargetNormalization(t *testing.T) {
 	assert.Len(t, runs2, 1, "Second target should have one run")
 
 	// Verify metadata contains correct targets
-	assert.Equal(t, `["192.168.1.10:161"]`, run1.Metadata["targets"])
-	assert.Equal(t, `["192.168.1.11:161"]`, run2.Metadata["targets"])
+	assert.Equal(t, `["192.168.1.10"]`, run1.Metadata["targets"])
+	assert.Equal(t, `["192.168.1.11"]`, run2.Metadata["targets"])
 
 	// Test that same IP in different notation normalizes correctly
 	target3 := "192.168.1.10" // Same as target1
@@ -410,7 +410,7 @@ func TestRunStore_ScanRunWithRange(t *testing.T) {
 	// Create scan run (no parent_target)
 	scanRun := store.CreateRun(policyName, scanTarget, port, "")
 
-	assert.Equal(t, `["192.168.1.0/24:161"]`, scanRun.Metadata["targets"])
+	assert.Equal(t, `["192.168.1.0/24"]`, scanRun.Metadata["targets"])
 	assert.NotContains(t, scanRun.Metadata, "parent_target")
 
 	// Create individual target runs from scan
@@ -420,10 +420,10 @@ func TestRunStore_ScanRunWithRange(t *testing.T) {
 	run1 := store.CreateRun(policyName, target1, port, scanTarget)
 	run2 := store.CreateRun(policyName, target2, port, scanTarget)
 
-	assert.Equal(t, `["192.168.1.10:161"]`, run1.Metadata["targets"])
+	assert.Equal(t, `["192.168.1.10"]`, run1.Metadata["targets"])
 	assert.Equal(t, scanTarget, run1.Metadata["parent_target"])
 
-	assert.Equal(t, `["192.168.1.11:161"]`, run2.Metadata["targets"])
+	assert.Equal(t, `["192.168.1.11"]`, run2.Metadata["targets"])
 	assert.Equal(t, scanTarget, run2.Metadata["parent_target"])
 
 	// Verify scan run is tracked separately (with its own port)
@@ -490,27 +490,24 @@ func TestRunStore_SameHostDifferentPorts(t *testing.T) {
 	allRuns := store.GetRunsForPolicy(policyName)
 	assert.Len(t, allRuns, 6, "Should have 3 runs from each port")
 
-	// Verify metadata has correct targets values (host:port format)
 	for _, run := range runsPort161 {
-		assert.Equal(t, `["192.168.1.10:161"]`, run.Metadata["targets"], "Port 161 runs should embed port in targets")
+		assert.Equal(t, `["192.168.1.10"]`, run.Metadata["targets"], "reported targets omit port")
 	}
 	for _, run := range runsPort162 {
-		assert.Equal(t, `["192.168.1.10:162"]`, run.Metadata["targets"], "Port 162 runs should embed port in targets")
+		assert.Equal(t, `["192.168.1.10"]`, run.Metadata["targets"], "reported targets omit port")
 	}
 }
 
-func TestRunStore_PortInTargets(t *testing.T) {
+func TestRunStore_TargetsMetadataOmitsPort(t *testing.T) {
 	store := policy.NewRunStore()
 	policyName := "test-policy"
 	target := "192.168.1.10"
 	port := uint16(162)
 
-	// Create run with non-default port
 	run := store.CreateRun(policyName, target, port, "")
 
-	// Verify metadata contains port embedded in targets as host:port JSON array
 	assert.NotNil(t, run.Metadata, "Metadata should not be nil")
-	assert.Equal(t, `["192.168.1.10:162"]`, run.Metadata["targets"], "Metadata should have targets as JSON [host:port]")
+	assert.Equal(t, `["192.168.1.10"]`, run.Metadata["targets"])
 	assert.NotContains(t, run.Metadata, "target", "Metadata should not have separate target field")
 	assert.NotContains(t, run.Metadata, "port", "Metadata should not have separate port field")
 }

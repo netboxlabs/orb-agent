@@ -3,10 +3,8 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/netip"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -52,19 +50,21 @@ func NewRunStore() *RunStore {
 	}
 }
 
-// normalizeTarget normalizes target strings to canonical form and includes port
-// Returns format "host:port" (e.g., "192.168.1.10:161")
-func normalizeTarget(host string, port uint16) string {
-	normalizedHost := host
-	// Try to parse as IP address
+// normalizedHostString returns canonical host or CIDR for display and metadata;
+// hostnames and other literals are returned unchanged.
+func normalizedHostString(host string) string {
 	if addr, err := netip.ParseAddr(host); err == nil {
-		normalizedHost = addr.String()
-	} else if prefix, err := netip.ParsePrefix(host); err == nil {
-		// Try to parse as IP prefix (CIDR)
-		normalizedHost = prefix.String()
+		return addr.String()
 	}
-	// Return composite identifier "host:port"
-	return fmt.Sprintf("%s:%d", normalizedHost, port)
+	if prefix, err := netip.ParsePrefix(host); err == nil {
+		return prefix.String()
+	}
+	return host
+}
+
+// normalizeTarget returns a stable map key "host:port" for per-target run storage.
+func normalizeTarget(host string, port uint16) string {
+	return fmt.Sprintf("%s:%d", normalizedHostString(host), port)
 }
 
 // copyRun creates a deep copy of a Run to avoid race conditions
@@ -104,9 +104,8 @@ func (rs *RunStore) CreateRun(policyName string, target string, port uint16, par
 	// Normalize target for consistent storage (includes port)
 	normalizedTarget := normalizeTarget(target, port)
 
-	// Create metadata with targets as JSON array of host:port strings
-	hostPort := net.JoinHostPort(target, strconv.FormatUint(uint64(port), 10))
-	targetsJSON, _ := json.Marshal([]string{hostPort})
+	// Report targets without port (UI shows policy/defaults elsewhere); align with device/network discovery.
+	targetsJSON, _ := json.Marshal([]string{normalizedHostString(target)})
 	metadata := map[string]string{
 		"targets": string(targetsJSON),
 	}
