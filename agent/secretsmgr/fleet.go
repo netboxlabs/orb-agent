@@ -340,10 +340,11 @@ func (f *FleetSecretsManager) SolveConfigSecrets(backends map[string]any, config
 func collectFleetPaths(v any, set map[string]struct{}) {
 	switch val := v.(type) {
 	case string:
-		for _, idx := range fleetRefRegex.FindAllStringSubmatchIndex(val, -1) {
-			if len(idx) >= 4 {
-				set[val[idx[2]:idx[3]]] = struct{}{}
-			}
+		// Align with processString: only the first ${fleet://...} is resolved; the rest
+		// of the string is discarded when substituting (legacy single-token behavior).
+		idx := fleetRefRegex.FindStringSubmatchIndex(val)
+		if len(idx) >= 4 {
+			set[val[idx[2]:idx[3]]] = struct{}{}
 		}
 	case map[string]any:
 		for _, vv := range val {

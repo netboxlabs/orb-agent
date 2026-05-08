@@ -312,6 +312,51 @@ func TestFleetSecretsManager_SolvePolicySecrets_batchesUncachedPaths(t *testing.
 	assert.Equal(t, "secretvalue", nested["c"])
 }
 
+// Multi-token strings use legacy first-match resolution in processString; prefetch must not
+// request later tokens (they would be ignored and could spuriously fail the solve).
+func TestFleetSecretsManager_SolvePolicySecrets_multiTokenStringPrefetchesFirstRefOnly(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+
+	fm.publisher = &asyncMockPublisher{
+		fm: fm,
+		customResponse: func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			require.Len(t, req.Secrets, 1, "only first fleet ref in the string should be prefetched")
+			assert.Equal(t, "path/first", req.Secrets[0].Path)
+			return &messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion,
+				RequestID:     req.RequestID,
+				Timestamp:     time.Now(),
+				Status:        "success",
+				Secrets: []messages.SecretValue{
+					{Path: "path/first", Value: "firstval", Version: 1},
+				},
+			}
+		},
+	}
+	fm.subscriber = &mockSubscriber{}
+
+	payload := config.PolicyPayload{
+		ID: "policy-multi",
+		Data: map[string]any{
+			"k": "${fleet://path/first} ${fleet://path/second}",
+		},
+	}
+
+	out, err := fm.SolvePolicySecrets(payload)
+	require.NoError(t, err)
+	data, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "firstval", data["k"])
+}
+
 func TestFleetSecretsManager_SolvePolicySecrets_batchPartialDoesNotCache(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	ctx, cancel := context.WithCancel(context.Background())
