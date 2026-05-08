@@ -39,17 +39,7 @@ func TestFleetSecretsManager_processString(t *testing.T) {
 		fm.responseTopic = "test/response"
 		fm.updatedTopic = "test/updated"
 
-		// Create a mock publisher that simulates async responses
-		mockPub := &asyncMockPublisher{
-			fm: fm,
-			responseSecrets: []messages.SecretValue{
-				{
-					Path:    "orb/agents/database/password",
-					Value:   "secretvalue",
-					Version: 1,
-				},
-			},
-		}
+		mockPub := &asyncMockPublisher{fm: fm}
 		fm.publisher = mockPub
 		fm.subscriber = &mockSubscriber{}
 
@@ -156,16 +146,76 @@ func TestFleetSecretsManager_handleUpdateNotification(t *testing.T) {
 	payload, err := json.Marshal(notification)
 	require.NoError(t, err)
 
-	// Note: This test doesn't fully test the update flow since requestSecret
-	// requires a real MQTT connection. But we can test the notification parsing.
-	// handleUpdateNotification logs errors from requestSecret but returns nil
+	// handleUpdateNotification has no publisher: fetch fails, callback marks policies as failed.
 	err = fm.handleUpdateNotification(payload)
-	assert.NoError(t, err) // Function returns nil even when requestSecret fails (it logs the error)
+	assert.NoError(t, err)
 
-	// Verify the callback was called with the policy marked as failed (false)
 	assert.True(t, callbackCalled)
 	assert.Contains(t, callbackPolicyIDs, "policy1")
-	assert.False(t, callbackPolicyIDs["policy1"]) // false because requestSecret failed
+	assert.False(t, callbackPolicyIDs["policy1"])
+}
+
+func TestFleetSecretsManager_handleUpdateNotification_successUpdatesCacheAndCallbacks(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+	fm.usedVars = map[string]fleetCachedSecret{
+		"test/path": {
+			Value:     "oldvalue",
+			Version:   1,
+			policyIDs: map[string]bool{"policy1": true},
+		},
+	}
+
+	var callbackPolicyIDs map[string]bool
+	var callbackCalled bool
+	fm.callback = func(ids map[string]bool) {
+		callbackCalled = true
+		callbackPolicyIDs = ids
+	}
+
+	fm.publisher = &asyncMockPublisher{
+		fm: fm,
+		customResponse: func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			return &messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion,
+				RequestID:     req.RequestID,
+				Timestamp:     time.Now(),
+				Status:        "success",
+				Secrets: []messages.SecretValue{
+					{Path: "test/path", Value: "newvalue", Version: 2},
+				},
+			}
+		},
+	}
+	fm.subscriber = &mockSubscriber{}
+
+	notification := messages.SecretUpdateNotificationMsg{
+		SchemaVersion: messages.CurrentSecretsSchemaVersion,
+		Timestamp:     time.Now(),
+		Updates: []messages.SecretUpdate{
+			{Path: "test/path", Version: 2, Contexts: []string{"policy1"}},
+		},
+	}
+	payload, err := json.Marshal(notification)
+	require.NoError(t, err)
+
+	err = fm.handleUpdateNotification(payload)
+	assert.NoError(t, err)
+
+	assert.True(t, callbackCalled)
+	require.Contains(t, callbackPolicyIDs, "policy1")
+	assert.True(t, callbackPolicyIDs["policy1"], "policy callback should signal success after version bump")
+
+	got := fm.usedVars["test/path"]
+	assert.Equal(t, 2, got.Version)
+	assert.Equal(t, "newvalue", got.Value)
 }
 
 func TestNewFleetSecretsManager(t *testing.T) {
@@ -216,31 +266,194 @@ func TestFleetSecretsManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestFleetSecretsManager_SolvePolicySecrets_batchesUncachedPaths(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+
+	var publishCount int
+	mockPub := &asyncMockPublisher{
+		fm: fm,
+		onPublish: func() {
+			publishCount++
+		},
+	}
+	fm.publisher = mockPub
+	fm.subscriber = &mockSubscriber{}
+
+	payload := config.PolicyPayload{
+		ID: "policy-batch",
+		Data: map[string]any{
+			"a":    "${fleet://path/one}",
+			"b":    []any{"${fleet://path/two}", map[string]any{"c": "${fleet://path/three}"}},
+			"same": "${fleet://path/one}",
+		},
+	}
+
+	out, err := fm.SolvePolicySecrets(payload)
+	require.NoError(t, err)
+	assert.Equal(t, 1, publishCount, "expected one batched MQTT request for multiple uncached paths")
+
+	data, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "secretvalue", data["a"])
+	assert.Equal(t, "secretvalue", data["same"])
+	slc, ok := data["b"].([]any)
+	require.True(t, ok)
+	assert.Equal(t, "secretvalue", slc[0])
+	nested, ok := slc[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "secretvalue", nested["c"])
+}
+
+// Multi-token strings use legacy first-match resolution in processString; prefetch must not
+// request later tokens (they would be ignored and could spuriously fail the solve).
+func TestFleetSecretsManager_SolvePolicySecrets_multiTokenStringPrefetchesFirstRefOnly(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+
+	fm.publisher = &asyncMockPublisher{
+		fm: fm,
+		customResponse: func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			require.Len(t, req.Secrets, 1, "only first fleet ref in the string should be prefetched")
+			assert.Equal(t, "path/first", req.Secrets[0].Path)
+			return &messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion,
+				RequestID:     req.RequestID,
+				Timestamp:     time.Now(),
+				Status:        "success",
+				Secrets: []messages.SecretValue{
+					{Path: "path/first", Value: "firstval", Version: 1},
+				},
+			}
+		},
+	}
+	fm.subscriber = &mockSubscriber{}
+
+	payload := config.PolicyPayload{
+		ID: "policy-multi",
+		Data: map[string]any{
+			"k": "${fleet://path/first} ${fleet://path/second}",
+		},
+	}
+
+	out, err := fm.SolvePolicySecrets(payload)
+	require.NoError(t, err)
+	data, ok := out.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "firstval", data["k"])
+}
+
+func TestFleetSecretsManager_SolvePolicySecrets_batchPartialDoesNotCache(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+
+	mockPub := &asyncMockPublisher{
+		fm: fm,
+		customResponse: func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			require.Len(t, req.Secrets, 2)
+			var goodPath, badPath string
+			for _, s := range req.Secrets {
+				switch s.Path {
+				case "path/good":
+					goodPath = s.Path
+				case "path/bad":
+					badPath = s.Path
+				}
+			}
+			require.NotEmpty(t, goodPath)
+			require.NotEmpty(t, badPath)
+			return &messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion,
+				RequestID:     req.RequestID,
+				Timestamp:     time.Now(),
+				Status:        "partial",
+				Secrets: []messages.SecretValue{
+					{Path: goodPath, Value: "ok", Version: 1},
+				},
+				Errors: []messages.SecretError{
+					{Path: badPath, Error: "not found", Code: messages.ErrorCodeNotFound},
+				},
+			}
+		},
+	}
+	fm.publisher = mockPub
+	fm.subscriber = &mockSubscriber{}
+
+	payload := config.PolicyPayload{
+		ID: "policy-partial",
+		Data: map[string]any{
+			"x": "${fleet://path/good}",
+			"y": "${fleet://path/bad}",
+		},
+	}
+
+	_, err := fm.SolvePolicySecrets(payload)
+	require.Error(t, err)
+	assert.Empty(t, fm.usedVars, "failed batch must not populate cache")
+}
+
 // Helper functions and mocks
 
 // asyncMockPublisher simulates async MQTT responses for testing
 type asyncMockPublisher struct {
-	fm              *FleetSecretsManager
-	responseSecrets []messages.SecretValue
+	fm             *FleetSecretsManager
+	customResponse func(req messages.SecretRequestMsg) *messages.SecretResponseMsg
+	onPublish      func()
 }
 
 func (m *asyncMockPublisher) Publish(_ context.Context, _ string, payload []byte) error {
-	// Parse the request to get the request ID
 	var req messages.SecretRequestMsg
 	if err := json.Unmarshal(payload, &req); err != nil {
 		return err
 	}
 
-	// Simulate async response in a goroutine
-	go func() {
-		time.Sleep(10 * time.Millisecond) // Small delay to simulate network
+	if m.onPublish != nil {
+		m.onPublish()
+	}
 
-		response := messages.SecretResponseMsg{
-			SchemaVersion: messages.CurrentSecretsSchemaVersion,
-			RequestID:     req.RequestID,
-			Timestamp:     time.Now(),
-			Status:        "success",
-			Secrets:       m.responseSecrets,
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+
+		var response messages.SecretResponseMsg
+		if m.customResponse != nil {
+			response = *m.customResponse(req)
+		} else {
+			secrets := make([]messages.SecretValue, len(req.Secrets))
+			for i, sr := range req.Secrets {
+				secrets[i] = messages.SecretValue{
+					Path:    sr.Path,
+					Value:   "secretvalue",
+					Version: 1,
+				}
+			}
+			response = messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion,
+				RequestID:     req.RequestID,
+				Timestamp:     time.Now(),
+				Status:        "success",
+				Secrets:       secrets,
+			}
 		}
 
 		responsePayload, _ := json.Marshal(response)

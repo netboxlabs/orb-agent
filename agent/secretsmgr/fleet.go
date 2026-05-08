@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"sync"
 	"time"
 
@@ -186,12 +187,14 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 		// Release the lock before performing the potentially long-running network request
 		f.mu.Unlock()
 
-		// Request updated secret
 		ctx := f.ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		secret, err := f.requestSecret(ctx, path, policyIDsCopy)
+
+		// Request updated secret (do not merge into usedVars here: this handler must
+		// compare versions and update the cache so the policy callback runs).
+		byPath, err := f.requestSecrets(ctx, []string{path}, policyIDsCopy, false)
 
 		// Re-acquire the lock before accessing or mutating shared state
 		f.mu.Lock()
@@ -204,6 +207,16 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 			f.mu.Unlock()
 			continue
 		}
+		sv, ok := byPath[path]
+		if !ok {
+			f.logger.Error("failed to request updated secret", "path", path, "error", "missing in response")
+			for id := range policyIDsCopy {
+				changedPolicyIDs[id] = false
+			}
+			f.mu.Unlock()
+			continue
+		}
+		secret := &sv
 
 		// Re-fetch the cached entry in case it changed while the lock was released
 		cached, exists = f.usedVars[path]
@@ -253,11 +266,18 @@ func (f *FleetSecretsManager) RegisterUpdatePoliciesCallback(callback func(map[s
 
 // SolvePolicySecrets resolves fleet secret references in a policy payload
 func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
-	// Create a copy of the payload
 	newPayload := payload
 
-	// Process the Data field
-	// TODO: currently this will solve secrets sequentially - we should find all the secrets and then request them all at once
+	pathSet := make(map[string]struct{})
+	collectFleetPaths(payload.Data, pathSet)
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := f.ensureSecrets(ctx, setToSortedSlice(pathSet), payload.ID); err != nil {
+		return payload, err
+	}
+
 	processedData, err := f.processValue(payload.Data, payload.ID)
 	if err != nil {
 		return payload, err
@@ -269,7 +289,27 @@ func (f *FleetSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (
 
 // SolveConfigSecrets resolves fleet secret references in backend and config manager configurations
 func (f *FleetSecretsManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
-	// Create a copy of the backends
+	configManagerMap, err := structToMap(configManager)
+	if err != nil {
+		return backends, configManager, fmt.Errorf("failed to convert config manager to map: %w", err)
+	}
+
+	backPaths := make(map[string]struct{})
+	collectFleetPaths(backends, backPaths)
+	cfgPaths := make(map[string]struct{})
+	collectFleetPaths(configManagerMap, cfgPaths)
+
+	ctx := f.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := f.ensureSecrets(ctx, setToSortedSlice(backPaths), "_backends"); err != nil {
+		return backends, configManager, fmt.Errorf("failed to process backends: %w", err)
+	}
+	if err := f.ensureSecrets(ctx, setToSortedSlice(cfgPaths), "_config_manager"); err != nil {
+		return backends, configManager, fmt.Errorf("failed to process config manager: %w", err)
+	}
+
 	newBackends := backends
 	processedBackends, err := f.processValue(newBackends, "_backends")
 	if err != nil {
@@ -280,12 +320,6 @@ func (f *FleetSecretsManager) SolveConfigSecrets(backends map[string]any, config
 		return backends, configManager, fmt.Errorf("failed to cast processed backends to map[string]any")
 	}
 
-	// Convert configManager to map[string]any
-	configManagerMap, err := structToMap(configManager)
-	if err != nil {
-		return backends, configManager, fmt.Errorf("failed to convert config manager to map: %w", err)
-	}
-	// Process the config manager map
 	processedConfigManagerMap, err := f.processValue(configManagerMap, "_config_manager")
 	if err != nil {
 		return backends, configManager, fmt.Errorf("failed to process config manager: %w", err)
@@ -300,8 +334,90 @@ func (f *FleetSecretsManager) SolveConfigSecrets(backends map[string]any, config
 	f.usedVars = make(map[string]fleetCachedSecret)
 	f.mu.Unlock()
 
-	// Process the backends and config manager
 	return newBackends, newConfigManager, nil
+}
+
+func collectFleetPaths(v any, set map[string]struct{}) {
+	switch val := v.(type) {
+	case string:
+		// Align with processString: only the first ${fleet://...} is resolved; the rest
+		// of the string is discarded when substituting (legacy single-token behavior).
+		idx := fleetRefRegex.FindStringSubmatchIndex(val)
+		if len(idx) >= 4 {
+			set[val[idx[2]:idx[3]]] = struct{}{}
+		}
+	case map[string]any:
+		for _, vv := range val {
+			collectFleetPaths(vv, set)
+		}
+	case []any:
+		for _, vv := range val {
+			collectFleetPaths(vv, set)
+		}
+	default:
+		return
+	}
+}
+
+func setToSortedSlice(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for p := range set {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func dedupeSortedStrings(paths []string) []string {
+	if len(paths) <= 1 {
+		return paths
+	}
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ensureSecrets fetches any uncached fleet paths in one MQTT request (or skip if all cached).
+func (f *FleetSecretsManager) ensureSecrets(ctx context.Context, paths []string, id string) error {
+	paths = dedupeSortedStrings(paths)
+	if len(paths) == 0 {
+		return nil
+	}
+	policyIDs := map[string]bool{id: true}
+
+	f.mu.Lock()
+	var missing []string
+	for _, path := range paths {
+		cached, exists := f.usedVars[path]
+		if exists {
+			if cached.policyIDs == nil {
+				cached.policyIDs = make(map[string]bool)
+			}
+			cached.policyIDs[id] = true
+			f.usedVars[path] = cached
+			continue
+		}
+		missing = append(missing, path)
+	}
+	f.mu.Unlock()
+
+	if len(missing) == 0 {
+		return nil
+	}
+
+	_, err := f.requestSecrets(ctx, missing, policyIDs, true)
+	return err
 }
 
 func (f *FleetSecretsManager) processValue(value any, id string) (any, error) {
@@ -357,16 +473,6 @@ func (f *FleetSecretsManager) processString(s string, id string) (string, error)
 	}
 
 	f.logger.Info("got secret", "secret_path", fleetPath)
-
-	// Cache the secret
-	f.mu.Lock()
-	f.usedVars[fleetPath] = fleetCachedSecret{
-		Value:     secret.Value,
-		Version:   secret.Version,
-		policyIDs: policyIDs,
-	}
-	f.mu.Unlock()
-
 	return secret.Value, nil
 }
 
@@ -396,24 +502,46 @@ func (f *FleetSecretsManager) processSlice(s []any, id string) ([]any, error) {
 	return result, nil
 }
 
-// requestSecret requests a secret from the control plane via MQTT
+// requestSecret requests a single secret from the control plane via MQTT.
 func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, policyIDs map[string]bool) (*messages.SecretValue, error) {
-	f.logger.Info("requesting secret", "path", path, "policy_ids", policyIDs)
+	byPath, err := f.requestSecrets(ctx, []string{path}, policyIDs, true)
+	if err != nil {
+		return nil, err
+	}
+	sv, ok := byPath[path]
+	if !ok {
+		return nil, fmt.Errorf("no secret in response for path %s", path)
+	}
+	return &sv, nil
+}
+
+// requestSecrets requests one or more secrets in a single MQTT round-trip.
+// When writeCache is true, results are merged into usedVars on success.
+func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string, policyIDs map[string]bool, writeCache bool) (map[string]messages.SecretValue, error) {
+	paths = dedupeSortedStrings(paths)
+	if len(paths) == 0 {
+		return map[string]messages.SecretValue{}, nil
+	}
+
+	f.logger.Info("requesting secrets", "paths", paths, "policy_ids", policyIDs)
 	if f.publisher == nil {
 		return nil, fmt.Errorf("MQTT publisher not bound")
 	}
 
 	requestID := uuid.New().String()
+	reqItems := make([]messages.SecretRequest, len(paths))
+	ctxStr := getContextFromPolicyIDs(policyIDs)
+	for i, path := range paths {
+		reqItems[i] = messages.SecretRequest{
+			Path:    path,
+			Context: ctxStr,
+		}
+	}
 	request := messages.SecretRequestMsg{
 		SchemaVersion: messages.CurrentSecretsSchemaVersion,
 		RequestID:     requestID,
 		Timestamp:     time.Now(),
-		Secrets: []messages.SecretRequest{
-			{
-				Path:    path,
-				Context: getContextFromPolicyIDs(policyIDs),
-			},
-		},
+		Secrets:       reqItems,
 	}
 
 	payload, err := json.Marshal(request)
@@ -421,45 +549,70 @@ func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, po
 		return nil, fmt.Errorf("failed to marshal secret request: %w", err)
 	}
 
-	// Create response channel with buffer size 1 to prevent blocking handleResponse
 	responseCh := make(chan *messages.SecretResponseMsg, 1)
 	f.mu.Lock()
 	f.pendingReqs[requestID] = responseCh
 	f.mu.Unlock()
 
-	// Cleanup pending request on exit
-	// Note: The channel is intentionally not closed here to avoid a race condition where
-	// handleResponse might already have a reference to the channel and attempt to send after
-	// it's closed (which would panic). By removing the channel from pendingReqs, we ensure
-	// no new sends will be attempted, and the buffered channel prevents blocking. The channel
-	// will be garbage collected once this function returns and any in-flight sends complete.
 	defer func() {
 		f.mu.Lock()
 		delete(f.pendingReqs, requestID)
 		f.mu.Unlock()
 	}()
 
-	// Publish request
 	if err := f.publisher.Publish(ctx, f.requestTopic, payload); err != nil {
 		return nil, fmt.Errorf("failed to publish secret request: %w", err)
 	}
 
-	// Wait for response with timeout
 	select {
 	case response := <-responseCh:
 		if response.Status == "error" {
 			if len(response.Errors) > 0 {
-				err := response.Errors[0]
-				return nil, fmt.Errorf("secret request failed: %s (code: %s)", err.Error, err.Code)
+				err0 := response.Errors[0]
+				return nil, fmt.Errorf("secret request failed: %s (code: %s)", err0.Error, err0.Code)
 			}
 			return nil, fmt.Errorf("secret request failed with status: %s", response.Status)
 		}
 
-		if len(response.Secrets) == 0 {
+		if len(response.Secrets) == 0 && len(paths) > 0 {
 			return nil, fmt.Errorf("no secrets in response")
 		}
 
-		// Log warning for partial responses (some secrets succeeded, some failed)
+		want := make(map[string]struct{}, len(paths))
+		for _, p := range paths {
+			want[p] = struct{}{}
+		}
+
+		byPath := make(map[string]messages.SecretValue, len(response.Secrets))
+		for _, sv := range response.Secrets {
+			if _, ok := want[sv.Path]; ok {
+				byPath[sv.Path] = sv
+			}
+		}
+
+		failed := make([]messages.SecretError, 0, len(response.Errors))
+		for _, secretErr := range response.Errors {
+			if _, ok := want[secretErr.Path]; ok {
+				failed = append(failed, secretErr)
+			}
+		}
+
+		for _, p := range paths {
+			if _, ok := byPath[p]; !ok {
+				var combinedErr error
+				for _, fe := range failed {
+					if fe.Path == p {
+						combinedErr = fmt.Errorf("secret request failed for path %s: %s (code: %s)", fe.Path, fe.Error, fe.Code)
+						break
+					}
+				}
+				if combinedErr != nil {
+					return nil, combinedErr
+				}
+				return nil, fmt.Errorf("secret missing in response for path %s", p)
+			}
+		}
+
 		if response.Status == "partial" && len(response.Errors) > 0 {
 			for _, secretErr := range response.Errors {
 				f.logger.Warn("partial secret response: some secrets failed",
@@ -469,7 +622,25 @@ func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, po
 			}
 		}
 
-		return &response.Secrets[0], nil
+		if writeCache {
+			f.mu.Lock()
+			for _, p := range paths {
+				sv := byPath[p]
+				cached := f.usedVars[p]
+				cached.Value = sv.Value
+				cached.Version = sv.Version
+				if cached.policyIDs == nil {
+					cached.policyIDs = make(map[string]bool)
+				}
+				for id := range policyIDs {
+					cached.policyIDs[id] = true
+				}
+				f.usedVars[p] = cached
+			}
+			f.mu.Unlock()
+		}
+
+		return byPath, nil
 
 	case <-ctx.Done():
 		return nil, fmt.Errorf("context canceled while waiting for secret response")
