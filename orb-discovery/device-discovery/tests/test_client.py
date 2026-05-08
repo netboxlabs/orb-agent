@@ -248,3 +248,55 @@ def test_ingest_returns_entity_count(mock_diode_client_class, sample_data, sampl
 
     expected = len(list(translate_data(sample_data)))
     assert count == expected
+
+
+def test_ingest_prunes_nested_refs_after_run_id_annotation(
+    mock_diode_client_class, sample_data, sample_metadata
+):
+    """
+    Verify that after annotation + prune, the top-level Device keeps run_id metadata and full payload.
+
+    Nested Device refs on Interface entities must be matcher-only stubs with no rich fields
+    and no annotation metadata (run_id). The stub may still carry source_match (e.g.,
+    netbox_id) — that is a matcher field and is intentionally preserved.
+    """
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = []
+
+    with patch(
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
+    ):
+        client.ingest(sample_metadata, sample_data, run_id="run-abc")
+
+    kwargs = mock_diode_instance.ingest.call_args[1]
+    entities = kwargs["entities"]
+    assert entities, "expected non-empty entities passed to diode_client.ingest"
+
+    # Find the top-level Device.
+    device_entities = [e for e in entities if e.HasField("device")]
+    assert len(device_entities) == 1
+    rich_device = device_entities[0].device
+    assert rich_device.name == "router1"
+    # Rich top-level keeps full payload — serial set in sample_data.
+    assert rich_device.serial == "123456789"
+    # run_id metadata applied to rich Device.
+    assert rich_device.metadata["run_id"] == "run-abc"
+
+    # Find an Interface entity (sample_data may or may not include one).
+    iface_entities = [e for e in entities if e.HasField("interface")]
+    if iface_entities:
+        iface = iface_entities[0].interface
+        # Nested Device on Interface is a stub: no serial, no metadata.
+        assert iface.HasField("device")
+        assert iface.device.name == "router1"
+        assert iface.device.serial == "", (
+            "nested Device must be stubbed — no rich fields"
+        )
+        assert "run_id" not in iface.device.metadata, (
+            "nested Device stub must not carry annotation metadata"
+        )

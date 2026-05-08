@@ -15,6 +15,7 @@ from netboxlabs.diode.sdk import (
 )
 
 from device_discovery.entity_metadata import apply_run_id_to_entities
+from device_discovery.stubs import prune_nested_refs
 from device_discovery.translate import translate_data
 from device_discovery.version import version_semver
 
@@ -143,6 +144,15 @@ class Client:
             )
             if run_id is not None:
                 apply_run_id_to_entities(entities_list, run_id)
+
+            # Trim nested Device/Interface refs to matcher-only stubs to
+            # shrink the wire payload. Runs after run_id annotation so
+            # the annotation (which only writes to top-level entities)
+            # has already finished — stubs cherry-pick source_match and
+            # are otherwise free of copied annotation. Runs before
+            # estimate_message_size so chunking decisions see the
+            # trimmed payload size.
+            prune_nested_refs(entities_list)
 
             request_metadata = dict(metadata or {})
             if run_id is not None:
