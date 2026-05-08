@@ -91,7 +91,7 @@ func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsSe
 	if isIngest {
 		repo := s.bridge.GetPolicyRepo()
 		enrichLogsWithDatasets(req, repo)
-		s.bridge.logger.Info("ingesting enriched logs with dataset_ids", "request", req)
+		s.bridge.logger.Debug("ingesting enriched logs with dataset_ids", "request", req)
 	}
 
 	payload, err := s.bridge.enc.Marshal(req)
