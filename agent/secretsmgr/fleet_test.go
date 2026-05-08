@@ -146,16 +146,76 @@ func TestFleetSecretsManager_handleUpdateNotification(t *testing.T) {
 	payload, err := json.Marshal(notification)
 	require.NoError(t, err)
 
-	// Note: This test doesn't fully test the update flow since requestSecret
-	// requires a real MQTT connection. But we can test the notification parsing.
-	// handleUpdateNotification logs errors from requestSecret but returns nil
+	// handleUpdateNotification has no publisher: fetch fails, callback marks policies as failed.
 	err = fm.handleUpdateNotification(payload)
-	assert.NoError(t, err) // Function returns nil even when requestSecret fails (it logs the error)
+	assert.NoError(t, err)
 
-	// Verify the callback was called with the policy marked as failed (false)
 	assert.True(t, callbackCalled)
 	assert.Contains(t, callbackPolicyIDs, "policy1")
-	assert.False(t, callbackPolicyIDs["policy1"]) // false because requestSecret failed
+	assert.False(t, callbackPolicyIDs["policy1"])
+}
+
+func TestFleetSecretsManager_handleUpdateNotification_successUpdatesCacheAndCallbacks(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+	fm.usedVars = map[string]fleetCachedSecret{
+		"test/path": {
+			Value:     "oldvalue",
+			Version:   1,
+			policyIDs: map[string]bool{"policy1": true},
+		},
+	}
+
+	var callbackPolicyIDs map[string]bool
+	var callbackCalled bool
+	fm.callback = func(ids map[string]bool) {
+		callbackCalled = true
+		callbackPolicyIDs = ids
+	}
+
+	fm.publisher = &asyncMockPublisher{
+		fm: fm,
+		customResponse: func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			return &messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion,
+				RequestID:     req.RequestID,
+				Timestamp:     time.Now(),
+				Status:        "success",
+				Secrets: []messages.SecretValue{
+					{Path: "test/path", Value: "newvalue", Version: 2},
+				},
+			}
+		},
+	}
+	fm.subscriber = &mockSubscriber{}
+
+	notification := messages.SecretUpdateNotificationMsg{
+		SchemaVersion: messages.CurrentSecretsSchemaVersion,
+		Timestamp:     time.Now(),
+		Updates: []messages.SecretUpdate{
+			{Path: "test/path", Version: 2, Contexts: []string{"policy1"}},
+		},
+	}
+	payload, err := json.Marshal(notification)
+	require.NoError(t, err)
+
+	err = fm.handleUpdateNotification(payload)
+	assert.NoError(t, err)
+
+	assert.True(t, callbackCalled)
+	require.Contains(t, callbackPolicyIDs, "policy1")
+	assert.True(t, callbackPolicyIDs["policy1"], "policy callback should signal success after version bump")
+
+	got := fm.usedVars["test/path"]
+	assert.Equal(t, 2, got.Version)
+	assert.Equal(t, "newvalue", got.Value)
 }
 
 func TestNewFleetSecretsManager(t *testing.T) {

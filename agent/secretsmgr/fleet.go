@@ -187,12 +187,14 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 		// Release the lock before performing the potentially long-running network request
 		f.mu.Unlock()
 
-		// Request updated secret
 		ctx := f.ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		secret, err := f.requestSecret(ctx, path, policyIDsCopy)
+
+		// Request updated secret (do not merge into usedVars here: this handler must
+		// compare versions and update the cache so the policy callback runs).
+		byPath, err := f.requestSecrets(ctx, []string{path}, policyIDsCopy, false)
 
 		// Re-acquire the lock before accessing or mutating shared state
 		f.mu.Lock()
@@ -205,6 +207,16 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 			f.mu.Unlock()
 			continue
 		}
+		sv, ok := byPath[path]
+		if !ok {
+			f.logger.Error("failed to request updated secret", "path", path, "error", "missing in response")
+			for id := range policyIDsCopy {
+				changedPolicyIDs[id] = false
+			}
+			f.mu.Unlock()
+			continue
+		}
+		secret := &sv
 
 		// Re-fetch the cached entry in case it changed while the lock was released
 		cached, exists = f.usedVars[path]
@@ -403,7 +415,7 @@ func (f *FleetSecretsManager) ensureSecrets(ctx context.Context, paths []string,
 		return nil
 	}
 
-	_, err := f.requestSecrets(ctx, missing, policyIDs)
+	_, err := f.requestSecrets(ctx, missing, policyIDs, true)
 	return err
 }
 
@@ -491,7 +503,7 @@ func (f *FleetSecretsManager) processSlice(s []any, id string) ([]any, error) {
 
 // requestSecret requests a single secret from the control plane via MQTT.
 func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, policyIDs map[string]bool) (*messages.SecretValue, error) {
-	byPath, err := f.requestSecrets(ctx, []string{path}, policyIDs)
+	byPath, err := f.requestSecrets(ctx, []string{path}, policyIDs, true)
 	if err != nil {
 		return nil, err
 	}
@@ -502,8 +514,9 @@ func (f *FleetSecretsManager) requestSecret(ctx context.Context, path string, po
 	return &sv, nil
 }
 
-// requestSecrets requests one or more secrets in a single MQTT round-trip and updates the cache on full success.
-func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string, policyIDs map[string]bool) (map[string]messages.SecretValue, error) {
+// requestSecrets requests one or more secrets in a single MQTT round-trip.
+// When writeCache is true, results are merged into usedVars on success.
+func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string, policyIDs map[string]bool, writeCache bool) (map[string]messages.SecretValue, error) {
 	paths = dedupeSortedStrings(paths)
 	if len(paths) == 0 {
 		return map[string]messages.SecretValue{}, nil
@@ -608,21 +621,23 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 			}
 		}
 
-		f.mu.Lock()
-		for _, p := range paths {
-			sv := byPath[p]
-			cached := f.usedVars[p]
-			cached.Value = sv.Value
-			cached.Version = sv.Version
-			if cached.policyIDs == nil {
-				cached.policyIDs = make(map[string]bool)
+		if writeCache {
+			f.mu.Lock()
+			for _, p := range paths {
+				sv := byPath[p]
+				cached := f.usedVars[p]
+				cached.Value = sv.Value
+				cached.Version = sv.Version
+				if cached.policyIDs == nil {
+					cached.policyIDs = make(map[string]bool)
+				}
+				for id := range policyIDs {
+					cached.policyIDs[id] = true
+				}
+				f.usedVars[p] = cached
 			}
-			for id := range policyIDs {
-				cached.policyIDs[id] = true
-			}
-			f.usedVars[p] = cached
+			f.mu.Unlock()
 		}
-		f.mu.Unlock()
 
 		return byPath, nil
 
