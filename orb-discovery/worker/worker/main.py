@@ -207,6 +207,7 @@ def main():
             app,
             host=args.host,
             port=args.port,
+            access_log=False,
         )
     except (KeyboardInterrupt, RuntimeError):
         pass
