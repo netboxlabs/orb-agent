@@ -85,6 +85,23 @@ See the [device discovery README](./README.md#diode-entities) for the contract a
 
 **Ubiquiti UniFi Switch (`ubiquiti_unifiswitch`)** shares the Broadcom-fastpath CLI base with EdgeSwitch but its `show vlan` output is a simple list with no port column. The driver enumerates VIDs via `show vlan` and queries each with `show vlan id <N>` (mirrors the ProCurve approach), then aggregates per-port and infers mode from membership shape (no admin-mode keyword exists in this CLI).
 
+## Switch stacks / Virtual Chassis (VC)
+
+Drivers that implement `get_chassis_members()` discover switch-stack / Virtual Chassis topology and emit a NetBox `VirtualChassis` plus one `Device` per stack member. Interfaces and IP addresses are routed to the member that physically owns them via the `parse_member_id` helper. Drivers without the method continue to emit a single `Device` regardless of whether the target is in stack mode — this is opt-in per driver, analogous to interface ↔ VLAN associations.
+
+See [Switch stacks / Virtual Chassis](./README.md#switch-stacks--virtual-chassis) in the README for the emission shape and master-pinning rationale.
+
+| Driver | Status |
+|--------|--------|
+| `ios` | Supported (Cisco IOS / IOS-XE) — Catalyst StackWise (3850, 9300, 2960X, etc.); parses `show switch detail` + `show inventory` via ntc-templates |
+| `junos` | Supported (Juniper EX / QFX) — Virtual Chassis via the `<get-virtual-chassis-information>` PyEZ RPC; tolerates both `<member-list>/<member>` (modern) and bare `<member>` (older releases) shapes |
+
+**Cisco IOS (`ios`)** detects 2+ populated stack members in `show switch detail`; per-member serials and models come from `show inventory` rows whose NAME matches `Switch <N>` (or, on some IOS / IOS-XE versions, a bare number). Members without a serial — or scenarios where the inventory output uses the `Chassis` keyword instead of per-switch entries (e.g. CSR1000v identifying as a single chassis) — fall back to the single-Device path. Stack-member port names are parsed across the full Catalyst interface family: Gi/Te/Fo/Hu plus the mGig prefixes (`TwoGigabitEthernet`, `FiveGigabitEthernet`, `TwentyFiveGigE`) on 9300/9400 hardware. FEX 3-tuple / 4-tuple names (`Eth101/1/1`, `GigabitEthernet101/1/0/1`) are rejected so a FEX id can never leak through as a stack-member id.
+
+**Juniper Junos (`junos`)** discovers VC members through a structured NETCONF RPC, so there is no CLI scraping. Member roles map: `Master*` (the trailing asterisk on the active master is stripped) → active, `Backup` → standby, `Linecard` → member. `NotPrsnt` slots are filtered before payload construction so empty member ids don't pollute the VC. Standalone EX/QFX devices (no VC configured) commonly raise `RpcError` for this RPC — the driver catches it at DEBUG level (not WARNING) so non-VC devices do not emit per-cycle warning noise during discovery; unexpected exceptions still surface at WARNING with full traceback.
+
+**Master pinning across vendors.** Regardless of driver, the master Device emitted to Diode is always the **lowest stack-member id present**. This is independent of live role (StackWise's `Active`, Junos VC's `Master*`) so a role failover does not change the master record sent to NetBox — the Diode plugin's `unique_master` matcher resolves the existing VC on re-run instead of creating a new one. The matcher fields used for VC re-identification (asset_tag, primary_ip4/6, name+site+tenant, `metadata.source_match`) are carried consistently across master Device, VC `master` ref, and each member's `virtual_chassis.master` ref so the matcher cascade resolves through the same record every cycle.
+
 ## Standard NAPALM drivers
 
 These drivers ship with the [NAPALM](https://napalm.readthedocs.io/en/latest/support/) library and are eligible for auto-discovery.

@@ -16,8 +16,27 @@ The device discovery backend uses [Diode Python SDK](https://github.com/netboxla
 * [IP Address](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/ip_address.py)
 * [Prefix](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/prefix.py)
 * [VLAN](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/vlan.py)
+* [VirtualChassis](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/virtual_chassis_example.py)
 
 Interfaces are attached to the device and ip addresses will be attached to the interfaces. Prefixes are added to the same interface site that it belongs to.
+
+When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), device-discovery emits one `VirtualChassis` entity plus one `Device` per member, and routes each interface/IP to the member that physically owns it — see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) below. Drivers that do not implement stack discovery (or devices not in stack mode) fall through to the existing single-`Device` path with no change in behaviour.
+
+## Switch stacks / Virtual Chassis
+
+When a driver implements stack-member discovery and the target reports 2+ members with serials, device-discovery emits a NetBox `VirtualChassis` plus one `Device` per member, and routes each interface and IP address to the correct member based on the interface name prefix (e.g. `GigabitEthernet1/0/1` → member 1, `GigabitEthernet2/0/12` → member 2). Standalone switches, devices not in stack mode, and members without a serial (which Diode cannot resolve) fall back to the existing single-`Device` path with no change in behaviour.
+
+**Emission shape** (in order):
+1. **Master `Device`** — plain (no `vc_position`, no `virtual_chassis` ref). Named `<hostname>-<id>` where `<hostname>` is the management hostname and `<id>` is the master's stack-member id.
+2. **`VirtualChassis`** — named `<hostname>`, with `master` set to the inline matcher block of the master Device.
+3. **N − 1 member `Device` entities** — each carries `vc_position = <member id>` and an inline `virtual_chassis` ref pointing to the same matcher block.
+4. **Interface / IPAddress entities** — routed to the member device whose id matches the interface name prefix. Logical interfaces with no parseable member id (`Vlan*`, `Loopback*`, `Port-channel*`, etc.) land on the master.
+
+**Master pinning.** The logical master sent to Diode is always the **lowest stack-member id present**, regardless of live role. This is required because the NetBox Diode plugin resolves an existing `VirtualChassis` via its `unique_master` matcher — pinning to the lowest id keeps the master Device stable across StackWise role failovers so re-runs upsert the existing VC instead of creating a new one. The other matcher fields used for VC re-identification (asset_tag, primary_ip4/6, name+site+tenant, and `metadata.source_match`) are carried consistently on both the rich master Device and the inline VC `master` ref so the plugin's matcher cascade resolves through the same record on every cycle.
+
+**Orphaned member ports.** If a member is dropped from the validated payload (missing serial, duplicate id, etc.) but the device still reports its ports via `show interfaces`, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
+
+**Supported drivers.** Stack discovery is opt-in per driver (analogous to interface↔VLAN associations). See the [supported platforms page](./supported_platforms.md#switch-stacks--virtual-chassis-vc) for the current list; vendors land as follow-up PRs as the underlying drivers gain stack-discovery support.
 
 When a driver supports it, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. Trunks that allow every VLAN (e.g. Cisco IOS `Trunking VLANs Enabled: ALL` or `1-4094`) are emitted as `tagged-all` so NetBox sees the proper 802.1Q semantics rather than a `tagged` interface with an empty allowed-VLAN list. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. Malformed CLI rows that the driver cannot parse fail closed (plain `tagged` mode with no tagged VLANs and a logged warning) — they never silently widen an interface to all VLANs. Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately.
 
@@ -352,3 +371,18 @@ Prefixes are derived from IP addresses discovered on interfaces. The network add
 | VID | `get_vlans()` → VLAN ID | Auto-collected |
 | Name | `get_vlans()` → VLAN name | Auto-collected |
 | Group / Role / Tenant | **Not collected** | Must be set via `defaults.vlan.*` |
+
+### Virtual Chassis (switch stacks)
+
+Only emitted when the driver implements `get_chassis_members()` and the target reports 2+ stack members with serials. See [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) above for the emission shape and the [supported platforms page](./supported_platforms.md#switch-stacks--virtual-chassis-vc) for the driver list.
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| `VirtualChassis.name` | `device.hostname` | The management hostname becomes the VC name |
+| `VirtualChassis.master` | Lowest member id present | Pinned to lowest id (not live role) so the master Device is stable across StackWise role failovers |
+| `VirtualChassis.domain` | Driver-supplied (when available) | Optional; only some platforms surface a VC domain id |
+| Member `Device.name` | `<hostname>-<member_id>` | E.g. `core-sw-1`, `core-sw-2` |
+| Member `Device.serial` | Per-member from driver | Required — members without a serial are dropped |
+| Member `Device.model` | Per-member from driver | Falls back to chassis model if the driver doesn't surface per-member models |
+| Member `Device.vc_position` | Stack-member id | Preserved exactly (e.g. id=1,2,4 if slot 3 is empty) |
+| Member-interface routing | Interface name prefix | Parsed via `parse_member_id` — Cisco IOS canonical (`Gi1/0/1` → member 1), mGig families (`TwoGigabitEthernet`, `FiveGigabitEthernet`, `TenGigabitEthernet`, `TwentyFiveGigE`), Junos FPC (`ge-1/0/0` → FPC 1), Aruba CX bare 3-tuple (`1/1/1`) |
