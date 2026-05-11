@@ -123,7 +123,7 @@ Current supported defaults:
 | ├─ comments | str | VRF comments |
 | ├─ tags | list | VRF tags |
 | vlan       | map  | VLAN-specific defaults        |
-| ├─ group   | str  | VLAN group                    |
+| ├─ group   | str  | VLAN group name. When set, every emitted VLAN is attached to a `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` (even when that resolves to the `undefined` sentinel), and the slug is auto-generated from the name so the reconciler dedupes the group across runs. |
 | ├─ tenant   | str  | VLAN tenant                  |
 | ├─ role   | str  | VLAN role                      |
 | ├─ description | str  | VLAN description          |
@@ -352,3 +352,4 @@ Prefixes are derived from IP addresses discovered on interfaces. The network add
 | VID | `get_vlans()` → VLAN ID | Auto-collected |
 | Name | `get_vlans()` → VLAN name | Auto-collected |
 | Group / Role / Tenant | **Not collected** | Must be set via `defaults.vlan.*` |
+| Group scope_site | Derived from `defaults.site` | Set on the emitted `ipam.vlangroup` whenever `defaults.vlan.group` is configured, so the reconciler can dedupe the group on `(name, slug, scope_site)` across runs. |

@@ -85,7 +85,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | vlan    | map  | VLAN-specific defaults  |
 | ├─ description | string  | VLAN description |
 | ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ipaddress` defaults pattern. |
-| ├─ group | string | VLAN group name |
+| ├─ group | string | VLAN group name. When set, every emitted VLAN is attached to a `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` (even when that resolves to the `undefined` sentinel), and the slug is auto-generated from the name so the reconciler dedupes the group across runs. |
 | ├─ tenant | string | VLAN tenant |
 | ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
 
