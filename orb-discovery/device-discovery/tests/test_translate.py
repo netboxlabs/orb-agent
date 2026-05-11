@@ -657,6 +657,54 @@ def test_translate_vlan_with_defaults(sample_defaults):
     assert len(vlan.tags) == 3
 
 
+def test_translate_vlan_group_scope_site_set_when_site_defined(sample_defaults):
+    """VLAN group is wrapped with slug + scope_site when defaults.site is a real value."""
+    sample_defaults.site = "New York"
+    sample_defaults.vlan = VlanParameters(group="Default Group")
+
+    vlan = translate_vlan("10", "V10", sample_defaults)
+
+    assert vlan.group.name == "Default Group"
+    assert vlan.group.slug == "default-group"
+    assert vlan.group.scope_site.name == "New York"
+
+
+def test_translate_vlan_group_scope_site_set_when_site_undefined(sample_defaults):
+    """scope_site is still populated when defaults.site is the sentinel 'undefined'."""
+    sample_defaults.site = "undefined"
+    sample_defaults.vlan = VlanParameters(group="Default Group")
+
+    vlan = translate_vlan("11", "V11", sample_defaults)
+
+    assert vlan.group.name == "Default Group"
+    assert vlan.group.slug == "default-group"
+    assert vlan.group.scope_site.name == "undefined"
+
+
+def test_translate_vlan_group_no_scope_site_when_site_none(sample_defaults):
+    """VLAN group has slug but no scope_site when defaults.site is None."""
+    sample_defaults.site = None
+    sample_defaults.vlan = VlanParameters(group="Default Group")
+
+    vlan = translate_vlan("12", "V12", sample_defaults)
+
+    assert vlan.group.name == "Default Group"
+    assert vlan.group.slug == "default-group"
+    assert vlan.group.scope_site.name == ""
+
+
+def test_translate_vlan_no_group_unaffected_by_site(sample_defaults):
+    """When no group is set, scope_site is not applied (group stays unset)."""
+    sample_defaults.site = "New York"
+    sample_defaults.vlan = VlanParameters(comments="no group")
+
+    vlan = translate_vlan("13", "V13", sample_defaults)
+
+    assert vlan.group.name == ""
+    assert vlan.group.slug == ""
+    assert vlan.group.scope_site.name == ""
+
+
 def test_translate_vlan_with_tenant_parameters(
     sample_defaults, sample_tenant_parameters
 ):

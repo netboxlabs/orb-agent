@@ -21,6 +21,8 @@ from netboxlabs.diode.sdk.ingester import (
     Rack,
     Tenant,
     TenantGroup,
+    VLANGroup,
+    slugify,
 )
 
 from device_discovery.interface import build_interface_entities
@@ -192,6 +194,10 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
         group = defaults.vlan.group
         tenant = translate_tenant(defaults.vlan.tenant)
         role = defaults.vlan.role
+        if group:
+            group = VLANGroup(
+                name=group, slug=slugify(group), scope_site=defaults.site
+            )
 
     clean_name = " ".join(vlan_name.strip().split())
     vlan = VLAN(

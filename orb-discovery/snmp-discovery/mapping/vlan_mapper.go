@@ -246,7 +246,12 @@ func applyVLANDefaults(v *diode.VLAN, defaults *config.Defaults) {
 		v.Tenant = &diode.Tenant{Name: StringPtr(vd.Tenant)}
 	}
 	if vd.Group != "" {
-		v.Group = &diode.VLANGroup{Name: StringPtr(vd.Group)}
+		name := vd.Group
+		group := &diode.VLANGroup{Name: &name, Slug: toSlug(&name)}
+		if defaults.Site != "" {
+			group.Scope = &diode.Site{Name: StringPtr(defaults.Site)}
+		}
+		v.Group = group
 	}
 	if vd.Status != "" {
 		v.Status = StringPtr(vd.Status)

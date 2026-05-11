@@ -355,3 +355,96 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 		t.Errorf("Group.Name: got %v, want \"campus-vlans\"", got.Group)
 	}
 }
+
+// applyVLANDefaults: when defaults.Site is a real value and a VLAN Group is
+// configured, the Group must carry Name + Slug + Scope = Site{Name: defaults.Site}.
+func TestApplyVLANDefaults_GroupScopeSite_WhenSiteDefined(t *testing.T) {
+	v := &diode.VLAN{}
+	defaults := &config.Defaults{
+		Site: "NYC",
+		VLAN: config.VLANDefaults{Group: "Lab VLAN Group"},
+	}
+
+	applyVLANDefaults(v, defaults)
+
+	if v.Group == nil {
+		t.Fatal("Group: got nil, want non-nil")
+	}
+	if v.Group.Name == nil || *v.Group.Name != "Lab VLAN Group" {
+		t.Errorf("Group.Name: got %v, want \"Lab VLAN Group\"", v.Group.Name)
+	}
+	if v.Group.Slug == nil || *v.Group.Slug != "lab-vlan-group" {
+		t.Errorf("Group.Slug: got %v, want \"lab-vlan-group\"", v.Group.Slug)
+	}
+	site, ok := v.Group.Scope.(*diode.Site)
+	if !ok {
+		t.Fatalf("Group.Scope: got %T, want *diode.Site", v.Group.Scope)
+	}
+	if site.Name == nil || *site.Name != "NYC" {
+		t.Errorf("Group.Scope.Site.Name: got %v, want \"NYC\"", site.Name)
+	}
+}
+
+// applyVLANDefaults: when defaults.Site is the sentinel "undefined" string,
+// scope_site is still populated (the value "undefined" is treated like any
+// other site name so the scoped-slug dedup path keeps working).
+func TestApplyVLANDefaults_GroupScopeSite_WhenSiteUndefined(t *testing.T) {
+	v := &diode.VLAN{}
+	defaults := &config.Defaults{
+		Site: "undefined",
+		VLAN: config.VLANDefaults{Group: "campus-vlans"},
+	}
+
+	applyVLANDefaults(v, defaults)
+
+	if v.Group == nil {
+		t.Fatal("Group: got nil, want non-nil")
+	}
+	if v.Group.Slug == nil || *v.Group.Slug != "campus-vlans" {
+		t.Errorf("Group.Slug: got %v, want \"campus-vlans\"", v.Group.Slug)
+	}
+	site, ok := v.Group.Scope.(*diode.Site)
+	if !ok {
+		t.Fatalf("Group.Scope: got %T, want *diode.Site", v.Group.Scope)
+	}
+	if site.Name == nil || *site.Name != "undefined" {
+		t.Errorf("Group.Scope.Site.Name: got %v, want \"undefined\"", site.Name)
+	}
+}
+
+// applyVLANDefaults: when defaults.Site is empty, the Group must still carry
+// Slug but no scope_site.
+func TestApplyVLANDefaults_GroupNoScopeSite_WhenSiteEmpty(t *testing.T) {
+	v := &diode.VLAN{}
+	defaults := &config.Defaults{
+		VLAN: config.VLANDefaults{Group: "campus-vlans"},
+	}
+
+	applyVLANDefaults(v, defaults)
+
+	if v.Group == nil {
+		t.Fatal("Group: got nil, want non-nil")
+	}
+	if v.Group.Slug == nil || *v.Group.Slug != "campus-vlans" {
+		t.Errorf("Group.Slug: got %v, want \"campus-vlans\"", v.Group.Slug)
+	}
+	if v.Group.Scope != nil {
+		t.Errorf("Group.Scope: got %v, want nil (site is empty)", v.Group.Scope)
+	}
+}
+
+// applyVLANDefaults: when no VLAN Group default is set, defaults.Site must not
+// synthesize a Group out of thin air.
+func TestApplyVLANDefaults_NoGroup_SiteIgnored(t *testing.T) {
+	v := &diode.VLAN{}
+	defaults := &config.Defaults{
+		Site: "NYC",
+		VLAN: config.VLANDefaults{},
+	}
+
+	applyVLANDefaults(v, defaults)
+
+	if v.Group != nil {
+		t.Errorf("Group: got %v, want nil (no group configured)", v.Group)
+	}
+}
