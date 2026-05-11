@@ -352,4 +352,3 @@ Prefixes are derived from IP addresses discovered on interfaces. The network add
 | VID | `get_vlans()` → VLAN ID | Auto-collected |
 | Name | `get_vlans()` → VLAN name | Auto-collected |
 | Group / Role / Tenant | **Not collected** | Must be set via `defaults.vlan.*` |
-| Group scope_site | Derived from `defaults.site` | Set on the emitted `ipam.vlangroup` whenever `defaults.vlan.group` is configured, so the reconciler can dedupe the group on `(name, slug, scope_site)` across runs. |
