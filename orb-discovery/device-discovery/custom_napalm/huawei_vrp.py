@@ -19,6 +19,7 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
 from custom_napalm._vlan import (
     SwitchportInfo,
     classify_switchport,
@@ -156,6 +157,211 @@ def _separate_section(separator: str, content: str) -> list[str]:
 
     it = iter(parts)
     return [line + next(it, "") for line in it]
+
+
+# ---------------------------------------------------------------------------
+# Stack discovery — Huawei VRP iStack
+# ---------------------------------------------------------------------------
+#
+# `display stack` on a VRP iStack-mode chassis emits a settings-block followed
+# by a fixed-width row table. A typical iStack output looks like::
+#
+#     Stack mode: Yes
+#     Stack topology type: Ring
+#     Stack system MAC: 00e0-fc12-3456
+#     ...
+#
+#     Slot   Role        Mac Address        Priority   Device Type
+#     -----------------------------------------------------------------
+#      1     Master      00e0-fc12-3456     100        S5720-32X-EI-AC
+#      2     Standby     00e0-fc12-7890     100        S5720-32X-EI-AC
+#      3     Slave       00e0-fc12-abcd     100        S5720-32X-EI-AC
+#
+# Note the Huawei terminology: ``Master`` / ``Standby`` / ``Slave`` — where
+# ``Slave`` means "non-master, non-standby member" (the third+ unit), NOT
+# "secondary master". This is the OPPOSITE of H3C Comware 5 (where Slave is
+# the secondary master). We translate ``Slave`` to NetBox ``member`` here
+# explicitly, BEFORE calling ``normalize_role`` (whose global map binds
+# ``slave → standby`` for Comware-5 compatibility — see batch 4 PR #401).
+#
+# Per-member serial comes from ``display esn`` (already used by ``get_facts``);
+# per-slot model is read from the same ``Device Type`` column of
+# ``display stack`` (the ntc-template ``display device`` is brittle on VRP
+# version skew and not required to retrieve usable data here).
+#
+# Standalone VRP (no iStack) returns ``Error: ...`` or empty output for
+# ``display stack``; the impl logs DEBUG and returns None. CSS (Cluster
+# Switch System, the modular-chassis VRP equivalent) is out of scope for
+# this batch — CSS uses a different command (``display css status``) and
+# requires a 4-tuple branch in ``parse_member_id`` for interface routing.
+
+_VRP_STACK_ROW_RE = re.compile(
+    r"""
+    ^\s*
+    (?P<id>\d+)\s+                                                   # Slot
+    (?P<role>[A-Za-z]+)\s+                                           # Role
+    (?P<mac>[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4})\s+          # MAC
+    (?P<priority>\d+)\s+                                             # Priority
+    (?P<model>\S+(?:\s+\S+)*?)                                       # Device Type — non-greedy
+                                                                     #   so the optional trailing
+                                                                     #   Slot/Chassis column on some
+                                                                     #   VRP variants (CX310 etc.)
+                                                                     #   doesn't get absorbed into
+                                                                     #   the model. Multi-token
+                                                                     #   model names like
+                                                                     #   ``S5720-32X-EI-AC PWR-AC HW``
+                                                                     #   are still captured in full
+                                                                     #   because the optional
+                                                                     #   `\d+/\d+` suffix doesn't
+                                                                     #   match those trailing tokens.
+    (?:\s+\d+/\d+)?                                                  # optional Slot/Chassis suffix
+    \s*$
+    """,
+    re.VERBOSE,
+)
+
+# `display esn` formats. Stacked VRP repeats one block per slot.
+# The serial separator is either a colon (`ESN of slot N: SN`) or — on a few
+# VRP releases — `is:` (`ESN of slot N is: SN`). Anchor on an explicit
+# colon-or-`is:` separator so a missing separator can't accidentally capture
+# the literal `is:` as the serial token.
+_VRP_ESN_SLOT_RE = re.compile(
+    r"""
+    ESN\s+of\s+slot\s+(?P<slot>\d+)
+    \s*(?:is)?\s*:\s*
+    (?P<serial>\S+)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _normalize_vrp_istack_role(raw: str | None) -> str:
+    """
+    Map a Huawei iStack role token to NetBox semantics.
+
+    Huawei iStack convention:
+      - Master  → active
+      - Standby → standby
+      - Slave   → member  (third+ unit; differs from Comware 5 / IRF)
+
+    Anything else falls back to the global ``normalize_role``.
+    """
+    raw_low = (raw or "").strip().lower()
+    if raw_low == "master":
+        return "active"
+    if raw_low == "standby":
+        return "standby"
+    if raw_low == "slave":
+        return "member"
+    return normalize_role(raw)
+
+
+def _parse_huawei_stack(text: str) -> list[dict]:
+    """
+    Parse ``display stack`` row table into a list of member dicts.
+
+    Returns ``[{"id": int, "role": str, "priority": int, "mac": str,
+    "model": str}, ...]``. The settings-block (Stack mode / topology /
+    Bridge-MAC) and column header / separator lines all fail the regex
+    and are skipped silently.
+    """
+    rows: list[dict] = []
+    for line in (text or "").splitlines():
+        m = _VRP_STACK_ROW_RE.match(line)
+        if not m:
+            continue
+        rows.append({
+            "id": int(m.group("id")),
+            "role": m.group("role"),
+            "priority": int(m.group("priority")),
+            "mac": m.group("mac"),
+            "model": (m.group("model") or "").strip(),
+        })
+    return rows
+
+
+def _parse_vrp_esn_by_slot(text: str) -> dict[int, str]:
+    """
+    Return ``{slot_id: serial}`` extracted from ``display esn`` output.
+
+    Stacked VRP devices print one line per slot (``ESN of slot N: <SN>``).
+    The ``ESN of device: <SN>`` standalone form is intentionally NOT
+    consumed here — chassis discovery only runs on multi-member stacks
+    and a standalone payload falls through to the single-Device path.
+    """
+    out: dict[int, str] = {}
+    for m in _VRP_ESN_SLOT_RE.finditer(text or ""):
+        try:
+            slot = int(m.group("slot"))
+        except (TypeError, ValueError):
+            continue
+        sn = (m.group("serial") or "").strip()
+        if sn and slot not in out:
+            out[slot] = sn
+    return out
+
+
+def _huawei_vrp_get_chassis_members_impl(driver) -> dict | None:
+    """
+    Implementation of ``VRPDriver.get_chassis_members`` (factored for testability).
+
+    Parses ``display stack`` for member id / role / priority / MAC / model
+    and joins per-member serial from ``display esn``. Standalone VRP /
+    non-iStack devices fall through to None at DEBUG. CSS (modular-chassis
+    VRP) is out of scope for this batch and not detected; CSS-configured
+    devices simply emit no `display stack` rows and fall through the same
+    way as standalone — no false positives, no spurious WARN.
+    """
+    try:
+        stack_out = driver.device.send_command("display stack")
+    except Exception:
+        logger.warning(
+            "huawei_vrp.get_chassis_members: display stack failed", exc_info=True
+        )
+        return None
+
+    rows = _parse_huawei_stack(stack_out or "")
+    if not rows:
+        # Standalone or CSS — neither produces parseable stack rows. Log at
+        # DEBUG and fall through; CSS support is deferred to a follow-up
+        # batch.
+        logger.debug(
+            "huawei_vrp.get_chassis_members: no stack rows in `display stack` output"
+        )
+        return None
+
+    try:
+        esn_out = driver.device.send_command("display esn")
+    except Exception:
+        logger.warning(
+            "huawei_vrp.get_chassis_members: display esn failed", exc_info=True
+        )
+        esn_out = ""
+
+    serial_by_slot = _parse_vrp_esn_by_slot(esn_out or "")
+
+    members: list[ChassisMember] = []
+    for row in rows:
+        sid = row["id"]
+        try:
+            mac_canon = normalize_mac(row["mac"])
+        except Exception:
+            # netaddr's AddrFormatError extends Exception, not ValueError —
+            # broaden the catch so a future regex relaxation doesn't crash
+            # discovery on a malformed MAC.
+            mac_canon = None
+        members.append(
+            ChassisMember(
+                id=sid,
+                serial=serial_by_slot.get(sid, ""),
+                model=row.get("model") or None,
+                role=_normalize_vrp_istack_role(row["role"]),
+                priority=row["priority"],
+                mac=mac_canon,
+                state=row["role"],
+            )
+        )
+    return to_payload(members, domain=None)
 
 
 class VRPDriver(_napalm_base.NetworkDriver):
@@ -376,6 +582,18 @@ class VRPDriver(_napalm_base.NetworkDriver):
                     entry["interfaces"].append(intf)
 
         return vlans
+
+    def get_chassis_members(self) -> dict | None:
+        """
+        Return stack-member info for Huawei VRP iStack-mode chassis.
+
+        Standalone VRP and CSS-mode (cluster, not iStack) return None;
+        multi-member iStacks emit the payload consumed by
+        ``device_discovery.translate``'s VirtualChassis emission path.
+        CSS support is deferred to a follow-up batch (different command
+        + 4-tuple interface-routing branch).
+        """
+        return _huawei_vrp_get_chassis_members_impl(self)
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from ``display port vlan``."""

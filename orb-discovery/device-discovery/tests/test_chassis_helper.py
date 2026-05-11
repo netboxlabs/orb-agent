@@ -157,6 +157,21 @@ def test_to_payload_preserves_domain():
         ("Vlan-interface4094",       None),
         ("NULL0",                    None),
 
+        # Huawei VRP (batch 6 — iStack):
+        ("XGigabitEthernet1/0/49",   1),    # Huawei full-form 10G
+        ("XGigabitEthernet2/0/1",    2),
+        ("10GE1/0/1",                1),    # Huawei abbreviated speed-N-GE
+        ("25GE2/0/1",                2),
+        ("40GE3/0/1",                3),
+        ("50GE1/0/1",                1),
+        ("100GE2/0/1",               2),
+        ("200GE1/0/1",               1),
+        ("400GE4/0/1",               4),
+        ("XGigabitEthernet1/0/49.100", 1),  # subif
+        # Huawei aggregations / management interfaces — no member id:
+        ("Eth-Trunk1",               None),
+        ("Vlanif100",                None),
+
         # SVIs / loopback / tunnel / management — no embedded member id
         ("Vlan10",                   None),
         ("Vlan1",                    None),

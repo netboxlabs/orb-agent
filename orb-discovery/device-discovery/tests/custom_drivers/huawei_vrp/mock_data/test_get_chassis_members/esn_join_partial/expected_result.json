@@ -1,0 +1,14 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "210235PARTL000000001",
+      "model": "S5720-52X-EI-AC",
+      "role": "active",
+      "priority": 200,
+      "mac": "00:E0:FC:99:AA:01",
+      "state": "Master"
+    }
+  ],
+  "domain": null
+}

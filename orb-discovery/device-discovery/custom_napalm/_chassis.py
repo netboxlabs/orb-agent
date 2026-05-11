@@ -151,6 +151,24 @@ _COMWARE_RE = re.compile(
     re.VERBOSE,
 )
 
+# 5) Huawei VRP-specific Ethernet prefixes (batch 6 — iStack support).
+#    Covers `XGigabitEthernet` (Huawei full-form 10G — NOT matched by the
+#    Cisco `Te`/`TenGigabitEthernet` branch) and the Huawei numeric-speed
+#    abbreviations (`10GE`, `25GE`, `40GE`, `50GE`, `100GE`, `200GE`, `400GE`)
+#    that VRP may emit in `display interface brief`. `GigabitEthernet1/0/1`
+#    already resolves via the Cisco `Gi` short-prefix branch.
+_HUAWEI_RE = re.compile(
+    r"""
+    ^
+    (?:XGigabitEthernet
+     | (?:10|25|40|50|100|200|400)GE
+    )
+    (\d+)/\d+/\d+(?:\.\d+)?
+    $
+    """,
+    re.VERBOSE,
+)
+
 
 def parse_member_id(if_name: str) -> int | None:
     """
@@ -167,6 +185,8 @@ def parse_member_id(if_name: str) -> int | None:
         Ten-GigabitEthernet1/0/49 -> 1, Twenty-FiveGigE2/0/1 -> 2,
         FortyGigE1/0/1 -> 1, FiftyGigE2/0/1 -> 2,
         TwoHundredGigE1/0/1 -> 1, FourHundredGigE2/0/1 -> 2
+      - Huawei VRP (batch 6 — iStack): XGigabitEthernet1/0/49 -> 1,
+        10GE1/0/1 -> 1, 25GE2/0/1 -> 2, 40GE/50GE/100GE/200GE/400GE
 
     Returns None for SVIs / loopback / tunnel / mgmt, LAG / bundle members,
     FEX 3/4-tuples, NX-OS ``Ethernet``/``Eth`` (out of scope for batch 1),
@@ -184,6 +204,10 @@ def parse_member_id(if_name: str) -> int | None:
         return int(m.group(1))
 
     m = _COMWARE_RE.match(if_name)
+    if m:
+        return int(m.group(1))
+
+    m = _HUAWEI_RE.match(if_name)
     if m:
         return int(m.group(1))
 
