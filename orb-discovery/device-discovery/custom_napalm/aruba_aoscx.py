@@ -23,6 +23,7 @@ from napalm.base.exceptions import ConnectionException
 from napalm.base.helpers import mac as normalize_mac
 from pyaoscx.session import Session
 
+from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
 from custom_napalm._vlan import (
     SwitchportInfo,
     classify_switchport,
@@ -445,6 +446,22 @@ class AOSCXDriver(_napalm_base.NetworkDriver):
 
         return result
 
+    def get_chassis_members(self) -> dict | None:
+        """
+        Return Aruba CX VSF (Virtual Switching Framework) member info.
+
+        Standalone AOS-CX (no VSF configured) returns ``None``. The driver
+        treats two failure modes as "no VC":
+
+        - HTTP 404 / "not found" → DEBUG log + None (expected on non-VSF).
+        - HTTP 200 with empty body or zero members → None.
+
+        Any other failure logs at WARNING with traceback so unexpected
+        transport / pyaoscx problems still surface — mirrors the Junos
+        log-level discipline from batch 2.
+        """
+        return _aoscx_get_chassis_members_impl(self)
+
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from system/interfaces REST endpoint."""
         try:
@@ -463,3 +480,170 @@ class AOSCXDriver(_napalm_base.NetworkDriver):
             info = _aoscx_iface_to_switchport_info(intf)
             result[name] = classify_switchport(info)
         return result
+
+
+# ---------------------------------------------------------------------------
+# AOS-CX VSF (Virtual Switching Framework) — chassis-members impl.
+#
+# Inlined here (not in a shared _aruba_cx_vsf module) so this driver stays
+# self-contained alongside the vendor-neutral primitives in _chassis.py.
+# The SSH transport (aruba_aoscx_ssh.py) duplicates the small role-alias /
+# absent-status pieces — both are <10 lines and keeping each driver
+# self-contained is preferred to a vendor-only shared module.
+# ---------------------------------------------------------------------------
+
+# Member-status values that mean "slot is reserved but no hardware is present".
+# Mirrors Junos NotPrsnt — these aren't real members, just empty positions.
+_AOSCX_ABSENT_STATUSES = frozenset({"missing", "not_present", "notpresent", "absent"})
+
+
+def _aoscx_normalize_vsf_role(raw: str | None) -> str:
+    """
+    Map an AOS-CX VSF role string to {"active","standby","member"}.
+
+    AOS-CX 10.10+ uses "conductor" / "commander" for what earlier firmware
+    called "master". Both are returned directly as "active" — we don't
+    detour through normalize_role's "master" → "active" lookup because the
+    AOS-CX vocabulary doesn't include "master" so there's no value in the
+    indirection. Everything else (active / standby / backup / member /
+    empty / unknown) falls through to the vendor-neutral helper.
+    """
+    if not raw:
+        return "member"
+    lower = raw.strip().lower()
+    if lower in ("conductor", "commander"):
+        return "active"
+    return normalize_role(lower)
+
+
+def _aoscx_member_from_rest_dict(member_id: int, data: dict) -> ChassisMember | None:
+    """
+    Build one ChassisMember from a pyaoscx ``/system/vsf_members/<id>`` entry.
+
+    Returns None for slots reported as physically absent. Tolerates the
+    field-name drift seen across firmware revisions:
+      - ``mac``         or ``mac_address``
+      - ``product``     / ``product_name``     / ``model``
+      - ``priority``    int or numeric string
+    """
+    if not isinstance(data, dict):
+        return None
+    raw_status = (data.get("status") or "").strip()
+    # Fold spaces AND hyphens to underscores and lowercase so ``Not Present``,
+    # ``Not-Present``, ``not_present`` all collapse to the underscore
+    # canonical form in _AOSCX_ABSENT_STATUSES. The raw (case- and space-
+    # preserving) status is kept for the emitted ChassisMember.state field
+    # so operators see the device's wire value in NetBox metadata.
+    status_norm = raw_status.lower().replace(" ", "_").replace("-", "_")
+    if status_norm in _AOSCX_ABSENT_STATUSES:
+        return None
+
+    serial = (data.get("serial_number") or data.get("serial") or "").strip()
+    model = (data.get("product_name") or data.get("product") or data.get("model") or "").strip() or None
+    mac = (data.get("mac_address") or data.get("mac") or "").strip() or None
+
+    raw_priority = data.get("priority")
+    priority: int | None
+    if isinstance(raw_priority, bool):
+        priority = None  # bool is a subclass of int — reject before coercion.
+    elif isinstance(raw_priority, int):
+        priority = raw_priority
+    elif isinstance(raw_priority, str):
+        try:
+            priority = int(raw_priority.strip())
+        except (TypeError, ValueError):
+            priority = None
+    else:
+        priority = None
+
+    return ChassisMember(
+        id=member_id,
+        serial=serial,
+        model=model,
+        role=_aoscx_normalize_vsf_role(data.get("role")),
+        priority=priority,
+        mac=mac,
+        state=raw_status or None,
+    )
+
+
+def _aoscx_coerce_member_id(raw_id: object) -> int | None:
+    """Coerce a pyaoscx member-id key (int or stringified int) to int; reject bool / negatives."""
+    if isinstance(raw_id, bool):
+        return None
+    if isinstance(raw_id, int):
+        return raw_id if raw_id >= 0 else None
+    if isinstance(raw_id, str):
+        try:
+            mid = int(raw_id)
+        except (TypeError, ValueError):
+            return None
+        return mid if mid >= 0 else None
+    return None
+
+
+def _aoscx_members_from_rest_payload(payload: object, domain: str | None = None) -> dict | None:
+    """
+    Build the translate-ready VSF payload from the pyaoscx REST response.
+
+    Accepts both response shapes pyaoscx returns across firmware versions:
+      - A list of member dicts (each carrying an ``id`` field).
+      - A dict keyed by member id (string-encoded), value = member dict.
+    """
+    if isinstance(payload, list):
+        iterable: list[tuple[object, dict]] = [
+            (entry.get("id") if isinstance(entry, dict) else None, entry)
+            for entry in payload
+        ]
+    elif isinstance(payload, dict):
+        iterable = list(payload.items())
+    else:
+        return None
+
+    members: list[ChassisMember] = []
+    for raw_id, raw_data in iterable:
+        if not isinstance(raw_data, dict):
+            continue
+        mid = _aoscx_coerce_member_id(raw_id)
+        if mid is None:
+            logger.warning("aruba_aoscx: dropping VSF member with non-int id %r", raw_id)
+            continue
+        m = _aoscx_member_from_rest_dict(mid, raw_data)
+        if m is not None:
+            members.append(m)
+
+    return to_payload(members, domain=domain)
+
+
+def _aoscx_get_chassis_members_impl(driver) -> dict | None:
+    """Implementation of AOSCXDriver.get_chassis_members (factored for testability)."""
+    try:
+        data = driver._get("system/vsf_members?depth=2")
+    except Exception as e:
+        # AOS-CX firmware without VSF returns 404 here. Don't spam WARNING
+        # for the expected non-VSF case; log at DEBUG.
+        msg = str(e).lower()
+        if "404" in msg or "not found" in msg or "not_found" in msg:
+            logger.debug(
+                "aruba_aoscx.get_chassis_members: VSF endpoint not present (standalone, no VSF): %s",
+                e,
+            )
+            return None
+        logger.warning(
+            "aruba_aoscx.get_chassis_members: unexpected fetch failure: %s",
+            e, exc_info=True,
+        )
+        return None
+
+    # Optional domain id — best-effort, helper accepts None.
+    domain: str | None = None
+    try:
+        vsf_root = driver._get("system/vsf?attributes=domain_id")
+        if isinstance(vsf_root, dict):
+            raw_domain = vsf_root.get("domain_id")
+            if raw_domain not in (None, 0):
+                domain = str(raw_domain)
+    except Exception:
+        logger.debug("aruba_aoscx.get_chassis_members: domain_id fetch failed", exc_info=True)
+
+    return _aoscx_members_from_rest_payload(data, domain=domain)

@@ -1,0 +1,21 @@
+VSF
+  Topology    : Chain
+  Name        : myvsf
+
+Member ID            : 1
+  MAC Address        : 94:f1:28:11:00:00
+  Status             : Active
+  Serial Number      : TW01ABC0001
+  CPU Utilization    : 5%
+  Memory Utilization : 30%
+  VSF Link 1: 1/1/49 active (Peer 2)
+  VSF Link 2: 1/1/50 standby
+
+Member ID            : 2
+  MAC Address        : 94:f1:28:11:00:80
+  Status             : Standby
+  Serial Number      : TW01ABC0002
+  CPU Utilization    : 3%
+  Memory Utilization : 28%
+  VSF Link 1: 2/1/49 active (Peer 1)
+  VSF Link 2: 2/1/50 standby

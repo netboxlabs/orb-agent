@@ -224,6 +224,16 @@ def _build_member_devices(
         member_info["serial_number"] = m["serial"]
         if m.get("model"):
             member_info["model"] = m["model"]
+        elif not is_master:
+            # Non-master members must NOT silently inherit the chassis-level
+            # model from device_info (which came from get_facts() on the
+            # master/management plane). On mixed-model stacks the inherited
+            # value would be wrong for every non-master member. When the
+            # driver couldn't determine a per-member model we emit it as
+            # empty so NetBox surfaces the gap rather than the lie. The
+            # master keeps the chassis-reported model because get_facts()
+            # describes the management entity — i.e., the master itself.
+            member_info["model"] = None
         return translate_device(
             member_info,
             defaults,
