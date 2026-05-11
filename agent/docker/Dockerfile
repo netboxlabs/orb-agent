@@ -2,7 +2,7 @@ ARG PKTVISOR_TAG=develop
 ARG OTEL_TAG=develop
 ARG NETWORK_DISCOVERY_TAG=latest
 ARG SNMP_DISCOVERY_TAG=latest
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.26.3
 
 ########################################################################
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS builder
@@ -49,7 +49,8 @@ RUN \
     apt update && \
     apt install --yes --no-install-recommends ca-certificates git nmap openssh-client tini && \
     update-ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
 RUN mkdir -p /opt/orb
 
