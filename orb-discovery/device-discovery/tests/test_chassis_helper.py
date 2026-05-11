@@ -15,6 +15,8 @@ from custom_napalm._chassis import ChassisMember, normalize_role, parse_member_i
         ("standby", "standby"),
         ("Standby", "standby"),
         ("backup", "standby"),
+        ("slave", "standby"),     # Comware 5 / older IRF terminology
+        ("Slave", "standby"),
         ("member", "member"),
         ("ready", "member"),
         ("provisioned", "member"),
@@ -128,9 +130,32 @@ def test_to_payload_preserves_domain():
         ("me0.0",                    None),
         ("fxp0",                     None),  # mgmt (older Junos)
 
-        # Aruba CX (lands in batch 2)
+        # Aruba CX bare 3-tuple (batch 3 — AOS-CX VSF)
         ("1/1/1",                    1),
         ("2/1/12",                   2),
+
+        # HP / H3C Comware expanded interface names (batch 4 — IRF).
+        # The hp_comware driver expands `XGE1/0/49` → `Ten-GigabitEthernet1/0/49`
+        # and similar; translate sees the hyphenated full forms.
+        ("Ten-GigabitEthernet1/0/49", 1),
+        ("Ten-GigabitEthernet2/0/49", 2),
+        ("Twenty-FiveGigE1/0/1",     1),
+        ("FortyGigE2/0/1",           2),
+        ("FiftyGigE3/0/1",           3),
+        ("TwoHundredGigE1/0/1",      1),
+        ("FourHundredGigE4/0/1",     4),
+        ("Ten-GigabitEthernet1/0/49.100", 1),    # subif
+        # GigabitEthernet1/0/1 + HundredGigE3/0/1 are exercised by the
+        # Cisco rows above; Comware uses the same canonical forms for those.
+        # M-GigabitEthernet is the Comware management interface — no member id.
+        ("M-GigabitEthernet0/0/0",   None),
+        # Comware aggregations / SVIs (must NOT extract a member id):
+        ("Bridge-Aggregation1",      None),
+        ("Bridge-Aggregation99",     None),
+        ("Route-Aggregation1",       None),
+        ("Vlan-interface100",        None),
+        ("Vlan-interface4094",       None),
+        ("NULL0",                    None),
 
         # SVIs / loopback / tunnel / management — no embedded member id
         ("Vlan10",                   None),

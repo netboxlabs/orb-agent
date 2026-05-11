@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "219801A1XKHX2300A1",
+      "model": "H3C S6520X-30HF-HI",
+      "role": "active",
+      "priority": 32,
+      "mac": "00:23:AA:BB:CC:01",
+      "state": "Master"
+    },
+    {
+      "id": 2,
+      "serial": "219801A1XKHX2300A2",
+      "model": "H3C S6520X-30HF-HI",
+      "role": "standby",
+      "priority": 16,
+      "mac": "00:23:AA:BB:CC:02",
+      "state": "Standby"
+    }
+  ],
+  "domain": "10"
+}

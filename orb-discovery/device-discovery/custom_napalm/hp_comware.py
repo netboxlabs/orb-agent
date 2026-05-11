@@ -21,6 +21,7 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
 from custom_napalm._vlan import (
     SwitchportInfo,
     classify_switchport,
@@ -338,6 +339,228 @@ def _parse_version_output(raw: str) -> tuple[str, str, float]:
     return model, os_version, uptime
 
 
+# --- IRF (Intelligent Resilient Framework) / switch-stack discovery ----------
+#
+# `display irf` on Comware 7 produces a fixed-width table followed by a
+# trailing settings block. A typical row looks like::
+#
+#   MemberID    Role        Priority  CPU-Mac           Description
+#   *+1         Master      32        0023-aabb-ccdd    ---
+#     2         Standby     32        0023-aabb-ccef    ---
+#     3         Loading     1         0000-0000-0000    ---
+#
+# The leading `*` marks the master, `+` marks the device the user is logged
+# into; either or both may be present. The MAC column uses the Comware-native
+# 4-hex-group dashed form (3 groups of 4 hex digits). A `Loading` or `Down`
+# member with no real MAC is permitted in the table but produces no usable
+# join key; those rows are kept here and later dropped by ``to_payload()``
+# because they end up with an empty serial.
+#
+# Standalone Comware switches (no IRF) print exactly one populated row — the
+# translate layer's ``validate_chassis_payload`` then falls through to the
+# single-Device path on a 1-member payload.
+
+_IRF_ROW_RE = re.compile(
+    r"""
+    ^\s*
+    [*+>]{0,3}\s*                             # optional row markers:
+                                              #   `*` master, `+` user-login-point,
+                                              #   `>` disabled-stack-capability.
+                                              #   Any combination may appear; we
+                                              #   only need to skip past them.
+    (?P<id>\d+)\s+                            # MemberID
+    (?:\d+\s+)?                               # optional Slot column (modular IRF
+                                              #   on H3C/HPE 12500 etc. prints
+                                              #   `MemberID Slot Role ...`)
+    (?P<role>[A-Za-z]+)\s+                    # Role (Master/Standby/Slave/Loading/Down)
+    (?P<priority>\d+)\s+                      # Priority
+    (?P<mac>[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4})   # CPU-Mac
+    """,
+    re.VERBOSE,
+)
+
+# Legend lines ('* indicates ...', '+ indicates ...') terminate the table and
+# precede the trailing settings block. We stop row parsing when we see one.
+_IRF_LEGEND_RE = re.compile(r"^\s*[*+]\s+indicates\b", re.IGNORECASE)
+
+# Domain ID line in the trailing block of `display irf`. Optional — older
+# Comware releases omit it, in which case payload domain stays None.
+# Comware 5 / legacy outputs print this as ``Topo-domain ID`` while Comware 7
+# prints just ``Domain ID``; the regex accepts both forms.
+_IRF_DOMAIN_RE = re.compile(
+    r"^\s*(?:Topo-)?Domain\s+ID\s*:\s*(\d+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+def _normalize_irf_mac(raw: str | None) -> str | None:
+    """
+    Reduce a Comware MAC token to a canonical comparable form.
+
+    Returns lowercase hex with no separators, or None for the all-zeroes
+    sentinel / unparseable input. The join key only needs to be consistent
+    across the two commands; we deliberately don't return colon-separated
+    form to avoid mismatches against ``display device manuinfo`` (which
+    uses dashes uppercase).
+    """
+    if not raw:
+        return None
+    stripped = re.sub(r"[^0-9a-fA-F]", "", raw).lower()
+    if len(stripped) != 12 or stripped == "0" * 12:
+        return None
+    return stripped
+
+
+def _parse_comware_irf(text: str) -> tuple[list[dict], str | None]:
+    """
+    Parse `display irf` into ``([{id, role, priority, mac}, ...], domain_id)``.
+
+    Stops at the first legend line (`* indicates ...`) so the trailing
+    settings block ("Bridge MAC", "Domain ID", etc.) doesn't accidentally
+    re-enter row parsing. Domain id is read from the same trailing block via
+    a separate regex on the full text and is independent of where row parsing
+    stops.
+    """
+    rows: list[dict] = []
+    for line in (text or "").splitlines():
+        if _IRF_LEGEND_RE.match(line):
+            break
+        m = _IRF_ROW_RE.match(line)
+        if not m:
+            continue
+        rows.append({
+            "id": int(m.group("id")),
+            "role": m.group("role"),
+            "priority": int(m.group("priority")),
+            "mac": m.group("mac"),
+        })
+    domain_match = _IRF_DOMAIN_RE.search(text or "")
+    domain = domain_match.group(1) if domain_match else None
+    return rows, domain
+
+
+def _comware_index_manuinfo_by_mac(rows: list[dict]) -> tuple[
+    dict[str, str], dict[str, str]
+]:
+    """
+    Return ``(serial_by_mac, model_by_mac)`` keyed by normalized MAC.
+
+    Joins ``display device manuinfo`` to IRF members via the chassis MAC the
+    CPU emits on each top-level ``Slot N`` block. Subslot / Fan / Power rows
+    are filtered out (they carry their own blade-level MACs that do not
+    match the IRF member's CPU-Mac), so the MAC join cannot accidentally
+    pick up a blade entry instead of the chassis-level row even if
+    ``display device manuinfo`` re-orders them. Joining by MAC rather than
+    slot id keeps fixed-switch IRF (``Slot 1`` == member 1) and
+    modular-chassis IRF (``Chassis 1`` groups multiple ``Subslot`` entries
+    under a single member) working through the same code path.
+
+    Rows with no MAC, an all-zeroes MAC, or an unparseable MAC are skipped:
+    they cannot be joined and the IRF member ends up with empty serial,
+    which ``to_payload()`` then drops with a warning.
+    """
+    serial_by_mac: dict[str, str] = {}
+    model_by_mac: dict[str, str] = {}
+    for row in rows or []:
+        # Top-level Slot rows and Chassis rows both carry the chassis-CPU
+        # MAC that `display irf` prints. Subslot / Fan / Power rows carry
+        # blade/component-level MACs that would never join the IRF CPU-Mac
+        # anyway — filtering them explicitly makes the contract obvious
+        # and forecloses on accidental joins via a future template change.
+        # `get_facts()` already treats Chassis rows as authoritative for
+        # the local-device serial, including those is consistent.
+        slot_type = (row.get("slot_type") or "").strip().lower()
+        if slot_type and slot_type not in ("slot", "chassis"):
+            continue
+        mac_key = _normalize_irf_mac(row.get("mac_address"))
+        if not mac_key:
+            continue
+        sn = (row.get("device_serial_number") or "").strip()
+        pid = (row.get("device_name") or "").strip()
+        if sn and mac_key not in serial_by_mac:
+            serial_by_mac[mac_key] = sn
+        if pid and mac_key not in model_by_mac:
+            model_by_mac[mac_key] = pid
+    return serial_by_mac, model_by_mac
+
+
+def _comware_get_chassis_members_impl(driver) -> dict | None:
+    """
+    Implementation of ``ComwareDriver.get_chassis_members`` (factored for testability).
+
+    Calls ``display irf`` for member id / role / priority / CPU-Mac, then
+    ``display device manuinfo`` for per-member serial + model joined by MAC.
+    Errors on either command are logged and surface as None or a partial
+    payload — translate decides whether to emit VC based on the validated
+    member count, so a single-member payload (the standalone-Comware case)
+    simply falls through to the single-Device path.
+    """
+    try:
+        irf_out = driver.device.send_command("display irf")
+    except Exception:
+        logger.warning(
+            "hp_comware.get_chassis_members: display irf failed", exc_info=True
+        )
+        return None
+
+    rows, domain = _parse_comware_irf(irf_out or "")
+    if not rows:
+        # Either Comware printed an "IRF is not enabled" style banner or the
+        # command isn't supported on this release. Both are the standalone
+        # case — log at DEBUG and fall through quietly. ``display irf`` is
+        # always available on Comware 7, so this branch is rare in practice.
+        logger.debug(
+            "hp_comware.get_chassis_members: no IRF rows in `display irf` output"
+        )
+        return None
+
+    try:
+        manuinfo_out = driver.device.send_command("display device manuinfo")
+        manuinfo_rows = parse_output(
+            platform="hp_comware",
+            command="display device manuinfo",
+            data=manuinfo_out or "",
+        )
+    except Exception:
+        # Non-fatal: members without a manuinfo match end up with empty
+        # serial and are dropped by ``to_payload()``. The IRF table itself
+        # is still useful for log forensics so we keep it at WARNING.
+        logger.warning(
+            "hp_comware.get_chassis_members: display device manuinfo failed",
+            exc_info=True,
+        )
+        manuinfo_rows = []
+
+    serial_by_mac, model_by_mac = _comware_index_manuinfo_by_mac(manuinfo_rows or [])
+
+    members: list[ChassisMember] = []
+    for row in rows:
+        mac_key = _normalize_irf_mac(row["mac"])
+        # Canonicalize MAC for the wire payload via napalm's helper so the
+        # state/mac field is consistent with other drivers (uppercase
+        # colon-separated). ``normalize_mac`` accepts the Comware dashed
+        # form; we only call it on MACs that already passed
+        # ``_normalize_irf_mac`` validation, so a raise here is unexpected
+        # and worth swallowing narrowly (netaddr's AddrFormatError extends
+        # ValueError) rather than catching every Exception.
+        try:
+            mac_canon = normalize_mac(row["mac"]) if mac_key else None
+        except (ValueError, TypeError):
+            mac_canon = None
+        members.append(
+            ChassisMember(
+                id=row["id"],
+                serial=serial_by_mac.get(mac_key, "") if mac_key else "",
+                model=model_by_mac.get(mac_key) if mac_key else None,
+                role=normalize_role(row["role"]),
+                priority=row["priority"],
+                mac=mac_canon,
+                state=row["role"],
+            )
+        )
+
+    return to_payload(members, domain=domain)
+
+
 class ComwareDriver(_napalm_base.NetworkDriver):
     """HP Comware NAPALM driver (read-only subset for device-discovery)."""
 
@@ -545,6 +768,17 @@ class ComwareDriver(_napalm_base.NetworkDriver):
             vlans[vlan_id] = {"name": vlan_name, "interfaces": []}
 
         return vlans
+
+    def get_chassis_members(self) -> dict | None:
+        """
+        Return IRF member info for HP/H3C Comware switches.
+
+        Standalone Comware (no IRF) typically prints a single populated row;
+        translate's ``validate_chassis_payload`` falls through to the
+        single-Device path on a 1-member payload. 2+ populated members emit
+        a NetBox VirtualChassis.
+        """
+        return _comware_get_chassis_members_impl(self)
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from `display interface brief` + `display vlan all`."""

@@ -37,6 +37,7 @@ _ROLE_MAP = {
     "master": "active",
     "standby": "standby",
     "backup": "standby",
+    "slave": "standby",      # Comware 5 / older IRF terminology
     "member": "member",
     "ready": "member",
     "provisioned": "member",
@@ -126,6 +127,30 @@ _FEX_4TUPLE_RE = re.compile(r"^(?:Ethernet|Eth|GigabitEthernet|Gi)\d+/\d+/\d+/\d
 # 3) Junos / Aruba CX — leading digit-cluster followed by /<digit>/<digit>.
 _JUNOS_RE = re.compile(r"^(?:[a-z]{2}-)?(\d+)/\d+/\d+(?:\.\d+)?$")
 
+# 4) HP / H3C Comware expanded interface names — the hp_comware driver expands
+#    `XGE1/0/49` → `Ten-GigabitEthernet1/0/49` and similar in get_interfaces(),
+#    so translate sees the hyphenated full forms. These do not match the Cisco
+#    regex (which expects `Te`/`TenGigabitEthernet` / `Fo`/`FortyGigabitEthernet`
+#    without hyphens), so we cover them explicitly. `GigabitEthernet1/0/1` and
+#    `HundredGigE3/0/1` already match the Cisco regex via the `Gi` / `Hu`
+#    short-prefix branches and are intentionally NOT duplicated here.
+#    `M-GigabitEthernet` is the Comware management interface — left as None.
+_COMWARE_RE = re.compile(
+    r"""
+    ^
+    (?:Ten-GigabitEthernet
+     | Twenty-FiveGigE
+     | FortyGigE
+     | FiftyGigE
+     | TwoHundredGigE
+     | FourHundredGigE
+    )
+    (\d+)/\d+/\d+(?:\.\d+)?
+    $
+    """,
+    re.VERBOSE,
+)
+
 
 def parse_member_id(if_name: str) -> int | None:
     """
@@ -138,6 +163,10 @@ def parse_member_id(if_name: str) -> int | None:
       - Subinterfaces: GigabitEthernet1/0/1.100 -> 1
       - Junos FPC-style: et-0/0/0 -> 0, ge-1/0/0 -> 1
       - Aruba CX bare digits: 1/1/1 -> 1
+      - HP / H3C Comware hyphenated speed prefixes (batch 4 — IRF):
+        Ten-GigabitEthernet1/0/49 -> 1, Twenty-FiveGigE2/0/1 -> 2,
+        FortyGigE1/0/1 -> 1, FiftyGigE2/0/1 -> 2,
+        TwoHundredGigE1/0/1 -> 1, FourHundredGigE2/0/1 -> 2
 
     Returns None for SVIs / loopback / tunnel / mgmt, LAG / bundle members,
     FEX 3/4-tuples, NX-OS ``Ethernet``/``Eth`` (out of scope for batch 1),
@@ -151,6 +180,10 @@ def parse_member_id(if_name: str) -> int | None:
         return None
 
     m = _CISCO_IOS_RE.match(if_name)
+    if m:
+        return int(m.group(1))
+
+    m = _COMWARE_RE.match(if_name)
     if m:
         return int(m.group(1))
 

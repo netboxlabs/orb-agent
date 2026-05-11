@@ -1,0 +1,11 @@
+MemberID    Role        Priority  CPU-Mac           Description
+*+1         Master      1         58ef-68a4-2c00    ---
+
+* indicates the device is the master.
++ indicates the device through which the user logs in.
+
+The Bridge MAC of the IRF is: 58ef-68a4-2c00
+Auto upgrade                : yes
+Mac persistent              : always
+Domain ID                   : 0
+Auto merge                  : yes
