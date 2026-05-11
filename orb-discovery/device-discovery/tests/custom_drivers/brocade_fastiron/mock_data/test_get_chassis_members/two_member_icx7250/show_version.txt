@@ -1,0 +1,23 @@
+  UNIT 1
+  (Primary) from secondary ICX72L08092.bin
+
+    SW: Version 08.0.92T213
+    HW: Stackable ICX7250-24P
+
+  UNIT 2
+  (Primary) from secondary ICX72L08092.bin
+
+    SW: Version 08.0.92T213
+    HW: Stackable ICX7250-24P
+
+=============================================================================
+UNIT 1: SL 1: ICX7250-24P PoE 24-port 100M/1GbE Module
+  Serial  #: ABC2456N1001
+  License: ICX7250_L3_SOFT_PACKAGE
+
+UNIT 2: SL 1: ICX7250-24P PoE 24-port 100M/1GbE Module
+  Serial  #: ABC2456N1002
+  License: ICX7250_L3_SOFT_PACKAGE
+
+The system uptime is 7 day(s) 1 hour(s) 12 minute(s) 5 second(s)
+  The system : started=warm start

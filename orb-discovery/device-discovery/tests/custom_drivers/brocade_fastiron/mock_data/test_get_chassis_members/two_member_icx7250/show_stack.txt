@@ -1,0 +1,10 @@
+T=11:54:25 GMT-04:00, eta 22h 5m remaining
+alone: standalone, D: dynamic config, S: static config, A: active, B: backup, M: member, X: not joined
+ID    Type            Role     Mac Address     Pri State   Comment
+1   S ICX7250-24P     active   cc4e.246b.b800 128  local   Ready
+2   S ICX7250-24P     standby  cc4e.246b.c700 128  remote  Ready
+
+     active        standby
+     +---+         +---+
+-2/1 | 1 |2/2--2/1 | 2 |2/2-
+     +---+         +---+

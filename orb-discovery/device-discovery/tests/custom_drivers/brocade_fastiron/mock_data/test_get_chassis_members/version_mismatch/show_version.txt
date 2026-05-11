@@ -1,0 +1,13 @@
+  UNIT 1
+  (Primary) from secondary ICX72L08092.bin
+
+    SW: Version 08.0.92T213
+    HW: Stackable ICX7250-48P
+
+=============================================================================
+UNIT 1: SL 1: ICX7250-48P PoE 48-port 100M/1GbE Module
+  Serial  #: ABC2456N2001
+  License: ICX7250_L3_SOFT_PACKAGE
+
+Switch uptime is 3 day(s) 0 hour(s) 0 minute(s) 0 second(s)
+  The system : started=warm start

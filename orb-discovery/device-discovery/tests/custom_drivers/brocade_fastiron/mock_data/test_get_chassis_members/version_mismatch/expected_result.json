@@ -1,0 +1,14 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "ABC2456N2001",
+      "model": "ICX7250-48P",
+      "role": "active",
+      "priority": 128,
+      "mac": "CC:4E:24:6B:AA:01",
+      "state": "local"
+    }
+  ],
+  "domain": null
+}

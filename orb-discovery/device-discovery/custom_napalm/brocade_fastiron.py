@@ -23,6 +23,7 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
 from custom_napalm._vlan import (
     SwitchportInfo,
     classify_switchport,
@@ -414,6 +415,197 @@ def _fastiron_aggregate_to_switchport(per_port: dict) -> SwitchportInfo:
     )
 
 
+# ---------------------------------------------------------------------------
+# Stack discovery — Brocade / Ruckus ICX stacking
+# ---------------------------------------------------------------------------
+#
+# `show stack` on an ICX 7xxx stack produces a fixed-width row table preceded
+# by a banner and a column header::
+#
+#     T=11:54:25 GMT-04:00, eta 22h 5m remaining
+#     alone: standalone, D: dynamic config, S: static config,
+#       A: active, B: backup, M: member, X: not joined
+#     ID    Type            Role     Mac Address     Pri State   Comment
+#     1   S ICX7250-24P    active    cc4e.246b.b800 128  local   Ready
+#     2   S ICX7250-24P    standby   cc4e.246b.c700 128  remote  Ready
+#
+# The ID column is the stack-member id. `D`/`S` is the configured-member type
+# (dynamic vs. static). `Type` is the device model. `Role` is the live role
+# (`active`, `standby`, `member`). `Mac Address` is the unit's stacking MAC in
+# Cisco-dotted form. `Pri` is the stack-election priority. `State` is the
+# connection location (`local`, `remote`, `reserve`). `Comment` is free text
+# (`Ready` / `Down` / `Reserved` / …) and is intentionally not consumed.
+#
+# Standalone ICX (no stack) emits `No stack`-style banners; the regex won't
+# match anything and the impl returns None at DEBUG.
+
+_FASTIRON_STACK_ROW_RE = re.compile(
+    r"""
+    ^\s*
+    (?P<id>\d+)\s+                          # ID
+    (?P<cfg>[A-Za-z])\s+                    # Cfg (canonical D/S; widened to any
+                                            # single letter to tolerate variant
+                                            # IronWare markers we haven't seen
+                                            # in the wild but which the legend
+                                            # describes (M / R / etc.))
+    (?P<model>\S+)\s+                       # Type (model token)
+    (?P<role>[A-Za-z]+)\s+                  # Role (active/standby/member/alone)
+    (?P<mac>[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4})   # MAC (Cisco-dotted)
+    \s+(?P<priority>\d+)                    # Pri
+    \s+(?P<state>\S+)                       # State (local/remote/reserve)
+    """,
+    re.VERBOSE,
+)
+
+
+def _parse_fastiron_stack(text: str) -> list[dict]:
+    """
+    Parse `show stack` row table into a list of member dicts.
+
+    Returns ``[{"id": int, "role": str, "priority": int, "mac": str,
+    "state": str, "model": str}, ...]``. Header / legend / topology-art
+    lines fail the regex and are skipped silently.
+    """
+    rows: list[dict] = []
+    for line in (text or "").splitlines():
+        m = _FASTIRON_STACK_ROW_RE.match(line)
+        if not m:
+            continue
+        rows.append({
+            "id": int(m.group("id")),
+            "role": m.group("role"),
+            "priority": int(m.group("priority")),
+            "mac": m.group("mac"),
+            "state": m.group("state"),
+            "model": m.group("model"),
+        })
+    return rows
+
+
+_FASTIRON_UNIT_HEADER_RE = re.compile(
+    r"^UNIT\s+(?P<id>\d+):\s+SL\s+\d+:\s+(?P<model>\S+)\b",
+    re.IGNORECASE,
+)
+# Most FastIron releases print ``Serial  #: <SN>``; some legacy outputs drop
+# the ``#``. The regex accepts both forms — ``Serial #:`` with any amount of
+# whitespace between ``Serial`` and ``#`` *or* a bare ``Serial:`` colon.
+_FASTIRON_UNIT_SERIAL_RE = re.compile(
+    r"^\s*Serial\s*#?\s*:\s*(?P<serial>\S+)",
+    re.IGNORECASE,
+)
+
+
+def _parse_fastiron_version_units(text: str) -> tuple[
+    dict[int, str], dict[int, str]
+]:
+    """
+    Parse ``show version`` Hardware-section UNIT blocks into per-unit data.
+
+    Returns ``(serial_by_unit, model_by_unit)`` keyed by stack-member id.
+    We parse driver-locally instead of via the ntc-template because the
+    template's Hardware-state Model+POE rule treats the literal ``POE``
+    token as case-sensitive, which silently breaks parsing on ICX7250
+    ``PoE`` / ``PoE+`` units — a very common stack hardware mix. First
+    `UNIT N: SL n: <MODEL>` line wins for ``model``; first
+    `Serial #: <SN>` line after a unit header wins for ``serial``.
+    Subsequent rows for the same unit (license, additional modules) are
+    ignored.
+    """
+    serial_by_id: dict[int, str] = {}
+    model_by_id: dict[int, str] = {}
+    current_id: int | None = None
+    for line in (text or "").splitlines():
+        m_header = _FASTIRON_UNIT_HEADER_RE.match(line)
+        if m_header:
+            try:
+                current_id = int(m_header.group("id"))
+            except (TypeError, ValueError):
+                current_id = None
+                continue
+            model = (m_header.group("model") or "").strip()
+            if model and current_id not in model_by_id:
+                model_by_id[current_id] = model
+            continue
+        if current_id is None:
+            continue
+        m_serial = _FASTIRON_UNIT_SERIAL_RE.match(line)
+        if m_serial:
+            sn = (m_serial.group("serial") or "").strip()
+            if sn and current_id not in serial_by_id:
+                serial_by_id[current_id] = sn
+    return serial_by_id, model_by_id
+
+
+def _fastiron_get_chassis_members_impl(driver) -> dict | None:
+    """
+    Implementation of ``FastIronDriver.get_chassis_members`` (factored for testability).
+
+    Parses ``show stack`` for member id / role / priority / MAC, joins to
+    ``show version`` for per-unit serial + model (keyed by stack-member id —
+    both commands use the same id space). Standalone ICX falls through to
+    None (no rows in ``show stack``); a multi-member payload is validated
+    by translate's ``validate_chassis_payload`` (requires ≥2 members).
+    """
+    try:
+        stack_out = driver.device.send_command("show stack")
+    except Exception:
+        logger.warning(
+            "brocade_fastiron.get_chassis_members: show stack failed", exc_info=True
+        )
+        return None
+
+    rows = _parse_fastiron_stack(stack_out or "")
+    if not rows:
+        # Standalone ICX emits `No stack` banners; older FastIron releases
+        # may not support `show stack` at all. Both are the no-stack path
+        # — log at DEBUG and let translate use the single-Device path.
+        logger.debug(
+            "brocade_fastiron.get_chassis_members: no stack rows in `show stack` output"
+        )
+        return None
+
+    try:
+        ver_out = driver.device.send_command("show version")
+    except Exception:
+        # Non-fatal: members without a serial join are dropped by
+        # ``to_payload()``. The show-stack table is still useful in logs.
+        logger.warning(
+            "brocade_fastiron.get_chassis_members: show version failed",
+            exc_info=True,
+        )
+        ver_out = ""
+
+    serial_by_id, model_by_id = _parse_fastiron_version_units(ver_out or "")
+
+    members: list[ChassisMember] = []
+    for row in rows:
+        sid = row["id"]
+        # MAC is regex-validated to Cisco-dotted form before reaching here,
+        # but ``napalm.base.helpers.mac()`` delegates to ``netaddr.EUI`` whose
+        # error class (``AddrFormatError``) extends ``Exception`` directly,
+        # not ``ValueError``. Catch broadly so a future regex relaxation
+        # never crashes discovery.
+        try:
+            mac_canon = normalize_mac(row["mac"])
+        except Exception:
+            mac_canon = None
+        members.append(
+            ChassisMember(
+                id=sid,
+                serial=serial_by_id.get(sid, ""),
+                # `show version`'s MODEL list is authoritative (it captures
+                # the exact PID); `show stack`'s Type column is a backup
+                # used only when version data isn't joined.
+                model=model_by_id.get(sid) or row.get("model"),
+                role=normalize_role(row["role"]),
+                priority=row["priority"],
+                mac=mac_canon,
+                state=row["state"],
+            )
+        )
+    return to_payload(members, domain=None)
+
+
 class FastIronDriver(_napalm_base.NetworkDriver):
     """FastIron IronWare NAPALM driver (read-only subset for device-discovery)."""
 
@@ -732,6 +924,16 @@ class FastIronDriver(_napalm_base.NetworkDriver):
                     entry["interfaces"].append(ve)
 
         return vlans
+
+    def get_chassis_members(self) -> dict | None:
+        """
+        Return stack-member info for Brocade / Ruckus ICX stacks.
+
+        Standalone ICX (no stack) returns None; multi-member stacks emit the
+        payload consumed by ``device_discovery.translate``'s VirtualChassis
+        emission path.
+        """
+        return _fastiron_get_chassis_members_impl(self)
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """
