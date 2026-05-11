@@ -9,11 +9,13 @@ fallback, wildcard signaling, and clamping — none of that is duplicated here.
 """
 
 import logging
+import re
 
 from napalm.base.helpers import canonical_interface_name
 from napalm.ios.ios import IOSDriver as NapalmIOSDriver
 from ntc_templates.parse import parse_output
 
+from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
 from custom_napalm._vlan import SwitchportInfo, classify_switchport, parse_vlan_range_string
 
 logger = logging.getLogger(__name__)
@@ -166,3 +168,95 @@ class IOSDriver(NapalmIOSDriver):
             info = _ios_row_to_switchport_info(row)
             result[ifname] = classify_switchport(info)
         return result
+
+    def get_chassis_members(self) -> dict | None:
+        """
+        Return stack-member info for Cisco StackWise (Catalyst 3850/9300/2960X/...).
+
+        Standalone IOS returns None (no stack rows, or a single populated slot).
+        Stack of N populated members returns the payload shape consumed by
+        device_discovery.translate's VC emission path.
+        """
+        return _ios_get_chassis_members_impl(self)
+
+
+# Two NAME formats are seen in the wild for stack members:
+#   "Switch 1"   — Catalyst 3850/9300/2960X StackWise (most common)
+#   "1"          — Some IOS / IOS-XE versions emit just the slot number
+# Anything else (e.g. "Chassis", "GigabitEthernet1/0/1") is ignored — the caller
+# treats an empty index as "no per-member inventory available" and the affected
+# members are dropped by to_payload().
+_INVENTORY_NAME_RE = re.compile(r"^(?:Switch\s+)?(\d+)$", re.IGNORECASE)
+
+
+def _index_inventory_by_switch(rows: list[dict]) -> tuple[dict[int, str], dict[int, str]]:
+    """
+    Return (serial_by_switch_id, model_by_switch_id) parsed from `show inventory`.
+
+    Matches NAME values of the form 'Switch N' or bare 'N' (case-insensitive). On
+    standalone IOS the NAME is 'Chassis' and yields empty dicts — caller treats
+    that as "no per-member inventory available".
+    """
+    serial_by_id: dict[int, str] = {}
+    model_by_id: dict[int, str] = {}
+    for row in rows or []:
+        m = _INVENTORY_NAME_RE.match((row.get("name") or "").strip())
+        if not m:
+            continue
+        sid = int(m.group(1))
+        sn = (row.get("sn") or "").strip()
+        pid = (row.get("pid") or "").strip()
+        if sn:
+            serial_by_id[sid] = sn
+        if pid:
+            model_by_id[sid] = pid
+    return serial_by_id, model_by_id
+
+
+def _ios_get_chassis_members_impl(driver) -> dict | None:
+    """Implementation of IOSDriver.get_chassis_members (factored for testability)."""
+    try:
+        detail_out = driver.device.send_command("show switch detail")
+        detail_rows = parse_output(
+            platform="cisco_ios",
+            command="show switch detail",
+            data=detail_out or "",
+        )
+    except Exception as e:
+        logger.warning("ios.get_chassis_members: show switch detail failed: %s", e)
+        return None
+
+    if not detail_rows:
+        return None
+
+    try:
+        inv_out = driver.device.send_command("show inventory")
+        inv_rows = parse_output(
+            platform="cisco_ios",
+            command="show inventory",
+            data=inv_out or "",
+        )
+    except Exception as e:
+        logger.warning("ios.get_chassis_members: show inventory failed: %s", e)
+        inv_rows = []
+
+    serial_by_id, model_by_id = _index_inventory_by_switch(inv_rows or [])
+
+    members: list[ChassisMember] = []
+    for row in detail_rows:
+        sid = _maybe_int(row.get("switch"))
+        if sid is None:
+            continue
+        members.append(
+            ChassisMember(
+                id=sid,
+                serial=serial_by_id.get(sid, ""),
+                model=model_by_id.get(sid),
+                role=normalize_role(row.get("role")),
+                priority=_maybe_int(row.get("priority")),
+                mac=row.get("mac_address") or row.get("mac") or None,
+                state=row.get("state") or None,
+            )
+        )
+
+    return to_payload(members, domain=None)

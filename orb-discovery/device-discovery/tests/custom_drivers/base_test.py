@@ -185,6 +185,39 @@ class BaseDriverTest:
         if expected is not None:
             assert result == expected
 
+    def test_get_chassis_members(self, scenario: str) -> None:
+        """Verify get_chassis_members payload shape (driver-optional)."""
+        mock_dir = self._mock_dir("test_get_chassis_members", scenario)
+        driver = self._build_driver(mock_dir)
+        if not hasattr(driver, "get_chassis_members"):
+            pytest.skip(f"{self.driver_cls.__name__} does not expose get_chassis_members")
+
+        result = driver.get_chassis_members()
+        assert result is None or isinstance(result, dict), (
+            "get_chassis_members must return a dict or None"
+        )
+        if isinstance(result, dict):
+            assert "members" in result and isinstance(result["members"], list)
+            for m in result["members"]:
+                assert isinstance(m, dict)
+                # bool is a subclass of int in Python — exclude explicitly so True/False
+                # are not accepted as member ids (matches translate-side validation).
+                mid = m.get("id")
+                assert isinstance(mid, int) and not isinstance(mid, bool), (
+                    f"member id must be a real int, got {mid!r}"
+                )
+                assert isinstance(m.get("serial"), str) and m["serial"], (
+                    f"member without serial leaked through: {m}"
+                )
+                assert m.get("role") in ("active", "standby", "member")
+
+        # Use the file's existence (not its parsed value) as the signal —
+        # ``null`` is a valid expected return for standalone scenarios.
+        expected_path = mock_dir / "expected_result.json"
+        if expected_path.exists():
+            expected = json.loads(expected_path.read_text(encoding="utf-8"))
+            assert result == expected
+
     def test_get_interfaces_vlans(self, scenario: str) -> None:
         """Verify get_interfaces_vlans returns valid per-iface VLAN config (driver-optional)."""
         mock_dir = self._mock_dir("test_get_interfaces_vlans", scenario)

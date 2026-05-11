@@ -1,0 +1,32 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "FOC1234A0X1",
+      "model": "WS-C2960X-48FPS-L",
+      "role": "active",
+      "priority": 15,
+      "mac": "0011.2233.4455",
+      "state": "Ready"
+    },
+    {
+      "id": 2,
+      "serial": "FOC1234A0X2",
+      "model": "WS-C2960X-48FPS-L",
+      "role": "member",
+      "priority": 5,
+      "mac": "0011.2233.5566",
+      "state": "Ready"
+    },
+    {
+      "id": 3,
+      "serial": "FOC1234A0X3",
+      "model": "WS-C2960X-48FPS-L",
+      "role": "member",
+      "priority": 1,
+      "mac": "0011.2233.6677",
+      "state": "Ready"
+    }
+  ],
+  "domain": null
+}

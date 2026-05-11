@@ -436,7 +436,7 @@ def test_translate_data(
 
 
 def test_translate_data_truncates_platform(sample_device_info, sample_defaults):
-    """Ensure overly long platform strings are truncated to 100 characters."""
+    """Ensure overly long platform strings are truncated to 100 characters while preserving the ``<DRIVER> <os_version>`` format."""
     long_os_version = "v" * 150
     device_info = sample_device_info.copy()
     device_info["os_version"] = long_os_version
@@ -451,8 +451,30 @@ def test_translate_data_truncates_platform(sample_device_info, sample_defaults):
     entities = list(translate_data(data))
 
     assert len(entities) == 1
-    assert entities[0].device.platform.name == long_os_version[:100]
+    # Truncation preserves the "IOS " driver prefix instead of dropping it.
+    expected = ("IOS " + long_os_version)[:100]
+    assert entities[0].device.platform.name == expected
+    assert entities[0].device.platform.name.startswith("IOS ")
     assert len(entities[0].device.platform.name) == 100
+
+
+def test_translate_data_handles_missing_os_version(sample_device_info, sample_defaults):
+    """A None/missing os_version must not crash _resolve_platform."""
+    device_info = sample_device_info.copy()
+    device_info["os_version"] = None
+    data = {
+        "device": device_info,
+        "interface": {},
+        "interface_ip": {},
+        "driver": "ios",
+        "defaults": sample_defaults,
+    }
+
+    entities = list(translate_data(data))
+
+    assert len(entities) == 1
+    # Driver-only when os_version is empty/None.
+    assert entities[0].device.platform.name == "IOS"
 
 
 def test_translate_data_creates_missing_interface(sample_device_info, sample_defaults):

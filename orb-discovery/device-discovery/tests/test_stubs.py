@@ -6,8 +6,8 @@ from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Entity
 
 from device_discovery.stubs import (
-    _current_device_from,
     _device_match_stub,
+    _index_top_level_devices,
     _interface_match_stub,
     _ip_match_stub,
     prune_nested_refs,
@@ -40,24 +40,32 @@ def test_ip_match_stub_no_vrf():
     assert not stub.HasField("vrf")
 
 
-def test_current_device_from_finds_device():
-    """Returns the first *diode.Device proto found in the entity list."""
+def test_index_top_level_devices_finds_device():
+    """Returns a name→Device map of every top-level Device in the entity list."""
     device_entity = Entity(device=pb.Device(name="sw1"))
     iface_entity = Entity(interface=pb.Interface(name="eth0"))
-    result = _current_device_from([iface_entity, device_entity])
-    assert result is not None
-    assert result.name == "sw1"
+    result = _index_top_level_devices([iface_entity, device_entity])
+    assert "sw1" in result
+    assert result["sw1"].name == "sw1"
 
 
-def test_current_device_from_no_device_returns_none():
-    """Returns None when no Device entity is present."""
+def test_index_top_level_devices_no_device_returns_empty():
+    """Returns an empty dict when no Device entity is present."""
     iface_entity = Entity(interface=pb.Interface(name="eth0"))
-    assert _current_device_from([iface_entity]) is None
+    assert _index_top_level_devices([iface_entity]) == {}
 
 
-def test_current_device_from_empty_returns_none():
-    """Returns None for an empty entity list."""
-    assert _current_device_from([]) is None
+def test_index_top_level_devices_empty_returns_empty():
+    """Returns an empty dict for an empty entity list."""
+    assert _index_top_level_devices([]) == {}
+
+
+def test_index_top_level_devices_indexes_multiple():
+    """Multi-Device translate paths (switch stacks) emit several top-level Devices."""
+    a = Entity(device=pb.Device(name="sw1"))
+    b = Entity(device=pb.Device(name="sw2"))
+    result = _index_top_level_devices([a, b])
+    assert set(result) == {"sw1", "sw2"}
 
 
 def test_device_match_stub_keeps_required_fields_drops_rest():

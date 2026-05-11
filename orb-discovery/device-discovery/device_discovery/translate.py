@@ -25,6 +25,10 @@ from netboxlabs.diode.sdk.ingester import (
 
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import Defaults, Options, TenantParameters, VrfParameters
+from device_discovery.translate_chassis import (
+    translate_as_stack,
+    validate_chassis_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -578,6 +582,48 @@ def assign_primary_ip(
     device.primary_ip4.CopyFrom(hits[0][2])
 
 
+def _resolve_platform(data: dict, options: Options) -> None:
+    """
+    Mutate data['device']['platform'] to the resolved platform string.
+
+    Format is ``"<DRIVER> <os_version>"`` (or just ``<driver>`` when
+    ``platform_omit_version`` is set). Long platform strings are truncated to 100 chars
+    while preserving the format — the previous behaviour replaced the whole string
+    with ``os_version[:100]`` on overflow, which dropped the driver prefix and
+    crashed when ``os_version`` was ``None``.
+    """
+    device_info = data.get("device") or {}
+    if not device_info:
+        return
+    if options.platform_omit_version:
+        device_info["platform"] = data.get("driver")
+        return
+    driver = (data.get("driver") or "").upper()
+    os_version = device_info.get("os_version") or ""
+    platform = f"{driver} {os_version}".strip()
+    device_info["platform"] = platform[:100]
+
+
+def _emit_vlans_and_stubs(
+    entities: list[Entity],
+    raw_vlans: dict | None,
+    defaults: Defaults,
+    new_stubs: list[pb.VLAN],
+) -> None:
+    """Append VLAN entities (from get_vlans()) plus any auto-stubbed VLANs not already emitted."""
+    if raw_vlans:
+        for vid, vlan_info in raw_vlans.items():
+            vlan = translate_vlan(vid, vlan_info.get("name"), defaults)
+            if vlan:
+                entities.append(Entity(vlan=vlan))
+    if new_stubs:
+        already_emitted = {e.vlan.vid for e in entities if e.HasField("vlan")}
+        for stub in new_stubs:
+            if stub.vid not in already_emitted:
+                entities.append(Entity(vlan=stub))
+                already_emitted.add(stub.vid)
+
+
 def translate_data(data: dict) -> Iterable[Entity]:
     """
     Translate data from NAPALM format to Diode SDK entities.
@@ -591,7 +637,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
         Iterable[Entity]: Iterable of translated Diode SDK entities.
 
     """
-    entities = []
+    entities: list[Entity] = []
     new_stubs: list[pb.VLAN] = []
 
     defaults = data.get("defaults") or Defaults()
@@ -605,15 +651,19 @@ def translate_data(data: dict) -> Iterable[Entity]:
     # is the device's own name reported by NAPALM — the two concepts must
     # not be conflated.
     target_hostname = data.get("target_hostname")
+
+    _resolve_platform(data, options)
+
+    chassis_members = validate_chassis_payload(data.get("chassis_members"))
+    if device_info and chassis_members is not None:
+        entities.extend(translate_as_stack(data, chassis_members, defaults, options))
+        _apply_interface_vlan_associations(
+            data, [e for e in entities if e.HasField("interface")], defaults, options, new_stubs,
+        )
+        _emit_vlans_and_stubs(entities, data.get("vlan"), defaults, new_stubs)
+        return entities
+
     if device_info:
-        if options.platform_omit_version:
-            device_info["platform"] = data.get("driver")
-        else:
-            device_info["platform"] = (
-                f"{data.get('driver', '').upper()} {device_info.get('os_version')}"
-            )
-            if len(device_info["platform"]) > 100:
-                device_info["platform"] = device_info.get("os_version")[:100]
         device = translate_device(device_info, defaults, config_info, options, netbox_id=netbox_id)
         device_for_interfaces = copy.deepcopy(device)
         device_for_interfaces.ClearField("config")
@@ -630,19 +680,5 @@ def translate_data(data: dict) -> Iterable[Entity]:
         entities.append(Entity(device=device))
         entities.extend(interface_related_entities)
 
-    if data.get("vlan"):
-        for vid, vlan_info in data.get("vlan").items():
-            vlan = translate_vlan(vid, vlan_info.get("name"), defaults)
-            if vlan:
-                entities.append(Entity(vlan=vlan))
-
-    # Emit any auto-stubbed VLANs (referenced on interfaces but absent from
-    # get_vlans()). De-dup against VIDs already emitted above.
-    if new_stubs:
-        already_emitted = {e.vlan.vid for e in entities if e.HasField("vlan")}
-        for stub in new_stubs:
-            if stub.vid not in already_emitted:
-                entities.append(Entity(vlan=stub))
-                already_emitted.add(stub.vid)
-
+    _emit_vlans_and_stubs(entities, data.get("vlan"), defaults, new_stubs)
     return entities

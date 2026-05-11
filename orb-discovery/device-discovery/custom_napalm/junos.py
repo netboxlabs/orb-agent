@@ -1,10 +1,19 @@
 # Copyright 2026 NetBox Labs Inc
 """
-Juniper Junos NAPALM driver subclass adding ``get_interfaces_vlans()``.
+Juniper Junos NAPALM driver subclass.
 
-Fetches via PyEZ NETCONF RPC. Targets EX/QFX switching products.
-Handles both ELS and non-ELS configuration models. v1 skips voice VLAN
-(Junos voip semantics differ from the Cisco family).
+Adds two optional extension methods on top of upstream NAPALM Junos:
+
+- ``get_interfaces_vlans()``: per-interface VLAN classification from the
+  ``<get-ethernet-switching-interface-information>`` RPC, tolerating both
+  ELS and non-ELS XML wrappers. v1 skips voice VLAN (Junos voip semantics
+  differ from the Cisco family).
+- ``get_chassis_members()``: Virtual Chassis topology from the
+  ``<get-virtual-chassis-information>`` RPC, returning the vendor-neutral
+  payload consumed by ``device_discovery.translate_chassis``. Standalone
+  EX/QFX devices (no VC configured) return ``None``.
+
+Both fetch via PyEZ NETCONF RPC and target EX / QFX switching products.
 
 XML parsing notes
 -----------------
@@ -26,9 +35,11 @@ XML parsing notes
 
 import logging
 
+from jnpr.junos.exception import RpcError
 from lxml import etree
 from napalm.junos.junos import JunOSDriver as NapalmJunOSDriver
 
+from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
 from custom_napalm._vlan import SwitchportInfo, classify_switchport
 
 logger = logging.getLogger(__name__)
@@ -160,8 +171,119 @@ def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
     )
 
 
+def _junos_get_chassis_members_impl(driver) -> dict | None:
+    """
+    Implementation of JunOSDriver.get_chassis_members (factored for testability).
+
+    Junos exposes Virtual Chassis topology via the
+    ``<get-virtual-chassis-information>`` RPC. The reply shape is::
+
+        <virtual-chassis-information>
+          <member-list>
+            <member>
+              <member-id>0</member-id>
+              <member-status>Prsnt</member-status>
+              <member-model>EX4300-48T</member-model>
+              <member-serial-number>PE3714410232</member-serial-number>
+              <member-mac-address>2c:6b:f5:a8:33:c0</member-mac-address>
+              <member-priority>129</member-priority>
+              <member-role>Master*</member-role>
+            </member>
+            ...
+          </member-list>
+        </virtual-chassis-information>
+
+    Standalone EX/QFX (no VC configured) raises ``RpcError`` or returns no
+    members; both produce ``None`` so translate falls through to the
+    single-Device path. ``NotPrsnt`` slots are filtered out before
+    ``to_payload`` so empty stack positions don't pollute the payload.
+
+    Logging policy: ``RpcError`` is the *expected* signal that the device
+    is not in VC mode, so it is logged at DEBUG only — otherwise every
+    standalone Junos device would emit a WARNING per discovery cycle.
+    Any other exception is unexpected and stays at WARNING so operators
+    see real driver / transport problems.
+    """
+    try:
+        reply = driver.device.rpc.get_virtual_chassis_information()
+    except RpcError as e:
+        logger.debug("junos.get_chassis_members: RPC not supported (likely standalone, not in VC mode): %s", e)
+        return None
+    except Exception as e:
+        # exc_info=True so the traceback survives — without it operators
+        # only see the exception string, which is rarely enough to root-cause
+        # transport / PyEZ failures.
+        logger.warning(
+            "junos.get_chassis_members: unexpected RPC failure: %s", e, exc_info=True,
+        )
+        return None
+
+    if reply is None:
+        return None
+
+    # Some Junos releases wrap members under <member-list>; older releases emit
+    # <member> directly under <virtual-chassis-information>. Try both.
+    member_list = _find_child(reply, "member-list")
+    members_xml = (
+        _find_children(member_list, "member") if member_list is not None
+        else _find_children(reply, "member")
+    )
+
+    if not members_xml:
+        return None
+
+    members: list[ChassisMember] = []
+    for m in members_xml:
+        mid = _maybe_int(_text(_find_child(m, "member-id")))
+        if mid is None:
+            continue
+
+        # Skip absent slots — Junos can list reserved member ids as NotPrsnt.
+        status = _text(_find_child(m, "member-status"))
+        if status and "notprsnt" in status.lower().replace("-", ""):
+            continue
+
+        # Role often comes with a trailing asterisk on the active master ("Master*").
+        # Strip it so normalize_role's lookup ("master" → "active") works.
+        raw_role = _text(_find_child(m, "member-role")).rstrip("*").strip()
+
+        members.append(
+            ChassisMember(
+                id=mid,
+                serial=_text(_find_child(m, "member-serial-number")),
+                model=_text(_find_child(m, "member-model")) or None,
+                role=normalize_role(raw_role),
+                priority=_maybe_int(_text(_find_child(m, "member-priority"))),
+                mac=_text(_find_child(m, "member-mac-address")) or None,
+                state=status or None,
+            )
+        )
+
+    return to_payload(members, domain=None)
+
+
 class JunOSDriver(NapalmJunOSDriver):
-    """Juniper Junos NAPALM driver with VLAN-interface association support."""
+    """
+    Juniper Junos NAPALM driver.
+
+    Adds two optional extension methods on top of the upstream NAPALM driver:
+
+    - ``get_interfaces_vlans()``: per-interface VLAN classification from the
+      ``<get-ethernet-switching-interface-information>`` RPC, tolerating
+      both ELS and non-ELS XML wrappers.
+    - ``get_chassis_members()``: Virtual Chassis topology from the
+      ``<get-virtual-chassis-information>`` RPC, returning the vendor-
+      neutral payload consumed by ``device_discovery.translate_chassis``.
+    """
+
+    def get_chassis_members(self) -> dict | None:
+        """
+        Return Junos Virtual Chassis member info (EX/QFX).
+
+        Standalone (non-VC) EX/QFX returns None; VC of N populated members
+        returns the payload shape consumed by translate's VC emission path.
+        """
+        return _junos_get_chassis_members_impl(self)
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """

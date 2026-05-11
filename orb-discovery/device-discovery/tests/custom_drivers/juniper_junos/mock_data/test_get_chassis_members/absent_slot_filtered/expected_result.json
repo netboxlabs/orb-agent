@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 0,
+      "serial": "PE3714410101",
+      "model": "EX4300-48T",
+      "role": "active",
+      "priority": 129,
+      "mac": "2c:6b:f5:a8:10:00",
+      "state": "Prsnt"
+    },
+    {
+      "id": 2,
+      "serial": "PE3714410102",
+      "model": "EX4300-48T",
+      "role": "standby",
+      "priority": 128,
+      "mac": "2c:6b:f5:a8:10:80",
+      "state": "Prsnt"
+    }
+  ],
+  "domain": null
+}

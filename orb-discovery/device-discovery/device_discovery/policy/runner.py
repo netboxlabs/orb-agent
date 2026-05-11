@@ -295,6 +295,16 @@ class PolicyRunner:
                         f"Error getting interface VLANs: {e}. "
                         "Continuing without interface-VLAN data."
                     )
+            get_chassis_members = getattr(device, "get_chassis_members", None)
+            if callable(get_chassis_members):
+                try:
+                    data["chassis_members"] = get_chassis_members()
+                except Exception as e:
+                    logger.warning(
+                        f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                        f"Error getting chassis members: {e}. "
+                        "Continuing without chassis data."
+                    )
             metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
             entity_count = Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")

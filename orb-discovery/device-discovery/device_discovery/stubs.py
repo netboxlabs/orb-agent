@@ -8,8 +8,12 @@ estimation, so the rich entity graph is preserved through translation/annotation
 the wire payload is trimmed.
 """
 
+import logging
+
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Entity
+
+logger = logging.getLogger(__name__)
 
 
 def _vrf_match_stub(vrf: pb.VRF) -> pb.VRF:
@@ -39,35 +43,54 @@ def _ip_match_stub(ip: pb.IPAddress) -> pb.IPAddress:
     return stub
 
 
-def _current_device_from(entities: list[Entity]) -> pb.Device | None:
+def _index_top_level_devices(entities: list[Entity]) -> dict[str, pb.Device]:
     """
-    Return the rich top-level Device proto, or None.
+    Return a name→Device map of every top-level Device proto.
 
-    device-discovery emits exactly one top-level Device per call to translate_data. This O(N)
-    lookup avoids threading the device pointer through to the client separately.
+    Used by prune_nested_refs to derive each nested Interface/IPAddress's stub
+    from its OWN device, not from a single 'first device' assumption. With
+    switch-stack emission, the same translate call produces N top-level
+    Devices (master + members); each member's interfaces must keep their
+    own device-ref through pruning.
+
+    Empty dict when entities has no top-level Device — pruning becomes a no-op.
     """
+    index: dict[str, pb.Device] = {}
     for e in entities:
         if e.HasField("device"):
-            return e.device
+            if e.device.name in index:
+                logger.warning(
+                    "prune_nested_refs: duplicate top-level Device name %r — "
+                    "second occurrence overwrites first; "
+                    "this indicates an upstream translator bug",
+                    e.device.name,
+                )
+            index[e.device.name] = e.device
+    return index
+
+
+def _resolve_device(
+    nested: pb.Device, index: dict[str, pb.Device]
+) -> pb.Device | None:
+    """Look up the rich top-level Device for a nested reference. Name first, serial fallback."""
+    if nested.name and nested.name in index:
+        return index[nested.name]
+    if nested.serial:
+        matches = [d for d in index.values() if d.serial == nested.serial]
+        if matches:
+            if len(matches) > 1:
+                logger.warning(
+                    "prune_nested_refs: duplicate serial %r across %d top-level Devices — picking %r; resolution is non-deterministic",
+                    nested.serial,
+                    len(matches),
+                    matches[0].name,
+                )
+            return matches[0]
     return None
 
 
-def _device_match_stub(d: pb.Device) -> pb.Device:
-    """
-    Return a Device carrying matcher-only fields plus NetBox-required-for-create fields.
-
-    INVARIANT: this set must be a superset of (a) every dcim.device matcher field
-    device-discovery currently populates, and (b) every field NetBox treats as required for
-    create. As of the spec date, device-discovery does NOT populate oob_ip, position, face,
-    virtual_chassis, or vc_position. If a new translator path starts setting any of those,
-    this stub must grow to include them — otherwise the rich entity and the stub will
-    resolve via different matcher precedence paths or fail validation on the first cycle.
-
-    `asset_tag` is the highest-precedence matcher and is populated when the policy sets
-    defaults.device.asset_tag — kept on the stub so the rich entity and stub never resolve
-    via different matchers.
-    """
-    stub = pb.Device(name=d.name)
+def _copy_device_relations(stub: pb.Device, d: pb.Device) -> None:
+    """Copy site/tenant/device_type/role/primary_ip4/primary_ip6 onto ``stub``."""
     if d.HasField("site"):
         stub.site.CopyFrom(pb.Site(name=d.site.name))
     if d.HasField("tenant"):
@@ -80,6 +103,30 @@ def _device_match_stub(d: pb.Device) -> pb.Device:
         stub.primary_ip4.CopyFrom(_ip_match_stub(d.primary_ip4))
     if d.HasField("primary_ip6"):
         stub.primary_ip6.CopyFrom(_ip_match_stub(d.primary_ip6))
+
+
+def _device_match_stub(d: pb.Device) -> pb.Device:
+    """
+    Return a Device carrying matcher-only fields plus NetBox-required-for-create fields.
+
+    INVARIANT: this set must be a superset of every dcim.device matcher field that the
+    Diode plugin would actually use to resolve this stub. The plugin's matcher precedence
+    (highest first) is: asset_tag → primary_ip4 → primary_ip6 → oob_ip → name+site+tenant
+    → name+site → rack+position+face → virtual_chassis+vc_position. Resolution stops at
+    the first matcher that produces a hit; in practice device-discovery populates
+    asset_tag (when defaults.device.asset_tag is set), primary_ip4 (master only), and
+    name+site+tenant for every device — so resolution always succeeds at one of those
+    higher-precedence matchers. virtual_chassis + vc_position are intentionally NOT
+    copied here: they would only be consulted by matcher #8, which is never reached, and
+    including them would copy a rich virtual_chassis subtree (with a nested master Device
+    ref) into every member interface's nested device-stub, bloating the wire payload.
+
+    `asset_tag` is the highest-precedence matcher and is populated when the policy sets
+    defaults.device.asset_tag — kept on the stub so the rich entity and stub never resolve
+    via different matchers.
+    """
+    stub = pb.Device(name=d.name)
+    _copy_device_relations(stub, d)
     if d.asset_tag:
         stub.asset_tag = d.asset_tag
     # Carry source_match (e.g., netbox_id) — that is the plugin's PK-based
@@ -155,40 +202,84 @@ def _stub_primary_ip_iface(ip: pb.IPAddress, dev_stub: pb.Device) -> None:
     )
 
 
+def _prune_interface_against_index(
+    iface: pb.Interface,
+    index: dict[str, pb.Device],
+    stub_for,
+) -> None:
+    """Resolve iface.device against the top-level index, then stub iface in place."""
+    rich = _resolve_device(iface.device, index)
+    if rich is None:
+        logger.warning(
+            "prune_nested_refs: could not resolve nested device %r for interface %r — leaving untouched",
+            iface.device.name,
+            iface.name,
+        )
+        return
+    _prune_interface_entity(iface, stub_for(rich))
+
+
+def _prune_ip_address_against_index(
+    ip: pb.IPAddress,
+    index: dict[str, pb.Device],
+    stub_for,
+) -> None:
+    """Resolve ip.assigned_object_interface.device, then replace the back-pointer with a stub."""
+    if not ip.HasField("assigned_object_interface"):
+        return
+    nested_iface = ip.assigned_object_interface
+    rich = _resolve_device(nested_iface.device, index)
+    if rich is None:
+        logger.warning(
+            "prune_nested_refs: could not resolve nested device %r for IP %r — leaving untouched",
+            nested_iface.device.name,
+            ip.address,
+        )
+        return
+    ip.assigned_object_interface.CopyFrom(
+        _interface_match_stub(nested_iface, stub_for(rich))
+    )
+
+
 def prune_nested_refs(entities: list[Entity]) -> None:
     """
     Walk entities once and replace nested Device and Interface references with stubs.
 
     Call from Client.ingest AFTER apply_run_id_to_entities and BEFORE estimate_message_size
-    / diode_client.ingest. Running before annotation would either skip the rich Device or
-    bloat every stub with run_id metadata. Running before estimate_message_size means
-    chunking sees the trimmed payload size.
+    / diode_client.ingest.
+
+    Multi-Device aware: each Interface/IPAddress nested device-ref is resolved against
+    the top-level Device index by name (serial as fallback). Stack-emitting translate
+    paths produce N top-level Devices; member interfaces must keep their own attribution.
 
     No-op if entities is empty or no top-level Device is present.
+    Unresolved nested device-refs are logged at WARNING and left untouched.
     """
     if not entities:
         return
-    rich_device = _current_device_from(entities)
-    if rich_device is None:
+    index = _index_top_level_devices(entities)
+    if not index:
         return
-    dev_stub = _device_match_stub(rich_device)
+
+    # Cache stubs per top-level device — _device_match_stub builds matcher copies,
+    # and re-running it for every interface would multiply work for large stacks.
+    stub_cache: dict[str, pb.Device] = {}
+
+    def _stub_for(rich: pb.Device) -> pb.Device:
+        if rich.name not in stub_cache:
+            stub_cache[rich.name] = _device_match_stub(rich)
+        return stub_cache[rich.name]
 
     for e in entities:
         if e.HasField("device"):
-            # Rich Device kept as-is, but trim the back-pointer Interface that
-            # assign_primary_ip nested under primary_ip4/6.assigned_object_interface
-            # — that nested Interface is only used to resolve the primary-IP's
-            # interface row, so a matcher-only stub is sufficient and avoids
-            # carrying the rich device.config (and other non-matcher fields)
-            # along the back-pointer.
-            _stub_primary_ip_iface(e.device.primary_ip4, dev_stub)
-            _stub_primary_ip_iface(e.device.primary_ip6, dev_stub)
-            continue
-        if e.HasField("interface"):
-            _prune_interface_entity(e.interface, dev_stub)
+            # Per-Device: the stub used here MUST be derived from THIS device, not
+            # from a single shared "rich device" — otherwise a multi-Device entity
+            # list (switch stacks) would point member primary-IP back-pointers at
+            # the master's stub.
+            own_stub = _stub_for(e.device)
+            _stub_primary_ip_iface(e.device.primary_ip4, own_stub)
+            _stub_primary_ip_iface(e.device.primary_ip6, own_stub)
+        elif e.HasField("interface"):
+            _prune_interface_against_index(e.interface, index, _stub_for)
         elif e.HasField("ip_address"):
-            ip = e.ip_address
-            if ip.HasField("assigned_object_interface"):
-                ip.assigned_object_interface.CopyFrom(
-                    _interface_match_stub(ip.assigned_object_interface, dev_stub)
-                )
+            _prune_ip_address_against_index(e.ip_address, index, _stub_for)
