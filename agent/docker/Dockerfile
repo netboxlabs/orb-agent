@@ -50,7 +50,9 @@ RUN \
     apt install --yes --no-install-recommends ca-certificates git nmap openssh-client tini && \
     update-ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
-    rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
+    sed -i 's/_PIP_VERSION = "26.0.1"/_PIP_VERSION = "26.1"/' /usr/local/lib/python3.14/ensurepip/__init__.py && \
+    rm -f /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl && \
+    python -m pip download pip==26.1 --no-deps --no-cache-dir -d /usr/local/lib/python3.14/ensurepip/_bundled/
 
 RUN mkdir -p /opt/orb
 
