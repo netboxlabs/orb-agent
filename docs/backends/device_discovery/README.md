@@ -142,7 +142,7 @@ Current supported defaults:
 | ├─ comments | str | VRF comments |
 | ├─ tags | list | VRF tags |
 | vlan       | map  | VLAN-specific defaults        |
-| ├─ group   | str  | VLAN group                    |
+| ├─ group   | str  | VLAN group name. When set, every emitted VLAN is attached to an `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
 | ├─ tenant   | str  | VLAN tenant                  |
 | ├─ role   | str  | VLAN role                      |
 | ├─ description | str  | VLAN description          |
