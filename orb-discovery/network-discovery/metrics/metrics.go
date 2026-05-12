@@ -43,20 +43,25 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 	reader := sdkmetric.NewPeriodicReader(exporter,
 		sdkmetric.WithInterval(time.Duration(exportPeriodSeconds)*time.Second),
 	)
-	meterProvider = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	otel.SetMeterProvider(meterProvider)
-	meter = otel.Meter("network-discovery")
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	otel.SetMeterProvider(mp)
+	m := otel.Meter("network-discovery")
+
+	cacheLock.Lock()
+	meterProvider = mp
+	meter = m
 	logger = logg
+	cacheLock.Unlock()
 	return nil
 }
 
 // GetCounter returns a cached counter or creates a new one if not exists.
 func GetCounter(name string, description string) metric.Int64Counter {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 	if meter == nil {
 		return nil
 	}
-	cacheLock.Lock()
-	defer cacheLock.Unlock()
 
 	if c, ok := counterCache[name]; ok {
 		return c
@@ -74,11 +79,11 @@ func GetCounter(name string, description string) metric.Int64Counter {
 
 // GetUpDownCounter returns a cached updown counter or creates a new one if not exists.
 func GetUpDownCounter(name string, description string) metric.Int64UpDownCounter {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 	if meter == nil {
 		return nil
 	}
-	cacheLock.Lock()
-	defer cacheLock.Unlock()
 
 	if c, ok := upDownCounterCache[name]; ok {
 		return c
@@ -94,11 +99,11 @@ func GetUpDownCounter(name string, description string) metric.Int64UpDownCounter
 
 // GetHistogram returns a cached histogram or creates a new one if not exists.
 func GetHistogram(name string, description string) metric.Float64Histogram {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 	if meter == nil {
 		return nil
 	}
-	cacheLock.Lock()
-	defer cacheLock.Unlock()
 
 	if h, ok := histogramCache[name]; ok {
 		return h
@@ -114,11 +119,11 @@ func GetHistogram(name string, description string) metric.Float64Histogram {
 
 // GetGauge returns a cached gauge or creates a new one if not exists.
 func GetGauge(name string, description string) metric.Int64Gauge {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
 	if meter == nil {
 		return nil
 	}
-	cacheLock.Lock()
-	defer cacheLock.Unlock()
 
 	if g, ok := gaugeCache[name]; ok {
 		return g
