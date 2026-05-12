@@ -19,8 +19,13 @@ import (
 // RawJWTWithClaims builds a raw JWT string with the given claims.
 // Signature is a dummy value; ParseUnverified only inspects header/payload.
 func RawJWTWithClaims(claims map[string]any) string {
+	return RawJWTWithClaimsAlg(claims, "RS256")
+}
+
+// RawJWTWithClaimsAlg is like RawJWTWithClaims but sets the JWS "alg" header (for tests).
+func RawJWTWithClaimsAlg(claims map[string]any, alg string) string {
 	header := map[string]any{
-		"alg": "RS256",
+		"alg": alg,
 		"kid": "test-key",
 		"typ": "JWT",
 	}
