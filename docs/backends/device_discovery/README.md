@@ -123,7 +123,7 @@ Current supported defaults:
 | ├─ comments | str | VRF comments |
 | ├─ tags | list | VRF tags |
 | vlan       | map  | VLAN-specific defaults        |
-| ├─ group   | str  | VLAN group name. When set, every emitted VLAN is attached to a `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` (even when that resolves to the `undefined` sentinel), and the slug is auto-generated from the name so the reconciler dedupes the group across runs. |
+| ├─ group   | str  | VLAN group name. When set, every emitted VLAN is attached to a `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
 | ├─ tenant   | str  | VLAN tenant                  |
 | ├─ role   | str  | VLAN role                      |
 | ├─ description | str  | VLAN description          |
