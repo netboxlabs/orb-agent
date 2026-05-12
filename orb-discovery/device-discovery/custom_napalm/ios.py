@@ -21,6 +21,23 @@ from custom_napalm._vlan import SwitchportInfo, classify_switchport, parse_vlan_
 logger = logging.getLogger(__name__)
 
 
+# Cisco IOS / IOS-XE Catalyst multigig short-form override.
+#
+# netutils.constants.BASE_INTERFACES (the table backing
+# napalm.base.helpers.canonical_interface_name) maps "Fi" to
+# "FiftyGigabitEthernet". On the IOS Catalyst platforms this driver targets,
+# "Fi" is the short form of FiveGigabitEthernet (5GBASE-T multigig). Without
+# this override, `show interfaces switchport` rows for 5G ports canonicalize
+# to "FiftyGigabitEthernet*/..." and fail to match the long-form
+# "FiveGigabitEthernet*/..." names emitted by NAPALM's get_interfaces(), so
+# the translator silently drops VLAN data for every 5G port.
+_IOS_ADDL_NAME_MAP = {
+    "Fi": "FiveGigabitEthernet",
+    "FI": "FiveGigabitEthernet",
+    "fi": "FiveGigabitEthernet",
+}
+
+
 def _maybe_int(v: object) -> int | None:
     """
     Convert a string/int to int, returning None on failure.
@@ -164,7 +181,7 @@ class IOSDriver(NapalmIOSDriver):
             ifname = row.get("interface")
             if not ifname:
                 continue
-            ifname = canonical_interface_name(ifname)
+            ifname = canonical_interface_name(ifname, addl_name_map=_IOS_ADDL_NAME_MAP)
             info = _ios_row_to_switchport_info(row)
             result[ifname] = classify_switchport(info)
         return result

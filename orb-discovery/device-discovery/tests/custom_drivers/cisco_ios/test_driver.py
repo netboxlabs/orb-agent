@@ -47,6 +47,72 @@ class TestIOSDriver(BaseDriverTest):
         assert result["GigabitEthernet1/0/1"]["mode"] == "access"
         assert result["GigabitEthernet1/0/1"]["untagged"] == 10
 
+    def test_get_interfaces_vlans_fi_shortform_expands_to_fivegig(self) -> None:
+        """
+        ``Fi*`` short-form expands to FiveGigabitEthernet, not FiftyGigabitEthernet.
+
+        Regression for ENGHLP-1279: netutils.BASE_INTERFACES maps ``"Fi"`` to
+        ``"FiftyGigabitEthernet"``, which is wrong for Cisco IOS Catalyst
+        multigig hardware. Without the IOS-specific ``addl_name_map`` override,
+        every ``Fi*`` port returned by ``show interfaces switchport`` ended up
+        with a key that didn't match the ``FiveGigabitEthernet*`` long form
+        emitted by ``get_interfaces()``, and ``apply_interface_vlans()``
+        silently dropped the association for every 5G port on the device.
+        """
+        mock_dir = self.mock_data_root / "test_get_interfaces_vlans" / "multigig_fivegig"
+        driver = self._build_driver(mock_dir)
+        result = driver.get_interfaces_vlans()
+        # The buggy expansion would have produced "FiftyGigabitEthernet3/0/1".
+        # Assert both the positive (correct expansion present) and negative
+        # (wrong expansion absent) so a future regression on the netutils
+        # mapping is caught even if FiveGig happens to also be inserted.
+        assert "FiveGigabitEthernet3/0/1" in result, (
+            f"expected FiveGigabitEthernet3/0/1 key, got {sorted(result)}"
+        )
+        assert "FiveGigabitEthernet3/0/2" in result
+        assert not any(k.startswith("FiftyGigabitEthernet") for k in result), (
+            f"unexpected FiftyGigabitEthernet key in {sorted(result)}"
+        )
+        assert result["FiveGigabitEthernet3/0/1"] == {
+            "mode": "access", "tagged": [], "untagged": 148,
+        }
+        assert result["FiveGigabitEthernet3/0/2"] == {
+            "mode": "trunk", "tagged": [190, 191, 251, 261], "untagged": 999,
+        }
+        # Sanity: other short-forms (Tw, Gi) keep working alongside the override.
+        assert result["TwoGigabitEthernet2/0/1"]["untagged"] == 20
+        assert result["GigabitEthernet1/0/1"]["untagged"] == 10
+
+    def test_canonical_interface_name_fi_override(self) -> None:
+        """
+        Lock the BASE_INTERFACES override at the function-call level.
+
+        If netutils ever flips ``"Fi"`` to mean something else, or a future
+        refactor drops ``addl_name_map`` from the driver call site, this
+        narrower assertion fires before the integration test does — making
+        the root cause obvious from the failure alone.
+        """
+        from napalm.base.helpers import canonical_interface_name
+
+        from custom_napalm.ios import _IOS_ADDL_NAME_MAP
+
+        assert canonical_interface_name(
+            "Fi3/0/1", addl_name_map=_IOS_ADDL_NAME_MAP
+        ) == "FiveGigabitEthernet3/0/1"
+        assert canonical_interface_name(
+            "FI3/0/1", addl_name_map=_IOS_ADDL_NAME_MAP
+        ) == "FiveGigabitEthernet3/0/1"
+        assert canonical_interface_name(
+            "fi3/0/1", addl_name_map=_IOS_ADDL_NAME_MAP
+        ) == "FiveGigabitEthernet3/0/1"
+        # Sanity: prefixes we did NOT override still resolve via BASE_INTERFACES.
+        assert canonical_interface_name(
+            "Gi1/0/1", addl_name_map=_IOS_ADDL_NAME_MAP
+        ) == "GigabitEthernet1/0/1"
+        assert canonical_interface_name(
+            "Twe1/0/1", addl_name_map=_IOS_ADDL_NAME_MAP
+        ) == "TwentyFiveGigE1/0/1"
+
     def test_expand_vlan_range_string_clamps_huge_range(self) -> None:
         """A range like 1-100000 is clamped to 1..4094 (then collapsed to wildcard)."""
         from custom_napalm._vlan import parse_vlan_range_string
