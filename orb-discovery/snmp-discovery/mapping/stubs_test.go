@@ -5,6 +5,7 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func strPtr(s string) *string { return &s }
@@ -105,10 +106,15 @@ func TestNewDeviceStub_KeepsMatcherAndRequiredFieldsDropsRest(t *testing.T) {
 	assert.NotNil(t, stub.PrimaryIp6)
 	assert.Equal(t, &v6, stub.PrimaryIp6.Address)
 
+	// AssetTag propagates — it is populated via
+	// PolicyConfig.Defaults.AssetTag and the stub must carry it so
+	// matcher precedence stays consistent between rich and stub.
+	require.NotNil(t, stub.AssetTag)
+	assert.Equal(t, "ASSET-001", *stub.AssetTag)
+
 	// All non-matcher / non-required fields cleared.
 	assert.Nil(t, stub.Platform)
 	assert.Nil(t, stub.Serial)
-	assert.Nil(t, stub.AssetTag)
 	assert.Nil(t, stub.Status)
 	assert.Nil(t, stub.Description)
 }

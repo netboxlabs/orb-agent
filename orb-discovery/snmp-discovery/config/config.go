@@ -84,6 +84,7 @@ type Defaults struct {
 	Site                     string             `yaml:"site,omitempty"`
 	Location                 string             `yaml:"location,omitempty"`
 	Role                     string             `yaml:"role,omitempty"`
+	AssetTag                 string             `yaml:"asset_tag,omitempty"`
 	IPAddress                IPAddressDefaults  `yaml:"ip_address,omitempty"`
 	Interface                InterfaceDefaults  `yaml:"interface,omitempty"`
 	Device                   DeviceDefaults     `yaml:"device,omitempty"`
@@ -111,6 +112,9 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	}
 	if overrideDefaults.Role != "" {
 		merged.Role = overrideDefaults.Role
+	}
+	if overrideDefaults.AssetTag != "" {
+		merged.AssetTag = overrideDefaults.AssetTag
 	}
 	if len(overrideDefaults.Tags) > 0 {
 		merged.Tags = overrideDefaults.Tags

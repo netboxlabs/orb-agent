@@ -54,13 +54,14 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 // INVARIANT: the fields here must be a superset of (a) every
 // dcim.device matcher field that snmp-discovery currently populates
 // on the rich Device, and (b) every dcim.device field NetBox treats
-// as required for create. As of the spec date, snmp-discovery does
-// NOT populate AssetTag, OobIp, Rack, Position, Face, VirtualChassis,
-// or VcPosition (matcher fields not used today). If a new mapper
-// starts setting any of those, or if NetBox adds new required fields
-// for dcim.device, this stub must grow to match — otherwise the rich
-// entity and the stub will resolve via different matcher precedence
-// paths or fail validation on the first cycle.
+// as required for create. As of the spec date, snmp-discovery
+// populates AssetTag via PolicyConfig.Defaults.AssetTag (literal or
+// OID reference). The stub must carry it through so rich and stub
+// resolve via the same matcher precedence path. OobIp, Rack,
+// Position, Face, VirtualChassis, and VcPosition remain
+// not-populated. If a new mapper starts setting any of those, or if
+// NetBox adds new required fields for dcim.device, this stub must
+// grow to match.
 //
 // Metadata.source_match (e.g. netbox_id) is the diode-netbox-plugin's
 // PK-based match path, so it must not diverge between rich and stub.
@@ -76,6 +77,7 @@ func newDeviceStub(d *diode.Device) *diode.Device {
 		Tenant:     d.Tenant,
 		DeviceType: d.DeviceType,
 		Role:       d.Role,
+		AssetTag:   d.AssetTag,
 		PrimaryIp4: newIPMatchStub(d.PrimaryIp4),
 		PrimaryIp6: newIPMatchStub(d.PrimaryIp6),
 	}

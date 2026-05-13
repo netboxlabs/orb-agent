@@ -448,3 +448,48 @@ entity: "interface"
 		t.Errorf("Vendor: got %q, want empty (generic)", m.Vendor)
 	}
 }
+
+func TestDefaults_AssetTag_ParsesFromYAML(t *testing.T) {
+	yamlContent := []byte(`
+defaults:
+  site: dc1
+  asset_tag: "ASSET-007"
+`)
+	var parsed struct {
+		Defaults Defaults `yaml:"defaults"`
+	}
+	require.NoError(t, yaml.Unmarshal(yamlContent, &parsed))
+	assert.Equal(t, "ASSET-007", parsed.Defaults.AssetTag)
+}
+
+func TestDefaults_AssetTag_ParsesOIDReference(t *testing.T) {
+	yamlContent := []byte(`
+defaults:
+  asset_tag: ".1.3.6.1.2.1.1.4.0"
+`)
+	var parsed struct {
+		Defaults Defaults `yaml:"defaults"`
+	}
+	require.NoError(t, yaml.Unmarshal(yamlContent, &parsed))
+	assert.Equal(t, ".1.3.6.1.2.1.1.4.0", parsed.Defaults.AssetTag)
+}
+
+func TestMergeDefaults_AssetTag_OverrideWins(t *testing.T) {
+	policy := &Defaults{AssetTag: "POLICY-TAG"}
+	override := &Defaults{AssetTag: "OVERRIDE-TAG"}
+	merged := MergeDefaults(policy, override)
+	assert.Equal(t, "OVERRIDE-TAG", merged.AssetTag)
+}
+
+func TestMergeDefaults_AssetTag_EmptyOverrideKeepsPolicy(t *testing.T) {
+	policy := &Defaults{AssetTag: "POLICY-TAG"}
+	override := &Defaults{AssetTag: ""}
+	merged := MergeDefaults(policy, override)
+	assert.Equal(t, "POLICY-TAG", merged.AssetTag)
+}
+
+func TestMergeDefaults_AssetTag_NoOverride(t *testing.T) {
+	policy := &Defaults{AssetTag: "POLICY-TAG"}
+	merged := MergeDefaults(policy, nil)
+	assert.Equal(t, "POLICY-TAG", merged.AssetTag)
+}

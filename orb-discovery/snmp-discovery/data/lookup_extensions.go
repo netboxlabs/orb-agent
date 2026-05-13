@@ -455,3 +455,55 @@ func loadYAMLFile(data []byte, devicesByVendor map[string]deviceRef) error {
 
 	return nil
 }
+
+// defaultOIDPattern matches OIDs rooted at the standard SNMP Internet
+// sub-tree (.1.3.6.1.*). This is intentionally stricter than oidPattern:
+// PolicyConfig defaults like defaults.location may already contain
+// dotted-decimal literals (e.g. "3.14.159" as a room number, or
+// "10.0.0.1"), and silently re-classifying them as OID references would
+// be a backward-compat break.
+var defaultOIDPattern = regexp.MustCompile(`^\.1\.3\.6\.1\.(\d+\.)+\d+$`)
+
+// ResolveDefault classifies raw as either a literal value or an SNMP OID
+// reference and resolves it against the walked map.
+//
+// If raw matches defaultOIDPattern, it is treated as an OID reference:
+// the function returns the corresponding value from walked, with NULL
+// bytes and surrounding whitespace trimmed from both ends. Both
+// leading-dot and no-leading-dot spellings are tolerated on the lookup
+// side.
+//
+// If raw is not an OID, it is treated as a literal and returned after
+// trimming surrounding whitespace.
+//
+// ok is false when:
+//   - raw is empty or whitespace-only,
+//   - raw is an OID reference and the OID is missing from walked,
+//   - raw is an OID reference and the resolved value is empty after
+//     trimming.
+//
+// The regex requires the .1.3.6.1.* root so legitimate non-SNMP
+// dotted-decimal literals (room numbers, IPs) cannot collide with the
+// OID-reference syntax. This is stricter than the lookup_extensions
+// oidPattern used by GetDeviceModel.
+func ResolveDefault(raw string, walked map[string]string) (string, bool) {
+	if defaultOIDPattern.MatchString(raw) {
+		if walked == nil {
+			return "", false
+		}
+		value, ok := lookupOIDBothSpellings(walked, raw)
+		if !ok {
+			return "", false
+		}
+		trimmed := strings.Trim(value, "\x00 \t\n\r")
+		if trimmed == "" {
+			return "", false
+		}
+		return trimmed, true
+	}
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	return trimmed, true
+}

@@ -3,6 +3,7 @@ package mapping_test
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestIPAddressMapper_Map(t *testing.T) {
@@ -4514,4 +4517,201 @@ func TestIPAddressMapper_LegacyTable_StillIPv4Only(t *testing.T) {
 	got := mapper.Map(pdus, entry, registry, nil)
 	ip := got.(*diode.IPAddress)
 	assert.Equal(t, "10.0.0.1/32", *ip.Address)
+}
+
+// TestDeviceMapping_WalksSysContactAndSysLocation confirms that the
+// two OIDs needed for OID-ref defaults are direct children of the
+// device system-group block (.1.3.6.1.2.1.1) in mapping.yaml, with the
+// expected field names. Anchoring at the system-group block (not a
+// recursive search across the whole file) ensures the OIDs are in the
+// per-Map() walked snapshot that applyDefaults consumes.
+func TestDeviceMapping_WalksSysContactAndSysLocation(t *testing.T) {
+	data, err := os.ReadFile("../policy/mapping.yaml")
+	require.NoError(t, err)
+
+	var m config.Mapping
+	require.NoError(t, yaml.Unmarshal(data, &m))
+
+	var sysGroup *config.MappingEntry
+	for i := range m.Entries {
+		if m.Entries[i].OID == ".1.3.6.1.2.1.1" && m.Entries[i].Entity == "device" {
+			sysGroup = &m.Entries[i]
+			break
+		}
+	}
+	require.NotNil(t, sysGroup, "device system-group block .1.3.6.1.2.1.1 not found in mapping.yaml")
+
+	wantOIDs := map[string]string{
+		".1.3.6.1.2.1.1.4.0": "sysContact",
+		".1.3.6.1.2.1.1.6.0": "sysLocation",
+	}
+	found := map[string]string{}
+	for _, child := range sysGroup.MappingEntries {
+		if expectedField, want := wantOIDs[child.OID]; want {
+			found[child.OID] = child.Field
+			assert.Equal(t, expectedField, child.Field,
+				"OID %s should have field=%q", child.OID, expectedField)
+		}
+	}
+	for oid := range wantOIDs {
+		_, present := found[oid]
+		assert.True(t, present, "expected %s as a direct child of the device system-group block", oid)
+	}
+}
+
+// TestDeviceMapper_Map_DefaultsResolveFromWalkedSnapshot is an end-to-end
+// integration test for the OID-reference defaults path. It exercises the
+// full DeviceMapper.Map flow with a synthetic system-group walk that
+// contains sysName, sysContact, and sysLocation, then verifies that
+// defaults.{location,asset_tag} pointing at those OIDs are resolved
+// against the walked snapshot built inside Map() — closing the gap
+// between the structural mapping.yaml assertion and the internal
+// applyDefaults tests.
+func TestDeviceMapper_Map_DefaultsResolveFromWalkedSnapshot(t *testing.T) {
+	logger := slog.Default()
+	mockDeviceLookup := &MockDeviceLookup{}
+	mockManufacturers := &MockManufacturerDataRetriever{}
+	mapper := mapping.NewDeviceMapper(mockManufacturers, mockDeviceLookup, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.5.0": {
+			OID:    "1.3.6.1.2.1.1.5.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.5",
+			Value:  "router1",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.1.4.0": {
+			OID:    "1.3.6.1.2.1.1.4.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.4",
+			Value:  "asset-12345",
+			Type:   mapping.OctetString,
+		},
+		"1.3.6.1.2.1.1.6.0": {
+			OID:    "1.3.6.1.2.1.1.6.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.6",
+			Value:  "Data Center 01",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.5", Entity: "device", Field: "name"},
+			{OID: "1.3.6.1.2.1.1.4", Entity: "device", Field: "sysContact"},
+			{OID: "1.3.6.1.2.1.1.6", Entity: "device", Field: "sysLocation"},
+		},
+	}
+	// Defaults use the leading-dot OID spelling. Walked map keys are
+	// stored without leading dot (matching the test fixture convention
+	// elsewhere in this file). data.ResolveDefault must therefore
+	// tolerate both spellings — this also exercises that path
+	// end-to-end.
+	defaults := &config.Defaults{
+		Site:     "dc1",
+		Location: ".1.3.6.1.2.1.1.6.0",
+		AssetTag: ".1.3.6.1.2.1.1.4.0",
+	}
+
+	registry := mapping.NewEntityRegistry(logger)
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+	require.NotNil(t, entity)
+	device, ok := entity.(*diode.Device)
+	require.True(t, ok)
+
+	require.NotNil(t, device.Location)
+	require.NotNil(t, device.Location.Name)
+	assert.Equal(t, "Data Center 01", *device.Location.Name)
+	require.NotNil(t, device.Location.Site)
+	assert.Equal(t, "dc1", *device.Location.Site.Name)
+
+	require.NotNil(t, device.AssetTag)
+	assert.Equal(t, "asset-12345", *device.AssetTag)
+}
+
+// TestDeviceMapper_Map_DefaultsResolveFromSysLocationOnly is the
+// symmetric partial-walk test for sysLocation: a device that responds
+// only to sysLocation (no name/description/platform/sysContact) must
+// still apply defaults via the no-op switch case's fieldFound=true.
+func TestDeviceMapper_Map_DefaultsResolveFromSysLocationOnly(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.6.0": {
+			OID:    "1.3.6.1.2.1.1.6.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.6",
+			Value:  "Data Center 02",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.6", Entity: "device", Field: "sysLocation"},
+		},
+	}
+	defaults := &config.Defaults{
+		Site:     "dc2",
+		Location: ".1.3.6.1.2.1.1.6.0",
+	}
+
+	registry := mapping.NewEntityRegistry(logger)
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+	require.NotNil(t, entity)
+	device, ok := entity.(*diode.Device)
+	require.True(t, ok)
+
+	require.NotNil(t, device.Location)
+	require.NotNil(t, device.Location.Name)
+	assert.Equal(t, "Data Center 02", *device.Location.Name)
+	require.NotNil(t, device.Location.Site)
+	assert.Equal(t, "dc2", *device.Location.Site.Name)
+}
+
+// TestDeviceMapper_Map_DefaultsResolveFromSysContactOnly covers the
+// edge case where a device responds to sysContact/sysLocation but not
+// to name/description/platform. The no-op switch cases set fieldFound
+// so applyDefaults still runs, and OID-ref defaults resolve normally.
+func TestDeviceMapper_Map_DefaultsResolveFromSysContactOnly(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.4.0": {
+			OID:    "1.3.6.1.2.1.1.4.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.4",
+			Value:  "asset-from-contact",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.4", Entity: "device", Field: "sysContact"},
+		},
+	}
+	defaults := &config.Defaults{
+		Site:     "dc1",
+		AssetTag: ".1.3.6.1.2.1.1.4.0",
+	}
+
+	registry := mapping.NewEntityRegistry(logger)
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+	require.NotNil(t, entity)
+	device, ok := entity.(*diode.Device)
+	require.True(t, ok)
+
+	require.NotNil(t, device.AssetTag)
+	assert.Equal(t, "asset-from-contact", *device.AssetTag)
 }

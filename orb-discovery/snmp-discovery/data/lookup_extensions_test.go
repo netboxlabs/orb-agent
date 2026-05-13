@@ -865,3 +865,88 @@ func TestLoadYAMLFile(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveDefault_Literal(t *testing.T) {
+	v, ok := ResolveDefault("DC1-Building-A", nil)
+	assert.True(t, ok)
+	assert.Equal(t, "DC1-Building-A", v)
+}
+
+func TestResolveDefault_LiteralTrimsWhitespace(t *testing.T) {
+	v, ok := ResolveDefault("  DC1  ", nil)
+	assert.True(t, ok)
+	assert.Equal(t, "DC1", v)
+}
+
+func TestResolveDefault_LiteralEmptyAfterTrim(t *testing.T) {
+	_, ok := ResolveDefault("   ", nil)
+	assert.False(t, ok)
+}
+
+func TestResolveDefault_EmptyRaw(t *testing.T) {
+	_, ok := ResolveDefault("", nil)
+	assert.False(t, ok)
+}
+
+func TestResolveDefault_NonSNMPDottedDecimalIsLiteral(t *testing.T) {
+	v, ok := ResolveDefault("3.14.159", map[string]string{".1.3.6.1.2.1.1.6.0": "ignored"})
+	assert.True(t, ok)
+	assert.Equal(t, "3.14.159", v)
+}
+
+func TestResolveDefault_IPLikeLiteralIsLiteral(t *testing.T) {
+	v, ok := ResolveDefault("10.0.0.1", nil)
+	assert.True(t, ok)
+	assert.Equal(t, "10.0.0.1", v)
+}
+
+func TestResolveDefault_OIDReferenceHit(t *testing.T) {
+	walked := map[string]string{".1.3.6.1.2.1.1.6.0": "Data Center 01"}
+	v, ok := ResolveDefault(".1.3.6.1.2.1.1.6.0", walked)
+	assert.True(t, ok)
+	assert.Equal(t, "Data Center 01", v)
+}
+
+func TestResolveDefault_OIDReferenceBothSpellingsTolerated(t *testing.T) {
+	walked := map[string]string{"1.3.6.1.2.1.1.6.0": "Data Center 01"}
+	v, ok := ResolveDefault(".1.3.6.1.2.1.1.6.0", walked)
+	assert.True(t, ok)
+	assert.Equal(t, "Data Center 01", v)
+}
+
+func TestResolveDefault_OIDReferenceMissing(t *testing.T) {
+	_, ok := ResolveDefault(".1.3.6.1.2.1.1.6.0", map[string]string{})
+	assert.False(t, ok)
+}
+
+func TestResolveDefault_OIDReferenceEmptyValue(t *testing.T) {
+	walked := map[string]string{".1.3.6.1.2.1.1.6.0": "   "}
+	_, ok := ResolveDefault(".1.3.6.1.2.1.1.6.0", walked)
+	assert.False(t, ok)
+}
+
+func TestResolveDefault_OIDReferenceStripsLeadingNullByte(t *testing.T) {
+	walked := map[string]string{".1.3.6.1.2.1.1.6.0": "\x00Data Center 01"}
+	v, ok := ResolveDefault(".1.3.6.1.2.1.1.6.0", walked)
+	assert.True(t, ok)
+	assert.Equal(t, "Data Center 01", v)
+}
+
+func TestResolveDefault_OIDReferenceStripsTrailingNullByte(t *testing.T) {
+	walked := map[string]string{".1.3.6.1.2.1.1.6.0": "Data Center 01\x00"}
+	v, ok := ResolveDefault(".1.3.6.1.2.1.1.6.0", walked)
+	assert.True(t, ok)
+	assert.Equal(t, "Data Center 01", v)
+}
+
+func TestResolveDefault_OIDReferenceNilWalked(t *testing.T) {
+	_, ok := ResolveDefault(".1.3.6.1.2.1.1.6.0", nil)
+	assert.False(t, ok)
+}
+
+func TestResolveDefault_ExistingOIDPatternUnchanged(t *testing.T) {
+	// Regression guard: the looser oidPattern used by GetDeviceModel must
+	// not be tightened by this change.
+	assert.True(t, oidPattern.MatchString(".1.3.6.1.4.1.14988.1"))
+	assert.True(t, oidPattern.MatchString("3.14.159"))
+}
