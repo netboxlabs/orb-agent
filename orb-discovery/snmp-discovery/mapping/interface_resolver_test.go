@@ -234,6 +234,23 @@ func TestResolveInterfaceType_RealWorldScenarios(t *testing.T) {
 		assert.Equal(t, "10gbase-t", result)
 	})
 
+	t.Run("GigabitEthernet at 10Mbps falls back to name pattern, not 'other'", func(t *testing.T) {
+		merged := MergePatterns(nil, true)
+		matcher, err := NewPatternMatcher(merged, logger)
+		assert.NoError(t, err)
+
+		speed := int64(10000) // 10 Mbps in kbps
+		result := ResolveInterfaceType(
+			"GigabitEthernet1/0/34",
+			"6",
+			&speed,
+			"other",
+			matcher,
+			0,
+		)
+		assert.Equal(t, "1000base-t", result)
+	})
+
 	t.Run("LAG interface from SNMP ifType", func(t *testing.T) {
 		merged := MergePatterns(nil, true)
 		matcher, err := NewPatternMatcher(merged, logger)

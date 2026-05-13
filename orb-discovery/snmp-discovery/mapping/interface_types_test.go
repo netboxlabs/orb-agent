@@ -216,7 +216,15 @@ var tests = []struct {
 		ifType:               "6",
 		defaultInterfaceType: "",
 		expectedNetboxType:   "other",
-		description:          "ethernetCsmacd with 10Mbps should map to other",
+		description:          "ethernetCsmacd with 10Mbps falls through to default fallback",
+		speed:                int64Ptr(10000),
+	},
+	{
+		name:                 "ethernetCsmacd 10Mbps honours configured default",
+		ifType:               "6",
+		defaultInterfaceType: "1000base-t",
+		expectedNetboxType:   "1000base-t",
+		description:          "10Mbps Ethernet should fall through to the configured default, not return 'other'",
 		speed:                int64Ptr(10000),
 	},
 	{
