@@ -60,7 +60,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 |:---------:|:----:|:--------:|:-----------:|
 | tags | list | no | List of tags to apply to all discovered entities |
 | site | string | no | Default site name for discovered devices |
-| location | string | no | Default location for discovered devices |
+| location | string | no | Default location for discovered devices. Accepts a literal name or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)) |
+| asset_tag | string | no | Default asset tag for discovered devices. Accepts a literal value or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)). NetBox enforces a 50-character limit; resolved values longer than 50 characters are warn-logged and skipped |
 | role | string | no | Default role for discovered devices |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
@@ -163,7 +164,8 @@ config:
   defaults:
     tags: ["snmp-discovery", "orb"]
     site: "datacenter-01"
-    location: "rack-42"
+    location: ".1.3.6.1.2.1.1.6.0"     # Resolve from sysLocation (or use a literal like "rack-42")
+    asset_tag: ".1.3.6.1.2.1.1.4.0"    # Resolve from sysContact (or use a literal)
     role: "network"
     ip_address:
       description: "SNMP discovered IP"
@@ -264,6 +266,42 @@ devices:
 ```
 
 No extra SNMP traffic is generated — the referenced OID must already be collected by the policy's walk set. `sysDescr` (`.1.3.6.1.2.1.1.1.0`) is always walked. If the referenced OID is missing or empty for a given device, snmp-discovery falls back to using the raw `sysObjectID`. The bundled `mikrotik.yaml` keeps the historical static `mikrotikRouter` model string by default for backward compatibility; operators who want per-device MikroTik model names can opt in by adding the override above to their `lookup_extensions_dir`.
+
+## Default values from SNMP OIDs
+
+Selected `defaults` fields accept either a literal value or an SNMP OID reference of the form `.1.3.6.1.…`. When the configured value matches the SNMP OID syntax (rooted at `.1.3.6.1.`), snmp-discovery dereferences the walked value at discovery time and uses that as the field value. Anything else is treated as a literal — including dotted-decimal literals such as `"3.14.159"` (a room number) or `"10.0.0.1"`, which do not start with the standard SNMP Internet prefix.
+
+| Defaults field | OID-reference supported? |
+|---|---|
+| `defaults.location` | yes |
+| `defaults.asset_tag` | yes |
+| other `defaults.*` fields | not yet — literal only |
+
+Two OIDs are walked on every device specifically so they can be referenced here:
+
+| OID | Name | Typical use |
+|---|---|---|
+| `.1.3.6.1.2.1.1.4.0` | `sysContact` | Some operators populate this with an inventory identifier — point `defaults.asset_tag` at it. |
+| `.1.3.6.1.2.1.1.6.0` | `sysLocation` | Physical location free-text per RFC 3418 — point `defaults.location` at it. |
+
+```yaml
+defaults:
+  site: "datacenter-01"
+  location: ".1.3.6.1.2.1.1.6.0"     # Use sysLocation
+  asset_tag: ".1.3.6.1.2.1.1.4.0"    # Use sysContact (note: sysContact is RFC 3418 contact info,
+                                       # not an asset tag by default — only opt in if your
+                                       # operators have repurposed it for inventory tracking)
+```
+
+Resolution rules:
+
+- The OID-reference syntax matches `^\.1\.3\.6\.1\.(\d+\.)+\d+$`; everything else stays a literal.
+- Both leading-dot (`.1.3.6…`) and no-leading-dot (`1.3.6…`) spellings are accepted.
+- A configured OID reference whose walked value is missing or empty leaves the field unset for that device — no fallback to a literal.
+- `defaults.asset_tag` is capped at NetBox's 50-character limit; longer resolved values are warn-logged and skipped (rather than truncated) to avoid silent asset-tag uniqueness collisions.
+- `defaults.location` resolved via an OID reference will create (or match) a NetBox `Location` object named after the resolved string, scoped to `defaults.site`. Free-text `sysLocation` values can therefore produce messy Location objects (`"Front Door"`, vendor defaults, etc.) — curate your fleet before enabling this in production.
+
+`entPhysicalAssetID` (ENTITY-MIB `.1.3.6.1.2.1.47.1.1.1.1.15`) is the standards-aligned asset-tag source, but it is a table column requiring chassis-row selection (`entPhysicalClass = chassis(3)`). It is not yet reachable from this `defaults.asset_tag` mechanism and is tracked as a follow-up.
 
 ### Manufacturer overrides
 
