@@ -277,12 +277,17 @@ Selected `defaults` fields accept either a literal value or an SNMP OID referenc
 | `defaults.asset_tag` | yes |
 | other `defaults.*` fields | not yet — literal only |
 
-Two OIDs are walked on every device specifically so they can be referenced here:
+Any OID in the **device-system-group walked snapshot** is a valid reference target. The full list available today:
 
-| OID | Name | Typical use |
-|---|---|---|
-| `.1.3.6.1.2.1.1.4.0` | `sysContact` | Some operators populate this with an inventory identifier — point `defaults.asset_tag` at it. |
-| `.1.3.6.1.2.1.1.6.0` | `sysLocation` | Physical location free-text per RFC 3418 — point `defaults.location` at it. |
+| OID | Name | Type | Typical use |
+|---|---|---|---|
+| `.1.3.6.1.2.1.1.1.0` | `sysDescr` | free text (often long) | Rarely useful as `location`/`asset_tag` because values commonly exceed NetBox's 100-char `Location.name` / 50-char `asset_tag` limits. |
+| `.1.3.6.1.2.1.1.2.0` | `sysObjectID` | OID string (e.g. `.1.3.6.1.4.1.9.1.1234`) | Not a useful default source on its own. |
+| `.1.3.6.1.2.1.1.4.0` | `sysContact` | free text | Some operators repurpose this as an inventory identifier — point `defaults.asset_tag` at it. |
+| `.1.3.6.1.2.1.1.5.0` | `sysName` | free text | Device hostname — point `defaults.asset_tag` at it when hostname doubles as the inventory tag. |
+| `.1.3.6.1.2.1.1.6.0` | `sysLocation` | free text | Physical location free-text per RFC 3418 — point `defaults.location` at it. |
+
+OIDs walked under **other** mapping groups — most notably ENTITY-MIB rows such as `entPhysicalSerialNum` (`.1.3.6.1.2.1.47.1.1.1.1.11.<row>`) — are **not** reachable: the mapping framework groups walked PDUs per-`Map()` call, and `defaults.location`/`defaults.asset_tag` resolution runs against the device-system-group snapshot only.
 
 ```yaml
 defaults:
@@ -299,7 +304,7 @@ Resolution rules:
 - Both leading-dot (`.1.3.6…`) and no-leading-dot (`1.3.6…`) spellings are accepted.
 - A configured OID reference whose walked value is missing or empty leaves the field unset for that device — no fallback to a literal.
 - `defaults.asset_tag` is capped at NetBox's 50-character limit; longer resolved values are warn-logged and skipped (rather than truncated) to avoid silent asset-tag uniqueness collisions.
-- `defaults.location` resolved via an OID reference will create (or match) a NetBox `Location` object named after the resolved string, scoped to `defaults.site`. Free-text `sysLocation` values can therefore produce messy Location objects (`"Front Door"`, vendor defaults, etc.) — curate your fleet before enabling this in production.
+- `defaults.location` resolved via an OID reference will create (or match) a NetBox `Location` object named after the resolved string, scoped to `defaults.site`. Free-text `sysLocation` values can therefore produce messy Location objects (`"Front Door"`, vendor defaults, etc.) — curate your fleet before enabling this in production. Resolved values longer than NetBox's 100-char `Location.name` limit will be rejected at upsert time.
 
 `entPhysicalAssetID` (ENTITY-MIB `.1.3.6.1.2.1.47.1.1.1.1.15`) is the standards-aligned asset-tag source, but it is a table column requiring chassis-row selection (`entPhysicalClass = chassis(3)`). It is not yet reachable from this `defaults.asset_tag` mechanism and is tracked as a follow-up.
 
