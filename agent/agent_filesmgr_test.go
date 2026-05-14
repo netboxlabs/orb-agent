@@ -226,6 +226,58 @@ func (b *slowStartBackend) Start(_ context.Context, _ context.CancelFunc) error 
 	return nil
 }
 
+// TestRestartDispatcher_StopsOnDispatcherCancel verifies that cancelling the
+// dispatcher's dedicated context (simulating what Stop() does) prevents the
+// dispatcher from processing any further pending restarts — even when backends
+// are still in the pendingRestarts map.
+func TestRestartDispatcher_StopsOnDispatcherCancel(t *testing.T) {
+	be := &countingBackend{
+		filesmgrTestBackend: filesmgrTestBackend{managedBinary: "orb-worker"},
+	}
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+
+	dispatcherCtx, dispatcherCancel := context.WithCancel(parentCtx)
+
+	a := &orbAgent{
+		logger:           slog.Default(),
+		backends:         map[string]backend.Backend{"worker": be},
+		filesManager:     &mockFilesManager{},
+		cancelFunction:   parentCancel,
+		ctx:              parentCtx,
+		dispatcherCancel: dispatcherCancel,
+	}
+
+	// Cancel the dispatcher context immediately — before any tick can fire.
+	dispatcherCancel()
+
+	// Enqueue a restart.
+	a.pendingRestartsMu.Lock()
+	a.pendingRestarts = map[string]struct{}{"worker": {}}
+	a.pendingRestartsMu.Unlock()
+
+	// Run the dispatcher; it should exit immediately on the cancelled context.
+	done := make(chan struct{})
+	go func() {
+		a.restartDispatcher(dispatcherCtx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// ok — dispatcher exited promptly
+	case <-time.After(time.Second):
+		t.Fatal("restartDispatcher did not exit after context cancellation")
+	}
+
+	// No Start/Stop calls must have occurred.
+	be.mu.Lock()
+	starts := be.startCalls
+	be.mu.Unlock()
+	assert.Equal(t, 0, starts, "dispatcher must not restart backends after its context is cancelled")
+}
+
 // TestRestartDispatcher_ProcessesRestartsSequentially verifies that the
 // dispatcher does not run concurrent Stop+Start sequences for different
 // backends within the same tick (F9). It uses slowStartBackend to track the

@@ -170,6 +170,27 @@ func TestStore_ConcurrentPutsForDifferentNamesAreSerialized(t *testing.T) {
 	}
 }
 
+func TestStore_SameVersionReplacementDoesNotPromotePrevious(t *testing.T) {
+	root := t.TempDir()
+	s := newStore(filepath.Join(root, "state.json"))
+
+	// Install v1.0.0 with SHA A.
+	p1 := filepath.Join(root, "x", "1.0.0")
+	require.NoError(t, os.MkdirAll(p1, 0o755))
+	entry1 := FileEntry{Name: "x", Version: "1.0.0", Path: p1, SHA256: "sha-a"}
+	require.NoError(t, s.put(entry1))
+
+	// Re-install the same version with a different SHA (e.g. re-fetch after corruption).
+	entry2 := FileEntry{Name: "x", Version: "1.0.0", Path: p1, SHA256: "sha-b"}
+	require.NoError(t, s.put(entry2))
+
+	// Previous must be nil: same version replacement must not promote current to previous.
+	tracked, ok := s.getTracked("x")
+	require.True(t, ok)
+	assert.Nil(t, tracked.Previous, "same-version re-put must not set Previous")
+	assert.Equal(t, "sha-b", tracked.Current.SHA256, "current SHA must be updated")
+}
+
 func TestStore_WriteFailureDoesNotMutateInMemoryState(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, "good")

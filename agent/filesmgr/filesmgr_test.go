@@ -691,6 +691,98 @@ func TestManager_StartPreservesUnversionedExtractedContent(t *testing.T) {
 	assert.NoDirExists(t, staleStage, "stale stage dir inside unversioned name dir must be removed on Start")
 }
 
+// TestManager_RemoveCleansUpPerNameMutex verifies that Remove deletes the
+// per-name mutex entry from perNameMu so the map does not grow unboundedly
+// when names churn (install → remove cycles).
+func TestManager_RemoveCleansUpPerNameMutex(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "data"})
+	sum := sha256Hex(archive)
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+
+	m, _ := newTestManager(t)
+	fm := m.(*filesmgr)
+
+	// Install so the per-name mutex is created.
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "1.0.0",
+		URL: srv.URL + "/x.tar.gz", SHA256: sum, Extract: true,
+	})
+	require.NoError(t, err)
+
+	// Confirm the mutex entry exists.
+	_, before := fm.perNameMu.Load("pkg")
+	require.True(t, before, "perNameMu must have an entry for 'pkg' after Ensure")
+
+	// Remove the entry.
+	require.NoError(t, m.Remove(context.Background(), "pkg"))
+
+	// The per-name mutex entry must now be gone.
+	_, after := fm.perNameMu.Load("pkg")
+	assert.False(t, after, "perNameMu must not retain an entry for 'pkg' after Remove")
+}
+
+// TestManager_EnsureRefetchesOnTamper verifies that if the on-disk file is
+// modified after installation, a subsequent Ensure with the same spec detects
+// the SHA256 mismatch and re-fetches the original content.
+func TestManager_EnsureRefetchesOnTamper(t *testing.T) {
+	blob := []byte("original-content-do-not-tamper")
+	sum := sha256Hex(blob)
+
+	var serveCount int
+	var serveMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serveMu.Lock()
+		serveCount++
+		serveMu.Unlock()
+		_, _ = w.Write(blob)
+	}))
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	spec := FileSpec{
+		Name:    "tool",
+		Version: "1.0.0",
+		URL:     srv.URL + "/tool",
+		SHA256:  sum,
+		Extract: false,
+	}
+
+	// First install.
+	path, err := m.Ensure(context.Background(), spec)
+	require.NoError(t, err)
+
+	filePath := filepath.Join(root, "tool", "current", "tool")
+	require.FileExists(t, filePath)
+
+	// Record server hits after the first install.
+	serveMu.Lock()
+	hitsAfterInstall := serveCount
+	serveMu.Unlock()
+	require.Greater(t, hitsAfterInstall, 0, "server must be hit during the initial install")
+
+	// Tamper: overwrite the file with different content.
+	require.NoError(t, os.WriteFile(filePath, []byte("tampered!"), 0o644))
+
+	// Second Ensure with the same spec — must detect mismatch and re-fetch.
+	path2, err := m.Ensure(context.Background(), spec)
+	require.NoError(t, err)
+	assert.Equal(t, path, path2, "path must be stable across re-fetch")
+
+	// The file must have the original content again.
+	got, err := os.ReadFile(filePath)
+	require.NoError(t, err)
+	assert.Equal(t, blob, got, "file content must be restored after tamper re-fetch")
+
+	// Server must have been hit again after the tamper (re-fetch occurred).
+	serveMu.Lock()
+	hitsAfterRefetch := serveCount
+	serveMu.Unlock()
+	assert.Greater(t, hitsAfterRefetch, hitsAfterInstall,
+		"server must be hit again after tamper detection (re-fetch must occur)")
+}
+
 // TestManager_StartCleansUpOrphanVersionDirs verifies that version directories
 // inside a name dir that are not referenced by any tracked entry are removed on
 // Start(), while the tracked version dir (current and previous) is preserved.

@@ -136,8 +136,14 @@ func (s *store) put(entry FileEntry) error {
 
 	var prevPtr *FileEntry
 	if existing, ok := next[entry.Name]; ok {
-		prev := existing.Current
-		prevPtr = &prev
+		// Only carry Previous when the new entry has a different version.
+		// Same-version replacements (re-fetch with different SHA, or recovery
+		// from missing-on-disk) would land at the same on-disk path as the
+		// existing entry, so Previous would be a no-op rollback target.
+		if existing.Current.Version != entry.Version {
+			prev := existing.Current
+			prevPtr = &prev
+		}
 	}
 	next[entry.Name] = trackedEntry{Current: entry, Previous: prevPtr}
 

@@ -2,7 +2,10 @@ package filesmgr
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -39,9 +42,6 @@ type filesmgr struct {
 
 	// perNameMu serializes Ensure calls for the same logical name.
 	perNameMu sync.Map // name -> *sync.Mutex
-
-	// filesmgrUnsubscribe is set by the agent after subscribing; it is not
-	// used internally here but Stop() calls bus.close() directly.
 }
 
 // NewManager constructs a default Manager rooted at the given directory.
@@ -266,10 +266,27 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 					}
 				}
 			}
-			mu.Unlock()
-			return existing.Path, nil
+
+			if !info.IsDir() {
+				// Verify the on-disk SHA256 still matches the recorded one.
+				// This is the contract: "matches the declared sha256."
+				// Tampered or corrupted files fall through to re-fetch.
+				// Only re-verify regular files; for Extract bundles (directories)
+				// the recorded SHA256 is of the archive — we don't keep the
+				// archive on disk, so we cannot cheaply re-verify. Trust the
+				// versioned directory's contents.
+				if actual, hashErr := sha256File(existing.Path); hashErr == nil && actual == spec.SHA256 {
+					mu.Unlock()
+					return existing.Path, nil
+				}
+				// Mismatch or hash error: fall through to re-fetch.
+			} else {
+				// Extracted bundle: cannot cheaply re-verify; trust on-disk state.
+				mu.Unlock()
+				return existing.Path, nil
+			}
 		}
-		// path missing on disk; fall through to re-fetch.
+		// path missing on disk or SHA mismatch; fall through to re-fetch.
 	}
 
 	// versionedDir is where the fetcher places the version directory.
@@ -383,6 +400,14 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 	if err != nil {
 		return err
 	}
+
+	// Drop the per-name mutex entry now that removal is complete and the mutex
+	// is no longer held. Safe because:
+	//   - We have already released mu above.
+	//   - A future Ensure or Remove will call mutexFor which uses LoadOrStore,
+	//     so a new mutex will be created correctly if the name re-appears.
+	m.perNameMu.Delete(name)
+
 	m.bus.publish(ev)
 	return nil
 }
@@ -425,6 +450,10 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 		if err != nil {
 			return err
 		}
+		// Drop the per-name mutex: the entry is fully removed and the mutex
+		// is no longer held. A future re-Ensure will allocate a fresh one via
+		// LoadOrStore in mutexFor.
+		m.perNameMu.Delete(name)
 		m.bus.publish(ev)
 		return nil
 	}
@@ -497,4 +526,23 @@ func (m *filesmgr) placementPath(spec FileSpec) string {
 		return filepath.Join(m.root, spec.Name, spec.Version)
 	}
 	return filepath.Join(m.root, spec.Name)
+}
+
+// sha256File computes the SHA-256 hex digest of the file at path by streaming
+// it through a hash. Returns lowercase hex on success.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	_, copyErr := io.Copy(h, f)
+	closeErr := f.Close()
+	if copyErr != nil {
+		return "", copyErr
+	}
+	if closeErr != nil {
+		return "", closeErr
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

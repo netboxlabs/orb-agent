@@ -34,6 +34,18 @@ type Manager interface {
 	// Returns an error if name has no previous version recorded (e.g., it's
 	// a first install) or if the previous version's directory no longer
 	// exists on disk.
+	//
+	// SPECIAL CASE — first-install rollback: if there is no Previous version
+	// recorded, Rollback removes the entry entirely (the agent's "rollback to
+	// default" semantic, so consumers fall back to their baked binary). This
+	// emits EventRemoved.
+	//
+	// Manual callers should be aware that EventRemoved is ignored by the
+	// agent's file-event-to-restart bridge (to avoid restart loops in the
+	// auto-rollback flow which already handles restart synchronously). If you
+	// are calling Rollback from outside the auto-rollback flow and the affected
+	// name corresponds to a ManagedBinary backend, you are responsible for
+	// triggering that backend's restart yourself.
 	Rollback(ctx context.Context, name string) error
 
 	// Subscribe registers a handler invoked on every FileEvent. The

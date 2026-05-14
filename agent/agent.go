@@ -39,8 +39,17 @@ type Agent interface {
 }
 
 type orbAgent struct {
-	logger           *slog.Logger
-	config           config.Config
+	logger *slog.Logger
+	config config.Config
+
+	// backends maps backend names to their Backend implementations.
+	//
+	// Invariant: this map is populated exactly once during startBackends and is
+	// read-only after Start returns. Multiple goroutines (subscribeFilesmgr's
+	// callback, restartBackendWithFilesmgrRollback) read it concurrently
+	// without synchronization, which is safe ONLY because of this invariant.
+	// Any future code path that mutates a.backends after Start MUST add a
+	// mutex to protect concurrent access.
 	backends         map[string]backend.Backend
 	backendsCommon   config.BackendCommons
 	debug            bool
@@ -72,6 +81,11 @@ type orbAgent struct {
 	// guarded here.
 	restartCancels   map[string]context.CancelFunc
 	restartCancelsMu sync.Mutex
+
+	// dispatcherCancel stops the restartDispatcher goroutine independently of
+	// the root agent context. Cancelled in Stop() before iterating backends so
+	// the dispatcher cannot fire a restart after backends have been stopped.
+	dispatcherCancel context.CancelFunc
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -195,8 +209,12 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	}
 
 	// Start the restart workers once, after all backends are registered.
+	// Use a dedicated context for the dispatcher so Stop() can cancel it before
+	// iterating backends, preventing a restart from firing after shutdown begins.
 	go a.waitForRestartRequests()
-	go a.restartDispatcher(agentCtx)
+	dispatcherCtx, dispatcherCancel := context.WithCancel(agentCtx)
+	a.dispatcherCancel = dispatcherCancel
+	go a.restartDispatcher(dispatcherCtx)
 
 	return nil
 }
@@ -449,6 +467,12 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 
 func (a *orbAgent) Stop(ctx context.Context) {
 	a.logger.Info("routine call for stop agent", "routine", ctx.Value(routineKey))
+	// Cancel the restart dispatcher first so it cannot fire a restart after we
+	// begin stopping backends. The dispatcher's select loop respects cancellation
+	// and will exit on the next tick.
+	if a.dispatcherCancel != nil {
+		a.dispatcherCancel()
+	}
 	for name, b := range a.backends {
 		if state, _, _ := b.GetRunningStatus(); state == backend.Running {
 			a.logger.Debug("stopping backend", "backend", name)
