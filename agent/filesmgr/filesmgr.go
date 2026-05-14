@@ -88,8 +88,10 @@ func (m *filesmgr) Start(_ context.Context) error {
 // For unversioned Extract installs (no "current" symlink, but a tracked entry
 // exists), the extracted content under <root>/<name>/ is the install itself —
 // only stage artifacts inside it are cleaned; the content is left untouched.
-// For abandoned name dirs (no "current" symlink AND no tracked entry), the
-// entire name directory is removed.
+//
+// Only directories that the manager recognizes as its own (via tracked state or
+// known marker artifacts like .filesmgr-stage-*, current.new) are subject to
+// cleanup. Unknown dirs are left untouched.
 func (m *filesmgr) cleanupStaleArtifacts() {
 	// Build the set of live version directories from the loaded store so we
 	// don't delete versions that are still tracked (current or previous).
@@ -148,11 +150,8 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 			// Only clean stage artifacts and current.new — leave the rest.
 			m.cleanStageArtifactsOnly(fullPath)
 		default:
-			// No tracked entry and no current symlink: abandoned name dir.
-			m.logger.Info("filesmgr: removing abandoned name dir", "path", fullPath)
-			if err := os.RemoveAll(fullPath); err != nil {
-				m.logger.Warn("filesmgr: failed to remove abandoned name dir", "path", fullPath, "error", err)
-			}
+			// No tracked entry and no current symlink: unknown directory.
+			// Leave it untouched — it is not ours to delete.
 		}
 	}
 }
@@ -258,7 +257,7 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 			if !info.IsDir() {
 				// Verify the on-disk SHA256 still matches the recorded one before
 				// doing any work. Tampered or corrupted files fall through to
-				// re-fetch (which also re-chmods), so chomoding first would be
+				// re-fetch (which also re-chmods), so chmoding first would be
 				// wasted work on the re-fetch path.
 				// Only re-verify regular files; for Extract bundles (directories)
 				// the recorded SHA256 is of the archive — we don't keep the
@@ -278,11 +277,14 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 					return existing.Path, nil
 				}
 				// SHA mismatch or hash error: fall through to re-fetch.
-			} else {
+			} else if spec.Extract {
 				// Extracted bundle: cannot cheaply re-verify; trust on-disk state.
 				mu.Unlock()
 				return existing.Path, nil
 			}
+			// spec.Extract == false but path is a directory: on-disk state has
+			// diverged from what was recorded (e.g. operator tampering or a
+			// mode-transition mistake). Fall through to re-fetch.
 		}
 		// path missing on disk or SHA mismatch; fall through to re-fetch.
 	}

@@ -414,31 +414,58 @@ func TestManager_RollbackWithMissingPreviousDir_ReturnsError(t *testing.T) {
 func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
 	root := t.TempDir()
 
-	// Create a stale stage directory at the root level.
+	// Create a stale stage directory at the root level — this IS ours to remove.
 	staleStage := filepath.Join(root, ".filesmgr-stage-abc123")
 	require.NoError(t, os.Mkdir(staleStage, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(staleStage, "payload"), []byte("stale"), 0o644))
 
-	// Create a stale current.new symlink inside a name directory.
-	nameDir := filepath.Join(root, "mypkg")
-	require.NoError(t, os.MkdirAll(nameDir, 0o755))
-	staleNew := filepath.Join(nameDir, "current.new")
+	// Create a tracked versioned name dir with a stale current.new symlink and a
+	// nested .filesmgr-stage-* dir so we can verify those are cleaned.
+	trackedDir := filepath.Join(root, "tracked-pkg")
+	versionDir := filepath.Join(trackedDir, "1.0.0")
+	require.NoError(t, os.MkdirAll(versionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(versionDir, "bin"), []byte("v1"), 0o755))
+	currentLink := filepath.Join(trackedDir, "current")
+	require.NoError(t, os.Symlink("1.0.0", currentLink))
+
+	staleNew := filepath.Join(trackedDir, "current.new")
 	require.NoError(t, os.Symlink("1.0.0", staleNew))
 
-	// Also create a nested .filesmgr-stage-* dir inside a name dir to verify
-	// that nested stale stage directories are removed on Start.
-	nestedStage := filepath.Join(nameDir, ".filesmgr-stage-xyz")
+	nestedStage := filepath.Join(trackedDir, ".filesmgr-stage-xyz")
 	require.NoError(t, os.Mkdir(nestedStage, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(nestedStage, "data"), []byte("nested-stale"), 0o644))
 
 	m := NewManager(slog.Default(), root)
 	require.NoError(t, m.Start(context.Background()))
 
-	// All stale artifacts must be gone after Start().
+	// Top-level stale stage dir must be removed.
 	assert.NoDirExists(t, staleStage, "stale stage dir must be removed on Start")
+	// Stale current.new and nested stage dir inside a versioned dir must be removed.
 	_, err := os.Lstat(staleNew)
 	assert.True(t, os.IsNotExist(err), "stale current.new must be removed on Start")
 	assert.NoDirExists(t, nestedStage, "nested stale stage dir must be removed on Start")
+}
+
+// TestManager_StartLeavesUnknownDirsAlone verifies that cleanupStaleArtifacts
+// does NOT remove directories under root that have no "current" symlink and are
+// not tracked in state. These dirs are not owned by the FilesManager and must
+// be left untouched to avoid destructive behavior when root is shared or
+// misconfigured.
+func TestManager_StartLeavesUnknownDirsAlone(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a directory that is completely unrelated to the FilesManager.
+	unknownDir := filepath.Join(root, "totally-unrelated")
+	require.NoError(t, os.MkdirAll(unknownDir, 0o755))
+	unknownFile := filepath.Join(unknownDir, "some-file.txt")
+	require.NoError(t, os.WriteFile(unknownFile, []byte("keep me"), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// The unknown directory and its content must survive Start.
+	assert.DirExists(t, unknownDir, "unknown dir must not be removed on Start")
+	assert.FileExists(t, unknownFile, "file inside unknown dir must not be removed on Start")
 }
 
 // TestManager_EnsureRestoresExactStateOnSymlinkFailure verifies that when the
@@ -750,6 +777,72 @@ func TestManager_EnsureRefetchesOnTamper(t *testing.T) {
 	serveMu.Unlock()
 	assert.Greater(t, hitsAfterRefetch, hitsAfterInstall,
 		"server must be hit again after tamper detection (re-fetch must occur)")
+}
+
+// TestManager_EnsureRefetchesWhenSingleFilePathBecameDirectory verifies that if
+// the on-disk path for a single-file (non-Extract) entry has been replaced by a
+// directory (e.g. operator tampering or a mode-transition mistake), Ensure
+// detects the mismatch and re-fetches the original content.
+func TestManager_EnsureRefetchesWhenSingleFilePathBecameDirectory(t *testing.T) {
+	blob := []byte("single-file-content")
+	sum := sha256Hex(blob)
+
+	var serveCount int
+	var serveMu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serveMu.Lock()
+		serveCount++
+		serveMu.Unlock()
+		_, _ = w.Write(blob)
+	}))
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	spec := FileSpec{
+		Name:    "tool",
+		Version: "1.0.0",
+		URL:     srv.URL + "/tool",
+		SHA256:  sum,
+		Extract: false,
+	}
+
+	// First install.
+	path, err := m.Ensure(context.Background(), spec)
+	require.NoError(t, err)
+
+	filePath := filepath.Join(root, "tool", "current", "tool")
+	require.FileExists(t, filePath)
+
+	serveMu.Lock()
+	hitsAfterInstall := serveCount
+	serveMu.Unlock()
+	require.Greater(t, hitsAfterInstall, 0, "server must be hit during the initial install")
+
+	// Tamper: replace the file with a directory at the same path.
+	require.NoError(t, os.Remove(filePath))
+	require.NoError(t, os.Mkdir(filePath, 0o755))
+
+	// Second Ensure with the same spec — must detect the directory and re-fetch.
+	path2, err := m.Ensure(context.Background(), spec)
+	require.NoError(t, err)
+	assert.Equal(t, path, path2, "path must be stable across re-fetch")
+
+	// The path must be a regular file again with the original content.
+	fi, err := os.Stat(path2)
+	require.NoError(t, err)
+	assert.False(t, fi.IsDir(), "path must be a regular file after re-fetch, not a directory")
+
+	got, err := os.ReadFile(path2)
+	require.NoError(t, err)
+	assert.Equal(t, blob, got, "file content must be restored after directory-tamper re-fetch")
+
+	// Server must have been hit again (re-fetch occurred).
+	serveMu.Lock()
+	hitsAfterRefetch := serveCount
+	serveMu.Unlock()
+	assert.Greater(t, hitsAfterRefetch, hitsAfterInstall,
+		"server must be hit again after directory-tamper detection (re-fetch must occur)")
 }
 
 // TestManager_StartCleansUpOrphanVersionDirs verifies that version directories

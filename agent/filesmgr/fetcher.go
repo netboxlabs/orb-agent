@@ -210,7 +210,7 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 			return fmt.Errorf("chmod %s: %w", stagePath, err)
 		}
 		finalPath := filepath.Join(dst, filename)
-		if err := os.Rename(stagePath, finalPath); err != nil {
+		if err := f.renameSwap(stagePath, finalPath); err != nil {
 			return fmt.Errorf("place %s: %w", finalPath, err)
 		}
 	}

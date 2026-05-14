@@ -537,14 +537,14 @@ func TestSubscribeToFilesmgr_IgnoresRolledBackAndRemoved(t *testing.T) {
 	}
 }
 
-// TestBackendRestartLock_SerializesConccurentRestarts verifies that
+// TestBackendRestartLock_SerializesConcurrentRestarts verifies that
 // backendRestartLock returns the same *sync.Mutex for the same backend name,
 // so restartBackendWithFilesmgrRollback and a concurrent RestartBackend caller
 // holding the same lock are serialized. The test simulates this by: having
 // goroutine A acquire the lock for "worker", then spawning goroutine B which
 // calls restartBackendWithFilesmgrRollback for "worker". B's Start should not
 // execute until A releases the lock.
-func TestBackendRestartLock_SerializesConccurentRestarts(t *testing.T) {
+func TestBackendRestartLock_SerializesConcurrentRestarts(t *testing.T) {
 	// Track the order of operations.
 	var order []string
 	var orderMu sync.Mutex

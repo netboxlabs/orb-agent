@@ -500,6 +500,17 @@ func (a *orbAgent) Stop(ctx context.Context) {
 	if a.dispatcherCancel != nil {
 		a.dispatcherCancel()
 	}
+	// Explicitly cancel all in-flight file-driven restart contexts. While ctx
+	// propagation from a.ctx → dispatcherCtx → runCtx would also cancel these,
+	// making teardown explicit ensures correctness even if the context chain is
+	// ever refactored.
+	a.restartCancelsMu.Lock()
+	for name, cancel := range a.restartCancels {
+		cancel()
+		a.logger.Debug("filesmgr restart context canceled", "backend", name)
+	}
+	clear(a.restartCancels)
+	a.restartCancelsMu.Unlock()
 	for name, b := range a.backends {
 		if state, _, _ := b.GetRunningStatus(); state == backend.Running {
 			a.logger.Debug("stopping backend", "backend", name)
