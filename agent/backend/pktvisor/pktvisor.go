@@ -76,6 +76,8 @@ func (p *pktvisorBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
+func (p *pktvisorBackend) ManagedBinaryName() string { return "" }
+
 func (p *pktvisorBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
 	runningStatus, errMsg, err := backend.GetRunningStatus(p.proc)

@@ -120,6 +120,8 @@ func (m *mockBackend) RemovePolicy(policy policies.PolicyData) error {
 	return args.Error(0)
 }
 
+func (m *mockBackend) ManagedBinaryName() string { return "" }
+
 type mockBackendState struct {
 	mock.Mock
 }

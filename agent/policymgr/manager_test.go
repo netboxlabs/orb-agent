@@ -85,6 +85,8 @@ func (m *mockBackend) RemovePolicy(policy policies.PolicyData) error {
 	return args.Error(0)
 }
 
+func (m *mockBackend) ManagedBinaryName() string { return "" }
+
 // Mock for the secretsmgr.Manager interface
 type mockSecretsManager struct {
 	mock.Mock

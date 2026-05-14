@@ -55,6 +55,13 @@ type orbAgent struct {
 	filesManager        filesmgr.Manager
 	filesmgrUnsubscribe func()
 	restartBackendChan  chan string
+
+	// pendingRestarts holds backend names that need to be restarted.
+	// The restartDispatcher goroutine drains this map and sends to
+	// restartBackendChan, coalescing rapid successive upgrade events
+	// into a single restart.
+	pendingRestarts   map[string]struct{}
+	pendingRestartsMu sync.Mutex
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -171,32 +178,68 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 			return err
 		}
 		a.backendStateManager.StartBackendMonitor(name, be)
-
-		go a.waitForRestartRequests()
 	}
+
+	// Start the restart workers once, after all backends are registered.
+	go a.waitForRestartRequests()
+	go a.restartDispatcher(agentCtx)
+
 	return nil
 }
 
 // subscribeFilesmgr wires FilesManager upgrade events to the backend
-// restart channel. A restart is requested when a file's logical name
-// matches a registered backend's name. This subscription is mode-
-// independent: it fires regardless of the active config manager.
-// The returned unsubscribe function must be called on Stop().
+// restart channel. When a file's logical name matches the ManagedBinaryName
+// of a registered backend, the backend (identified by its backend name, NOT
+// the file name) is enqueued for restart. This decouples backend identity
+// from binary identity. The subscription is mode-independent: it fires
+// regardless of the active config manager. The returned unsubscribe
+// function must be called on Stop().
 func (a *orbAgent) subscribeFilesmgr() {
 	a.filesmgrUnsubscribe = a.filesManager.Subscribe(func(ev filesmgr.FileEvent) {
 		if ev.Type != filesmgr.EventUpgraded {
 			return
 		}
-		if _, ok := a.backends[ev.Entry.Name]; !ok {
-			return
-		}
-		select {
-		case a.restartBackendChan <- ev.Entry.Name:
-			a.logger.Info("filesmgr: requested restart", "backend", ev.Entry.Name, "version", ev.Entry.Version)
-		default:
-			a.logger.Warn("filesmgr: restart channel full, dropping request", "backend", ev.Entry.Name)
+		for name, be := range a.backends {
+			if be.ManagedBinaryName() == ev.Entry.Name {
+				a.pendingRestartsMu.Lock()
+				if a.pendingRestarts == nil {
+					a.pendingRestarts = make(map[string]struct{})
+				}
+				a.pendingRestarts[name] = struct{}{}
+				a.pendingRestartsMu.Unlock()
+				a.logger.Info("filesmgr: queued restart", "backend", name, "file", ev.Entry.Name, "version", ev.Entry.Version)
+			}
 		}
 	})
+}
+
+// restartDispatcher runs as a background goroutine and drains pendingRestarts
+// into restartBackendChan every 500 ms. Using a BLOCKING send means the
+// dispatcher will wait if the channel is full — ensuring no restart is lost.
+// Coalescing semantics: multiple upgrade events for the same backend within
+// a 500 ms window result in exactly one restart.
+func (a *orbAgent) restartDispatcher(ctx context.Context) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.pendingRestartsMu.Lock()
+			pending := a.pendingRestarts
+			a.pendingRestarts = nil
+			a.pendingRestartsMu.Unlock()
+			for name := range pending {
+				select {
+				case a.restartBackendChan <- name:
+					a.logger.Info("filesmgr: dispatched restart", "backend", name)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
 }
 
 func (a *orbAgent) waitForRestartRequests() {

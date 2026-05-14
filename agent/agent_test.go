@@ -129,6 +129,7 @@ func (m *mockFilesManager) Stop(_ context.Context) error  { return nil }
 func (m *mockFilesManager) Ensure(_ context.Context, _ filesmgr.FileSpec) (string, error) {
 	return "", nil
 }
+
 func (m *mockFilesManager) Get(_ string) (filesmgr.FileEntry, bool) {
 	return filesmgr.FileEntry{}, false
 }

@@ -92,6 +92,13 @@ type Backend interface {
 	GetRunningStatus() (RunningStatus, string, error)
 	GetInitialState() RunningStatus
 
+	// ManagedBinaryName returns the logical name of a file managed by
+	// FilesManager that this backend's runtime depends on, or empty string
+	// if none. When that file's version changes, BackendStateManager will
+	// request a restart of this backend so it can pick up the new binary
+	// path.
+	ManagedBinaryName() string
+
 	ApplyPolicy(data policies.PolicyData, updatePolicy bool) error
 	RemovePolicy(data policies.PolicyData) error
 }

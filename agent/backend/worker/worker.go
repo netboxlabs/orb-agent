@@ -374,6 +374,8 @@ func (d *workerBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
+func (d *workerBackend) ManagedBinaryName() string { return "" }
+
 func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version

@@ -336,6 +336,8 @@ func (d *snmpDiscoveryBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
+func (d *snmpDiscoveryBackend) ManagedBinaryName() string { return "" }
+
 func (d *snmpDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version

@@ -77,6 +77,8 @@ func (m *mockBackend) RemovePolicy(data policies.PolicyData) error {
 	return args.Error(0)
 }
 
+func (m *mockBackend) ManagedBinaryName() string { return "" }
+
 func (m *mockBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	args := m.Called()
 	if args.Get(0) == nil {
