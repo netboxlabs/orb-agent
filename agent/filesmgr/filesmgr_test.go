@@ -28,6 +28,19 @@ func newTestManager(t *testing.T) (Manager, string) {
 	return m, root
 }
 
+// TestManager_StartSucceedsWhenRootDirNotWritable verifies the lazy-root
+// invariant: Start() must not create the root directory or fail when the root's
+// parent does not exist (or is not writable). Agents that never call Ensure
+// must be able to boot cleanly without requiring write access to /opt or
+// whatever the configured root's parent is.
+func TestManager_StartSucceedsWhenRootDirNotWritable(t *testing.T) {
+	// Use a path whose parent does not exist so MkdirAll would fail if called.
+	// We deliberately do NOT call Ensure — that would (correctly) fail.
+	m := NewManager(slog.Default(), "/non/existent/path/orb/files")
+	require.NoError(t, m.Start(context.Background()),
+		"Start must succeed even when root dir cannot be created (no state.json == no-op)")
+}
+
 func TestManager_EnsureInstallsAndEmitsEvent(t *testing.T) {
 	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
 	sum := sha256Hex(archive)
@@ -236,13 +249,13 @@ func TestManager_EnsureStorePutFailureRollsBack(t *testing.T) {
 
 	root := t.TempDir()
 
-	// Start a normal manager so Start() can create the root dir.
+	// Start a normal manager first — with no existing state.json, Start is a
+	// no-op (lazy root). Then block writes by placing a directory at the
+	// state.json path so that Ensure's store.put call fails.
 	m := NewManager(slog.Default(), root)
 	require.NoError(t, m.Start(context.Background()))
 
 	// Now block writes by placing a directory at the state.json path.
-	// Start() writes an empty state.json, so remove it first then mkdir it.
-	require.NoError(t, os.Remove(filepath.Join(root, "state.json")))
 	require.NoError(t, os.Mkdir(filepath.Join(root, "state.json"), 0o755))
 
 	_, err := m.Ensure(context.Background(), FileSpec{
@@ -679,6 +692,17 @@ func TestManager_RemoveRejectsUnsafeNames(t *testing.T) {
 // left by a crashed atomic write are removed on the next Start().
 func TestManager_StartCleansUpStateTmpFiles(t *testing.T) {
 	root := t.TempDir()
+
+	// Create a tracked entry on disk so Start has pending entries and enters the
+	// full reconciliation + cleanupStaleArtifacts path (with the lazy-root change,
+	// Start returns early when state.json is missing or empty).
+	nameDir := filepath.Join(root, "x")
+	require.NoError(t, os.MkdirAll(nameDir, 0o755))
+	filePath := filepath.Join(nameDir, "bin")
+	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o755))
+	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"","path":"` +
+		filePath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
 	// Plant a fake state-*.json.tmp file at the root (as if a crash left it).
 	tmpFile := filepath.Join(root, "state-abc123.json.tmp")

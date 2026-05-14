@@ -61,28 +61,55 @@ func NewManager(logger *slog.Logger, root string) Manager {
 	}
 }
 
-// Start creates the root directory, loads persisted state, performs crash
-// recovery for partially-installed entries, and removes any stale temp
-// directories or partial symlinks left by a previous crash.
+// ensureRoot creates the root directory if it does not already exist.
+// It is called lazily at first use (Ensure, Remove, Rollback, or startup
+// crash recovery) rather than unconditionally in Start, so that agents
+// that never call Ensure do not require write access to the root's parent
+// (e.g. /opt on a non-root deployment where the default root is
+// /opt/orb/files).
+func (m *filesmgr) ensureRoot() error {
+	return os.MkdirAll(m.root, 0o755)
+}
+
+// Start loads persisted state, performs crash recovery for partially-installed
+// entries, and removes any stale temp directories or partial symlinks left by
+// a previous crash. The root directory is only created when there are entries
+// to reconcile (i.e. state.json exists and is non-empty).
 //
 // Startup sequence:
-//  1. MkdirAll the root.
-//  2. loadPending: read state.json into memory without any filesystem checks.
-//  3. Crash recovery: for each entry whose Current.Path doesn't exist on disk,
+//  1. loadPending: read state.json into memory without any filesystem checks.
+//     A missing state.json returns an empty map (no error).
+//  2. If there are no pending entries, return immediately — no directory
+//     creation needed (lazy root).
+//  3. ensureRoot: create the root directory now that we know we need it.
+//  4. Crash recovery: for each entry whose Current.Path doesn't exist on disk,
 //     remove the implied version directory (created by the fetcher but never
 //     activated by swapSymlink) and drop the entry from state.
-//  4. commitReconciled: persist the post-recovery entries and update in-memory
+//  5. commitReconciled: persist the post-recovery entries and update in-memory
 //     state in a single atomic write.
-//  5. cleanupStaleArtifacts: remove stage dirs, current.new links, and orphan
+//  6. cleanupStaleArtifacts: remove stage dirs, current.new links, and orphan
 //     version dirs inside tracked name directories.
 func (m *filesmgr) Start(_ context.Context) error {
-	if err := os.MkdirAll(m.root, 0o755); err != nil {
+	// Don't MkdirAll here unconditionally — it would fail on non-root
+	// deployments when the default /opt/orb/files isn't writable, breaking
+	// agents that never use FilesManager. The directory is created lazily on
+	// first use (Ensure / crash-recovery commit).
+
+	// Phase 1: read state.json without filesystem reconciliation.
+	// loadPending returns an empty map (nil error) when state.json is missing.
+	pending, err := m.store.loadPending()
+	if err != nil {
 		return err
 	}
 
-	// Phase 1: read state.json without filesystem reconciliation.
-	pending, err := m.store.loadPending()
-	if err != nil {
+	// No pending entries means this agent has never used FilesManager (or its
+	// state was cleared). Skip root creation and all reconciliation.
+	if len(pending) == 0 {
+		return nil
+	}
+
+	// We have entries to reconcile — the root directory must exist.
+	if err := m.ensureRoot(); err != nil {
 		return err
 	}
 
@@ -301,6 +328,9 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	if err := spec.Validate(); err != nil {
 		return "", err
 	}
+	if err := m.ensureRoot(); err != nil {
+		return "", fmt.Errorf("filesmgr: create root: %w", err)
+	}
 
 	mu := m.mutexFor(spec.Name)
 	mu.Lock()
@@ -444,6 +474,9 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 	if err := isSafePathSegment(name, "name"); err != nil {
 		return err
 	}
+	if err := m.ensureRoot(); err != nil {
+		return fmt.Errorf("filesmgr: create root: %w", err)
+	}
 	mu := m.mutexFor(name)
 	mu.Lock()
 
@@ -492,6 +525,9 @@ func (m *filesmgr) removeLocked(name string, current FileEntry) (FileEvent, erro
 func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	if err := isSafePathSegment(name, "name"); err != nil {
 		return err
+	}
+	if err := m.ensureRoot(); err != nil {
+		return fmt.Errorf("filesmgr: create root: %w", err)
 	}
 	mu := m.mutexFor(name)
 	mu.Lock()

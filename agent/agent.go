@@ -27,7 +27,7 @@ const (
 	routineKey              config.ContextKey = "routine"
 	otlpShutdownTimeout     time.Duration     = 5 * time.Second
 	restartBackendChanSize  int               = 5
-	defaultFilesManagerRoot                   = "/opt/orb/files"
+	defaultFilesManagerRoot string            = "/opt/orb/files"
 )
 
 // Agent is the interface that all agents must implement
@@ -218,6 +218,12 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	// Start the restart workers once, after all backends are registered.
 	// Use a dedicated context for the dispatcher so Stop() can cancel it before
 	// iterating backends, preventing a restart from firing after shutdown begins.
+	//
+	// waitForRestartRequests is started exactly once per agent lifetime.
+	// If startBackends is ever invoked again for the same agent (e.g., a
+	// future reload path), a second listener would be started, leading to
+	// duplicate consumption and panics on channel close. This mirrors the
+	// write-once invariant on a.backends.
 	go a.waitForRestartRequests()
 	dispatcherCtx, dispatcherCancel := context.WithCancel(agentCtx)
 	a.dispatcherCancel = dispatcherCancel
