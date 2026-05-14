@@ -22,6 +22,8 @@ func New(logger *slog.Logger, c config.ManagerSecrets) Manager {
 		return &vaultManager{logger: logger, config: c.Sources.Vault}
 	case "fleet":
 		return NewFleetSecretsManager(logger, c.Sources.Fleet)
+	case "delinea":
+		return &delineaManager{logger: logger, config: c.Sources.Delinea}
 	default:
 		logger.Info("no secrets manager specified or invalid type, skipping")
 		return &dummyManager{}

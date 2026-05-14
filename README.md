@@ -51,6 +51,7 @@ orb:
 
 Supported secrets managers:
 - [HashiCorp Vault](./docs/secretsmgr/vault.md)
+- [Delinea Secret Server](./docs/secretsmgr/delinea.md) (beta)
 
 ### Backends
 The `backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
