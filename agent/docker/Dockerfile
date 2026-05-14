@@ -45,9 +45,16 @@ RUN pip3 install --no-cache-dir netboxlabs-device-discovery netboxlabs-orb-worke
 ########################################################################
 FROM python:3.14-slim-trixie
 
+# libnghttp2-14 is pinned to the security-patched version that fixes
+# CVE-2026-27135. When a newer patch lands, the Debian archive may stop
+# retaining this exact version, causing this build to fail; bump the pin
+# to the current patched version. Look up the latest patched version at:
+# https://security-tracker.debian.org/tracker/CVE-2026-27135
 RUN \
     apt update && \
-    apt install --yes --no-install-recommends ca-certificates git nmap openssh-client tini && \
+    apt install --yes --no-install-recommends \
+        libnghttp2-14=1.64.0-1.1+deb13u1 \
+        ca-certificates git nmap openssh-client tini && \
     update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
