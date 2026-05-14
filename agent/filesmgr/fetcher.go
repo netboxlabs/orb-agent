@@ -52,8 +52,14 @@ func filenameFromURL(rawURL string) (string, error) {
 	}
 	// Strip query string and use only the URL path portion.
 	base := path.Base(u.Path)
-	if base == "" || base == "/" || base == "." {
-		return "", fmt.Errorf("cannot derive filename from URL %q", rawURL)
+	// Reject any base that isn't a safe single-segment filename: empty,
+	// "/", ".", "..", or anything containing path separators. Without
+	// this, a URL like https://example.com/a/.. would yield a base of
+	// ".." which, when joined with the staging/destination path, escapes
+	// the managed root — a path-traversal write primitive driven by
+	// untrusted URL input.
+	if err := isSafePathSegment(base, "filename"); err != nil {
+		return "", fmt.Errorf("cannot derive safe filename from URL %q: %w", rawURL, err)
 	}
 	return base, nil
 }

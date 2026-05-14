@@ -104,6 +104,20 @@ func TestFetcher_RejectsFileScheme(t *testing.T) {
 	assert.Contains(t, err.Error(), "not allowed")
 }
 
+func TestFilenameFromURL_RejectsTraversal(t *testing.T) {
+	traversalURLs := []string{
+		"https://example.com/a/..",      // path.Base yields ".."
+		"https://example.com/..",        // path.Base yields ".."
+		"https://example.com/a/../b/..", // path.Base yields ".."
+	}
+	for _, u := range traversalURLs {
+		_, err := filenameFromURL(u)
+		require.Error(t, err, "URL %q must be rejected", u)
+		assert.Contains(t, err.Error(), "cannot derive safe filename",
+			"URL %q error must mention safe-filename rejection", u)
+	}
+}
+
 func TestFetcher_PlacesSingleFile(t *testing.T) {
 	// Serve a small blob (non-archive); no Mode set → default 0o644.
 	blob := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03}
