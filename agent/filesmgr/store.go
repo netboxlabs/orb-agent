@@ -70,16 +70,24 @@ func (s *store) load() error {
 func (s *store) put(entry FileEntry) error {
 	s.mu.Lock()
 	s.entries[entry.Name] = entry
+	snapshot := make(map[string]FileEntry, len(s.entries))
+	for k, v := range s.entries {
+		snapshot[k] = v
+	}
 	s.mu.Unlock()
-	return s.write()
+	return s.write(snapshot)
 }
 
 // delete removes an entry by name and atomically writes state.json.
 func (s *store) delete(name string) error {
 	s.mu.Lock()
 	delete(s.entries, name)
+	snapshot := make(map[string]FileEntry, len(s.entries))
+	for k, v := range s.entries {
+		snapshot[k] = v
+	}
 	s.mu.Unlock()
-	return s.write()
+	return s.write(snapshot)
 }
 
 // get returns the entry for name, if present.
@@ -101,14 +109,7 @@ func (s *store) all() map[string]FileEntry {
 	return out
 }
 
-func (s *store) write() error {
-	s.mu.RLock()
-	snapshot := make(map[string]FileEntry, len(s.entries))
-	for k, v := range s.entries {
-		snapshot[k] = v
-	}
-	s.mu.RUnlock()
-
+func (s *store) write(snapshot map[string]FileEntry) error {
 	sf := stateFile{Version: stateSchemaVersion, Entries: snapshot}
 	data, err := json.MarshalIndent(sf, "", "  ")
 	if err != nil {

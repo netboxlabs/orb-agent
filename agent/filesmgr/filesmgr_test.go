@@ -52,8 +52,11 @@ func TestManager_EnsureInstallsAndEmitsEvent(t *testing.T) {
 		Extract: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(root, "pkg", "1.0.0"), path)
+	// Versioned installs expose the stable "current" symlink path, not the
+	// version-specific directory.
+	assert.Equal(t, filepath.Join(root, "pkg", "current"), path)
 
+	// Reading through the symlink must return the installed file.
 	content, err := os.ReadFile(filepath.Join(path, "a.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, "alpha", string(content))
@@ -141,6 +144,57 @@ func TestManager_UpgradeEmitsUpgradedWithPrevious(t *testing.T) {
 	require.NotNil(t, events[1].Previous)
 	assert.Equal(t, "1.0.0", events[1].Previous.Version)
 	assert.Equal(t, "2.0.0", events[1].Entry.Version)
+}
+
+func TestManager_CurrentSymlinkPointsToLatestVersion(t *testing.T) {
+	v1 := buildTarGz(t, map[string]string{"file.txt": "content-v1"})
+	v2 := buildTarGz(t, map[string]string{"file.txt": "content-v2"})
+	sum1, sum2 := sha256Hex(v1), sha256Hex(v2)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(v1)
+	})
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(v2)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	// Install v1 and confirm "current" points to "1.0.0".
+	path1, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "1.0.0",
+		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(root, "pkg", "current"), path1)
+
+	target1, err := os.Readlink(filepath.Join(root, "pkg", "current"))
+	require.NoError(t, err)
+	assert.Equal(t, "1.0.0", target1)
+
+	content1, err := os.ReadFile(filepath.Join(path1, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "content-v1", string(content1))
+
+	// Upgrade to v2 and confirm "current" now points to "2.0.0".
+	path2, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "2.0.0",
+		URL: srv.URL + "/v2.tar.gz", SHA256: sum2, Extract: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(root, "pkg", "current"), path2)
+
+	target2, err := os.Readlink(filepath.Join(root, "pkg", "current"))
+	require.NoError(t, err)
+	assert.Equal(t, "2.0.0", target2)
+
+	// Reading through the symlink must return the new content.
+	content2, err := os.ReadFile(filepath.Join(path2, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "content-v2", string(content2))
 }
 
 func TestManager_RemoveEmitsRemoved(t *testing.T) {
