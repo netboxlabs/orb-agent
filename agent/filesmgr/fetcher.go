@@ -138,18 +138,19 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 		if err := os.MkdirAll(dst, 0o755); err != nil {
 			return fmt.Errorf("create version dir %s: %w", dst, err)
 		}
-		finalPath := filepath.Join(dst, filename)
-		if err := os.Rename(stagePath, finalPath); err != nil {
-			return fmt.Errorf("place %s: %w", finalPath, err)
-		}
-		// Apply file permissions. Default to 0o644 (data file); callers set
-		// 0o755 explicitly for executables via FileSpec.Mode.
+		// Apply file permissions to the staged file BEFORE renaming into place
+		// so that if chmod fails the file never lands at its final location with
+		// wrong permissions (F7: chmod-before-rename for atomicity).
 		mode := spec.Mode
 		if mode == 0 {
 			mode = 0o644
 		}
-		if err := os.Chmod(finalPath, mode); err != nil {
-			return fmt.Errorf("chmod %s: %w", finalPath, err)
+		if err := os.Chmod(stagePath, mode); err != nil {
+			return fmt.Errorf("chmod %s: %w", stagePath, err)
+		}
+		finalPath := filepath.Join(dst, filename)
+		if err := os.Rename(stagePath, finalPath); err != nil {
+			return fmt.Errorf("place %s: %w", finalPath, err)
 		}
 	}
 

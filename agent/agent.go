@@ -230,7 +230,11 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 		a.logger.Warn("filesmgr: backend Stop returned error", "backend", backendName, "error", err)
 	}
 
-	startErr := be.Start(ctx, a.cancelFunction)
+	// Derive a fresh per-backend context so that if the backend calls its own
+	// cancel (self-termination pattern), it does NOT tear down the whole agent
+	// (F1). Mirror the pattern used in startBackends.
+	runCtx, runCancel := context.WithCancel(a.ctx)
+	startErr := be.Start(runCtx, runCancel)
 	if startErr == nil {
 		a.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", backendName, "binary", binaryName)
 		return
@@ -246,8 +250,9 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 		return
 	}
 
-	// Retry Start with the rolled-back binary.
-	if err := be.Start(ctx, a.cancelFunction); err != nil {
+	// Retry Start with the rolled-back binary — fresh context again.
+	runCtx2, runCancel2 := context.WithCancel(a.ctx)
+	if err := be.Start(runCtx2, runCancel2); err != nil {
 		a.logger.Error("filesmgr: backend Start failed even after rollback", "backend", backendName, "error", err)
 		return
 	}
@@ -273,7 +278,10 @@ func (a *orbAgent) restartDispatcher(ctx context.Context) {
 			a.pendingRestartsMu.Unlock()
 			for name := range pending {
 				a.logger.Info("filesmgr: dispatched restart", "backend", name)
-				go a.restartBackendWithFilesmgrRollback(ctx, name)
+				// Run synchronously so concurrent Stop+Start sequences for the
+				// same backend cannot overlap across ticks (F9). The dispatcher
+				// is on its own goroutine; the rest of the agent is unaffected.
+				a.restartBackendWithFilesmgrRollback(ctx, name)
 			}
 		}
 	}

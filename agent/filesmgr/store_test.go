@@ -1,8 +1,10 @@
 package filesmgr
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -139,6 +141,33 @@ func TestStore_V2RoundTripWithPrevious(t *testing.T) {
 	assert.Equal(t, "2.0.0", tracked.Current.Version)
 	require.NotNil(t, tracked.Previous, "previous must be recorded after second put")
 	assert.Equal(t, "1.0.0", tracked.Previous.Version)
+}
+
+func TestStore_ConcurrentPutsForDifferentNamesAreSerialized(t *testing.T) {
+	root := t.TempDir()
+	s := newStore(filepath.Join(root, "state.json"))
+
+	const n = 10
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		go func(i int) {
+			defer wg.Done()
+			name := fmt.Sprintf("entry-%d", i)
+			p := filepath.Join(root, name)
+			require.NoError(t, os.MkdirAll(p, 0o755))
+			require.NoError(t, s.put(FileEntry{Name: name, Path: p, SHA256: "abc"}))
+		}(i)
+	}
+	wg.Wait()
+
+	all := s.all()
+	assert.Len(t, all, n, "all %d entries must be present after concurrent puts", n)
+	for i := range n {
+		name := fmt.Sprintf("entry-%d", i)
+		_, ok := all[name]
+		assert.True(t, ok, "entry %s must be present", name)
+	}
 }
 
 func TestStore_WriteFailureDoesNotMutateInMemoryState(t *testing.T) {

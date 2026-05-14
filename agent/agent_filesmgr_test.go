@@ -86,6 +86,7 @@ func TestRestartBackendWithFilesmgrRollback_RetriesAfterFailure(t *testing.T) {
 		backends:       map[string]backend.Backend{"worker": be},
 		filesManager:   fm,
 		cancelFunction: cancel,
+		ctx:            ctx,
 	}
 
 	a.restartBackendWithFilesmgrRollback(ctx, "worker")
@@ -188,6 +189,88 @@ func TestSubscribeToFilesmgr_DecouplesBackendNameFromBinaryName(t *testing.T) {
 	}
 }
 
+// slowStartBackend is a Backend whose Start blocks for a configurable duration
+// and tracks the peak number of concurrent in-flight Start calls via a shared
+// counter. Used by TestRestartDispatcher_ProcessesRestartsSequentially.
+type slowStartBackend struct {
+	filesmgrTestBackend
+	delay       time.Duration
+	globalMu    *sync.Mutex
+	inFlight    *int
+	maxInFlight *int
+}
+
+func (b *slowStartBackend) Start(_ context.Context, _ context.CancelFunc) error {
+	b.globalMu.Lock()
+	*b.inFlight++
+	if *b.inFlight > *b.maxInFlight {
+		*b.maxInFlight = *b.inFlight
+	}
+	b.globalMu.Unlock()
+
+	time.Sleep(b.delay)
+
+	b.globalMu.Lock()
+	*b.inFlight--
+	b.globalMu.Unlock()
+	return nil
+}
+
+// TestRestartDispatcher_ProcessesRestartsSequentially verifies that the
+// dispatcher does not run concurrent Stop+Start sequences for different
+// backends within the same tick (F9). It uses slowStartBackend to track the
+// peak number of concurrent in-flight Start calls.
+func TestRestartDispatcher_ProcessesRestartsSequentially(t *testing.T) {
+	const delay = 50 * time.Millisecond
+	const nBackends = 3
+
+	var mu sync.Mutex
+	inFlight, maxInFlight := 0, 0
+
+	backends := make(map[string]backend.Backend, nBackends)
+	for i := range nBackends {
+		name := fmt.Sprintf("backend-%d", i)
+		backends[name] = &slowStartBackend{
+			filesmgrTestBackend: filesmgrTestBackend{managedBinary: name},
+			delay:               delay,
+			globalMu:            &mu,
+			inFlight:            &inFlight,
+			maxInFlight:         &maxInFlight,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a := &orbAgent{
+		logger:         slog.Default(),
+		backends:       backends,
+		filesManager:   &mockFilesManager{},
+		cancelFunction: cancel,
+		ctx:            ctx,
+	}
+
+	// Enqueue all backends at once.
+	a.pendingRestartsMu.Lock()
+	a.pendingRestarts = make(map[string]struct{})
+	for name := range backends {
+		a.pendingRestarts[name] = struct{}{}
+	}
+	a.pendingRestartsMu.Unlock()
+
+	go a.restartDispatcher(ctx)
+
+	// Wait long enough for one tick + nBackends sequential restarts.
+	time.Sleep(time.Duration(nBackends+2)*delay + 300*time.Millisecond)
+	cancel()
+
+	// Max concurrent in-flight Start calls must be ≤ 1 (sequential).
+	mu.Lock()
+	maxIF := maxInFlight
+	mu.Unlock()
+	assert.LessOrEqual(t, maxIF, 1, "restarts must be sequential: peak concurrent Start calls must be ≤ 1")
+}
+
 // countingBackend is a filesmgrTestBackend that counts Start/Stop calls.
 type countingBackend struct {
 	filesmgrTestBackend
@@ -226,6 +309,7 @@ func TestSubscribeToFilesmgr_CoalescesAndDeliversReliably(t *testing.T) {
 		backends:       map[string]backend.Backend{},
 		filesManager:   &mockFilesManager{},
 		cancelFunction: cancel,
+		ctx:            ctx,
 	}
 	a.backends["worker"] = be
 

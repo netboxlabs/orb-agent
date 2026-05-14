@@ -91,7 +91,9 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 			}
 			continue
 		}
-		// Inside each name directory, remove any stale current.new symlinks.
+		// Inside each name directory: remove stale current.new symlinks and
+		// any nested .filesmgr-stage-* directories left by a crashed fetch
+		// (Prior #8: nested stage dirs were not cleaned).
 		if e.IsDir() {
 			staleNew := filepath.Join(fullPath, "current.new")
 			if fi, err := os.Lstat(staleNew); err == nil {
@@ -99,6 +101,16 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 				if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
 					if err := os.Remove(staleNew); err != nil {
 						m.logger.Warn("filesmgr: failed to remove stale current.new", "path", staleNew, "error", err)
+					}
+				}
+			}
+			inner, _ := os.ReadDir(fullPath)
+			for _, ie := range inner {
+				if strings.HasPrefix(ie.Name(), ".filesmgr-stage-") {
+					stalePath := filepath.Join(fullPath, ie.Name())
+					m.logger.Info("filesmgr: removing nested stale stage dir", "path", stalePath)
+					if err := os.RemoveAll(stalePath); err != nil {
+						m.logger.Warn("filesmgr: failed to remove nested stale stage dir", "path", stalePath, "error", err)
 					}
 				}
 			}
@@ -135,9 +147,22 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Capture the full pre-mutation tracked entry so we can restore it exactly
+	// if the symlink swap fails later (F3: avoid poisoning Previous).
+	preTracked, hadExisting := m.store.getTracked(spec.Name)
 	existing, hasExisting := m.store.get(spec.Name)
 	if hasExisting && existing.SHA256 == spec.SHA256 && existing.Version == spec.Version {
-		if _, err := os.Stat(existing.Path); err == nil {
+		if info, err := os.Stat(existing.Path); err == nil {
+			// F6: even on idempotent path, apply mode change if requested.
+			if !spec.Extract && spec.Mode != 0 {
+				current := info.Mode().Perm()
+				wanted := spec.Mode.Perm()
+				if current != wanted {
+					if err := os.Chmod(existing.Path, wanted); err != nil {
+						return "", fmt.Errorf("chmod %s: %w", existing.Path, err)
+					}
+				}
+			}
 			return existing.Path, nil
 		}
 		// path missing on disk; fall through to re-fetch.
@@ -208,9 +233,10 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	if spec.Version != "" {
 		linkPath := filepath.Join(m.root, spec.Name, "current")
 		if err := swapSymlink(spec.Version, linkPath); err != nil {
-			// Roll back: restore or delete state entry, remove version dir.
-			if hasExisting {
-				_ = m.store.put(existing)
+			// Roll back: restore exact prior state to avoid poisoning Previous
+			// (F3). putTracked writes the trackedEntry verbatim — no promote logic.
+			if hadExisting {
+				_ = m.store.putTracked(spec.Name, preTracked)
 			} else {
 				_ = m.store.delete(spec.Name)
 			}
@@ -229,6 +255,9 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 }
 
 func (m *filesmgr) Remove(_ context.Context, name string) error {
+	if err := isSafePathSegment(name, "name"); err != nil {
+		return err
+	}
 	mu := m.mutexFor(name)
 	mu.Lock()
 	defer mu.Unlock()
@@ -261,6 +290,9 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 }
 
 func (m *filesmgr) Rollback(_ context.Context, name string) error {
+	if err := isSafePathSegment(name, "name"); err != nil {
+		return err
+	}
 	mu := m.mutexFor(name)
 	mu.Lock()
 	defer mu.Unlock()
@@ -271,6 +303,12 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	}
 	if tracked.Previous == nil {
 		return fmt.Errorf("filesmgr: %s has no previous version recorded", name)
+	}
+	// F8: unversioned entries produce a self-referential symlink
+	// (<root>/<name>/current -> <name>), which is invalid.
+	if tracked.Current.Version == "" || tracked.Previous.Version == "" {
+		return fmt.Errorf("filesmgr: rollback requires versioned entries (current=%q, previous=%q)",
+			tracked.Current.Version, tracked.Previous.Version)
 	}
 	prev := *tracked.Previous
 
@@ -283,14 +321,22 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	// Atomic symlink swap back to the previous version's directory basename.
 	versionBase := filepath.Base(versionDir)
 	linkPath := filepath.Join(m.root, name, "current")
+
+	// Read the current symlink target before we swap, so we can restore it
+	// if the state write fails after the swap (F5).
+	oldTarget, _ := os.Readlink(linkPath) // empty string if missing/not-symlink
+
 	if err := swapSymlink(versionBase, linkPath); err != nil {
 		return fmt.Errorf("filesmgr: swap symlink: %w", err)
 	}
 
 	// Update store: previous becomes current, previous is cleared.
 	if err := m.store.putWithoutPrevious(prev); err != nil {
-		// The symlink already points to the old version; state is inconsistent
-		// but the filesystem is in a safer state. Surface the error.
+		// The symlink already points to the old version but state is still the
+		// new version. Best-effort: swap back so filesystem matches state (F5).
+		if oldTarget != "" {
+			_ = swapSymlink(oldTarget, linkPath)
+		}
 		return fmt.Errorf("filesmgr: persist rollback: %w", err)
 	}
 

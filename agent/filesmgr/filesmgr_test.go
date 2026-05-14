@@ -400,11 +400,211 @@ func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
 	staleNew := filepath.Join(nameDir, "current.new")
 	require.NoError(t, os.Symlink("1.0.0", staleNew))
 
+	// Prior #8: also create a nested .filesmgr-stage-* dir inside a name dir.
+	nestedStage := filepath.Join(nameDir, ".filesmgr-stage-xyz")
+	require.NoError(t, os.Mkdir(nestedStage, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(nestedStage, "data"), []byte("nested-stale"), 0o644))
+
 	m := NewManager(slog.Default(), root)
 	require.NoError(t, m.Start(context.Background()))
 
-	// Both stale artifacts must be gone after Start().
+	// All stale artifacts must be gone after Start().
 	assert.NoDirExists(t, staleStage, "stale stage dir must be removed on Start")
 	_, err := os.Lstat(staleNew)
 	assert.True(t, os.IsNotExist(err), "stale current.new must be removed on Start")
+	assert.NoDirExists(t, nestedStage, "nested stale stage dir must be removed on Start")
+}
+
+// TestManager_EnsureRestoresExactStateOnSymlinkFailure verifies that when the
+// symlink swap fails during an upgrade (v1→v2→v3), the store is restored to
+// the exact pre-upgrade tracked state (Current=v2, Previous=v1) rather than
+// being poisoned to (Current=v2, Previous=v3) by a naïve store.put.
+func TestManager_EnsureRestoresExactStateOnSymlinkFailure(t *testing.T) {
+	v1 := buildTarGz(t, map[string]string{"file.txt": "v1"})
+	v2 := buildTarGz(t, map[string]string{"file.txt": "v2"})
+	v3 := buildTarGz(t, map[string]string{"file.txt": "v3"})
+	sum1, sum2, sum3 := sha256Hex(v1), sha256Hex(v2), sha256Hex(v3)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v1) })
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v2) })
+	mux.HandleFunc("/v3.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v3) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	// Install v1 then v2 so Previous=v1 is recorded.
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "1.0.0",
+		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
+	})
+	require.NoError(t, err)
+	_, err = m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "2.0.0",
+		URL: srv.URL + "/v2.tar.gz", SHA256: sum2, Extract: true,
+	})
+	require.NoError(t, err)
+
+	// Block the symlink swap for v3 by making the <root>/pkg/ directory
+	// read-only so os.Symlink() inside swapSymlink cannot create the temp
+	// symlink (current.new). Restore write permission on test cleanup.
+	pkgDir := filepath.Join(root, "pkg")
+	require.NoError(t, os.Chmod(pkgDir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(pkgDir, 0o755) })
+
+	_, err = m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "3.0.0",
+		URL: srv.URL + "/v3.tar.gz", SHA256: sum3, Extract: true,
+	})
+	// Restore write permission before asserting so cleanup of TempDir succeeds.
+	_ = os.Chmod(pkgDir, 0o755)
+	require.Error(t, err, "Ensure must fail when symlink swap fails")
+
+	// Store must be restored to exactly Current=v2, Previous=v1.
+	tracked, ok := m.(*filesmgr).store.getTracked("pkg")
+	require.True(t, ok)
+	assert.Equal(t, "2.0.0", tracked.Current.Version, "current must be v2 after failed v3 Ensure")
+	require.NotNil(t, tracked.Previous, "previous must not be nil")
+	assert.Equal(t, "1.0.0", tracked.Previous.Version, "previous must be v1, not poisoned by v3")
+}
+
+// TestManager_EnsureChmodsOnModeChange verifies that re-Ensure-ing the same
+// file with a different Mode updates the on-disk permissions even when SHA256
+// and Version match (idempotency path F6).
+func TestManager_EnsureChmodsOnModeChange(t *testing.T) {
+	blob := []byte("executable-content")
+	sum := sha256Hex(blob)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(blob)
+	}))
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	spec := FileSpec{
+		Name:    "tool",
+		Version: "1.0.0",
+		URL:     srv.URL + "/tool",
+		SHA256:  sum,
+		Extract: false,
+		Mode:    0o644,
+	}
+	_, err := m.Ensure(context.Background(), spec)
+	require.NoError(t, err)
+
+	filePath := filepath.Join(root, "tool", "current", "tool")
+	fi, err := os.Stat(filePath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), fi.Mode().Perm())
+
+	// Re-Ensure with same SHA256/Version but different Mode.
+	spec.Mode = 0o755
+	_, err = m.Ensure(context.Background(), spec)
+	require.NoError(t, err)
+
+	fi, err = os.Stat(filePath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), fi.Mode().Perm(), "mode must be updated on idempotent Ensure with new Mode")
+}
+
+// TestManager_RollbackRejectsUnversionedEntries verifies that Rollback returns
+// an error when either current or previous has an empty Version (F8).
+func TestManager_RollbackRejectsUnversionedEntries(t *testing.T) {
+	root := t.TempDir()
+	// Manually inject an unversioned tracked entry directly into the store so
+	// we bypass Ensure's versioned-path logic.
+	s := newStore(filepath.Join(root, "state.json"))
+	p := filepath.Join(root, "tool")
+	require.NoError(t, os.MkdirAll(p, 0o755))
+	// Put with no Version (empty string).
+	require.NoError(t, s.put(FileEntry{Name: "tool", Version: "", Path: p, SHA256: "abc"}))
+	// Inject a fake previous also with no version so the Previous != nil check passes.
+	p2 := filepath.Join(root, "tool2")
+	require.NoError(t, os.MkdirAll(p2, 0o755))
+	require.NoError(t, s.putTracked("tool", trackedEntry{
+		Current:  FileEntry{Name: "tool", Version: "", Path: p, SHA256: "abc"},
+		Previous: &FileEntry{Name: "tool", Version: "", Path: p2, SHA256: "def"},
+	}))
+
+	fm := &filesmgr{
+		logger:  slog.Default(),
+		root:    root,
+		store:   s,
+		fetcher: newFetcher(),
+		bus:     newEventBusWithLogger(slog.Default()),
+	}
+
+	err := fm.Rollback(context.Background(), "tool")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires versioned entries")
+}
+
+// TestManager_RollbackRestoresSymlinkIfStateWriteFails verifies that when the
+// state write fails after the symlink has been swapped to the previous version,
+// Rollback best-effort swaps the symlink back to its pre-rollback target (F5).
+func TestManager_RollbackRestoresSymlinkIfStateWriteFails(t *testing.T) {
+	v1 := buildTarGz(t, map[string]string{"file.txt": "v1"})
+	v2 := buildTarGz(t, map[string]string{"file.txt": "v2"})
+	sum1, sum2 := sha256Hex(v1), sha256Hex(v2)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v1) })
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v2) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	// Install v1 then v2.
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "1.0.0",
+		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
+	})
+	require.NoError(t, err)
+	_, err = m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "2.0.0",
+		URL: srv.URL + "/v2.tar.gz", SHA256: sum2, Extract: true,
+	})
+	require.NoError(t, err)
+
+	// Confirm symlink points to v2 before rollback.
+	linkPath := filepath.Join(root, "pkg", "current")
+	target, err := os.Readlink(linkPath)
+	require.NoError(t, err)
+	require.Equal(t, "2.0.0", target)
+
+	// Block state writes by replacing state.json with a directory.
+	statePath := filepath.Join(root, "state.json")
+	require.NoError(t, os.Remove(statePath))
+	require.NoError(t, os.Mkdir(statePath, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(statePath) })
+
+	// Rollback must fail (state write fails).
+	err = m.Rollback(context.Background(), "pkg")
+	require.Error(t, err, "Rollback must fail when state write fails")
+
+	// Best-effort restore: symlink must point back to v2 (pre-rollback target).
+	restoredTarget, readErr := os.Readlink(linkPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "2.0.0", restoredTarget, "symlink must be restored to pre-rollback target after state write failure")
+}
+
+// TestManager_RemoveRejectsUnsafeNames verifies that Remove returns an error
+// for path-traversal names and does not touch the filesystem (Prior #1).
+func TestManager_RemoveRejectsUnsafeNames(t *testing.T) {
+	m, root := newTestManager(t)
+
+	for _, badName := range []string{"../etc", "/etc", "..", "."} {
+		err := m.Remove(context.Background(), badName)
+		require.Error(t, err, "Remove(%q) must return error", badName)
+	}
+
+	// Filesystem under root must be untouched (only state.json may exist).
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.Equal(t, "state.json", e.Name(), "unexpected file created for bad Remove: %s", e.Name())
+	}
 }

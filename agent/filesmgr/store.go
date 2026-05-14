@@ -117,7 +117,15 @@ func (s *store) load() error {
 // the existing Current is recorded as the new Previous (one level of history
 // only — older Previous entries are replaced).
 // If the disk write fails, the in-memory state is left unchanged.
+//
+// writeMu is acquired first to serialize the entire snapshot-mutate-write-commit
+// sequence. This prevents a lost-update race where two concurrent puts for
+// different names both snapshot the same pre-state map and the second commit
+// silently drops the first's update.
 func (s *store) put(entry FileEntry) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	// Build the candidate snapshot WITHOUT mutating the live map.
 	s.mu.RLock()
 	next := make(map[string]trackedEntry, len(s.entries)+1)
@@ -133,11 +141,7 @@ func (s *store) put(entry FileEntry) error {
 	}
 	next[entry.Name] = trackedEntry{Current: entry, Previous: prevPtr}
 
-	// Serialize disk writes globally.
-	s.writeMu.Lock()
-	err := s.writeSnapshot(next)
-	s.writeMu.Unlock()
-	if err != nil {
+	if err := s.writeSnapshot(next); err != nil {
 		return err
 	}
 
@@ -152,6 +156,9 @@ func (s *store) put(entry FileEntry) error {
 // Used during Rollback (where the rolled-back-to version has no further back)
 // and during error recovery.
 func (s *store) putWithoutPrevious(entry FileEntry) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	s.mu.RLock()
 	next := make(map[string]trackedEntry, len(s.entries)+1)
 	for k, v := range s.entries {
@@ -161,10 +168,33 @@ func (s *store) putWithoutPrevious(entry FileEntry) error {
 
 	next[entry.Name] = trackedEntry{Current: entry, Previous: nil}
 
+	if err := s.writeSnapshot(next); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.entries = next
+	s.mu.Unlock()
+	return nil
+}
+
+// putTracked writes a tracked entry verbatim, bypassing the
+// promote-current-to-previous logic of put(). Used by the Ensure rollback-on-
+// failure path to restore exact prior state and avoid poisoning Previous.
+func (s *store) putTracked(name string, te trackedEntry) error {
 	s.writeMu.Lock()
-	err := s.writeSnapshot(next)
-	s.writeMu.Unlock()
-	if err != nil {
+	defer s.writeMu.Unlock()
+
+	s.mu.RLock()
+	next := make(map[string]trackedEntry, len(s.entries)+1)
+	for k, v := range s.entries {
+		next[k] = v
+	}
+	s.mu.RUnlock()
+
+	next[name] = te
+
+	if err := s.writeSnapshot(next); err != nil {
 		return err
 	}
 
@@ -177,6 +207,9 @@ func (s *store) putWithoutPrevious(entry FileEntry) error {
 // delete removes an entry by name and atomically writes state.json.
 // If the disk write fails, the in-memory state is left unchanged.
 func (s *store) delete(name string) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	// Build the candidate snapshot WITHOUT mutating the live map.
 	s.mu.RLock()
 	next := make(map[string]trackedEntry, len(s.entries))
@@ -186,11 +219,7 @@ func (s *store) delete(name string) error {
 	s.mu.RUnlock()
 	delete(next, name)
 
-	// Serialize disk writes globally.
-	s.writeMu.Lock()
-	err := s.writeSnapshot(next)
-	s.writeMu.Unlock()
-	if err != nil {
+	if err := s.writeSnapshot(next); err != nil {
 		return err
 	}
 
