@@ -839,6 +839,239 @@ func TestRunnerAnnotateThenPrune(t *testing.T) {
 	}
 }
 
+// chassisEntries returns the minimal config.MappingEntry slice needed to
+// walk ENTITY-MIB entPhysicalTable columns so that TranslateAsStack has data.
+// The entries mirror the chassis_inventory block in policy/mapping.yaml.
+func chassisEntries() []config.MappingEntry {
+	return []config.MappingEntry{
+		{
+			OID: "1.3.6.1.2.1.1", Entity: "device", Field: "_id", IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.1.5", Entity: "device", Field: "name"},
+			},
+		},
+		{
+			OID: "1.3.6.1.2.1.2.2.1", Entity: "interface", Field: "_id", IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+			},
+		},
+		{
+			OID:            "1.3.6.1.2.1.47.1.1.1",
+			Entity:         "chassis_inventory",
+			Field:          "_id",
+			IdentifierSize: 2,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.47.1.1.1.1.4", Entity: "chassis_inventory", Field: "containedIn"},
+				{OID: "1.3.6.1.2.1.47.1.1.1.1.5", Entity: "chassis_inventory", Field: "class"},
+				{OID: "1.3.6.1.2.1.47.1.1.1.1.6", Entity: "chassis_inventory", Field: "parentRelPos"},
+				{OID: "1.3.6.1.2.1.47.1.1.1.1.7", Entity: "chassis_inventory", Field: "name"},
+				{OID: "1.3.6.1.2.1.47.1.1.1.1.11", Entity: "chassis_inventory", Field: "serialNumber"},
+				{OID: "1.3.6.1.2.1.47.1.1.1.1.13", Entity: "chassis_inventory", Field: "modelName"},
+			},
+		},
+	}
+}
+
+// TestRunWithMetadata_StandaloneSetsSerialFromEntityMib confirms that the
+// ENTITY-MIB serial walk path (TranslateAsStack standalone branch) sets
+// master.Serial when exactly one chassis row is present — no VirtualChassis
+// is emitted and no member Devices are added.
+func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
+	// Single chassis row: class=3, containedIn=0, serial="FOC1234A".
+	// Keys in the inner PDU map use leading dots so extractInventory finds them.
+	// Integer-typed PDUs must use Go int values; MapPDU does a type-assertion.
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "router-1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.6": {
+				".1.3.6.1.2.1.47.1.1.1.1.6.1": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "FOC1234A", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.13": {
+				".1.3.6.1.2.1.47.1.1.1.1.13.1": {Value: "WS-C3850-48P", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+
+	runner := queryTargetRunner(factory, chassisEntries())
+	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	require.NoError(t, err)
+	require.NotEmpty(t, entities)
+
+	// Exactly one Device, no VirtualChassis, Serial set from ENTITY-MIB.
+	var devices []*diode.Device
+	var vcs []*diode.VirtualChassis
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.Device:
+			devices = append(devices, v)
+		case *diode.VirtualChassis:
+			vcs = append(vcs, v)
+		}
+	}
+	require.Len(t, devices, 1, "standalone: exactly one Device")
+	assert.Empty(t, vcs, "standalone: no VirtualChassis emitted")
+	require.NotNil(t, devices[0].Serial, "standalone: master.Serial must be set from ENTITY-MIB")
+	assert.Equal(t, "FOC1234A", *devices[0].Serial)
+}
+
+// TestRunWithMetadata_EmitsFullStackShape asserts the complete emission
+// shape for a 2-member stack end-to-end through the runner pipeline:
+// TranslateAsStack, annotators, and PruneNestedRefs. Checks:
+//   - 1 VirtualChassis with correct Name; VC.Metadata["run_id"] set
+//   - VC.Master.VirtualChassis nil (non-recursion invariant)
+//   - 2 Devices: master (VcPosition nil, source_match present) and
+//     member (VcPosition=2, source_match absent)
+//   - Interface Gi1/0/1 routed to master; Gi2/0/1 routed to member
+func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
+	// Two chassis rows: member 1 (parentRelPos=1) and member 2 (parentRelPos=2).
+	// Two interfaces: Gi1/0/1 (ifIndex=1, routes to member 1) and
+	// Gi2/0/1 (ifIndex=2, routes to member 2 via ParseMemberID).
+	// Integer-typed PDUs must use Go int values; MapPDU does a type-assertion.
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "3850-stack", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {Value: "Gi1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+				"1.3.6.1.2.1.2.2.1.2.2": {Value: "Gi2/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			// Member 1 (entPhysicalIndex=1).
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1":    {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.4.1000": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1":    {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.5.1000": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.6": {
+				".1.3.6.1.2.1.47.1.1.1.1.6.1":    {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.6.1000": {Value: 2, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1":    {Value: "FCW2147L0K3", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.11.1000": {Value: "FCW2147L0K4", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.13": {
+				".1.3.6.1.2.1.47.1.1.1.1.13.1":    {Value: "WS-C3850-48P", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.13.1000": {Value: "WS-C3850-48P", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+
+	runner := queryTargetRunner(factory, chassisEntries())
+
+	// Use NetboxID=42 on the target so we can verify source_match on master.
+	netboxID := 42
+	target := config.Target{Host: "192.0.2.1", Port: 161, NetboxID: &netboxID}
+	entities, err := runner.queryTarget(context.Background(), target)
+	require.NoError(t, err)
+	require.NotEmpty(t, entities)
+
+	// Mirror production sequence: annotate, prune.
+	if target.NetboxID != nil {
+		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+	}
+	annotateEntitiesWithRunID(entities, "run-stack-123")
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities))
+
+	// Collect typed results.
+	var masterDev, memberDev *diode.Device
+	var vcEntity *diode.VirtualChassis
+	var ifaces []*diode.Interface
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.Device:
+			if v.VcPosition == nil {
+				masterDev = v
+			} else {
+				memberDev = v
+			}
+		case *diode.VirtualChassis:
+			vcEntity = v
+		case *diode.Interface:
+			ifaces = append(ifaces, v)
+		}
+	}
+
+	// VC assertions.
+	require.NotNil(t, vcEntity, "VirtualChassis must be emitted for a 2-member stack")
+	require.NotNil(t, vcEntity.Name)
+	assert.Equal(t, "3850-stack", *vcEntity.Name)
+	assert.Equal(t, "run-stack-123", vcEntity.Metadata["run_id"], "VC must carry run_id")
+	require.NotNil(t, vcEntity.Master)
+	assert.Nil(t, vcEntity.Master.VirtualChassis, "VC.Master.VirtualChassis must be nil (non-recursion)")
+
+	// Master Device assertions.
+	require.NotNil(t, masterDev, "master Device must be present")
+	assert.Nil(t, masterDev.VcPosition, "master has no VcPosition")
+	require.NotNil(t, masterDev.Serial)
+	assert.Equal(t, "FCW2147L0K3", *masterDev.Serial, "master Serial = lowest-id chassis serial")
+	require.NotNil(t, masterDev.Metadata)
+	sm, ok := masterDev.Metadata["source_match"].(diode.Metadata)
+	require.True(t, ok, "master must carry source_match")
+	assert.Equal(t, netboxID, sm["netbox_id"])
+
+	// Member Device assertions.
+	require.NotNil(t, memberDev, "member Device must be present")
+	require.NotNil(t, memberDev.VcPosition)
+	assert.Equal(t, int64(2), *memberDev.VcPosition)
+	_, hasSM := memberDev.Metadata["source_match"]
+	assert.False(t, hasSM, "member must NOT carry source_match")
+
+	// VirtualChassis.Master source_match assertions (Fix 1):
+	// Both the top-level VC.Master ref AND the member's inline
+	// VirtualChassis.Master ref must carry source_match so Diode's
+	// unique_master matcher resolves consistently on reruns.
+	wantSM := diode.Metadata{"netbox_id": netboxID}
+	require.NotNil(t, vcEntity.Master, "VC.Master must be set")
+	vcMasterSM, vcMasterOK := vcEntity.Master.Metadata["source_match"].(diode.Metadata)
+	require.True(t, vcMasterOK, "VC.Master must carry source_match")
+	assert.Equal(t, wantSM, vcMasterSM, "VC.Master source_match must match netboxID")
+
+	require.NotNil(t, memberDev.VirtualChassis, "member.VirtualChassis must be set")
+	require.NotNil(t, memberDev.VirtualChassis.Master, "member.VirtualChassis.Master must be set")
+	memberMasterSM, memberMasterOK := memberDev.VirtualChassis.Master.Metadata["source_match"].(diode.Metadata)
+	require.True(t, memberMasterOK, "member.VirtualChassis.Master must carry source_match")
+	assert.Equal(t, wantSM, memberMasterSM, "member.VirtualChassis.Master source_match must match netboxID")
+
+	// Interface routing: exactly 2 interfaces, Gi1/0/1 → master, Gi2/0/1 → member.
+	assert.Len(t, ifaces, 2, "expect exactly 2 top-level interfaces: Gi1/0/1 (master) and Gi2/0/1 (member)")
+	ifaceByName := map[string]*diode.Interface{}
+	for _, iface := range ifaces {
+		if iface.Name != nil {
+			ifaceByName[*iface.Name] = iface
+		}
+	}
+	gi1 := ifaceByName["Gi1/0/1"]
+	gi2 := ifaceByName["Gi2/0/1"]
+	require.NotNil(t, gi1, "Gi1/0/1 must be present")
+	require.NotNil(t, gi2, "Gi2/0/1 must be present")
+	require.NotNil(t, gi1.Device)
+	require.NotNil(t, gi2.Device)
+	assert.Equal(t, "3850-stack", *gi1.Device.Name, "Gi1/0/1 routes to master")
+	assert.Equal(t, "3850-stack-2", *gi2.Device.Name, "Gi2/0/1 routes to member")
+}
+
 func TestNewRunner_RangeScheduledWithCron(t *testing.T) {
 	cron := "0 * * * *"
 	pol := config.Policy{

@@ -17,6 +17,12 @@ func annotateDeviceWithSourceMatch(entities []diode.Entity, netboxID int) {
 		switch v := e.(type) {
 		case *diode.Device:
 			setDeviceSourceMatch(v, netboxID, seen)
+			// Inline master ref inside a member's VirtualChassis.Master must
+			// also carry source_match so Diode's unique_master matcher
+			// resolves consistently with the rich master Device.
+			if v.VirtualChassis != nil {
+				setDeviceSourceMatch(v.VirtualChassis.Master, netboxID, seen)
+			}
 		case *diode.Interface:
 			if v != nil {
 				setDeviceSourceMatch(v.Device, netboxID, seen)
@@ -27,12 +33,25 @@ func annotateDeviceWithSourceMatch(entities []diode.Entity, netboxID int) {
 					setDeviceSourceMatch(iface.Device, netboxID, seen)
 				}
 			}
+		case *diode.VirtualChassis:
+			// Top-level VC carries the master ref that needs source_match
+			// for unique_master matcher resolution.
+			if v != nil {
+				setDeviceSourceMatch(v.Master, netboxID, seen)
+			}
 		}
 	}
 }
 
 func setDeviceSourceMatch(d *diode.Device, netboxID int, seen map[unsafe.Pointer]struct{}) {
 	if d == nil {
+		return
+	}
+	// Skip non-master members emitted by mapping.TranslateAsStack:
+	// each carries VcPosition. Annotating them with master's
+	// netbox_id would make Diode's source_match matcher collapse
+	// every member onto the same NetBox device row.
+	if d.VcPosition != nil {
 		return
 	}
 	p := unsafe.Pointer(d)
@@ -60,6 +79,8 @@ func annotateEntitiesWithRunID(entities []diode.Entity, runID string) {
 			annotateIPAddress(v, runID, seen)
 		case *diode.VLAN:
 			annotateVLAN(v, runID, seen)
+		case *diode.VirtualChassis:
+			annotateVirtualChassis(v, runID, seen)
 		}
 	}
 }
@@ -128,6 +149,27 @@ func annotateIPAddress(ip *diode.IPAddress, runID string, seen map[unsafe.Pointe
 	}
 	if ip.NatInside != nil {
 		annotateIPAddress(ip.NatInside, runID, seen)
+	}
+}
+
+func annotateVirtualChassis(vc *diode.VirtualChassis, runID string, seen map[unsafe.Pointer]struct{}) {
+	if vc == nil {
+		return
+	}
+	p := unsafe.Pointer(vc)
+	if _, ok := seen[p]; ok {
+		return
+	}
+	seen[p] = struct{}{}
+	mergeRunID(&vc.Metadata, runID)
+	// Stamp run_id on the inline Master Device stub so it lines up with
+	// the run_id on the rich top-level Device that the stub matches —
+	// keeps annotation consistent with how VLAN and Interface
+	// annotation reach their nested Device refs. annotateDevice only
+	// mutates d.Metadata (no recursion into Device's nested fields), so
+	// no cycle risk through Master.VirtualChassis.
+	if vc.Master != nil {
+		annotateDevice(vc.Master, runID, seen)
 	}
 }
 

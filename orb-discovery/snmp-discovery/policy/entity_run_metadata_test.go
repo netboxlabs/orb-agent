@@ -196,6 +196,68 @@ func TestAnnotateEntitiesWithRunID_shared_vlan_visited_once(t *testing.T) {
 	assert.Equal(t, "run-shared-vlan", sharedVlan.Metadata["run_id"])
 }
 
+func TestAnnotateDeviceWithSourceMatch_SkipsMemberDevices(t *testing.T) {
+	pos := int64(2)
+	master := &diode.Device{Name: stringPtr("master")}
+	member := &diode.Device{
+		Name:       stringPtr("master-2"),
+		VcPosition: &pos, // member identity signal
+	}
+	annotateDeviceWithSourceMatch([]diode.Entity{master, member}, 42)
+
+	assert.Equal(t, diode.Metadata{"netbox_id": 42}, master.Metadata["source_match"])
+	_, hasSM := member.Metadata["source_match"]
+	assert.False(t, hasSM, "member Devices (VcPosition != nil) must NOT receive master's source_match")
+}
+
+func TestAnnotateDeviceWithSourceMatch_AnnotatesVirtualChassisMaster(t *testing.T) {
+	// masterRef is the shared inline Device used as VirtualChassis.Master
+	// on the top-level VC entity AND on each member's VirtualChassis.Master.
+	masterRef := &diode.Device{Name: stringPtr("3850-stack"), Serial: stringPtr("FCW001")}
+
+	two := int64(2)
+	// member Device: VcPosition != nil, so the member itself must NOT get source_match.
+	memberDev := &diode.Device{
+		Name:       stringPtr("3850-stack-2"),
+		VcPosition: &two,
+		VirtualChassis: &diode.VirtualChassis{
+			Name:   stringPtr("3850-stack"),
+			Master: masterRef,
+		},
+	}
+	// top-level VC entity.
+	vcEntity := &diode.VirtualChassis{
+		Name:   stringPtr("3850-stack"),
+		Master: masterRef,
+	}
+
+	entities := []diode.Entity{vcEntity, memberDev}
+	annotateDeviceWithSourceMatch(entities, 42)
+
+	wantSM := diode.Metadata{"netbox_id": 42}
+
+	// Top-level VC's Master must carry source_match.
+	require.NotNil(t, vcEntity.Master.Metadata, "VC.Master must have Metadata set")
+	assert.Equal(t, wantSM, vcEntity.Master.Metadata["source_match"],
+		"top-level VC.Master must carry source_match")
+
+	// Member's VirtualChassis.Master (same pointer) must carry source_match.
+	require.NotNil(t, memberDev.VirtualChassis.Master.Metadata,
+		"member.VirtualChassis.Master must have Metadata set")
+	assert.Equal(t, wantSM, memberDev.VirtualChassis.Master.Metadata["source_match"],
+		"member.VirtualChassis.Master must carry source_match")
+
+	// Member device itself must NOT carry source_match (VcPosition != nil → skipped).
+	_, hasSM := memberDev.Metadata["source_match"]
+	assert.False(t, hasSM, "member Device (VcPosition != nil) must NOT receive source_match")
+}
+
+func TestAnnotateEntitiesWithRunID_StampsVirtualChassis(t *testing.T) {
+	vc := &diode.VirtualChassis{Name: stringPtr("stack")}
+	annotateEntitiesWithRunID([]diode.Entity{vc}, "run-123")
+	assert.Equal(t, "run-123", vc.Metadata["run_id"])
+}
+
 // Helper function for tests
 func int64Ptr(v int64) *int64 {
 	return &v

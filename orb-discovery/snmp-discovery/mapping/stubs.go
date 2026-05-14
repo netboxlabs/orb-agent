@@ -54,14 +54,28 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 // INVARIANT: the fields here must be a superset of (a) every
 // dcim.device matcher field that snmp-discovery currently populates
 // on the rich Device, and (b) every dcim.device field NetBox treats
-// as required for create. As of the spec date, snmp-discovery
-// populates AssetTag via PolicyConfig.Defaults.AssetTag (literal or
-// OID reference). The stub must carry it through so rich and stub
-// resolve via the same matcher precedence path. OobIp, Rack,
-// Position, Face, VirtualChassis, and VcPosition remain
-// not-populated. If a new mapper starts setting any of those, or if
-// NetBox adds new required fields for dcim.device, this stub must
-// grow to match.
+// as required for create. As of this branch:
+//
+//   - AssetTag IS populated (via PolicyConfig.Defaults.AssetTag,
+//     literal or OID reference). The stub MUST carry it so rich and
+//     stub resolve via the same matcher precedence path.
+//
+//   - VcPosition and VirtualChassis ARE populated on non-master
+//     member Devices when emitting a stack, but are intentionally
+//     NOT carried on stubs. Matcher #8 (virtual_chassis plus
+//     vc_position) sits behind higher-precedence matchers — asset_tag,
+//     primary_ip*, name+site+tenant, name+site, rack+position+face —
+//     that every member Device already carries via the fields above.
+//     Copying the rich VirtualChassis subtree onto every nested stub
+//     would just bloat the wire payload.
+//
+//   - OobIp, Rack, Position, and Face remain not-populated.
+//
+// If a new mapper starts setting other matcher fields, or if NetBox
+// adds new required fields for dcim.device, this stub must grow to
+// match — otherwise the rich entity and the stub will resolve via
+// different matcher precedence paths or fail validation on the first
+// cycle.
 //
 // Metadata.source_match (e.g. netbox_id) is the diode-netbox-plugin's
 // PK-based match path, so it must not diverge between rich and stub.
@@ -129,51 +143,139 @@ func CurrentDeviceFrom(entities []diode.Entity) *diode.Device {
 }
 
 // PruneNestedRefs walks entities once and replaces nested Device and
-// Interface references with matcher-only stubs. The top-level rich
-// Device entity (the same pointer as currentDevice) is left unchanged
-// — only nested references *to* it on other entities are rewritten.
+// Interface references with matcher-only stubs. Top-level rich Device
+// entities are left unchanged — only nested references *to* them on
+// other entities are rewritten.
+//
+// Multi-Device aware: each nested Device ref resolves to its OWN
+// top-level Device by name (fallback: serial) before stubbing.
+// Single-Device behavior is preserved as the degenerate case — the
+// multi-device code IS the single-device code.
 //
 // Call from the runner AFTER annotateDeviceWithSourceMatch and
 // annotateEntitiesWithRunID, BEFORE Ingest. Running before annotation
-// would either (a) cause annotators to skip the rich Device because
-// they would only see stubs, or (b) bloat every stub with run_id
-// metadata, defeating the savings.
+// would either (a) cause annotators to skip rich Devices because they
+// would only see stubs, or (b) bloat every stub with run_id metadata,
+// defeating the savings.
 //
-// No-op if currentDevice is nil or entities is empty.
+// No-op if entities is empty.
 func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device) {
-	if currentDevice == nil || len(entities) == 0 {
+	if len(entities) == 0 {
 		return
 	}
-	deviceStub := newDeviceStub(currentDevice)
+
+	byName := map[string]*diode.Device{}
+	bySerial := map[string]*diode.Device{}
+	// Build a name -> top-level Interface index so nested Parent/
+	// Bridge/Lag refs can re-resolve their owning Device via the
+	// authoritative top-level Interface entry (which TranslateAsStack
+	// has already routed to the correct member). Subinterface parent
+	// resolution runs BEFORE TranslateAsStack and may leave nested
+	// refs pointing at master; this index fixes it during pruning.
+	// Top-level Interface index. Keyed by Name. Stores ALL matches to
+	// support stacks where two member Devices both expose an iface
+	// with the same name (e.g. per-member management ports like
+	// `me0`/`mgmt0` on Junos VC and Cisco StackWise). When a nested
+	// ref by-name lookup is ambiguous, stubForIface skips the
+	// owner-rewrite rather than rebinding to a wrong member.
+	ifaceByName := map[string][]*diode.Interface{}
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.Device:
+			if v.Name != nil {
+				byName[*v.Name] = v
+			}
+			if v.Serial != nil {
+				bySerial[*v.Serial] = v
+			}
+		case *diode.Interface:
+			if v.Name != nil {
+				ifaceByName[*v.Name] = append(ifaceByName[*v.Name], v)
+			}
+		}
+	}
+
+	stubCache := map[*diode.Device]*diode.Device{}
+	stubFor := func(ref *diode.Device) *diode.Device {
+		if ref == nil {
+			return nil
+		}
+		var owner *diode.Device
+		if ref.Name != nil {
+			owner = byName[*ref.Name]
+		}
+		if owner == nil && ref.Serial != nil {
+			owner = bySerial[*ref.Serial]
+		}
+		if owner == nil {
+			owner = currentDevice // legacy single-Device fallback
+		}
+		if owner == nil {
+			// No known top-level Device and no currentDevice (e.g. the
+			// mapper produced no Device entity for this walk). Leave the
+			// existing ref in place rather than stubbing an anonymous
+			// device — the annotators already set run_id on the ref and
+			// we must not replace it with a bare stub.
+			return ref
+		}
+		if cached, ok := stubCache[owner]; ok {
+			return cached
+		}
+		s := newDeviceStub(owner)
+		stubCache[owner] = s
+		return s
+	}
+
+	// stubForIface re-resolves a nested Interface ref by NAME against
+	// the top-level Interface index (when one exists) before stubbing,
+	// so a stale Parent.Device (set by ResolveSubinterfaceParents
+	// before TranslateAsStack) is corrected to the current owner.
+	stubForIface := func(ref *diode.Interface) *diode.Interface {
+		if ref == nil {
+			return nil
+		}
+		owner := ref.Device
+		// Only rewrite owner when the top-level lookup is unambiguous.
+		// If multiple top-level interfaces share the same name (cross-
+		// member duplicates like `me0`/`mgmt0` on Junos VC / Cisco
+		// StackWise), the lookup cannot tell which member owns this
+		// particular ref — leaving owner as-is preserves whatever
+		// upstream routing produced (which is correct in the common
+		// case where ref.Device already points at the right member).
+		if ref.Name != nil {
+			if tops, ok := ifaceByName[*ref.Name]; ok && len(tops) == 1 && tops[0].Device != nil {
+				owner = tops[0].Device
+			}
+		}
+		return newInterfaceStub(ref, stubFor(owner))
+	}
 
 	for _, entity := range entities {
 		switch e := entity.(type) {
 		case *diode.Device:
-			// Top-level Device is the rich one; leave it alone.
-			if e == currentDevice {
-				continue
-			}
+			// Top-level rich Devices stay rich.
+			continue
 		case *diode.Interface:
-			e.Device = deviceStub
+			e.Device = stubFor(e.Device)
 			if e.Parent != nil {
-				e.Parent = newInterfaceStub(e.Parent, deviceStub)
+				e.Parent = stubForIface(e.Parent)
 			}
 			if e.Bridge != nil {
-				e.Bridge = newInterfaceStub(e.Bridge, deviceStub)
+				e.Bridge = stubForIface(e.Bridge)
 			}
 			if e.Lag != nil {
-				e.Lag = newInterfaceStub(e.Lag, deviceStub)
+				e.Lag = stubForIface(e.Lag)
 			}
 		case *diode.IPAddress:
 			if iface, ok := e.AssignedObject.(*diode.Interface); ok && iface != nil {
-				e.AssignedObject = newInterfaceStub(iface, deviceStub)
+				e.AssignedObject = stubForIface(iface)
 			}
 		case *diode.MACAddress:
 			if iface, ok := e.AssignedObject.(*diode.Interface); ok && iface != nil {
-				e.AssignedObject = newInterfaceStub(iface, deviceStub)
+				e.AssignedObject = stubForIface(iface)
 			}
 		case *diode.Module:
-			e.Device = deviceStub
+			e.Device = stubFor(e.Device)
 		}
 	}
 }

@@ -1044,12 +1044,9 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 
 	fieldFound := false
 	// Iterate values in sorted-OID order (ascending) instead of relying on
-	// Go's randomized map iteration. For table-valued mappings such as
-	// entPhysicalSerialNum (.1.3.6.1.2.1.47.1.1.1.1.11.X), this means the
-	// lowest entPhysicalIndex — typically the chassis at .1 — is visited
-	// first. Combined with "skip if already set" guards in cases like
-	// serialNumber, this yields deterministic "lowest-index non-empty wins"
-	// behaviour. Scalar fields (sysName etc.) are unaffected by ordering.
+	// Go's randomized map iteration. Scalar fields (sysName etc.) are
+	// unaffected by ordering; the sort exists so that any future table-valued
+	// device field can apply "lowest-index non-empty wins" deterministically.
 	valueKeys := make([]ObjectIDIndex, 0, len(values))
 	for objectID := range values {
 		valueKeys = append(valueKeys, objectID)
@@ -1132,20 +1129,6 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 						Model:        &deviceModel,
 						Manufacturer: &manufacturerEntity,
 					}
-					fieldFound = true
-				case "serialNumber":
-					serial := strings.TrimRight(strings.TrimSpace(value.Value), "\x00")
-					if serial == "" {
-						m.logger.Debug("empty serial number, skipping", "object_id", objectID)
-						continue
-					}
-					// entPhysicalSerialNum is a table — keep the first non-empty
-					// value (chassis at entPhysicalIndex .1) so module/SFP
-					// serials don't overwrite it.
-					if deviceEntity.Serial != nil && *deviceEntity.Serial != "" {
-						continue
-					}
-					deviceEntity.Serial = &serial
 					fieldFound = true
 				case "sysContact":
 					// Walked solely so defaults can reference this OID;

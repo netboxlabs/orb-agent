@@ -114,20 +114,49 @@ entries:
         field: "sysLocation"
         description: "Walked solely so defaults.location or defaults.asset_tag can reference it via OID. Not consumed by the mapper directly."
 
-  # Device serial number (ENTITY-MIB entPhysicalSerialNum).
-  # identifier_size: 2 uses the last two OID components (column.row,
-  # e.g. "11.1") as the grouping index, which is disjoint from the
-  # single-component ifIndex values ("1", "2", ...) used by the
-  # interface table. This prevents groupByObjectIDIndex from merging
-  # serial PDUs into interface index buckets.
+  # ENTITY-MIB entPhysicalTable — chassis inventory for stack detection.
+  # Consumed by mapping.TranslateAsStack as a post-pass; the
+  # ChassisInventoryMapper.Map is a no-op. Master device Serial is set
+  # from entPhysicalSerialNum here (replacing the DeviceMapper
+  # "serialNumber" branch). identifier_size: 2 keys rows by (column, row)
+  # disjoint from ifIndex buckets.
   - oid: ".1.3.6.1.2.1.47.1.1.1"
-    entity: "device"
+    entity: "chassis_inventory"
     field: "_id"
     identifier_size: 2
+    description: "ENTITY-MIB entPhysicalTable (chassis physical inventory for stack detection)"
     mapping_entries:
-      - oid: ".1.3.6.1.2.1.47.1.1.1.1.11"
-        entity: "device"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.4"   # entPhysicalContainedIn
+        entity: "chassis_inventory"
+        field: "containedIn"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.5"   # entPhysicalClass
+        entity: "chassis_inventory"
+        field: "class"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.6"   # entPhysicalParentRelPos
+        entity: "chassis_inventory"
+        field: "parentRelPos"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.7"   # entPhysicalName
+        entity: "chassis_inventory"
+        field: "name"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.11"  # entPhysicalSerialNum
+        entity: "chassis_inventory"
         field: "serialNumber"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.13"  # entPhysicalModelName
+        entity: "chassis_inventory"
+        field: "modelName"
+
+  # ENTITY-MIB entAliasMappingTable — maps entPhysicalIndex -> ifIndex
+  # for stack-member interface routing. Column .2 holds an OID like
+  # .1.3.6.1.2.1.2.2.1.1.<ifIndex>.
+  - oid: ".1.3.6.1.2.1.47.1.3.2"
+    entity: "chassis_inventory"
+    field: "_id"
+    identifier_size: 2
+    description: "ENTITY-MIB entAliasMappingTable (entPhysicalIndex -> ifIndex)"
+    mapping_entries:
+      - oid: ".1.3.6.1.2.1.47.1.3.2.1.2"
+        entity: "chassis_inventory"
+        field: "aliasMapping"
   # BRIDGE-MIB dot1dBasePortIfIndex — bridge port -> ifIndex translation.
   # Required by VlanMapper bitmap decoding.
   - oid: ".1.3.6.1.2.1.17.1.4.1"
