@@ -74,10 +74,20 @@ type FleetSecretsManager struct {
 	Timeout *int `yaml:"timeout,omitempty"` // Request timeout in seconds
 }
 
-// SecretsSources represents the configuration for manager sources, including vault and fleet.
+// DelineaManager represents the configuration for the Delinea Secret Server manager
+type DelineaManager struct {
+	ServerURL string  `yaml:"server_url"`
+	Tenant    string  `yaml:"tenant"`
+	Username  string  `yaml:"username"`
+	Password  string  `yaml:"password"`
+	Schedule  *string `yaml:"schedule,omitempty"`
+}
+
+// SecretsSources represents the configuration for manager sources, including vault, fleet and delinea.
 type SecretsSources struct {
-	Vault VaultManager        `yaml:"vault"`
-	Fleet FleetSecretsManager `yaml:"fleet"`
+	Vault   VaultManager        `yaml:"vault"`
+	Fleet   FleetSecretsManager `yaml:"fleet"`
+	Delinea DelineaManager      `yaml:"delinea"`
 }
 
 // ManagerSecrets represents the configuration for the Secrets Manager
