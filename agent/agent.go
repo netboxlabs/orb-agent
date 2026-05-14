@@ -173,7 +173,29 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 
 		go a.waitForRestartRequests()
 	}
+	a.subscribeFilesmgr()
 	return nil
+}
+
+// subscribeFilesmgr wires FilesManager upgrade events to the backend
+// restart channel. A restart is requested when a file's logical name
+// matches a registered backend's name. This subscription is mode-
+// independent: it fires regardless of the active config manager.
+func (a *orbAgent) subscribeFilesmgr() {
+	a.filesManager.Subscribe(func(ev filesmgr.FileEvent) {
+		if ev.Type != filesmgr.EventUpgraded {
+			return
+		}
+		if _, ok := a.backends[ev.Entry.Name]; !ok {
+			return
+		}
+		select {
+		case a.restartBackendChan <- ev.Entry.Name:
+			a.logger.Info("filesmgr: requested restart", "backend", ev.Entry.Name, "version", ev.Entry.Version)
+		default:
+			a.logger.Warn("filesmgr: restart channel full, dropping request", "backend", ev.Entry.Name)
+		}
+	})
 }
 
 func (a *orbAgent) waitForRestartRequests() {
