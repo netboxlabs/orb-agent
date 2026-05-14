@@ -94,7 +94,9 @@ The Orb Agent will resolve the Delinea reference and use the actual secret value
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every secret that was resolved at least once. When a referenced secret value changes, the policies that referenced it are automatically re-applied with the new value. A failed poll fetch also triggers the re-apply path so the operator can observe the failure.
+If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every secret that was resolved at least once. When a referenced secret value changes, the policies that referenced it are automatically re-applied with the new value.
+
+If a poll fetch fails for a previously cached secret, every policy that referenced it is **removed** from its backend (this is the policy manager's contract for an invalid-secret signal). Once the secret is reachable and resolves again, the policy will be re-applied on the next config-manager sync. If any policy references multiple Delinea secrets, a single failed fetch is sticky: that policy is removed even if another referenced secret merely changed value in the same poll cycle.
 
 This is useful for credential rotation scenarios, where you want to rotate credentials in Delinea without restarting the Orb Agent or manually updating policies.
 
@@ -115,7 +117,7 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
    - Create a secret `orb-test-credential` (template `Password`) with `password=hunter2-OBS1378`.
    - Grant `svc_orb` the `View Secret` permission on `/orb-test`.
 
-2. **Write `orb-agent.yaml`:**
+2. **Write `orb-agent.yaml`:** the agent refuses to start with `backends: {}`, so the example includes a minimal `device_discovery` backend together with one local policy that references the Delinea secret. Adjust the backend block to whatever backend you actually run.
 
    ```yaml
    version: 1.0
@@ -128,8 +130,14 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
            username: "svc_orb"
            password: "${DELINEA_PASSWORD}"
            schedule: "*/1 * * * *"
-     backends: {}
-     policies: {}
+     backends:
+       device_discovery:
+         common: {}
+     policies:
+       device_discovery:
+         orb-test-policy:
+           data:
+             credential: "${delinea://path/orb-test/orb-test-credential/password}"
      config_manager:
        active: local
        sources:
@@ -144,9 +152,9 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
    ./build/orb-agent -c orb-agent.yaml -d
    ```
 
-4. **Verify auth + lookup:** in the logs, look for a successful `SolvePolicySecrets` call on a policy referencing `${delinea://path/orb-test/orb-test-credential/password}`. The resolved value must reach the backend rather than the placeholder string. (Add a temporary local policy with that field if your config has no policies.)
+4. **Verify auth + lookup:** in the logs, look for a successful `SolvePolicySecrets` call on the `orb-test-policy` policy. The `credential` field passed to the `device_discovery` backend must be the resolved value, not the placeholder string.
 
-5. **Verify rotation:** change the password of `orb-test-credential` in the Delinea UI to `rotated-hunter2`. Within one minute, the agent logs `Detected changed delinea secret` and re-applies the policy.
+5. **Verify rotation:** change the password of `orb-test-credential` in the Delinea UI to `rotated-hunter2`. Within one minute, the agent logs `Detected changed delinea secret` and re-applies the policy with the new value.
 
 6. **Negative checks:**
    - Wrong service-user password → the first secret fetch fails with a clear authentication error.

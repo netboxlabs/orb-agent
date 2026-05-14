@@ -126,12 +126,12 @@ func TestDelineaStart_ConfigValidation(t *testing.T) {
 		{
 			name:    "both ServerURL and Tenant empty",
 			cfg:     config.DelineaManager{Username: "u", Password: "p"},
-			wantErr: "either server_url or tenant",
+			wantErr: "exactly one of server_url or tenant",
 		},
 		{
 			name:    "both ServerURL and Tenant set",
 			cfg:     config.DelineaManager{ServerURL: "https://example.com", Tenant: "example", Username: "u", Password: "p"},
-			wantErr: "either server_url or tenant",
+			wantErr: "exactly one of server_url or tenant",
 		},
 		{
 			name:    "missing username",
@@ -373,6 +373,48 @@ func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {
 		assert.False(t, ids["policy-A"], "fetch-failure signal should be false")
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected callback to fire on fetch failure")
+	}
+}
+
+// When one cached secret fails to fetch and another for the same policy
+// changes value in the same poll cycle, the policy must be reported as
+// failed (false), not changed (true), regardless of map-iteration order.
+func TestDelineaPolling_FailureIsStickyAcrossMultipleSecrets(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
+	fake.putByID(2, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
+
+	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	changed := make(chan map[string]bool, 1)
+	m.RegisterUpdatePoliciesCallback(func(ids map[string]bool) { changed <- ids })
+
+	_, err := m.SolvePolicySecrets(config.PolicyPayload{
+		ID: "policy-A",
+		Data: map[string]any{
+			"a": "${delinea://id/1/password}",
+			"b": "${delinea://id/2/password}",
+		},
+	})
+	require.NoError(t, err)
+
+	// One secret changes, the other goes missing (404).
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v2"}}})
+	fake.mu.Lock()
+	delete(fake.byID, 2)
+	fake.mu.Unlock()
+
+	m.pollSecrets()
+
+	select {
+	case ids := <-changed:
+		require.Contains(t, ids, "policy-A")
+		assert.False(t, ids["policy-A"], "failure should be sticky even when another secret changed")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected callback to fire")
 	}
 }
 

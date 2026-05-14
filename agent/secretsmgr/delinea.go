@@ -53,7 +53,7 @@ func (d *delineaManager) Start(ctx context.Context) error {
 
 	if (d.config.ServerURL == "" && d.config.Tenant == "") ||
 		(d.config.ServerURL != "" && d.config.Tenant != "") {
-		return fmt.Errorf("either server_url or tenant must be set (not both and not neither)")
+		return fmt.Errorf("exactly one of server_url or tenant must be set")
 	}
 	if d.config.Username == "" {
 		return fmt.Errorf("username is required")
@@ -100,51 +100,68 @@ func (d *delineaManager) Start(ctx context.Context) error {
 
 // pollSecrets re-fetches every cached secret and fires the update callback
 // for every policy whose secret changed (true) or failed to refresh (false).
+// Failures are sticky: a policy marked false by one secret cannot be flipped
+// to true by another. policyIDs are re-read under the lock after each
+// fetch so policies added to the cache during the unlocked fetch are also
+// notified.
 func (d *delineaManager) pollSecrets() {
 	d.mu.Lock()
 	if len(d.usedVars) == 0 || d.callback == nil {
 		d.mu.Unlock()
 		return
 	}
-	// Snapshot the (body, value, policyIDs) tuples we need to re-check, so
-	// the network round-trip in fetch() doesn't run under the lock.
-	type snap struct {
-		body      string
-		value     string
-		policyIDs []string
-	}
+	// Snapshot only (body, previous-value) under the lock; defer policyID
+	// collection until after the unlocked fetch so we pick up any policies
+	// added during the fetch window.
+	type snap struct{ body, value string }
 	snapshots := make([]snap, 0, len(d.usedVars))
 	for body, cached := range d.usedVars {
-		ids := make([]string, 0, len(cached.policyIDs))
-		for id := range cached.policyIDs {
-			ids = append(ids, id)
-		}
-		snapshots = append(snapshots, snap{body: body, value: cached.Value, policyIDs: ids})
+		snapshots = append(snapshots, snap{body: body, value: cached.Value})
 	}
 	d.mu.Unlock()
 
 	d.logger.Debug("Polling delinea secrets for changes", "secretCount", len(snapshots))
 	changed := make(map[string]bool)
+	markFalse := func(id string) { changed[id] = false }
+	markTrue := func(id string) {
+		if prev, ok := changed[id]; ok && !prev {
+			return // failure is sticky
+		}
+		changed[id] = true
+	}
 
 	for _, s := range snapshots {
 		current, err := d.fetch(s.body)
 		if err != nil {
 			d.logger.Error("Failed to retrieve delinea secret during polling", "ref", s.body, "error", err)
-			for _, id := range s.policyIDs {
-				changed[id] = false
+			d.mu.Lock()
+			cached, ok := d.usedVars[s.body]
+			ids := make([]string, 0, len(cached.policyIDs))
+			if ok {
+				for id := range cached.policyIDs {
+					ids = append(ids, id)
+				}
+			}
+			d.mu.Unlock()
+			for _, id := range ids {
+				markFalse(id)
 			}
 			continue
 		}
 		if current != s.value {
 			d.logger.Info("Detected changed delinea secret", "ref", s.body)
 			d.mu.Lock()
+			ids := []string{}
 			if cached, ok := d.usedVars[s.body]; ok {
 				cached.Value = current
 				d.usedVars[s.body] = cached
+				for id := range cached.policyIDs {
+					ids = append(ids, id)
+				}
 			}
 			d.mu.Unlock()
-			for _, id := range s.policyIDs {
-				changed[id] = true
+			for _, id := range ids {
+				markTrue(id)
 			}
 		}
 	}
