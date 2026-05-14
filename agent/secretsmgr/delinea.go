@@ -63,7 +63,7 @@ func (d *delineaManager) Start(ctx context.Context) error {
 	// when this field is non-nil. Only set it when the operator explicitly
 	// opted into skip_tls.
 	if d.config.SkipTLS {
-		sdkCfg.TLSClientConfig = &tls.Config{InsecureSkipVerify: d.config.SkipTLS} //nolint:gosec // operator opted in via skip_tls
+		sdkCfg.TLSClientConfig = &tls.Config{InsecureSkipVerify: d.config.SkipTLS}
 	}
 
 	c, err := server.New(sdkCfg)
