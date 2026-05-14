@@ -14,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/redact"
@@ -51,6 +52,7 @@ type orbAgent struct {
 	configManager       configmgr.Manager
 	secretsManager      secretsmgr.Manager
 	backendStateManager backend.StateManager
+	filesManager        filesmgr.Manager
 	restartBackendChan  chan string
 }
 
@@ -59,6 +61,7 @@ var _ Agent = (*orbAgent)(nil)
 // New creates a new agent
 func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
+	fm := filesmgr.NewManager(logger, "/opt/orb/files")
 	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {
 		logger.Error("error during create policy manager, exiting", "error", err)
@@ -85,6 +88,7 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 		configManager:       cm,
 		secretsManager:      sm,
 		backendStateManager: backendStateManager,
+		filesManager:        fm,
 		restartBackendChan:  restartBackendChan,
 	}, nil
 }
@@ -146,7 +150,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 		}
 		be := backend.GetBackend(name)
 
-		if err := be.Configure(a.logger, a.policyManager.GetRepo(), cEntity, a.backendsCommon); err != nil {
+		if err := be.Configure(a.logger, a.policyManager.GetRepo(), cEntity, a.backendsCommon, a.filesManager); err != nil {
 			a.logger.Info("failed to configure backend", "backend", name, "error", err)
 			return err
 		}
@@ -251,6 +255,10 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		}
 	}
 
+	if err := a.filesManager.Start(ctx); err != nil {
+		return fmt.Errorf("filesmgr start: %w", err)
+	}
+
 	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
 		return err
 	}
@@ -278,6 +286,11 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			if err := repo.FailNonTerminalRuns(policies.RunFailureReasonAgentStopped); err != nil {
 				a.logger.Error("error while finalizing policy runs on shutdown", slog.Any("error", err))
 			}
+		}
+	}
+	if a.filesManager != nil {
+		if err := a.filesManager.Stop(ctx); err != nil {
+			a.logger.Warn("filesmgr stop returned error", "error", err)
 		}
 	}
 	if err := a.configManager.Stop(ctx); err != nil {
@@ -333,7 +346,7 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 			return errors.New("backend not found: " + name)
 		}
 	}
-	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon); err != nil {
+	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon, a.filesManager); err != nil {
 		return err
 	}
 	a.logger.Info("resetting backend", "backend", name)
