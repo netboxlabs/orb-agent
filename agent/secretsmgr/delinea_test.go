@@ -305,6 +305,7 @@ func TestDelineaSolvePolicySecrets_BadGrammar(t *testing.T) {
 	require.NoError(t, m.Start(context.Background()))
 
 	cases := []string{
+		"${delinea://}",
 		"${delinea://garbage}",
 		"${delinea://id/abc/password}",
 		"${delinea://id/1}",
@@ -348,6 +349,34 @@ func TestDelineaPolling_DetectsChange(t *testing.T) {
 		t.Fatal("expected callback to fire on change")
 	}
 	assert.Equal(t, "v2", m.usedVars["id/1/password"].Value, "cache should be updated to v2")
+}
+
+// A failed poll must evict the cached value so a subsequent resolve goes
+// back to Delinea instead of returning a stale credential the policy manager
+// has already removed.
+func TestDelineaPolling_FetchFailureEvictsCache(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
+
+	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+	m.RegisterUpdatePoliciesCallback(func(map[string]bool) {})
+
+	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "policy-A", Data: map[string]any{"c": "${delinea://id/1/password}"}})
+	require.NoError(t, err)
+
+	// Make subsequent fetches fail.
+	fake.mu.Lock()
+	delete(fake.byID, 1)
+	fake.mu.Unlock()
+	m.pollSecrets()
+
+	m.mu.Lock()
+	_, stillCached := m.usedVars["id/1/password"]
+	m.mu.Unlock()
+	assert.False(t, stillCached, "failed poll must evict the cache entry so the next resolve re-fetches from Delinea")
 }
 
 func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {

@@ -42,7 +42,11 @@ func processValue(v any, scheme, policyID string, resolve resolverFunc) (any, er
 }
 
 func processString(s, scheme, policyID string, resolve resolverFunc) (string, error) {
-	re := regexp.MustCompile(`\${` + regexp.QuoteMeta(scheme) + `://([^}]+)}`)
+	// Use [^}]* (zero or more) so an empty body like "${vault://}" still
+	// matches and is forwarded to the resolver, which can reject it with
+	// a clear grammar error. A "+" quantifier would pass it through to the
+	// backend literally.
+	re := regexp.MustCompile(`\${` + regexp.QuoteMeta(scheme) + `://([^}]*)}`)
 	if !re.MatchString(s) {
 		return s, nil
 	}

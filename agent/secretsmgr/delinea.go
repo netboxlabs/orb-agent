@@ -152,6 +152,14 @@ func (d *delineaManager) pollSecrets() {
 				for id := range cached.policyIDs {
 					ids = append(ids, id)
 				}
+				// Evict the stale entry: the secret is unreachable
+				// (revoked, deleted, network failure). If we kept the
+				// cached value, a subsequent SolvePolicySecrets call
+				// would silently re-apply the policy with the stale
+				// credential after the policy manager removed it.
+				// Forcing a re-fetch ensures the policy can only come
+				// back after a successful Delinea round-trip.
+				delete(d.usedVars, s.body)
 			}
 			d.mu.Unlock()
 			for _, id := range ids {
@@ -226,6 +234,7 @@ func (d *delineaManager) resolveBody(body, policyID string) (string, error) {
 	// while our fetch was in flight; if so, merge our policyID into the
 	// existing entry instead of overwriting it (which would drop any IDs
 	// the winner had registered).
+	fresh := false
 	if existing, ok := d.usedVars[body]; ok {
 		existing.policyIDs[policyID] = true
 		value = existing.Value
@@ -234,8 +243,12 @@ func (d *delineaManager) resolveBody(body, policyID string) (string, error) {
 			Value:     value,
 			policyIDs: map[string]bool{policyID: true},
 		}
+		fresh = true
 	}
 	d.mu.Unlock()
+	if fresh {
+		d.logger.Debug("Resolved delinea secret", "ref", body, "policy_id", policyID)
+	}
 	return value, nil
 }
 

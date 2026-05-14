@@ -122,7 +122,7 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
    - Create a secret `orb-test-credential` (template `Password`) with `password=hunter2-OBS1378`.
    - Grant `svc_orb` the `View Secret` permission on `/orb-test`.
 
-2. **Write `agent.yaml`** in the current directory: the agent refuses to start with `backends: {}`, so the example includes a minimal `device_discovery` backend together with one local policy that references the Delinea secret. Adjust the backend block to whatever backend you actually run.
+2. **Write `agent.yaml`** in the current directory: the agent refuses to start with `backends: {}`, so the example includes a minimal `device_discovery` backend plus a local policy whose `scope` references the Delinea secret. Replace the `driver` / `hostname` block with whatever device you actually want to discover (or substitute a different backend you already run).
 
    ```yaml
    version: 1.0
@@ -137,12 +137,19 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
            schedule: "*/1 * * * *"
      backends:
        device_discovery:
-         common: {}
+       common: {}
      policies:
        device_discovery:
          orb-test-policy:
-           data:
-             credential: "${delinea://path/orb-test/orb-test-credential/password}"
+           config:
+             schedule: "*/5 * * * *"
+             defaults:
+               site: orb-test
+           scope:
+             - driver: ios
+               hostname: 192.0.2.1
+               username: demo
+               password: "${delinea://path/orb-test/orb-test-credential/password}"
      config_manager:
        active: local
        sources:
@@ -161,9 +168,9 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
      netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml -d
    ```
 
-4. **Verify auth + lookup:** in the logs, look for a successful `SolvePolicySecrets` call on the `orb-test-policy` policy. The `credential` field passed to the `device_discovery` backend must be the resolved value, not the placeholder string.
+4. **Verify auth + lookup:** in the debug log, look for one line per resolved placeholder of the form `Resolved delinea secret ref=path/orb-test/orb-test-credential/password policy_id=…`, followed by the `device_discovery` backend accepting the policy without a `failed to solve secrets` error.
 
-5. **Verify rotation:** change the password of `orb-test-credential` in the Delinea UI to `rotated-hunter2`. Within one minute, the agent logs `Detected changed delinea secret` and re-applies the policy with the new value.
+5. **Verify rotation:** change the password of `orb-test-credential` in the Delinea UI to `rotated-hunter2`. Within one minute, the agent logs `Detected changed delinea secret ref=path/orb-test/orb-test-credential/password` and re-applies the policy with the new value.
 
 6. **Negative checks:**
    - Wrong service-user password → the first secret fetch fails with a clear authentication error.
