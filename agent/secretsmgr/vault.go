@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
 	vault "github.com/hashicorp/vault/api"
-	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -27,11 +25,6 @@ type vaultManager struct {
 	auth      authMethod
 	token     *vault.Secret
 	scheduler gocron.Scheduler
-}
-
-type cachedSecret struct {
-	Value     string          // The actual secret value
-	policyIDs map[string]bool // The IDs of policies that have used this secret
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
@@ -101,18 +94,14 @@ func (v *vaultManager) RegisterUpdatePoliciesCallback(callback func(map[string]b
 	v.callback = callback
 }
 
-// SolvePolicySecrets processes a policy payload and replaces vault references with environment variables
+// SolvePolicySecrets processes a policy payload and replaces vault references with their values.
 func (v *vaultManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
-	// Create a copy of the payload
 	newPayload := payload
-
-	// Process the Data field
-	processedData, err := v.processValue(payload.Data, payload.ID)
+	processed, err := processValue(payload.Data, "vault", payload.ID, v.resolveBody)
 	if err != nil {
 		return payload, err
 	}
-
-	newPayload.Data = processedData
+	newPayload.Data = processed
 	return newPayload, nil
 }
 
@@ -151,11 +140,9 @@ func (v *vaultManager) pollSecrets() {
 	}
 }
 
-// SolveConfigSecrets processes the configuration secrets and replaces vault references with environment variables
+// SolveConfigSecrets processes the configuration secrets and replaces vault references with their values.
 func (v *vaultManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
-	// Create a copy of the backends
-	newBackends := backends
-	processedBackends, err := v.processValue(newBackends, "_backends")
+	processedBackends, err := processValue(backends, "vault", "_backends", v.resolveBody)
 	if err != nil {
 		return backends, configManager, fmt.Errorf("failed to process backends: %w", err)
 	}
@@ -164,13 +151,11 @@ func (v *vaultManager) SolveConfigSecrets(backends map[string]any, configManager
 		return backends, configManager, fmt.Errorf("failed to cast processed backends to map[string]any")
 	}
 
-	// Convert configManager to map[string]any
 	configManagerMap, err := structToMap(configManager)
 	if err != nil {
 		return backends, configManager, fmt.Errorf("failed to convert config manager to map: %w", err)
 	}
-	// Process the config manager map
-	processedConfigManagerMap, err := v.processValue(configManagerMap, "_config_manager")
+	processedConfigManagerMap, err := processValue(configManagerMap, "vault", "_config_manager", v.resolveBody)
 	if err != nil {
 		return backends, configManager, fmt.Errorf("failed to process config manager: %w", err)
 	}
@@ -179,37 +164,10 @@ func (v *vaultManager) SolveConfigSecrets(backends map[string]any, configManager
 		return backends, configManager, fmt.Errorf("failed to convert processed map to config manager: %w", err)
 	}
 
-	// Do not track updates on config vars for now
+	// Do not track updates on config vars
 	v.usedVars = make(map[string]cachedSecret)
 
-	// Process the backends and config manager
 	return newBackends, newConfigManager, nil
-}
-
-// structToMap converts a struct to a map[string]any
-func structToMap(input any) (map[string]any, error) {
-	data, err := yaml.Marshal(input)
-	if err != nil {
-		return nil, err
-	}
-	var result map[string]any
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-// mapToStruct converts a map[string]any to a struct of type T
-func mapToStruct[T any](input any) (T, error) {
-	data, err := yaml.Marshal(input)
-	if err != nil {
-		return *new(T), err
-	}
-	var result T
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		return *new(T), err
-	}
-	return result, nil
 }
 
 func (v *vaultManager) addTokenLifecycleWatcher() error {
@@ -248,76 +206,40 @@ func (v *vaultManager) addTokenLifecycleWatcher() error {
 	return nil
 }
 
-func (v *vaultManager) processValue(value any, id string) (any, error) {
-	switch val := value.(type) {
-	case string:
-		return v.processString(val, id)
-	case map[string]any:
-		return v.processMap(val, id)
-	case []any:
-		return v.processSlice(val, id)
-	default:
-		return val, nil
-	}
-}
-
-// processString processes a string and replaces vault references
-func (v *vaultManager) processString(s string, id string) (string, error) {
-	re := regexp.MustCompile(`\${vault://([^}]+)}`)
-	if !re.MatchString(s) {
-		return s, nil
-	}
-
-	match := re.FindStringSubmatchIndex(s)
-	if len(match) < 4 {
-		return "", fmt.Errorf("failed to find vault reference in string: %s", s)
-	}
-
-	vaultPath := s[match[2]:match[3]]
-
-	if secrets, exists := v.usedVars[vaultPath]; exists {
-		secrets.policyIDs[id] = true
-		v.usedVars[vaultPath] = secrets
+// resolveBody is the Vault-specific resolver passed to the shared walker.
+// "body" is the substring after "vault://" and before "}", i.e. the kv path.
+func (v *vaultManager) resolveBody(body, policyID string) (string, error) {
+	if secrets, exists := v.usedVars[body]; exists {
+		secrets.policyIDs[policyID] = true
+		v.usedVars[body] = secrets
 		return secrets.Value, nil
 	}
 
-	secret, err := v.getSecret(vaultPath)
+	value, err := v.getSecret(body)
 	if err != nil {
 		return "", err
 	}
 
-	v.usedVars[vaultPath] = cachedSecret{
-		Value:     secret,
-		policyIDs: map[string]bool{id: true},
+	v.usedVars[body] = cachedSecret{
+		Value:     value,
+		policyIDs: map[string]bool{policyID: true},
 	}
-
-	return secret, nil
+	return value, nil
 }
 
-// processMap processes a map recursively and replaces vault references in its values
+// processString delegates to the shared resolver walker using the vault scheme.
+func (v *vaultManager) processString(s string, id string) (string, error) {
+	return processString(s, "vault", id, v.resolveBody)
+}
+
+// processMap delegates to the shared resolver walker using the vault scheme.
 func (v *vaultManager) processMap(m map[string]any, id string) (map[string]any, error) {
-	result := make(map[string]any)
-	for key, val := range m {
-		processedVal, err := v.processValue(val, id)
-		if err != nil {
-			return nil, fmt.Errorf("failed to process value for key %s: %w", key, err)
-		}
-		result[key] = processedVal
-	}
-	return result, nil
+	return processMap(m, "vault", id, v.resolveBody)
 }
 
-// processSlice processes a slice recursively and replaces vault references in its elements
+// processSlice delegates to the shared resolver walker using the vault scheme.
 func (v *vaultManager) processSlice(s []any, id string) ([]any, error) {
-	result := make([]any, len(s))
-	for i, val := range s {
-		processedVal, err := v.processValue(val, id)
-		if err != nil {
-			return nil, fmt.Errorf("failed to process value at index %d: %w", i, err)
-		}
-		result[i] = processedVal
-	}
-	return result, nil
+	return processSlice(s, "vault", id, v.resolveBody)
 }
 
 // getSecret retrieves a secret from the vault
