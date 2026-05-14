@@ -51,11 +51,12 @@ func NewManager(logger *slog.Logger, root string) Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	l := logger.With("subsystem", "filesmgr")
 	return &filesmgr{
-		logger:  logger.With("subsystem", "filesmgr"),
+		logger:  l,
 		root:    root,
 		store:   newStore(filepath.Join(root, "state.json")),
-		fetcher: newFetcher(),
+		fetcher: newFetcher(l),
 		bus:     newEventBusWithLogger(logger),
 	}
 }
@@ -254,31 +255,29 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	existing := preTracked.Current
 	if hadExisting && existing.SHA256 == spec.SHA256 && existing.Version == spec.Version {
 		if info, err := os.Stat(existing.Path); err == nil {
-			// Even on the idempotent path, apply mode change if requested.
-			if !spec.Extract && spec.Mode != 0 {
-				current := info.Mode().Perm()
-				wanted := spec.Mode.Perm()
-				if current != wanted {
-					if err := os.Chmod(existing.Path, wanted); err != nil {
-						mu.Unlock()
-						return "", fmt.Errorf("chmod %s: %w", existing.Path, err)
-					}
-				}
-			}
-
 			if !info.IsDir() {
-				// Verify the on-disk SHA256 still matches the recorded one.
-				// This is the contract: "matches the declared sha256."
-				// Tampered or corrupted files fall through to re-fetch.
+				// Verify the on-disk SHA256 still matches the recorded one before
+				// doing any work. Tampered or corrupted files fall through to
+				// re-fetch (which also re-chmods), so chomoding first would be
+				// wasted work on the re-fetch path.
 				// Only re-verify regular files; for Extract bundles (directories)
 				// the recorded SHA256 is of the archive — we don't keep the
 				// archive on disk, so we cannot cheaply re-verify. Trust the
 				// versioned directory's contents.
 				if actual, hashErr := sha256File(existing.Path); hashErr == nil && actual == spec.SHA256 {
+					// Content matches; now optionally chmod if mode differs.
+					if !spec.Extract && spec.Mode != 0 {
+						if info.Mode().Perm() != spec.Mode.Perm() {
+							if err := os.Chmod(existing.Path, spec.Mode); err != nil {
+								mu.Unlock()
+								return "", fmt.Errorf("chmod %s: %w", existing.Path, err)
+							}
+						}
+					}
 					mu.Unlock()
 					return existing.Path, nil
 				}
-				// Mismatch or hash error: fall through to re-fetch.
+				// SHA mismatch or hash error: fall through to re-fetch.
 			} else {
 				// Extracted bundle: cannot cheaply re-verify; trust on-disk state.
 				mu.Unlock()
@@ -400,12 +399,14 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 		return err
 	}
 
-	// Drop the per-name mutex entry now that removal is complete and the mutex
-	// is no longer held. Safe because:
-	//   - We have already released mu above.
-	//   - A future Ensure or Remove will call mutexFor which uses LoadOrStore,
-	//     so a new mutex will be created correctly if the name re-appears.
-	m.perNameMu.Delete(name)
+	// Note: we intentionally do NOT delete the per-name mutex on Remove.
+	// Doing so would race with concurrent callers who already obtained the
+	// old mutex via mutexFor() but haven't acquired it yet — they would
+	// proceed with the now-orphaned mutex while a later caller would get a
+	// fresh mutex via LoadOrStore, breaking the serialization invariant for
+	// the same logical name. The mutex map grows monotonically with the set
+	// of logical names ever Ensure'd, which is bounded in practice (small
+	// set of backend binaries and plugin names).
 
 	m.bus.publish(ev)
 	return nil
@@ -449,10 +450,11 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 		if err != nil {
 			return err
 		}
-		// Drop the per-name mutex: the entry is fully removed and the mutex
-		// is no longer held. A future re-Ensure will allocate a fresh one via
-		// LoadOrStore in mutexFor.
-		m.perNameMu.Delete(name)
+		// Note: we intentionally do NOT delete the per-name mutex here.
+		// See the same comment in Remove for the full rationale: deleting
+		// the mutex after releasing it races with concurrent callers who
+		// already hold a reference to the old mutex but haven't locked it
+		// yet, breaking the serialization invariant.
 		m.bus.publish(ev)
 		return nil
 	}

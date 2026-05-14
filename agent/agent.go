@@ -86,6 +86,13 @@ type orbAgent struct {
 	// the root agent context. Cancelled in Stop() before iterating backends so
 	// the dispatcher cannot fire a restart after backends have been stopped.
 	dispatcherCancel context.CancelFunc
+
+	// backendRestartMu serializes Stop+Start sequences per backend across
+	// both restart paths (file-driven via restartDispatcher and health/fleet-
+	// driven via waitForRestartRequests). Without this, a file event and a
+	// health-driven restart for the same backend can interleave Stop/Start
+	// operations.
+	backendRestartMu sync.Map // name -> *sync.Mutex
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -261,12 +268,28 @@ func (a *orbAgent) subscribeFilesmgr() {
 	})
 }
 
+// backendRestartLock returns a per-backend mutex that serializes concurrent
+// Stop+Start sequences. Both restartBackendWithFilesmgrRollback (file-driven)
+// and RestartBackend (health/fleet-driven) acquire this mutex before touching
+// a backend, ensuring only one restart sequence runs at a time per backend.
+// Entries are never deleted — same race rationale as filesmgr.perNameMu.
+func (a *orbAgent) backendRestartLock(name string) *sync.Mutex {
+	v, _ := a.backendRestartMu.LoadOrStore(name, &sync.Mutex{})
+	return v.(*sync.Mutex) //nolint:forcetypeassert
+}
+
 // restartBackendWithFilesmgrRollback performs a Stop + Start sequence for a
 // backend after a FilesManager event upgraded its managed binary. If Start
 // fails, asks FilesManager to roll back the binary to its previous version,
 // then retries Start once. On second failure, gives up and logs the error —
 // no infinite loop.
 func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backendName string) {
+	// Serialize concurrent Stop+Start sequences for the same backend across
+	// both restart paths (file-driven and health/fleet-driven).
+	restartMu := a.backendRestartLock(backendName)
+	restartMu.Lock()
+	defer restartMu.Unlock()
+
 	be, ok := a.backends[backendName]
 	if !ok {
 		a.logger.Warn("filesmgr: backend not registered for restart", "backend", backendName)
@@ -538,6 +561,12 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	if !backend.HaveBackend(name) {
 		return errors.New("specified backend does not exist: " + name)
 	}
+
+	// Serialize concurrent Stop+Start sequences for the same backend across
+	// both restart paths (file-driven and health/fleet-driven).
+	restartMu := a.backendRestartLock(name)
+	restartMu.Lock()
+	defer restartMu.Unlock()
 
 	be := a.backends[name]
 	a.logger.Info("restarting backend", "backend", name, "reason", reason)

@@ -560,7 +560,7 @@ func TestManager_RollbackRejectsUnversionedEntries(t *testing.T) {
 		logger:  slog.Default(),
 		root:    root,
 		store:   s,
-		fetcher: newFetcher(),
+		fetcher: newFetcher(slog.Default()),
 		bus:     newEventBusWithLogger(slog.Default()),
 	}
 
@@ -689,37 +689,6 @@ func TestManager_StartPreservesUnversionedExtractedContent(t *testing.T) {
 
 	// Stage dir inside name dir must be gone.
 	assert.NoDirExists(t, staleStage, "stale stage dir inside unversioned name dir must be removed on Start")
-}
-
-// TestManager_RemoveCleansUpPerNameMutex verifies that Remove deletes the
-// per-name mutex entry from perNameMu so the map does not grow unboundedly
-// when names churn (install → remove cycles).
-func TestManager_RemoveCleansUpPerNameMutex(t *testing.T) {
-	archive := buildTarGz(t, map[string]string{"a.txt": "data"})
-	sum := sha256Hex(archive)
-	srv := serveTarGz(t, archive)
-	defer srv.Close()
-
-	m, _ := newTestManager(t)
-	fm := m.(*filesmgr)
-
-	// Install so the per-name mutex is created.
-	_, err := m.Ensure(context.Background(), FileSpec{
-		Name: "pkg", Version: "1.0.0",
-		URL: srv.URL + "/x.tar.gz", SHA256: sum, Extract: true,
-	})
-	require.NoError(t, err)
-
-	// Confirm the mutex entry exists.
-	_, before := fm.perNameMu.Load("pkg")
-	require.True(t, before, "perNameMu must have an entry for 'pkg' after Ensure")
-
-	// Remove the entry.
-	require.NoError(t, m.Remove(context.Background(), "pkg"))
-
-	// The per-name mutex entry must now be gone.
-	_, after := fm.perNameMu.Load("pkg")
-	assert.False(t, after, "perNameMu must not retain an entry for 'pkg' after Remove")
 }
 
 // TestManager_EnsureRefetchesOnTamper verifies that if the on-disk file is

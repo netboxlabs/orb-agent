@@ -57,7 +57,7 @@ func TestFetcher_FetchAndExtractArchive(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "extracted")
 
-	f := newFetcher()
+	f := newFetcher(nil)
 	err := f.fetch(context.Background(), FileSpec{
 		Name:    "x",
 		URL:     srv.URL + "/x.tar.gz",
@@ -81,7 +81,7 @@ func TestFetcher_SHA256Mismatch(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "extracted")
 
-	f := newFetcher()
+	f := newFetcher(nil)
 	err := f.fetch(context.Background(), FileSpec{
 		Name:    "x",
 		URL:     srv.URL + "/x.tar.gz",
@@ -93,7 +93,7 @@ func TestFetcher_SHA256Mismatch(t *testing.T) {
 }
 
 func TestFetcher_RejectsFileScheme(t *testing.T) {
-	f := newFetcher()
+	f := newFetcher(nil)
 	err := f.fetch(context.Background(), FileSpec{
 		Name:   "x",
 		URL:    "file:///etc/passwd",
@@ -117,7 +117,7 @@ func TestFetcher_PlacesSingleFile(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "1.0.0")
 
-	f := newFetcher()
+	f := newFetcher(nil)
 	err := f.fetch(context.Background(), FileSpec{
 		Name:    "orb-worker",
 		URL:     srv.URL + "/orb-worker",
@@ -154,7 +154,7 @@ func TestFetcher_PlacesSingleFile_ExecutableMode(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "1.0.0")
 
-	f := newFetcher()
+	f := newFetcher(nil)
 	err := f.fetch(context.Background(), FileSpec{
 		Name:    "orb-worker",
 		URL:     srv.URL + "/orb-worker",
@@ -198,7 +198,7 @@ func TestFetcher_ReEnsureExtractedReplacesExistingDst(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "pkg")
 
-	f := newFetcher()
+	f := newFetcher(nil)
 
 	// First fetch — dst does not yet exist.
 	err := f.fetch(context.Background(), FileSpec{

@@ -454,7 +454,7 @@ func TestSubscribeToFilesmgr_CoalescesAndDeliversReliably(t *testing.T) {
 	a.backends["worker"] = be
 
 	// Simulate the bridge firing 10 upgrade events for the same backend.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		a.pendingRestartsMu.Lock()
 		if a.pendingRestarts == nil {
 			a.pendingRestarts = make(map[string]struct{})
@@ -535,6 +535,89 @@ func TestSubscribeToFilesmgr_IgnoresRolledBackAndRemoved(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 		// ok — neither event type should trigger a restart
 	}
+}
+
+// TestBackendRestartLock_SerializesConccurentRestarts verifies that
+// backendRestartLock returns the same *sync.Mutex for the same backend name,
+// so restartBackendWithFilesmgrRollback and a concurrent RestartBackend caller
+// holding the same lock are serialized. The test simulates this by: having
+// goroutine A acquire the lock for "worker", then spawning goroutine B which
+// calls restartBackendWithFilesmgrRollback for "worker". B's Start should not
+// execute until A releases the lock.
+func TestBackendRestartLock_SerializesConccurentRestarts(t *testing.T) {
+	// Track the order of operations.
+	var order []string
+	var orderMu sync.Mutex
+	record := func(s string) {
+		orderMu.Lock()
+		order = append(order, s)
+		orderMu.Unlock()
+	}
+
+	cbe := &countingBackend{
+		filesmgrTestBackend: filesmgrTestBackend{managedBinary: "orb-worker"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a := &orbAgent{
+		logger:         slog.Default(),
+		backends:       map[string]backend.Backend{"worker": cbe},
+		filesManager:   &mockFilesManager{},
+		cancelFunction: cancel,
+		ctx:            ctx,
+	}
+
+	// Goroutine A: acquire the backend restart lock and hold it briefly.
+	mu := a.backendRestartLock("worker")
+	mu.Lock()
+	record("A-locked")
+
+	startedB := make(chan struct{})
+	doneB := make(chan struct{})
+	go func() {
+		defer close(doneB)
+		close(startedB) // signal that B is about to contend
+		// B calls restartBackendWithFilesmgrRollback; it will block on the mutex
+		// until A releases it.
+		a.restartBackendWithFilesmgrRollback(ctx, "worker")
+		record("B-done")
+	}()
+
+	// Wait until B has started, then give it a moment to block on the lock.
+	<-startedB
+	time.Sleep(20 * time.Millisecond)
+
+	// B must not have called Start yet (it's blocked waiting on the mutex A holds).
+	cbe.mu.Lock()
+	startsWhileLocked := cbe.startCalls
+	cbe.mu.Unlock()
+	assert.Equal(t, 0, startsWhileLocked, "B must not have called Start while A holds the lock")
+
+	// Release A's lock; B should now proceed.
+	record("A-unlocked")
+	mu.Unlock()
+
+	select {
+	case <-doneB:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine B did not complete after A released the lock")
+	}
+
+	// B must have called Start exactly once (Stop+Start from restartBackendWithFilesmgrRollback).
+	cbe.mu.Lock()
+	startsAfter := cbe.startCalls
+	cbe.mu.Unlock()
+	assert.Equal(t, 1, startsAfter, "B must call Start exactly once after A releases the lock")
+
+	// Order must be: A-locked, A-unlocked, B-done.
+	orderMu.Lock()
+	got := order
+	orderMu.Unlock()
+	require.Len(t, got, 3)
+	assert.Equal(t, []string{"A-locked", "A-unlocked", "B-done"}, got,
+		"operations must be serialized: B must not run until A releases the lock")
 }
 
 // buildTestTarGz produces a minimal in-memory .tar.gz containing the given files.
