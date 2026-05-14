@@ -163,7 +163,7 @@ func TestManager_CurrentSymlinkPointsToLatestVersion(t *testing.T) {
 
 	m, root := newTestManager(t)
 
-	// Install v1 and confirm "current" points to "1.0.0".
+	// Install 1.0.0 and confirm "current" points to "1.0.0".
 	path1, err := m.Ensure(context.Background(), FileSpec{
 		Name: "pkg", Version: "1.0.0",
 		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
@@ -179,7 +179,7 @@ func TestManager_CurrentSymlinkPointsToLatestVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "content-v1", string(content1))
 
-	// Upgrade to v2 and confirm "current" now points to "2.0.0".
+	// Upgrade to 2.0.0 and confirm "current" now points to "2.0.0".
 	path2, err := m.Ensure(context.Background(), FileSpec{
 		Name: "pkg", Version: "2.0.0",
 		URL: srv.URL + "/v2.tar.gz", SHA256: sum2, Extract: true,
@@ -289,21 +289,21 @@ func TestManager_RollbackRestoresPreviousVersion(t *testing.T) {
 		mu.Unlock()
 	})
 
-	// Install v1.
+	// Install 1.0.0.
 	_, err := m.Ensure(context.Background(), FileSpec{
 		Name: "pkg", Version: "1.0.0",
 		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
 	})
 	require.NoError(t, err)
 
-	// Upgrade to v2.
+	// Upgrade to 2.0.0.
 	_, err = m.Ensure(context.Background(), FileSpec{
 		Name: "pkg", Version: "2.0.0",
 		URL: srv.URL + "/v2.tar.gz", SHA256: sum2, Extract: true,
 	})
 	require.NoError(t, err)
 
-	// Verify symlink points to v2.
+	// Verify symlink points to 2.0.0.
 	target, err := os.Readlink(filepath.Join(root, "pkg", "current"))
 	require.NoError(t, err)
 	assert.Equal(t, "2.0.0", target)
@@ -311,12 +311,12 @@ func TestManager_RollbackRestoresPreviousVersion(t *testing.T) {
 	// Rollback.
 	require.NoError(t, m.Rollback(context.Background(), "pkg"))
 
-	// Symlink must now point to v1.
+	// Symlink must now point to 1.0.0.
 	target, err = os.Readlink(filepath.Join(root, "pkg", "current"))
 	require.NoError(t, err)
 	assert.Equal(t, "1.0.0", target)
 
-	// Get must return the v1 entry.
+	// Get must return the 1.0.0 entry.
 	entry, ok := m.Get("pkg")
 	require.True(t, ok)
 	assert.Equal(t, "1.0.0", entry.Version)
@@ -369,7 +369,7 @@ func TestManager_RollbackWithNoPreviousRemovesEntry(t *testing.T) {
 	// The on-disk directory must no longer exist.
 	assert.NoDirExists(t, filepath.Join(root, "pkg"), "pkg directory must be removed after rollback-to-default")
 
-	// Events sequence: EventInstalled then EventRemoved (with v1.0.0 Entry).
+	// Events sequence: EventInstalled then EventRemoved (with 1.0.0 Entry).
 	mu.Lock()
 	defer mu.Unlock()
 	require.Len(t, events, 2)
@@ -403,7 +403,7 @@ func TestManager_RollbackWithMissingPreviousDir_ReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Simulate operator cleanup: remove the v1 directory.
+	// Simulate operator cleanup: remove the 1.0.0 directory.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "pkg", "1.0.0")))
 
 	err = m.Rollback(context.Background(), "pkg")
@@ -441,9 +441,9 @@ func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
 }
 
 // TestManager_EnsureRestoresExactStateOnSymlinkFailure verifies that when the
-// symlink swap fails during an upgrade (v1→v2→v3), the store is restored to
-// the exact pre-upgrade tracked state (Current=v2, Previous=v1) rather than
-// being poisoned to (Current=v2, Previous=v3) by a naïve store.put.
+// symlink swap fails during an upgrade (1.0.0 → 2.0.0 → 3.0.0), the store is
+// restored to the exact pre-upgrade tracked state (Current=2.0.0, Previous=1.0.0)
+// rather than being poisoned to (Current=2.0.0, Previous=3.0.0) by a naïve store.put.
 func TestManager_EnsureRestoresExactStateOnSymlinkFailure(t *testing.T) {
 	v1 := buildTarGz(t, map[string]string{"file.txt": "v1"})
 	v2 := buildTarGz(t, map[string]string{"file.txt": "v2"})
@@ -459,7 +459,7 @@ func TestManager_EnsureRestoresExactStateOnSymlinkFailure(t *testing.T) {
 
 	m, root := newTestManager(t)
 
-	// Install v1 then v2 so Previous=v1 is recorded.
+	// Install 1.0.0 then 2.0.0 so Previous=1.0.0 is recorded.
 	_, err := m.Ensure(context.Background(), FileSpec{
 		Name: "pkg", Version: "1.0.0",
 		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
@@ -471,7 +471,7 @@ func TestManager_EnsureRestoresExactStateOnSymlinkFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Block the symlink swap for v3 by making the <root>/pkg/ directory
+	// Block the symlink swap for 3.0.0 by making the <root>/pkg/ directory
 	// read-only so os.Symlink() inside swapSymlink cannot create the temp
 	// symlink (current.new). Restore write permission on test cleanup.
 	pkgDir := filepath.Join(root, "pkg")
@@ -486,7 +486,7 @@ func TestManager_EnsureRestoresExactStateOnSymlinkFailure(t *testing.T) {
 	_ = os.Chmod(pkgDir, 0o755)
 	require.Error(t, err, "Ensure must fail when symlink swap fails")
 
-	// Store must be restored to exactly Current=v2, Previous=v1.
+	// Store must be restored to exactly Current=2.0.0, Previous=1.0.0.
 	tracked, ok := m.(*filesmgr).store.getTracked("pkg")
 	require.True(t, ok)
 	assert.Equal(t, "2.0.0", tracked.Current.Version, "current must be v2 after failed v3 Ensure")
@@ -582,7 +582,7 @@ func TestManager_RollbackRestoresSymlinkIfStateWriteFails(t *testing.T) {
 
 	m, root := newTestManager(t)
 
-	// Install v1 then v2.
+	// Install 1.0.0 then 2.0.0.
 	_, err := m.Ensure(context.Background(), FileSpec{
 		Name: "pkg", Version: "1.0.0",
 		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
@@ -594,7 +594,7 @@ func TestManager_RollbackRestoresSymlinkIfStateWriteFails(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Confirm symlink points to v2 before rollback.
+	// Confirm symlink points to 2.0.0 before rollback.
 	linkPath := filepath.Join(root, "pkg", "current")
 	target, err := os.Readlink(linkPath)
 	require.NoError(t, err)
@@ -610,7 +610,7 @@ func TestManager_RollbackRestoresSymlinkIfStateWriteFails(t *testing.T) {
 	err = m.Rollback(context.Background(), "pkg")
 	require.Error(t, err, "Rollback must fail when state write fails")
 
-	// Best-effort restore: symlink must point back to v2 (pre-rollback target).
+	// Best-effort restore: symlink must point back to 2.0.0 (pre-rollback target).
 	restoredTarget, readErr := os.Readlink(linkPath)
 	require.NoError(t, readErr)
 	assert.Equal(t, "2.0.0", restoredTarget, "symlink must be restored to pre-rollback target after state write failure")

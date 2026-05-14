@@ -44,8 +44,8 @@ func newStore(path string) *store {
 
 // load reads state.json (if present) and drops any entries whose Path
 // does not exist on disk. A missing state.json file is not an error.
-// If the file is version 1 (old format), it is upgraded in-memory to v2
-// with no Previous pointers.
+// Older state files using the flat entry format are upgraded in-memory
+// to the current tracked format with no Previous pointers.
 func (s *store) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,7 +72,7 @@ func (s *store) load() error {
 	var tracked map[string]trackedEntry
 
 	if peek.Version <= 1 {
-		// v1 format: entries is map[string]FileEntry.
+		// Legacy flat format: entries is map[string]FileEntry.
 		var sf1 struct {
 			Version int                  `json:"version"`
 			Entries map[string]FileEntry `json:"entries"`
@@ -85,7 +85,7 @@ func (s *store) load() error {
 			tracked[name] = trackedEntry{Current: entry, Previous: nil}
 		}
 	} else {
-		// v2 format.
+		// Current tracked format.
 		var sf stateFile
 		if err := json.Unmarshal(data, &sf); err != nil {
 			return err

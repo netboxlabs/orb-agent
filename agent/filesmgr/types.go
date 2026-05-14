@@ -31,7 +31,7 @@ type FileSpec struct {
 	Extract bool
 
 	// TargetPath optionally overrides the default placement path.
-	// Not supported in v1; Validate() rejects any non-empty value.
+	// Not yet supported; Validate() rejects any non-empty value.
 	TargetPath string
 
 	// Mode optionally sets the file permission bits for single-file downloads

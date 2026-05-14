@@ -83,7 +83,7 @@ func TestStore_V1Migration(t *testing.T) {
 	root := t.TempDir()
 	statePath := filepath.Join(root, "state.json")
 
-	// Write a hand-crafted v1-format state.json.
+	// Write a hand-crafted legacy-format state.json.
 	p := filepath.Join(root, "x", "1.0.0")
 	require.NoError(t, os.MkdirAll(p, 0o755))
 	v1JSON := `{
@@ -120,7 +120,7 @@ func TestStore_V2RoundTripWithPrevious(t *testing.T) {
 	root := t.TempDir()
 	s := newStore(filepath.Join(root, "state.json"))
 
-	// Install v1.
+	// Install 1.0.0.
 	p1 := filepath.Join(root, "x", "1.0.0")
 	require.NoError(t, os.MkdirAll(p1, 0o755))
 	entry1 := FileEntry{Name: "x", Version: "1.0.0", Path: p1, SHA256: "aaa", InstalledAt: time.Now().UTC().Truncate(time.Second)}
