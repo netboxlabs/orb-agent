@@ -17,6 +17,15 @@ type Manager interface {
 	// matches the spec, returns the existing path with no fetch or event.
 	// If absent or different, fetches via go-getter, verifies, and places
 	// atomically. Synchronous; callers wrap in a goroutine for async use.
+	//
+	// NOTE: the per-name mutex is held for the entire fetch + state-update +
+	// symlink-swap sequence, including network I/O. Concurrent operations on
+	// the same logical name (another Ensure, Remove, or Rollback) block for the
+	// duration of an in-flight fetch. For the current v1 consumer set (a small
+	// number of backend binaries) this serialization is acceptable; high-churn
+	// callers should expect Ensure to be slow under contention. Future
+	// refactor could stage the fetch outside the lock and acquire it only for
+	// the commit phase.
 	Ensure(ctx context.Context, spec FileSpec) (path string, err error)
 
 	// Get returns the current entry for a logical name, if installed.

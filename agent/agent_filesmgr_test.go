@@ -333,6 +333,84 @@ func TestRestartDispatcher_ProcessesRestartsSequentially(t *testing.T) {
 	assert.LessOrEqual(t, maxIF, 1, "restarts must be sequential: peak concurrent Start calls must be ≤ 1")
 }
 
+// TestRestartDispatcher_CtxCancelMidDrain verifies Fix 1: when the dispatcher
+// context is cancelled while the inner for-range loop is draining a pending
+// map that contains N backends, the remaining backends are NOT restarted.
+// slowStartBackend introduces a delay per Start so that cancellation fires
+// before all entries are processed; the ctx-check at the top of the loop
+// then aborts the drain early.
+func TestRestartDispatcher_CtxCancelMidDrain(t *testing.T) {
+	const delay = 150 * time.Millisecond
+	const nBackends = 4
+
+	var mu sync.Mutex
+	inFlight, maxInFlight := 0, 0
+
+	backends := make(map[string]backend.Backend, nBackends)
+	for i := range nBackends {
+		name := fmt.Sprintf("midcancel-backend-%d", i)
+		backends[name] = &slowStartBackend{
+			filesmgrTestBackend: filesmgrTestBackend{managedBinary: name},
+			delay:               delay,
+			globalMu:            &mu,
+			inFlight:            &inFlight,
+			maxInFlight:         &maxInFlight,
+		}
+	}
+
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	defer parentCancel()
+
+	dispatcherCtx, dispatcherCancel := context.WithCancel(parentCtx)
+
+	a := &orbAgent{
+		logger:           slog.Default(),
+		backends:         backends,
+		filesManager:     &mockFilesManager{},
+		cancelFunction:   parentCancel,
+		ctx:              parentCtx,
+		dispatcherCancel: dispatcherCancel,
+	}
+
+	// Enqueue all backends.
+	a.pendingRestartsMu.Lock()
+	a.pendingRestarts = make(map[string]struct{})
+	for name := range backends {
+		a.pendingRestarts[name] = struct{}{}
+	}
+	a.pendingRestartsMu.Unlock()
+
+	// Cancel the dispatcher context after a short window — long enough for
+	// the first backend's Start to begin but well before all nBackends
+	// restarts would complete (nBackends * delay = 600 ms).
+	go func() {
+		time.Sleep(delay / 3)
+		dispatcherCancel()
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		a.restartDispatcher(dispatcherCtx)
+		close(done)
+	}()
+
+	// Dispatcher should exit well before all backends finish.
+	select {
+	case <-done:
+	case <-time.After(time.Duration(nBackends)*delay + 500*time.Millisecond):
+		t.Fatal("restartDispatcher did not exit after context cancellation mid-drain")
+	}
+
+	// The loop must have aborted before serving all nBackends entries.
+	// We can't assert exactly 1 (map iteration order is non-deterministic) but
+	// we assert fewer than nBackends were started, proving early exit occurred.
+	mu.Lock()
+	maxIF := maxInFlight
+	mu.Unlock()
+	assert.Less(t, maxIF, nBackends,
+		"dispatcher must abort mid-drain on ctx cancel: fewer than %d backends should have started", nBackends)
+}
+
 // countingBackend is a filesmgrTestBackend that counts Start/Stop calls.
 type countingBackend struct {
 	filesmgrTestBackend

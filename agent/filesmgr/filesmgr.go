@@ -248,12 +248,11 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	mu.Lock()
 
 	// Capture the full pre-mutation tracked entry so we can restore it exactly
-	// if the symlink swap fails later. Capture pre-state for exact restoration
-	// so that if the symlink swap fails we can restore verbatim without
-	// poisoning Previous with the failed version.
+	// if the symlink swap fails later — verbatim restoration avoids poisoning
+	// Previous with the failed version.
 	preTracked, hadExisting := m.store.getTracked(spec.Name)
-	existing, hasExisting := m.store.get(spec.Name)
-	if hasExisting && existing.SHA256 == spec.SHA256 && existing.Version == spec.Version {
+	existing := preTracked.Current
+	if hadExisting && existing.SHA256 == spec.SHA256 && existing.Version == spec.Version {
 		if info, err := os.Stat(existing.Path); err == nil {
 			// Even on the idempotent path, apply mode change if requested.
 			if !spec.Extract && spec.Mode != 0 {
@@ -371,7 +370,7 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	// Build the event before unlocking; publish after to avoid blocking other
 	// goroutines waiting on this name's mutex while a slow subscriber runs.
 	var ev FileEvent
-	if hasExisting {
+	if hadExisting {
 		prev := existing
 		ev = FileEvent{Type: EventUpgraded, Entry: entry, Previous: &prev}
 	} else {

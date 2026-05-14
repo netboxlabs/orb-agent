@@ -223,9 +223,8 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 // restart channel. When a file's logical name matches the ManagedBinaryName
 // of a registered backend, the backend (identified by its backend name, NOT
 // the file name) is enqueued for restart. This decouples backend identity
-// from binary identity. The subscription is mode-independent: it fires
-// regardless of the active config manager. The returned unsubscribe
-// function must be called on Stop().
+// from binary identity. The unsubscribe function stored in
+// a.filesmgrUnsubscribe must be called on Stop().
 //
 // Must be called after startBackends has populated a.backends; the subscriber
 // callback reads a.backends from the FileEvent goroutine.
@@ -354,6 +353,11 @@ func (a *orbAgent) restartDispatcher(ctx context.Context) {
 			a.pendingRestarts = nil
 			a.pendingRestartsMu.Unlock()
 			for name := range pending {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
 				a.logger.Info("filesmgr: dispatched restart", "backend", name)
 				// Run synchronously so concurrent Stop+Start sequences for the
 				// same backend cannot overlap across ticks. The dispatcher

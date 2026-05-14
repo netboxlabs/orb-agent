@@ -41,6 +41,17 @@ type workerBackend struct {
 	exec         string
 	filesManager filesmgr.Manager
 
+	// lastResolveExecWarning is the last entry.Path that triggered the
+	// "not a regular file" warning in resolveExecPath. The warning is
+	// re-emitted only when the path changes, suppressing log spam when a
+	// persistent misconfiguration causes every exec.Command call to fall
+	// back to the baked binary.
+	// resolveExecPath is called from Start (main goroutine) and once from
+	// checkWorkerSupportsDebug (called synchronously from Start before the
+	// process goroutine is launched), so access is single-threaded and no
+	// additional synchronization is required.
+	lastResolveExecWarning string
+
 	apiHost     string
 	apiPort     string
 	apiProtocol string
@@ -384,6 +395,8 @@ func (d *workerBackend) ManagedBinaryName() string { return "orb-worker" }
 // regular file, that path is used. If the entry path is a directory (e.g.
 // when Ensure was called with Extract:true and no filename suffix) or the stat
 // fails, a warning is logged and the baked-in binary path is used as fallback.
+// The warning is emitted at most once per distinct bad path to avoid log spam
+// when a persistent misconfiguration causes every exec.Command call to fall back.
 func (d *workerBackend) resolveExecPath() string {
 	if d.filesManager == nil {
 		return d.exec
@@ -394,10 +407,15 @@ func (d *workerBackend) resolveExecPath() string {
 	}
 	info, err := os.Stat(entry.Path)
 	if err != nil || info.IsDir() {
-		d.logger.Warn("filesmgr orb-worker entry is not a regular file; falling back to baked binary",
-			"path", entry.Path, "error", err)
+		if d.lastResolveExecWarning != entry.Path {
+			d.logger.Warn("filesmgr orb-worker entry is not a regular file; falling back to baked binary",
+				"path", entry.Path, "error", err)
+			d.lastResolveExecWarning = entry.Path
+		}
 		return d.exec
 	}
+	// Path is valid — clear warning state so a future regression re-logs.
+	d.lastResolveExecWarning = ""
 	return entry.Path
 }
 
