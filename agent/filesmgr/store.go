@@ -123,9 +123,11 @@ func (s *store) load() error {
 // orphan version directories created by a crashed install, and then calls
 // commitReconciled to persist the validated entries and update in-memory state.
 func (s *store) loadPending() (map[string]trackedEntry, error) {
-	s.mu.RLock()
+	// No locking around os.ReadFile: s.path is immutable post-construction,
+	// and concurrent writers serialize through writeMu inside writeSnapshot
+	// (file writes use a unique temp + atomic rename, so a concurrent
+	// in-progress write cannot produce a torn read).
 	data, err := os.ReadFile(s.path)
-	s.mu.RUnlock()
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return make(map[string]trackedEntry), nil

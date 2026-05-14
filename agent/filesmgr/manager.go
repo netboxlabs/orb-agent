@@ -26,6 +26,17 @@ type Manager interface {
 	// callers should expect Ensure to be slow under contention. Future
 	// refactor could stage the fetch outside the lock and acquire it only for
 	// the commit phase.
+	//
+	// TAMPER-DETECTION ASYMMETRY: on the idempotent fast path (spec already
+	// installed and matching), Ensure re-hashes the on-disk file for single-
+	// file specs (Extract == false) and falls through to re-fetch on mismatch.
+	// For extracted bundles (Extract == true) the on-disk tree is trusted as
+	// long as the version directory exists — the recorded SHA256 is of the
+	// archive (which we don't keep on disk), so re-hashing the extracted tree
+	// can't cheaply prove integrity against the spec. Operators modifying
+	// files inside an extracted bundle will not trigger a re-fetch; either
+	// remove the entry to force a fresh fetch, or use single-file delivery
+	// for assets that must be tamper-checked on every Ensure.
 	Ensure(ctx context.Context, spec FileSpec) (path string, err error)
 
 	// Get returns the current entry for a logical name, if installed.

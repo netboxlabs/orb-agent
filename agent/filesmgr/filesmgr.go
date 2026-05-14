@@ -411,40 +411,11 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 		return "", err
 	}
 
-	// Determine the consumer-visible entry path.
-	// For versioned installs, the entry path uses the "current" symlink.
-	// For single-file (non-extract), the path includes the filename derived
-	// from the URL so callers can locate the binary directly.
-	var entryPath string
-	if spec.Version != "" {
-		linkPath := filepath.Join(m.root, spec.Name, "current")
-		if spec.Extract {
-			// entry path: <root>/<name>/current (symlink to version dir)
-			entryPath = linkPath
-		} else {
-			// entry path: <root>/<name>/current/<filename>
-			fn, err := filenameFromURL(spec.URL)
-			if err != nil {
-				_ = os.RemoveAll(versionedDir)
-				mu.Unlock()
-				return "", err
-			}
-			entryPath = filepath.Join(linkPath, fn)
-		}
-	} else {
-		// No versioning: versionedDir IS the placement. For single-file,
-		// the actual file sits inside versionedDir.
-		if spec.Extract {
-			entryPath = versionedDir
-		} else {
-			fn, err := filenameFromURL(spec.URL)
-			if err != nil {
-				_ = os.RemoveAll(versionedDir)
-				mu.Unlock()
-				return "", err
-			}
-			entryPath = filepath.Join(versionedDir, fn)
-		}
+	entryPath, err := m.computeEntryPath(spec, versionedDir)
+	if err != nil {
+		_ = os.RemoveAll(versionedDir)
+		mu.Unlock()
+		return "", err
 	}
 
 	entry := FileEntry{
@@ -658,6 +629,39 @@ func (m *filesmgr) placementPath(spec FileSpec) string {
 		return filepath.Join(m.root, spec.Name, spec.Version)
 	}
 	return filepath.Join(m.root, spec.Name)
+}
+
+// computeEntryPath returns the consumer-visible path recorded in FileEntry.Path
+// based on spec.Version and spec.Extract:
+//
+//   - versioned + extract:      <root>/<name>/current                 (symlink to version dir)
+//   - versioned + single-file:  <root>/<name>/current/<filename>      (symlink to version dir, then file)
+//   - unversioned + extract:    <root>/<name>                         (versionedDir IS the placement)
+//   - unversioned + single-file:<root>/<name>/<filename>              (filename derived from URL)
+//
+// For single-file cases the filename is derived from spec.URL via filenameFromURL
+// and an error is returned if no safe filename can be derived. The caller is
+// responsible for cleaning up versionedDir on error.
+func (m *filesmgr) computeEntryPath(spec FileSpec, versionedDir string) (string, error) {
+	if spec.Version != "" {
+		linkPath := filepath.Join(m.root, spec.Name, "current")
+		if spec.Extract {
+			return linkPath, nil
+		}
+		fn, err := filenameFromURL(spec.URL)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(linkPath, fn), nil
+	}
+	if spec.Extract {
+		return versionedDir, nil
+	}
+	fn, err := filenameFromURL(spec.URL)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(versionedDir, fn), nil
 }
 
 // sha256File computes the SHA-256 hex digest of the file at path by streaming
