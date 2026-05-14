@@ -160,10 +160,12 @@ func (m *filesmgr) Start(_ context.Context) error {
 
 // cleanupStaleArtifacts removes:
 //  1. Top-level temp stage directories (.filesmgr-stage-*).
-//  2. Top-level state temp files (state-*.json.tmp) left by a crashed write.
-//  3. Stale current.new symlinks and nested .filesmgr-stage-* dirs inside
-//     each name directory.
-//  4. Orphan version subdirectories inside name directories that are not
+//  2. Top-level backup parent directories (.filesmgr-backup-*) left by a
+//     crashed renameSwap call.
+//  3. Top-level state temp files (state-*.json.tmp) left by a crashed write.
+//  4. Stale current.new symlinks, nested .filesmgr-stage-* dirs, and nested
+//     .filesmgr-backup-* dirs inside each name directory.
+//  5. Orphan version subdirectories inside name directories that are not
 //     referenced by any tracked entry (neither current nor previous).
 //     These are left when the process crashed between store.put and
 //     swapSymlink — the version dir exists on disk but state.json was never
@@ -171,11 +173,11 @@ func (m *filesmgr) Start(_ context.Context) error {
 //
 // For unversioned Extract installs (no "current" symlink, but a tracked entry
 // exists), the extracted content under <root>/<name>/ is the install itself —
-// only stage artifacts inside it are cleaned; the content is left untouched.
+// only stage/backup artifacts inside it are cleaned; the content is left untouched.
 //
 // Only directories that the manager recognizes as its own (via tracked state or
-// known marker artifacts like .filesmgr-stage-*, current.new) are subject to
-// cleanup. Unknown dirs are left untouched.
+// known marker artifacts like .filesmgr-stage-*, .filesmgr-backup-*, current.new)
+// are subject to cleanup. Unknown dirs are left untouched.
 func (m *filesmgr) cleanupStaleArtifacts() {
 	// Build the set of live version directories from the loaded store so we
 	// don't delete versions that are still tracked (current or previous).
@@ -203,6 +205,14 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 			m.logger.Info("filesmgr: removing stale stage dir", "path", fullPath)
 			if err := os.RemoveAll(fullPath); err != nil {
 				m.logger.Warn("filesmgr: failed to remove stale stage dir", "path", fullPath, "error", err)
+			}
+			continue
+		}
+		// Remove top-level stale backup parent dirs left by a crashed renameSwap.
+		if strings.HasPrefix(e.Name(), ".filesmgr-backup-") {
+			m.logger.Info("filesmgr: removing stale backup dir", "path", fullPath)
+			if err := os.RemoveAll(fullPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove stale backup dir", "path", fullPath, "error", err)
 			}
 			continue
 		}
@@ -265,6 +275,13 @@ func (m *filesmgr) cleanVersionedOrphans(nameDir string, liveDirs map[string]boo
 			}
 			continue
 		}
+		if strings.HasPrefix(ie.Name(), ".filesmgr-backup-") {
+			m.logger.Info("filesmgr: removing nested stale backup dir", "path", innerPath)
+			if err := os.RemoveAll(innerPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove nested stale backup dir", "path", innerPath, "error", err)
+			}
+			continue
+		}
 		// Skip non-directory entries and reserved names inside name dirs.
 		if !ie.IsDir() || ie.Name() == "current" {
 			continue
@@ -299,6 +316,14 @@ func (m *filesmgr) cleanStageArtifactsOnly(nameDir string) {
 			m.logger.Info("filesmgr: removing nested stale stage dir (unversioned)", "path", innerPath)
 			if err := os.RemoveAll(innerPath); err != nil {
 				m.logger.Warn("filesmgr: failed to remove nested stale stage dir (unversioned)", "path", innerPath, "error", err)
+			}
+			continue
+		}
+		if strings.HasPrefix(ie.Name(), ".filesmgr-backup-") {
+			innerPath := filepath.Join(nameDir, ie.Name())
+			m.logger.Info("filesmgr: removing nested stale backup dir (unversioned)", "path", innerPath)
+			if err := os.RemoveAll(innerPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove nested stale backup dir (unversioned)", "path", innerPath, "error", err)
 			}
 		}
 	}
@@ -445,10 +470,20 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 		if err := swapSymlink(spec.Version, linkPath); err != nil {
 			// Roll back: restore exact prior state to avoid poisoning Previous.
 			// putTracked writes the trackedEntry verbatim — no promote logic.
+			// Both rollback paths are non-recoverable here (we're already in the
+			// swap-failed error path); log failures so operators can notice and
+			// reconcile manually — the next agent restart will recover via the
+			// crash-recovery path in Start().
 			if hadExisting {
-				_ = m.store.putTracked(spec.Name, preTracked)
+				if rollbackErr := m.store.putTracked(spec.Name, preTracked); rollbackErr != nil {
+					m.logger.Error("filesmgr: failed to restore pre-state after symlink swap failure",
+						"name", spec.Name, "error", rollbackErr)
+				}
 			} else {
-				_ = m.store.delete(spec.Name)
+				if rollbackErr := m.store.delete(spec.Name); rollbackErr != nil {
+					m.logger.Error("filesmgr: failed to delete entry after symlink swap failure",
+						"name", spec.Name, "error", rollbackErr)
+				}
 			}
 			_ = os.RemoveAll(versionedDir)
 			mu.Unlock()

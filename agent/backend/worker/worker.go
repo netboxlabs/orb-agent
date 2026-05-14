@@ -41,15 +41,12 @@ type workerBackend struct {
 	exec         string
 	filesManager filesmgr.Manager
 
-	// lastResolveExecWarning is the last entry.Path that triggered the
-	// "not a regular file" warning in resolveExecPath. The warning is
-	// re-emitted only when the path changes, suppressing log spam when a
-	// persistent misconfiguration causes every exec.Command call to fall
-	// back to the baked binary.
-	// resolveExecPath is called from Start (main goroutine) and once from
-	// checkWorkerSupportsDebug (called synchronously from Start before the
-	// process goroutine is launched), so access is single-threaded and no
-	// additional synchronization is required.
+	// lastResolveExecWarning records the last bad path that triggered a fallback
+	// warning, so the warning isn't re-emitted on every resolveExecPath call for
+	// the same misconfiguration. Concurrent Stop/Start sequences against the
+	// same backend are serialized by orbAgent.backendRestartLock (defined in
+	// agent.go), so this field is accessed under that effective lock — no
+	// additional synchronization needed here.
 	lastResolveExecWarning string
 
 	apiHost     string

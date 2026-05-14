@@ -27,8 +27,14 @@ func newEventBusWithLogger(logger *slog.Logger) *eventBus {
 	return &eventBus{logger: logger}
 }
 
-// subscribe registers fn for all future events. The returned function
-// removes the subscription.
+// subscribe registers fn to receive future events. Returns an unsubscribe
+// function the caller may invoke to remove fn from the subscriber set.
+//
+// If the bus has already been close()d, subscribe still records the
+// handler but it will never be invoked (publish is a no-op post-close).
+// This is acceptable for the agent-lifetime subscription pattern where
+// close happens during Stop and no new subscriptions are made after that
+// point. Callers that need to detect a closed bus must do so externally.
 func (b *eventBus) subscribe(fn func(FileEvent)) func() {
 	b.mu.Lock()
 	b.nextID++

@@ -980,3 +980,67 @@ func TestManager_StartCleansUpOrphanVersionDirs(t *testing.T) {
 	// The tracked version directory must still exist.
 	assert.DirExists(t, trackedVersionDir, "tracked version dir must not be removed on Start")
 }
+
+// TestManager_StartCleansUpStaleBackupDirs verifies that .filesmgr-backup-*
+// directories left behind by a crashed renameSwap call are removed on the next
+// Start(). This covers:
+//   - A backup parent dir at the root level (e.g. from a crash during an
+//     unversioned Extract swap).
+//   - A backup parent dir inside a tracked versioned name directory.
+//   - A backup parent dir inside a tracked unversioned (Extract, no version)
+//     name directory.
+func TestManager_StartCleansUpStaleBackupDirs(t *testing.T) {
+	root := t.TempDir()
+
+	// --- Root-level backup dir ---
+	// Simulate a crash that left a .filesmgr-backup-* dir directly under root.
+	rootBackup := filepath.Join(root, ".filesmgr-backup-rootlevel")
+	require.NoError(t, os.MkdirAll(filepath.Join(rootBackup, "dst"), 0o755))
+
+	// --- Versioned name dir with a nested backup dir ---
+	// Set up a tracked versioned install (tracked-versioned / 1.0.0).
+	versionedNameDir := filepath.Join(root, "tracked-versioned")
+	versionDir := filepath.Join(versionedNameDir, "1.0.0")
+	require.NoError(t, os.MkdirAll(versionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(versionDir, "bin"), []byte("v1"), 0o755))
+	currentLink := filepath.Join(versionedNameDir, "current")
+	require.NoError(t, os.Symlink("1.0.0", currentLink))
+
+	// Plant a stale backup parent inside the versioned name dir.
+	nestedBackupVersioned := filepath.Join(versionedNameDir, ".filesmgr-backup-nested")
+	require.NoError(t, os.MkdirAll(filepath.Join(nestedBackupVersioned, "dst"), 0o755))
+
+	// --- Unversioned name dir with a nested backup dir ---
+	// Set up a tracked unversioned Extract install (tracked-unversioned).
+	unversionedNameDir := filepath.Join(root, "tracked-unversioned")
+	require.NoError(t, os.MkdirAll(unversionedNameDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(unversionedNameDir, "file.txt"), []byte("content"), 0o644))
+
+	// Plant a stale backup parent inside the unversioned name dir.
+	nestedBackupUnversioned := filepath.Join(unversionedNameDir, ".filesmgr-backup-nested2")
+	require.NoError(t, os.MkdirAll(filepath.Join(nestedBackupUnversioned, "dst"), 0o755))
+
+	// Write state.json with both entries so the manager recognises them.
+	versionedPath := filepath.Join(versionedNameDir, "current", "bin")
+	stateJSON := `{"version":2,"entries":{` +
+		`"tracked-versioned":{"current":{"name":"tracked-versioned","version":"1.0.0","path":"` + versionedPath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}},` +
+		`"tracked-unversioned":{"current":{"name":"tracked-unversioned","version":"","path":"` + unversionedNameDir + `","sha256":"abc","source":"","installed_at":"0001-01-01T00:00:00Z"}}` +
+		`}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// All three backup dirs must be removed.
+	assert.NoDirExists(t, rootBackup,
+		"root-level stale backup dir must be removed on Start")
+	assert.NoDirExists(t, nestedBackupVersioned,
+		"nested stale backup dir inside versioned name dir must be removed on Start")
+	assert.NoDirExists(t, nestedBackupUnversioned,
+		"nested stale backup dir inside unversioned name dir must be removed on Start")
+
+	// The tracked content must survive.
+	assert.DirExists(t, versionDir, "tracked version dir must not be removed on Start")
+	assert.FileExists(t, filepath.Join(unversionedNameDir, "file.txt"),
+		"unversioned content must not be removed on Start")
+}

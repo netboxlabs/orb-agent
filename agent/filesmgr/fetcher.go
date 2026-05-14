@@ -67,49 +67,59 @@ func filenameFromURL(rawURL string) (string, error) {
 // renameSwap atomically replaces dst with src using a swap-via-backup pattern.
 // If dst does not exist, it falls back to a simple os.Rename(src, dst).
 // If dst exists, the sequence is:
-//  1. Get a unique backup path in the same directory as dst (same filesystem).
-//  2. Rename dst → backup (atomic on POSIX; same-fs).
+//  1. Create a unique backup parent directory via os.MkdirTemp (atomic; no
+//     Remove-then-Rename race because the parent dir is the reservation).
+//  2. Rename dst → <backupParent>/dst (atomic on POSIX; same-fs).
 //  3. Rename src → dst (atomic on POSIX).
-//  4. Remove the backup (best-effort; failures are logged via f.logger).
+//  4. RemoveAll the backup parent (best-effort; failures are logged).
+//
+// Using a backup parent directory (rather than renaming dst directly to a
+// unique path) eliminates the TOCTOU window that existed when MkdirTemp was
+// followed by os.Remove: between Remove and Rename another process could
+// create a file at the same path, causing the rename to fail. By keeping the
+// MkdirTemp-created directory and moving dst into it as a child, the rename
+// target is a path inside a directory that only we own — no race possible.
 //
 // If step 3 fails, renameSwap attempts to restore the original by renaming
-// backup → dst. Works for both files and directories; avoids the
-// ENOTEMPTY/EEXIST error that os.Rename returns when overwriting a non-empty
-// directory on Linux.
+// <backupParent>/dst back to dst. Works for both files and directories;
+// avoids the ENOTEMPTY/EEXIST error that os.Rename returns when overwriting a
+// non-empty directory on Linux.
 func (f *fetcher) renameSwap(src, dst string) error {
 	if _, err := os.Lstat(dst); os.IsNotExist(err) {
 		// Simple case: dst does not exist yet.
 		return os.Rename(src, dst)
 	}
 
-	// dst exists — use backup-swap pattern.
-	// MkdirTemp creates an empty directory; remove it immediately so we have
-	// a unique path name we can use as the backup rename target.
-	backup, err := os.MkdirTemp(filepath.Dir(dst), ".filesmgr-backup-*")
+	// dst exists — use backup-parent-swap pattern to avoid TOCTOU.
+	// MkdirTemp creates a uniquely-named empty directory inside filepath.Dir(dst)
+	// on the same filesystem, ensuring the subsequent rename is same-fs atomic.
+	// We never remove this directory before using it — dst is moved inside it as
+	// a child, so the backup path is always under a directory that only we own.
+	backupParent, err := os.MkdirTemp(filepath.Dir(dst), ".filesmgr-backup-*")
 	if err != nil {
-		return fmt.Errorf("create backup path: %w", err)
+		return fmt.Errorf("create backup parent: %w", err)
 	}
-	// Remove the empty dir so rename can take that name.
-	if err := os.Remove(backup); err != nil {
-		return fmt.Errorf("clear backup placeholder: %w", err)
-	}
+	backupChild := filepath.Join(backupParent, "dst")
 
-	// Move existing dst out of the way.
-	if err := os.Rename(dst, backup); err != nil {
+	// Move existing dst into the backup parent.
+	if err := os.Rename(dst, backupChild); err != nil {
+		_ = os.RemoveAll(backupParent)
 		return fmt.Errorf("backup existing dst: %w", err)
 	}
 
 	// Move new content into place.
 	if err := os.Rename(src, dst); err != nil {
 		// Best-effort restore: put the original back.
-		_ = os.Rename(backup, dst)
+		_ = os.Rename(backupChild, dst)
+		_ = os.RemoveAll(backupParent)
 		return fmt.Errorf("place new content: %w", err)
 	}
 
-	// Clean up the backup. Best-effort: log on failure but don't fail the call.
-	if rmErr := os.RemoveAll(backup); rmErr != nil {
-		f.logger.Warn("filesmgr: failed to remove backup after successful swap",
-			"backup", backup, "error", rmErr)
+	// Clean up the backup parent (and the saved dst inside it).
+	// Best-effort: log on failure but don't fail the call.
+	if rmErr := os.RemoveAll(backupParent); rmErr != nil {
+		f.logger.Warn("filesmgr: failed to remove backup parent after successful swap",
+			"path", backupParent, "error", rmErr)
 	}
 	return nil
 }

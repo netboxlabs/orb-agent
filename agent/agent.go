@@ -518,12 +518,20 @@ func (a *orbAgent) Stop(ctx context.Context) {
 	clear(a.restartCancels)
 	a.restartCancelsMu.Unlock()
 	for name, b := range a.backends {
+		// Acquire the per-backend restart lock before calling Stop so that any
+		// in-flight file-driven restart (restartBackendWithFilesmgrRollback) that
+		// has already passed its ctx-done check is allowed to finish before we
+		// attempt to stop the backend. Without this, Stop could race with a
+		// concurrent Start from the dispatcher goroutine.
+		mu := a.backendRestartLock(name)
+		mu.Lock()
 		if state, _, _ := b.GetRunningStatus(); state == backend.Running {
 			a.logger.Debug("stopping backend", "backend", name)
 			if err := b.Stop(ctx); err != nil {
 				a.logger.Error("error while stopping the backend", "backend", name)
 			}
 		}
+		mu.Unlock()
 	}
 	a.shutdownOTLP()
 	if a.policyManager != nil {
