@@ -112,7 +112,7 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
 ### Prerequisites
 
 - Free trial tenant from <https://secretservercloud.com>.
-- Local `build/orb-agent` built from a branch containing this integration (`make agent_bin`).
+- Docker (the `netboxlabs/orb-agent:develop` image is used below; switch to `:latest` once a release containing this integration is published).
 
 ### Steps
 
@@ -122,7 +122,7 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
    - Create a secret `orb-test-credential` (template `Password`) with `password=hunter2-OBS1378`.
    - Grant `svc_orb` the `View Secret` permission on `/orb-test`.
 
-2. **Write `orb-agent.yaml`:** the agent refuses to start with `backends: {}`, so the example includes a minimal `device_discovery` backend together with one local policy that references the Delinea secret. Adjust the backend block to whatever backend you actually run.
+2. **Write `agent.yaml`** in the current directory: the agent refuses to start with `backends: {}`, so the example includes a minimal `device_discovery` backend together with one local policy that references the Delinea secret. Adjust the backend block to whatever backend you actually run.
 
    ```yaml
    version: 1.0
@@ -147,14 +147,18 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
        active: local
        sources:
          local:
-           config: ./orb-agent.yaml
+           config: /opt/orb/agent.yaml
    ```
 
-3. **Run with debug logging:**
+3. **Pull the image and run with debug logging:**
 
    ```bash
+   docker pull netboxlabs/orb-agent:develop
    export DELINEA_PASSWORD='<svc_orb password>'
-   ./build/orb-agent -c orb-agent.yaml -d
+   docker run --rm --net=host \
+     -v "${PWD}":/opt/orb/ \
+     -e DELINEA_PASSWORD \
+     netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml -d
    ```
 
 4. **Verify auth + lookup:** in the logs, look for a successful `SolvePolicySecrets` call on the `orb-test-policy` policy. The `credential` field passed to the `device_discovery` backend must be the resolved value, not the placeholder string.
