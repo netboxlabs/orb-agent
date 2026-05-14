@@ -79,44 +79,7 @@ func TestStore_Delete(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestStore_V1Migration(t *testing.T) {
-	root := t.TempDir()
-	statePath := filepath.Join(root, "state.json")
-
-	// Write a hand-crafted legacy-format state.json.
-	p := filepath.Join(root, "x", "1.0.0")
-	require.NoError(t, os.MkdirAll(p, 0o755))
-	v1JSON := `{
-  "version": 1,
-  "entries": {
-    "x": {
-      "name": "x",
-      "version": "1.0.0",
-      "path": "` + p + `",
-      "sha256": "abc",
-      "source": "https://example.com/x.tar.gz",
-      "installed_at": "2026-01-01T00:00:00Z"
-    }
-  }
-}`
-	require.NoError(t, os.WriteFile(statePath, []byte(v1JSON), 0o644))
-
-	s := newStore(statePath)
-	require.NoError(t, s.load())
-
-	// Entry must be present.
-	got, ok := s.get("x")
-	require.True(t, ok)
-	assert.Equal(t, "x", got.Name)
-	assert.Equal(t, "1.0.0", got.Version)
-
-	// No Previous should exist after migration.
-	tracked, ok := s.getTracked("x")
-	require.True(t, ok)
-	assert.Nil(t, tracked.Previous, "v1 migration must produce no Previous")
-}
-
-func TestStore_V2RoundTripWithPrevious(t *testing.T) {
+func TestStore_RoundTripWithPrevious(t *testing.T) {
 	root := t.TempDir()
 	s := newStore(filepath.Join(root, "state.json"))
 

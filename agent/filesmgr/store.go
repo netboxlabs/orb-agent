@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-const stateSchemaVersion = 2
+const stateSchemaVersion = 1
 
 // trackedEntry holds the current installed entry plus the displaced previous
 // entry (if any) so that Rollback can restore it.
@@ -44,8 +44,6 @@ func newStore(path string) *store {
 
 // load reads state.json (if present) and drops any entries whose Path
 // does not exist on disk. A missing state.json file is not an error.
-// Older state files using the flat entry format are upgraded in-memory
-// to the current tracked format with no Previous pointers.
 func (s *store) load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -61,36 +59,13 @@ func (s *store) load() error {
 		return nil
 	}
 
-	// Peek at version field first.
-	var peek struct {
-		Version int `json:"version"`
-	}
-	if err := json.Unmarshal(data, &peek); err != nil {
+	var sf stateFile
+	if err := json.Unmarshal(data, &sf); err != nil {
 		return err
 	}
-
-	var tracked map[string]trackedEntry
-
-	if peek.Version <= 1 {
-		// Legacy flat format: entries is map[string]FileEntry.
-		var sf1 struct {
-			Version int                  `json:"version"`
-			Entries map[string]FileEntry `json:"entries"`
-		}
-		if err := json.Unmarshal(data, &sf1); err != nil {
-			return err
-		}
-		tracked = make(map[string]trackedEntry, len(sf1.Entries))
-		for name, entry := range sf1.Entries {
-			tracked[name] = trackedEntry{Current: entry, Previous: nil}
-		}
-	} else {
-		// Current tracked format.
-		var sf stateFile
-		if err := json.Unmarshal(data, &sf); err != nil {
-			return err
-		}
-		tracked = sf.Entries
+	tracked := sf.Entries
+	if tracked == nil {
+		tracked = make(map[string]trackedEntry)
 	}
 
 	// Reconcile: drop entries whose current path is missing on disk; drop
@@ -115,8 +90,7 @@ func (s *store) load() error {
 
 // loadPending reads state.json and returns the raw entries map without any
 // filesystem reconciliation (no stat checks, no drops). A missing state.json
-// file returns an empty map. Older v1 flat-format files are upgraded in-memory
-// to the tracked format.
+// file returns an empty map.
 //
 // This is the first half of the split-load approach for crash recovery: the
 // caller (filesmgr.Start) inspects each entry for missing paths, removes any
@@ -138,31 +112,12 @@ func (s *store) loadPending() (map[string]trackedEntry, error) {
 		return make(map[string]trackedEntry), nil
 	}
 
-	var peek struct {
-		Version int `json:"version"`
-	}
-	if err := json.Unmarshal(data, &peek); err != nil {
-		return nil, err
-	}
-
-	if peek.Version <= 1 {
-		var sf1 struct {
-			Version int                  `json:"version"`
-			Entries map[string]FileEntry `json:"entries"`
-		}
-		if err := json.Unmarshal(data, &sf1); err != nil {
-			return nil, err
-		}
-		tracked := make(map[string]trackedEntry, len(sf1.Entries))
-		for name, entry := range sf1.Entries {
-			tracked[name] = trackedEntry{Current: entry, Previous: nil}
-		}
-		return tracked, nil
-	}
-
 	var sf stateFile
 	if err := json.Unmarshal(data, &sf); err != nil {
 		return nil, err
+	}
+	if sf.Entries == nil {
+		return make(map[string]trackedEntry), nil
 	}
 	return sf.Entries, nil
 }

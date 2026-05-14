@@ -454,7 +454,7 @@ func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
 	// leaves it alone (post-round-7 fix). The entry path goes through "current"
 	// so that os.Stat resolves it correctly via the symlink.
 	binPath := filepath.Join(trackedDir, "current", "bin")
-	stateJSON := `{"version":2,"entries":{"tracked-pkg":{"current":{"name":"tracked-pkg","version":"1.0.0","path":"` +
+	stateJSON := `{"version":1,"entries":{"tracked-pkg":{"current":{"name":"tracked-pkg","version":"1.0.0","path":"` +
 		binPath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
@@ -700,7 +700,7 @@ func TestManager_StartCleansUpStateTmpFiles(t *testing.T) {
 	require.NoError(t, os.MkdirAll(nameDir, 0o755))
 	filePath := filepath.Join(nameDir, "bin")
 	require.NoError(t, os.WriteFile(filePath, []byte("v1"), 0o755))
-	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"","path":"` +
+	stateJSON := `{"version":1,"entries":{"x":{"current":{"name":"x","version":"","path":"` +
 		filePath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
@@ -732,7 +732,7 @@ func TestManager_StartPreservesUnversionedExtractedContent(t *testing.T) {
 
 	// Populate state.json with an unversioned tracked entry so the manager
 	// knows about this name. Path points to the name dir itself (Extract, no version).
-	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"","path":"` +
+	stateJSON := `{"version":1,"entries":{"x":{"current":{"name":"x","version":"","path":"` +
 		nameDir + `","sha256":"abc","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
@@ -930,7 +930,7 @@ func TestManager_StartRecoversCrashedInstall(t *testing.T) {
 	// state.json records the entry as if the install completed (store.put ran).
 	// Current.Path uses the "current" symlink path — which doesn't exist yet.
 	currentPath := filepath.Join(nameDir, "current", "binary")
-	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"1.0.0","path":"` +
+	stateJSON := `{"version":1,"entries":{"x":{"current":{"name":"x","version":"1.0.0","path":"` +
 		currentPath + `","sha256":"abc","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
@@ -972,7 +972,7 @@ func TestManager_StartRecoversSymlinkMismatchCrash(t *testing.T) {
 	// Current.Path resolves through the stale current symlink so os.Stat
 	// would succeed — only the symlink-target check catches the mismatch.
 	currentPath := filepath.Join(nameDir, "current", "binary")
-	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"2.0.0","path":"` +
+	stateJSON := `{"version":1,"entries":{"x":{"current":{"name":"x","version":"2.0.0","path":"` +
 		currentPath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
@@ -1019,7 +1019,7 @@ func TestManager_StartPreservesNonTrackedVersionDirs(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "bin"), []byte("old"), 0o755))
 
 	// Write state.json referencing only v1.0.0.
-	stateJSON := `{"version":2,"entries":{"mypkg":{"current":{"name":"mypkg","version":"1.0.0","path":"` +
+	stateJSON := `{"version":1,"entries":{"mypkg":{"current":{"name":"mypkg","version":"1.0.0","path":"` +
 		currentLink + `/bin","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
@@ -1075,7 +1075,7 @@ func TestManager_StartCleansUpStaleBackupDirs(t *testing.T) {
 
 	// Write state.json with both entries so the manager recognises them.
 	versionedPath := filepath.Join(versionedNameDir, "current", "bin")
-	stateJSON := `{"version":2,"entries":{` +
+	stateJSON := `{"version":1,"entries":{` +
 		`"tracked-versioned":{"current":{"name":"tracked-versioned","version":"1.0.0","path":"` + versionedPath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}},` +
 		`"tracked-unversioned":{"current":{"name":"tracked-unversioned","version":"","path":"` + unversionedNameDir + `","sha256":"abc","source":"","installed_at":"0001-01-01T00:00:00Z"}}` +
 		`}}`
