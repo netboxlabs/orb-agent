@@ -134,6 +134,7 @@ func (m *mockFilesManager) Get(_ string) (filesmgr.FileEntry, bool) {
 	return filesmgr.FileEntry{}, false
 }
 func (m *mockFilesManager) Remove(_ context.Context, _ string) error    { return nil }
+func (m *mockFilesManager) Rollback(_ context.Context, _ string) error  { return nil }
 func (m *mockFilesManager) Subscribe(_ func(filesmgr.FileEvent)) func() { return func() {} }
 
 // mockSecretsManager implements secretsmgr.Manager for testing

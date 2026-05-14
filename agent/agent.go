@@ -213,9 +213,50 @@ func (a *orbAgent) subscribeFilesmgr() {
 	})
 }
 
+// restartBackendWithFilesmgrRollback performs a Stop + Start sequence for a
+// backend after a FilesManager event upgraded its managed binary. If Start
+// fails, asks FilesManager to roll back the binary to its previous version,
+// then retries Start once. On second failure, gives up and logs the error —
+// no infinite loop.
+func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backendName string) {
+	be, ok := a.backends[backendName]
+	if !ok {
+		a.logger.Warn("filesmgr: backend not registered for restart", "backend", backendName)
+		return
+	}
+	binaryName := be.ManagedBinaryName()
+
+	if err := be.Stop(ctx); err != nil {
+		a.logger.Warn("filesmgr: backend Stop returned error", "backend", backendName, "error", err)
+	}
+
+	startErr := be.Start(ctx, a.cancelFunction)
+	if startErr == nil {
+		a.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", backendName, "binary", binaryName)
+		return
+	}
+	a.logger.Warn("filesmgr: backend Start failed after upgrade, rolling back", "backend", backendName, "error", startErr)
+
+	if binaryName == "" {
+		a.logger.Error("filesmgr: cannot roll back, backend declares no managed binary", "backend", backendName)
+		return
+	}
+	if err := a.filesManager.Rollback(ctx, binaryName); err != nil {
+		a.logger.Error("filesmgr: rollback failed", "backend", backendName, "binary", binaryName, "error", err)
+		return
+	}
+
+	// Retry Start with the rolled-back binary.
+	if err := be.Start(ctx, a.cancelFunction); err != nil {
+		a.logger.Error("filesmgr: backend Start failed even after rollback", "backend", backendName, "error", err)
+		return
+	}
+	a.logger.Info("filesmgr: backend restarted with rolled-back binary", "backend", backendName, "binary", binaryName)
+}
+
 // restartDispatcher runs as a background goroutine and drains pendingRestarts
-// into restartBackendChan every 500 ms. Using a BLOCKING send means the
-// dispatcher will wait if the channel is full — ensuring no restart is lost.
+// every 500 ms, spawning a dedicated goroutine per backend that handles
+// upgrade-driven restart with automatic rollback on Start failure.
 // Coalescing semantics: multiple upgrade events for the same backend within
 // a 500 ms window result in exactly one restart.
 func (a *orbAgent) restartDispatcher(ctx context.Context) {
@@ -231,12 +272,8 @@ func (a *orbAgent) restartDispatcher(ctx context.Context) {
 			a.pendingRestarts = nil
 			a.pendingRestartsMu.Unlock()
 			for name := range pending {
-				select {
-				case a.restartBackendChan <- name:
-					a.logger.Info("filesmgr: dispatched restart", "backend", name)
-				case <-ctx.Done():
-					return
-				}
+				a.logger.Info("filesmgr: dispatched restart", "backend", name)
+				go a.restartBackendWithFilesmgrRollback(ctx, name)
 			}
 		}
 	}

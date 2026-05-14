@@ -26,6 +26,16 @@ type Manager interface {
 	// Idempotent.
 	Remove(ctx context.Context, name string) error
 
+	// Rollback restores the previous version of a tracked file. It atomically
+	// swaps the `current` symlink back to the previous version's location and
+	// updates state.json so the previous entry becomes current (and previous
+	// is cleared). Emits EventRolledBack on success.
+	//
+	// Returns an error if name has no previous version recorded (e.g., it's
+	// a first install) or if the previous version's directory no longer
+	// exists on disk.
+	Rollback(ctx context.Context, name string) error
+
 	// Subscribe registers a handler invoked on every FileEvent. The
 	// returned function removes the subscription. Handlers run synchronously
 	// from the goroutine that mutated state; handlers must not block.

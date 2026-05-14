@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -37,6 +40,69 @@ func (b *filesmgrTestBackend) GetRunningStatus() (backend.RunningStatus, string,
 func (b *filesmgrTestBackend) GetInitialState() backend.RunningStatus          { return backend.Unknown }
 func (b *filesmgrTestBackend) ApplyPolicy(_ policies.PolicyData, _ bool) error { return nil }
 func (b *filesmgrTestBackend) RemovePolicy(_ policies.PolicyData) error        { return nil }
+
+// failOnceThenSucceedBackend fails Start on the first call and succeeds thereafter.
+type failOnceThenSucceedBackend struct {
+	filesmgrTestBackend
+	mu         sync.Mutex
+	startCalls int
+}
+
+func (b *failOnceThenSucceedBackend) Start(_ context.Context, _ context.CancelFunc) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.startCalls++
+	if b.startCalls == 1 {
+		return fmt.Errorf("simulated start failure")
+	}
+	return nil
+}
+
+// rollbackRecordingFilesManager is a mockFilesManager that records Rollback calls.
+type rollbackRecordingFilesManager struct {
+	mockFilesManager
+	mu            sync.Mutex
+	rollbackCalls []string
+}
+
+func (m *rollbackRecordingFilesManager) Rollback(_ context.Context, name string) error {
+	m.mu.Lock()
+	m.rollbackCalls = append(m.rollbackCalls, name)
+	m.mu.Unlock()
+	return nil
+}
+
+func TestRestartBackendWithFilesmgrRollback_RetriesAfterFailure(t *testing.T) {
+	be := &failOnceThenSucceedBackend{
+		filesmgrTestBackend: filesmgrTestBackend{managedBinary: "orb-worker"},
+	}
+	fm := &rollbackRecordingFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a := &orbAgent{
+		logger:         slog.Default(),
+		backends:       map[string]backend.Backend{"worker": be},
+		filesManager:   fm,
+		cancelFunction: cancel,
+	}
+
+	a.restartBackendWithFilesmgrRollback(ctx, "worker")
+
+	// Start must have been called twice: once (fails) + once after rollback.
+	be.mu.Lock()
+	starts := be.startCalls
+	be.mu.Unlock()
+	assert.Equal(t, 2, starts, "Start must be called twice: initial attempt + post-rollback retry")
+
+	// Rollback must have been called exactly once with the binary name.
+	fm.mu.Lock()
+	calls := fm.rollbackCalls
+	fm.mu.Unlock()
+	require.Len(t, calls, 1, "Rollback must be called exactly once")
+	assert.Equal(t, "orb-worker", calls[0])
+}
 
 // makeBridge models the subscribeFilesmgr logic: iterate registered backends,
 // check ManagedBinaryName(), and enqueue the backend name (NOT the file name)
@@ -122,20 +188,46 @@ func TestSubscribeToFilesmgr_DecouplesBackendNameFromBinaryName(t *testing.T) {
 	}
 }
 
+// countingBackend is a filesmgrTestBackend that counts Start/Stop calls.
+type countingBackend struct {
+	filesmgrTestBackend
+	mu         sync.Mutex
+	startCalls int
+	stopCalls  int
+}
+
+func (b *countingBackend) Start(_ context.Context, _ context.CancelFunc) error {
+	b.mu.Lock()
+	b.startCalls++
+	b.mu.Unlock()
+	return nil
+}
+
+func (b *countingBackend) Stop(_ context.Context) error {
+	b.mu.Lock()
+	b.stopCalls++
+	b.mu.Unlock()
+	return nil
+}
+
 // TestSubscribeToFilesmgr_CoalescesAndDeliversReliably fires 10 upgrade events
 // for the same file, runs the restartDispatcher, and asserts that exactly one
-// restart reaches restartBackendChan within 1 second.
+// restart (Stop+Start) is issued within 1 second.
 func TestSubscribeToFilesmgr_CoalescesAndDeliversReliably(t *testing.T) {
-	restartBackendChan := make(chan string, 5)
-
-	a := &orbAgent{
-		logger:             slog.Default(),
-		restartBackendChan: restartBackendChan,
-		backends:           map[string]backend.Backend{},
+	be := &countingBackend{
+		filesmgrTestBackend: filesmgrTestBackend{managedBinary: "orb-worker"},
 	}
 
-	// Register one backend whose managed binary is "orb-worker".
-	a.backends["worker"] = &filesmgrTestBackend{managedBinary: "orb-worker"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a := &orbAgent{
+		logger:         slog.Default(),
+		backends:       map[string]backend.Backend{},
+		filesManager:   &mockFilesManager{},
+		cancelFunction: cancel,
+	}
+	a.backends["worker"] = be
 
 	// Simulate the bridge firing 10 upgrade events for the same backend.
 	for i := 0; i < 10; i++ {
@@ -147,26 +239,26 @@ func TestSubscribeToFilesmgr_CoalescesAndDeliversReliably(t *testing.T) {
 		a.pendingRestartsMu.Unlock()
 	}
 
-	// Run the dispatcher for a short time in the background.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	go a.restartDispatcher(ctx)
 
-	// Collect all restart signals within 1 second.
-	var received []string
-	deadline := time.After(time.Second)
-drain:
-	for {
-		select {
-		case name := <-restartBackendChan:
-			received = append(received, name)
-		case <-deadline:
-			break drain
+	// Allow up to 1 second for the coalesced restart to complete.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		be.mu.Lock()
+		starts := be.startCalls
+		be.mu.Unlock()
+		if starts >= 1 {
+			break
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
-	assert.Len(t, received, 1, "coalescing: 10 upgrade events must produce exactly 1 restart")
-	if len(received) == 1 {
-		assert.Equal(t, "worker", received[0])
-	}
+	// Cancel the dispatcher before asserting so no further restarts occur.
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	be.mu.Lock()
+	defer be.mu.Unlock()
+	assert.Equal(t, 1, be.startCalls, "coalescing: 10 upgrade events must produce exactly 1 restart")
+	assert.Equal(t, 1, be.stopCalls, "coalescing: 10 upgrade events must produce exactly 1 stop")
 }

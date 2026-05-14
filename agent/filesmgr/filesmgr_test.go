@@ -268,6 +268,124 @@ func TestManager_EnsureStorePutFailureRollsBack(t *testing.T) {
 	assert.True(t, os.IsNotExist(vstatErr), "version dir must be cleaned up after store.put failure")
 }
 
+func TestManager_RollbackRestoresPreviousVersion(t *testing.T) {
+	v1 := buildTarGz(t, map[string]string{"file.txt": "content-v1"})
+	v2 := buildTarGz(t, map[string]string{"file.txt": "content-v2"})
+	sum1, sum2 := sha256Hex(v1), sha256Hex(v2)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v1) })
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v2) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	var events []FileEvent
+	var mu sync.Mutex
+	m.Subscribe(func(ev FileEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	})
+
+	// Install v1.
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "1.0.0",
+		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
+	})
+	require.NoError(t, err)
+
+	// Upgrade to v2.
+	_, err = m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "2.0.0",
+		URL: srv.URL + "/v2.tar.gz", SHA256: sum2, Extract: true,
+	})
+	require.NoError(t, err)
+
+	// Verify symlink points to v2.
+	target, err := os.Readlink(filepath.Join(root, "pkg", "current"))
+	require.NoError(t, err)
+	assert.Equal(t, "2.0.0", target)
+
+	// Rollback.
+	require.NoError(t, m.Rollback(context.Background(), "pkg"))
+
+	// Symlink must now point to v1.
+	target, err = os.Readlink(filepath.Join(root, "pkg", "current"))
+	require.NoError(t, err)
+	assert.Equal(t, "1.0.0", target)
+
+	// Get must return the v1 entry.
+	entry, ok := m.Get("pkg")
+	require.True(t, ok)
+	assert.Equal(t, "1.0.0", entry.Version)
+
+	// Events: Installed, Upgraded, RolledBack.
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, events, 3)
+	assert.Equal(t, EventInstalled, events[0].Type)
+	assert.Equal(t, EventUpgraded, events[1].Type)
+	last := events[2]
+	assert.Equal(t, EventRolledBack, last.Type)
+	assert.Equal(t, "1.0.0", last.Entry.Version, "Entry must be the now-live v1")
+	require.NotNil(t, last.Previous)
+	assert.Equal(t, "2.0.0", last.Previous.Version, "Previous must be the rolled-back-from v2")
+}
+
+func TestManager_RollbackWithNoPrevious_ReturnsError(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "data"})
+	sum := sha256Hex(archive)
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+
+	m, _ := newTestManager(t)
+
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "1.0.0",
+		URL: srv.URL + "/x.tar.gz", SHA256: sum, Extract: true,
+	})
+	require.NoError(t, err)
+
+	err = m.Rollback(context.Background(), "pkg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no previous version")
+}
+
+func TestManager_RollbackWithMissingPreviousDir_ReturnsError(t *testing.T) {
+	v1 := buildTarGz(t, map[string]string{"a.txt": "v1"})
+	v2 := buildTarGz(t, map[string]string{"a.txt": "v2"})
+	sum1, sum2 := sha256Hex(v1), sha256Hex(v2)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v1) })
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v2) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m, root := newTestManager(t)
+
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "1.0.0",
+		URL: srv.URL + "/v1.tar.gz", SHA256: sum1, Extract: true,
+	})
+	require.NoError(t, err)
+
+	_, err = m.Ensure(context.Background(), FileSpec{
+		Name: "pkg", Version: "2.0.0",
+		URL: srv.URL + "/v2.tar.gz", SHA256: sum2, Extract: true,
+	})
+	require.NoError(t, err)
+
+	// Simulate operator cleanup: remove the v1 directory.
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "pkg", "1.0.0")))
+
+	err = m.Rollback(context.Background(), "pkg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "previous version dir missing")
+}
+
 func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
 	root := t.TempDir()
 

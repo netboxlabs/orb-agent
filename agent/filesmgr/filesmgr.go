@@ -260,6 +260,55 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 	return nil
 }
 
+func (m *filesmgr) Rollback(_ context.Context, name string) error {
+	mu := m.mutexFor(name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	tracked, ok := m.store.getTracked(name)
+	if !ok {
+		return fmt.Errorf("filesmgr: %s not tracked, nothing to roll back", name)
+	}
+	if tracked.Previous == nil {
+		return fmt.Errorf("filesmgr: %s has no previous version recorded", name)
+	}
+	prev := *tracked.Previous
+
+	// The previous version's directory must still exist on disk.
+	versionDir := versionDirFromEntry(m.root, prev)
+	if _, err := os.Stat(versionDir); err != nil {
+		return fmt.Errorf("filesmgr: previous version dir missing: %w", err)
+	}
+
+	// Atomic symlink swap back to the previous version's directory basename.
+	versionBase := filepath.Base(versionDir)
+	linkPath := filepath.Join(m.root, name, "current")
+	if err := swapSymlink(versionBase, linkPath); err != nil {
+		return fmt.Errorf("filesmgr: swap symlink: %w", err)
+	}
+
+	// Update store: previous becomes current, previous is cleared.
+	if err := m.store.putWithoutPrevious(prev); err != nil {
+		// The symlink already points to the old version; state is inconsistent
+		// but the filesystem is in a safer state. Surface the error.
+		return fmt.Errorf("filesmgr: persist rollback: %w", err)
+	}
+
+	rolledBackFrom := tracked.Current
+	m.bus.publish(FileEvent{
+		Type:     EventRolledBack,
+		Entry:    prev,
+		Previous: &rolledBackFrom,
+	})
+	return nil
+}
+
+// versionDirFromEntry returns the on-disk version directory for an entry.
+// Convention: entries are always placed under <root>/<name>/<version>.
+func versionDirFromEntry(root string, entry FileEntry) string {
+	return filepath.Join(root, entry.Name, entry.Version)
+}
+
 func (m *filesmgr) mutexFor(name string) *sync.Mutex {
 	v, _ := m.perNameMu.LoadOrStore(name, &sync.Mutex{})
 	return v.(*sync.Mutex) //nolint:forcetypeassert

@@ -77,6 +77,70 @@ func TestStore_Delete(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestStore_V1Migration(t *testing.T) {
+	root := t.TempDir()
+	statePath := filepath.Join(root, "state.json")
+
+	// Write a hand-crafted v1-format state.json.
+	p := filepath.Join(root, "x", "1.0.0")
+	require.NoError(t, os.MkdirAll(p, 0o755))
+	v1JSON := `{
+  "version": 1,
+  "entries": {
+    "x": {
+      "name": "x",
+      "version": "1.0.0",
+      "path": "` + p + `",
+      "sha256": "abc",
+      "source": "https://example.com/x.tar.gz",
+      "installed_at": "2026-01-01T00:00:00Z"
+    }
+  }
+}`
+	require.NoError(t, os.WriteFile(statePath, []byte(v1JSON), 0o644))
+
+	s := newStore(statePath)
+	require.NoError(t, s.load())
+
+	// Entry must be present.
+	got, ok := s.get("x")
+	require.True(t, ok)
+	assert.Equal(t, "x", got.Name)
+	assert.Equal(t, "1.0.0", got.Version)
+
+	// No Previous should exist after migration.
+	tracked, ok := s.getTracked("x")
+	require.True(t, ok)
+	assert.Nil(t, tracked.Previous, "v1 migration must produce no Previous")
+}
+
+func TestStore_V2RoundTripWithPrevious(t *testing.T) {
+	root := t.TempDir()
+	s := newStore(filepath.Join(root, "state.json"))
+
+	// Install v1.
+	p1 := filepath.Join(root, "x", "1.0.0")
+	require.NoError(t, os.MkdirAll(p1, 0o755))
+	entry1 := FileEntry{Name: "x", Version: "1.0.0", Path: p1, SHA256: "aaa", InstalledAt: time.Now().UTC().Truncate(time.Second)}
+	require.NoError(t, s.put(entry1))
+
+	// Install v2 — should record v1 as Previous.
+	p2 := filepath.Join(root, "x", "2.0.0")
+	require.NoError(t, os.MkdirAll(p2, 0o755))
+	entry2 := FileEntry{Name: "x", Version: "2.0.0", Path: p2, SHA256: "bbb", InstalledAt: time.Now().UTC().Truncate(time.Second)}
+	require.NoError(t, s.put(entry2))
+
+	// Reload from disk and verify Previous is persisted.
+	s2 := newStore(filepath.Join(root, "state.json"))
+	require.NoError(t, s2.load())
+
+	tracked, ok := s2.getTracked("x")
+	require.True(t, ok)
+	assert.Equal(t, "2.0.0", tracked.Current.Version)
+	require.NotNil(t, tracked.Previous, "previous must be recorded after second put")
+	assert.Equal(t, "1.0.0", tracked.Previous.Version)
+}
+
 func TestStore_WriteFailureDoesNotMutateInMemoryState(t *testing.T) {
 	root := t.TempDir()
 	p := filepath.Join(root, "good")

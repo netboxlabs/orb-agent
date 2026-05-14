@@ -106,6 +106,10 @@ const (
 	EventUpgraded
 	// EventRemoved fires when a name is explicitly removed.
 	EventRemoved
+	// EventRolledBack fires after a successful Rollback. Entry is the now-live
+	// (previous) entry; Previous is the entry that was rolled back FROM (the
+	// one that was active until Rollback was called).
+	EventRolledBack
 )
 
 // FileEvent is delivered to subscribers on state changes.
