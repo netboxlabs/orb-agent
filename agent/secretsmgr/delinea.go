@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/DelineaXPM/tss-sdk-go/v3/server"
+	"github.com/go-co-op/gocron/v2"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -16,12 +17,13 @@ var _ Manager = (*delineaManager)(nil)
 
 // delineaManager resolves ${delinea://…} placeholders against Delinea Secret Server.
 type delineaManager struct {
-	logger   *slog.Logger
-	config   config.DelineaManager
-	ctx      context.Context
-	client   *server.Server
-	usedVars map[string]cachedSecret
-	callback func(map[string]bool)
+	logger    *slog.Logger
+	config    config.DelineaManager
+	ctx       context.Context
+	client    *server.Server
+	usedVars  map[string]cachedSecret
+	callback  func(map[string]bool)
+	scheduler gocron.Scheduler
 }
 
 // Start validates the configuration and constructs the SDK client. It does
@@ -62,7 +64,59 @@ func (d *delineaManager) Start(ctx context.Context) error {
 	}
 	d.client = c
 
+	if d.config.Schedule != nil {
+		s, err := gocron.NewScheduler()
+		if err != nil {
+			return fmt.Errorf("failed to create scheduler: %w", err)
+		}
+		d.scheduler = s
+		task := gocron.NewTask(d.pollSecrets)
+		if _, err = d.scheduler.NewJob(
+			gocron.CronJob(*d.config.Schedule, false),
+			task,
+			gocron.WithSingletonMode(gocron.LimitModeReschedule),
+		); err != nil {
+			return fmt.Errorf("failed to create delinea polling job: %w", err)
+		}
+		d.logger.Info("Starting delinea secret polling", "cron interval", *d.config.Schedule)
+		d.scheduler.Start()
+	}
+
 	return nil
+}
+
+// pollSecrets re-fetches every cached secret and fires the update callback
+// for every policy whose secret changed (true) or failed to refresh (false).
+func (d *delineaManager) pollSecrets() {
+	if len(d.usedVars) == 0 || d.callback == nil {
+		return
+	}
+	d.logger.Debug("Polling delinea secrets for changes", "secretCount", len(d.usedVars))
+	changed := make(map[string]bool)
+
+	for body, cached := range d.usedVars {
+		current, err := d.fetch(body)
+		if err != nil {
+			d.logger.Error("Failed to retrieve delinea secret during polling", "ref", body, "error", err)
+			for id := range cached.policyIDs {
+				changed[id] = false
+			}
+			continue
+		}
+		if current != cached.Value {
+			d.logger.Info("Detected changed delinea secret", "ref", body)
+			cached.Value = current
+			d.usedVars[body] = cached
+			for id := range cached.policyIDs {
+				changed[id] = true
+			}
+		}
+	}
+
+	if len(changed) > 0 {
+		d.logger.Info("Calling update callback for changed delinea secrets", "policyCount", len(changed))
+		d.callback(changed)
+	}
 }
 
 // RegisterUpdatePoliciesCallback registers the policy-reapply callback.
@@ -164,7 +218,33 @@ func extractField(secret *server.Secret, field, body string) (string, error) {
 	return val, nil
 }
 
-// SolveConfigSecrets is a stub for Task 6.
+// SolveConfigSecrets resolves ${delinea://...} references in the backends map
+// and config-manager struct. Config-time references are NOT tracked for
+// later re-apply.
 func (d *delineaManager) SolveConfigSecrets(backends map[string]any, cm config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
-	return backends, cm, nil
+	processedBackends, err := processValue(backends, "delinea", "_backends", d.resolveBody)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to process backends: %w", err)
+	}
+	newBackends, ok := processedBackends.(map[string]any)
+	if !ok {
+		return backends, cm, fmt.Errorf("failed to cast processed backends to map[string]any")
+	}
+
+	cmMap, err := structToMap(cm)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to convert config manager to map: %w", err)
+	}
+	processedCMMap, err := processValue(cmMap, "delinea", "_config_manager", d.resolveBody)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to process config manager: %w", err)
+	}
+	newCM, err := mapToStruct[config.ManagerConfig](processedCMMap)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to convert processed map to config manager: %w", err)
+	}
+
+	// Do not track updates on config vars
+	d.usedVars = make(map[string]cachedSecret)
+	return newBackends, newCM, nil
 }

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -280,4 +281,93 @@ func TestDelineaSolvePolicySecrets_BadGrammar(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestDelineaPolling_DetectsChange(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
+
+	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	changed := make(chan map[string]bool, 1)
+	m.RegisterUpdatePoliciesCallback(func(ids map[string]bool) { changed <- ids })
+
+	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "policy-A", Data: map[string]any{"c": "${delinea://id/1/password}"}})
+	require.NoError(t, err)
+
+	// Mutate the server-side value, then trigger pollSecrets directly.
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v2"}}})
+	m.pollSecrets()
+
+	select {
+	case ids := <-changed:
+		require.Contains(t, ids, "policy-A")
+		assert.True(t, ids["policy-A"], "value-changed signal should be true")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected callback to fire on change")
+	}
+	assert.Equal(t, "v2", m.usedVars["id/1/password"].Value, "cache should be updated to v2")
+}
+
+func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
+
+	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	changed := make(chan map[string]bool, 1)
+	m.RegisterUpdatePoliciesCallback(func(ids map[string]bool) { changed <- ids })
+
+	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "policy-A", Data: map[string]any{"c": "${delinea://id/1/password}"}})
+	require.NoError(t, err)
+
+	fake.Close() // server now returns errors
+	m.pollSecrets()
+
+	select {
+	case ids := <-changed:
+		require.Contains(t, ids, "policy-A")
+		assert.False(t, ids["policy-A"], "fetch-failure signal should be false")
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected callback to fire on fetch failure")
+	}
+}
+
+func TestDelineaSolveConfigSecrets(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(5, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "be-secret"}}})
+
+	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	backends := map[string]any{
+		"common": map[string]any{
+			"diode": map[string]any{
+				"client_secret": "${delinea://id/5/password}",
+			},
+		},
+	}
+	cm := config.ManagerConfig{
+		Active: "git",
+		Sources: config.Sources{
+			Git: config.GitManager{
+				URL:      "https://example/repo.git",
+				Password: "${delinea://id/5/password}",
+			},
+		},
+	}
+
+	gotBackends, gotCM, err := m.SolveConfigSecrets(backends, cm)
+	require.NoError(t, err)
+	assert.Equal(t, "be-secret", gotBackends["common"].(map[string]any)["diode"].(map[string]any)["client_secret"])
+	assert.Equal(t, "be-secret", gotCM.Sources.Git.Password)
+	// config-time secrets should not be tracked
+	assert.Empty(t, m.usedVars)
 }
