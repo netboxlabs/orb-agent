@@ -171,3 +171,62 @@ func TestFetcher_PlacesSingleFile_ExecutableMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o755), fi.Mode().Perm(), "Mode: 0o755 must produce an executable file")
 }
+
+// TestFetcher_ReEnsureExtractedReplacesExistingDst verifies that fetching an
+// Extract=true spec into a dst that already exists as a directory succeeds —
+// the renameSwap helper replaces the existing content atomically.
+func TestFetcher_ReEnsureExtractedReplacesExistingDst(t *testing.T) {
+	// First archive: contains v1.txt.
+	archive1 := buildTarGz(t, map[string]string{"v1.txt": "first"})
+	sum1 := sha256Hex(archive1)
+
+	// Second archive: contains v2.txt (different content, different SHA).
+	archive2 := buildTarGz(t, map[string]string{"v2.txt": "second"})
+	sum2 := sha256Hex(archive2)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(archive1)
+	})
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(archive2)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "pkg")
+
+	f := newFetcher()
+
+	// First fetch — dst does not yet exist.
+	err := f.fetch(context.Background(), FileSpec{
+		Name:    "pkg",
+		URL:     srv.URL + "/v1.tar.gz",
+		SHA256:  sum1,
+		Extract: true,
+	}, dst)
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(dst, "v1.txt"), "v1.txt must be present after first fetch")
+
+	// Place a marker file inside the extracted dir to confirm it is replaced.
+	markerPath := filepath.Join(dst, "marker.txt")
+	require.NoError(t, os.WriteFile(markerPath, []byte("marker"), 0o644))
+
+	// Second fetch — dst already exists as a directory.
+	err = f.fetch(context.Background(), FileSpec{
+		Name:    "pkg",
+		URL:     srv.URL + "/v2.tar.gz",
+		SHA256:  sum2,
+		Extract: true,
+	}, dst)
+	require.NoError(t, err, "re-fetch into existing dst must succeed")
+
+	// New archive's content must be present.
+	assert.FileExists(t, filepath.Join(dst, "v2.txt"), "v2.txt must be present after second fetch")
+
+	// Old content (v1.txt) and the marker must be gone — dst was replaced.
+	assert.NoFileExists(t, filepath.Join(dst, "v1.txt"), "v1.txt must be gone after replacement")
+	assert.NoFileExists(t, markerPath, "marker must be gone after dst replacement")
+}

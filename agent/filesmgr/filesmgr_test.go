@@ -654,6 +654,43 @@ func TestManager_StartCleansUpStateTmpFiles(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "state-*.json.tmp must be removed on Start")
 }
 
+// TestManager_StartPreservesUnversionedExtractedContent verifies that an
+// unversioned Extract install (no "current" symlink) is not destroyed by
+// cleanupStaleArtifacts. Only stage artifacts inside the name dir are removed;
+// the extracted content (files and subdirs) survives Start().
+func TestManager_StartPreservesUnversionedExtractedContent(t *testing.T) {
+	root := t.TempDir()
+
+	// Set up the on-disk layout for an unversioned Extract install:
+	//   <root>/x/file.txt
+	//   <root>/x/subdir/
+	// No "current" symlink — this is an unversioned placement.
+	nameDir := filepath.Join(root, "x")
+	require.NoError(t, os.MkdirAll(filepath.Join(nameDir, "subdir"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(nameDir, "file.txt"), []byte("content"), 0o644))
+
+	// Populate state.json with an unversioned tracked entry so the manager
+	// knows about this name. Path points to the name dir itself (Extract, no version).
+	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"","path":"` +
+		nameDir + `","sha256":"abc","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
+
+	// Plant a stale stage dir inside the name dir — this SHOULD be removed.
+	staleStage := filepath.Join(nameDir, ".filesmgr-stage-orphan")
+	require.NoError(t, os.Mkdir(staleStage, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(staleStage, "tmp"), []byte("stale"), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// Extracted content must survive.
+	assert.FileExists(t, filepath.Join(nameDir, "file.txt"), "file.txt must not be removed on Start")
+	assert.DirExists(t, filepath.Join(nameDir, "subdir"), "subdir must not be removed on Start")
+
+	// Stage dir inside name dir must be gone.
+	assert.NoDirExists(t, staleStage, "stale stage dir inside unversioned name dir must be removed on Start")
+}
+
 // TestManager_StartCleansUpOrphanVersionDirs verifies that version directories
 // inside a name dir that are not referenced by any tracked entry are removed on
 // Start(), while the tracked version dir (current and previous) is preserved.

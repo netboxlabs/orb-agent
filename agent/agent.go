@@ -301,8 +301,13 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 	}
 
 	// Retry Start with the rolled-back binary — fresh context derived from ctx again.
+	// Cancel the prior runCancel before storing runCancel2 to avoid leaking the
+	// context created for the first (failed) Start attempt.
 	runCtx2, runCancel2 := context.WithCancel(ctx)
 	a.restartCancelsMu.Lock()
+	if prior, ok := a.restartCancels[backendName]; ok {
+		prior()
+	}
 	a.restartCancels[backendName] = runCancel2
 	a.restartCancelsMu.Unlock()
 

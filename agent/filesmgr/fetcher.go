@@ -52,6 +52,56 @@ func filenameFromURL(rawURL string) (string, error) {
 	return base, nil
 }
 
+// renameSwap atomically replaces dst with src using a swap-via-backup pattern.
+// If dst does not exist, it falls back to a simple os.Rename(src, dst).
+// If dst exists, the sequence is:
+//  1. Get a unique backup path in the same directory as dst (same filesystem).
+//  2. Rename dst → backup (atomic on POSIX; same-fs).
+//  3. Rename src → dst (atomic on POSIX).
+//  4. Remove the backup (best-effort).
+//
+// If step 3 fails, renameSwap attempts to restore the original by renaming
+// backup → dst. Works for both files and directories; avoids the
+// ENOTEMPTY/EEXIST error that os.Rename returns when overwriting a non-empty
+// directory on Linux.
+func renameSwap(src, dst string) error {
+	if _, err := os.Lstat(dst); os.IsNotExist(err) {
+		// Simple case: dst does not exist yet.
+		return os.Rename(src, dst)
+	}
+
+	// dst exists — use backup-swap pattern.
+	// MkdirTemp creates an empty directory; remove it immediately so we have
+	// a unique path name we can use as the backup rename target.
+	backup, err := os.MkdirTemp(filepath.Dir(dst), ".filesmgr-backup-*")
+	if err != nil {
+		return fmt.Errorf("create backup path: %w", err)
+	}
+	// Remove the empty dir so rename can take that name.
+	if err := os.Remove(backup); err != nil {
+		return fmt.Errorf("clear backup placeholder: %w", err)
+	}
+
+	// Move existing dst out of the way.
+	if err := os.Rename(dst, backup); err != nil {
+		return fmt.Errorf("backup existing dst: %w", err)
+	}
+
+	// Move new content into place.
+	if err := os.Rename(src, dst); err != nil {
+		// Best-effort restore: put the original back.
+		_ = os.Rename(backup, dst)
+		return fmt.Errorf("place new content: %w", err)
+	}
+
+	// Clean up the backup. Best-effort: log on failure but don't fail the call.
+	if rmErr := os.RemoveAll(backup); rmErr != nil {
+		// Non-fatal: the new content is already in place.
+		_ = rmErr
+	}
+	return nil
+}
+
 // fetch downloads spec.URL into dst. If spec.Extract is true, dst is a
 // directory containing the extracted archive contents; otherwise dst is a
 // directory and the file is placed at dst/<filename>. The download is
@@ -128,7 +178,12 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 
 	if spec.Extract {
 		// Atomic rename of the extracted directory into dst.
-		if err := os.Rename(stagePath, dst); err != nil {
+		// If dst already exists (re-ensure with different content), use a
+		// swap-via-backup pattern: move the existing dst out of the way first,
+		// rename the new content in, then remove the backup. This handles the
+		// case where dst is an existing directory (os.Rename(dir→dir) fails on
+		// Linux) and provides a restore path if the second rename fails.
+		if err := renameSwap(stagePath, dst); err != nil {
 			return fmt.Errorf("place %s: %w", dst, err)
 		}
 	} else {

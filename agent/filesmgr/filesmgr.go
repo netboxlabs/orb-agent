@@ -83,6 +83,12 @@ func (m *filesmgr) Start(_ context.Context) error {
 //     These are left when the process crashed between store.put and
 //     swapSymlink — the version dir exists on disk but state.json was never
 //     updated to reflect the symlink target.
+//
+// For unversioned Extract installs (no "current" symlink, but a tracked entry
+// exists), the extracted content under <root>/<name>/ is the install itself —
+// only stage artifacts inside it are cleaned; the content is left untouched.
+// For abandoned name dirs (no "current" symlink AND no tracked entry), the
+// entire name directory is removed.
 func (m *filesmgr) cleanupStaleArtifacts() {
 	// Build the set of live version directories from the loaded store so we
 	// don't delete versions that are still tracked (current or previous).
@@ -121,39 +127,93 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 			}
 			continue
 		}
-		// Inside each name directory: remove stale current.new symlinks,
-		// nested .filesmgr-stage-* directories, and orphan version dirs.
-		if e.IsDir() {
-			staleNew := filepath.Join(fullPath, "current.new")
-			if fi, err := os.Lstat(staleNew); err == nil {
-				m.logger.Info("filesmgr: removing stale current.new", "path", staleNew)
-				if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
-					if err := os.Remove(staleNew); err != nil {
-						m.logger.Warn("filesmgr: failed to remove stale current.new", "path", staleNew, "error", err)
-					}
-				}
+		// Inside each name directory: decide cleanup strategy based on whether
+		// a "current" symlink exists (versioned install vs. unversioned install
+		// vs. abandoned name dir).
+		if !e.IsDir() {
+			continue
+		}
+		currentPath := filepath.Join(fullPath, "current")
+		_, currentErr := os.Lstat(currentPath)
+		_, tracked := m.store.get(e.Name())
+
+		switch {
+		case currentErr == nil:
+			// Versioned install: clean stale current.new, nested stage dirs,
+			// and orphan version subdirs.
+			m.cleanVersionedOrphans(fullPath, liveDirs)
+		case tracked:
+			// Unversioned install: the name dir IS the install content.
+			// Only clean stage artifacts and current.new — leave the rest.
+			m.cleanStageArtifactsOnly(fullPath)
+		default:
+			// No tracked entry and no current symlink: abandoned name dir.
+			m.logger.Info("filesmgr: removing abandoned name dir", "path", fullPath)
+			if err := os.RemoveAll(fullPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove abandoned name dir", "path", fullPath, "error", err)
 			}
-			inner, _ := os.ReadDir(fullPath)
-			for _, ie := range inner {
-				innerPath := filepath.Join(fullPath, ie.Name())
-				if strings.HasPrefix(ie.Name(), ".filesmgr-stage-") {
-					m.logger.Info("filesmgr: removing nested stale stage dir", "path", innerPath)
-					if err := os.RemoveAll(innerPath); err != nil {
-						m.logger.Warn("filesmgr: failed to remove nested stale stage dir", "path", innerPath, "error", err)
-					}
-					continue
-				}
-				// Skip non-directory entries and reserved names inside name dirs.
-				if !ie.IsDir() || ie.Name() == "current" {
-					continue
-				}
-				// Any subdirectory that is not a tracked version dir is an orphan.
-				if !liveDirs[innerPath] {
-					m.logger.Info("filesmgr: removing orphan version dir", "path", innerPath)
-					if err := os.RemoveAll(innerPath); err != nil {
-						m.logger.Warn("filesmgr: failed to remove orphan version dir", "path", innerPath, "error", err)
-					}
-				}
+		}
+	}
+}
+
+// cleanVersionedOrphans cleans inside a versioned name directory:
+//   - removes stale current.new symlinks / files
+//   - removes nested .filesmgr-stage-* directories
+//   - removes orphan version subdirectories not in liveDirs
+func (m *filesmgr) cleanVersionedOrphans(nameDir string, liveDirs map[string]bool) {
+	staleNew := filepath.Join(nameDir, "current.new")
+	if fi, err := os.Lstat(staleNew); err == nil {
+		m.logger.Info("filesmgr: removing stale current.new", "path", staleNew)
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			if err := os.Remove(staleNew); err != nil {
+				m.logger.Warn("filesmgr: failed to remove stale current.new", "path", staleNew, "error", err)
+			}
+		}
+	}
+	inner, _ := os.ReadDir(nameDir)
+	for _, ie := range inner {
+		innerPath := filepath.Join(nameDir, ie.Name())
+		if strings.HasPrefix(ie.Name(), ".filesmgr-stage-") {
+			m.logger.Info("filesmgr: removing nested stale stage dir", "path", innerPath)
+			if err := os.RemoveAll(innerPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove nested stale stage dir", "path", innerPath, "error", err)
+			}
+			continue
+		}
+		// Skip non-directory entries and reserved names inside name dirs.
+		if !ie.IsDir() || ie.Name() == "current" {
+			continue
+		}
+		// Any subdirectory that is not a tracked version dir is an orphan.
+		if !liveDirs[innerPath] {
+			m.logger.Info("filesmgr: removing orphan version dir", "path", innerPath)
+			if err := os.RemoveAll(innerPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove orphan version dir", "path", innerPath, "error", err)
+			}
+		}
+	}
+}
+
+// cleanStageArtifactsOnly cleans only stage artifacts and stale current.new
+// inside an unversioned name directory. The directory's own content (extracted
+// files, subdirs) is preserved — it IS the install.
+func (m *filesmgr) cleanStageArtifactsOnly(nameDir string) {
+	staleNew := filepath.Join(nameDir, "current.new")
+	if fi, err := os.Lstat(staleNew); err == nil {
+		m.logger.Info("filesmgr: removing stale current.new (unversioned)", "path", staleNew)
+		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+			if err := os.Remove(staleNew); err != nil {
+				m.logger.Warn("filesmgr: failed to remove stale current.new (unversioned)", "path", staleNew, "error", err)
+			}
+		}
+	}
+	inner, _ := os.ReadDir(nameDir)
+	for _, ie := range inner {
+		if strings.HasPrefix(ie.Name(), ".filesmgr-stage-") {
+			innerPath := filepath.Join(nameDir, ie.Name())
+			m.logger.Info("filesmgr: removing nested stale stage dir (unversioned)", "path", innerPath)
+			if err := os.RemoveAll(innerPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove nested stale stage dir (unversioned)", "path", innerPath, "error", err)
 			}
 		}
 	}
