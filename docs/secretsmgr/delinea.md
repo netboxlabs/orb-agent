@@ -96,7 +96,12 @@ The Orb Agent will resolve the Delinea reference and use the actual secret value
 
 If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every secret that was resolved at least once. When a referenced secret value changes, the policies that referenced it are automatically re-applied with the new value.
 
-If a poll fetch fails for a previously cached secret, every policy that referenced it is **removed** from its backend (this is the policy manager's contract for an invalid-secret signal). Once the secret is reachable and resolves again, the policy will be re-applied on the next config-manager sync. If any policy references multiple Delinea secrets, a single failed fetch is sticky: that policy is removed even if another referenced secret merely changed value in the same poll cycle.
+If a poll fetch fails for a previously cached secret, every policy that referenced it is **removed** from its backend (this is the policy manager's contract for an invalid-secret signal). Subsequent recovery depends on the active config manager:
+
+- **`config_manager.active: git` or `fleet`**: the policy will be re-applied on the next config-manager sync once the secret is reachable again.
+- **`config_manager.active: local`**: there is no periodic sync. The removed policy will not come back on its own — the operator must restart the agent (or otherwise re-trigger the local config manager) to re-apply policies once Delinea is reachable.
+
+If a policy references multiple Delinea secrets, a single failed fetch is sticky: that policy is removed even if another referenced secret merely changed value in the same poll cycle.
 
 This is useful for credential rotation scenarios, where you want to rotate credentials in Delinea without restarting the Orb Agent or manually updating policies.
 

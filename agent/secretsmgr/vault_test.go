@@ -832,6 +832,20 @@ func TestNew(t *testing.T) {
 			},
 			expectedType: "*secretsmgr.dummyManager",
 		},
+		{
+			name: "delinea manager",
+			config: config.ManagerSecrets{
+				Active: "delinea",
+				Sources: config.SecretsSources{
+					Delinea: config.DelineaManager{
+						ServerURL: "https://example.com",
+						Username:  "svc_orb",
+						Password:  "p",
+					},
+				},
+			},
+			expectedType: "*secretsmgr.delineaManager",
+		},
 	}
 
 	for _, tt := range tests {

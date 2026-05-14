@@ -93,6 +93,17 @@ func (d *delineaManager) Start(ctx context.Context) error {
 		}
 		d.logger.Info("Starting delinea secret polling", "cron interval", *d.config.Schedule)
 		d.scheduler.Start()
+
+		// The Manager interface has no Stop method; tie the scheduler's
+		// lifetime to the start context so it shuts down cleanly when the
+		// agent's root context is cancelled. Without this, the cron job
+		// keeps making SDK calls after agent shutdown.
+		go func() {
+			<-ctx.Done()
+			if err := d.scheduler.Shutdown(); err != nil {
+				d.logger.Error("delinea scheduler shutdown failed", "error", err)
+			}
+		}()
 	}
 
 	return nil
@@ -211,9 +222,18 @@ func (d *delineaManager) resolveBody(body, policyID string) (string, error) {
 	}
 
 	d.mu.Lock()
-	d.usedVars[body] = cachedSecret{
-		Value:     value,
-		policyIDs: map[string]bool{policyID: true},
+	// Another goroutine may have raced us and already populated the cache
+	// while our fetch was in flight; if so, merge our policyID into the
+	// existing entry instead of overwriting it (which would drop any IDs
+	// the winner had registered).
+	if existing, ok := d.usedVars[body]; ok {
+		existing.policyIDs[policyID] = true
+		value = existing.Value
+	} else {
+		d.usedVars[body] = cachedSecret{
+			Value:     value,
+			policyIDs: map[string]bool{policyID: true},
+		}
 	}
 	d.mu.Unlock()
 	return value, nil

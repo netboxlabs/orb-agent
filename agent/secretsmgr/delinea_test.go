@@ -376,6 +376,40 @@ func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {
 	}
 }
 
+// Two policies resolving the same uncached reference concurrently must both
+// end up registered as dependents of the cached entry — a later goroutine's
+// write must not overwrite the earlier goroutine's policyIDs map.
+func TestDelineaResolveBody_ConcurrentMergesPolicyIDs(t *testing.T) {
+	t.Parallel()
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
+
+	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	require.NoError(t, m.Start(context.Background()))
+
+	const n = 16
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			id := fmt.Sprintf("policy-%d", i)
+			_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: id, Data: map[string]any{"c": "${delinea://id/1/password}"}})
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+
+	m.mu.Lock()
+	cached, ok := m.usedVars["id/1/password"]
+	require.True(t, ok)
+	got := len(cached.policyIDs)
+	m.mu.Unlock()
+	assert.Equal(t, n, got, "every concurrent policy should be registered in the cache entry")
+}
+
 // When one cached secret fails to fetch and another for the same policy
 // changes value in the same poll cycle, the policy must be reported as
 // failed (false), not changed (true), regardless of map-iteration order.
