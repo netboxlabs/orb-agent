@@ -945,6 +945,54 @@ func TestManager_StartRecoversCrashedInstall(t *testing.T) {
 	assert.False(t, ok, "crashed-install entry must be dropped from state on Start")
 }
 
+// TestManager_StartRecoversSymlinkMismatchCrash verifies that Start() detects
+// the crash window where store.put recorded the new entry (state has v2) but
+// swapSymlink never ran (current still points at v1). Without this detection,
+// the entry would be accepted because Current.Path resolves through the stale
+// symlink — agent would report v2 while actually running v1.
+func TestManager_StartRecoversSymlinkMismatchCrash(t *testing.T) {
+	root := t.TempDir()
+	nameDir := filepath.Join(root, "x")
+
+	// Set up the v1 install that was the previous live state.
+	v1Dir := filepath.Join(nameDir, "1.0.0")
+	require.NoError(t, os.MkdirAll(v1Dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(v1Dir, "binary"), []byte("v1"), 0o755))
+
+	// The current symlink still points at v1 (the swap step crashed).
+	currentLink := filepath.Join(nameDir, "current")
+	require.NoError(t, os.Symlink("1.0.0", currentLink))
+
+	// The fetcher placed v2's version dir before the crash.
+	v2Dir := filepath.Join(nameDir, "2.0.0")
+	require.NoError(t, os.MkdirAll(v2Dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(v2Dir, "binary"), []byte("v2"), 0o755))
+
+	// state.json claims Current=v2 (store.put ran for v2 before the crash).
+	// Current.Path resolves through the stale current symlink so os.Stat
+	// would succeed — only the symlink-target check catches the mismatch.
+	currentPath := filepath.Join(nameDir, "current", "binary")
+	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"2.0.0","path":"` +
+		currentPath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// The crashed v2 version dir must be removed.
+	assert.NoDirExists(t, v2Dir, "crashed v2 version dir must be removed on Start")
+
+	// v1's dir and the stale symlink should be untouched (live install).
+	assert.DirExists(t, v1Dir, "live v1 version dir must be preserved")
+	target, err := os.Readlink(currentLink)
+	require.NoError(t, err)
+	assert.Equal(t, "1.0.0", target, "current symlink target must be preserved")
+
+	// The stale v2 entry must be dropped from state.
+	_, ok := m.Get("x")
+	assert.False(t, ok, "stale v2 entry must be dropped from state")
+}
+
 // TestManager_StartPreservesNonTrackedVersionDirs verifies that subdirectories
 // inside a tracked name dir which are NOT referenced by any tracked entry are
 // preserved on Start. We cannot distinguish a stale-but-harmless old version

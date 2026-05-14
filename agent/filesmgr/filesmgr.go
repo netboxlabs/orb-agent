@@ -113,11 +113,46 @@ func (m *filesmgr) Start(_ context.Context) error {
 		return err
 	}
 
-	// Phase 2: crash recovery — detect entries whose Current.Path is missing
-	// (process died after store.put but before swapSymlink) and clean up the
-	// orphaned version directory the fetcher already placed on disk.
+	// Phase 2: crash recovery — detect entries whose on-disk state does not
+	// match the recorded state and clean up the orphaned version directory.
+	// Two crash windows are covered:
+	//  (a) Current.Path is missing: process died before swapSymlink ran AND
+	//      there is no prior current symlink. Drop the entry.
+	//  (b) Current symlink target != Current.Version: process died after
+	//      store.put recorded the new entry but before swapSymlink updated
+	//      the symlink, so disk is still on the old version while state
+	//      claims the new one. Drop the entry so state matches disk; the
+	//      backend will fall back to whatever the existing current symlink
+	//      points at, which is the genuinely-live version.
 	reconciled := make(map[string]trackedEntry, len(pending))
 	for name, te := range pending {
+		// Check (b) first: for versioned entries, validate that the current
+		// symlink target matches the recorded Version.
+		if te.Current.Version != "" {
+			linkPath := filepath.Join(m.root, name, "current")
+			if target, readErr := os.Readlink(linkPath); readErr == nil && target != te.Current.Version {
+				// State says we're on te.Current.Version but the symlink
+				// still points at a different version — the swap step
+				// crashed. Remove the new version directory we placed,
+				// drop the entry. The on-disk live version (whatever the
+				// symlink points at) is no longer tracked by state — the
+				// next Ensure will re-record it; or absent that, the
+				// consumer falls back to the baked binary path.
+				versionDir := filepath.Join(m.root, name, te.Current.Version)
+				if _, vdirErr := os.Stat(versionDir); vdirErr == nil {
+					if rmErr := os.RemoveAll(versionDir); rmErr != nil {
+						m.logger.Warn("filesmgr: failed to remove crashed-install version dir (symlink mismatch)",
+							"name", name, "dir", versionDir, "error", rmErr)
+					} else {
+						m.logger.Info("filesmgr: removed crashed-install version dir (symlink target mismatch)",
+							"name", name, "dir", versionDir, "expected", te.Current.Version, "actual", target)
+					}
+				}
+				m.logger.Warn("filesmgr: dropping entry, current symlink target mismatch (crash recovery)",
+					"name", name, "expected", te.Current.Version, "actual", target)
+				continue
+			}
+		}
 		if _, statErr := os.Stat(te.Current.Path); statErr != nil {
 			// The recorded path doesn't exist. If there is a version directory
 			// on disk it is an orphan from a crashed install — remove it.
