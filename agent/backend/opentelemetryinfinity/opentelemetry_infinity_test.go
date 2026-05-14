@@ -126,7 +126,7 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 	err = be.Configure(logger, repo, map[string]any{
 		"host": serverURL.Hostname(),
 		"port": serverURL.Port(),
-	}, config.BackendCommons{})
+	}, config.BackendCommons{}, nil)
 	assert.NoError(t, err)
 
 	// Start the backend
@@ -191,7 +191,7 @@ func TestOpenTelemetryBackendCompleted(t *testing.T) {
 	// Configure backend with invalid parameters
 	err := be.Configure(slog.Default(), nil, map[string]any{
 		"host": "invalid-host",
-	}, config.BackendCommons{})
+	}, config.BackendCommons{}, nil)
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

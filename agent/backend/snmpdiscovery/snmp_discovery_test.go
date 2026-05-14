@@ -119,7 +119,7 @@ func TestSnmpDiscoveryBackendStart(t *testing.T) {
 		"log_level":          "debug",
 		"dry_run":            false,
 		"dry_run_output_dir": "/tmp/snmp",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -219,7 +219,7 @@ func TestSnmpDiscoveryUsesOtelTargetWithoutCredentials(t *testing.T) {
 		"client_id":     "snmp-client",
 		"client_secret": "snmp-secret",
 		"agent_name":    "snmp-agent",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -244,7 +244,7 @@ func TestSnmpDiscoveryBackendCompleted(t *testing.T) {
 
 	require.NoError(t, be.Configure(slog.Default(), nil, map[string]any{
 		"host": "invalid-host",
-	}, config.BackendCommons{}))
+	}, config.BackendCommons{}, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -311,7 +311,7 @@ func TestSnmpDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {
 		"agent_name":         "snmp-agent",
 		"dry_run":            true,
 		"dry_run_output_dir": "/tmp/snmp-dry-run",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

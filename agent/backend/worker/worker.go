@@ -15,6 +15,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
@@ -94,7 +95,7 @@ func (d *workerBackend) checkWorkerSupportsDebug() bool {
 }
 
 func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
-	config map[string]any, common config.BackendCommons,
+	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
 	d.logger = logger.With("backend", "worker")
 	d.policyRepo = repo
