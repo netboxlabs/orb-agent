@@ -113,6 +113,77 @@ func (s *store) load() error {
 	return nil
 }
 
+// loadPending reads state.json and returns the raw entries map without any
+// filesystem reconciliation (no stat checks, no drops). A missing state.json
+// file returns an empty map. Older v1 flat-format files are upgraded in-memory
+// to the tracked format.
+//
+// This is the first half of the split-load approach for crash recovery: the
+// caller (filesmgr.Start) inspects each entry for missing paths, removes any
+// orphan version directories created by a crashed install, and then calls
+// commitReconciled to persist the validated entries and update in-memory state.
+func (s *store) loadPending() (map[string]trackedEntry, error) {
+	s.mu.RLock()
+	data, err := os.ReadFile(s.path)
+	s.mu.RUnlock()
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return make(map[string]trackedEntry), nil
+		}
+		return nil, err
+	}
+	if len(data) == 0 {
+		return make(map[string]trackedEntry), nil
+	}
+
+	var peek struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &peek); err != nil {
+		return nil, err
+	}
+
+	if peek.Version <= 1 {
+		var sf1 struct {
+			Version int                  `json:"version"`
+			Entries map[string]FileEntry `json:"entries"`
+		}
+		if err := json.Unmarshal(data, &sf1); err != nil {
+			return nil, err
+		}
+		tracked := make(map[string]trackedEntry, len(sf1.Entries))
+		for name, entry := range sf1.Entries {
+			tracked[name] = trackedEntry{Current: entry, Previous: nil}
+		}
+		return tracked, nil
+	}
+
+	var sf stateFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		return nil, err
+	}
+	return sf.Entries, nil
+}
+
+// commitReconciled replaces the in-memory entries map with the caller-supplied
+// reconciled map and persists it to disk. This is the second half of the
+// split-load approach: after crash recovery has dropped entries whose paths are
+// missing, the caller passes the cleaned-up map here.
+// If the disk write fails, the in-memory state is left unchanged.
+func (s *store) commitReconciled(entries map[string]trackedEntry) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if err := s.writeSnapshot(entries); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.entries = entries
+	s.mu.Unlock()
+	return nil
+}
+
 // put inserts a new current entry. If an existing entry is already tracked,
 // the existing Current is recorded as the new Previous (one level of history
 // only — older Previous entries are replaced).

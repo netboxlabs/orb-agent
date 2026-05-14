@@ -61,15 +61,72 @@ func NewManager(logger *slog.Logger, root string) Manager {
 	}
 }
 
-// Start creates the root directory, loads persisted state, and removes any
-// stale temp directories or partial symlinks left by a previous crash.
+// Start creates the root directory, loads persisted state, performs crash
+// recovery for partially-installed entries, and removes any stale temp
+// directories or partial symlinks left by a previous crash.
+//
+// Startup sequence:
+//  1. MkdirAll the root.
+//  2. loadPending: read state.json into memory without any filesystem checks.
+//  3. Crash recovery: for each entry whose Current.Path doesn't exist on disk,
+//     remove the implied version directory (created by the fetcher but never
+//     activated by swapSymlink) and drop the entry from state.
+//  4. commitReconciled: persist the post-recovery entries and update in-memory
+//     state in a single atomic write.
+//  5. cleanupStaleArtifacts: remove stage dirs, current.new links, and orphan
+//     version dirs inside tracked name directories.
 func (m *filesmgr) Start(_ context.Context) error {
 	if err := os.MkdirAll(m.root, 0o755); err != nil {
 		return err
 	}
-	if err := m.store.load(); err != nil {
+
+	// Phase 1: read state.json without filesystem reconciliation.
+	pending, err := m.store.loadPending()
+	if err != nil {
 		return err
 	}
+
+	// Phase 2: crash recovery — detect entries whose Current.Path is missing
+	// (process died after store.put but before swapSymlink) and clean up the
+	// orphaned version directory the fetcher already placed on disk.
+	reconciled := make(map[string]trackedEntry, len(pending))
+	for name, te := range pending {
+		if _, statErr := os.Stat(te.Current.Path); statErr != nil {
+			// The recorded path doesn't exist. If there is a version directory
+			// on disk it is an orphan from a crashed install — remove it.
+			if te.Current.Version != "" {
+				versionDir := filepath.Join(m.root, name, te.Current.Version)
+				if _, vdirErr := os.Stat(versionDir); vdirErr == nil {
+					if rmErr := os.RemoveAll(versionDir); rmErr != nil {
+						m.logger.Warn("filesmgr: failed to remove crashed-install version dir",
+							"name", name, "dir", versionDir, "error", rmErr)
+					} else {
+						m.logger.Info("filesmgr: removed crashed-install version dir",
+							"name", name, "dir", versionDir)
+					}
+				}
+			}
+			// Drop the entry; do not add to reconciled.
+			m.logger.Warn("filesmgr: dropping entry, path missing (crash recovery)",
+				"name", name, "path", te.Current.Path)
+			continue
+		}
+		// Path exists. Also validate Previous if present.
+		if te.Previous != nil {
+			if _, prevErr := os.Stat(te.Previous.Path); prevErr != nil {
+				m.logger.Warn("filesmgr: dropping previous entry, path missing",
+					"name", name, "path", te.Previous.Path)
+				te.Previous = nil
+			}
+		}
+		reconciled[name] = te
+	}
+
+	// Phase 3: persist the post-recovery entries and update in-memory state.
+	if err := m.store.commitReconciled(reconciled); err != nil {
+		return err
+	}
+
 	m.cleanupStaleArtifacts()
 	return nil
 }
@@ -141,17 +198,18 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 		_, tracked := m.store.get(e.Name())
 
 		switch {
+		case !tracked:
+			// Untracked name: leave alone regardless of any FilesManager-like
+			// markers it might contain (including a "current" symlink). Cleanup
+			// is the manager's domain only for names it owns.
 		case currentErr == nil:
-			// Versioned install: clean stale current.new, nested stage dirs,
-			// and orphan version subdirs.
+			// Tracked versioned install: clean stale current.new, nested stage
+			// dirs, and orphan version subdirs.
 			m.cleanVersionedOrphans(fullPath, liveDirs)
-		case tracked:
-			// Unversioned install: the name dir IS the install content.
+		default:
+			// Tracked unversioned install: the name dir IS the install content.
 			// Only clean stage artifacts and current.new — leave the rest.
 			m.cleanStageArtifactsOnly(fullPath)
-		default:
-			// No tracked entry and no current symlink: unknown directory.
-			// Leave it untouched — it is not ours to delete.
 		}
 	}
 }

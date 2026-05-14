@@ -241,7 +241,8 @@ func TestManager_EnsureStorePutFailureRollsBack(t *testing.T) {
 	require.NoError(t, m.Start(context.Background()))
 
 	// Now block writes by placing a directory at the state.json path.
-	// state.json doesn't exist yet (no puts yet), so we just mkdir it.
+	// Start() writes an empty state.json, so remove it first then mkdir it.
+	require.NoError(t, os.Remove(filepath.Join(root, "state.json")))
 	require.NoError(t, os.Mkdir(filepath.Join(root, "state.json"), 0o755))
 
 	_, err := m.Ensure(context.Background(), FileSpec{
@@ -434,6 +435,15 @@ func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
 	nestedStage := filepath.Join(trackedDir, ".filesmgr-stage-xyz")
 	require.NoError(t, os.Mkdir(nestedStage, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(nestedStage, "data"), []byte("nested-stale"), 0o644))
+
+	// Write state.json so that "tracked-pkg" is recognized as a tracked name.
+	// Without a state.json entry the manager treats it as an untracked dir and
+	// leaves it alone (post-round-7 fix). The entry path goes through "current"
+	// so that os.Stat resolves it correctly via the symlink.
+	binPath := filepath.Join(trackedDir, "current", "bin")
+	stateJSON := `{"version":2,"entries":{"tracked-pkg":{"current":{"name":"tracked-pkg","version":"1.0.0","path":"` +
+		binPath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
 	m := NewManager(slog.Default(), root)
 	require.NoError(t, m.Start(context.Background()))
@@ -843,6 +853,72 @@ func TestManager_EnsureRefetchesWhenSingleFilePathBecameDirectory(t *testing.T) 
 	serveMu.Unlock()
 	assert.Greater(t, hitsAfterRefetch, hitsAfterInstall,
 		"server must be hit again after directory-tamper detection (re-fetch must occur)")
+}
+
+// TestManager_StartLeavesUntrackedNameWithCurrentSymlinkAlone verifies that
+// cleanupStaleArtifacts does NOT touch a name directory that is untracked in
+// state.json even when it contains a "current" symlink that resembles a
+// FilesManager versioned install. Such directories are not owned by the manager
+// and must be left entirely untouched to avoid destructive behavior when root
+// is shared with other tooling that uses the same symlink convention.
+func TestManager_StartLeavesUntrackedNameWithCurrentSymlinkAlone(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a directory that looks like a versioned install but is NOT tracked.
+	foreignDir := filepath.Join(root, "foreign")
+	versionDir1 := filepath.Join(foreignDir, "1.0.0")
+	versionDir2 := filepath.Join(foreignDir, "2.0.0")
+	require.NoError(t, os.MkdirAll(versionDir1, 0o755))
+	require.NoError(t, os.MkdirAll(versionDir2, 0o755))
+	// Set up a "current" symlink pointing at 1.0.0, just like the manager would.
+	currentLink := filepath.Join(foreignDir, "current")
+	require.NoError(t, os.Symlink("1.0.0", currentLink))
+
+	// Start with no state.json — "foreign" is untracked.
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// All three must survive: the current symlink and both version directories.
+	_, lstatErr := os.Lstat(currentLink)
+	assert.NoError(t, lstatErr, "current symlink inside untracked dir must not be removed on Start")
+	assert.DirExists(t, versionDir1, "1.0.0 dir inside untracked name must not be removed on Start")
+	assert.DirExists(t, versionDir2, "2.0.0 dir inside untracked name must not be removed on Start")
+}
+
+// TestManager_StartRecoversCrashedInstall verifies that Start() detects and
+// cleans up the crash window where store.put succeeded (state.json written) but
+// the process died before swapSymlink, leaving a version directory on disk that
+// is never reachable via the "current" symlink.
+//
+// Expected behaviour:
+//   - The orphan version directory is removed.
+//   - The state entry is dropped (path doesn't resolve).
+func TestManager_StartRecoversCrashedInstall(t *testing.T) {
+	root := t.TempDir()
+
+	nameDir := filepath.Join(root, "x")
+	versionDir := filepath.Join(nameDir, "1.0.0")
+	// Simulate: fetcher placed the version dir but swapSymlink never ran.
+	require.NoError(t, os.MkdirAll(versionDir, 0o755))
+	// NOTE: no "current" symlink and no binary inside the version dir (the
+	// binary path recorded in state.json also doesn't exist on disk).
+
+	// state.json records the entry as if the install completed (store.put ran).
+	// Current.Path uses the "current" symlink path — which doesn't exist yet.
+	currentPath := filepath.Join(nameDir, "current", "binary")
+	stateJSON := `{"version":2,"entries":{"x":{"current":{"name":"x","version":"1.0.0","path":"` +
+		currentPath + `","sha256":"abc","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// The orphan version directory must be gone.
+	assert.NoDirExists(t, versionDir, "crashed-install version dir must be removed on Start")
+
+	// The entry must be dropped from state.
+	_, ok := m.Get("x")
+	assert.False(t, ok, "crashed-install entry must be dropped from state on Start")
 }
 
 // TestManager_StartCleansUpOrphanVersionDirs verifies that version directories
