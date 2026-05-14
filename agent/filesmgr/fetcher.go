@@ -231,6 +231,9 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 		}
 	}
 
-	tmp = "" // cancel cleanup
+	// Leave `tmp` set so the deferred RemoveAll(tmp) runs and removes the
+	// now-empty staging parent directory. (The stagePath was renamed OUT
+	// of tmp into dst; the parent dir itself still exists and would leak
+	// as a `.filesmgr-stage-*` directory per successful Ensure otherwise.)
 	return nil
 }

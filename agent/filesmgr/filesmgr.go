@@ -251,11 +251,18 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 	}
 }
 
-// cleanVersionedOrphans cleans inside a versioned name directory:
-//   - removes stale current.new symlinks / files
-//   - removes nested .filesmgr-stage-* directories
-//   - removes orphan version subdirectories not in liveDirs
-func (m *filesmgr) cleanVersionedOrphans(nameDir string, liveDirs map[string]bool) {
+// cleanVersionedOrphans cleans inside a versioned name directory. It only
+// touches entries with manager-owned names — stale `current.new` symlinks,
+// nested `.filesmgr-stage-*` and `.filesmgr-backup-*` artifacts. Other
+// subdirectories (including old version dirs no longer in `liveDirs`) are
+// left alone: we cannot distinguish a stale-but-harmless older version dir
+// from something an operator or companion process placed there.
+//
+// The `liveDirs` argument is retained for symmetry with the call site but
+// is no longer used to drive deletions. Crash-recovery of version dirs
+// from a crashed install is handled separately in Start() via state.json
+// reconciliation, where we know the exact version directory to remove.
+func (m *filesmgr) cleanVersionedOrphans(nameDir string, _ map[string]bool) {
 	staleNew := filepath.Join(nameDir, "current.new")
 	if fi, err := os.Lstat(staleNew); err == nil {
 		m.logger.Info("filesmgr: removing stale current.new", "path", staleNew)
@@ -282,17 +289,8 @@ func (m *filesmgr) cleanVersionedOrphans(nameDir string, liveDirs map[string]boo
 			}
 			continue
 		}
-		// Skip non-directory entries and reserved names inside name dirs.
-		if !ie.IsDir() || ie.Name() == "current" {
-			continue
-		}
-		// Any subdirectory that is not a tracked version dir is an orphan.
-		if !liveDirs[innerPath] {
-			m.logger.Info("filesmgr: removing orphan version dir", "path", innerPath)
-			if err := os.RemoveAll(innerPath); err != nil {
-				m.logger.Warn("filesmgr: failed to remove orphan version dir", "path", innerPath, "error", err)
-			}
-		}
+		// Any other entry (version dirs, operator-placed files, etc.) is
+		// left untouched.
 	}
 }
 

@@ -945,10 +945,13 @@ func TestManager_StartRecoversCrashedInstall(t *testing.T) {
 	assert.False(t, ok, "crashed-install entry must be dropped from state on Start")
 }
 
-// TestManager_StartCleansUpOrphanVersionDirs verifies that version directories
-// inside a name dir that are not referenced by any tracked entry are removed on
-// Start(), while the tracked version dir (current and previous) is preserved.
-func TestManager_StartCleansUpOrphanVersionDirs(t *testing.T) {
+// TestManager_StartPreservesNonTrackedVersionDirs verifies that subdirectories
+// inside a tracked name dir which are NOT referenced by any tracked entry are
+// preserved on Start. We cannot distinguish a stale-but-harmless old version
+// dir from something an operator or companion process placed there, so we err
+// on the side of preservation. Crashed-install recovery is handled separately
+// via state.json reconciliation in Start (TestManager_StartRecoversCrashedInstall).
+func TestManager_StartPreservesNonTrackedVersionDirs(t *testing.T) {
 	root := t.TempDir()
 
 	// Manually create the on-disk layout for a tracked entry at v1.0.0.
@@ -961,10 +964,11 @@ func TestManager_StartCleansUpOrphanVersionDirs(t *testing.T) {
 	currentLink := filepath.Join(nameDir, "current")
 	require.NoError(t, os.Symlink("1.0.0", currentLink))
 
-	// Plant an orphan version dir (not referenced in state.json at all).
-	orphanDir := filepath.Join(nameDir, "0.9.0")
-	require.NoError(t, os.MkdirAll(orphanDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(orphanDir, "bin"), []byte("old"), 0o755))
+	// Plant a non-tracked subdir under the same name dir (could be an old
+	// version, operator-placed data, etc.). It must NOT be removed on Start.
+	otherDir := filepath.Join(nameDir, "0.9.0")
+	require.NoError(t, os.MkdirAll(otherDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(otherDir, "bin"), []byte("old"), 0o755))
 
 	// Write state.json referencing only v1.0.0.
 	stateJSON := `{"version":2,"entries":{"mypkg":{"current":{"name":"mypkg","version":"1.0.0","path":"` +
@@ -974,10 +978,11 @@ func TestManager_StartCleansUpOrphanVersionDirs(t *testing.T) {
 	m := NewManager(slog.Default(), root)
 	require.NoError(t, m.Start(context.Background()))
 
-	// The orphan directory must be gone.
-	assert.NoDirExists(t, orphanDir, "orphan version dir must be removed on Start")
+	// The non-tracked directory must still exist — only known-artifact patterns
+	// (.filesmgr-stage-*, .filesmgr-backup-*, current.new) are touched.
+	assert.DirExists(t, otherDir, "non-tracked subdir must be preserved on Start")
 
-	// The tracked version directory must still exist.
+	// The tracked version directory must also still exist.
 	assert.DirExists(t, trackedVersionDir, "tracked version dir must not be removed on Start")
 }
 
