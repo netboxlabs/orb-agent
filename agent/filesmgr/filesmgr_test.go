@@ -334,13 +334,24 @@ func TestManager_RollbackRestoresPreviousVersion(t *testing.T) {
 	assert.Equal(t, "2.0.0", last.Previous.Version, "Previous must be the rolled-back-from v2")
 }
 
-func TestManager_RollbackWithNoPrevious_ReturnsError(t *testing.T) {
+// TestManager_RollbackWithNoPreviousRemovesEntry verifies the rollback-to-default
+// semantic: when there is no Previous version, Rollback removes the entry
+// entirely so consumers fall back to their baked default binary.
+func TestManager_RollbackWithNoPreviousRemovesEntry(t *testing.T) {
 	archive := buildTarGz(t, map[string]string{"a.txt": "data"})
 	sum := sha256Hex(archive)
 	srv := serveTarGz(t, archive)
 	defer srv.Close()
 
-	m, _ := newTestManager(t)
+	m, root := newTestManager(t)
+
+	var events []FileEvent
+	var mu sync.Mutex
+	m.Subscribe(func(ev FileEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	})
 
 	_, err := m.Ensure(context.Background(), FileSpec{
 		Name: "pkg", Version: "1.0.0",
@@ -348,9 +359,23 @@ func TestManager_RollbackWithNoPrevious_ReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	err = m.Rollback(context.Background(), "pkg")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no previous version")
+	// Rollback with no Previous must succeed and remove the entry.
+	require.NoError(t, m.Rollback(context.Background(), "pkg"))
+
+	// Entry must be gone from the manager.
+	_, ok := m.Get("pkg")
+	assert.False(t, ok, "entry must be removed after rollback-to-default")
+
+	// The on-disk directory must no longer exist.
+	assert.NoDirExists(t, filepath.Join(root, "pkg"), "pkg directory must be removed after rollback-to-default")
+
+	// Events sequence: EventInstalled then EventRemoved (with v1.0.0 Entry).
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, events, 2)
+	assert.Equal(t, EventInstalled, events[0].Type)
+	assert.Equal(t, EventRemoved, events[1].Type)
+	assert.Equal(t, "1.0.0", events[1].Entry.Version)
 }
 
 func TestManager_RollbackWithMissingPreviousDir_ReturnsError(t *testing.T) {

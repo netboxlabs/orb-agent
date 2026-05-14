@@ -35,9 +35,10 @@ const (
 )
 
 type workerBackend struct {
-	logger     *slog.Logger
-	policyRepo policies.PolicyRepo
-	exec       string
+	logger       *slog.Logger
+	policyRepo   policies.PolicyRepo
+	exec         string
+	filesManager filesmgr.Manager
 
 	apiHost     string
 	apiPort     string
@@ -75,7 +76,7 @@ func Register() bool {
 }
 
 func (d *workerBackend) checkWorkerSupportsDebug() bool {
-	cmd := exec.Command(d.exec, "--help")
+	cmd := exec.Command(d.resolveExecPath(), "--help")
 	output, err := cmd.Output()
 	if err != nil {
 		d.logger.Warn("unable to check orb-worker help, skipping --debug flag",
@@ -95,10 +96,11 @@ func (d *workerBackend) checkWorkerSupportsDebug() bool {
 }
 
 func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
-	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
+	config map[string]any, common config.BackendCommons, fm filesmgr.Manager,
 ) error {
 	d.logger = logger.With("backend", "worker")
 	d.policyRepo = repo
+	d.filesManager = fm
 	d.diodeTargetFromOtel = false
 	d.debug = common.Debug
 
@@ -207,7 +209,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, dOptions...)
+	}, d.resolveExecPath(), dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd
@@ -374,7 +376,19 @@ func (d *workerBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
-func (d *workerBackend) ManagedBinaryName() string { return "" }
+func (d *workerBackend) ManagedBinaryName() string { return "orb-worker" }
+
+// resolveExecPath returns the path to the orb-worker binary. If FilesManager
+// tracks an entry under the name "orb-worker", that path is used. Otherwise
+// the baked-in binary (resolved from PATH) is used.
+func (d *workerBackend) resolveExecPath() string {
+	if d.filesManager != nil {
+		if entry, ok := d.filesManager.Get("orb-worker"); ok && entry.Path != "" {
+			return entry.Path
+		}
+	}
+	return d.exec
+}
 
 func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	if updatePolicy {

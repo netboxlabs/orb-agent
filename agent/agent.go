@@ -196,7 +196,14 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 // function must be called on Stop().
 func (a *orbAgent) subscribeFilesmgr() {
 	a.filesmgrUnsubscribe = a.filesManager.Subscribe(func(ev filesmgr.FileEvent) {
-		if ev.Type != filesmgr.EventUpgraded {
+		switch ev.Type {
+		case filesmgr.EventInstalled, filesmgr.EventUpgraded:
+			// continue — both signal that a new binary is on disk and the backend
+			// should be restarted to pick up the FilesManager-managed path.
+		default:
+			// Do NOT act on EventRolledBack or EventRemoved — those originate from
+			// the auto-rollback flow which handles its own restart, and restarting
+			// on them would create duplicate restart cycles.
 			return
 		}
 		for name, be := range a.backends {

@@ -1,9 +1,16 @@
 package agent
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -107,10 +114,13 @@ func TestRestartBackendWithFilesmgrRollback_RetriesAfterFailure(t *testing.T) {
 
 // makeBridge models the subscribeFilesmgr logic: iterate registered backends,
 // check ManagedBinaryName(), and enqueue the backend name (NOT the file name)
-// when a match is found.
+// when a match is found. Both EventInstalled and EventUpgraded trigger restarts.
 func makeBridge(backends map[string]*filesmgrTestBackend, restartCh chan string) func(filesmgr.FileEvent) {
 	return func(ev filesmgr.FileEvent) {
-		if ev.Type != filesmgr.EventUpgraded {
+		switch ev.Type {
+		case filesmgr.EventInstalled, filesmgr.EventUpgraded:
+			// continue
+		default:
 			return
 		}
 		for name, be := range backends {
@@ -345,4 +355,148 @@ func TestSubscribeToFilesmgr_CoalescesAndDeliversReliably(t *testing.T) {
 	defer be.mu.Unlock()
 	assert.Equal(t, 1, be.startCalls, "coalescing: 10 upgrade events must produce exactly 1 restart")
 	assert.Equal(t, 1, be.stopCalls, "coalescing: 10 upgrade events must produce exactly 1 stop")
+}
+
+// TestSubscribeToFilesmgr_TriggersRestartOnInstall verifies that EventInstalled
+// (first-time file arrival) also triggers a backend restart — Fix 3.
+func TestSubscribeToFilesmgr_TriggersRestartOnInstall(t *testing.T) {
+	restartCh := make(chan string, 1)
+	backends := map[string]*filesmgrTestBackend{
+		"worker": {managedBinary: "orb-worker"},
+	}
+
+	bridge := makeBridge(backends, restartCh)
+
+	bridge(filesmgr.FileEvent{
+		Type:  filesmgr.EventInstalled,
+		Entry: filesmgr.FileEntry{Name: "orb-worker", Version: "v1.0.0"},
+	})
+
+	select {
+	case got := <-restartCh:
+		assert.Equal(t, "worker", got, "restart channel must receive backend name on EventInstalled")
+	case <-time.After(time.Second):
+		t.Fatal("expected restart signal on EventInstalled")
+	}
+}
+
+// TestSubscribeToFilesmgr_IgnoresRolledBackAndRemoved verifies that
+// EventRolledBack and EventRemoved do NOT trigger a restart — these are
+// handled by the auto-rollback flow itself and triggering here would cause
+// duplicate restart cycles.
+func TestSubscribeToFilesmgr_IgnoresRolledBackAndRemoved(t *testing.T) {
+	restartCh := make(chan string, 1)
+	backends := map[string]*filesmgrTestBackend{
+		"worker": {managedBinary: "orb-worker"},
+	}
+
+	bridge := makeBridge(backends, restartCh)
+
+	for _, evType := range []filesmgr.FileEventType{filesmgr.EventRolledBack, filesmgr.EventRemoved} {
+		bridge(filesmgr.FileEvent{
+			Type:  evType,
+			Entry: filesmgr.FileEntry{Name: "orb-worker"},
+		})
+	}
+
+	select {
+	case got := <-restartCh:
+		t.Fatalf("unexpected restart for event: %q", got)
+	case <-time.After(50 * time.Millisecond):
+		// ok — neither event type should trigger a restart
+	}
+}
+
+// buildTestTarGz produces a minimal in-memory .tar.gz containing the given files.
+func buildTestTarGz(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, content := range entries {
+		require.NoError(t, tw.WriteHeader(&tar.Header{
+			Name: name,
+			Mode: 0o755,
+			Size: int64(len(content)),
+		}))
+		_, err := tw.Write([]byte(content))
+		require.NoError(t, err)
+	}
+	require.NoError(t, tw.Close())
+	require.NoError(t, gz.Close())
+	return buf.Bytes()
+}
+
+func testSHA256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// TestRestartBackendWithFilesmgrRollback_FirstInstallFailureFallsBackToBaked
+// verifies the end-to-end first-install self-heal path (Fix 4):
+//   - A real filesmgr.Manager has an entry installed (simulating a first-install).
+//   - The backend's Start fails on the first call (broken binary).
+//   - restartBackendWithFilesmgrRollback calls Rollback, which — because there is
+//     no Previous — removes the entry from the manager entirely.
+//   - The retry Start succeeds (baked binary path).
+//   - After the flow the entry is gone from the manager.
+func TestRestartBackendWithFilesmgrRollback_FirstInstallFailureFallsBackToBaked(t *testing.T) {
+	// Build a minimal tar.gz archive to serve as the "binary".
+	archive := buildTestTarGz(t, map[string]string{"orb-worker": "#!/bin/sh\nexit 0\n"})
+	sum := testSHA256Hex(archive)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	// Real FilesManager with temp root.
+	root := t.TempDir()
+	fm := filesmgr.NewManager(slog.Default(), root)
+	require.NoError(t, fm.Start(context.Background()))
+	defer func() { _ = fm.Stop(context.Background()) }()
+
+	// Install v1.0.0 (no previous — first install).
+	_, err := fm.Ensure(context.Background(), filesmgr.FileSpec{
+		Name:    "orb-worker",
+		Version: "1.0.0",
+		URL:     srv.URL + "/orb-worker.tar.gz",
+		SHA256:  sum,
+		Extract: true,
+	})
+	require.NoError(t, err)
+
+	// Confirm the entry is present.
+	_, ok := fm.Get("orb-worker")
+	require.True(t, ok, "entry must exist before rollback test")
+
+	// Backend: fails on first Start, succeeds on second.
+	be := &failOnceThenSucceedBackend{
+		filesmgrTestBackend: filesmgrTestBackend{managedBinary: "orb-worker"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a := &orbAgent{
+		logger:         slog.Default(),
+		backends:       map[string]backend.Backend{"worker": be},
+		filesManager:   fm,
+		cancelFunction: cancel,
+		ctx:            ctx,
+	}
+
+	// Execute the restart+rollback flow.
+	a.restartBackendWithFilesmgrRollback(ctx, "worker")
+
+	// Start must have been called twice: first attempt (fails) + retry after rollback.
+	be.mu.Lock()
+	starts := be.startCalls
+	be.mu.Unlock()
+	assert.Equal(t, 2, starts, "Start must be called twice: initial failure + retry after rollback")
+
+	// After rollback-to-default, the entry must be gone from the manager.
+	_, stillPresent := fm.Get("orb-worker")
+	assert.False(t, stillPresent, "filesmgr entry must be removed after rollback-to-default")
 }

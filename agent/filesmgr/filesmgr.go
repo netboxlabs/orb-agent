@@ -267,25 +267,23 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 		return nil
 	}
 
-	// When the entry uses a "current" symlink, remove the symlink first so
-	// callers cannot read through it after this call returns.
-	currentLink := filepath.Join(m.root, name, "current")
-	if fi, err := os.Lstat(currentLink); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-		if removeErr := os.Remove(currentLink); removeErr != nil {
-			return fmt.Errorf("remove current symlink %s: %w", currentLink, removeErr)
-		}
-	}
+	return m.removeLocked(name, entry)
+}
 
-	// Remove the entire name directory (covers all version sub-dirs).
+// removeLocked is the body of Remove minus the per-name mutex acquisition and
+// existence check. It is also called by Rollback when there is no Previous
+// version (rollback-to-default). Caller must hold the per-name mutex.
+func (m *filesmgr) removeLocked(name string, current FileEntry) error {
+	// Remove the entire name directory (covers all version sub-dirs and the
+	// current symlink). os.RemoveAll is safe even if parts are missing.
 	nameDir := filepath.Join(m.root, name)
 	if err := os.RemoveAll(nameDir); err != nil {
-		return fmt.Errorf("remove %s: %w", nameDir, err)
+		return fmt.Errorf("filesmgr: remove %s: %w", nameDir, err)
 	}
-
 	if err := m.store.delete(name); err != nil {
-		return err
+		return fmt.Errorf("filesmgr: delete state %s: %w", name, err)
 	}
-	m.bus.publish(FileEvent{Type: EventRemoved, Entry: entry})
+	m.bus.publish(FileEvent{Type: EventRemoved, Entry: current})
 	return nil
 }
 
@@ -302,7 +300,10 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 		return fmt.Errorf("filesmgr: %s not tracked, nothing to roll back", name)
 	}
 	if tracked.Previous == nil {
-		return fmt.Errorf("filesmgr: %s has no previous version recorded", name)
+		// No previous version recorded. Roll back to "default" meaning no
+		// managed entry — consumers fall back to their baked binary.
+		// This is the first-install-failure recovery path.
+		return m.removeLocked(name, tracked.Current)
 	}
 	// F8: unversioned entries produce a self-referential symlink
 	// (<root>/<name>/current -> <name>), which is invalid.
