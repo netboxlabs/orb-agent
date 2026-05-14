@@ -32,6 +32,14 @@ func (d *delineaManager) Start(ctx context.Context) error {
 	d.ctx = ctx
 	d.usedVars = make(map[string]cachedSecret)
 
+	for _, field := range []*string{&d.config.ServerURL, &d.config.Tenant, &d.config.Username, &d.config.Password} {
+		resolved, err := config.ResolveEnv(*field)
+		if err != nil {
+			return fmt.Errorf("resolving delinea credential from environment: %w", err)
+		}
+		*field = resolved
+	}
+
 	if (d.config.ServerURL == "" && d.config.Tenant == "") ||
 		(d.config.ServerURL != "" && d.config.Tenant != "") {
 		return fmt.Errorf("either server_url or tenant must be set (not both and not neither)")

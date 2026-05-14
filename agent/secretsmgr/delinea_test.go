@@ -157,6 +157,44 @@ func TestDelineaStart_ConfigValidation(t *testing.T) {
 	}
 }
 
+func TestDelineaStart_ResolvesEnvCredentials(t *testing.T) {
+	fake := newFakeDelineaServer()
+	t.Cleanup(fake.Close)
+	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "hunter2"}}})
+
+	t.Setenv("DELINEA_TEST_USER", "svc_orb")
+	t.Setenv("DELINEA_TEST_PASS", "real-secret")
+
+	m := &delineaManager{
+		logger: newTestLogger(),
+		config: config.DelineaManager{
+			ServerURL: fake.URL,
+			Username:  "${DELINEA_TEST_USER}",
+			Password:  "${DELINEA_TEST_PASS}",
+		},
+	}
+	require.NoError(t, m.Start(context.Background()))
+	assert.Equal(t, "svc_orb", m.config.Username)
+	assert.Equal(t, "real-secret", m.config.Password)
+
+	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "p", Data: map[string]any{"c": "${delinea://id/1/password}"}})
+	require.NoError(t, err)
+}
+
+func TestDelineaStart_UnsetEnvFailsClearly(t *testing.T) {
+	m := &delineaManager{
+		logger: newTestLogger(),
+		config: config.DelineaManager{
+			ServerURL: "https://example.com",
+			Username:  "svc_orb",
+			Password:  "${DELINEA_TEST_DEFINITELY_UNSET}",
+		},
+	}
+	err := m.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolving delinea credential from environment")
+}
+
 func TestDelineaSolvePolicySecrets_ByID(t *testing.T) {
 	t.Parallel()
 	fake := newFakeDelineaServer()

@@ -80,7 +80,6 @@ type DelineaManager struct {
 	Tenant    string  `yaml:"tenant"`
 	Username  string  `yaml:"username"`
 	Password  string  `yaml:"password"`
-	Timeout   *int    `yaml:"timeout,omitempty"`
 	SkipTLS   bool    `yaml:"skip_tls"`
 	Schedule  *string `yaml:"schedule,omitempty"`
 }

@@ -12,13 +12,14 @@ secrets_manager:
       server_url: ""                                 # on-prem / Platform URL; XOR with tenant
       tenant: "<your-tenant>"                        # Secret Server Cloud subdomain
       username: "svc_orb"
-      password: "${env:DELINEA_PASSWORD}"
-      timeout: 30                                    # seconds; default 60
+      password: "${DELINEA_PASSWORD}"
       skip_tls: false
       schedule: "*/5 * * * *"                        # optional cron for change-detection polling
 ```
 
 Exactly one of `server_url` or `tenant` must be set. The provider does not eagerly authenticate at startup — the first secret fetch performs the OAuth handshake.
+
+The `server_url`, `tenant`, `username`, and `password` fields each accept a `${ENV_VAR}` placeholder that is resolved from the agent's environment at startup; an unset referenced variable causes startup to fail with a clear error.
 
 ## Placeholder grammar
 
@@ -63,7 +64,7 @@ This procedure validates the full integration against a real Delinea instance. T
          delinea:
            tenant: "<your-tenant>"
            username: "svc_orb"
-           password: "${env:DELINEA_PASSWORD}"
+           password: "${DELINEA_PASSWORD}"
            schedule: "*/1 * * * *"
      backends: {}
      policies: {}
