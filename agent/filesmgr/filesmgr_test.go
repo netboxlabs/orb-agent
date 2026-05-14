@@ -227,3 +227,66 @@ func TestManager_RemoveEmitsRemoved(t *testing.T) {
 	require.Len(t, events, 2)
 	assert.Equal(t, EventRemoved, events[1].Type)
 }
+
+func TestManager_EnsureStorePutFailureRollsBack(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "data"})
+	sum := sha256Hex(archive)
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+
+	root := t.TempDir()
+
+	// Start a normal manager so Start() can create the root dir.
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// Now block writes by placing a directory at the state.json path.
+	// state.json doesn't exist yet (no puts yet), so we just mkdir it.
+	require.NoError(t, os.Mkdir(filepath.Join(root, "state.json"), 0o755))
+
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name:    "pkg",
+		Version: "1.0.0",
+		URL:     srv.URL + "/x.tar.gz",
+		SHA256:  sum,
+		Extract: true,
+	})
+	require.Error(t, err, "Ensure must fail when store.put fails")
+
+	// No entry must be recorded in state.
+	_, ok := m.Get("pkg")
+	assert.False(t, ok, "no entry should be recorded when store.put fails")
+
+	// No "current" symlink should exist.
+	currentLink := filepath.Join(root, "pkg", "current")
+	_, lstatErr := os.Lstat(currentLink)
+	assert.True(t, os.IsNotExist(lstatErr), "current symlink must not exist after rollback")
+
+	// The version directory should also have been cleaned up.
+	versionDir := filepath.Join(root, "pkg", "1.0.0")
+	_, vstatErr := os.Lstat(versionDir)
+	assert.True(t, os.IsNotExist(vstatErr), "version dir must be cleaned up after store.put failure")
+}
+
+func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
+	root := t.TempDir()
+
+	// Create a stale stage directory at the root level.
+	staleStage := filepath.Join(root, ".filesmgr-stage-abc123")
+	require.NoError(t, os.Mkdir(staleStage, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(staleStage, "payload"), []byte("stale"), 0o644))
+
+	// Create a stale current.new symlink inside a name directory.
+	nameDir := filepath.Join(root, "mypkg")
+	require.NoError(t, os.MkdirAll(nameDir, 0o755))
+	staleNew := filepath.Join(nameDir, "current.new")
+	require.NoError(t, os.Symlink("1.0.0", staleNew))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// Both stale artifacts must be gone after Start().
+	assert.NoDirExists(t, staleStage, "stale stage dir must be removed on Start")
+	_, err := os.Lstat(staleNew)
+	assert.True(t, os.IsNotExist(err), "stale current.new must be removed on Start")
+}

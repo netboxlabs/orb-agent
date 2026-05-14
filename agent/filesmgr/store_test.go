@@ -76,3 +76,25 @@ func TestStore_Delete(t *testing.T) {
 	_, ok := s.get("y")
 	assert.False(t, ok)
 }
+
+func TestStore_WriteFailureDoesNotMutateInMemoryState(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "good")
+	require.NoError(t, os.MkdirAll(p, 0o755))
+
+	// Place a directory at the exact state.json path so os.Rename onto it
+	// fails with EISDIR, exercising the rollback path in put().
+	stateDir := filepath.Join(root, "statedir")
+	require.NoError(t, os.MkdirAll(stateDir, 0o755))
+	statePath := filepath.Join(stateDir, "state.json")
+	require.NoError(t, os.Mkdir(statePath, 0o755))
+
+	s := newStore(statePath)
+	// Attempt a put — the disk write must fail because state.json is a directory.
+	err := s.put(FileEntry{Name: "x", Path: p, SHA256: "def"})
+	require.Error(t, err, "expected put to fail when state.json path is a directory")
+
+	// In-memory state must be unchanged (no "x" entry).
+	_, ok := s.get("x")
+	assert.False(t, ok, "in-memory state must not be mutated on write failure")
+}

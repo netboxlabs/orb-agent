@@ -22,6 +22,7 @@ type stateFile struct {
 type store struct {
 	path    string
 	mu      sync.RWMutex
+	writeMu sync.Mutex // serializes all disk writes
 	entries map[string]FileEntry
 	logger  *slog.Logger
 }
@@ -67,27 +68,57 @@ func (s *store) load() error {
 }
 
 // put inserts or replaces an entry and atomically writes state.json.
+// If the disk write fails, the in-memory state is left unchanged.
 func (s *store) put(entry FileEntry) error {
-	s.mu.Lock()
-	s.entries[entry.Name] = entry
-	snapshot := make(map[string]FileEntry, len(s.entries))
+	// Build the candidate snapshot WITHOUT mutating the live map.
+	s.mu.RLock()
+	next := make(map[string]FileEntry, len(s.entries)+1)
 	for k, v := range s.entries {
-		snapshot[k] = v
+		next[k] = v
 	}
+	s.mu.RUnlock()
+	next[entry.Name] = entry
+
+	// Serialize disk writes globally.
+	s.writeMu.Lock()
+	err := s.writeSnapshot(next)
+	s.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	// Commit only on success.
+	s.mu.Lock()
+	s.entries = next
 	s.mu.Unlock()
-	return s.write(snapshot)
+	return nil
 }
 
 // delete removes an entry by name and atomically writes state.json.
+// If the disk write fails, the in-memory state is left unchanged.
 func (s *store) delete(name string) error {
-	s.mu.Lock()
-	delete(s.entries, name)
-	snapshot := make(map[string]FileEntry, len(s.entries))
+	// Build the candidate snapshot WITHOUT mutating the live map.
+	s.mu.RLock()
+	next := make(map[string]FileEntry, len(s.entries))
 	for k, v := range s.entries {
-		snapshot[k] = v
+		next[k] = v
 	}
+	s.mu.RUnlock()
+	delete(next, name)
+
+	// Serialize disk writes globally.
+	s.writeMu.Lock()
+	err := s.writeSnapshot(next)
+	s.writeMu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	// Commit only on success.
+	s.mu.Lock()
+	s.entries = next
 	s.mu.Unlock()
-	return s.write(snapshot)
+	return nil
 }
 
 // get returns the entry for name, if present.
@@ -109,20 +140,64 @@ func (s *store) all() map[string]FileEntry {
 	return out
 }
 
-func (s *store) write(snapshot map[string]FileEntry) error {
+// writeSnapshot marshals snapshot to a unique temp file, fsyncs it, renames
+// it into the final state.json path, then fsyncs the parent directory so the
+// rename is durable. Caller must hold writeMu.
+func (s *store) writeSnapshot(snapshot map[string]FileEntry) error {
 	sf := stateFile{Version: stateSchemaVersion, Entries: snapshot}
 	data, err := json.MarshalIndent(sf, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// Use a unique temp name to avoid collisions under concurrent callers
+	// (writeMu serializes, but be defensive anyway).
+	f, err := os.CreateTemp(dir, "state-*.json.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	tmpName := f.Name()
+
+	// Clean up temp on any failure path.
+	var writeErr error
+	defer func() {
+		if writeErr != nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if _, writeErr = f.Write(data); writeErr != nil {
+		_ = f.Close()
+		return writeErr
+	}
+	if writeErr = f.Sync(); writeErr != nil {
+		_ = f.Close()
+		return writeErr
+	}
+	if writeErr = f.Close(); writeErr != nil {
+		return writeErr
+	}
+
+	if writeErr = os.Rename(tmpName, s.path); writeErr != nil {
+		return writeErr
+	}
+
+	// fsync the parent directory so the rename (directory entry update) is durable.
+	dfd, err := os.Open(dir)
+	if err != nil {
+		// Non-fatal: the file is written, the rename succeeded; losing the dir
+		// fsync only matters on a power-loss between rename and fsync.
+		s.logger.Warn("filesmgr: cannot open dir for fsync", "dir", dir, "error", err)
+		return nil
+	}
+	if err := dfd.Sync(); err != nil {
+		s.logger.Warn("filesmgr: dir fsync failed", "dir", dir, "error", err)
+	}
+	_ = dfd.Close()
+	return nil
 }

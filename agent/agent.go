@@ -53,6 +53,7 @@ type orbAgent struct {
 	secretsManager      secretsmgr.Manager
 	backendStateManager backend.StateManager
 	filesManager        filesmgr.Manager
+	filesmgrUnsubscribe func()
 	restartBackendChan  chan string
 }
 
@@ -173,7 +174,6 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 
 		go a.waitForRestartRequests()
 	}
-	a.subscribeFilesmgr()
 	return nil
 }
 
@@ -181,8 +181,9 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 // restart channel. A restart is requested when a file's logical name
 // matches a registered backend's name. This subscription is mode-
 // independent: it fires regardless of the active config manager.
+// The returned unsubscribe function must be called on Stop().
 func (a *orbAgent) subscribeFilesmgr() {
-	a.filesManager.Subscribe(func(ev filesmgr.FileEvent) {
+	a.filesmgrUnsubscribe = a.filesManager.Subscribe(func(ev filesmgr.FileEvent) {
 		if ev.Type != filesmgr.EventUpgraded {
 			return
 		}
@@ -280,6 +281,9 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	if err := a.filesManager.Start(ctx); err != nil {
 		return fmt.Errorf("filesmgr start: %w", err)
 	}
+	// Subscribe before any backend starts so events fired during backend
+	// Start() are not missed.
+	a.subscribeFilesmgr()
 
 	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
 		return err
@@ -309,6 +313,9 @@ func (a *orbAgent) Stop(ctx context.Context) {
 				a.logger.Error("error while finalizing policy runs on shutdown", slog.Any("error", err))
 			}
 		}
+	}
+	if a.filesmgrUnsubscribe != nil {
+		a.filesmgrUnsubscribe()
 	}
 	if a.filesManager != nil {
 		if err := a.filesManager.Stop(ctx); err != nil {

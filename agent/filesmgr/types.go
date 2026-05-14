@@ -5,6 +5,8 @@ package filesmgr
 
 import (
 	"errors"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -28,20 +30,50 @@ type FileSpec struct {
 	Extract bool
 
 	// TargetPath optionally overrides the default placement path.
-	// When empty, the manager derives a path under its root.
+	// Not supported in v1; Validate() rejects any non-empty value.
 	TargetPath string
 }
 
-// Validate returns an error if required fields are missing.
+// isSafePathSegment returns an error if s is not a safe single-path segment.
+// A safe segment: non-empty, not absolute, contains no path separators, does
+// not equal ".." or ".", and is unchanged by filepath.Clean.
+func isSafePathSegment(s, field string) error {
+	if s == "" {
+		return errors.New(field + " must not be empty")
+	}
+	if filepath.IsAbs(s) {
+		return errors.New(field + " must not be an absolute path")
+	}
+	if strings.ContainsAny(s, "/\\") {
+		return errors.New(field + " must not contain path separators")
+	}
+	if s == ".." || s == "." {
+		return errors.New(field + " must not be '.' or '..'")
+	}
+	if filepath.Clean(s) != s {
+		return errors.New(field + " is not a clean single path segment")
+	}
+	return nil
+}
+
+// Validate returns an error if required fields are missing or unsafe.
 func (s FileSpec) Validate() error {
-	if s.Name == "" {
-		return errors.New("name is required")
+	if err := isSafePathSegment(s.Name, "name"); err != nil {
+		return err
 	}
 	if s.URL == "" {
 		return errors.New("url is required")
 	}
 	if s.SHA256 == "" {
 		return errors.New("sha256 is required")
+	}
+	if s.Version != "" {
+		if err := isSafePathSegment(s.Version, "version"); err != nil {
+			return err
+		}
+	}
+	if s.TargetPath != "" {
+		return errors.New("TargetPath not supported in v1")
 	}
 	return nil
 }

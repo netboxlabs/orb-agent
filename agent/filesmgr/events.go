@@ -15,6 +15,7 @@ type eventBus struct {
 	subscribers []subscriber
 	nextID      int64
 	logger      *slog.Logger
+	closed      bool
 }
 
 func newEventBus() *eventBus {
@@ -48,9 +49,14 @@ func (b *eventBus) subscribe(fn func(FileEvent)) func() {
 }
 
 // publish invokes every subscriber synchronously. Panics from a subscriber
-// are recovered and logged; other subscribers continue.
+// are recovered and logged; other subscribers continue. After close() is
+// called, publish is a no-op.
 func (b *eventBus) publish(ev FileEvent) {
 	b.mu.RLock()
+	if b.closed {
+		b.mu.RUnlock()
+		return
+	}
 	snapshot := make([]subscriber, len(b.subscribers))
 	copy(snapshot, b.subscribers)
 	b.mu.RUnlock()
@@ -58,6 +64,15 @@ func (b *eventBus) publish(ev FileEvent) {
 	for _, s := range snapshot {
 		b.callOne(s, ev)
 	}
+}
+
+// close empties the subscriber list and marks the bus as closed so that
+// subsequent publish() calls are no-ops. Safe to call multiple times.
+func (b *eventBus) close() {
+	b.mu.Lock()
+	b.closed = true
+	b.subscribers = nil
+	b.mu.Unlock()
 }
 
 func (b *eventBus) callOne(s subscriber, ev FileEvent) {

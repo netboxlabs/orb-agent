@@ -60,3 +60,23 @@ func TestEventBus_PanicRecovery(t *testing.T) {
 	bus.publish(FileEvent{Type: EventInstalled})
 	assert.Equal(t, int32(1), atomic.LoadInt32(&goodCalls))
 }
+
+func TestEventBus_CloseStopsDelivery(t *testing.T) {
+	bus := newEventBus()
+
+	var calls int32
+	bus.subscribe(func(_ FileEvent) {
+		atomic.AddInt32(&calls, 1)
+	})
+
+	bus.publish(FileEvent{Type: EventInstalled})
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "event before close must be delivered")
+
+	bus.close()
+
+	bus.publish(FileEvent{Type: EventInstalled})
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls), "event after close must be dropped")
+
+	// Calling close again must not panic.
+	bus.close()
+}
