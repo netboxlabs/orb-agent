@@ -2,10 +2,11 @@ package secretsmgr
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/DelineaXPM/tss-sdk-go/v3/server"
 	"github.com/go-co-op/gocron/v2"
@@ -21,6 +22,7 @@ type delineaManager struct {
 	config    config.DelineaManager
 	ctx       context.Context
 	client    *server.Server
+	mu        sync.Mutex
 	usedVars  map[string]cachedSecret
 	callback  func(map[string]bool)
 	scheduler gocron.Scheduler
@@ -32,12 +34,21 @@ func (d *delineaManager) Start(ctx context.Context) error {
 	d.ctx = ctx
 	d.usedVars = make(map[string]cachedSecret)
 
-	for _, field := range []*string{&d.config.ServerURL, &d.config.Tenant, &d.config.Username, &d.config.Password} {
-		resolved, err := config.ResolveEnv(*field)
+	envFields := []struct {
+		name string
+		ptr  *string
+	}{
+		{"server_url", &d.config.ServerURL},
+		{"tenant", &d.config.Tenant},
+		{"username", &d.config.Username},
+		{"password", &d.config.Password},
+	}
+	for _, f := range envFields {
+		resolved, err := config.ResolveEnv(*f.ptr)
 		if err != nil {
-			return fmt.Errorf("resolving delinea credential from environment: %w", err)
+			return fmt.Errorf("resolving delinea %s from environment: %w", f.name, err)
 		}
-		*field = resolved
+		*f.ptr = resolved
 	}
 
 	if (d.config.ServerURL == "" && d.config.Tenant == "") ||
@@ -58,12 +69,6 @@ func (d *delineaManager) Start(ctx context.Context) error {
 		},
 		ServerURL: d.config.ServerURL,
 		Tenant:    d.config.Tenant,
-	}
-	// NOTE: server.New mutates http.DefaultTransport.TLSClientConfig globally
-	// when this field is non-nil. Only set it when the operator explicitly
-	// opted into skip_tls.
-	if d.config.SkipTLS {
-		sdkCfg.TLSClientConfig = &tls.Config{InsecureSkipVerify: d.config.SkipTLS}
 	}
 
 	c, err := server.New(sdkCfg)
@@ -96,26 +101,49 @@ func (d *delineaManager) Start(ctx context.Context) error {
 // pollSecrets re-fetches every cached secret and fires the update callback
 // for every policy whose secret changed (true) or failed to refresh (false).
 func (d *delineaManager) pollSecrets() {
+	d.mu.Lock()
 	if len(d.usedVars) == 0 || d.callback == nil {
+		d.mu.Unlock()
 		return
 	}
-	d.logger.Debug("Polling delinea secrets for changes", "secretCount", len(d.usedVars))
+	// Snapshot the (body, value, policyIDs) tuples we need to re-check, so
+	// the network round-trip in fetch() doesn't run under the lock.
+	type snap struct {
+		body      string
+		value     string
+		policyIDs []string
+	}
+	snapshots := make([]snap, 0, len(d.usedVars))
+	for body, cached := range d.usedVars {
+		ids := make([]string, 0, len(cached.policyIDs))
+		for id := range cached.policyIDs {
+			ids = append(ids, id)
+		}
+		snapshots = append(snapshots, snap{body: body, value: cached.Value, policyIDs: ids})
+	}
+	d.mu.Unlock()
+
+	d.logger.Debug("Polling delinea secrets for changes", "secretCount", len(snapshots))
 	changed := make(map[string]bool)
 
-	for body, cached := range d.usedVars {
-		current, err := d.fetch(body)
+	for _, s := range snapshots {
+		current, err := d.fetch(s.body)
 		if err != nil {
-			d.logger.Error("Failed to retrieve delinea secret during polling", "ref", body, "error", err)
-			for id := range cached.policyIDs {
+			d.logger.Error("Failed to retrieve delinea secret during polling", "ref", s.body, "error", err)
+			for _, id := range s.policyIDs {
 				changed[id] = false
 			}
 			continue
 		}
-		if current != cached.Value {
-			d.logger.Info("Detected changed delinea secret", "ref", body)
-			cached.Value = current
-			d.usedVars[body] = cached
-			for id := range cached.policyIDs {
+		if current != s.value {
+			d.logger.Info("Detected changed delinea secret", "ref", s.body)
+			d.mu.Lock()
+			if cached, ok := d.usedVars[s.body]; ok {
+				cached.Value = current
+				d.usedVars[s.body] = cached
+			}
+			d.mu.Unlock()
+			for _, id := range s.policyIDs {
 				changed[id] = true
 			}
 		}
@@ -150,20 +178,27 @@ func (d *delineaManager) SolvePolicySecrets(payload config.PolicyPayload) (confi
 //	id/<numeric-id>/<field-slug>
 //	path/<folder>/.../<name>/<field-slug>
 func (d *delineaManager) resolveBody(body, policyID string) (string, error) {
+	d.mu.Lock()
 	if cached, ok := d.usedVars[body]; ok {
 		cached.policyIDs[policyID] = true
 		d.usedVars[body] = cached
-		return cached.Value, nil
+		value := cached.Value
+		d.mu.Unlock()
+		return value, nil
 	}
+	d.mu.Unlock()
 
 	value, err := d.fetch(body)
 	if err != nil {
 		return "", err
 	}
+
+	d.mu.Lock()
 	d.usedVars[body] = cachedSecret{
 		Value:     value,
 		policyIDs: map[string]bool{policyID: true},
 	}
+	d.mu.Unlock()
 	return value, nil
 }
 
@@ -179,13 +214,13 @@ func (d *delineaManager) fetch(body string) (string, error) {
 	case "id":
 		idStr, field, ok := strings.Cut(rest, "/")
 		if !ok || field == "" {
-			return "", fmt.Errorf("invalid delinea id reference %q: expected 'id/<id>/<field>'", body)
+			return "", fmt.Errorf("invalid delinea id reference %q: expected exactly 'id/<id>/<field>'", body)
 		}
 		if strings.Contains(field, "/") {
-			return "", fmt.Errorf("invalid delinea id reference %q: id may not contain '/'", body)
+			return "", fmt.Errorf("invalid delinea id reference %q: expected exactly 'id/<id>/<field>' (no extra path segments)", body)
 		}
-		var id int
-		if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil || id <= 0 {
+		id, err := strconv.Atoi(idStr)
+		if err != nil || id <= 0 {
 			return "", fmt.Errorf("invalid delinea numeric id %q in reference %q", idStr, body)
 		}
 		secret, err := d.client.Secret(id)
@@ -253,6 +288,8 @@ func (d *delineaManager) SolveConfigSecrets(backends map[string]any, cm config.M
 	}
 
 	// Do not track updates on config vars
+	d.mu.Lock()
 	d.usedVars = make(map[string]cachedSecret)
+	d.mu.Unlock()
 	return newBackends, newCM, nil
 }

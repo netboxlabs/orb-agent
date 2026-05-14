@@ -21,9 +21,13 @@ type cachedSecret struct {
 // later change-tracking.
 type resolverFunc func(body, policyID string) (string, error)
 
-// processValue walks v looking for ${<scheme>://<body>} placeholders. Each
-// match is replaced by the value returned from resolve(body, policyID).
-// Returns the rewritten value.
+// processValue walks v and, for any string leaf that contains a
+// ${<scheme>://<body>} placeholder, returns the value produced by
+// resolve(body, policyID) in place of that string. The placeholder must be
+// the whole string value — surrounding text and additional placeholders are
+// not substituted (only the first match is resolved and replaces the entire
+// string). Map/slice leaves are walked recursively; other values pass
+// through unchanged.
 func processValue(v any, scheme, policyID string, resolve resolverFunc) (any, error) {
 	switch val := v.(type) {
 	case string:

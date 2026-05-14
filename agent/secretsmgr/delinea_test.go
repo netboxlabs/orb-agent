@@ -192,7 +192,7 @@ func TestDelineaStart_UnsetEnvFailsClearly(t *testing.T) {
 	}
 	err := m.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "resolving delinea credential from environment")
+	assert.Contains(t, err.Error(), "resolving delinea password from environment")
 }
 
 func TestDelineaSolvePolicySecrets_ByID(t *testing.T) {

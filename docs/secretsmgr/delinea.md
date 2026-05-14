@@ -18,7 +18,6 @@ orb:
         tenant: "<your-tenant>"         # Secret Server Cloud subdomain (XOR with server_url)
         username: "svc_orb"
         password: "${DELINEA_PASSWORD}"
-        skip_tls: false                 # Optional, default false
         schedule: "*/5 * * * *"         # Optional, cron format for polling interval
 ```
 
@@ -32,7 +31,6 @@ Exactly one of `server_url` or `tenant` must be set. The provider does not eager
 | `tenant` | string | Cond. | Tenant subdomain for Secret Server Cloud (e.g. `acme` for `acme.secretservercloud.com`). Mutually exclusive with `server_url`. |
 | `username` | string | Yes | Service-user username with `View Secret` permission on the referenced secrets. |
 | `password` | string | Yes | Password for the service user. |
-| `skip_tls` | bool | No | Skip TLS certificate verification (default: `false`). Use only for development. |
 | `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
 
 Each of `server_url`, `tenant`, `username`, and `password` accepts an environment-variable placeholder of the form `${VAR_NAME}`. The placeholder is resolved at agent startup; an unset referenced variable causes the agent to fail startup with a clear error.
