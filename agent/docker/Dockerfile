@@ -47,6 +47,7 @@ FROM python:3.14-slim-trixie
 
 RUN \
     apt update && \
+    apt upgrade --yes && \
     apt install --yes --no-install-recommends ca-certificates git nmap openssh-client tini && \
     update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
