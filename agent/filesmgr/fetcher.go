@@ -140,7 +140,7 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 		}
 		// Apply file permissions to the staged file BEFORE renaming into place
 		// so that if chmod fails the file never lands at its final location with
-		// wrong permissions (F7: chmod-before-rename for atomicity).
+		// wrong permissions (chmod-before-rename for atomicity).
 		mode := spec.Mode
 		if mode == 0 {
 			mode = 0o644

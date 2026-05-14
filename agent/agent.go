@@ -24,9 +24,10 @@ import (
 )
 
 const (
-	routineKey             config.ContextKey = "routine"
-	otlpShutdownTimeout    time.Duration     = 5 * time.Second
-	restartBackendChanSize int               = 5
+	routineKey              config.ContextKey = "routine"
+	otlpShutdownTimeout     time.Duration     = 5 * time.Second
+	restartBackendChanSize  int               = 5
+	defaultFilesManagerRoot                   = "/opt/orb/files"
 )
 
 // Agent is the interface that all agents must implement
@@ -62,6 +63,15 @@ type orbAgent struct {
 	// into a single restart.
 	pendingRestarts   map[string]struct{}
 	pendingRestartsMu sync.Mutex
+
+	// restartCancels stores the cancel functions for backend contexts created
+	// by restartBackendWithFilesmgrRollback. The prior cancel is called before
+	// each new restart to avoid leaking contexts across multiple upgrade cycles.
+	// Note: startBackends does not store its cancel functions (pre-existing
+	// pattern); only the new restartBackendWithFilesmgrRollback code paths are
+	// guarded here.
+	restartCancels   map[string]context.CancelFunc
+	restartCancelsMu sync.Mutex
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -69,7 +79,11 @@ var _ Agent = (*orbAgent)(nil)
 // New creates a new agent
 func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
-	fm := filesmgr.NewManager(logger, "/opt/orb/files")
+	fmRoot := c.OrbAgent.FilesManager.Root
+	if fmRoot == "" {
+		fmRoot = defaultFilesManagerRoot
+	}
+	fm := filesmgr.NewManager(logger, fmRoot)
 	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {
 		logger.Error("error during create policy manager, exiting", "error", err)
@@ -194,7 +208,13 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 // from binary identity. The subscription is mode-independent: it fires
 // regardless of the active config manager. The returned unsubscribe
 // function must be called on Stop().
+//
+// Must be called after startBackends has populated a.backends; the subscriber
+// callback reads a.backends from the FileEvent goroutine.
 func (a *orbAgent) subscribeFilesmgr() {
+	if a.filesManager == nil {
+		return
+	}
 	a.filesmgrUnsubscribe = a.filesManager.Subscribe(func(ev filesmgr.FileEvent) {
 		switch ev.Type {
 		case filesmgr.EventInstalled, filesmgr.EventUpgraded:
@@ -207,7 +227,11 @@ func (a *orbAgent) subscribeFilesmgr() {
 			return
 		}
 		for name, be := range a.backends {
-			if be.ManagedBinaryName() == ev.Entry.Name {
+			mb, ok := be.(backend.ManagedBinary)
+			if !ok {
+				continue
+			}
+			if mb.ManagedBinaryName() == ev.Entry.Name {
 				a.pendingRestartsMu.Lock()
 				if a.pendingRestarts == nil {
 					a.pendingRestarts = make(map[string]struct{})
@@ -231,16 +255,35 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 		a.logger.Warn("filesmgr: backend not registered for restart", "backend", backendName)
 		return
 	}
-	binaryName := be.ManagedBinaryName()
+	binaryName := ""
+	if mb, ok := be.(backend.ManagedBinary); ok {
+		binaryName = mb.ManagedBinaryName()
+	}
 
 	if err := be.Stop(ctx); err != nil {
 		a.logger.Warn("filesmgr: backend Stop returned error", "backend", backendName, "error", err)
 	}
 
-	// Derive a fresh per-backend context so that if the backend calls its own
-	// cancel (self-termination pattern), it does NOT tear down the whole agent
-	// (F1). Mirror the pattern used in startBackends.
-	runCtx, runCancel := context.WithCancel(a.ctx)
+	// Cancel any prior per-backend context from a previous restart cycle to
+	// avoid leaking contexts across multiple upgrade events for the same backend.
+	a.restartCancelsMu.Lock()
+	if a.restartCancels == nil {
+		a.restartCancels = make(map[string]context.CancelFunc)
+	}
+	if prior, ok := a.restartCancels[backendName]; ok {
+		prior()
+	}
+	a.restartCancelsMu.Unlock()
+
+	// Derive a fresh per-backend context from the same ctx parameter so that
+	// if the backend calls its own cancel (self-termination pattern), it does NOT
+	// tear down the whole agent. Both the initial attempt and the rollback retry
+	// use ctx as the parent for consistency.
+	runCtx, runCancel := context.WithCancel(ctx)
+	a.restartCancelsMu.Lock()
+	a.restartCancels[backendName] = runCancel
+	a.restartCancelsMu.Unlock()
+
 	startErr := be.Start(runCtx, runCancel)
 	if startErr == nil {
 		a.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", backendName, "binary", binaryName)
@@ -257,8 +300,12 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 		return
 	}
 
-	// Retry Start with the rolled-back binary — fresh context again.
-	runCtx2, runCancel2 := context.WithCancel(a.ctx)
+	// Retry Start with the rolled-back binary — fresh context derived from ctx again.
+	runCtx2, runCancel2 := context.WithCancel(ctx)
+	a.restartCancelsMu.Lock()
+	a.restartCancels[backendName] = runCancel2
+	a.restartCancelsMu.Unlock()
+
 	if err := be.Start(runCtx2, runCancel2); err != nil {
 		a.logger.Error("filesmgr: backend Start failed even after rollback", "backend", backendName, "error", err)
 		return
@@ -286,7 +333,7 @@ func (a *orbAgent) restartDispatcher(ctx context.Context) {
 			for name := range pending {
 				a.logger.Info("filesmgr: dispatched restart", "backend", name)
 				// Run synchronously so concurrent Stop+Start sequences for the
-				// same backend cannot overlap across ticks (F9). The dispatcher
+				// same backend cannot overlap across ticks. The dispatcher
 				// is on its own goroutine; the rest of the agent is unaffected.
 				a.restartBackendWithFilesmgrRollback(ctx, name)
 			}
@@ -373,16 +420,20 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		}
 	}
 
-	if err := a.filesManager.Start(ctx); err != nil {
-		return fmt.Errorf("filesmgr start: %w", err)
+	if a.filesManager != nil {
+		if err := a.filesManager.Start(ctx); err != nil {
+			return fmt.Errorf("filesmgr start: %w", err)
+		}
 	}
-	// Subscribe before any backend starts so events fired during backend
-	// Start() are not missed.
-	a.subscribeFilesmgr()
 
 	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
 		return err
 	}
+
+	// Subscribe after startBackends has populated a.backends so the subscriber
+	// callback reads a fully-initialized map. Must be called after startBackends
+	// returns; reads a.backends from the FileEvent goroutine.
+	a.subscribeFilesmgr()
 
 	if err = a.configManager.Start(agentCtx, a.config, a.backends); err != nil {
 		return err

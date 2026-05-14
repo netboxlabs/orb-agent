@@ -91,8 +91,6 @@ func (o *openTelemetryBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
-func (o *openTelemetryBackend) ManagedBinaryName() string { return "" }
-
 func (o *openTelemetryBackend) Version() (string, error) {
 	var info info
 	url := fmt.Sprintf("%s://%s:%s/api/v1/status", o.apiProtocol, o.apiHost, o.apiPort)

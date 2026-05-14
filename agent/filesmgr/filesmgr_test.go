@@ -425,7 +425,8 @@ func TestManager_StartCleansUpStaleArtifacts(t *testing.T) {
 	staleNew := filepath.Join(nameDir, "current.new")
 	require.NoError(t, os.Symlink("1.0.0", staleNew))
 
-	// Prior #8: also create a nested .filesmgr-stage-* dir inside a name dir.
+	// Also create a nested .filesmgr-stage-* dir inside a name dir to verify
+	// that nested stale stage directories are removed on Start.
 	nestedStage := filepath.Join(nameDir, ".filesmgr-stage-xyz")
 	require.NoError(t, os.Mkdir(nestedStage, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(nestedStage, "data"), []byte("nested-stale"), 0o644))
@@ -496,7 +497,7 @@ func TestManager_EnsureRestoresExactStateOnSymlinkFailure(t *testing.T) {
 
 // TestManager_EnsureChmodsOnModeChange verifies that re-Ensure-ing the same
 // file with a different Mode updates the on-disk permissions even when SHA256
-// and Version match (idempotency path F6).
+// and Version match (idempotent path — applies mode change without re-fetching).
 func TestManager_EnsureChmodsOnModeChange(t *testing.T) {
 	blob := []byte("executable-content")
 	sum := sha256Hex(blob)
@@ -535,7 +536,9 @@ func TestManager_EnsureChmodsOnModeChange(t *testing.T) {
 }
 
 // TestManager_RollbackRejectsUnversionedEntries verifies that Rollback returns
-// an error when either current or previous has an empty Version (F8).
+// an error when either current or previous has an empty Version. Rollback
+// creates a symlink target relative to the name dir; an unversioned entry
+// would yield a self-referential symlink, so such calls are rejected.
 func TestManager_RollbackRejectsUnversionedEntries(t *testing.T) {
 	root := t.TempDir()
 	// Manually inject an unversioned tracked entry directly into the store so
@@ -568,7 +571,8 @@ func TestManager_RollbackRejectsUnversionedEntries(t *testing.T) {
 
 // TestManager_RollbackRestoresSymlinkIfStateWriteFails verifies that when the
 // state write fails after the symlink has been swapped to the previous version,
-// Rollback best-effort swaps the symlink back to its pre-rollback target (F5).
+// Rollback best-effort swaps the symlink back to its pre-rollback target so
+// the filesystem stays consistent with the persisted state.
 func TestManager_RollbackRestoresSymlinkIfStateWriteFails(t *testing.T) {
 	v1 := buildTarGz(t, map[string]string{"file.txt": "v1"})
 	v2 := buildTarGz(t, map[string]string{"file.txt": "v2"})
@@ -632,4 +636,56 @@ func TestManager_RemoveRejectsUnsafeNames(t *testing.T) {
 	for _, e := range entries {
 		assert.Equal(t, "state.json", e.Name(), "unexpected file created for bad Remove: %s", e.Name())
 	}
+}
+
+// TestManager_StartCleansUpStateTmpFiles verifies that state-*.json.tmp files
+// left by a crashed atomic write are removed on the next Start().
+func TestManager_StartCleansUpStateTmpFiles(t *testing.T) {
+	root := t.TempDir()
+
+	// Plant a fake state-*.json.tmp file at the root (as if a crash left it).
+	tmpFile := filepath.Join(root, "state-abc123.json.tmp")
+	require.NoError(t, os.WriteFile(tmpFile, []byte(`{}`), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	_, statErr := os.Stat(tmpFile)
+	assert.True(t, os.IsNotExist(statErr), "state-*.json.tmp must be removed on Start")
+}
+
+// TestManager_StartCleansUpOrphanVersionDirs verifies that version directories
+// inside a name dir that are not referenced by any tracked entry are removed on
+// Start(), while the tracked version dir (current and previous) is preserved.
+func TestManager_StartCleansUpOrphanVersionDirs(t *testing.T) {
+	root := t.TempDir()
+
+	// Manually create the on-disk layout for a tracked entry at v1.0.0.
+	nameDir := filepath.Join(root, "mypkg")
+	trackedVersionDir := filepath.Join(nameDir, "1.0.0")
+	require.NoError(t, os.MkdirAll(trackedVersionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(trackedVersionDir, "bin"), []byte("v1"), 0o755))
+
+	// Set up the current symlink pointing to the tracked version.
+	currentLink := filepath.Join(nameDir, "current")
+	require.NoError(t, os.Symlink("1.0.0", currentLink))
+
+	// Plant an orphan version dir (not referenced in state.json at all).
+	orphanDir := filepath.Join(nameDir, "0.9.0")
+	require.NoError(t, os.MkdirAll(orphanDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(orphanDir, "bin"), []byte("old"), 0o755))
+
+	// Write state.json referencing only v1.0.0.
+	stateJSON := `{"version":2,"entries":{"mypkg":{"current":{"name":"mypkg","version":"1.0.0","path":"` +
+		currentLink + `/bin","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	// The orphan directory must be gone.
+	assert.NoDirExists(t, orphanDir, "orphan version dir must be removed on Start")
+
+	// The tracked version directory must still exist.
+	assert.DirExists(t, trackedVersionDir, "tracked version dir must not be removed on Start")
 }

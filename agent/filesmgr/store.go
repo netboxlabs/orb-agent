@@ -260,6 +260,21 @@ func (s *store) all() map[string]FileEntry {
 	return out
 }
 
+// iterTracked calls fn for every tracked entry in a consistent snapshot.
+// Used by cleanupStaleArtifacts to enumerate both current and previous
+// version directories so neither is mistakenly removed as an orphan.
+func (s *store) iterTracked(fn func(name string, te trackedEntry)) {
+	s.mu.RLock()
+	snapshot := make(map[string]trackedEntry, len(s.entries))
+	for k, v := range s.entries {
+		snapshot[k] = v
+	}
+	s.mu.RUnlock()
+	for name, te := range snapshot {
+		fn(name, te)
+	}
+}
+
 // writeSnapshot marshals snapshot to a unique temp file, fsyncs it, renames
 // it into the final state.json path, then fsyncs the parent directory so the
 // rename is durable. Caller must hold writeMu.
@@ -308,15 +323,17 @@ func (s *store) writeSnapshot(snapshot map[string]trackedEntry) error {
 	}
 
 	// fsync the parent directory so the rename (directory entry update) is durable.
-	dfd, err := os.Open(dir)
-	if err != nil {
-		// Non-fatal: the file is written, the rename succeeded; losing the dir
-		// fsync only matters on a power-loss between rename and fsync.
-		s.logger.Warn("filesmgr: cannot open dir for fsync", "dir", dir, "error", err)
+	// These errors are non-fatal: the file is written and the rename succeeded;
+	// losing the dir fsync only matters on a power-loss between rename and fsync.
+	// Use separate variables (openErr, syncErr) so they are clearly distinct from
+	// writeErr, which controls the deferred cleanup of the temp file.
+	dfd, openErr := os.Open(dir)
+	if openErr != nil {
+		s.logger.Warn("filesmgr: cannot open dir for fsync", "dir", dir, "error", openErr)
 		return nil
 	}
-	if err := dfd.Sync(); err != nil {
-		s.logger.Warn("filesmgr: dir fsync failed", "dir", dir, "error", err)
+	if syncErr := dfd.Sync(); syncErr != nil {
+		s.logger.Warn("filesmgr: dir fsync failed", "dir", dir, "error", syncErr)
 	}
 	_ = dfd.Close()
 	return nil

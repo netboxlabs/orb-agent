@@ -92,15 +92,19 @@ type Backend interface {
 	GetRunningStatus() (RunningStatus, string, error)
 	GetInitialState() RunningStatus
 
-	// ManagedBinaryName returns the logical name of a file managed by
-	// FilesManager that this backend's runtime depends on, or empty string
-	// if none. When that file's version changes, BackendStateManager will
-	// request a restart of this backend so it can pick up the new binary
-	// path.
-	ManagedBinaryName() string
-
 	ApplyPolicy(data policies.PolicyData, updatePolicy bool) error
 	RemovePolicy(data policies.PolicyData) error
+}
+
+// ManagedBinary is an optional interface implemented by backends whose
+// runtime binary is delivered via FilesManager. The agent type-asserts on
+// this interface when dispatching file-driven restarts. Backends that don't
+// implement this interface are never affected by FilesManager events.
+type ManagedBinary interface {
+	// ManagedBinaryName returns the logical name FilesManager tracks for
+	// this backend's binary (e.g., "orb-worker"). Backends that don't
+	// implement this interface are never affected by FilesManager events.
+	ManagedBinaryName() string
 }
 
 var registry = make(map[string]Backend)

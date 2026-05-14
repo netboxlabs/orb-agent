@@ -73,9 +73,31 @@ func (m *filesmgr) Start(_ context.Context) error {
 	return nil
 }
 
-// cleanupStaleArtifacts removes temp stage directories (.filesmgr-stage-*)
-// left at the root level and any current.new symlinks inside name directories.
+// cleanupStaleArtifacts removes:
+//  1. Top-level temp stage directories (.filesmgr-stage-*).
+//  2. Top-level state temp files (state-*.json.tmp) left by a crashed write.
+//  3. Stale current.new symlinks and nested .filesmgr-stage-* dirs inside
+//     each name directory.
+//  4. Orphan version subdirectories inside name directories that are not
+//     referenced by any tracked entry (neither current nor previous).
+//     These are left when the process crashed between store.put and
+//     swapSymlink — the version dir exists on disk but state.json was never
+//     updated to reflect the symlink target.
 func (m *filesmgr) cleanupStaleArtifacts() {
+	// Build the set of live version directories from the loaded store so we
+	// don't delete versions that are still tracked (current or previous).
+	liveDirs := make(map[string]bool)
+	m.store.iterTracked(func(_ string, te trackedEntry) {
+		if d := versionDirFromEntry(m.root, te.Current); d != "" && te.Current.Version != "" {
+			liveDirs[d] = true
+		}
+		if te.Previous != nil {
+			if d := versionDirFromEntry(m.root, *te.Previous); d != "" && te.Previous.Version != "" {
+				liveDirs[d] = true
+			}
+		}
+	})
+
 	entries, err := os.ReadDir(m.root)
 	if err != nil {
 		m.logger.Warn("filesmgr: cannot read root for cleanup", "root", m.root, "error", err)
@@ -91,9 +113,16 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 			}
 			continue
 		}
-		// Inside each name directory: remove stale current.new symlinks and
-		// any nested .filesmgr-stage-* directories left by a crashed fetch
-		// (Prior #8: nested stage dirs were not cleaned).
+		// Remove top-level state temp files left by a crashed atomic write.
+		if strings.HasPrefix(e.Name(), "state-") && strings.HasSuffix(e.Name(), ".json.tmp") {
+			m.logger.Info("filesmgr: removing stale state temp file", "path", fullPath)
+			if err := os.Remove(fullPath); err != nil {
+				m.logger.Warn("filesmgr: failed to remove stale state temp file", "path", fullPath, "error", err)
+			}
+			continue
+		}
+		// Inside each name directory: remove stale current.new symlinks,
+		// nested .filesmgr-stage-* directories, and orphan version dirs.
 		if e.IsDir() {
 			staleNew := filepath.Join(fullPath, "current.new")
 			if fi, err := os.Lstat(staleNew); err == nil {
@@ -106,11 +135,23 @@ func (m *filesmgr) cleanupStaleArtifacts() {
 			}
 			inner, _ := os.ReadDir(fullPath)
 			for _, ie := range inner {
+				innerPath := filepath.Join(fullPath, ie.Name())
 				if strings.HasPrefix(ie.Name(), ".filesmgr-stage-") {
-					stalePath := filepath.Join(fullPath, ie.Name())
-					m.logger.Info("filesmgr: removing nested stale stage dir", "path", stalePath)
-					if err := os.RemoveAll(stalePath); err != nil {
-						m.logger.Warn("filesmgr: failed to remove nested stale stage dir", "path", stalePath, "error", err)
+					m.logger.Info("filesmgr: removing nested stale stage dir", "path", innerPath)
+					if err := os.RemoveAll(innerPath); err != nil {
+						m.logger.Warn("filesmgr: failed to remove nested stale stage dir", "path", innerPath, "error", err)
+					}
+					continue
+				}
+				// Skip non-directory entries and reserved names inside name dirs.
+				if !ie.IsDir() || ie.Name() == "current" {
+					continue
+				}
+				// Any subdirectory that is not a tracked version dir is an orphan.
+				if !liveDirs[innerPath] {
+					m.logger.Info("filesmgr: removing orphan version dir", "path", innerPath)
+					if err := os.RemoveAll(innerPath); err != nil {
+						m.logger.Warn("filesmgr: failed to remove orphan version dir", "path", innerPath, "error", err)
 					}
 				}
 			}
@@ -145,24 +186,27 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 
 	mu := m.mutexFor(spec.Name)
 	mu.Lock()
-	defer mu.Unlock()
 
 	// Capture the full pre-mutation tracked entry so we can restore it exactly
-	// if the symlink swap fails later (F3: avoid poisoning Previous).
+	// if the symlink swap fails later. Capture pre-state for exact restoration
+	// so that if the symlink swap fails we can restore verbatim without
+	// poisoning Previous with the failed version.
 	preTracked, hadExisting := m.store.getTracked(spec.Name)
 	existing, hasExisting := m.store.get(spec.Name)
 	if hasExisting && existing.SHA256 == spec.SHA256 && existing.Version == spec.Version {
 		if info, err := os.Stat(existing.Path); err == nil {
-			// F6: even on idempotent path, apply mode change if requested.
+			// Even on the idempotent path, apply mode change if requested.
 			if !spec.Extract && spec.Mode != 0 {
 				current := info.Mode().Perm()
 				wanted := spec.Mode.Perm()
 				if current != wanted {
 					if err := os.Chmod(existing.Path, wanted); err != nil {
+						mu.Unlock()
 						return "", fmt.Errorf("chmod %s: %w", existing.Path, err)
 					}
 				}
 			}
+			mu.Unlock()
 			return existing.Path, nil
 		}
 		// path missing on disk; fall through to re-fetch.
@@ -173,6 +217,7 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 
 	// Step 1: fetch into the version directory.
 	if err := m.fetcher.fetch(ctx, spec, versionedDir); err != nil {
+		mu.Unlock()
 		return "", err
 	}
 
@@ -188,14 +233,12 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 			entryPath = linkPath
 		} else {
 			// entry path: <root>/<name>/current/<filename>
-			filename := filepath.Base(versionedDir) // versionedDir = <root>/<name>/<version>
-			// We need the actual filename from the URL.
 			fn, err := filenameFromURL(spec.URL)
 			if err != nil {
 				_ = os.RemoveAll(versionedDir)
+				mu.Unlock()
 				return "", err
 			}
-			_ = filename // unused; use fn from URL
 			entryPath = filepath.Join(linkPath, fn)
 		}
 	} else {
@@ -207,6 +250,7 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 			fn, err := filenameFromURL(spec.URL)
 			if err != nil {
 				_ = os.RemoveAll(versionedDir)
+				mu.Unlock()
 				return "", err
 			}
 			entryPath = filepath.Join(versionedDir, fn)
@@ -226,6 +270,7 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	if err := m.store.put(entry); err != nil {
 		// Roll back: remove the version dir we just fetched.
 		_ = os.RemoveAll(versionedDir)
+		mu.Unlock()
 		return "", err
 	}
 
@@ -233,24 +278,30 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	if spec.Version != "" {
 		linkPath := filepath.Join(m.root, spec.Name, "current")
 		if err := swapSymlink(spec.Version, linkPath); err != nil {
-			// Roll back: restore exact prior state to avoid poisoning Previous
-			// (F3). putTracked writes the trackedEntry verbatim — no promote logic.
+			// Roll back: restore exact prior state to avoid poisoning Previous.
+			// putTracked writes the trackedEntry verbatim — no promote logic.
 			if hadExisting {
 				_ = m.store.putTracked(spec.Name, preTracked)
 			} else {
 				_ = m.store.delete(spec.Name)
 			}
 			_ = os.RemoveAll(versionedDir)
+			mu.Unlock()
 			return "", fmt.Errorf("swap current symlink: %w", err)
 		}
 	}
 
+	// Build the event before unlocking; publish after to avoid blocking other
+	// goroutines waiting on this name's mutex while a slow subscriber runs.
+	var ev FileEvent
 	if hasExisting {
 		prev := existing
-		m.bus.publish(FileEvent{Type: EventUpgraded, Entry: entry, Previous: &prev})
+		ev = FileEvent{Type: EventUpgraded, Entry: entry, Previous: &prev}
 	} else {
-		m.bus.publish(FileEvent{Type: EventInstalled, Entry: entry})
+		ev = FileEvent{Type: EventInstalled, Entry: entry}
 	}
+	mu.Unlock()
+	m.bus.publish(ev)
 	return entryPath, nil
 }
 
@@ -260,31 +311,37 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 	}
 	mu := m.mutexFor(name)
 	mu.Lock()
-	defer mu.Unlock()
 
 	entry, ok := m.store.get(name)
 	if !ok {
+		mu.Unlock()
 		return nil
 	}
 
-	return m.removeLocked(name, entry)
+	ev, err := m.removeLocked(name, entry)
+	mu.Unlock()
+	if err != nil {
+		return err
+	}
+	m.bus.publish(ev)
+	return nil
 }
 
-// removeLocked is the body of Remove minus the per-name mutex acquisition and
-// existence check. It is also called by Rollback when there is no Previous
-// version (rollback-to-default). Caller must hold the per-name mutex.
-func (m *filesmgr) removeLocked(name string, current FileEntry) error {
+// removeLocked performs the disk and state mutations for a Remove operation and
+// returns the event to publish. It does NOT publish the event itself; callers
+// must publish after releasing the per-name mutex to avoid blocking other
+// goroutines on a slow subscriber. Caller must hold the per-name mutex.
+func (m *filesmgr) removeLocked(name string, current FileEntry) (FileEvent, error) {
 	// Remove the entire name directory (covers all version sub-dirs and the
 	// current symlink). os.RemoveAll is safe even if parts are missing.
 	nameDir := filepath.Join(m.root, name)
 	if err := os.RemoveAll(nameDir); err != nil {
-		return fmt.Errorf("filesmgr: remove %s: %w", nameDir, err)
+		return FileEvent{}, fmt.Errorf("filesmgr: remove %s: %w", nameDir, err)
 	}
 	if err := m.store.delete(name); err != nil {
-		return fmt.Errorf("filesmgr: delete state %s: %w", name, err)
+		return FileEvent{}, fmt.Errorf("filesmgr: delete state %s: %w", name, err)
 	}
-	m.bus.publish(FileEvent{Type: EventRemoved, Entry: current})
-	return nil
+	return FileEvent{Type: EventRemoved, Entry: current}, nil
 }
 
 func (m *filesmgr) Rollback(_ context.Context, name string) error {
@@ -293,21 +350,28 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	}
 	mu := m.mutexFor(name)
 	mu.Lock()
-	defer mu.Unlock()
 
 	tracked, ok := m.store.getTracked(name)
 	if !ok {
+		mu.Unlock()
 		return fmt.Errorf("filesmgr: %s not tracked, nothing to roll back", name)
 	}
 	if tracked.Previous == nil {
 		// No previous version recorded. Roll back to "default" meaning no
 		// managed entry — consumers fall back to their baked binary.
 		// This is the first-install-failure recovery path.
-		return m.removeLocked(name, tracked.Current)
+		ev, err := m.removeLocked(name, tracked.Current)
+		mu.Unlock()
+		if err != nil {
+			return err
+		}
+		m.bus.publish(ev)
+		return nil
 	}
-	// F8: unversioned entries produce a self-referential symlink
-	// (<root>/<name>/current -> <name>), which is invalid.
+	// Rollback creates a symlink target relative to the name dir; an
+	// unversioned entry would yield a self-referential symlink, so reject.
 	if tracked.Current.Version == "" || tracked.Previous.Version == "" {
+		mu.Unlock()
 		return fmt.Errorf("filesmgr: rollback requires versioned entries (current=%q, previous=%q)",
 			tracked.Current.Version, tracked.Previous.Version)
 	}
@@ -316,6 +380,7 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	// The previous version's directory must still exist on disk.
 	versionDir := versionDirFromEntry(m.root, prev)
 	if _, err := os.Stat(versionDir); err != nil {
+		mu.Unlock()
 		return fmt.Errorf("filesmgr: previous version dir missing: %w", err)
 	}
 
@@ -324,29 +389,35 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	linkPath := filepath.Join(m.root, name, "current")
 
 	// Read the current symlink target before we swap, so we can restore it
-	// if the state write fails after the swap (F5).
+	// if the state write fails after the swap.
 	oldTarget, _ := os.Readlink(linkPath) // empty string if missing/not-symlink
 
 	if err := swapSymlink(versionBase, linkPath); err != nil {
+		mu.Unlock()
 		return fmt.Errorf("filesmgr: swap symlink: %w", err)
 	}
 
 	// Update store: previous becomes current, previous is cleared.
 	if err := m.store.putWithoutPrevious(prev); err != nil {
 		// The symlink already points to the old version but state is still the
-		// new version. Best-effort: swap back so filesystem matches state (F5).
+		// new version. Best-effort: swap back so filesystem matches state.
 		if oldTarget != "" {
 			_ = swapSymlink(oldTarget, linkPath)
 		}
+		mu.Unlock()
 		return fmt.Errorf("filesmgr: persist rollback: %w", err)
 	}
 
+	// Build the event before unlocking; publish after to avoid holding the
+	// per-name mutex while a slow subscriber runs.
 	rolledBackFrom := tracked.Current
-	m.bus.publish(FileEvent{
+	ev := FileEvent{
 		Type:     EventRolledBack,
 		Entry:    prev,
 		Previous: &rolledBackFrom,
-	})
+	}
+	mu.Unlock()
+	m.bus.publish(ev)
 	return nil
 }
 

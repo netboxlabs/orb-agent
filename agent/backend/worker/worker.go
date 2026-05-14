@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -379,15 +380,25 @@ func (d *workerBackend) GetInitialState() backend.RunningStatus {
 func (d *workerBackend) ManagedBinaryName() string { return "orb-worker" }
 
 // resolveExecPath returns the path to the orb-worker binary. If FilesManager
-// tracks an entry under the name "orb-worker", that path is used. Otherwise
-// the baked-in binary (resolved from PATH) is used.
+// tracks an entry under the name "orb-worker" and that entry points to a
+// regular file, that path is used. If the entry path is a directory (e.g.
+// when Ensure was called with Extract:true and no filename suffix) or the stat
+// fails, a warning is logged and the baked-in binary path is used as fallback.
 func (d *workerBackend) resolveExecPath() string {
-	if d.filesManager != nil {
-		if entry, ok := d.filesManager.Get("orb-worker"); ok && entry.Path != "" {
-			return entry.Path
-		}
+	if d.filesManager == nil {
+		return d.exec
 	}
-	return d.exec
+	entry, ok := d.filesManager.Get("orb-worker")
+	if !ok || entry.Path == "" {
+		return d.exec
+	}
+	info, err := os.Stat(entry.Path)
+	if err != nil || info.IsDir() {
+		d.logger.Warn("filesmgr orb-worker entry is not a regular file; falling back to baked binary",
+			"path", entry.Path, "error", err)
+		return d.exec
+	}
+	return entry.Path
 }
 
 func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {

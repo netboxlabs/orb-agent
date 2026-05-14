@@ -360,8 +360,6 @@ func (d *networkDiscoveryBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
-func (d *networkDiscoveryBackend) ManagedBinaryName() string { return "" }
-
 func (d *networkDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version

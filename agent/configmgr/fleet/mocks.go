@@ -95,8 +95,6 @@ func (m *mockBackend) RemovePolicy(data policies.PolicyData) error {
 	return args.Error(0)
 }
 
-func (m *mockBackend) ManagedBinaryName() string { return "" }
-
 // MockMQTTConnection is a mock implementation of MQTTConnector for testing
 type MockMQTTConnection struct {
 	mu sync.Mutex

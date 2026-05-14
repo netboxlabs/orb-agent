@@ -104,13 +104,21 @@ type BackendCommons struct {
 	Debug bool // Debug flag from CLI (not from YAML config)
 }
 
+// FilesManagerConfig holds optional configuration for the FilesManager subsystem.
+type FilesManagerConfig struct {
+	// Root is the directory under which FilesManager stores all managed files.
+	// Defaults to /opt/orb/files when unset.
+	Root string `yaml:"root"`
+}
+
 // OrbAgent represents the configuration for the Orb agent
 type OrbAgent struct {
-	Backends       map[string]any    `yaml:"backends"`
-	Policies       map[string]any    `yaml:"policies"`
-	Labels         map[string]string `yaml:"labels"`
-	ConfigManager  ManagerConfig     `yaml:"config_manager"`
-	SecretsManager ManagerSecrets    `yaml:"secrets_manager"`
+	Backends       map[string]any     `yaml:"backends"`
+	Policies       map[string]any     `yaml:"policies"`
+	Labels         map[string]string  `yaml:"labels"`
+	ConfigManager  ManagerConfig      `yaml:"config_manager"`
+	SecretsManager ManagerSecrets     `yaml:"secrets_manager"`
+	FilesManager   FilesManagerConfig `yaml:"files_manager"`
 	Debug          struct {
 		Enable bool `yaml:"enable"`
 	} `yaml:"debug"`

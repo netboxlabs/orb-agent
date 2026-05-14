@@ -343,8 +343,6 @@ func (d *deviceDiscoveryBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
-func (d *deviceDiscoveryBackend) ManagedBinaryName() string { return "" }
-
 func (d *deviceDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version

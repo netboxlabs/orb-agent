@@ -1,9 +1,6 @@
 package worker
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,56 +16,40 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 )
 
-// buildBinaryTarGz creates a minimal .tar.gz containing a single executable
-// shell script at the given filename with the given content.
-func buildBinaryTarGz(t *testing.T, filename, content string) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	require.NoError(t, tw.WriteHeader(&tar.Header{
-		Name: filename,
-		Mode: 0o755,
-		Size: int64(len(content)),
-	}))
-	_, err := tw.Write([]byte(content))
-	require.NoError(t, err)
-	require.NoError(t, tw.Close())
-	require.NoError(t, gz.Close())
-	return buf.Bytes()
-}
-
 func sha256HexOf(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
 
 // TestWorkerBackend_ResolvesExecFromFilesManager verifies that resolveExecPath
-// returns the FilesManager-managed path when an "orb-worker" entry is installed,
-// and falls back to the baked d.exec value when no entry exists.
+// returns the FilesManager-managed path when an "orb-worker" entry is a regular
+// file, and falls back to the baked d.exec value when no entry exists.
 func TestWorkerBackend_ResolvesExecFromFilesManager(t *testing.T) {
-	// --- Setup: build a fake orb-worker archive and serve it. ---
-	archive := buildBinaryTarGz(t, "orb-worker", "#!/bin/sh\nexit 0\n")
-	sum := sha256HexOf(archive)
+	// --- Setup: serve a fake binary as a raw file (not extracted). ---
+	// We use a plain binary content so the entry path resolves to a regular file.
+	binaryContent := []byte("#!/bin/sh\nexit 0\n")
+	sum := sha256HexOf(binaryContent)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/gzip")
-		_, _ = w.Write(archive)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(binaryContent)
 	}))
 	defer srv.Close()
 
-	// --- Case 1: FilesManager has an entry. resolveExecPath must return its Path. ---
+	// --- Case 1: FilesManager has a regular-file entry. resolveExecPath must return its Path. ---
 	root := t.TempDir()
 	fm := filesmgr.NewManager(slog.Default(), root)
 	require.NoError(t, fm.Start(context.Background()))
 	defer func() { _ = fm.Stop(context.Background()) }()
 
+	// Use Extract:false so the entry path is the file itself, not a directory.
 	installedPath, err := fm.Ensure(context.Background(), filesmgr.FileSpec{
 		Name:    "orb-worker",
 		Version: "1.0.0",
-		URL:     srv.URL + "/orb-worker.tar.gz",
+		URL:     srv.URL + "/orb-worker",
 		SHA256:  sum,
-		Extract: true,
+		Extract: false,
+		Mode:    0o755,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, installedPath)
@@ -78,18 +59,23 @@ func TestWorkerBackend_ResolvesExecFromFilesManager(t *testing.T) {
 	require.True(t, ok)
 	require.NotEmpty(t, entry.Path)
 
-	// Construct a workerBackend with filesManager set via Configure.
+	// Sanity check: the path must be a regular file, not a directory.
+	info, err := os.Stat(entry.Path)
+	require.NoError(t, err)
+	require.False(t, info.IsDir(), "installed entry path must be a regular file")
+
+	// Construct a workerBackend with filesManager set.
 	be := &workerBackend{
-		exec:   defaultExec,
-		logger: slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		exec:         defaultExec,
+		logger:       slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		filesManager: fm,
 	}
-	be.filesManager = fm
 
 	resolved := be.resolveExecPath()
 	assert.Equal(t, entry.Path, resolved,
-		"resolveExecPath must return the FilesManager-managed path when entry exists")
+		"resolveExecPath must return the FilesManager-managed path when entry is a regular file")
 	assert.NotEqual(t, defaultExec, resolved,
-		"resolveExecPath must not return the baked default when FilesManager has an entry")
+		"resolveExecPath must not return the baked default when FilesManager has a regular-file entry")
 
 	// --- Case 2: no FilesManager entry. resolveExecPath must fall back to d.exec. ---
 	beNoFM := &workerBackend{
@@ -120,4 +106,51 @@ func TestWorkerBackend_ResolvesExecFromFilesManager(t *testing.T) {
 func TestWorkerBackend_ManagedBinaryNameIsOrbWorker(t *testing.T) {
 	be := &workerBackend{}
 	assert.Equal(t, "orb-worker", be.ManagedBinaryName())
+}
+
+// TestWorkerBackend_FallsBackWhenManagedPathIsDirectory verifies that
+// resolveExecPath falls back to d.exec when FilesManager has an entry whose
+// Path is a directory (e.g. Ensure called with Extract:true — entry.Path is
+// the "current" symlink pointing to a directory, not a file).
+func TestWorkerBackend_FallsBackWhenManagedPathIsDirectory(t *testing.T) {
+	// Create a temp dir to serve as the managed path — simulates what happens
+	// when FilesManager stores a directory as the entry path.
+	dirPath := t.TempDir()
+
+	// Build a stub FilesManager whose Get returns a directory path.
+	fm := &stubDirFilesManager{path: dirPath}
+
+	be := &workerBackend{
+		exec:         defaultExec,
+		logger:       slog.New(slog.NewTextHandler(os.Stdout, nil)),
+		filesManager: fm,
+	}
+
+	resolved := be.resolveExecPath()
+	assert.Equal(t, defaultExec, resolved,
+		"resolveExecPath must fall back to d.exec when the managed path is a directory")
+}
+
+// stubDirFilesManager is a minimal filesmgr.Manager that returns a fixed
+// entry path (used to inject a directory path for testing resolveExecPath).
+type stubDirFilesManager struct {
+	path string
+}
+
+func (s *stubDirFilesManager) Start(_ context.Context) error { return nil }
+func (s *stubDirFilesManager) Stop(_ context.Context) error  { return nil }
+func (s *stubDirFilesManager) Ensure(_ context.Context, _ filesmgr.FileSpec) (string, error) {
+	return s.path, nil
+}
+
+func (s *stubDirFilesManager) Get(name string) (filesmgr.FileEntry, bool) {
+	if name == "orb-worker" {
+		return filesmgr.FileEntry{Name: name, Path: s.path}, true
+	}
+	return filesmgr.FileEntry{}, false
+}
+func (s *stubDirFilesManager) Remove(_ context.Context, _ string) error   { return nil }
+func (s *stubDirFilesManager) Rollback(_ context.Context, _ string) error { return nil }
+func (s *stubDirFilesManager) Subscribe(_ func(filesmgr.FileEvent)) func() {
+	return func() {}
 }
