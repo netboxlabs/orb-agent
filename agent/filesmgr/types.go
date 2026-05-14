@@ -5,6 +5,7 @@ package filesmgr
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,6 +33,12 @@ type FileSpec struct {
 	// TargetPath optionally overrides the default placement path.
 	// Not supported in v1; Validate() rejects any non-empty value.
 	TargetPath string
+
+	// Mode optionally sets the file permission bits for single-file downloads
+	// (Extract == false). Zero means default (0o644 — readable data file).
+	// Callers that need an executable should set 0o755 explicitly.
+	// Ignored when Extract == true (archive extractor preserves per-entry modes).
+	Mode os.FileMode
 }
 
 // isSafePathSegment returns an error if s is not a safe single-path segment.

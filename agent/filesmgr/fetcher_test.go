@@ -105,7 +105,7 @@ func TestFetcher_RejectsFileScheme(t *testing.T) {
 }
 
 func TestFetcher_PlacesSingleFile(t *testing.T) {
-	// Serve a small binary blob (non-archive).
+	// Serve a small blob (non-archive); no Mode set → default 0o644.
 	blob := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03}
 	sum := sha256Hex(blob)
 
@@ -123,6 +123,7 @@ func TestFetcher_PlacesSingleFile(t *testing.T) {
 		URL:     srv.URL + "/orb-worker",
 		SHA256:  sum,
 		Extract: false,
+		// Mode intentionally omitted → should default to 0o644.
 	}, dst)
 	require.NoError(t, err)
 
@@ -134,8 +135,39 @@ func TestFetcher_PlacesSingleFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, blob, got)
 
-	// Must be executable (0o755).
+	// Default mode must be 0o644 (data file, not executable).
 	fi, err := os.Stat(placedPath)
 	require.NoError(t, err)
-	assert.Equal(t, os.FileMode(0o755), fi.Mode().Perm(), "single-file binary must be 0o755")
+	assert.Equal(t, os.FileMode(0o644), fi.Mode().Perm(), "single-file default mode must be 0o644")
+}
+
+func TestFetcher_PlacesSingleFile_ExecutableMode(t *testing.T) {
+	// Same fetch but with Mode: 0o755 → file must be executable.
+	blob := []byte{0xCA, 0xFE, 0xBA, 0xBE}
+	sum := sha256Hex(blob)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(blob)
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "1.0.0")
+
+	f := newFetcher()
+	err := f.fetch(context.Background(), FileSpec{
+		Name:    "orb-worker",
+		URL:     srv.URL + "/orb-worker",
+		SHA256:  sum,
+		Extract: false,
+		Mode:    0o755,
+	}, dst)
+	require.NoError(t, err)
+
+	placedPath := filepath.Join(dst, "orb-worker")
+	require.FileExists(t, placedPath)
+
+	fi, err := os.Stat(placedPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), fi.Mode().Perm(), "Mode: 0o755 must produce an executable file")
 }
