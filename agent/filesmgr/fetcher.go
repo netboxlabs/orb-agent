@@ -193,6 +193,14 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 		Dst:     stagePath,
 		Mode:    mode,
 		Getters: httpGetters,
+		// DisableSymlinks blocks tar entries that are symbolic links from being
+		// honored during extraction. Without this a crafted archive can include
+		// a symlink entry pointing outside the extraction target (e.g. "/etc")
+		// and subsequent regular-file entries that write through it, escaping
+		// the staging directory. Since FileSpec.URL can come from runtime
+		// (untrusted) configuration, this is a real filesystem-escape vector
+		// rather than a theoretical hardening concern.
+		DisableSymlinks: true,
 	}
 	if err := client.Get(); err != nil {
 		return fmt.Errorf("fetch %s: %w", spec.Name, err)
