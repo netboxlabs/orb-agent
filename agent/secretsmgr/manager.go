@@ -25,7 +25,7 @@ func New(logger *slog.Logger, c config.ManagerSecrets) Manager {
 	case "delinea":
 		return &delineaManager{logger: logger, config: c.Sources.Delinea}
 	case "doppler":
-		return &dopplerManager{logger: logger, config: c.Sources.Doppler}
+		return &dopplerManager{preLogger: logger, config: c.Sources.Doppler}
 	default:
 		logger.Info("no secrets manager specified or invalid type, skipping")
 		return &dummyManager{}

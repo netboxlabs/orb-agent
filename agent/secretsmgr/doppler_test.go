@@ -18,8 +18,8 @@ import (
 
 func TestDopplerStart_EmptyTokenFails(t *testing.T) {
 	d := &dopplerManager{
-		logger: newTestLogger(),
-		config: config.DopplerManager{},
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{},
 	}
 	err := d.Start(context.Background())
 	require.Error(t, err)
@@ -28,8 +28,8 @@ func TestDopplerStart_EmptyTokenFails(t *testing.T) {
 
 func TestDopplerStart_DefaultsAPIHostAndTimeout(t *testing.T) {
 	d := &dopplerManager{
-		logger: newTestLogger(),
-		config: config.DopplerManager{Token: "dp.st.faketoken"},
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{Token: "dp.st.faketoken"},
 	}
 	err := d.Start(context.Background())
 	require.NoError(t, err)
@@ -40,8 +40,8 @@ func TestDopplerStart_DefaultsAPIHostAndTimeout(t *testing.T) {
 func TestDopplerStart_TokenFromEnv(t *testing.T) {
 	t.Setenv("DOPPLER_TOKEN_TEST_TASK2", "dp.st.fromenv")
 	d := &dopplerManager{
-		logger: newTestLogger(),
-		config: config.DopplerManager{Token: "${DOPPLER_TOKEN_TEST_TASK2}"},
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{Token: "${DOPPLER_TOKEN_TEST_TASK2}"},
 	}
 	err := d.Start(context.Background())
 	require.NoError(t, err)
@@ -50,8 +50,8 @@ func TestDopplerStart_TokenFromEnv(t *testing.T) {
 
 func TestDopplerStart_UnsetEnvTokenFails(t *testing.T) {
 	d := &dopplerManager{
-		logger: newTestLogger(),
-		config: config.DopplerManager{Token: "${ORB_UNSET_VAR_TASK2}"},
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{Token: "${ORB_UNSET_VAR_TASK2}"},
 	}
 	err := d.Start(context.Background())
 	require.Error(t, err)
@@ -126,7 +126,7 @@ func newDopplerManagerForTest(t *testing.T, fake *fakeDopplerServer, cfg config.
 	t.Helper()
 	cfg.Token = "dp.st.faketoken"
 	cfg.APIHost = fake.URL
-	d := &dopplerManager{logger: newTestLogger(), config: cfg}
+	d := &dopplerManager{preLogger: newTestLogger(), config: cfg}
 	require.NoError(t, d.Start(context.Background()))
 	return d
 }
@@ -194,8 +194,8 @@ func TestDopplerFetch_Unauthorized(t *testing.T) {
 	defer fake.Close()
 
 	d := &dopplerManager{
-		logger: newTestLogger(),
-		config: config.DopplerManager{Token: "wrong", APIHost: fake.URL, Project: "orb", Config: "prd"},
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{Token: "wrong", APIHost: fake.URL, Project: "orb", Config: "prd"},
 	}
 	require.NoError(t, d.Start(context.Background()))
 
