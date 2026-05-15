@@ -159,30 +159,39 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 		}
 	}
 
+	applied := 0
+	skipped := 0
 	for _, payload := range rpc {
-		if payload.Action != "sanitize" {
-			// If the policy data is a string and Format is "yaml" (or empty), try to unmarshal it as YAML
-			// This handles cases where Format="yaml" or where the backend sends YAML without setting Format
-			if dataStr, ok := payload.Data.(string); ok && dataStr != "" && (payload.Format == "yaml" || payload.Format == "") {
-				var structuredData map[string]any
-				if err := yaml.Unmarshal([]byte(dataStr), &structuredData); err != nil {
-					// If unmarshaling fails, log a warning only if Format was explicitly set to yaml
-					if payload.Format == "yaml" {
-						messaging.logger.Warn("failed to unmarshal YAML policy data",
-							"policy_id", payload.ID,
-							"policy_name", payload.Name,
-							"error", err)
-					}
-					// Continue with original string data - let the backend handle it
-				} else {
-					// Successfully unmarshaled - use the structured data
-					payload.Data = structuredData
-				}
-			}
-			messaging.policyManager.ManagePolicy(config.PolicyPayload(payload))
+		if payload.Action == "sanitize" {
+			skipped++
+			continue
 		}
+		// If the policy data is a string and Format is "yaml" (or empty), try to unmarshal it as YAML
+		// This handles cases where Format="yaml" or where the backend sends YAML without setting Format
+		if dataStr, ok := payload.Data.(string); ok && dataStr != "" && (payload.Format == "yaml" || payload.Format == "") {
+			var structuredData map[string]any
+			if err := yaml.Unmarshal([]byte(dataStr), &structuredData); err != nil {
+				// If unmarshaling fails, log a warning only if Format was explicitly set to yaml
+				if payload.Format == "yaml" {
+					messaging.logger.Warn("failed to unmarshal YAML policy data",
+						"policy_id", payload.ID,
+						"policy_name", payload.Name,
+						"error", err)
+				}
+				// Continue with original string data - let the backend handle it
+			} else {
+				// Successfully unmarshaled - use the structured data
+				payload.Data = structuredData
+			}
+		}
+		messaging.policyManager.ManagePolicy(config.PolicyPayload(payload))
+		applied++
 	}
-	messaging.logger.Info("successfully processed agent policies", "count", len(rpc))
+	fields := []any{"applied", applied}
+	if skipped > 0 {
+		fields = append(fields, "skipped", skipped)
+	}
+	messaging.logger.Info("successfully processed agent policies", fields...)
 }
 
 func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPCPayload, unsubscribeFromTopic func(topic string) error) {

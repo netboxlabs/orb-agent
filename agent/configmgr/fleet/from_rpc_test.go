@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -775,6 +777,86 @@ func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
 
 	// Assert - ManagePolicy should NOT be called for sanitize action
 	mockPMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
+}
+
+// Test that the "successfully processed agent policies" log records the
+// correct applied/skipped counters and omits skipped when zero.
+func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
+	tests := []struct {
+		name        string
+		payloads    []messages.AgentPolicyRPCPayload
+		wantApplied float64
+		wantSkipped float64 // 0 means the key must be absent
+	}{
+		{
+			name:        "sanitize-only payload reports applied=0 and skipped=1",
+			payloads:    []messages.AgentPolicyRPCPayload{{Action: "sanitize", ID: "p1", Name: "n1", Backend: "pktvisor"}},
+			wantApplied: 0,
+			wantSkipped: 1,
+		},
+		{
+			name: "apply-only payloads omit the skipped key",
+			payloads: []messages.AgentPolicyRPCPayload{
+				{Action: "apply", ID: "p1", Name: "n1", Backend: "pktvisor", Data: map[string]any{}},
+				{Action: "apply", ID: "p2", Name: "n2", Backend: "pktvisor", Data: map[string]any{}},
+			},
+			wantApplied: 2,
+			wantSkipped: 0,
+		},
+		{
+			name: "mixed payloads report both counters",
+			payloads: []messages.AgentPolicyRPCPayload{
+				{Action: "apply", ID: "p1", Name: "n1", Backend: "pktvisor", Data: map[string]any{}},
+				{Action: "sanitize", ID: "p2", Name: "n2", Backend: "pktvisor"},
+				{Action: "sanitize", ID: "p3", Name: "n3", Backend: "pktvisor"},
+			},
+			wantApplied: 1,
+			wantSkipped: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			mockPMgr := &mockPolicyManager{}
+			mockPMgr.On("ManagePolicy", mock.Anything).Return()
+			resetChan := make(chan struct{}, 1)
+			groupManager := newGroupManager()
+			handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+
+			handlers.handleAgentPolicies(tc.payloads, false)
+
+			var record map[string]any
+			require.NoError(t, findLogRecord(buf.Bytes(), "successfully processed agent policies", &record))
+			assert.Equal(t, tc.wantApplied, record["applied"], "applied counter mismatch")
+			if tc.wantSkipped == 0 {
+				_, present := record["skipped"]
+				assert.False(t, present, "skipped key should be absent when zero")
+			} else {
+				assert.Equal(t, tc.wantSkipped, record["skipped"], "skipped counter mismatch")
+			}
+		})
+	}
+}
+
+// findLogRecord scans newline-delimited JSON slog output and returns the first
+// record whose msg matches the given message.
+func findLogRecord(out []byte, msg string, dst *map[string]any) error {
+	for _, line := range bytes.Split(bytes.TrimRight(out, "\n"), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		rec := map[string]any{}
+		if err := json.Unmarshal(line, &rec); err != nil {
+			return err
+		}
+		if rec["msg"] == msg {
+			*dst = rec
+			return nil
+		}
+	}
+	return assert.AnError
 }
 
 // Test handleAgentPolicies with fullList=true but GetAll fails
