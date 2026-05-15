@@ -187,6 +187,7 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 			expectedTopics: []string{},
 			setupMocks: func(m *mockPolicyManager) {
 				m.On("ManagePolicy", mock.Anything).Return()
+				m.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 			},
 			expectedError:         false,
 			expectedPolicyMgrCall: true,
@@ -660,6 +661,7 @@ func TestMessageHandlers_handleAgentPolicies_NotFullList(t *testing.T) {
 	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
 		return p.ID == "policy1" && p.Action == "apply"
 	})).Return()
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 
 	// Create policy payload
 	policies := []messages.AgentPolicyRPCPayload{
@@ -725,6 +727,7 @@ func TestMessageHandlers_handleAgentPolicies_FullList_RemovesOldPolicies(t *test
 	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
 		return p.ID == "policy1" && p.Action == "apply"
 	})).Return()
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{{ID: "policy1"}}, nil)
 
 	// Create new policy list (only policy1, so policy2 should be removed)
 	newPolicies := []messages.AgentPolicyRPCPayload{
@@ -754,6 +757,7 @@ func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
 	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
@@ -780,8 +784,9 @@ func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
 	mockPMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
 }
 
-// Test that the "successfully processed agent policies" log records the
-// correct applied/skipped counters and omits skipped when zero.
+// Test that handleAgentPolicies emits the DEBUG RPC-shape line with
+// applied/skipped counters (omitting skipped when zero) and the INFO
+// "agent policies active" line reflecting the repo state after handling.
 func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -789,16 +794,20 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 		wantApplied     float64
 		wantSkipped     float64 // 0 means the key must be absent
 		wantManageCalls int
+		repoState       []policies.PolicyData
+		wantActiveCount float64
 	}{
 		{
-			name:            "sanitize-only payload reports applied=0 and skipped=1",
+			name:            "sanitize-only payload: applied=0, skipped=1, no policies active",
 			payloads:        []messages.AgentPolicyRPCPayload{{Action: "sanitize", ID: "p1", Name: "n1", Backend: "pktvisor"}},
 			wantApplied:     0,
 			wantSkipped:     1,
 			wantManageCalls: 0,
+			repoState:       []policies.PolicyData{},
+			wantActiveCount: 0,
 		},
 		{
-			name: "apply-only payloads omit the skipped key",
+			name: "apply-only payloads: skipped key absent, repo reflects applied policies",
 			payloads: []messages.AgentPolicyRPCPayload{
 				{Action: "apply", ID: "p1", Name: "n1", Backend: "pktvisor", Data: map[string]any{}},
 				{Action: "apply", ID: "p2", Name: "n2", Backend: "pktvisor", Data: map[string]any{}},
@@ -806,9 +815,11 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 			wantApplied:     2,
 			wantSkipped:     0,
 			wantManageCalls: 2,
+			repoState:       []policies.PolicyData{{ID: "p1"}, {ID: "p2"}},
+			wantActiveCount: 2,
 		},
 		{
-			name: "mixed payloads report both counters",
+			name: "mixed payloads: both counters present, repo reflects only applied",
 			payloads: []messages.AgentPolicyRPCPayload{
 				{Action: "apply", ID: "p1", Name: "n1", Backend: "pktvisor", Data: map[string]any{}},
 				{Action: "sanitize", ID: "p2", Name: "n2", Backend: "pktvisor"},
@@ -817,33 +828,47 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 			wantApplied:     1,
 			wantSkipped:     2,
 			wantManageCalls: 1,
+			repoState:       []policies.PolicyData{{ID: "p1"}},
+			wantActiveCount: 1,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			mockPMgr := &mockPolicyManager{}
 			mockPMgr.On("ManagePolicy", mock.Anything).Return()
+			mockPMgr.On("GetPolicyState").Return(tc.repoState, nil)
 			resetChan := make(chan struct{}, 1)
 			groupManager := newGroupManager()
 			handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
 
 			handlers.handleAgentPolicies(tc.payloads, false)
 
-			var record map[string]any
-			require.NoError(t, findLogRecord(buf.Bytes(), "successfully processed agent policies", &record))
-			assert.Equal(t, tc.wantApplied, record["applied"], "applied counter mismatch")
+			// DEBUG line: RPC shape.
+			var debugRec map[string]any
+			require.NoError(t, findLogRecord(buf.Bytes(), "agent_policy RPC handled", &debugRec))
+			assert.Equal(t, "DEBUG", debugRec["level"], "RPC line must be DEBUG")
+			assert.Equal(t, tc.wantApplied, debugRec["applied"], "applied counter mismatch")
 			if tc.wantSkipped == 0 {
-				_, present := record["skipped"]
+				_, present := debugRec["skipped"]
 				assert.False(t, present, "skipped key should be absent when zero")
 			} else {
-				assert.Equal(t, tc.wantSkipped, record["skipped"], "skipped counter mismatch")
+				assert.Equal(t, tc.wantSkipped, debugRec["skipped"], "skipped counter mismatch")
 			}
-			// the old "count" field must not be re-introduced
-			_, hasCount := record["count"]
-			assert.False(t, hasCount, "legacy 'count' key must not be present")
+
+			// INFO line: active count from repo state.
+			var infoRec map[string]any
+			require.NoError(t, findLogRecord(buf.Bytes(), "agent policies active", &infoRec))
+			assert.Equal(t, "INFO", infoRec["level"], "active-count line must be INFO")
+			assert.Equal(t, tc.wantActiveCount, infoRec["count"], "active count mismatch")
+
+			// Legacy combined log message must not be re-introduced.
+			var legacy map[string]any
+			assert.Error(t, findLogRecord(buf.Bytes(), "successfully processed agent policies", &legacy),
+				"legacy combined log message must not be emitted")
+
 			assert.Equal(t, tc.wantManageCalls, mockCallCount(mockPMgr, "ManagePolicy"), "ManagePolicy call count mismatch")
 		})
 	}
@@ -1482,6 +1507,7 @@ func TestMessageHandlers_handleAgentPolicies_YAMLStringData(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
 	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
@@ -1533,6 +1559,7 @@ func TestMessageHandlers_handleAgentPolicies_StructuredData(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
 	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
@@ -1587,6 +1614,7 @@ func TestMessageHandlers_handleAgentPolicies_EmptyYAMLString(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
 	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
@@ -1628,6 +1656,7 @@ func TestMessageHandlers_handleAgentPolicies_InvalidYAMLString(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
 	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
@@ -1670,6 +1699,7 @@ func TestMessageHandlers_handleAgentPolicies_NonYAMLFormat(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil)
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
 	handlers := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
