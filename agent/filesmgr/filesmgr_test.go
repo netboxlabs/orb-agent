@@ -945,16 +945,18 @@ func TestManager_StartRecoversCrashedInstall(t *testing.T) {
 	assert.False(t, ok, "crashed-install entry must be dropped from state on Start")
 }
 
-// TestManager_StartRecoversSymlinkMismatchCrash verifies that Start() detects
-// the crash window where store.put recorded the new entry (state has v2) but
-// swapSymlink never ran (current still points at v1). Without this detection,
-// the entry would be accepted because Current.Path resolves through the stale
-// symlink — agent would report v2 while actually running v1.
-func TestManager_StartRecoversSymlinkMismatchCrash(t *testing.T) {
+// TestManager_StartRecoversSymlinkMismatchCrash_DemotesPrevious verifies the
+// real-world crash window: store.put recorded the upgrade (Current=v2,
+// Previous=v1) but swapSymlink never ran (current still points at v1).
+// On recovery, the v2 dir is removed AND state is demoted to (Current=v1,
+// Previous=nil) so the manager keeps tracking the actually-live binary.
+// Without demotion, filesManager.Get() would return nothing and consumers
+// would silently fall back to their baked binary while v1 is still running.
+func TestManager_StartRecoversSymlinkMismatchCrash_DemotesPrevious(t *testing.T) {
 	root := t.TempDir()
 	nameDir := filepath.Join(root, "x")
 
-	// Set up the v1 install that was the previous live state.
+	// Set up the v1 install (the previously-live, still-live version).
 	v1Dir := filepath.Join(nameDir, "1.0.0")
 	require.NoError(t, os.MkdirAll(v1Dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(v1Dir, "binary"), []byte("v1"), 0o755))
@@ -968,12 +970,16 @@ func TestManager_StartRecoversSymlinkMismatchCrash(t *testing.T) {
 	require.NoError(t, os.MkdirAll(v2Dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(v2Dir, "binary"), []byte("v2"), 0o755))
 
-	// state.json claims Current=v2 (store.put ran for v2 before the crash).
-	// Current.Path resolves through the stale current symlink so os.Stat
-	// would succeed — only the symlink-target check catches the mismatch.
-	currentPath := filepath.Join(nameDir, "current", "binary")
+	// state.json: Current=v2 (just recorded by store.put), Previous=v1
+	// (promoted from the prior Current). Current.Path resolves through the
+	// stale symlink so os.Stat would succeed — only the symlink-target check
+	// detects the mismatch.
+	v1Bin := filepath.Join(v1Dir, "binary")
+	currentBin := filepath.Join(nameDir, "current", "binary")
 	stateJSON := `{"version":1,"entries":{"x":{"current":{"name":"x","version":"2.0.0","path":"` +
-		currentPath + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+		currentBin + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"},` +
+		`"previous":{"name":"x","version":"1.0.0","path":"` +
+		v1Bin + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
 
 	m := NewManager(slog.Default(), root)
@@ -988,9 +994,42 @@ func TestManager_StartRecoversSymlinkMismatchCrash(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1.0.0", target, "current symlink target must be preserved")
 
-	// The stale v2 entry must be dropped from state.
+	// State must be demoted: Current=v1, Previous=nil. The manager continues
+	// tracking the live binary so consumers don't silently downgrade.
+	entry, ok := m.Get("x")
+	require.True(t, ok, "entry must be retained (demoted) so filesManager.Get returns the live version path")
+	assert.Equal(t, "1.0.0", entry.Version, "Current must be demoted to v1")
+}
+
+// TestManager_StartRecoversSymlinkMismatchCrash_DropsWhenNoPrevious verifies the
+// fallback case: if state has no Previous matching the symlink target (e.g. the
+// state file is corrupt or out-of-sync beyond simple crash), the entry is
+// dropped. Consumers fall back to baked binary until a fresh Ensure re-records.
+func TestManager_StartRecoversSymlinkMismatchCrash_DropsWhenNoPrevious(t *testing.T) {
+	root := t.TempDir()
+	nameDir := filepath.Join(root, "x")
+
+	v1Dir := filepath.Join(nameDir, "1.0.0")
+	require.NoError(t, os.MkdirAll(v1Dir, 0o755))
+	currentLink := filepath.Join(nameDir, "current")
+	require.NoError(t, os.Symlink("1.0.0", currentLink))
+
+	v2Dir := filepath.Join(nameDir, "2.0.0")
+	require.NoError(t, os.MkdirAll(v2Dir, 0o755))
+
+	// State has Current=v2 but NO Previous (unrealistic corruption / partial
+	// state). Symlink points at v1, which is untracked.
+	currentBin := filepath.Join(nameDir, "current", "binary")
+	stateJSON := `{"version":1,"entries":{"x":{"current":{"name":"x","version":"2.0.0","path":"` +
+		currentBin + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(root, "state.json"), []byte(stateJSON), 0o644))
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	assert.NoDirExists(t, v2Dir, "crashed v2 dir must be removed")
 	_, ok := m.Get("x")
-	assert.False(t, ok, "stale v2 entry must be dropped from state")
+	assert.False(t, ok, "entry must be dropped when Previous doesn't match symlink target")
 }
 
 // TestManager_StartPreservesNonTrackedVersionDirs verifies that subdirectories

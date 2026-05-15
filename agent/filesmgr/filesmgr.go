@@ -131,13 +131,11 @@ func (m *filesmgr) Start(_ context.Context) error {
 		if te.Current.Version != "" {
 			linkPath := filepath.Join(m.root, name, "current")
 			if target, readErr := os.Readlink(linkPath); readErr == nil && target != te.Current.Version {
-				// State says we're on te.Current.Version but the symlink
-				// still points at a different version — the swap step
-				// crashed. Remove the new version directory we placed,
-				// drop the entry. The on-disk live version (whatever the
-				// symlink points at) is no longer tracked by state — the
-				// next Ensure will re-record it; or absent that, the
-				// consumer falls back to the baked binary path.
+				// State claims te.Current.Version but the symlink still points
+				// at a different version — the swap step crashed. The on-disk
+				// live version is whatever the symlink points at, NOT what
+				// state.Current says. Remove the uncommitted new version dir,
+				// then reconcile state to match disk.
 				versionDir := filepath.Join(m.root, name, te.Current.Version)
 				if _, vdirErr := os.Stat(versionDir); vdirErr == nil {
 					if rmErr := os.RemoveAll(versionDir); rmErr != nil {
@@ -148,7 +146,26 @@ func (m *filesmgr) Start(_ context.Context) error {
 							"name", name, "dir", versionDir, "expected", te.Current.Version, "actual", target)
 					}
 				}
-				m.logger.Warn("filesmgr: dropping entry, current symlink target mismatch (crash recovery)",
+				// If te.Previous matches the symlink target AND its path is
+				// still on disk, the previously-live version IS the actually-
+				// live version. Demote Previous → Current so the manager
+				// continues tracking the live binary (rather than silently
+				// dropping the entry and letting consumers fall back to the
+				// baked binary, which would lose the managed-version handle).
+				if te.Previous != nil && te.Previous.Version == target {
+					if _, prevErr := os.Stat(te.Previous.Path); prevErr == nil {
+						demoted := trackedEntry{Current: *te.Previous, Previous: nil}
+						reconciled[name] = demoted
+						m.logger.Info("filesmgr: demoted previous to current after symlink-mismatch crash recovery",
+							"name", name, "version", te.Previous.Version)
+						continue
+					}
+				}
+				// Otherwise the live version isn't recoverable from state
+				// (no Previous matching the symlink, or its path is gone).
+				// Drop the entry — consumers will fall back to baked binary
+				// until a fresh Ensure re-records state.
+				m.logger.Warn("filesmgr: dropping entry, current symlink target mismatch and no recoverable previous (crash recovery)",
 					"name", name, "expected", te.Current.Version, "actual", target)
 				continue
 			}
