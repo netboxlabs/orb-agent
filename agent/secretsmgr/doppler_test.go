@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -112,6 +113,13 @@ func (f *fakeDopplerServer) set(project, cfg, name, value string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.secrets[project+"|"+cfg+"|"+name] = value
+}
+
+func (f *fakeDopplerServer) delete(project, cfg, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.secrets, project+"|"+cfg+"|"+name)
+	f.missing[project+"|"+cfg+"|"+name] = true
 }
 
 func newDopplerManagerForTest(t *testing.T, fake *fakeDopplerServer, cfg config.DopplerManager) *dopplerManager {
@@ -286,4 +294,85 @@ func TestDopplerSolveConfigSecrets_ReplacesInBackendsAndClearsTracking(t *testin
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	require.Empty(t, d.usedVars, "config-time refs must not be tracked for re-apply")
+}
+
+func TestDopplerPollSecrets_DetectsChange(t *testing.T) {
+	fake := newFakeDopplerServer()
+	defer fake.Close()
+	fake.set("orb", "prd", "API_KEY", "v1")
+
+	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
+
+	gotCalls := make(chan map[string]bool, 1)
+	d.RegisterUpdatePoliciesCallback(func(m map[string]bool) {
+		gotCalls <- m
+	})
+
+	_, err := d.resolveBody("API_KEY", "policy-1")
+	require.NoError(t, err)
+
+	// Server-side rotation.
+	fake.set("orb", "prd", "API_KEY", "v2")
+
+	d.pollSecrets()
+	select {
+	case m := <-gotCalls:
+		require.Equal(t, map[string]bool{"policy-1": true}, m)
+	case <-time.After(time.Second):
+		t.Fatal("expected callback not invoked")
+	}
+
+	d.mu.Lock()
+	require.Equal(t, "v2", d.usedVars["API_KEY"].Value)
+	d.mu.Unlock()
+}
+
+func TestDopplerPollSecrets_NoChangeNoCallback(t *testing.T) {
+	fake := newFakeDopplerServer()
+	defer fake.Close()
+	fake.set("orb", "prd", "API_KEY", "v1")
+
+	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
+
+	called := atomic.Bool{}
+	d.RegisterUpdatePoliciesCallback(func(map[string]bool) {
+		called.Store(true)
+	})
+
+	_, err := d.resolveBody("API_KEY", "policy-1")
+	require.NoError(t, err)
+
+	d.pollSecrets()
+	require.False(t, called.Load(), "no change → no callback")
+}
+
+func TestDopplerPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
+	fake := newFakeDopplerServer()
+	defer fake.Close()
+	fake.set("orb", "prd", "API_KEY", "v1")
+
+	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
+
+	gotCalls := make(chan map[string]bool, 1)
+	d.RegisterUpdatePoliciesCallback(func(m map[string]bool) {
+		gotCalls <- m
+	})
+
+	_, err := d.resolveBody("API_KEY", "policy-1")
+	require.NoError(t, err)
+
+	fake.delete("orb", "prd", "API_KEY")
+
+	d.pollSecrets()
+	select {
+	case m := <-gotCalls:
+		require.Equal(t, map[string]bool{"policy-1": false}, m)
+	case <-time.After(time.Second):
+		t.Fatal("expected failure callback not invoked")
+	}
+
+	d.mu.Lock()
+	_, present := d.usedVars["API_KEY"]
+	d.mu.Unlock()
+	require.False(t, present, "failed entry must be evicted from cache")
 }

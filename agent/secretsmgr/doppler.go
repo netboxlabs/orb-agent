@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-co-op/gocron/v2"
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
@@ -32,6 +33,7 @@ type dopplerManager struct {
 	mu         sync.Mutex
 	usedVars   map[string]cachedSecret
 	callback   func(map[string]bool)
+	scheduler  gocron.Scheduler
 }
 
 // Start validates the configuration, resolves env-var placeholders, and
@@ -72,6 +74,31 @@ func (d *dopplerManager) Start(ctx context.Context) error {
 		timeout = time.Duration(*d.config.Timeout) * time.Second
 	}
 	d.httpClient = &http.Client{Timeout: timeout}
+
+	if d.config.Schedule != nil {
+		s, err := gocron.NewScheduler()
+		if err != nil {
+			return fmt.Errorf("failed to create scheduler: %w", err)
+		}
+		d.scheduler = s
+		task := gocron.NewTask(d.pollSecrets)
+		if _, err = d.scheduler.NewJob(
+			gocron.CronJob(*d.config.Schedule, false),
+			task,
+			gocron.WithSingletonMode(gocron.LimitModeReschedule),
+		); err != nil {
+			return fmt.Errorf("failed to create doppler polling job: %w", err)
+		}
+		d.logger.Info("Starting doppler secret polling", "cron interval", *d.config.Schedule)
+		d.scheduler.Start()
+
+		go func() {
+			<-ctx.Done()
+			if err := d.scheduler.Shutdown(); err != nil {
+				d.logger.Error("doppler scheduler shutdown failed", "error", err)
+			}
+		}()
+	}
 
 	return nil
 }
@@ -160,6 +187,77 @@ func (d *dopplerManager) SolveConfigSecrets(backends map[string]any, cm config.M
 	d.usedVars = make(map[string]cachedSecret)
 	d.mu.Unlock()
 	return newBackends, newCM, nil
+}
+
+// pollSecrets re-fetches every cached secret and fires the callback for
+// changed entries (true) or failed refreshes (false). Failures are sticky
+// per policy ID: a false set by one secret cannot be flipped to true by
+// another. policy IDs are re-read under the lock after each fetch so
+// policies added during the unlocked fetch window are also notified.
+func (d *dopplerManager) pollSecrets() {
+	d.mu.Lock()
+	if len(d.usedVars) == 0 || d.callback == nil {
+		d.mu.Unlock()
+		return
+	}
+	type snap struct{ body, value string }
+	snapshots := make([]snap, 0, len(d.usedVars))
+	for body, cached := range d.usedVars {
+		snapshots = append(snapshots, snap{body: body, value: cached.Value})
+	}
+	d.mu.Unlock()
+
+	d.logger.Debug("Polling doppler secrets for changes", "secretCount", len(snapshots))
+	changed := make(map[string]bool)
+	markFalse := func(id string) { changed[id] = false }
+	markTrue := func(id string) {
+		if prev, ok := changed[id]; ok && !prev {
+			return // failure is sticky
+		}
+		changed[id] = true
+	}
+
+	for _, s := range snapshots {
+		current, err := d.fetch(s.body)
+		if err != nil {
+			d.logger.Error("Failed to retrieve doppler secret during polling", "ref", s.body, "error", err)
+			d.mu.Lock()
+			cached, ok := d.usedVars[s.body]
+			ids := make([]string, 0, len(cached.policyIDs))
+			if ok {
+				for id := range cached.policyIDs {
+					ids = append(ids, id)
+				}
+				delete(d.usedVars, s.body)
+			}
+			d.mu.Unlock()
+			for _, id := range ids {
+				markFalse(id)
+			}
+			continue
+		}
+		if current != s.value {
+			d.logger.Info("Detected changed doppler secret", "ref", s.body)
+			d.mu.Lock()
+			ids := []string{}
+			if cached, ok := d.usedVars[s.body]; ok {
+				cached.Value = current
+				d.usedVars[s.body] = cached
+				for id := range cached.policyIDs {
+					ids = append(ids, id)
+				}
+			}
+			d.mu.Unlock()
+			for _, id := range ids {
+				markTrue(id)
+			}
+		}
+	}
+
+	if len(changed) > 0 {
+		d.logger.Info("Calling update callback for changed doppler secrets", "policyCount", len(changed))
+		d.callback(changed)
+	}
 }
 
 // parseBody splits a placeholder body into (project, config, name) according
