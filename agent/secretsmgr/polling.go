@@ -27,7 +27,7 @@ type pollingBase struct {
 	mu        sync.Mutex
 	usedVars  map[string]cachedSecret
 	callback  func(map[string]bool)
-	scheduler gocron.Scheduler //nolint:unused // wired by providers in Tasks 10-12
+	scheduler gocron.Scheduler
 }
 
 // init wires the base into the provider. Must be called from the provider's
@@ -200,8 +200,6 @@ func (b *pollingBase) pollSecrets() {
 // startScheduler optionally starts a cron job that calls pollSecrets on the
 // configured cadence. The scheduler is shut down when ctx (passed to init)
 // is cancelled. No-op when schedule is nil.
-//
-//nolint:unused // wired by providers in Tasks 10-12
 func (b *pollingBase) startScheduler(schedule *string) error {
 	if schedule == nil {
 		return nil
