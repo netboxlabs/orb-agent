@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -783,16 +784,18 @@ func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
 // correct applied/skipped counters and omits skipped when zero.
 func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 	tests := []struct {
-		name        string
-		payloads    []messages.AgentPolicyRPCPayload
-		wantApplied float64
-		wantSkipped float64 // 0 means the key must be absent
+		name            string
+		payloads        []messages.AgentPolicyRPCPayload
+		wantApplied     float64
+		wantSkipped     float64 // 0 means the key must be absent
+		wantManageCalls int
 	}{
 		{
-			name:        "sanitize-only payload reports applied=0 and skipped=1",
-			payloads:    []messages.AgentPolicyRPCPayload{{Action: "sanitize", ID: "p1", Name: "n1", Backend: "pktvisor"}},
-			wantApplied: 0,
-			wantSkipped: 1,
+			name:            "sanitize-only payload reports applied=0 and skipped=1",
+			payloads:        []messages.AgentPolicyRPCPayload{{Action: "sanitize", ID: "p1", Name: "n1", Backend: "pktvisor"}},
+			wantApplied:     0,
+			wantSkipped:     1,
+			wantManageCalls: 0,
 		},
 		{
 			name: "apply-only payloads omit the skipped key",
@@ -800,8 +803,9 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 				{Action: "apply", ID: "p1", Name: "n1", Backend: "pktvisor", Data: map[string]any{}},
 				{Action: "apply", ID: "p2", Name: "n2", Backend: "pktvisor", Data: map[string]any{}},
 			},
-			wantApplied: 2,
-			wantSkipped: 0,
+			wantApplied:     2,
+			wantSkipped:     0,
+			wantManageCalls: 2,
 		},
 		{
 			name: "mixed payloads report both counters",
@@ -810,8 +814,9 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 				{Action: "sanitize", ID: "p2", Name: "n2", Backend: "pktvisor"},
 				{Action: "sanitize", ID: "p3", Name: "n3", Backend: "pktvisor"},
 			},
-			wantApplied: 1,
-			wantSkipped: 2,
+			wantApplied:     1,
+			wantSkipped:     2,
+			wantManageCalls: 1,
 		},
 	}
 
@@ -836,8 +841,24 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 			} else {
 				assert.Equal(t, tc.wantSkipped, record["skipped"], "skipped counter mismatch")
 			}
+			// the old "count" field must not be re-introduced
+			_, hasCount := record["count"]
+			assert.False(t, hasCount, "legacy 'count' key must not be present")
+			assert.Equal(t, tc.wantManageCalls, mockCallCount(mockPMgr, "ManagePolicy"), "ManagePolicy call count mismatch")
 		})
 	}
+}
+
+// mockCallCount returns the number of times the given method was invoked on a
+// testify mock.
+func mockCallCount(m *mockPolicyManager, method string) int {
+	n := 0
+	for _, call := range m.Calls {
+		if call.Method == method {
+			n++
+		}
+	}
+	return n
 }
 
 // findLogRecord scans newline-delimited JSON slog output and returns the first
@@ -856,7 +877,7 @@ func findLogRecord(out []byte, msg string, dst *map[string]any) error {
 			return nil
 		}
 	}
-	return assert.AnError
+	return fmt.Errorf("no log record matching message %q", msg)
 }
 
 // Test handleAgentPolicies with fullList=true but GetAll fails

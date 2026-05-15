@@ -185,6 +185,7 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 			}
 		}
 		messaging.policyManager.ManagePolicy(config.PolicyPayload(payload))
+		// counts payloads submitted to ManagePolicy; not backend-confirmed applies
 		applied++
 	}
 	fields := []any{"applied", applied}
