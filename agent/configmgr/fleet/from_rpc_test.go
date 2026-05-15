@@ -785,38 +785,38 @@ func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
 }
 
 // Test that handleAgentPolicies emits the DEBUG RPC-shape line with
-// applied/skipped counters (omitting skipped when zero) and the INFO
-// "agent policies active" line reflecting the repo state after handling.
+// applied/skipped counters and the INFO "managed policies" line reflecting
+// the repo state after handling.
 func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 	tests := []struct {
-		name            string
-		payloads        []messages.AgentPolicyRPCPayload
-		wantApplied     float64
-		wantSkipped     float64 // 0 means the key must be absent
-		wantManageCalls int
-		repoState       []policies.PolicyData
-		wantActiveCount float64
+		name             string
+		payloads         []messages.AgentPolicyRPCPayload
+		wantApplied      float64
+		wantSkipped      float64
+		wantManageCalls  int
+		repoState        []policies.PolicyData
+		wantManagedCount float64
 	}{
 		{
-			name:            "sanitize-only payload: applied=0, skipped=1, no policies active",
-			payloads:        []messages.AgentPolicyRPCPayload{{Action: "sanitize", ID: "p1", Name: "n1", Backend: "pktvisor"}},
-			wantApplied:     0,
-			wantSkipped:     1,
-			wantManageCalls: 0,
-			repoState:       []policies.PolicyData{},
-			wantActiveCount: 0,
+			name:             "sanitize-only payload: applied=0, skipped=1, no managed policies",
+			payloads:         []messages.AgentPolicyRPCPayload{{Action: "sanitize", ID: "p1", Name: "n1", Backend: "pktvisor"}},
+			wantApplied:      0,
+			wantSkipped:      1,
+			wantManageCalls:  0,
+			repoState:        []policies.PolicyData{},
+			wantManagedCount: 0,
 		},
 		{
-			name: "apply-only payloads: skipped key absent, repo reflects applied policies",
+			name: "apply-only payloads: skipped=0, repo reflects applied policies",
 			payloads: []messages.AgentPolicyRPCPayload{
 				{Action: "apply", ID: "p1", Name: "n1", Backend: "pktvisor", Data: map[string]any{}},
 				{Action: "apply", ID: "p2", Name: "n2", Backend: "pktvisor", Data: map[string]any{}},
 			},
-			wantApplied:     2,
-			wantSkipped:     0,
-			wantManageCalls: 2,
-			repoState:       []policies.PolicyData{{ID: "p1"}, {ID: "p2"}},
-			wantActiveCount: 2,
+			wantApplied:      2,
+			wantSkipped:      0,
+			wantManageCalls:  2,
+			repoState:        []policies.PolicyData{{ID: "p1"}, {ID: "p2"}},
+			wantManagedCount: 2,
 		},
 		{
 			name: "mixed payloads: both counters present, repo reflects only applied",
@@ -825,11 +825,11 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 				{Action: "sanitize", ID: "p2", Name: "n2", Backend: "pktvisor"},
 				{Action: "sanitize", ID: "p3", Name: "n3", Backend: "pktvisor"},
 			},
-			wantApplied:     1,
-			wantSkipped:     2,
-			wantManageCalls: 1,
-			repoState:       []policies.PolicyData{{ID: "p1"}},
-			wantActiveCount: 1,
+			wantApplied:      1,
+			wantSkipped:      2,
+			wantManageCalls:  1,
+			repoState:        []policies.PolicyData{{ID: "p1"}},
+			wantManagedCount: 1,
 		},
 	}
 
@@ -846,23 +846,18 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 
 			handlers.handleAgentPolicies(tc.payloads, false)
 
-			// DEBUG line: RPC shape.
+			// DEBUG line: RPC shape, applied + skipped always emitted.
 			var debugRec map[string]any
 			require.NoError(t, findLogRecord(buf.Bytes(), "agent_policy RPC handled", &debugRec))
 			assert.Equal(t, "DEBUG", debugRec["level"], "RPC line must be DEBUG")
 			assert.Equal(t, tc.wantApplied, debugRec["applied"], "applied counter mismatch")
-			if tc.wantSkipped == 0 {
-				_, present := debugRec["skipped"]
-				assert.False(t, present, "skipped key should be absent when zero")
-			} else {
-				assert.Equal(t, tc.wantSkipped, debugRec["skipped"], "skipped counter mismatch")
-			}
+			assert.Equal(t, tc.wantSkipped, debugRec["skipped"], "skipped counter mismatch")
 
-			// INFO line: active count from repo state.
+			// INFO line: managed policy count from repo state.
 			var infoRec map[string]any
-			require.NoError(t, findLogRecord(buf.Bytes(), "agent policies active", &infoRec))
-			assert.Equal(t, "INFO", infoRec["level"], "active-count line must be INFO")
-			assert.Equal(t, tc.wantActiveCount, infoRec["count"], "active count mismatch")
+			require.NoError(t, findLogRecord(buf.Bytes(), "managed policies", &infoRec))
+			assert.Equal(t, "INFO", infoRec["level"], "managed-policies line must be INFO")
+			assert.Equal(t, tc.wantManagedCount, infoRec["count"], "managed policy count mismatch")
 
 			// Legacy combined log message must not be re-introduced.
 			var legacy map[string]any

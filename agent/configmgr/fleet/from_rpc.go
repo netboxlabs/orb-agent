@@ -187,18 +187,14 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 		messaging.policyManager.ManagePolicy(config.PolicyPayload(payload))
 		applied++
 	}
-	debugFields := []any{"applied", applied}
-	if skipped > 0 {
-		debugFields = append(debugFields, "skipped", skipped)
-	}
-	messaging.logger.Debug("agent_policy RPC handled", debugFields...)
+	messaging.logger.Debug("agent_policy RPC handled", "applied", applied, "skipped", skipped)
 
-	active, err := messaging.policyManager.GetPolicyState()
+	managed, err := messaging.policyManager.GetPolicyState()
 	if err != nil {
-		messaging.logger.Warn("failed to read active policy count after RPC", "error", err)
+		messaging.logger.Warn("failed to read managed policy count after RPC", "error", err)
 		return
 	}
-	messaging.logger.Info("agent policies active", "count", len(active))
+	messaging.logger.Info("managed policies", "count", len(managed))
 }
 
 func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPCPayload, unsubscribeFromTopic func(topic string) error) {
