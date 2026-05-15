@@ -19,7 +19,7 @@ type Manager interface {
 func New(logger *slog.Logger, c config.ManagerSecrets) Manager {
 	switch c.Active {
 	case "vault":
-		return &vaultManager{logger: logger, config: c.Sources.Vault}
+		return &vaultManager{preLogger: logger, config: c.Sources.Vault}
 	case "fleet":
 		return NewFleetSecretsManager(logger, c.Sources.Fleet)
 	case "delinea":
