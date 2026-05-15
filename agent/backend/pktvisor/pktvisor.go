@@ -18,6 +18,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -327,7 +328,7 @@ func (p *pktvisorBackend) Stop(ctx context.Context) error {
 
 // Configure this will set configurations, but if not set, will use the following defaults
 func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
-	config map[string]any, common config.BackendCommons,
+	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
 	p.logger = logger.With("backend", "pktvisor")
 	p.policyRepo = repo

@@ -119,7 +119,7 @@ func TestNetworkDiscoveryBackendStart(t *testing.T) {
 		"log_level":          "debug",
 		"dry_run":            false,
 		"dry_run_output_dir": "/tmp/network",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -219,7 +219,7 @@ func TestNetworkDiscoveryUsesOtelTargetWithoutCredentials(t *testing.T) {
 		"client_id":     "network-client",
 		"client_secret": "network-secret",
 		"agent_name":    "network-agent",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -244,7 +244,7 @@ func TestNetworkDiscoveryBackendCompleted(t *testing.T) {
 
 	require.NoError(t, be.Configure(slog.Default(), nil, map[string]any{
 		"host": "invalid-host",
-	}, config.BackendCommons{}))
+	}, config.BackendCommons{}, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -311,7 +311,7 @@ func TestNetworkDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T)
 		"agent_name":         "network-agent",
 		"dry_run":            true,
 		"dry_run_output_dir": "/tmp/network-dry-run",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

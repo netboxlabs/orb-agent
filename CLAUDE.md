@@ -34,11 +34,12 @@ After editing, always run `make fix-lint` — gci (import ordering) and gofumpt 
 
 `cmd/main.go` → parses YAML config(s) + flags → calls `agent.New()` then `agent.Start()`.
 
-`agent.New()` wires together four subsystems:
+`agent.New()` wires together five subsystems:
 1. **SecretManager** — resolves `${VAR}` placeholders (vault / fleet / dummy)
-2. **PolicyManager** — owns the in-memory `PolicyRepo`, applies policies to backends
-3. **BackendStateManager** — tracks backend health; triggers restarts in fleet mode (no-op in local/git mode)
-4. **ConfigManager** — drives policy lifecycle (local / git / fleet strategies)
+2. **FilesManager** — fetches, verifies, and tracks files on disk at runtime (binaries, plugin bundles)
+3. **PolicyManager** — owns the in-memory `PolicyRepo`, applies policies to backends
+4. **BackendStateManager** — tracks backend health; triggers restarts in fleet mode (no-op in local/git mode); also restarts backends when their managed file changes via FilesManager events
+5. **ConfigManager** — drives policy lifecycle (local / git / fleet strategies)
 
 `agent.Start()` sequences: start secrets → start backends → start config manager. The config manager is started *last* so all backends are ready to receive the initial policy push.
 
@@ -46,13 +47,14 @@ After editing, always run `make fix-lint` — gci (import ordering) and gofumpt 
 
 ### Key Interfaces
 
-All four subsystems are consumed through interfaces, making them easily swappable and mockable in tests:
+All five subsystems are consumed through interfaces, making them easily swappable and mockable in tests:
 
 | Interface | Defined in |
 |---|---|
 | `Agent` | `agent/agent.go` |
 | `backend.Backend` | `agent/backend/backend.go` |
 | `configmgr.Manager` | `agent/configmgr/manager.go` |
+| `filesmgr.Manager` | `agent/filesmgr/manager.go` |
 | `policymgr.PolicyManager` | `agent/policymgr/manager.go` |
 | `secretsmgr.Manager` | `agent/secretsmgr/manager.go` |
 | `policies.PolicyRepo` | `agent/policies/repo.go` |
