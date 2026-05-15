@@ -785,7 +785,7 @@ func TestMessageHandlers_handleAgentPolicies_SkipsSanitizeAction(t *testing.T) {
 }
 
 // Test that handleAgentPolicies emits the DEBUG RPC-shape line with
-// applied/skipped counters and the INFO "managed policies" line reflecting
+// applied/skipped counters and the INFO "agent managed policies" line reflecting
 // the repo state after handling.
 func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 	tests := []struct {
@@ -855,7 +855,7 @@ func TestMessageHandlers_handleAgentPolicies_LogCounters(t *testing.T) {
 
 			// INFO line: managed policy count from repo state.
 			var infoRec map[string]any
-			require.NoError(t, findLogRecord(buf.Bytes(), "managed policies", &infoRec))
+			require.NoError(t, findLogRecord(buf.Bytes(), "agent managed policies", &infoRec))
 			assert.Equal(t, "INFO", infoRec["level"], "managed-policies line must be INFO")
 			assert.Equal(t, tc.wantManagedCount, infoRec["count"], "managed policy count mismatch")
 

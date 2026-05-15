@@ -191,10 +191,10 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 
 	managed, err := messaging.policyManager.GetPolicyState()
 	if err != nil {
-		messaging.logger.Warn("failed to read managed policy count after RPC", "error", err)
+		messaging.logger.Warn("failed to read agent managed policy count after RPC", "error", err)
 		return
 	}
-	messaging.logger.Info("managed policies", "count", len(managed))
+	messaging.logger.Info("agent managed policies", "count", len(managed))
 }
 
 func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPCPayload, unsubscribeFromTopic func(topic string) error) {
