@@ -206,3 +206,50 @@ func TestDopplerFetch_EmptyComputedValueFails(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty")
 }
+
+func TestDopplerResolveBody_CacheHitAvoidsSecondHTTP(t *testing.T) {
+	fake := newFakeDopplerServer()
+	defer fake.Close()
+	fake.set("orb", "prd", "API_KEY", "v1")
+
+	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
+
+	v1, err := d.resolveBody("API_KEY", "policy-a")
+	require.NoError(t, err)
+	require.Equal(t, "v1", v1)
+
+	v2, err := d.resolveBody("API_KEY", "policy-b")
+	require.NoError(t, err)
+	require.Equal(t, "v1", v2)
+
+	require.EqualValues(t, 1, fake.calls.Load(), "second resolve should hit cache")
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	require.True(t, d.usedVars["API_KEY"].policyIDs["policy-a"])
+	require.True(t, d.usedVars["API_KEY"].policyIDs["policy-b"])
+}
+
+func TestDopplerSolvePolicySecrets_ReplacesPlaceholders(t *testing.T) {
+	fake := newFakeDopplerServer()
+	defer fake.Close()
+	fake.set("orb", "prd", "API_KEY", "s3cret")
+
+	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
+
+	payload := config.PolicyPayload{
+		ID: "policy-1",
+		Data: map[string]any{
+			"endpoint": "https://example.com",
+			"auth": map[string]any{
+				"token": "${doppler://API_KEY}",
+			},
+		},
+	}
+	out, err := d.SolvePolicySecrets(payload)
+	require.NoError(t, err)
+
+	data := out.Data.(map[string]any)
+	auth := data["auth"].(map[string]any)
+	require.Equal(t, "s3cret", auth["token"])
+}

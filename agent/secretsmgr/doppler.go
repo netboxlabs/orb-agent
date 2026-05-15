@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -28,6 +29,7 @@ type dopplerManager struct {
 	ctx        context.Context
 	apiHost    string
 	httpClient *http.Client
+	mu         sync.Mutex
 	usedVars   map[string]cachedSecret
 	callback   func(map[string]bool)
 }
@@ -79,9 +81,53 @@ func (d *dopplerManager) RegisterUpdatePoliciesCallback(callback func(map[string
 	d.callback = callback
 }
 
-// SolvePolicySecrets is filled in in Task 4.
+// SolvePolicySecrets processes a policy payload and replaces ${doppler://...}
+// references with the resolved secret value.
 func (d *dopplerManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
-	return payload, fmt.Errorf("doppler: SolvePolicySecrets not yet implemented")
+	newPayload := payload
+	processed, err := processValue(payload.Data, "doppler", payload.ID, d.resolveBody)
+	if err != nil {
+		return payload, err
+	}
+	newPayload.Data = processed
+	return newPayload, nil
+}
+
+// resolveBody returns the cached value for body, or fetches and caches it.
+// Multiple policy IDs referencing the same body are merged race-safely.
+func (d *dopplerManager) resolveBody(body, policyID string) (string, error) {
+	d.mu.Lock()
+	if cached, ok := d.usedVars[body]; ok {
+		cached.policyIDs[policyID] = true
+		d.usedVars[body] = cached
+		value := cached.Value
+		d.mu.Unlock()
+		return value, nil
+	}
+	d.mu.Unlock()
+
+	value, err := d.fetch(body)
+	if err != nil {
+		return "", err
+	}
+
+	d.mu.Lock()
+	fresh := false
+	if existing, ok := d.usedVars[body]; ok {
+		existing.policyIDs[policyID] = true
+		value = existing.Value
+	} else {
+		d.usedVars[body] = cachedSecret{
+			Value:     value,
+			policyIDs: map[string]bool{policyID: true},
+		}
+		fresh = true
+	}
+	d.mu.Unlock()
+	if fresh {
+		d.logger.Debug("Resolved doppler secret", "ref", body, "policy_id", policyID)
+	}
+	return value, nil
 }
 
 // SolveConfigSecrets is filled in in Task 5.
