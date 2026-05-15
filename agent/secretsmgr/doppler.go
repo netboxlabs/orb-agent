@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
+
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
