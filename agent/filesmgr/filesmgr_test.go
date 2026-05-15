@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -943,6 +944,47 @@ func TestManager_StartRecoversCrashedInstall(t *testing.T) {
 	// The entry must be dropped from state.
 	_, ok := m.Get("x")
 	assert.False(t, ok, "crashed-install entry must be dropped from state on Start")
+}
+
+// TestManager_StartSkipsWriteWhenReconciliationIsNoOp verifies that Start()
+// does NOT write to state.json when reconciliation found nothing to change.
+// This is required for read-only deployments where the filesystem may be
+// mounted read-only after correct state was pre-provisioned: the manager must
+// be able to boot without attempting any disk writes.
+func TestManager_StartSkipsWriteWhenReconciliationIsNoOp(t *testing.T) {
+	root := t.TempDir()
+	nameDir := filepath.Join(root, "x")
+	versionDir := filepath.Join(nameDir, "1.0.0")
+	require.NoError(t, os.MkdirAll(versionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(versionDir, "binary"), []byte("v1"), 0o755))
+	require.NoError(t, os.Symlink("1.0.0", filepath.Join(nameDir, "current")))
+
+	currentBin := filepath.Join(nameDir, "current", "binary")
+	stateJSON := `{"version":1,"entries":{"x":{"current":{"name":"x","version":"1.0.0","path":"` +
+		currentBin + `","sha256":"","source":"","installed_at":"0001-01-01T00:00:00Z"}}}}`
+	statePath := filepath.Join(root, "state.json")
+	require.NoError(t, os.WriteFile(statePath, []byte(stateJSON), 0o644))
+
+	// Capture the mtime before Start. If commitReconciled runs, the file is
+	// rewritten and mtime advances.
+	infoBefore, err := os.Stat(statePath)
+	require.NoError(t, err)
+	mtimeBefore := infoBefore.ModTime()
+	// Wait a moment so any rewrite would produce a distinguishable mtime.
+	time.Sleep(20 * time.Millisecond)
+
+	m := NewManager(slog.Default(), root)
+	require.NoError(t, m.Start(context.Background()))
+
+	infoAfter, err := os.Stat(statePath)
+	require.NoError(t, err)
+	assert.Equal(t, mtimeBefore, infoAfter.ModTime(),
+		"state.json must not be rewritten when reconciliation found no changes")
+
+	// Sanity: the entry must still be tracked.
+	entry, ok := m.Get("x")
+	require.True(t, ok)
+	assert.Equal(t, "1.0.0", entry.Version)
 }
 
 // TestManager_StartRecoversSymlinkMismatchCrash_DemotesPrevious verifies the

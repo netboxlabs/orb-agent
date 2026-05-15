@@ -141,6 +141,18 @@ func (s *store) commitReconciled(entries map[string]trackedEntry) error {
 	return nil
 }
 
+// adoptReconciled updates the in-memory entries map WITHOUT writing to disk.
+// Used by Start() when reconciliation produced no changes — the on-disk state
+// already matches `entries`, so no write is needed. Avoiding the write lets
+// agents boot on read-only deployments where state.json was pre-provisioned
+// correctly.
+func (s *store) adoptReconciled(entries map[string]trackedEntry) error {
+	s.mu.Lock()
+	s.entries = entries
+	s.mu.Unlock()
+	return nil
+}
+
 // put inserts a new current entry. If an existing entry is already tracked,
 // the existing Current is recorded as the new Previous (one level of history
 // only — older Previous entries are replaced).

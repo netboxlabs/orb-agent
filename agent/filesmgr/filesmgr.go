@@ -125,6 +125,12 @@ func (m *filesmgr) Start(_ context.Context) error {
 	//      backend will fall back to whatever the existing current symlink
 	//      points at, which is the genuinely-live version.
 	reconciled := make(map[string]trackedEntry, len(pending))
+	// reconciledChanged tracks whether any mutation happened during the loop
+	// (entry dropped, Previous demoted, or Previous nil'd out). If false at
+	// the end we skip the disk write entirely — important for read-only
+	// deployments where state.json is correct but the filesystem is mounted
+	// read-only (commitReconciled would fail unnecessarily).
+	reconciledChanged := false
 	for name, te := range pending {
 		// Check (b) first: for versioned entries, validate that the current
 		// symlink target matches the recorded Version.
@@ -156,6 +162,7 @@ func (m *filesmgr) Start(_ context.Context) error {
 					if _, prevErr := os.Stat(te.Previous.Path); prevErr == nil {
 						demoted := trackedEntry{Current: *te.Previous, Previous: nil}
 						reconciled[name] = demoted
+						reconciledChanged = true
 						m.logger.Info("filesmgr: demoted previous to current after symlink-mismatch crash recovery",
 							"name", name, "version", te.Previous.Version)
 						continue
@@ -167,6 +174,7 @@ func (m *filesmgr) Start(_ context.Context) error {
 				// until a fresh Ensure re-records state.
 				m.logger.Warn("filesmgr: dropping entry, current symlink target mismatch and no recoverable previous (crash recovery)",
 					"name", name, "expected", te.Current.Version, "actual", target)
+				reconciledChanged = true
 				continue
 			}
 		}
@@ -188,6 +196,7 @@ func (m *filesmgr) Start(_ context.Context) error {
 			// Drop the entry; do not add to reconciled.
 			m.logger.Warn("filesmgr: dropping entry, path missing (crash recovery)",
 				"name", name, "path", te.Current.Path)
+			reconciledChanged = true
 			continue
 		}
 		// Path exists. Also validate Previous if present.
@@ -196,14 +205,23 @@ func (m *filesmgr) Start(_ context.Context) error {
 				m.logger.Warn("filesmgr: dropping previous entry, path missing",
 					"name", name, "path", te.Previous.Path)
 				te.Previous = nil
+				reconciledChanged = true
 			}
 		}
 		reconciled[name] = te
 	}
 
 	// Phase 3: persist the post-recovery entries and update in-memory state.
-	if err := m.store.commitReconciled(reconciled); err != nil {
-		return err
+	// If reconciliation made no changes the on-disk state is already correct;
+	// skip the disk write so read-only deployments don't fail to boot.
+	if !reconciledChanged {
+		if err := m.store.adoptReconciled(reconciled); err != nil {
+			return err
+		}
+	} else {
+		if err := m.store.commitReconciled(reconciled); err != nil {
+			return err
+		}
 	}
 
 	m.cleanupStaleArtifacts()
