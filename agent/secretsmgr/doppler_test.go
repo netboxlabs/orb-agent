@@ -376,3 +376,15 @@ func TestDopplerPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
 	d.mu.Unlock()
 	require.False(t, present, "failed entry must be evicted from cache")
 }
+
+func TestNewManager_ReturnsDopplerManagerWhenActive(t *testing.T) {
+	logger := newTestLogger()
+	m := New(logger, config.ManagerSecrets{
+		Active: "doppler",
+		Sources: config.SecretsSources{
+			Doppler: config.DopplerManager{Token: "dp.st.anything"},
+		},
+	})
+	_, ok := m.(*dopplerManager)
+	require.True(t, ok, "New() with active=doppler must return *dopplerManager, got %T", m)
+}
