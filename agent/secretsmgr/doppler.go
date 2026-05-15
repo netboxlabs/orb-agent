@@ -2,9 +2,13 @@ package secretsmgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -83,4 +87,91 @@ func (d *dopplerManager) SolvePolicySecrets(payload config.PolicyPayload) (confi
 // SolveConfigSecrets is filled in in Task 5.
 func (d *dopplerManager) SolveConfigSecrets(backends map[string]any, cm config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
 	return backends, cm, fmt.Errorf("doppler: SolveConfigSecrets not yet implemented")
+}
+
+// parseBody splits a placeholder body into (project, config, name) according
+// to the two supported grammars:
+//
+//	<name>                                — uses configured defaults
+//	<project>/<config>/<name>             — fully qualified
+//
+// Returns an error for any other shape, or for short-form bodies when no
+// defaults are configured.
+func (d *dopplerManager) parseBody(body string) (project, cfg, name string, err error) {
+	if body == "" {
+		return "", "", "", fmt.Errorf("invalid doppler reference: empty body")
+	}
+	parts := strings.Split(body, "/")
+	switch len(parts) {
+	case 1:
+		if d.config.Project == "" || d.config.Config == "" {
+			return "", "", "", fmt.Errorf("invalid doppler reference %q: short form requires project and config defaults in the agent config", body)
+		}
+		return d.config.Project, d.config.Config, parts[0], nil
+	case 3:
+		if parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return "", "", "", fmt.Errorf("invalid doppler reference %q: project, config, and name must all be non-empty", body)
+		}
+		return parts[0], parts[1], parts[2], nil
+	default:
+		return "", "", "", fmt.Errorf("invalid doppler reference %q: expected '<name>' or '<project>/<config>/<name>'", body)
+	}
+}
+
+type dopplerSecretResponse struct {
+	Name  string `json:"name"`
+	Value struct {
+		Raw      string `json:"raw"`
+		Computed string `json:"computed"`
+	} `json:"value"`
+	Messages []string `json:"messages,omitempty"`
+}
+
+// fetch performs the single-secret REST call for the given placeholder body.
+func (d *dopplerManager) fetch(body string) (string, error) {
+	project, cfg, name, err := d.parseBody(body)
+	if err != nil {
+		return "", err
+	}
+
+	u, err := url.Parse(d.apiHost + "/v3/configs/config/secret")
+	if err != nil {
+		return "", fmt.Errorf("doppler: bad api_host %q: %w", d.apiHost, err)
+	}
+	q := u.Query()
+	q.Set("project", project)
+	q.Set("config", cfg)
+	q.Set("name", name)
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(d.ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("doppler: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+d.config.Token)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := d.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("doppler: get secret %q: %w", body, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("doppler: secret not found: %s", body)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("doppler: get secret %q: HTTP %d: %s", body, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var parsed dopplerSecretResponse
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		return "", fmt.Errorf("doppler: decode response for %q: %w", body, err)
+	}
+	if parsed.Value.Computed == "" {
+		return "", fmt.Errorf("doppler: computed value is empty for %s", body)
+	}
+	return parsed.Value.Computed, nil
 }
