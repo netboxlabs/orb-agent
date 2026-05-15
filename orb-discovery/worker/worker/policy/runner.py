@@ -21,6 +21,7 @@ from worker.backend import Backend, load_class
 from worker.entity_metadata import apply_run_id_to_entities
 from worker.metrics import get_metric
 from worker.models import DiodeConfig, Policy, Status
+from worker.package_finder import maybe_evict
 from worker.policy.run import RunStatus, RunStore
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,10 @@ class PolicyRunner:
         policy.config.package = policy.config.package.replace("\r\n", "").replace(
             "\n", ""
         )
+
+        # Evict stale cached modules if the bundle's `current` symlink has been
+        # updated to a newer version since we last imported this package.
+        maybe_evict(policy.config.package)
 
         # Debug logging for backend loading
         logger.debug(f"Loading backend class: {policy.config.package}")
