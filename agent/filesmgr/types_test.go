@@ -118,6 +118,16 @@ func TestFileSpec_Validate(t *testing.T) {
 			spec:    FileSpec{Name: ".filesmgr-backup-restore", URL: "https://x", SHA256: "abc"},
 			wantErr: "reserved",
 		},
+		{
+			name:    "version uses reserved stage prefix",
+			spec:    FileSpec{Name: "x", Version: ".filesmgr-stage-v1", URL: "https://x", SHA256: "abc"},
+			wantErr: "reserved",
+		},
+		{
+			name:    "version uses reserved backup prefix",
+			spec:    FileSpec{Name: "x", Version: ".filesmgr-backup-1", URL: "https://x", SHA256: "abc"},
+			wantErr: "reserved",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

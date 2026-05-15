@@ -64,9 +64,11 @@ func isSafePathSegment(s, field string) error {
 }
 
 // reservedNamePrefix is the prefix FilesManager uses internally for its own
-// on-disk artifacts (.filesmgr-stage-*, .filesmgr-backup-*, etc.). Names with
-// this prefix are rejected so that legitimate tracked entries can never
-// collide with stage/backup cleanup logic.
+// on-disk artifacts (.filesmgr-stage-*, .filesmgr-backup-*, etc.). Names AND
+// versions with this prefix are rejected so that legitimate tracked entries
+// can never collide with stage/backup cleanup logic — a versioned install
+// landing at <root>/<name>/.filesmgr-stage-foo would be deleted by
+// cleanVersionedOrphans on the next Start.
 const reservedNamePrefix = ".filesmgr-"
 
 // Validate returns an error if required fields are missing or unsafe.
@@ -84,6 +86,9 @@ func (s FileSpec) Validate() error {
 		return errors.New("sha256 is required")
 	}
 	if s.Version != "" {
+		if strings.HasPrefix(s.Version, reservedNamePrefix) {
+			return errors.New("version must not use the reserved \"" + reservedNamePrefix + "\" prefix")
+		}
 		if err := isSafePathSegment(s.Version, "version"); err != nil {
 			return err
 		}
