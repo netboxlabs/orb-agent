@@ -253,3 +253,37 @@ func TestDopplerSolvePolicySecrets_ReplacesPlaceholders(t *testing.T) {
 	auth := data["auth"].(map[string]any)
 	require.Equal(t, "s3cret", auth["token"])
 }
+
+func TestDopplerSolveConfigSecrets_ReplacesInBackendsAndClearsTracking(t *testing.T) {
+	fake := newFakeDopplerServer()
+	defer fake.Close()
+	fake.set("orb", "prd", "BACKEND_TOKEN", "be-tok")
+	fake.set("orb", "prd", "FLEET_SECRET", "fleet-tok")
+
+	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
+
+	backends := map[string]any{
+		"otel": map[string]any{
+			"token": "${doppler://BACKEND_TOKEN}",
+		},
+	}
+	cm := config.ManagerConfig{
+		Active: "fleet",
+		Sources: config.Sources{
+			Fleet: config.FleetManager{
+				ClientSecret: "${doppler://FLEET_SECRET}",
+			},
+		},
+	}
+
+	outBackends, outCM, err := d.SolveConfigSecrets(backends, cm)
+	require.NoError(t, err)
+
+	otel := outBackends["otel"].(map[string]any)
+	require.Equal(t, "be-tok", otel["token"])
+	require.Equal(t, "fleet-tok", outCM.Sources.Fleet.ClientSecret)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	require.Empty(t, d.usedVars, "config-time refs must not be tracked for re-apply")
+}

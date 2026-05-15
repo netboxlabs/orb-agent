@@ -130,9 +130,36 @@ func (d *dopplerManager) resolveBody(body, policyID string) (string, error) {
 	return value, nil
 }
 
-// SolveConfigSecrets is filled in in Task 5.
+// SolveConfigSecrets resolves ${doppler://...} references in the backends map
+// and config-manager struct at startup. Config-time references are NOT
+// tracked for later re-apply.
 func (d *dopplerManager) SolveConfigSecrets(backends map[string]any, cm config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
-	return backends, cm, fmt.Errorf("doppler: SolveConfigSecrets not yet implemented")
+	processedBackends, err := processValue(backends, "doppler", "_backends", d.resolveBody)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to process backends: %w", err)
+	}
+	newBackends, ok := processedBackends.(map[string]any)
+	if !ok {
+		return backends, cm, fmt.Errorf("failed to cast processed backends to map[string]any")
+	}
+
+	cmMap, err := structToMap(cm)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to convert config manager to map: %w", err)
+	}
+	processedCMMap, err := processValue(cmMap, "doppler", "_config_manager", d.resolveBody)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to process config manager: %w", err)
+	}
+	newCM, err := mapToStruct[config.ManagerConfig](processedCMMap)
+	if err != nil {
+		return backends, cm, fmt.Errorf("failed to convert processed map to config manager: %w", err)
+	}
+
+	d.mu.Lock()
+	d.usedVars = make(map[string]cachedSecret)
+	d.mu.Unlock()
+	return newBackends, newCM, nil
 }
 
 // parseBody splits a placeholder body into (project, config, name) according
