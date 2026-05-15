@@ -18,12 +18,12 @@ type eventBus struct {
 	closed      bool
 }
 
-func newEventBus() *eventBus {
-	return &eventBus{logger: slog.Default()}
-}
-
-//nolint:unused
+// newEventBusWithLogger constructs an eventBus with the given logger. If
+// logger is nil it falls back to slog.Default().
 func newEventBusWithLogger(logger *slog.Logger) *eventBus {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &eventBus{logger: logger}
 }
 

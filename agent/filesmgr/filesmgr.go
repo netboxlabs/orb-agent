@@ -689,7 +689,8 @@ func versionDirFromEntry(root string, entry FileEntry) string {
 
 func (m *filesmgr) mutexFor(name string) *sync.Mutex {
 	v, _ := m.perNameMu.LoadOrStore(name, &sync.Mutex{})
-	return v.(*sync.Mutex) //nolint:forcetypeassert
+	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
+	return mu
 }
 
 func (m *filesmgr) placementPath(spec FileSpec) string {

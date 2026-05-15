@@ -281,7 +281,8 @@ func (a *orbAgent) subscribeFilesmgr() {
 // Entries are never deleted — same race rationale as filesmgr.perNameMu.
 func (a *orbAgent) backendRestartLock(name string) *sync.Mutex {
 	v, _ := a.backendRestartMu.LoadOrStore(name, &sync.Mutex{})
-	return v.(*sync.Mutex) //nolint:forcetypeassert
+	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
+	return mu
 }
 
 // restartBackendWithFilesmgrRollback performs a Stop + Start sequence for a

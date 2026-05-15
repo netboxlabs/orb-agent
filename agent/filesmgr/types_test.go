@@ -105,6 +105,19 @@ func TestFileSpec_Validate(t *testing.T) {
 			spec:    FileSpec{Name: "x", URL: "https://x", SHA256: "abc", TargetPath: "/opt/custom"},
 			wantErr: "TargetPath not supported in v1",
 		},
+		// Reserved prefix: names that look like manager-owned artifacts
+		// must be rejected so cleanup logic never collides with a legitimate
+		// tracked entry.
+		{
+			name:    "name uses reserved stage prefix",
+			spec:    FileSpec{Name: ".filesmgr-stage-prod", URL: "https://x", SHA256: "abc"},
+			wantErr: "reserved",
+		},
+		{
+			name:    "name uses reserved backup prefix",
+			spec:    FileSpec{Name: ".filesmgr-backup-restore", URL: "https://x", SHA256: "abc"},
+			wantErr: "reserved",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

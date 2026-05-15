@@ -9,7 +9,7 @@ import (
 )
 
 func TestEventBus_PublishAndSubscribe(t *testing.T) {
-	bus := newEventBus()
+	bus := newEventBusWithLogger(nil)
 
 	var received []FileEvent
 	var mu sync.Mutex
@@ -31,7 +31,7 @@ func TestEventBus_PublishAndSubscribe(t *testing.T) {
 }
 
 func TestEventBus_Unsubscribe(t *testing.T) {
-	bus := newEventBus()
+	bus := newEventBusWithLogger(nil)
 
 	var calls int32
 	unsubscribe := bus.subscribe(func(_ FileEvent) {
@@ -46,7 +46,7 @@ func TestEventBus_Unsubscribe(t *testing.T) {
 }
 
 func TestEventBus_PanicRecovery(t *testing.T) {
-	bus := newEventBus()
+	bus := newEventBusWithLogger(nil)
 
 	var goodCalls int32
 	bus.subscribe(func(_ FileEvent) {
@@ -62,7 +62,7 @@ func TestEventBus_PanicRecovery(t *testing.T) {
 }
 
 func TestEventBus_CloseStopsDelivery(t *testing.T) {
-	bus := newEventBus()
+	bus := newEventBusWithLogger(nil)
 
 	var calls int32
 	bus.subscribe(func(_ FileEvent) {

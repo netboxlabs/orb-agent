@@ -63,8 +63,17 @@ func isSafePathSegment(s, field string) error {
 	return nil
 }
 
+// reservedNamePrefix is the prefix FilesManager uses internally for its own
+// on-disk artifacts (.filesmgr-stage-*, .filesmgr-backup-*, etc.). Names with
+// this prefix are rejected so that legitimate tracked entries can never
+// collide with stage/backup cleanup logic.
+const reservedNamePrefix = ".filesmgr-"
+
 // Validate returns an error if required fields are missing or unsafe.
 func (s FileSpec) Validate() error {
+	if strings.HasPrefix(s.Name, reservedNamePrefix) {
+		return errors.New("name must not use the reserved \"" + reservedNamePrefix + "\" prefix")
+	}
 	if err := isSafePathSegment(s.Name, "name"); err != nil {
 		return err
 	}
