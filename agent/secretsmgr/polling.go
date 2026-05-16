@@ -42,9 +42,12 @@ func (b *pollingBase) init(ctx context.Context, logger *slog.Logger, scheme stri
 }
 
 // RegisterUpdatePoliciesCallback registers the policy-reapply callback used by
-// pollSecrets when cached values change or become unreachable.
+// pollSecrets when cached values change or become unreachable. Safe to call
+// at any time relative to a running poll cycle.
 func (b *pollingBase) RegisterUpdatePoliciesCallback(callback func(map[string]bool)) {
+	b.mu.Lock()
 	b.callback = callback
+	b.mu.Unlock()
 }
 
 // SolvePolicySecrets walks the policy payload and replaces every
@@ -142,6 +145,7 @@ func (b *pollingBase) pollSecrets() {
 	for body, cached := range b.usedVars {
 		snapshots = append(snapshots, snap{body: body, value: cached.Value})
 	}
+	cb := b.callback
 	b.mu.Unlock()
 
 	b.logger.Debug("Polling secrets for changes", "scheme", b.scheme, "secretCount", len(snapshots))
@@ -193,7 +197,7 @@ func (b *pollingBase) pollSecrets() {
 
 	if len(changed) > 0 {
 		b.logger.Info("Calling update callback for changed secrets", "scheme", b.scheme, "policyCount", len(changed))
-		b.callback(changed)
+		cb(changed)
 	}
 }
 

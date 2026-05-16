@@ -60,6 +60,7 @@ func (d *dopplerManager) Start(ctx context.Context) error {
 	if d.apiHost == "" {
 		d.apiHost = defaultDopplerAPIHost
 	}
+	d.apiHost = strings.TrimRight(d.apiHost, "/")
 
 	timeout := defaultDopplerTimeout
 	if d.config.Timeout != nil && *d.config.Timeout > 0 {
@@ -106,7 +107,6 @@ type dopplerSecretResponse struct {
 		Raw      string `json:"raw"`
 		Computed string `json:"computed"`
 	} `json:"value"`
-	Messages []string `json:"messages,omitempty"`
 }
 
 // fetch performs the single-secret REST call for the given placeholder body.
@@ -139,13 +139,16 @@ func (d *dopplerManager) fetch(body string) (string, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("doppler: read response for %q: %w", body, err)
+	}
 
 	if resp.StatusCode == http.StatusNotFound {
 		return "", fmt.Errorf("doppler: secret not found: %s", body)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("doppler: get secret %q: HTTP %d: %s", body, resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+		return "", fmt.Errorf("doppler: get secret %q: HTTP %d: %s", body, resp.StatusCode, dopplerErrorDetail(bodyBytes))
 	}
 
 	var parsed dopplerSecretResponse
@@ -156,4 +159,17 @@ func (d *dopplerManager) fetch(body string) (string, error) {
 		return "", fmt.Errorf("doppler: computed value is empty for %s", body)
 	}
 	return parsed.Value.Computed, nil
+}
+
+// dopplerErrorDetail extracts a human-readable message from a non-2xx Doppler
+// response body. Prefers the structured `messages` field when present, falls
+// back to the raw body text otherwise.
+func dopplerErrorDetail(bodyBytes []byte) string {
+	var envelope struct {
+		Messages []string `json:"messages"`
+	}
+	if err := json.Unmarshal(bodyBytes, &envelope); err == nil && len(envelope.Messages) > 0 {
+		return strings.Join(envelope.Messages, "; ")
+	}
+	return strings.TrimSpace(string(bodyBytes))
 }

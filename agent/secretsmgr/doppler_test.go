@@ -35,6 +35,28 @@ func TestDopplerStart_DefaultsAPIHostAndTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "https://api.doppler.com", d.apiHost)
 	require.NotNil(t, d.httpClient)
+	require.Equal(t, defaultDopplerTimeout, d.httpClient.Timeout)
+}
+
+func TestDopplerStart_CustomTimeout(t *testing.T) {
+	timeoutSec := 5
+	d := &dopplerManager{
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{Token: "dp.st.faketoken", Timeout: &timeoutSec},
+	}
+	err := d.Start(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, d.httpClient.Timeout)
+}
+
+func TestDopplerStart_TrimsTrailingSlashFromAPIHost(t *testing.T) {
+	d := &dopplerManager{
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{Token: "dp.st.faketoken", APIHost: "https://api.doppler.com/"},
+	}
+	err := d.Start(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "https://api.doppler.com", d.apiHost)
 }
 
 func TestDopplerStart_TokenFromEnv(t *testing.T) {
@@ -202,6 +224,7 @@ func TestDopplerFetch_Unauthorized(t *testing.T) {
 	_, err := d.fetch("API_KEY")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "401")
+	require.Contains(t, err.Error(), "unauthorized", "error should surface Doppler's messages field")
 }
 
 func TestDopplerFetch_EmptyComputedValueFails(t *testing.T) {
