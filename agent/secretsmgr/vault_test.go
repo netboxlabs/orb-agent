@@ -658,6 +658,57 @@ func TestVaultManager_pollSecrets(t *testing.T) {
 	assert.Equal(t, "newsecretvalue", vm.usedVars["testsecret/app/credentials/password"].Value)
 }
 
+// TestVaultManager_PollSecretsFailureEvictsAndSignalsFalse exercises the
+// behavior Vault inherited from pollingBase via the Phase 2 refactor: a
+// failed fetch during polling now evicts the cached entry and signals the
+// affected policies as failed. The test bypasses Start (no Docker) by
+// constructing a vaultManager directly and overriding the wired fetch with
+// a stub that returns an error for the cached path.
+func TestVaultManager_PollSecretsFailureEvictsAndSignalsFalse(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotCalls := make(chan map[string]bool, 1)
+	callback := func(m map[string]bool) { gotCalls <- m }
+
+	const path = "testsecret/app/credentials/password"
+	vm := &vaultManager{
+		pollingBase: pollingBase{
+			logger:   logger,
+			scheme:   "vault",
+			ctx:      ctx,
+			usedVars: make(map[string]cachedSecret),
+			callback: callback,
+		},
+		preLogger: logger,
+		config:    config.VaultManager{},
+	}
+	// Pre-seed the cache as if the secret had been resolved earlier.
+	vm.usedVars[path] = cachedSecret{
+		Value:     "stale",
+		policyIDs: map[string]bool{"policy-1": true, "policy-2": true},
+	}
+	// Override fetch with a stub that simulates a fatal Vault read failure.
+	vm.pollingBase.fetch = func(string) (string, error) {
+		return "", fmt.Errorf("vault simulated read failure")
+	}
+
+	vm.pollSecrets()
+
+	select {
+	case m := <-gotCalls:
+		require.Equal(t, map[string]bool{"policy-1": false, "policy-2": false}, m)
+	case <-time.After(time.Second):
+		t.Fatal("expected failure callback was not invoked")
+	}
+
+	vm.mu.Lock()
+	_, present := vm.usedVars[path]
+	vm.mu.Unlock()
+	require.False(t, present, "failed entry must be evicted from the cache")
+}
+
 func TestVaultManager_Start(t *testing.T) {
 	// Use shared test vault server
 	cluster, _ := createTestVault(t)

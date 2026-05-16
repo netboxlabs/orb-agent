@@ -227,6 +227,33 @@ func TestDopplerFetch_Unauthorized(t *testing.T) {
 	require.Contains(t, err.Error(), "unauthorized", "error should surface Doppler's messages field")
 }
 
+// TestDopplerSolvePolicySecrets_PropagatesAuthErrorWithMessage verifies that an
+// auth failure encountered while resolving a policy placeholder surfaces both
+// the HTTP status and Doppler's `messages` payload after passing through the
+// shared processMap/processValue resolver pipeline.
+func TestDopplerSolvePolicySecrets_PropagatesAuthErrorWithMessage(t *testing.T) {
+	fake := newFakeDopplerServer()
+	defer fake.Close()
+	fake.set("orb", "prd", "API_KEY", "s3cret")
+
+	d := &dopplerManager{
+		preLogger: newTestLogger(),
+		config:    config.DopplerManager{Token: "wrong", APIHost: fake.URL, Project: "orb", Config: "prd"},
+	}
+	require.NoError(t, d.Start(context.Background()))
+
+	payload := config.PolicyPayload{
+		ID: "policy-1",
+		Data: map[string]any{
+			"auth": map[string]any{"token": "${doppler://API_KEY}"},
+		},
+	}
+	_, err := d.SolvePolicySecrets(payload)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "401")
+	require.Contains(t, err.Error(), "unauthorized", "messages envelope must survive resolver wrapping")
+}
+
 func TestDopplerFetch_EmptyComputedValueFails(t *testing.T) {
 	fake := newFakeDopplerServer()
 	defer fake.Close()
