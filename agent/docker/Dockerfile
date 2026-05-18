@@ -35,20 +35,12 @@ FROM netboxlabs/pktvisor:${PKTVISOR_TAG} AS pktvisor
 ########################################################################
 FROM python:3.14-alpine AS python-builder
 
-RUN apk add --no-cache --virtual .build-deps \
-        build-base \
-        musl-dev \
-        libffi-dev \
-        openssl-dev \
-        cargo \
-        rust
-
+# Upgrade pip to latest version with fewer vulnerabilities
 RUN python -m pip install --upgrade --no-cache-dir pip==26.1 && \
     rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
+# Install Python packages
 RUN pip3 install --no-cache-dir netboxlabs-device-discovery netboxlabs-orb-worker
-
-RUN apk del .build-deps
 
 ########################################################################
 FROM python:3.14-alpine
@@ -65,9 +57,11 @@ RUN apk add --no-cache \
 
 RUN mkdir -p /opt/orb
 
+# Copy Python site-packages and binaries from builder (includes pip and package executables)
 COPY --from=python-builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 COPY --from=python-builder /usr/local/bin /usr/local/bin
 
+# Copy binaries from other stages
 COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/bin/pktvisord
 COPY --from=pktvisor /geo-db /geo-db
 COPY --from=pktvisor /iana /iana
