@@ -69,7 +69,6 @@ COPY --from=python-builder /usr/local/lib/python3.14/site-packages /usr/local/li
 COPY --from=python-builder /usr/local/bin /usr/local/bin
 
 COPY --from=pktvisor /usr/local/sbin/pktvisord /usr/local/bin/pktvisord
-COPY --from=pktvisor /usr/local/sbin/crashpad_handler /usr/local/bin/crashpad_handler
 COPY --from=pktvisor /geo-db /geo-db
 COPY --from=pktvisor /iana /iana
 
