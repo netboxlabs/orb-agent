@@ -60,9 +60,9 @@ RUN apk add --no-cache \
     echo "UTC" > /etc/timezone && \
     update-ca-certificates
 
-RUN mkdir -p /opt/orb /opt/orb/bin /opt/orb/pip-cache /usr/local/share/orb-agent
+RUN mkdir -p /opt/orb /opt/orb/files /opt/orb/pip-cache /usr/local/share/orb-agent
 
-ENV PATH=/opt/orb/bin:$PATH
+ENV PATH=/opt/orb/files:$PATH
 ENV PIP_CACHE_DIR=/opt/orb/pip-cache
 ENV ORB_DEFAULT_CONFIG=/usr/local/share/orb-agent/default_config.yaml
 

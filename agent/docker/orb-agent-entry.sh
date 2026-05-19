@@ -4,7 +4,7 @@
 #
 
 # Recreate writable dirs in case the user bind-mounted over /opt/orb.
-mkdir -p /opt/orb/bin /opt/orb/pip-cache
+mkdir -p /opt/orb/files /opt/orb/pip-cache
 
 if [ "${INSTALL_DRIVERS_PATH}" != '' ]; then
   cd "$(dirname "$(realpath "${INSTALL_DRIVERS_PATH}")")"
