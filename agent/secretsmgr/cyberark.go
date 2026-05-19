@@ -116,9 +116,8 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		Transport: &http.Transport{TLSClientConfig: tlsCfg},
 	}
 
-	// pollingBase wiring + scheduler are added in Task 5 once fetch exists.
-	_ = ctx
-	return nil
+	c.init(ctx, c.preLogger, "cyberark", c.fetch)
+	return c.startScheduler(c.config.Schedule)
 }
 
 // containsPEMBlock returns true if bytes contain at least one valid PEM

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -267,7 +268,7 @@ func (f *fakeCCP) set(appID, safe, object string, fields map[string]any) {
 	f.accounts[appID+"|"+safe+"|"+object] = fields
 }
 
-func (f *fakeCCP) delete(appID, safe, object string) { //nolint:unused // used by later tasks
+func (f *fakeCCP) delete(appID, safe, object string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.accounts, appID+"|"+safe+"|"+object)
@@ -409,3 +410,90 @@ Wf86aX6PepsntZv2GYlA5UpabfT2EZICICpJ5h/iI+i341gBmLiAFQOyTDT+/wQc
 6MF9+Yw1Yy0t
 -----END CERTIFICATE-----
 `
+
+func TestCyberArkResolveBody_CacheHitAvoidsSecondHTTP(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "v1"})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+
+	v1, err := c.resolveBody("Lab/Acc", "policy-a")
+	require.NoError(t, err)
+	require.Equal(t, "v1", v1)
+
+	v2, err := c.resolveBody("Lab/Acc", "policy-b")
+	require.NoError(t, err)
+	require.Equal(t, "v1", v2)
+
+	require.EqualValues(t, 1, fake.calls.Load(), "second resolve should hit cache")
+}
+
+func TestCyberArkSolvePolicySecrets_ReplacesPlaceholder(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "s3cret"})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	payload := config.PolicyPayload{
+		ID: "policy-1",
+		Data: map[string]any{
+			"auth": map[string]any{"password": "${cyberark://Lab/Acc}"},
+		},
+	}
+	out, err := c.SolvePolicySecrets(payload)
+	require.NoError(t, err)
+	auth := out.Data.(map[string]any)["auth"].(map[string]any)
+	require.Equal(t, "s3cret", auth["password"])
+}
+
+func TestCyberArkPollSecrets_DetectsChange(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "v1"})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	got := make(chan map[string]bool, 4)
+	c.RegisterUpdatePoliciesCallback(func(m map[string]bool) { got <- m })
+
+	_, err := c.resolveBody("Lab/Acc", "policy-1")
+	require.NoError(t, err)
+
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "v2"})
+
+	c.pollSecrets()
+	select {
+	case m := <-got:
+		require.Equal(t, map[string]bool{"policy-1": true}, m)
+	case <-time.After(time.Second):
+		t.Fatal("expected change callback not invoked")
+	}
+}
+
+func TestCyberArkPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "v1"})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	got := make(chan map[string]bool, 4)
+	c.RegisterUpdatePoliciesCallback(func(m map[string]bool) { got <- m })
+
+	_, err := c.resolveBody("Lab/Acc", "policy-1")
+	require.NoError(t, err)
+
+	fake.delete("orb-agent", "Lab", "Acc")
+
+	c.pollSecrets()
+	select {
+	case m := <-got:
+		require.Equal(t, map[string]bool{"policy-1": false}, m)
+	case <-time.After(time.Second):
+		t.Fatal("expected failure callback not invoked")
+	}
+
+	c.mu.Lock()
+	_, present := c.usedVars["Lab/Acc"]
+	c.mu.Unlock()
+	require.False(t, present, "failed entry must be evicted")
+}
