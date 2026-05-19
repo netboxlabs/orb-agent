@@ -19,11 +19,13 @@ type Manager interface {
 func New(logger *slog.Logger, c config.ManagerSecrets) Manager {
 	switch c.Active {
 	case "vault":
-		return &vaultManager{logger: logger, config: c.Sources.Vault}
+		return &vaultManager{preLogger: logger, config: c.Sources.Vault}
 	case "fleet":
 		return NewFleetSecretsManager(logger, c.Sources.Fleet)
 	case "delinea":
-		return &delineaManager{logger: logger, config: c.Sources.Delinea}
+		return &delineaManager{preLogger: logger, config: c.Sources.Delinea}
+	case "doppler":
+		return &dopplerManager{preLogger: logger, config: c.Sources.Doppler}
 	default:
 		logger.Info("no secrets manager specified or invalid type, skipping")
 		return &dummyManager{}

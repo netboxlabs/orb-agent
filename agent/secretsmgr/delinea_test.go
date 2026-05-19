@@ -149,7 +149,7 @@ func TestDelineaStart_ConfigValidation(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			m := &delineaManager{logger: newTestLogger(), config: tc.cfg}
+			m := &delineaManager{preLogger: newTestLogger(), config: tc.cfg}
 			err := m.Start(context.Background())
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
@@ -166,7 +166,7 @@ func TestDelineaStart_ResolvesEnvCredentials(t *testing.T) {
 	t.Setenv("DELINEA_TEST_PASS", "real-secret")
 
 	m := &delineaManager{
-		logger: newTestLogger(),
+		preLogger: newTestLogger(),
 		config: config.DelineaManager{
 			ServerURL: fake.URL,
 			Username:  "${DELINEA_TEST_USER}",
@@ -183,7 +183,7 @@ func TestDelineaStart_ResolvesEnvCredentials(t *testing.T) {
 
 func TestDelineaStart_UnsetEnvFailsClearly(t *testing.T) {
 	m := &delineaManager{
-		logger: newTestLogger(),
+		preLogger: newTestLogger(),
 		config: config.DelineaManager{
 			ServerURL: "https://example.com",
 			Username:  "svc_orb",
@@ -208,7 +208,7 @@ func TestDelineaSolvePolicySecrets_ByID(t *testing.T) {
 	})
 
 	m := &delineaManager{
-		logger: newTestLogger(),
+		preLogger: newTestLogger(),
 		config: config.DelineaManager{
 			ServerURL: fake.URL,
 			Username:  "u",
@@ -240,7 +240,7 @@ func TestDelineaSolvePolicySecrets_ByPath(t *testing.T) {
 		},
 	})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	out, err := m.SolvePolicySecrets(config.PolicyPayload{
@@ -257,7 +257,7 @@ func TestDelineaSolvePolicySecrets_CacheHit(t *testing.T) {
 	t.Cleanup(fake.Close)
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	payload := config.PolicyPayload{ID: "p", Data: map[string]any{"c": "${delinea://id/1/password}"}}
@@ -276,7 +276,7 @@ func TestDelineaSolvePolicySecrets_FieldMissing(t *testing.T) {
 	t.Cleanup(fake.Close)
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "username", ItemValue: "demo"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "p", Data: map[string]any{"c": "${delinea://id/1/password}"}})
@@ -290,7 +290,7 @@ func TestDelineaSolvePolicySecrets_ServerError(t *testing.T) {
 	t.Cleanup(fake.Close)
 	// no secrets added → 404
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "p", Data: map[string]any{"c": "${delinea://id/99/password}"}})
@@ -301,7 +301,7 @@ func TestDelineaSolvePolicySecrets_BadGrammar(t *testing.T) {
 	t.Parallel()
 	fake := newFakeDelineaServer()
 	t.Cleanup(fake.Close)
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	cases := []string{
@@ -328,7 +328,7 @@ func TestDelineaPolling_DetectsChange(t *testing.T) {
 	t.Cleanup(fake.Close)
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	changed := make(chan map[string]bool, 1)
@@ -360,7 +360,7 @@ func TestDelineaPolling_FetchFailureEvictsCache(t *testing.T) {
 	t.Cleanup(fake.Close)
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 	m.RegisterUpdatePoliciesCallback(func(map[string]bool) {})
 
@@ -384,7 +384,7 @@ func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {
 	fake := newFakeDelineaServer()
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	changed := make(chan map[string]bool, 1)
@@ -414,7 +414,7 @@ func TestDelineaResolveBody_ConcurrentMergesPolicyIDs(t *testing.T) {
 	t.Cleanup(fake.Close)
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	const n = 16
@@ -449,7 +449,7 @@ func TestDelineaPolling_FailureIsStickyAcrossMultipleSecrets(t *testing.T) {
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
 	fake.putByID(2, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	changed := make(chan map[string]bool, 1)
@@ -487,7 +487,7 @@ func TestDelineaSolveConfigSecrets(t *testing.T) {
 	t.Cleanup(fake.Close)
 	fake.putByID(5, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "be-secret"}}})
 
-	m := &delineaManager{logger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
+	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
 	backends := map[string]any{

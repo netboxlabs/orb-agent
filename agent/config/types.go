@@ -83,11 +83,22 @@ type DelineaManager struct {
 	Schedule  *string `yaml:"schedule,omitempty"`
 }
 
-// SecretsSources represents the configuration for manager sources, including vault, fleet and delinea.
+// DopplerManager represents the configuration for the Doppler secrets manager
+type DopplerManager struct {
+	Token    string  `yaml:"token"`
+	APIHost  string  `yaml:"api_host,omitempty"`
+	Project  string  `yaml:"project,omitempty"`
+	Config   string  `yaml:"config,omitempty"`
+	Timeout  *int    `yaml:"timeout,omitempty"`
+	Schedule *string `yaml:"schedule,omitempty"`
+}
+
+// SecretsSources represents the configuration for manager sources, including vault, fleet, delinea and doppler.
 type SecretsSources struct {
 	Vault   VaultManager        `yaml:"vault"`
 	Fleet   FleetSecretsManager `yaml:"fleet"`
 	Delinea DelineaManager      `yaml:"delinea"`
+	Doppler DopplerManager      `yaml:"doppler"`
 }
 
 // ManagerSecrets represents the configuration for the Secrets Manager

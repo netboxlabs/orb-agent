@@ -155,7 +155,26 @@ func createTestVault(t *testing.T) (*docker.DockerCluster, *vault.Client) {
 	return getTestVaultCluster(t), getTestVaultClient(t)
 }
 
-func TestVaultManager_getSecret(t *testing.T) {
+// newTestVaultManager builds a vaultManager wired into pollingBase for tests
+// that bypass Start (which is the normal initializer for the base).
+func newTestVaultManager(ctx context.Context, logger *slog.Logger, client *vault.Client, callback func(map[string]bool)) *vaultManager {
+	vm := &vaultManager{
+		pollingBase: pollingBase{
+			logger:   logger,
+			scheme:   "vault",
+			ctx:      ctx,
+			usedVars: make(map[string]cachedSecret),
+			callback: callback,
+		},
+		preLogger: logger,
+		config:    config.VaultManager{},
+		client:    client,
+	}
+	vm.pollingBase.fetch = vm.fetch
+	return vm
+}
+
+func TestVaultManager_fetch(t *testing.T) {
 	// Use shared test vault server
 	_, client := createTestVault(t)
 
@@ -164,11 +183,17 @@ func TestVaultManager_getSecret(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	vm := &vaultManager{
-		logger: logger,
-		config: config.VaultManager{},
-		ctx:    ctx,
-		client: client,
+		pollingBase: pollingBase{
+			logger:   logger,
+			scheme:   "vault",
+			ctx:      ctx,
+			usedVars: make(map[string]cachedSecret),
+		},
+		preLogger: logger,
+		config:    config.VaultManager{},
+		client:    client,
 	}
+	vm.pollingBase.fetch = vm.fetch
 
 	tests := []struct {
 		name          string
@@ -217,7 +242,7 @@ func TestVaultManager_getSecret(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Call the method under test
-			value, err := vm.getSecret(tt.path)
+			value, err := vm.fetch(tt.path)
 
 			// Assertions
 			if tt.expectedError != "" {
@@ -238,13 +263,7 @@ func TestVaultManager_processString(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	vm := &vaultManager{
-		logger:   logger,
-		config:   config.VaultManager{},
-		ctx:      ctx,
-		client:   client,
-		usedVars: make(map[string]cachedSecret),
-	}
+	vm := newTestVaultManager(ctx, logger, client, nil)
 
 	tests := []struct {
 		name          string
@@ -285,7 +304,7 @@ func TestVaultManager_processString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := vm.processString(tt.input, tt.policyID)
+			result, err := processString(tt.input, "vault", tt.policyID, vm.resolveBody)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -314,13 +333,7 @@ func TestVaultManager_processMap(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	vm := &vaultManager{
-		logger:   logger,
-		config:   config.VaultManager{},
-		ctx:      ctx,
-		client:   client,
-		usedVars: make(map[string]cachedSecret),
-	}
+	vm := newTestVaultManager(ctx, logger, client, nil)
 
 	tests := []struct {
 		name        string
@@ -386,7 +399,7 @@ func TestVaultManager_processMap(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := vm.processMap(tt.input, tt.policyID)
+			result, err := processMap(tt.input, "vault", tt.policyID, vm.resolveBody)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -406,13 +419,7 @@ func TestVaultManager_processSlice(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	vm := &vaultManager{
-		logger:   logger,
-		config:   config.VaultManager{},
-		ctx:      ctx,
-		client:   client,
-		usedVars: make(map[string]cachedSecret),
-	}
+	vm := newTestVaultManager(ctx, logger, client, nil)
 
 	tests := []struct {
 		name        string
@@ -471,7 +478,7 @@ func TestVaultManager_processSlice(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := vm.processSlice(tt.input, tt.policyID)
+			result, err := processSlice(tt.input, "vault", tt.policyID, vm.resolveBody)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -491,13 +498,7 @@ func TestVaultManager_SolvePolicySecrets(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	vm := &vaultManager{
-		logger:   logger,
-		config:   config.VaultManager{},
-		ctx:      ctx,
-		client:   client,
-		usedVars: make(map[string]cachedSecret),
-	}
+	vm := newTestVaultManager(ctx, logger, client, nil)
 
 	tests := []struct {
 		name        string
@@ -583,8 +584,9 @@ func TestVaultManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 	// Create the vault manager
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	vm := &vaultManager{
-		logger: logger,
-		config: config.VaultManager{},
+		pollingBase: pollingBase{logger: logger, scheme: "vault"},
+		preLogger:   logger,
+		config:      config.VaultManager{},
 	}
 
 	// Test registering a callback
@@ -618,14 +620,7 @@ func TestVaultManager_pollSecrets(t *testing.T) {
 		callbackPolicyIDs = policyIDs
 	}
 
-	vm := &vaultManager{
-		logger:   logger,
-		config:   config.VaultManager{},
-		ctx:      ctx,
-		client:   client,
-		usedVars: make(map[string]cachedSecret),
-		callback: callback,
-	}
+	vm := newTestVaultManager(ctx, logger, client, callback)
 
 	// Setup initial secret state
 	vm.usedVars["testsecret/app/credentials/password"] = cachedSecret{
@@ -661,6 +656,57 @@ func TestVaultManager_pollSecrets(t *testing.T) {
 
 	// Verify the cached value was updated
 	assert.Equal(t, "newsecretvalue", vm.usedVars["testsecret/app/credentials/password"].Value)
+}
+
+// TestVaultManager_PollSecretsFailureEvictsAndSignalsFalse exercises the
+// behavior Vault inherited from pollingBase via the Phase 2 refactor: a
+// failed fetch during polling now evicts the cached entry and signals the
+// affected policies as failed. The test bypasses Start (no Docker) by
+// constructing a vaultManager directly and overriding the wired fetch with
+// a stub that returns an error for the cached path.
+func TestVaultManager_PollSecretsFailureEvictsAndSignalsFalse(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gotCalls := make(chan map[string]bool, 1)
+	callback := func(m map[string]bool) { gotCalls <- m }
+
+	const path = "testsecret/app/credentials/password"
+	vm := &vaultManager{
+		pollingBase: pollingBase{
+			logger:   logger,
+			scheme:   "vault",
+			ctx:      ctx,
+			usedVars: make(map[string]cachedSecret),
+			callback: callback,
+		},
+		preLogger: logger,
+		config:    config.VaultManager{},
+	}
+	// Pre-seed the cache as if the secret had been resolved earlier.
+	vm.usedVars[path] = cachedSecret{
+		Value:     "stale",
+		policyIDs: map[string]bool{"policy-1": true, "policy-2": true},
+	}
+	// Override fetch with a stub that simulates a fatal Vault read failure.
+	vm.pollingBase.fetch = func(string) (string, error) {
+		return "", fmt.Errorf("vault simulated read failure")
+	}
+
+	vm.pollSecrets()
+
+	select {
+	case m := <-gotCalls:
+		require.Equal(t, map[string]bool{"policy-1": false, "policy-2": false}, m)
+	case <-time.After(time.Second):
+		t.Fatal("expected failure callback was not invoked")
+	}
+
+	vm.mu.Lock()
+	_, present := vm.usedVars[path]
+	vm.mu.Unlock()
+	require.False(t, present, "failed entry must be evicted from the cache")
 }
 
 func TestVaultManager_Start(t *testing.T) {
@@ -771,8 +817,8 @@ func TestVaultManager_Start(t *testing.T) {
 
 			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			vm := &vaultManager{
-				logger: logger,
-				config: testConfig,
+				preLogger: logger,
+				config:    testConfig,
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
