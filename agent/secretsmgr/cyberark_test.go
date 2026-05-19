@@ -96,15 +96,14 @@ func TestCyberArkStart_RejectsURLWithoutHost(t *testing.T) {
 func TestCyberArkStart_RejectsCABundleWithOnlyPrivateKey(t *testing.T) {
 	// A PEM file that has a recognisable PEM block but no certificate must
 	// be rejected at startup rather than producing an empty trust pool that
-	// fails opaquely at TLS handshake time.
+	// fails opaquely at TLS handshake time. Generate the key at runtime via
+	// the same helper the mTLS test uses, so there's no literal-looking
+	// private-key material in the source tree to trip secret scanners.
+	_, keyPEM := generateTestCertPair(t, "ca-bundle-key-only-fixture")
+
 	dir := t.TempDir()
 	keyOnly := filepath.Join(dir, "key.pem")
-	require.NoError(t, os.WriteFile(keyOnly, []byte(`-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIPRWyrJDXG9zAQt2YgL3vV4eqOh1aFFkdvE7QprjLkBmoAoGCCqGSM49
-AwEHoUQDQgAEH+wLkFW6xQRPAY1+i6FdNYbZFTr1cmoZTbb8B+pPj91A3pSAlIeq
-Iz3FQjRyrCfXrI4LElIh6/Pwhkz2zHo+pQ==
------END EC PRIVATE KEY-----
-`), 0o600))
+	require.NoError(t, os.WriteFile(keyOnly, keyPEM, 0o600))
 
 	c := &cyberarkManager{
 		preLogger: newTestLogger(),
