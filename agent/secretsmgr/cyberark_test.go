@@ -150,6 +150,75 @@ func TestCyberArkStart_SkipTLSVerifyFlowsThroughToTransport(t *testing.T) {
 	require.True(t, tr.TLSClientConfig.InsecureSkipVerify)
 }
 
+func cyberarkManagerWith(appID string) *cyberarkManager {
+	return &cyberarkManager{config: config.CyberArkManager{AppID: appID}}
+}
+
+func TestCyberArkParseBody_ShortForm(t *testing.T) {
+	c := cyberarkManagerWith("orb-agent")
+	ref, err := c.parseBody("Lab/DB-Account")
+	require.NoError(t, err)
+	require.Equal(t, "orb-agent", ref.appID)
+	require.Equal(t, "Lab", ref.safe)
+	require.Equal(t, "DB-Account", ref.object)
+	require.Equal(t, "Content", ref.field)
+}
+
+func TestCyberArkParseBody_ShortFormWithField(t *testing.T) {
+	c := cyberarkManagerWith("orb-agent")
+	ref, err := c.parseBody("Lab/DB-Account/UserName")
+	require.NoError(t, err)
+	require.Equal(t, "orb-agent", ref.appID)
+	require.Equal(t, "Lab", ref.safe)
+	require.Equal(t, "DB-Account", ref.object)
+	require.Equal(t, "UserName", ref.field)
+}
+
+func TestCyberArkParseBody_Qualified(t *testing.T) {
+	c := cyberarkManagerWith("orb-agent")
+	ref, err := c.parseBody("OtherApp//Lab/DB-Account")
+	require.NoError(t, err)
+	require.Equal(t, "OtherApp", ref.appID)
+	require.Equal(t, "Lab", ref.safe)
+	require.Equal(t, "DB-Account", ref.object)
+	require.Equal(t, "Content", ref.field)
+}
+
+func TestCyberArkParseBody_QualifiedWithField(t *testing.T) {
+	c := cyberarkManagerWith("orb-agent")
+	ref, err := c.parseBody("OtherApp//Lab/DB-Account/UserName")
+	require.NoError(t, err)
+	require.Equal(t, "OtherApp", ref.appID)
+	require.Equal(t, "Lab", ref.safe)
+	require.Equal(t, "DB-Account", ref.object)
+	require.Equal(t, "UserName", ref.field)
+}
+
+func TestCyberArkParseBody_GrammarErrors(t *testing.T) {
+	c := cyberarkManagerWith("orb-agent")
+	for _, body := range []string{
+		"",                                     // empty
+		"Lab",                                  // 1 segment short — no object
+		"Lab/DB-Account/UserName/Extra",        // 4 segments short — too long
+		"OtherApp//Lab",                        // qualified short — no object
+		"OtherApp//Lab/DB-Account/Field/Extra", // qualified too long
+		"//Lab/DB-Account",                     // empty AppID before //
+		"/Lab/DB-Account",                      // leading slash
+		"Lab/",                                 // trailing slash
+		"Lab//Object",                          // // with nothing after AppID makes no sense
+	} {
+		_, err := c.parseBody(body)
+		require.Errorf(t, err, "body %q should have been rejected", body)
+	}
+}
+
+func TestCyberArkParseBody_ShortFormRequiresConfiguredAppID(t *testing.T) {
+	c := cyberarkManagerWith("")
+	_, err := c.parseBody("Lab/DB-Account")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "app_id")
+}
+
 // testSelfSignedCAPEM is a syntactically-valid X.509 self-signed CA PEM block
 // used purely to drive the CA-bundle parsing happy path. It is NOT used for
 // any real TLS handshake.

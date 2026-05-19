@@ -125,3 +125,61 @@ func containsPEMBlock(b []byte) bool {
 	block, _ := pem.Decode(b)
 	return block != nil
 }
+
+// cyberarkRef holds a parsed placeholder body.
+type cyberarkRef struct {
+	appID  string
+	safe   string
+	object string
+	field  string // "Content" when caller omitted the field segment
+}
+
+// parseBody decodes a placeholder body into (AppID, Safe, Object, Field).
+// Grammar (see docs/secretsmgr/cyberark.md):
+//
+//	Short:               <Safe>/<Object>
+//	Short+field:         <Safe>/<Object>/<Field>
+//	Qualified:           <AppID>//<Safe>/<Object>
+//	Qualified+field:     <AppID>//<Safe>/<Object>/<Field>
+//
+// The "//" separator unambiguously marks the end of an AppID override.
+func (c *cyberarkManager) parseBody(body string) (cyberarkRef, error) {
+	if body == "" {
+		return cyberarkRef{}, fmt.Errorf("invalid cyberark reference: empty body")
+	}
+
+	var (
+		appID     string
+		remainder string
+	)
+	if idx := strings.Index(body, "//"); idx >= 0 {
+		appID = body[:idx]
+		remainder = body[idx+2:]
+		if appID == "" {
+			return cyberarkRef{}, fmt.Errorf("invalid cyberark reference %q: empty AppID before '//'", body)
+		}
+	} else {
+		appID = c.config.AppID
+		remainder = body
+	}
+
+	if appID == "" {
+		return cyberarkRef{}, fmt.Errorf("invalid cyberark reference %q: short form requires sources.cyberark.app_id to be set", body)
+	}
+
+	parts := strings.Split(remainder, "/")
+	switch len(parts) {
+	case 2:
+		if parts[0] == "" || parts[1] == "" {
+			return cyberarkRef{}, fmt.Errorf("invalid cyberark reference %q: Safe and Object must be non-empty", body)
+		}
+		return cyberarkRef{appID: appID, safe: parts[0], object: parts[1], field: "Content"}, nil
+	case 3:
+		if parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return cyberarkRef{}, fmt.Errorf("invalid cyberark reference %q: Safe, Object and Field must be non-empty", body)
+		}
+		return cyberarkRef{appID: appID, safe: parts[0], object: parts[1], field: parts[2]}, nil
+	default:
+		return cyberarkRef{}, fmt.Errorf("invalid cyberark reference %q: expected '<Safe>/<Object>[/<Field>]' (optionally prefixed by '<AppID>//')", body)
+	}
+}
