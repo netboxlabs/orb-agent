@@ -132,6 +132,9 @@ func (v *vaultManager) parseBody(body string) (vaultRef, error) {
 		if mount == "" {
 			return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty mount before '//'", body)
 		}
+		if err := validateMount(mount, body); err != nil {
+			return vaultRef{}, err
+		}
 		return splitPathField(mount, rest, body)
 	}
 
@@ -143,29 +146,44 @@ func (v *vaultManager) parseBody(body string) (vaultRef, error) {
 	if len(parts) < 3 {
 		return vaultRef{}, fmt.Errorf("invalid vault reference %q: legacy form requires '<mount>/<path>/<field>'; for multi-segment mounts use '<mount>//<path>/<field>' or set sources.vault.mount", body)
 	}
-	return vaultRef{
-		mount: parts[0],
-		path:  strings.Join(parts[1:len(parts)-1], "/"),
-		field: parts[len(parts)-1],
-	}, nil
+	mount := parts[0]
+	if mount == "" {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty mount", body)
+	}
+	return splitPathField(mount, strings.Join(parts[1:], "/"), body)
+}
+
+// validateMount rejects mounts that contain empty path segments (leading,
+// trailing, or consecutive "/"). Catches inputs like "/foo/bar" or "foo//"
+// that would otherwise reach the Vault client with a malformed mount.
+func validateMount(mount, original string) error {
+	for _, seg := range strings.Split(mount, "/") {
+		if seg == "" {
+			return fmt.Errorf("invalid vault reference %q: mount contains an empty path segment", original)
+		}
+	}
+	return nil
 }
 
 // splitPathField extracts (path, field) from the part of the body that lives
-// after the mount, validating that both are non-empty.
+// after the mount, validating that no segment is empty (no leading, trailing,
+// or consecutive "/").
 func splitPathField(mount, rest, original string) (vaultRef, error) {
 	parts := strings.Split(rest, "/")
 	if len(parts) < 2 {
 		return vaultRef{}, fmt.Errorf("invalid vault reference %q: expected at least one path segment and a field after the mount", original)
 	}
 	field := parts[len(parts)-1]
-	path := strings.Join(parts[:len(parts)-1], "/")
-	if path == "" {
-		return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty secret path", original)
-	}
+	pathParts := parts[:len(parts)-1]
 	if field == "" {
 		return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty field", original)
 	}
-	return vaultRef{mount: mount, path: path, field: field}, nil
+	for _, seg := range pathParts {
+		if seg == "" {
+			return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty path segment", original)
+		}
+	}
+	return vaultRef{mount: mount, path: strings.Join(pathParts, "/"), field: field}, nil
 }
 
 // fetch retrieves a secret from Vault. See parseBody for the supported
