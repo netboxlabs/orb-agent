@@ -110,7 +110,7 @@ func TestWorkerBackendStart(t *testing.T) {
 		"agent_name":         "worker-agent",
 		"dry_run":            false,
 		"dry_run_output_dir": "/tmp/worker",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -210,7 +210,7 @@ func TestWorkerUsesOtelTargetWithoutCredentials(t *testing.T) {
 		"client_id":     "worker-client",
 		"client_secret": "worker-secret",
 		"agent_name":    "worker-agent",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -279,7 +279,7 @@ func TestWorkerGetRunningStatusAPIFailure(t *testing.T) {
 	err = be.Configure(logger, repo, map[string]any{
 		"host": serverURL.Hostname(),
 		"port": serverURL.Port(),
-	}, config.BackendCommons{})
+	}, config.BackendCommons{}, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -309,7 +309,7 @@ func TestWorkerBackendCompleted(t *testing.T) {
 
 	require.NoError(t, be.Configure(slog.Default(), nil, map[string]any{
 		"host": "invalid-host",
-	}, config.BackendCommons{}))
+	}, config.BackendCommons{}, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -376,7 +376,7 @@ func TestWorkerBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {
 		"agent_name":         "worker-agent",
 		"dry_run":            true,
 		"dry_run_output_dir": "/tmp/worker-dry-run",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

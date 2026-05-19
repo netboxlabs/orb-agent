@@ -15,6 +15,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
@@ -29,7 +30,7 @@ func (m *mockBackend) GetName() string {
 	return m.name
 }
 
-func (m *mockBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo, cfg map[string]any, commons config.BackendCommons) error {
+func (m *mockBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo, cfg map[string]any, commons config.BackendCommons, _ filesmgr.Manager) error {
 	args := m.Called(logger, repo, cfg, commons)
 	return args.Error(0)
 }

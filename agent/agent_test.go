@@ -13,6 +13,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -120,6 +121,22 @@ func (m *mockPolicyManager) RemovePolicy(_ string, _ string, _ string) error {
 	return nil
 }
 
+// mockFilesManager implements filesmgr.Manager for testing (no-op)
+type mockFilesManager struct{}
+
+func (m *mockFilesManager) Start(_ context.Context) error { return nil }
+func (m *mockFilesManager) Stop(_ context.Context) error  { return nil }
+func (m *mockFilesManager) Ensure(_ context.Context, _ filesmgr.FileSpec) (string, error) {
+	return "", nil
+}
+
+func (m *mockFilesManager) Get(_ string) (filesmgr.FileEntry, bool) {
+	return filesmgr.FileEntry{}, false
+}
+func (m *mockFilesManager) Remove(_ context.Context, _ string) error    { return nil }
+func (m *mockFilesManager) Rollback(_ context.Context, _ string) error  { return nil }
+func (m *mockFilesManager) Subscribe(_ func(filesmgr.FileEvent)) func() { return func() {} }
+
 // mockSecretsManager implements secretsmgr.Manager for testing
 type mockSecretsManager struct{}
 
@@ -165,6 +182,7 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
 	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
+	orbAgent.filesManager = &mockFilesManager{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -204,6 +222,7 @@ func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
 	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
+	orbAgent.filesManager = &mockFilesManager{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -238,6 +257,7 @@ func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
 	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
+	orbAgent.filesManager = &mockFilesManager{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -280,6 +300,7 @@ func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
 	orbAgent := agent.(*orbAgent)
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.filesManager = &mockFilesManager{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -322,6 +343,7 @@ func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 	orbAgent.secretsManager = &mockSecretsManager{}
 	orbAgent.policyManager = &mockPolicyManager{repo: repo}
 	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
+	orbAgent.filesManager = &mockFilesManager{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

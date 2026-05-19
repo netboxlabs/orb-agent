@@ -16,6 +16,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -67,7 +68,7 @@ func Register() bool {
 
 // Configure initializes the backend with the given configuration
 func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
-	config map[string]any, common config.BackendCommons,
+	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
 	o.logger = logger.With("backend", "opentelemetry_infinity")
 	o.policyRepo = repo

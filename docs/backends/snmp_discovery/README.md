@@ -14,10 +14,37 @@ The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/dio
 * [Manufacturer](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/manufacturer/main.go)
 * [Site](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/site/main.go)
 * [VLAN](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/vlan/main.go)
+* [VirtualChassis](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/virtual_chassis/main.go)
+
+When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), snmp-discovery emits one `VirtualChassis` entity plus one `Device` per stack member, and routes each interface/IP to the member that physically owns it — see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) below. Standalone switches and devices not in stack mode fall through to the existing single-`Device` path with no change in behaviour.
 
 When a device exposes the relevant MIBs, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. VLAN discovery uses Q-BRIDGE-MIB (RFC 4363) as the generic source and a Cisco-specific overlay (CISCO-VLAN-MEMBERSHIP-MIB, CISCO-VOICE-VLAN-MIB) on Cisco devices that don't fully implement Q-BRIDGE — see [SNMP Discovery — Supported Platforms](./supported_platforms.md#interface--vlan-associations) for which device classes are covered.
 
 Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately. The same caveat applies on device-discovery.
+
+## Switch stacks / Virtual Chassis
+
+When the target reports 2+ chassis rows in `ENTITY-MIB` (`entPhysicalTable`) with non-empty serials, snmp-discovery emits a NetBox `VirtualChassis` plus one `Device` per stack member, and routes each interface and IP address to the correct member. Detection is vendor-neutral and driven entirely by `entPhysicalClass`, `entPhysicalContainedIn`, and `entPhysicalSerialNum`; no vendor-specific MIB is required. Standalone switches, devices not in stack mode, and members without a serial fall back to the existing single-`Device` path with no change in behaviour.
+
+**Topology patterns detected.** Two valid `ENTITY-MIB` shapes are supported:
+
+| Pattern | Chassis row's `entPhysicalContainedIn` | Used by |
+|---|---|---|
+| Flat | `0` (chassis rows at the ENTITY-MIB root) | Catalyst 9300/3850 stacks, Aruba CX VSF, Juniper EX/QFX Virtual Chassis, HP/H3C IRF, Huawei iStack, Brocade ICX |
+| Wrapped | non-zero, pointing at a `entPhysicalClass = 11` (stack) container | Cisco StackWise Virtual on 9400/9500/9600/etc. |
+
+**Emission shape** (in order):
+
+1. **Master `Device`** — plain (no `vc_position`, no `virtual_chassis` ref). Named `<sysName>` from the SNMP walk; serial taken from the lowest-id chassis row.
+2. **`VirtualChassis`** — named `<sysName>`, with `master` set to the inline matcher block of the master Device.
+3. **N − 1 member `Device` entities** — each named `<sysName>-<memberID>` (matching the format `device_discovery` emits, so the same physical stack discovered by both services lands on the same NetBox rows), carrying `vc_position = <memberID>` and an inline `virtual_chassis` ref pointing to the same matcher block. Per-member serial comes from `entPhysicalSerialNum` on the member's chassis row; per-member model comes from `entPhysicalModelName` when populated.
+4. **Interface / IPAddress entities** — routed to the member that physically owns them. Routing uses `entAliasMappingTable` (RFC 6933) when present, then falls back to ifName parsing: Cisco IOS/IOS-XE/NX-OS 3-tuple (`Gi1/0/1`, `Te2/1/0/3`, etc., including short forms `Te`/`Fo`/`Hu`/`Tw`/`Fi`/`Twe`), Junos FPC, Aruba CX numeric, H3C dashed. Subinterface unit suffixes (`Gi2/0/1.100`) strip to the parent before parsing.
+
+**Member ID derivation.** When `entPhysicalParentRelPos` is populated (`> 0`) it provides the member id directly; otherwise the trailing integer of `entPhysicalName` (`Switch 2`) is used; the final fallback is the ordinal position of the chassis row in the inventory. Master identity is pinned to the **lowest member id present**, regardless of live role — this is required because the Diode plugin resolves an existing `VirtualChassis` via its `unique_master` matcher, and pinning to the lowest id keeps the master Device stable across live stack-role failovers so re-runs upsert the existing VC instead of creating a new one. The other matcher fields used for VC re-identification (asset_tag, primary_ip4/6, name+site+tenant, and `metadata.source_match`) are carried consistently on both the rich master Device and the inline VC `master` ref.
+
+**Member AssetTag is cleared.** Diode's highest-precedence matcher for `dcim.device` is `asset_tag` (unique). The master Device carries the policy `defaults.asset_tag` value if configured; member Devices have it explicitly cleared so multiple members do not collapse onto one NetBox row through a shared asset tag. Master / standalone AssetTag behaviour from `defaults.asset_tag` is unchanged.
+
+**Orphaned member ports.** If a chassis row is dropped from the validated payload (empty serial, duplicate serial collapsed against a lower-id row, etc.) but the device still reports ports owned by that member, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
 
 ## Configuration
 The `snmp_discovery` backend does not require any special configuration in the backends section. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
@@ -60,7 +87,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 |:---------:|:----:|:--------:|:-----------:|
 | tags | list | no | List of tags to apply to all discovered entities |
 | site | string | no | Default site name for discovered devices |
-| location | string | no | Default location for discovered devices |
+| location | string | no | Default location for discovered devices. Accepts a literal name or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)) |
+| asset_tag | string | no | Default asset tag for discovered devices. Accepts a literal value or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)). NetBox enforces a 50-character limit; resolved values longer than 50 characters are warn-logged and skipped |
 | role | string | no | Default role for discovered devices |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
@@ -163,7 +191,8 @@ config:
   defaults:
     tags: ["snmp-discovery", "orb"]
     site: "datacenter-01"
-    location: "rack-42"
+    location: ".1.3.6.1.2.1.1.6.0"     # Resolve from sysLocation (or use a literal like "rack-42")
+    asset_tag: ".1.3.6.1.2.1.1.4.0"    # Resolve from sysContact (or use a literal)
     role: "network"
     ip_address:
       description: "SNMP discovered IP"
@@ -264,6 +293,47 @@ devices:
 ```
 
 No extra SNMP traffic is generated — the referenced OID must already be collected by the policy's walk set. `sysDescr` (`.1.3.6.1.2.1.1.1.0`) is always walked. If the referenced OID is missing or empty for a given device, snmp-discovery falls back to using the raw `sysObjectID`. The bundled `mikrotik.yaml` keeps the historical static `mikrotikRouter` model string by default for backward compatibility; operators who want per-device MikroTik model names can opt in by adding the override above to their `lookup_extensions_dir`.
+
+## Default values from SNMP OIDs
+
+Selected `defaults` fields accept either a literal value or an SNMP OID reference of the form `.1.3.6.1.…`. When the configured value matches the SNMP OID syntax (rooted at `.1.3.6.1.`), snmp-discovery dereferences the walked value at discovery time and uses that as the field value. Anything else is treated as a literal — including dotted-decimal literals such as `"3.14.159"` (a room number) or `"10.0.0.1"`, which do not start with the standard SNMP Internet prefix.
+
+| Defaults field | OID-reference supported? |
+|---|---|
+| `defaults.location` | yes |
+| `defaults.asset_tag` | yes |
+| other `defaults.*` fields | not yet — literal only |
+
+Any OID in the **device-system-group walked snapshot** is a valid reference target. The full list available today:
+
+| OID | Name | Type | Typical use |
+|---|---|---|---|
+| `.1.3.6.1.2.1.1.1.0` | `sysDescr` | free text (often long) | Rarely useful as `location`/`asset_tag` because values commonly exceed NetBox's 100-char `Location.name` / 50-char `asset_tag` limits. |
+| `.1.3.6.1.2.1.1.2.0` | `sysObjectID` | OID string (e.g. `.1.3.6.1.4.1.9.1.1234`) | Not a useful default source on its own. |
+| `.1.3.6.1.2.1.1.4.0` | `sysContact` | free text | Some operators repurpose this as an inventory identifier — point `defaults.asset_tag` at it. |
+| `.1.3.6.1.2.1.1.5.0` | `sysName` | free text | Device hostname — point `defaults.asset_tag` at it when hostname doubles as the inventory tag. |
+| `.1.3.6.1.2.1.1.6.0` | `sysLocation` | free text | Physical location free-text per RFC 3418 — point `defaults.location` at it. |
+
+OIDs walked under **other** mapping groups — most notably ENTITY-MIB rows such as `entPhysicalSerialNum` (`.1.3.6.1.2.1.47.1.1.1.1.11.<row>`) — are **not** reachable: the mapping framework groups walked PDUs per-`Map()` call, and `defaults.location`/`defaults.asset_tag` resolution runs against the device-system-group snapshot only.
+
+```yaml
+defaults:
+  site: "datacenter-01"
+  location: ".1.3.6.1.2.1.1.6.0"     # Use sysLocation
+  asset_tag: ".1.3.6.1.2.1.1.4.0"    # Use sysContact (note: sysContact is RFC 3418 contact info,
+                                       # not an asset tag by default — only opt in if your
+                                       # operators have repurposed it for inventory tracking)
+```
+
+Resolution rules:
+
+- The OID-reference syntax matches `^\.1\.3\.6\.1\.(\d+\.)+\d+$`; everything else stays a literal.
+- The leading dot is mandatory: `.1.3.6.1.…`. A value without it (e.g. `1.3.6.1.2.1.1.6.0`) is treated as a literal and used verbatim — it will not be dereferenced.
+- A configured OID reference whose walked value is missing or empty leaves the field unset for that device — no fallback to a literal.
+- `defaults.asset_tag` is capped at NetBox's 50-character limit; longer resolved values are warn-logged and skipped (rather than truncated) to avoid silent asset-tag uniqueness collisions.
+- `defaults.location` resolved via an OID reference will create (or match) a NetBox `Location` object named after the resolved string, scoped to `defaults.site`. Free-text `sysLocation` values can therefore produce messy Location objects (`"Front Door"`, vendor defaults, etc.) — curate your fleet before enabling this in production. Resolved values longer than NetBox's 100-char `Location.name` limit will be rejected at upsert time.
+
+`entPhysicalAssetID` (ENTITY-MIB `.1.3.6.1.2.1.47.1.1.1.1.15`) is the standards-aligned asset-tag source, but it is a table column requiring chassis-row selection (`entPhysicalClass = chassis(3)`). It is not yet reachable from this `defaults.asset_tag` mechanism and is tracked as a follow-up.
 
 ### Manufacturer overrides
 

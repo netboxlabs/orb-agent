@@ -98,6 +98,22 @@ func TestParseJWTClaims(t *testing.T) {
 			},
 		},
 		{
+			name: "EdDSA header (orb-auth style)",
+			tokenString: RawJWTWithClaimsAlg(map[string]any{
+				"orb:org_id":   "test-org",
+				"orb:zone":     "default",
+				"orb:agent_id": "test-agent",
+				"client_id":    "test-client",
+				"iat":          1516239022,
+			}, "EdDSA"),
+			expected: &JWTClaims{
+				OrgID:    "test-org",
+				Zone:     "default",
+				ClientID: "test-client",
+				AgentID:  "test-agent",
+			},
+		},
+		{
 			name: "JWT missing org_id",
 			tokenString: RawJWTWithClaims(map[string]any{
 				"client_id":    "test-client",

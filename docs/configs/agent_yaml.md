@@ -194,16 +194,41 @@ For the full list of parameters per backend, see:
 
 ## `orb.secrets_manager`
 
-Configures HashiCorp Vault as an external secrets source. When active, `${vault://...}` references in policy and config values are resolved at runtime.
+Configures an external secrets source. When active, `${<scheme>://...}` references in policy and config values are resolved at runtime against the selected backend.
 
-The placeholder format is `${vault://mount/path/to/secret/fieldname}`, where:
-- `mount` is the KV v2 engine mount name
-- `path/to/secret` is the path within that mount
-- `fieldname` is the key within the secret (last path segment)
+Supported backends (set one in `active`):
+
+| `active` | Backend | Placeholder scheme | Docs |
+|---|---|---|---|
+| `vault` | HashiCorp Vault (KV v2) | `${vault://...}` | [Vault](../secretsmgr/vault.md) |
+| `delinea` | Delinea Secret Server | `${delinea://...}` | [Delinea](../secretsmgr/delinea.md) |
+| `doppler` | Doppler | `${doppler://...}` | [Doppler](../secretsmgr/doppler.md) |
+| `fleet` | Fleet (NetBox Labs cloud) | — | — |
+
+### Vault
+
+Three placeholder grammars are supported, in priority order:
+
+- **Fully qualified** — `${vault://<mount>//<path>/<key>}`. The `//` separator delimits the mount, so multi-segment mounts (e.g. `foo/bar`) work unambiguously.
+- **Short form** — `${vault://<path>/<key>}`. Requires `sources.vault.mount` to be configured; the configured mount is used.
+- **Legacy** — `${vault://<mount>/<path>/<key>}`. Single-segment mount only; preserved for backward compatibility with placeholders that pre-date the `//` separator.
+
+Single-segment mount, legacy form:
 
 ```yaml
-# Example: read the "password" key from secret at kv/myapp/db
 password: ${vault://kv/myapp/db/password}
+```
+
+Single-segment mount, qualified form (recommended for new configs):
+
+```yaml
+password: ${vault://kv//myapp/db/password}
+```
+
+Multi-segment mount — only the qualified form parses correctly:
+
+```yaml
+password: ${vault://foo/bar//myapp/db/password}
 ```
 
 ```yaml
@@ -220,6 +245,32 @@ orb:
 ```
 
 See the full [Vault secrets manager documentation](../secretsmgr/vault.md) for all parameters and authentication methods.
+
+### Doppler
+
+Doppler placeholders take a short form (using project/config defaults from the agent config) or a fully qualified form:
+
+```yaml
+# Short form — uses sources.doppler.project and sources.doppler.config defaults
+password: ${doppler://API_KEY}
+
+# Fully qualified — useful with Service Account / Personal tokens spanning configs
+password: ${doppler://orb/prd/API_KEY}
+```
+
+```yaml
+orb:
+  secrets_manager:
+    active: doppler
+    sources:
+      doppler:
+        token: ${DOPPLER_TOKEN}
+        project: orb
+        config: prd
+        schedule: "*/5 * * * *"
+```
+
+See the full [Doppler secrets manager documentation](../secretsmgr/doppler.md) for all parameters, authentication, and change-detection semantics.
 
 Plain `${VAR_NAME}` references are **not** resolved by the secrets manager — those are handled by environment variable substitution as described below.
 
