@@ -31,7 +31,7 @@ Currently, only the `local` and `git` sources are supported for config manager.
 - [Git](./docs/configs/git.md)
 
 ### Secrets Manager
-The `secrets_manager` section specifies how Orb agent should retrieve and inject secrets into policies. The secrets manager can reference external secret stores like HashiCorp Vault to retrieve sensitive information such as credentials without hardcoding them in configuration files.
+The `secrets_manager` section specifies how Orb agent should retrieve and inject secrets into policies. The secrets manager can reference external secret stores like HashiCorp Vault, Doppler, or Delinea Secret Server to retrieve sensitive information such as credentials without hardcoding them in configuration files.
 
 ```yaml
 orb:
@@ -51,6 +51,7 @@ orb:
 
 Supported secrets managers:
 - [HashiCorp Vault](./docs/secretsmgr/vault.md)
+- [Doppler](./docs/secretsmgr/doppler.md)
 - [Delinea Secret Server](./docs/secretsmgr/delinea.md) (beta)
 
 ### Backends

@@ -65,6 +65,7 @@ type VaultManager struct {
 	AuthArgs  map[string]any `yaml:"auth_args"`
 	Address   string         `yaml:"address"`
 	Namespace string         `yaml:"namespace"`
+	Mount     string         `yaml:"mount,omitempty"`
 	Timeout   *int           `yaml:"timeout,omitempty"`
 	Schedule  *string        `yaml:"schedule,omitempty"`
 }
