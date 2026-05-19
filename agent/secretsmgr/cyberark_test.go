@@ -2,7 +2,16 @@ package secretsmgr
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -508,4 +517,118 @@ func TestNewManager_ReturnsCyberArkManagerWhenActive(t *testing.T) {
 	})
 	_, ok := m.(*cyberarkManager)
 	require.True(t, ok, "New() with active=cyberark must return *cyberarkManager, got %T", m)
+}
+
+// generateTestCertPair produces a self-signed EC cert/key PEM pair valid for
+// 127.0.0.1 and "localhost" with the given CommonName. Used to drive the
+// mTLS round-trip test; not used in production paths.
+func generateTestCertPair(t *testing.T, cn string) (certPEM, keyPEM []byte) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	require.NoError(t, err)
+	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	require.NoError(t, err)
+	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM
+}
+
+func TestCyberArk_mTLS_HandshakeRoundTrip(t *testing.T) {
+	// Generate a CA-ish cert that doubles as a server cert AND is accepted
+	// as a client cert. Same key material is used for both sides of the
+	// handshake; this is fine for the test's purposes (it proves Go's
+	// http.Client presents the cert we asked for).
+	serverCertPEM, serverKeyPEM := generateTestCertPair(t, "server.localhost")
+	clientCertPEM, clientKeyPEM := generateTestCertPair(t, "orb-agent-client")
+
+	dir := t.TempDir()
+	caFile := filepath.Join(dir, "ca.pem")
+	require.NoError(t, os.WriteFile(caFile, serverCertPEM, 0o600))
+	certFile := filepath.Join(dir, "client.pem")
+	keyFile := filepath.Join(dir, "client.key")
+	require.NoError(t, os.WriteFile(certFile, clientCertPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, clientKeyPEM, 0o600))
+
+	// Server requires client cert.
+	serverCert, err := tls.X509KeyPair(serverCertPEM, serverKeyPEM)
+	require.NoError(t, err)
+	clientCA := x509.NewCertPool()
+	clientCA.AppendCertsFromPEM(clientCertPEM)
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Content":"mtls-ok"}`))
+	}))
+	srv.TLS = &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    clientCA,
+		MinVersion:   tls.VersionTLS12,
+	}
+	srv.StartTLS()
+	defer srv.Close()
+
+	// With a configured client cert + CA bundle, the handshake should succeed.
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config: config.CyberArkManager{
+			URL:        srv.URL,
+			AppID:      "orb-agent",
+			CABundle:   caFile,
+			ClientCert: certFile,
+			ClientKey:  keyFile,
+		},
+	}
+	require.NoError(t, c.Start(context.Background()))
+
+	val, err := c.fetch("Lab/Acc")
+	require.NoError(t, err)
+	require.Equal(t, "mtls-ok", val)
+
+	// Without the client cert/key, the handshake must fail.
+	c2 := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config: config.CyberArkManager{
+			URL:      srv.URL,
+			AppID:    "orb-agent",
+			CABundle: caFile,
+		},
+	}
+	require.NoError(t, c2.Start(context.Background()))
+	_, err = c2.fetch("Lab/Acc")
+	require.Error(t, err, "fetch without client cert must fail")
+}
+
+func TestCyberArk_SkipTLSVerify_AcceptsSelfSignedServer(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"Content":"skip-tls-ok"}`))
+	}))
+	defer srv.Close()
+
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config: config.CyberArkManager{
+			URL:           srv.URL,
+			AppID:         "orb-agent",
+			SkipTLSVerify: true,
+		},
+	}
+	require.NoError(t, c.Start(context.Background()))
+
+	val, err := c.fetch("Lab/Acc")
+	require.NoError(t, err)
+	require.Equal(t, "skip-tls-ok", val)
 }
