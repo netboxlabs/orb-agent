@@ -118,7 +118,7 @@ sources:
 ${vault://<path-segments>/<key>}
 ```
 
-Example — with the YAML above, both placeholders resolve against `foo/bar`:
+Example — with the YAML above, the placeholder resolves against `foo/bar`:
 
 ```
 ${vault://app/cred/password}                  # mount=foo/bar (from yaml), path=app/cred, key=password

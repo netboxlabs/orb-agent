@@ -211,7 +211,7 @@ func TestVaultManager_fetch(t *testing.T) {
 			name:          "invalid path format",
 			path:          "testsecret/password",
 			expectedValue: "",
-			expectedError: "invalid vault path format: testsecret/password",
+			expectedError: `invalid vault reference "testsecret/password"`,
 		},
 		{
 			name:          "secret not found",
