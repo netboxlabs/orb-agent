@@ -2,9 +2,14 @@ package secretsmgr
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -217,6 +222,176 @@ func TestCyberArkParseBody_ShortFormRequiresConfiguredAppID(t *testing.T) {
 	_, err := c.parseBody("Lab/DB-Account")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "app_id")
+}
+
+// fakeCCP emulates the GET /AIMWebService/api/Accounts endpoint.
+type fakeCCP struct {
+	*httptest.Server
+	mu       sync.Mutex
+	accounts map[string]map[string]any // key = "<AppID>|<Safe>|<Object>"
+	missing  map[string]bool
+	calls    atomic.Int32
+	lastReq  atomic.Value // url.Values
+}
+
+func newFakeCCP() *fakeCCP {
+	f := &fakeCCP{accounts: map[string]map[string]any{}, missing: map[string]bool{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/AIMWebService/api/Accounts", func(w http.ResponseWriter, r *http.Request) {
+		f.calls.Add(1)
+		q := r.URL.Query()
+		f.lastReq.Store(q)
+		key := q.Get("AppID") + "|" + q.Get("Safe") + "|" + q.Get("Object")
+
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.missing[key] {
+			http.Error(w, `{"ErrorCode":"APPAP004E","ErrorMsg":"Object not found"}`, http.StatusNotFound)
+			return
+		}
+		acc, ok := f.accounts[key]
+		if !ok {
+			http.Error(w, `{"ErrorCode":"APPAP004E","ErrorMsg":"Object not found"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(acc)
+	})
+	f.Server = httptest.NewServer(mux)
+	return f
+}
+
+func (f *fakeCCP) set(appID, safe, object string, fields map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accounts[appID+"|"+safe+"|"+object] = fields
+}
+
+func (f *fakeCCP) delete(appID, safe, object string) { //nolint:unused // used by later tasks
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.accounts, appID+"|"+safe+"|"+object)
+	f.missing[appID+"|"+safe+"|"+object] = true
+}
+
+func newCyberarkManagerForTest(t *testing.T, fake *fakeCCP, cfg config.CyberArkManager) *cyberarkManager {
+	t.Helper()
+	if cfg.AppID == "" {
+		cfg.AppID = "orb-agent"
+	}
+	cfg.URL = fake.URL
+	c := &cyberarkManager{preLogger: newTestLogger(), config: cfg}
+	require.NoError(t, c.Start(context.Background()))
+	return c
+}
+
+func TestCyberArkFetch_ShortForm_ReturnsContent(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "DB-Account", map[string]any{
+		"Content":  "s3cret",
+		"UserName": "dbuser",
+	})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	val, err := c.fetch("Lab/DB-Account")
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", val)
+
+	q := fake.lastReq.Load().(url.Values)
+	require.Equal(t, "orb-agent", q.Get("AppID"))
+	require.Equal(t, "Lab", q.Get("Safe"))
+	require.Equal(t, "DB-Account", q.Get("Object"))
+}
+
+func TestCyberArkFetch_FieldSelector_ReturnsUserName(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "DB-Account", map[string]any{
+		"Content":  "s3cret",
+		"UserName": "dbuser",
+	})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	val, err := c.fetch("Lab/DB-Account/UserName")
+	require.NoError(t, err)
+	require.Equal(t, "dbuser", val)
+}
+
+func TestCyberArkFetch_QualifiedAppID_OverridesYAML(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("OtherApp", "Lab", "DB-Account", map[string]any{"Content": "ot-secret"})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	val, err := c.fetch("OtherApp//Lab/DB-Account")
+	require.NoError(t, err)
+	require.Equal(t, "ot-secret", val)
+
+	q := fake.lastReq.Load().(url.Values)
+	require.Equal(t, "OtherApp", q.Get("AppID"))
+}
+
+func TestCyberArkFetch_ReasonIsForwarded(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "x"})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{Reason: "policy resolution"})
+	_, err := c.fetch("Lab/Acc")
+	require.NoError(t, err)
+
+	q := fake.lastReq.Load().(url.Values)
+	require.Equal(t, "policy resolution", q.Get("Reason"))
+}
+
+func TestCyberArkFetch_NotFound(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	_, err := c.fetch("Lab/Missing")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+	require.Contains(t, err.Error(), "Object not found", "underlying CCP error message must surface")
+}
+
+func TestCyberArkFetch_FieldMissingFromResponse(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "x"})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	_, err := c.fetch("Lab/Acc/Database")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `field "Database"`)
+}
+
+func TestCyberArkFetch_FieldEmptyInResponse(t *testing.T) {
+	fake := newFakeCCP()
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": ""})
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	_, err := c.fetch("Lab/Acc")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty")
+}
+
+func TestCyberArkFetch_Unauthorized(t *testing.T) {
+	fake := &fakeCCP{accounts: map[string]map[string]any{}, missing: map[string]bool{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/AIMWebService/api/Accounts", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"ErrorCode":"AUTH","ErrorMsg":"App not authorized"}`, http.StatusUnauthorized)
+	})
+	fake.Server = httptest.NewServer(mux)
+	defer fake.Close()
+
+	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
+	_, err := c.fetch("Lab/Acc")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "401")
+	require.Contains(t, err.Error(), "App not authorized")
 }
 
 // testSelfSignedCAPEM is a syntactically-valid X.509 self-signed CA PEM block

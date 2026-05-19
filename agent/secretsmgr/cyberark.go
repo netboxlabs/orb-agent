@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -124,6 +126,101 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 func containsPEMBlock(b []byte) bool {
 	block, _ := pem.Decode(b)
 	return block != nil
+}
+
+// ccpErrorEnvelope is the JSON CyberArk sends on non-2xx responses.
+type ccpErrorEnvelope struct {
+	ErrorCode string `json:"ErrorCode,omitempty"`
+	ErrorMsg  string `json:"ErrorMsg,omitempty"`
+}
+
+// fetch performs the GET /AIMWebService/api/Accounts call for the parsed
+// reference and returns the requested field. Defaults to the Content field
+// (which holds the password in CCP's response model).
+func (c *cyberarkManager) fetch(body string) (string, error) {
+	ref, err := c.parseBody(body)
+	if err != nil {
+		return "", err
+	}
+
+	u, err := url.Parse(c.baseURL + "/AIMWebService/api/Accounts")
+	if err != nil {
+		return "", fmt.Errorf("cyberark: bad url %q: %w", c.baseURL, err)
+	}
+	q := u.Query()
+	q.Set("AppID", ref.appID)
+	q.Set("Safe", ref.safe)
+	q.Set("Object", ref.object)
+	if c.config.Reason != "" {
+		q.Set("Reason", c.config.Reason)
+	}
+	u.RawQuery = q.Encode()
+
+	// c.ctx is set by pollingBase.init() in Start (Task 5). Defensive default
+	// here because tests in Task 4 — and any caller that bypasses Start —
+	// would otherwise hit http.NewRequestWithContext's nil-context error.
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("cyberark: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): %w",
+			body, ref.appID, ref.safe, ref.object, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("cyberark: read response for %s: %w", body, err)
+	}
+
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("cyberark: account not found: %s (AppID=%s Safe=%s Object=%s): %s",
+			body, ref.appID, ref.safe, ref.object, ccpErrorDetail(bodyBytes))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): HTTP %d: %s",
+			body, ref.appID, ref.safe, ref.object, resp.StatusCode, ccpErrorDetail(bodyBytes))
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(bodyBytes, &parsed); err != nil {
+		return "", fmt.Errorf("cyberark: decode response for %s: %w", body, err)
+	}
+
+	raw, ok := parsed[ref.field]
+	if !ok {
+		return "", fmt.Errorf("cyberark: field %q not found in response for %s (AppID=%s Safe=%s Object=%s)",
+			ref.field, body, ref.appID, ref.safe, ref.object)
+	}
+	strValue, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("cyberark: field %q is not a string for %s", ref.field, body)
+	}
+	if strValue == "" {
+		return "", fmt.Errorf("cyberark: field %q is empty for %s", ref.field, body)
+	}
+	return strValue, nil
+}
+
+// ccpErrorDetail extracts a human-readable message from a CCP non-2xx
+// response. Falls back to the raw body when the JSON envelope isn't present.
+func ccpErrorDetail(b []byte) string {
+	var env ccpErrorEnvelope
+	if err := json.Unmarshal(b, &env); err == nil && env.ErrorMsg != "" {
+		if env.ErrorCode != "" {
+			return env.ErrorCode + ": " + env.ErrorMsg
+		}
+		return env.ErrorMsg
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // cyberarkRef holds a parsed placeholder body.
