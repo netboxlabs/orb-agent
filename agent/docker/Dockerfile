@@ -45,6 +45,8 @@ RUN pip3 install --no-cache-dir netboxlabs-device-discovery netboxlabs-orb-worke
 ########################################################################
 FROM python:3.14-alpine
 
+ENV TZ=UTC
+
 RUN apk add --no-cache \
         bash \
         ca-certificates \
@@ -52,7 +54,10 @@ RUN apk add --no-cache \
         gzip \
         nmap \
         openssh-client \
-        tini && \
+        tini \
+        tzdata && \
+    cp /usr/share/zoneinfo/UTC /etc/localtime && \
+    echo "UTC" > /etc/timezone && \
     update-ca-certificates
 
 RUN mkdir -p /opt/orb
