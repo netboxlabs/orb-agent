@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,7 +31,7 @@ type cyberarkManager struct {
 
 	config     config.CyberArkManager
 	preLogger  *slog.Logger
-	baseURL    string
+	baseURL    *url.URL
 	httpClient *http.Client
 }
 
@@ -72,7 +71,17 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", c.config.URL, parsedURL.Scheme)
 	}
-	c.baseURL = strings.TrimRight(c.config.URL, "/")
+	if parsedURL.Host == "" {
+		return fmt.Errorf("cyberark: url %q must include a host", c.config.URL)
+	}
+	if parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
+		return fmt.Errorf("cyberark: url %q must not contain a query string or fragment", c.config.URL)
+	}
+	// Keep the parsed URL around so fetch() builds the endpoint by setting
+	// Path on a clone rather than concatenating strings — which would
+	// silently corrupt any baseURL carrying a non-trivial Path.
+	parsedURL.Path = strings.TrimRight(parsedURL.Path, "/")
+	c.baseURL = parsedURL
 
 	if (c.config.ClientCert == "") != (c.config.ClientKey == "") {
 		return fmt.Errorf("cyberark: client_cert and client_key must both be set or both empty")
@@ -89,12 +98,13 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 			return fmt.Errorf("cyberark: read ca_bundle %q: %w", c.config.CABundle, err)
 		}
 		pool := x509.NewCertPool()
+		// AppendCertsFromPEM returns true only when at least one certificate
+		// successfully parsed. A file containing only a PEM private key, or
+		// only a malformed certificate, leaves the pool empty — reject those
+		// at startup rather than producing an unusable trust store at
+		// connection time.
 		if !pool.AppendCertsFromPEM(pemBytes) {
-			// AppendCertsFromPEM silently ignores junk; fail when the file
-			// has no usable PEM blocks at all.
-			if !containsPEMBlock(pemBytes) {
-				return fmt.Errorf("cyberark: ca_bundle %q contains no PEM blocks", c.config.CABundle)
-			}
+			return fmt.Errorf("cyberark: ca_bundle %q contains no parseable certificates", c.config.CABundle)
 		}
 		tlsCfg.RootCAs = pool
 	}
@@ -111,20 +121,19 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if c.config.Timeout != nil && *c.config.Timeout > 0 {
 		timeout = time.Duration(*c.config.Timeout) * defaultCyberArkTimeoutUnit
 	}
+	// Clone http.DefaultTransport so we keep proxy-from-environment, dial
+	// timeouts, idle-conn settings, HTTP/2 negotiation, etc. — a bare
+	// &http.Transport{} would silently regress all of those in
+	// enterprise deployments that rely on HTTPS_PROXY for outbound traffic.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsCfg
 	c.httpClient = &http.Client{
 		Timeout:   timeout,
-		Transport: &http.Transport{TLSClientConfig: tlsCfg},
+		Transport: transport,
 	}
 
 	c.init(ctx, c.preLogger, "cyberark", c.fetch)
 	return c.startScheduler(c.config.Schedule)
-}
-
-// containsPEMBlock returns true if bytes contain at least one valid PEM
-// block.
-func containsPEMBlock(b []byte) bool {
-	block, _ := pem.Decode(b)
-	return block != nil
 }
 
 // ccpErrorEnvelope is the JSON CyberArk sends on non-2xx responses.
@@ -142,10 +151,8 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 		return "", err
 	}
 
-	u, err := url.Parse(c.baseURL + "/AIMWebService/api/Accounts")
-	if err != nil {
-		return "", fmt.Errorf("cyberark: bad url %q: %w", c.baseURL, err)
-	}
+	u := *c.baseURL
+	u.Path = strings.TrimRight(u.Path, "/") + "/AIMWebService/api/Accounts"
 	q := u.Query()
 	q.Set("AppID", ref.appID)
 	q.Set("Safe", ref.safe)

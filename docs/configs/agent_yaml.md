@@ -315,6 +315,7 @@ Values can reference environment variables using `${VAR_NAME}` syntax. Resolutio
 |-------|-----------------|-------------|
 | Git config manager | `url`, `password` | Go agent at startup |
 | Vault secrets manager `auth_args` | All fields | Go agent at startup |
+| CyberArk secrets manager | `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key` | Go agent at startup |
 | `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
 | `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase` | Go SNMP backend at policy execution |
 

@@ -53,7 +53,66 @@ func TestCyberArkStart_TrimsTrailingSlashFromURL(t *testing.T) {
 		config:    config.CyberArkManager{URL: "https://ccp.example.com/", AppID: "orb"},
 	}
 	require.NoError(t, c.Start(context.Background()))
-	require.Equal(t, "https://ccp.example.com", c.baseURL)
+	require.Equal(t, "https://ccp.example.com", c.baseURL.String())
+}
+
+func TestCyberArkStart_AcceptsURLWithPathPrefix(t *testing.T) {
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config:    config.CyberArkManager{URL: "https://ccp.example.com/cyberark", AppID: "orb"},
+	}
+	require.NoError(t, c.Start(context.Background()))
+	require.Equal(t, "/cyberark", c.baseURL.Path, "path prefix must be preserved")
+}
+
+func TestCyberArkStart_RejectsURLWithQueryOrFragment(t *testing.T) {
+	for _, bad := range []string{
+		"https://ccp.example.com?x=y",
+		"https://ccp.example.com#anchor",
+		"https://ccp.example.com/cyberark?a=1",
+	} {
+		t.Run(bad, func(t *testing.T) {
+			c := &cyberarkManager{
+				preLogger: newTestLogger(),
+				config:    config.CyberArkManager{URL: bad, AppID: "orb"},
+			}
+			err := c.Start(context.Background())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "query string or fragment")
+		})
+	}
+}
+
+func TestCyberArkStart_RejectsURLWithoutHost(t *testing.T) {
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config:    config.CyberArkManager{URL: "https://", AppID: "orb"},
+	}
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must include a host")
+}
+
+func TestCyberArkStart_RejectsCABundleWithOnlyPrivateKey(t *testing.T) {
+	// A PEM file that has a recognisable PEM block but no certificate must
+	// be rejected at startup rather than producing an empty trust pool that
+	// fails opaquely at TLS handshake time.
+	dir := t.TempDir()
+	keyOnly := filepath.Join(dir, "key.pem")
+	require.NoError(t, os.WriteFile(keyOnly, []byte(`-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIPRWyrJDXG9zAQt2YgL3vV4eqOh1aFFkdvE7QprjLkBmoAoGCCqGSM49
+AwEHoUQDQgAEH+wLkFW6xQRPAY1+i6FdNYbZFTr1cmoZTbb8B+pPj91A3pSAlIeq
+Iz3FQjRyrCfXrI4LElIh6/Pwhkz2zHo+pQ==
+-----END EC PRIVATE KEY-----
+`), 0o600))
+
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config:    config.CyberArkManager{URL: "https://ccp.example.com", AppID: "orb", CABundle: keyOnly},
+	}
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no parseable certificates")
 }
 
 func TestCyberArkStart_RejectsUnparseableURL(t *testing.T) {
