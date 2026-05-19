@@ -213,12 +213,21 @@ Three placeholder grammars are supported, in priority order:
 - **Short form** — `${vault://<path>/<key>}`. Requires `sources.vault.mount` to be configured; the configured mount is used.
 - **Legacy** — `${vault://<mount>/<path>/<key>}`. Single-segment mount only; preserved for backward compatibility with placeholders that pre-date the `//` separator.
 
-```yaml
-# Single-segment mount (legacy / qualified are equivalent here)
-password: ${vault://kv/myapp/db/password}
-password: ${vault://kv//myapp/db/password}
+Single-segment mount, legacy form:
 
-# Multi-segment mount (only the qualified form parses correctly)
+```yaml
+password: ${vault://kv/myapp/db/password}
+```
+
+Single-segment mount, qualified form (recommended for new configs):
+
+```yaml
+password: ${vault://kv//myapp/db/password}
+```
+
+Multi-segment mount — only the qualified form parses correctly:
+
+```yaml
 password: ${vault://foo/bar//myapp/db/password}
 ```
 

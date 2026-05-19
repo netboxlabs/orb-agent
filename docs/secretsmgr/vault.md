@@ -124,6 +124,8 @@ Example — with the YAML above, both placeholders resolve against `foo/bar`:
 ${vault://app/cred/password}                  # mount=foo/bar (from yaml), path=app/cred, key=password
 ```
 
+> ⚠ **When `sources.vault.mount` is set, every unqualified placeholder is interpreted as path-only under that mount.** A placeholder that looks legacy-style — for example `${vault://kv/app/cred/password}` with `mount: foo/bar` configured — is **not** treated as legacy; it resolves to `mount=foo/bar`, path=`kv/app/cred`, key=`password`, and will almost certainly miss. If you need to target a different mount from the configured default, use the fully qualified form: `${vault://kv//app/cred/password}`.
+
 ### Legacy (single-segment mount, no separator)
 
 For backward compatibility with placeholders that pre-date the `//` separator:

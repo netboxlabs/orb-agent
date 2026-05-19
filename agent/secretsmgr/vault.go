@@ -175,23 +175,24 @@ func (v *vaultManager) fetch(body string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	resolved := fmt.Sprintf("mount=%q path=%q field=%q", ref.mount, ref.path, ref.field)
 	secret, err := v.client.KVv2(ref.mount).Get(v.ctx, ref.path)
 	if err != nil {
-		return "", fmt.Errorf("failed to get secret path %s: %w", body, err)
+		return "", fmt.Errorf("failed to get secret path %s (%s): %w", body, resolved, err)
 	}
 	if secret == nil || secret.Data == nil {
-		return "", fmt.Errorf("secret not found: %s", body)
+		return "", fmt.Errorf("secret not found: %s (%s)", body, resolved)
 	}
 	value, ok := secret.Data[ref.field]
 	if !ok {
-		return "", fmt.Errorf("secret not found: %s", body)
+		return "", fmt.Errorf("secret not found: %s (%s)", body, resolved)
 	}
 	strValue, ok := value.(string)
 	if !ok {
-		return "", fmt.Errorf("secret is not a string: %s", body)
+		return "", fmt.Errorf("secret is not a string: %s (%s)", body, resolved)
 	}
 	if strValue == "" {
-		return "", fmt.Errorf("secret is empty: %s", body)
+		return "", fmt.Errorf("secret is empty: %s (%s)", body, resolved)
 	}
 	return strValue, nil
 }
