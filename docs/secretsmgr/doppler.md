@@ -2,8 +2,6 @@
 
 The Orb Agent can integrate with [Doppler](https://www.doppler.com/) to securely manage sensitive information such as passwords and API keys. This feature allows you to reference secrets stored in Doppler directly in your policy configurations without hardcoding sensitive values.
 
-The provider is read-only and has been validated end-to-end against a real Doppler workplace using a Service Token, including secret rotation and cron-driven re-apply.
-
 ## Configuration
 
 The Doppler secrets manager is configured in the `secrets_manager` section of your Orb Agent configuration file:
@@ -75,14 +73,29 @@ ${doppler://orb/prd/API_KEY}
 
 Use the fully qualified form with Service Account or Personal tokens that have access to multiple configs.
 
-## Change detection
+### Example
 
-When `schedule` is set, the provider re-fetches each cached secret on the cron cadence. If a value changed, the policy manager re-applies every policy that referenced it. If a secret becomes unreachable (deleted, revoked, network failure), the provider evicts the cache entry and asks the policy manager to mark the affected policies as failed; the policy can recover only after a successful re-fetch.
+Here's an example of using Doppler secrets in a device discovery policy:
 
-## Manual validation checklist (against a real Doppler workplace)
+```yaml
+orb:
+  policies:
+    device_discovery:
+      discovery_1:
+        schedule: "0 * * * *"  # Run hourly
+        defaults:
+          site: NY
+        scope:
+          - driver: ios
+            hostname: 10.1.2.24
+            username: "${doppler://CISCO_USERNAME}"
+            password: "${doppler://CISCO_PASSWORD}"
+```
 
-1. Create a Service Token scoped to a single config; run the agent with that token and a short-form placeholder.
-2. Rotate the secret in Doppler; verify the agent's log emits `Detected changed secret` (with `scheme=doppler`) on the next poll and that the affected policy is re-applied.
-3. Delete the secret in Doppler; verify the agent emits the failure log and that the policy is marked failed.
-4. Configure the agent with no `project`/`config` defaults and use the fully qualified `${doppler://proj/cfg/NAME}` form with a Service Account token; verify the lookup succeeds.
-5. Use an invalid token; verify the agent's log emits a 401 error on first lookup.
+The Orb Agent will resolve the Doppler reference and use the actual secret value from Doppler when the policy is applied.
+
+## Secret Polling
+
+If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. The change is logged at INFO as `Detected changed secret scheme=doppler ref=<name>` so operators can confirm a rotation has propagated. If a secret becomes unreachable (deleted, revoked, network failure), the provider evicts the cache entry and the policy manager marks the affected policies as failed; the policy can recover only after a successful re-fetch.
+
+This is useful for credential rotation scenarios, where you want to update credentials in Doppler without restarting the Orb Agent or manually updating policies.
