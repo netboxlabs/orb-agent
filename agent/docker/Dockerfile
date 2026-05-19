@@ -60,7 +60,11 @@ RUN apk add --no-cache \
     echo "UTC" > /etc/timezone && \
     update-ca-certificates
 
-RUN mkdir -p /opt/orb
+RUN mkdir -p /opt/orb /opt/orb/files /opt/orb/pip-cache /usr/local/share/orb-agent
+
+ENV PATH=/opt/orb/files:$PATH
+ENV PIP_CACHE_DIR=/opt/orb/pip-cache
+ENV ORB_DEFAULT_CONFIG=/usr/local/share/orb-agent/default_config.yaml
 
 # Copy Python site-packages and binaries from builder (includes pip and package executables)
 COPY --from=python-builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
@@ -79,6 +83,6 @@ COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-dis
 
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh
-COPY --from=builder /src/orb-agent/agent/docker/default_config.yaml /opt/orb/default_config.yaml
+COPY --from=builder /src/orb-agent/agent/docker/default_config.yaml /usr/local/share/orb-agent/default_config.yaml
 
 ENTRYPOINT [ "/sbin/tini", "--", "/usr/local/bin/orb-agent-entry.sh" ]
