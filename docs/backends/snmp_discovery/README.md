@@ -301,7 +301,7 @@ defaults:
 Resolution rules:
 
 - The OID-reference syntax matches `^\.1\.3\.6\.1\.(\d+\.)+\d+$`; everything else stays a literal.
-- Both leading-dot (`.1.3.6…`) and no-leading-dot (`1.3.6…`) spellings are accepted.
+- The leading dot is mandatory: `.1.3.6.1.…`. A value without it (e.g. `1.3.6.1.2.1.1.6.0`) is treated as a literal and used verbatim — it will not be dereferenced.
 - A configured OID reference whose walked value is missing or empty leaves the field unset for that device — no fallback to a literal.
 - `defaults.asset_tag` is capped at NetBox's 50-character limit; longer resolved values are warn-logged and skipped (rather than truncated) to avoid silent asset-tag uniqueness collisions.
 - `defaults.location` resolved via an OID reference will create (or match) a NetBox `Location` object named after the resolved string, scoped to `defaults.site`. Free-text `sysLocation` values can therefore produce messy Location objects (`"Front Door"`, vendor defaults, etc.) — curate your fleet before enabling this in production. Resolved values longer than NetBox's 100-char `Location.name` limit will be rejected at upsert time.
