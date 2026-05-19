@@ -207,14 +207,19 @@ Supported backends (set one in `active`):
 
 ### Vault
 
-The placeholder format is `${vault://mount/path/to/secret/fieldname}`, where:
-- `mount` is the KV v2 engine mount name
-- `path/to/secret` is the path within that mount
-- `fieldname` is the key within the secret (last path segment)
+Three placeholder grammars are supported, in priority order:
+
+- **Fully qualified** — `${vault://<mount>//<path>/<key>}`. The `//` separator delimits the mount, so multi-segment mounts (e.g. `foo/bar`) work unambiguously.
+- **Short form** — `${vault://<path>/<key>}`. Requires `sources.vault.mount` to be configured; the configured mount is used.
+- **Legacy** — `${vault://<mount>/<path>/<key>}`. Single-segment mount only; preserved for backward compatibility with placeholders that pre-date the `//` separator.
 
 ```yaml
-# Example: read the "password" key from secret at kv/myapp/db
+# Single-segment mount (legacy / qualified are equivalent here)
 password: ${vault://kv/myapp/db/password}
+password: ${vault://kv//myapp/db/password}
+
+# Multi-segment mount (only the qualified form parses correctly)
+password: ${vault://foo/bar//myapp/db/password}
 ```
 
 ```yaml

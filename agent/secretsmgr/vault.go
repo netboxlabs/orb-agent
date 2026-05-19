@@ -101,21 +101,88 @@ func (v *vaultManager) addTokenLifecycleWatcher() error {
 	return nil
 }
 
-// fetch retrieves a secret from the vault. The body must be a slash-delimited
-// path of the form "<mount>/<path-segments>/<field>".
-func (v *vaultManager) fetch(body string) (string, error) {
+// vaultRef captures a parsed ${vault://...} reference.
+type vaultRef struct {
+	mount string
+	path  string
+	field string
+}
+
+// parseBody resolves a placeholder body into (mount, path, field) using one of
+// three grammars, in priority order:
+//
+//  1. Fully qualified — "<mount>//<path-segments>/<field>". The first "//"
+//     terminates the mount, so multi-segment mounts (e.g. "foo/bar") work
+//     unambiguously.
+//  2. Short form — "<path-segments>/<field>". Requires sources.vault.mount to
+//     be configured; the configured mount is used and the body carries only
+//     path/field.
+//  3. Legacy form — "<mount>/<path-segments>/<field>". Single-segment mount.
+//     Preserved verbatim for backward compatibility with existing
+//     placeholders that pre-date this grammar; used only when neither "//"
+//     appears nor a default mount is configured.
+func (v *vaultManager) parseBody(body string) (vaultRef, error) {
+	if body == "" {
+		return vaultRef{}, fmt.Errorf("invalid vault reference: empty body")
+	}
+
+	if idx := strings.Index(body, "//"); idx >= 0 {
+		mount := body[:idx]
+		rest := body[idx+2:]
+		if mount == "" {
+			return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty mount before '//'", body)
+		}
+		return splitPathField(mount, rest, body)
+	}
+
+	if v.config.Mount != "" {
+		return splitPathField(v.config.Mount, body, body)
+	}
+
 	parts := strings.Split(body, "/")
 	if len(parts) < 3 {
-		return "", fmt.Errorf("invalid vault path format: %s", body)
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: legacy form requires '<mount>/<path>/<field>'; for multi-segment mounts use '<mount>//<path>/<field>' or set sources.vault.mount", body)
 	}
-	secret, err := v.client.KVv2(parts[0]).Get(v.ctx, strings.Join(parts[1:len(parts)-1], "/"))
+	return vaultRef{
+		mount: parts[0],
+		path:  strings.Join(parts[1:len(parts)-1], "/"),
+		field: parts[len(parts)-1],
+	}, nil
+}
+
+// splitPathField extracts (path, field) from the part of the body that lives
+// after the mount, validating that both are non-empty.
+func splitPathField(mount, rest, original string) (vaultRef, error) {
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: expected at least one path segment and a field after the mount", original)
+	}
+	field := parts[len(parts)-1]
+	path := strings.Join(parts[:len(parts)-1], "/")
+	if path == "" {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty secret path", original)
+	}
+	if field == "" {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty field", original)
+	}
+	return vaultRef{mount: mount, path: path, field: field}, nil
+}
+
+// fetch retrieves a secret from Vault. See parseBody for the supported
+// reference grammars.
+func (v *vaultManager) fetch(body string) (string, error) {
+	ref, err := v.parseBody(body)
+	if err != nil {
+		return "", err
+	}
+	secret, err := v.client.KVv2(ref.mount).Get(v.ctx, ref.path)
 	if err != nil {
 		return "", fmt.Errorf("failed to get secret path %s: %w", body, err)
 	}
 	if secret == nil || secret.Data == nil {
 		return "", fmt.Errorf("secret not found: %s", body)
 	}
-	value, ok := secret.Data[parts[len(parts)-1]]
+	value, ok := secret.Data[ref.field]
 	if !ok {
 		return "", fmt.Errorf("secret not found: %s", body)
 	}
