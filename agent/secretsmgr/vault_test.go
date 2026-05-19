@@ -217,7 +217,7 @@ func TestVaultManager_fetch(t *testing.T) {
 			name:          "secret not found",
 			path:          "testsecret/nonexistent/path/key",
 			expectedValue: "",
-			expectedError: "failed to get secret path testsecret/nonexistent/path/key:",
+			expectedError: "failed to get secret path testsecret/nonexistent/path/key",
 		},
 		{
 			name:          "key not found in data",
