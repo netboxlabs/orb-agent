@@ -94,12 +94,27 @@ type DopplerManager struct {
 	Schedule *string `yaml:"schedule,omitempty"`
 }
 
-// SecretsSources represents the configuration for manager sources, including vault, fleet, delinea and doppler.
+// CyberArkManager represents the configuration for the CyberArk Central
+// Credential Provider (CCP) secrets manager.
+type CyberArkManager struct {
+	URL           string  `yaml:"url"`
+	AppID         string  `yaml:"app_id"`
+	Reason        string  `yaml:"reason,omitempty"`
+	SkipTLSVerify bool    `yaml:"skip_tls_verify,omitempty"`
+	CABundle      string  `yaml:"ca_bundle,omitempty"`
+	ClientCert    string  `yaml:"client_cert,omitempty"`
+	ClientKey     string  `yaml:"client_key,omitempty"`
+	Timeout       *int    `yaml:"timeout,omitempty"`
+	Schedule      *string `yaml:"schedule,omitempty"`
+}
+
+// SecretsSources represents the configuration for manager sources, including vault, fleet, delinea, doppler and cyberark.
 type SecretsSources struct {
-	Vault   VaultManager        `yaml:"vault"`
-	Fleet   FleetSecretsManager `yaml:"fleet"`
-	Delinea DelineaManager      `yaml:"delinea"`
-	Doppler DopplerManager      `yaml:"doppler"`
+	Vault    VaultManager        `yaml:"vault"`
+	Fleet    FleetSecretsManager `yaml:"fleet"`
+	Delinea  DelineaManager      `yaml:"delinea"`
+	Doppler  DopplerManager      `yaml:"doppler"`
+	CyberArk CyberArkManager     `yaml:"cyberark"`
 }
 
 // ManagerSecrets represents the configuration for the Secrets Manager
