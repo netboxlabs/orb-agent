@@ -134,6 +134,21 @@ func TestVaultParseBody_ShortFormRequiresPathAndField(t *testing.T) {
 	require.Contains(t, err.Error(), "at least one path segment")
 }
 
+// TestVaultParseBody_RejectsInvalidDefaultMount verifies the short-form
+// path defends itself against a misconfigured sources.vault.mount even
+// when a caller bypasses Start (where the same check fires earlier).
+func TestVaultParseBody_RejectsInvalidDefaultMount(t *testing.T) {
+	for _, badMount := range []string{"/foo", "foo/", "foo//bar"} {
+		t.Run(badMount, func(t *testing.T) {
+			v := vaultManagerWith(badMount)
+			_, err := v.parseBody("app/cred/password")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "invalid sources.vault.mount")
+			require.Contains(t, err.Error(), badMount)
+		})
+	}
+}
+
 // TestVaultParseBody_RejectsEmptySegments locks in the contract that every
 // path segment (mount, intermediate path, field) is non-empty across all
 // three grammars. Without these checks, leading/trailing/consecutive "/"

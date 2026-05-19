@@ -25,6 +25,10 @@ type vaultManager struct {
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
+	if v.config.Mount != "" && hasEmptySegment(v.config.Mount) {
+		return fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
+	}
+
 	vaultCfg := vault.DefaultConfig()
 	vaultCfg.Address = v.config.Address
 	if v.config.Timeout == nil || *v.config.Timeout == 0 {
@@ -139,6 +143,9 @@ func (v *vaultManager) parseBody(body string) (vaultRef, error) {
 	}
 
 	if v.config.Mount != "" {
+		if hasEmptySegment(v.config.Mount) {
+			return vaultRef{}, fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
+		}
 		return splitPathField(v.config.Mount, body, body)
 	}
 
@@ -153,14 +160,24 @@ func (v *vaultManager) parseBody(body string) (vaultRef, error) {
 	return splitPathField(mount, strings.Join(parts[1:], "/"), body)
 }
 
+// hasEmptySegment reports whether s, split by "/", contains any empty
+// segment — i.e. a leading "/", a trailing "/", or consecutive "//".
+// Used to reject malformed mounts before they reach the Vault client.
+func hasEmptySegment(s string) bool {
+	for _, seg := range strings.Split(s, "/") {
+		if seg == "" {
+			return true
+		}
+	}
+	return false
+}
+
 // validateMount rejects mounts that contain empty path segments (leading,
 // trailing, or consecutive "/"). Catches inputs like "/foo/bar" or "foo//"
 // that would otherwise reach the Vault client with a malformed mount.
 func validateMount(mount, original string) error {
-	for _, seg := range strings.Split(mount, "/") {
-		if seg == "" {
-			return fmt.Errorf("invalid vault reference %q: mount contains an empty path segment", original)
-		}
+	if hasEmptySegment(mount) {
+		return fmt.Errorf("invalid vault reference %q: mount contains an empty path segment", original)
 	}
 	return nil
 }

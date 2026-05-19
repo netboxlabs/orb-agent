@@ -249,8 +249,10 @@ func TestPollingBase_RegisterCallbackAfterStart(t *testing.T) {
 	_, _ = b.resolveBody("k", "policy-1")
 	b.pollSecrets()
 
-	// Register callback concurrently with a second poll.
-	got := make(chan map[string]bool, 1)
+	// Register callback concurrently with a second poll. Buffer is sized to
+	// absorb both potential sends (the concurrent poll + the final poll
+	// below) so the callback never blocks regardless of interleaving.
+	got := make(chan map[string]bool, 4)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
