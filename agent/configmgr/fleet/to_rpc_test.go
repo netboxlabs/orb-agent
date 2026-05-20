@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -473,4 +474,38 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	assert.IsType(t, map[string]interface{}{}, backendInfo.Data["object_val"])
 
 	mockBackend1.AssertExpectations(t)
+}
+
+func TestSendGroupMembershipsRequest_Success(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	messaging := NewMessaging(logger, nil, resetChan, &groupManager)
+
+	var published []byte
+	publishFunc := func(_ context.Context, payload []byte) error {
+		published = payload
+		return nil
+	}
+
+	messaging.sendGroupMembershipsRequest(context.Background(), publishFunc)
+	assert.NotEmpty(t, published)
+
+	var rpc map[string]any
+	require.NoError(t, json.Unmarshal(published, &rpc))
+	assert.Equal(t, "group_membership_req", rpc["func"])
+}
+
+func TestSendGroupMembershipsRequest_PublishError(_ *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	messaging := NewMessaging(logger, nil, resetChan, &groupManager)
+
+	publishFunc := func(_ context.Context, _ []byte) error {
+		return errors.New("publish failed")
+	}
+
+	// Should log error but not panic
+	messaging.sendGroupMembershipsRequest(context.Background(), publishFunc)
 }

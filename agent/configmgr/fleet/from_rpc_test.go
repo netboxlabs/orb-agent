@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -1729,4 +1731,75 @@ func TestMessageHandlers_handleAgentPolicies_NonYAMLFormat(t *testing.T) {
 
 	// Assert
 	mockPMgr.AssertExpectations(t)
+}
+
+func TestHandleAgentReset_NoFullReset(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, nil, resetChan, &groupManager)
+
+	// FullReset=false should not send to resetChan
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{
+		FullReset: false,
+		Reason:    "test",
+	})
+	assert.Empty(t, resetChan)
+}
+
+func TestHandleGroupMemberships_UnsubscribeError(_ *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	// Pre-populate the group manager with a group
+	groupManager.Add(messages.GroupMembershipData{GroupID: "group1", Name: "Group 1"})
+
+	handlers := NewMessaging(logger, &mockPolicyManager{}, resetChan, &groupManager)
+
+	mockRepo := &mockPolicyRepo{}
+	mockRepo.On("GetAll").Return([]policies.PolicyData{}, nil)
+	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetRepo").Return(mockRepo)
+	handlers.policyManager = mockPMgr
+
+	unsubscribeErr := errors.New("unsubscribe failed")
+	topicActions := TopicActions{
+		Subscribe:   func(string) error { return nil },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(string) error { return unsubscribeErr },
+	}
+
+	// FullList=true triggers unsubscribe for existing groups — should not panic on error
+	payload := messages.GroupMembershipRPCPayload{
+		FullList: true,
+		Groups:   []messages.GroupMembershipData{},
+	}
+	handlers.handleGroupMemberships(context.Background(), payload, "org1", "agent1", topicActions)
+}
+
+func TestHandleGroupMemberships_SubscribeError(_ *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, nil, resetChan, &groupManager)
+
+	mockRepo := &mockPolicyRepo{}
+	mockRepo.On("GetAll").Return([]policies.PolicyData{}, nil)
+	mockPMgr := &mockPolicyManager{}
+	mockPMgr.On("GetRepo").Return(mockRepo)
+	handlers.policyManager = mockPMgr
+
+	subscribeErr := errors.New("subscribe failed")
+	topicActions := TopicActions{
+		Subscribe:   func(string) error { return subscribeErr },
+		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+		Unsubscribe: func(string) error { return nil },
+	}
+
+	// Subscribe error should be logged but not panic
+	payload := messages.GroupMembershipRPCPayload{
+		FullList: false,
+		Groups:   []messages.GroupMembershipData{{GroupID: "group1", Name: "Group 1"}},
+	}
+	handlers.handleGroupMemberships(context.Background(), payload, "org1", "agent1", topicActions)
 }
