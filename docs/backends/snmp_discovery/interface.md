@@ -33,19 +33,6 @@ Interface types are determined using the following priority order (first match w
   Dell FTOS `TenGigabitEthernet 0/0.100` are still classified as
   subinterfaces of `Port-channel 1` / `TenGigabitEthernet 0/0`.
 
-### Interface name selection
-snmp-discovery reads ifDescr (`.1.3.6.1.2.1.2.2.1.2`) as the primary
-source for `Interface.Name` and falls back to ifName
-(`.1.3.6.1.2.1.31.1.1.1.1`) when ifDescr is unavailable. Additionally,
-when ifDescr looks like a description (contains the substring `": "` —
-for example Dell PowerConnect's `Unit: 1 Slot: 0 Port: 1 Gigabit -
-Level`) AND ifName looks like a canonical interface name (no `": "`
-substring), snmp-discovery uses ifName. Single-space canonical names
-that do **not** contain `": "` (e.g. Dell FTOS
-`TenGigabitEthernet 0/0`, Extreme SLX `Port-channel 1`) are kept
-as-is. The detection rule is generic — no per-vendor configuration
-is required.
-
 ### 1. User-Defined Patterns (Highest Priority for Non-Subinterfaces)
 - Patterns configured in `defaults.interface_patterns` are checked first
 - If ANY user pattern matches, the most specific (longest) user match is used
@@ -69,6 +56,20 @@ is required.
 ### 5. Default Fallback (Lowest Priority)
 - If nothing else matches, uses `defaults.if_type`
 - Defaults to `other` if not specified
+
+## Interface Name Selection
+
+snmp-discovery reads ifDescr (`.1.3.6.1.2.1.2.2.1.2`) as the primary
+source for `Interface.Name` and falls back to ifName
+(`.1.3.6.1.2.1.31.1.1.1.1`) when ifDescr is unavailable. Additionally,
+when ifDescr looks like a description (contains the substring `": "` —
+for example Dell PowerConnect's `Unit: 1 Slot: 0 Port: 1 Gigabit -
+Level`) AND ifName looks like a canonical interface name (no `": "`
+substring), snmp-discovery uses ifName. Single-space canonical names
+that do **not** contain `": "` (e.g. Dell FTOS
+`TenGigabitEthernet 0/0`, Extreme SLX `Port-channel 1`) are kept
+as-is. The detection rule is generic — no per-vendor configuration
+is required.
 
 ## Subinterface Detection and Parent Tracking
 
