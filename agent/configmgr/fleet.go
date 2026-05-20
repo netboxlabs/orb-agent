@@ -13,6 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
 	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
@@ -54,12 +55,12 @@ type FleetConfigManager struct {
 	goroutinesWg sync.WaitGroup // tracks goroutines started in Start(); Wait()ed in Stop() before Disconnect
 }
 
-func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever) *FleetConfigManager {
+func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever, fm filesmgr.Manager) *FleetConfigManager {
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
 	return &FleetConfigManager{
 		logger:           logger,
-		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan, reconnectChan, backendState),
+		connection:       fleet.NewMQTTConnection(logger, pMgr, resetChan, reconnectChan, backendState, fm),
 		authTokenManager: fleet.NewAuthTokenManager(logger),
 		resetChan:        resetChan,
 		reconnectChan:    reconnectChan,

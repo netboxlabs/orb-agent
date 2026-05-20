@@ -126,7 +126,7 @@ backend1:
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	// Instantiate the gitConfigManager.
-	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active, &mockBackendState{})
+	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active, &mockBackendState{}, nil)
 
 	// Call Start
 	backends := map[string]backend.Backend{
@@ -206,7 +206,7 @@ backend1:
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active, &mockBackendState{})
+	gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active, &mockBackendState{}, nil)
 
 	backends := map[string]backend.Backend{
 		"backend1": &mockBackend{name: "backend1"},
@@ -308,7 +308,7 @@ backend1:
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	gc := configmgr.New(logger, pMgr, "git", &mockBackendState{})
+	gc := configmgr.New(logger, pMgr, "git", &mockBackendState{}, nil)
 
 	backends := map[string]backend.Backend{
 		"backend1": &mockBackend{name: "backend1"},

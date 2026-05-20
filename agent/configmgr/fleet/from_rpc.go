@@ -11,6 +11,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -20,15 +21,17 @@ type Messaging struct {
 	policyManager policymgr.PolicyManager
 	groupManager  *GroupManager
 	resetChan     chan struct{}
+	filesManager  filesmgr.Manager
 }
 
 // NewMessaging creates a new Messaging
-func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager, resetChan chan struct{}, groupManager *GroupManager) *Messaging {
+func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager, resetChan chan struct{}, groupManager *GroupManager, filesManager filesmgr.Manager) *Messaging {
 	return &Messaging{
 		logger:        logger,
 		policyManager: policyManager,
 		groupManager:  groupManager,
 		resetChan:     resetChan,
+		filesManager:  filesManager,
 	}
 }
 
@@ -69,7 +72,6 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			return err
 		}
 		messaging.handleAgentGroupRemoval(groupRemoved.Payload, topicActions.Unsubscribe)
-
 	case messages.DatasetRemovedRPCFunc:
 		var r messages.DatasetRemovedRPC
 		if err := json.Unmarshal(payload, &r); err != nil {
@@ -91,10 +93,49 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			return err
 		}
 		messaging.handleAgentReset(ctx, r.Payload)
+	case messages.PackagesCredentialsRPCFunc:
+		var r messages.PackagesCredentialsRPC
+		if err := json.Unmarshal(payload, &r); err != nil {
+			messaging.logger.Error("error decoding packages credentials message from core", "error", messages.ErrSchemaMalformed)
+			return err
+		}
+		messaging.handlePackages(ctx, r.Payload)
 	default:
 		messaging.logger.Debug("unknown rpc function", "func", rpc.Func)
 	}
 	return nil
+}
+
+// handlePackages installs each bundle delivered by filesmanager.
+// Failures are non-fatal: a failed bundle is logged and skipped so that
+// other bundles in the same delivery are still installed.
+func (messaging *Messaging) handlePackages(ctx context.Context, payload messages.PackagesCredentialsRPCPayload) {
+	if len(payload.Bundles) == 0 {
+		messaging.logger.Debug("packages_credentials received with empty bundle list, nothing to do")
+		return
+	}
+	messaging.logger.Info("installing bundles", "count", len(payload.Bundles))
+	for _, bundle := range payload.Bundles {
+		spec := filesmgr.FileSpec{
+			Name:    bundle.Name,
+			Version: bundle.Version,
+			URL:     bundle.URL,
+			SHA256:  bundle.SHA256,
+			Extract: true,
+		}
+		path, err := messaging.filesManager.Ensure(ctx, spec)
+		if err != nil {
+			messaging.logger.Error("failed to install bundle",
+				"name", bundle.Name,
+				"version", bundle.Version,
+				"error", err)
+			continue
+		}
+		messaging.logger.Info("bundle installed",
+			"name", bundle.Name,
+			"version", bundle.Version,
+			"path", path)
+	}
 }
 
 func (messaging *Messaging) handleGroupMemberships(ctx context.Context, groupMemberships messages.GroupMembershipRPCPayload, orgID string, agentID string, topicActions TopicActions) {

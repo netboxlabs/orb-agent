@@ -141,7 +141,7 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -159,7 +159,7 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -180,7 +180,7 @@ func TestManagerNew(t *testing.T) {
 		}
 
 		mockBackendState := &mockBackendState{}
-		mgr := configmgr.New(logger, pMgr, cfg.Active, mockBackendState)
+		mgr := configmgr.New(logger, pMgr, cfg.Active, mockBackendState, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -193,7 +193,7 @@ func TestManagerNew(t *testing.T) {
 			Active: "unknown",
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the local implementation
 		ctx := context.Background()
