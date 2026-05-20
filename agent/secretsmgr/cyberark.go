@@ -20,6 +20,12 @@ import (
 const (
 	defaultCyberArkTimeoutUnit = time.Second
 	defaultCyberArkTimeout     = 60 * time.Second
+
+	// ccpEndpointPath is the CCP REST path appended to the configured base
+	// URL on every fetch. Kept as a constant so Start can also reject
+	// configurations whose URL already carries the suffix (see issue logged
+	// in PR review).
+	ccpEndpointPath = "/AIMWebService/api/Accounts"
 )
 
 var _ Manager = (*cyberarkManager)(nil)
@@ -77,10 +83,16 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
 		return fmt.Errorf("cyberark: url %q must not contain a query string or fragment", c.config.URL)
 	}
-	// Keep the parsed URL around so fetch() builds the endpoint by setting
-	// Path on a clone rather than concatenating strings — which would
-	// silently corrupt any baseURL carrying a non-trivial Path.
+	// Reject URLs that already point at the CCP endpoint. The agent appends
+	// "/AIMWebService/api/Accounts" itself; including it again in the
+	// configured URL produces "/AIMWebService/api/Accounts/AIMWebService/api/Accounts"
+	// at request time and consistent 404s. Operators copying examples from
+	// CyberArk integrations that already include the suffix would otherwise
+	// hit this only at runtime.
 	parsedURL.Path = strings.TrimRight(parsedURL.Path, "/")
+	if strings.HasSuffix(parsedURL.Path, ccpEndpointPath) {
+		return fmt.Errorf("cyberark: url %q already includes the CCP endpoint path %q; configure only the base URL (e.g. https://ccp.example.com)", c.config.URL, ccpEndpointPath)
+	}
 	c.baseURL = parsedURL
 
 	if (c.config.ClientCert == "") != (c.config.ClientKey == "") {
@@ -152,7 +164,7 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 	}
 
 	u := *c.baseURL
-	u.Path = strings.TrimRight(u.Path, "/") + "/AIMWebService/api/Accounts"
+	u.Path = strings.TrimRight(u.Path, "/") + ccpEndpointPath
 	q := u.Query()
 	q.Set("AppID", ref.appID)
 	q.Set("Safe", ref.safe)
@@ -162,9 +174,11 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 	}
 	u.RawQuery = q.Encode()
 
-	// c.ctx is set by pollingBase.init() in Start (Task 5). Defensive default
-	// here because tests in Task 4 — and any caller that bypasses Start —
-	// would otherwise hit http.NewRequestWithContext's nil-context error.
+	// pollingBase.init populates c.ctx during Start. The defensive fallback
+	// guards against callers (most notably tests) that construct the
+	// manager directly and bypass Start; http.NewRequestWithContext errors
+	// out on a nil ctx, so without this we'd surface an opaque failure
+	// instead of a real request.
 	ctx := c.ctx
 	if ctx == nil {
 		ctx = context.Background()

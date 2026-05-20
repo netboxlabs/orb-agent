@@ -93,6 +93,28 @@ func TestCyberArkStart_RejectsURLWithoutHost(t *testing.T) {
 	require.Contains(t, err.Error(), "must include a host")
 }
 
+func TestCyberArkStart_RejectsURLAlreadyAtCCPEndpoint(t *testing.T) {
+	// Operators copying examples from upstream CyberArk integrations
+	// sometimes paste the full endpoint URL. Catch it at startup; otherwise
+	// fetch builds /AIMWebService/api/Accounts/AIMWebService/api/Accounts
+	// and 404s consistently at runtime.
+	for _, bad := range []string{
+		"https://ccp.example.com/AIMWebService/api/Accounts",
+		"https://ccp.example.com/AIMWebService/api/Accounts/",
+		"https://ccp.example.com/some/prefix/AIMWebService/api/Accounts",
+	} {
+		t.Run(bad, func(t *testing.T) {
+			c := &cyberarkManager{
+				preLogger: newTestLogger(),
+				config:    config.CyberArkManager{URL: bad, AppID: "orb"},
+			}
+			err := c.Start(context.Background())
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "already includes the CCP endpoint path")
+		})
+	}
+}
+
 func TestCyberArkStart_RejectsCABundleWithOnlyPrivateKey(t *testing.T) {
 	// A PEM file that has a recognisable PEM block but no certificate must
 	// be rejected at startup rather than producing an empty trust pool that
