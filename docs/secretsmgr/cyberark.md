@@ -46,7 +46,7 @@ orb:
 | `timeout` | int | No | HTTP timeout in seconds (default `60`). |
 | `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
 
-Each string field accepts an environment-variable placeholder of the form `${VAR_NAME}`. Placeholders are resolved at agent startup; an unset variable causes the agent to fail startup with a clear error.
+The following fields accept an environment-variable placeholder of the form `${VAR_NAME}`: `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key`. Placeholders are resolved at agent startup; an unset variable causes the agent to fail startup with a clear error.
 
 ## Authentication
 
