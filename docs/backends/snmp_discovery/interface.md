@@ -23,12 +23,15 @@ Interface types are determined using the following priority order (first match w
 - If a subinterface is detected, it is ALWAYS assigned type `virtual`
 - Parent interface tracking is performed in a post-processing phase
 - This takes precedence over ALL other matching methods
-- **Whitespace short-circuit**: Tier 0 only fires on whitespace-free names.
-  Real subinterface formats across every supported vendor are whitespace-free
-  (`GigabitEthernet0/0.100`, `ge-0/0/0:0`, `eth0:1`). Vendors that publish a
-  descriptive ifDescr — Dell PowerConnect is the canonical example with
-  `Unit: 1 Slot: 0 Port: 1 Gigabit - Level` — bypass Tier 0 entirely and
-  are typed via Tier 2 (`ifType`) or Tier 3 (built-in patterns) instead.
+- **Descriptive-ifDescr short-circuit**: Tier 0 does **not** fire on names
+  that look like labeled-field descriptions (names containing the
+  `": "` substring — Dell PowerConnect's `Unit: 1 Slot: 0 Port: 1
+  Gigabit - Level` is the canonical example). Those bypass Tier 0
+  entirely and are typed via Tier 2 (`ifType`) or Tier 3 (built-in
+  patterns) instead. Whitespace **inside** the parent part of a real
+  subinterface name is fine — Extreme SLX `Port-channel 1.100` and
+  Dell FTOS `TenGigabitEthernet 0/0.100` are still classified as
+  subinterfaces of `Port-channel 1` / `TenGigabitEthernet 0/0`.
 
 ### Interface name selection
 snmp-discovery reads ifDescr (`.1.3.6.1.2.1.2.2.1.2`) as the primary
