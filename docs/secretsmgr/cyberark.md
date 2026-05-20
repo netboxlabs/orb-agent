@@ -9,7 +9,7 @@ The Orb Agent can integrate with [CyberArk Privileged Access Manager (PAM)](http
 Before configuring the agent, the CyberArk administrator must provision:
 
 1. An **AppID** record in the Vault representing the orb-agent instance.
-2. **Authentication evidence** on the AppID: a client certificate's Common Name / Subject, an IP allowlist of the agent hosts, an OS user, or a hostname.
+2. **Authentication evidence** on the AppID: a matching certificate identity (CyberArk supports Issuer, Subject DN, or Subject Alternative Name — see the [CyberArk Application Authentication Methods documentation](https://docs.cyberark.com/credential-providers/latest/en/content/cp%20and%20ascp/application-authentication-methods-general.htm)), an IP allowlist of the agent hosts, an OS user, or a hostname.
 3. **Safe access**: every Safe the agent will read from must grant the AppID the `Retrieve Accounts` permission.
 4. **Account naming**: pick a consistent Object naming scheme so YAML placeholders are stable across rotations.
 
@@ -52,7 +52,7 @@ The following fields accept an environment-variable placeholder of the form `${V
 
 CCP authenticates the *requesting application* (the orb-agent process), not a user. CyberArk supports several mechanisms; pick whichever fits your environment:
 
-- **Client certificate (recommended for production)**: set `client_cert` and `client_key`, and ensure the CyberArk admin configured the AppID to require the matching certificate Common Name.
+- **Client certificate (recommended for production)**: set `client_cert` and `client_key`, and have the CyberArk admin add a matching certificate-identity authenticator to the AppID. CyberArk supports matching by Issuer, Subject DN, or Subject Alternative Name (see the [Application Authentication Methods documentation](https://docs.cyberark.com/credential-providers/latest/en/content/cp%20and%20ascp/application-authentication-methods-general.htm) for the exact attribute names and how to provision each one). The agent has no preference between SAN and Subject — pick whichever matches the cert your PKI issues to orb-agent.
 - **IP allowlist**: nothing on the agent side; the CyberArk admin allowlists the agent host's IP on the AppID.
 - **OS user / hostname**: nothing on the agent side; rarely used cross-OS.
 
