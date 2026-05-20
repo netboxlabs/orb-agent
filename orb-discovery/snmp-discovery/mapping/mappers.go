@@ -723,24 +723,44 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				m.logger.Debug("mapping value to interface entity with mapper", "object_id", objectID, "value", value)
 				switch propertyMappingEntry.Field {
 				case "name":
+					// ifDescr is the preferred source for Interface.Name
+					// across all vendors except those whose ifDescr is a
+					// hardware description (Dell PowerConnect:
+					// "Unit: 1 Slot: 0 Port: 1 Gigabit - Level"). Don't
+					// overwrite an already-set clean Name (typically from
+					// ifName via name_alternate, which arrives first
+					// under slices.Reverse) with a descriptive ifDescr.
 					name := strings.TrimRight(value.Value, "\x00 \t\n\r")
-					if name != "" {
-						interfaceEntity.Name = &name
-						fieldFound = true
+					if name == "" {
+						continue
 					}
+					currentClean := interfaceEntity.Name != nil &&
+						*interfaceEntity.Name != "" &&
+						*interfaceEntity.Name != DefaultInterfaceName &&
+						!looksDescriptive(*interfaceEntity.Name)
+					if currentClean && looksDescriptive(name) {
+						// Keep the already-set clean Name; don't downgrade.
+						continue
+					}
+					interfaceEntity.Name = &name
+					fieldFound = true
 				case "name_alternate":
 					// Fallback for vendors where ifDescr is empty/absent
-					// (e.g. FortiGate, Nokia TiMOS 7750). Only used when
-					// the primary ifDescr-backed "name" field produced no
-					// value; the guard treats the registry's
-					// DefaultInterfaceName sentinel (set in createEntity)
-					// as "not yet populated" so outcome is independent
-					// of PDU iteration order within the group.
+					// (e.g. FortiGate, Nokia TiMOS 7750), AND for vendors
+					// whose ifDescr is a hardware description (Dell
+					// PowerConnect). The latter is detected by looksDescriptive
+					// (requires a ": " substring), which intentionally
+					// does NOT match single-space canonical names like
+					// Dell FTOS "TenGigabitEthernet 0/0" or Extreme SLX
+					// "Port-channel 1" — those keep their ifDescr.
 					alt := strings.TrimRight(value.Value, "\x00 \t\n\r")
 					if alt == "" {
 						continue
 					}
-					if interfaceEntity.Name == nil || *interfaceEntity.Name == "" || *interfaceEntity.Name == DefaultInterfaceName {
+					if interfaceEntity.Name == nil ||
+						*interfaceEntity.Name == "" ||
+						*interfaceEntity.Name == DefaultInterfaceName ||
+						(looksDescriptive(*interfaceEntity.Name) && !looksDescriptive(alt)) {
 						interfaceEntity.Name = &alt
 						fieldFound = true
 					}

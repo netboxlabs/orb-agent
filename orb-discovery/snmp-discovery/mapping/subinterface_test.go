@@ -136,6 +136,44 @@ func TestExtractParentInterfaceName(t *testing.T) {
 			description:    "Vlan100 should return empty string (not a subinterface)",
 		},
 
+		// Descriptive ifDescr strings (Dell PowerConnect and similar
+		// vendors) must NOT be treated as subinterfaces. The discriminator
+		// is the colon-space substring, which appears in labeled-field
+		// descriptive text but never in valid subinterface names.
+		{
+			name:           "Dell PowerConnect gigabit ifDescr",
+			interfaceName:  "Unit: 1 Slot: 0 Port: 1 Gigabit - Level",
+			expectedParent: "",
+			description:    "Dell verbose ifDescr should not match as subinterface (colon-space label)",
+		},
+		{
+			name:           "Dell PowerConnect 10G ifDescr",
+			interfaceName:  "Unit: 1 Slot: 0 Port: 1 10G - Level",
+			expectedParent: "",
+			description:    "Dell verbose 10G ifDescr should not match as subinterface",
+		},
+		{
+			name:           "Description text with embedded colon-space",
+			interfaceName:  "uplink: trunk to core",
+			expectedParent: "",
+			description:    "Operator-edited descriptive strings should not match as subinterface",
+		},
+		// Whitespace-bearing canonical PARENT names are still legitimate
+		// subinterface parents (Dell FTOS, Extreme SLX). The descriptive
+		// predicate must not over-fire on these.
+		{
+			name:           "Extreme SLX Port-channel subinterface",
+			interfaceName:  "Port-channel 1.100",
+			expectedParent: "Port-channel 1",
+			description:    "Space-bearing parent with .N child must still extract as subinterface",
+		},
+		{
+			name:           "Dell FTOS TenGigabitEthernet subinterface",
+			interfaceName:  "TenGigabitEthernet 0/0.100",
+			expectedParent: "TenGigabitEthernet 0/0",
+			description:    "Single-space canonical name with .N subinterface child extracts the parent",
+		},
+
 		// Edge cases
 		{
 			name:           "Empty interface name",

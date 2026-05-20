@@ -1525,6 +1525,151 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "ifName replaces ifDescr when ifDescr is descriptive",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "Unit: 1 Slot: 0 Port: 1 Gigabit - Level",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "Gi1/0/1",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("Gi1/0/1"),
+			},
+			expectError: false,
+		},
+		{
+			// Under the mapper's slices.Sort + slices.Reverse iteration,
+			// ifName (`.31.x`) is processed BEFORE ifDescr (`.2.2.x`).
+			// `case "name"` must not overwrite the already-set clean
+			// Name with the descriptive ifDescr — both case-arms are
+			// guarded so the final Name is order-independent.
+			name: "ifDescr does not overwrite clean ifName even when processed second",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				// OID-sorted reverse means .31.x lands BEFORE .2.2.x.
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "Gi1/0/1",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "Unit: 1 Slot: 0 Port: 1 Gigabit - Level",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("Gi1/0/1"),
+			},
+			expectError: false,
+		},
+		{
+			// Dell FTOS / Extreme SLX style: ifDescr has a single space
+			// but is the canonical name (no colon-space substring), so
+			// it must remain Name even when ifName is a whitespace-free
+			// shorter form. Protects the asymmetry between the broad
+			// containsWhitespace predicate (subinterface heuristic) and
+			// the narrower looksDescriptive predicate (name selection).
+			name: "single-space canonical ifDescr beats short ifName",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "TenGigabitEthernet 0/0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "Te0/0",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("TenGigabitEthernet 0/0"),
+			},
+			expectError: false,
+		},
+		{
+			// Pre-existing behavior still applies when both names are
+			// clean (no colon-space): ifDescr wins. This is the
+			// regression guard for the long-standing "ifDescr wins
+			// when both are populated" test, applied to a non-Gi name
+			// to vary it.
+			name: "clean ifDescr still wins over clean ifName",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "FortyGigE1/0/1",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.31.1.1.1.1.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.1",
+					Value:  "Fo1/0/1",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+					{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+				},
+			},
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("FortyGigE1/0/1"),
+			},
+			expectError: false,
+		},
+		{
 			name: "ifName fallback when ifDescr PDU is absent",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.31.1.1.1.1.1": {

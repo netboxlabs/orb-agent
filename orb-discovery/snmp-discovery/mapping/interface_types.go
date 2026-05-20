@@ -2,12 +2,41 @@ package mapping
 
 import "strings"
 
+// looksDescriptive reports whether s looks like a hardware description
+// (e.g. Dell PowerConnect's "Unit: 1 Slot: 0 Port: 1 Gigabit - Level")
+// rather than a canonical interface name. The discriminator is the
+// "colon-space" sequence: it appears in labeled-field descriptive
+// text (Dell PowerConnect, similar vendor families) but never in
+// valid subinterface names (Juniper's "ge-0/0/0:0" has no space after
+// the colon) and never in the canonical names we ship today,
+// including space-bearing ones (Dell FTOS "TenGigabitEthernet 0/0",
+// Extreme SLX "Port-channel 1", and their subinterface forms
+// "TenGigabitEthernet 0/0.100", "Port-channel 1.100").
+//
+// Used by both the subinterface heuristic (Lever A) and the ifDescr-
+// vs-ifName name selection (Lever B). Sharing one predicate avoids
+// the over-broad "any whitespace" rule that would mis-classify
+// space-bearing parents like "Port-channel 1.100" as non-subinterfaces.
+func looksDescriptive(s string) bool {
+	return strings.Contains(s, ": ")
+}
+
 // ExtractParentInterfaceName returns the parent interface name if the supplied name
 // represents a subinterface, or an empty string if it's not a subinterface.
 // Subinterfaces are identified by the presence of dot (.) or colon (:) separators.
+// Names that look descriptive (labeled-field ifDescr strings — see
+// looksDescriptive) are never subinterfaces. Whitespace in the parent
+// part is fine (Dell FTOS "TenGigabitEthernet 0/0.100", Extreme SLX
+// "Port-channel 1.100") because those don't match the descriptive
+// shape; only the colon-space-labeled form is filtered out.
 // Examples: "eth0.100" -> "eth0", "GigabitEthernet0/0.100" -> "GigabitEthernet0/0",
-// "ge-0/0/0:0" -> "ge-0/0/0", "eth0" -> ""
+// "ge-0/0/0:0" -> "ge-0/0/0", "eth0" -> "",
+// "Port-channel 1.100" -> "Port-channel 1",
+// "Unit: 1 Slot: 0 Port: 1 Gigabit - Level" -> ""
 func ExtractParentInterfaceName(interfaceName string) string {
+	if looksDescriptive(interfaceName) {
+		return ""
+	}
 	separators := []string{".", ":"}
 	for _, separator := range separators {
 		if idx := strings.LastIndex(interfaceName, separator); idx > 0 {
