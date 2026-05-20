@@ -22,9 +22,10 @@ const (
 	defaultCyberArkTimeout     = 60 * time.Second
 
 	// ccpEndpointPath is the CCP REST path appended to the configured base
-	// URL on every fetch. Kept as a constant so Start can also reject
-	// configurations whose URL already carries the suffix (see issue logged
-	// in PR review).
+	// URL on every fetch. Shared with Start so it can reject configurations
+	// whose URL already ends with this suffix, which would otherwise produce
+	// "/AIMWebService/api/Accounts/AIMWebService/api/Accounts" at request
+	// time and consistent 404s.
 	ccpEndpointPath = "/AIMWebService/api/Accounts"
 )
 
