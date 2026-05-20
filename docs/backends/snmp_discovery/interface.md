@@ -108,9 +108,17 @@ Some vendors publish a verbose hardware description in ifDescr instead of
 a CLI-style identifier. snmp-discovery detects this (ifDescr contains
 the `": "` substring) and uses ifName as the `Interface.Name`.
 
-| Vendor | ifDescr example | ifName | Resulting `Interface.Name` |
-|--------|-----------------|--------|----------------------------|
+| Vendor / device class | ifDescr example | ifName | Resulting `Interface.Name` |
+|-----------------------|-----------------|--------|----------------------------|
 | Dell PowerConnect (N1548, N2048, similar N-series) | `Unit: 1 Slot: 0 Port: 1 Gigabit - Level` | `Gi1/0/1` | `Gi1/0/1` |
+| Lancom L-COSsx (XS5110F, XS5116QF — 10G/25G aggregation) | `Unit: 1 Slot: 0 Port: 1 10G - Level` | `1/0/1` | `1/0/1` |
+| Ubiquiti EdgeSwitch (ES-24-250W, US-8-V2) | `Slot: 0 Port: 1 Gigabit - Level` | `0/1` | `0/1` |
+| Ubiquiti UISP Fiber OLT | `Slot: 0 Port: 1 10G - Level` | `0/1` | `0/1` |
+| Hirschmann / Belden (MS4128 — industrial Ethernet) | `Module: 1 Port: 1 - 1 Gbit` | `1/1/1` | `1/1/1` |
+| Ciena Waveserver | `Ciena Waveserver-Ai, R1.5.1: Console Management port` | `Console` | `Console` |
+
+The rule is generic — any vendor whose ifDescr contains a `": "`
+label and exposes a clean ifName benefits automatically.
 
 Vendors whose ifDescr contains whitespace but **no** `": "` substring
 (Dell FTOS `TenGigabitEthernet 0/0`, Extreme SLX `Port-channel 1`)
