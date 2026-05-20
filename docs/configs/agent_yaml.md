@@ -203,6 +203,7 @@ Supported backends (set one in `active`):
 | `vault` | HashiCorp Vault (KV v2) | `${vault://...}` | [Vault](../secretsmgr/vault.md) |
 | `delinea` | Delinea Secret Server | `${delinea://...}` | [Delinea](../secretsmgr/delinea.md) |
 | `doppler` | Doppler | `${doppler://...}` | [Doppler](../secretsmgr/doppler.md) |
+| `cyberark` | CyberArk PAM (Central Credential Provider) | `${cyberark://...}` | [CyberArk](../secretsmgr/cyberark.md) |
 | `fleet` | Fleet (NetBox Labs cloud) | — | — |
 
 ### Vault
@@ -272,6 +273,36 @@ orb:
 
 See the full [Doppler secrets manager documentation](../secretsmgr/doppler.md) for all parameters, authentication, and change-detection semantics.
 
+### CyberArk
+
+CyberArk placeholders take a short form (using the AppID default from the agent config) or a fully qualified form, with an optional field selector for non-password fields:
+
+```yaml
+# Short form — returns the Content (password) field
+password: ${cyberark://<Safe>/<Object>}
+
+# Short form with field selector
+username: ${cyberark://<Safe>/<Object>/UserName}
+
+# Fully qualified, overriding the configured AppID
+password: ${cyberark://<AppID>//<Safe>/<Object>}
+```
+
+```yaml
+orb:
+  secrets_manager:
+    active: cyberark
+    sources:
+      cyberark:
+        url: https://ccp.corp.example.com
+        app_id: orb-agent
+        client_cert: /opt/orb/secrets/orb.crt
+        client_key:  /opt/orb/secrets/orb.key
+        schedule: "*/5 * * * *"
+```
+
+See the full [CyberArk secrets manager documentation](../secretsmgr/cyberark.md) for all parameters and authentication options.
+
 Plain `${VAR_NAME}` references are **not** resolved by the secrets manager — those are handled by environment variable substitution as described below.
 
 ---
@@ -284,6 +315,7 @@ Values can reference environment variables using `${VAR_NAME}` syntax. Resolutio
 |-------|-----------------|-------------|
 | Git config manager | `url`, `password` | Go agent at startup |
 | Vault secrets manager `auth_args` | All fields | Go agent at startup |
+| CyberArk secrets manager | `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key` | Go agent at startup |
 | `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
 | `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase` | Go SNMP backend at policy execution |
 

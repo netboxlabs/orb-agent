@@ -219,6 +219,14 @@ func (b *pollingBase) startScheduler(schedule *string) error {
 		task,
 		gocron.WithSingletonMode(gocron.LimitModeReschedule),
 	); err != nil {
+		// gocron.NewScheduler spawns an internal goroutine immediately; if we
+		// return here without shutting it down, that goroutine leaks for the
+		// process lifetime. Surface the shutdown error in the log but always
+		// return the NewJob failure (the actionable error for the operator).
+		if shutdownErr := b.scheduler.Shutdown(); shutdownErr != nil {
+			b.logger.Error("scheduler shutdown failed after NewJob error", "scheme", b.scheme, "error", shutdownErr)
+		}
+		b.scheduler = nil
 		return fmt.Errorf("failed to create %s polling job: %w", b.scheme, err)
 	}
 	b.logger.Info("Starting secret polling", "scheme", b.scheme, "cron interval", *schedule)
