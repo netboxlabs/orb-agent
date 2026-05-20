@@ -23,6 +23,25 @@ Interface types are determined using the following priority order (first match w
 - If a subinterface is detected, it is ALWAYS assigned type `virtual`
 - Parent interface tracking is performed in a post-processing phase
 - This takes precedence over ALL other matching methods
+- **Whitespace short-circuit**: Tier 0 only fires on whitespace-free names.
+  Real subinterface formats across every supported vendor are whitespace-free
+  (`GigabitEthernet0/0.100`, `ge-0/0/0:0`, `eth0:1`). Vendors that publish a
+  descriptive ifDescr — Dell PowerConnect is the canonical example with
+  `Unit: 1 Slot: 0 Port: 1 Gigabit - Level` — bypass Tier 0 entirely and
+  are typed via Tier 2 (`ifType`) or Tier 3 (built-in patterns) instead.
+
+### Interface name selection
+snmp-discovery reads ifDescr (`.1.3.6.1.2.1.2.2.1.2`) as the primary
+source for `Interface.Name` and falls back to ifName
+(`.1.3.6.1.2.1.31.1.1.1.1`) when ifDescr is unavailable. Additionally,
+when ifDescr looks like a description (contains the substring `": "` —
+for example Dell PowerConnect's `Unit: 1 Slot: 0 Port: 1 Gigabit -
+Level`) AND ifName looks like a canonical interface name (no `": "`
+substring), snmp-discovery uses ifName. Single-space canonical names
+that do **not** contain `": "` (e.g. Dell FTOS
+`TenGigabitEthernet 0/0`, Extreme SLX `Port-channel 1`) are kept
+as-is. The detection rule is generic — no per-vendor configuration
+is required.
 
 ### 1. User-Defined Patterns (Highest Priority for Non-Subinterfaces)
 - Patterns configured in `defaults.interface_patterns` are checked first
@@ -78,6 +97,20 @@ The separator must appear between non-empty parent and child parts. Interface na
 | Arista | `Ethernet.subint` | `Ethernet1.100` | `Ethernet1` |
 | Nokia SR OS | `ethernet.subint` | `ethernet-1/1/1.50` | `ethernet-1/1/1` |
 | Linux | `interface.vlan` | `eth0.100` | `eth0` |
+
+### Descriptive ifDescr Vendors
+
+Some vendors publish a verbose hardware description in ifDescr instead of
+a CLI-style identifier. snmp-discovery detects this (ifDescr contains
+the `": "` substring) and uses ifName as the `Interface.Name`.
+
+| Vendor | ifDescr example | ifName | Resulting `Interface.Name` |
+|--------|-----------------|--------|----------------------------|
+| Dell PowerConnect (N1548, N2048, similar N-series) | `Unit: 1 Slot: 0 Port: 1 Gigabit - Level` | `Gi1/0/1` | `Gi1/0/1` |
+
+Vendors whose ifDescr contains whitespace but **no** `": "` substring
+(Dell FTOS `TenGigabitEthernet 0/0`, Extreme SLX `Port-channel 1`)
+keep their ifDescr as the canonical name.
 
 ### Two-Phase Processing
 
