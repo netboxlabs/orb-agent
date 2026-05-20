@@ -724,3 +724,222 @@ func TestRemovePolicyDataset(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, state)
 }
+
+func TestRemovePolicy_BackendRemoveError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "be_remove_err"}
+	backend.Register("be_remove_err", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	// Add a policy first
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{
+		ID:      "p1",
+		Name:    "P1",
+		Backend: "be_remove_err",
+		State:   policies.Running,
+	}))
+
+	// RemovePolicy should still succeed even if backend errors
+	mockBe.On("RemovePolicy", mock.Anything).Return(errors.New("backend error"))
+	err = mgr.RemovePolicy("p1", "P1", "be_remove_err")
+	assert.NoError(t, err)
+}
+
+func TestRemovePolicy_UnknownBackend(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	err = mgr.RemovePolicy("p1", "P1", "nonexistent_backend_xyz")
+	assert.Error(t, err)
+}
+
+func TestRemovePolicyDataset_GetError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "be_dataset_get_err"}
+	backend.Register("be_dataset_get_err", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	// Call RemovePolicyDataset on a policy that doesn't exist — should not panic
+	mgr.RemovePolicyDataset("nonexistent_policy", "dataset1", mockBe)
+	mockBe.AssertNotCalled(t, "RemovePolicy")
+}
+
+func TestRemovePolicyDataset_RemovePolicyError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "be_dataset_rm_err"}
+	backend.Register("be_dataset_rm_err", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	// Add policy with single dataset
+	payload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "p_ds_rm",
+		Name:      "P DS RM",
+		Backend:   "be_dataset_rm_err",
+		Version:   1,
+		DatasetID: "ds1",
+		Data:      map[string]any{},
+	}
+	secretsMgr.On("SolvePolicySecrets", mock.Anything).Return(payload, nil)
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil)
+	mockBe.On("ApplyPolicy", mock.Anything, false).Return(nil)
+	mgr.ManagePolicy(payload)
+
+	// RemovePolicy on backend errors — should still complete
+	mockBe.On("RemovePolicy", mock.Anything).Return(errors.New("backend remove error"))
+	mgr.RemovePolicyDataset("p_ds_rm", "ds1", mockBe)
+
+	// Policy should be gone from repo
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.Empty(t, state)
+}
+
+func TestRemoveBackendPolicies_Permanently(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "be_perm_remove"}
+	backend.Register("be_perm_remove", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	repo := mgr.GetRepo()
+	for i := 1; i <= 2; i++ {
+		require.NoError(t, repo.Update(policies.PolicyData{
+			ID:      fmt.Sprintf("perm%d", i),
+			Name:    fmt.Sprintf("Perm %d", i),
+			Backend: "be_perm_remove",
+			State:   policies.Running,
+		}))
+	}
+
+	mockBe.On("RemovePolicy", mock.Anything).Return(nil)
+
+	err = mgr.RemoveBackendPolicies(mockBe, true)
+	require.NoError(t, err)
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.Empty(t, state)
+}
+
+func TestRemoveBackendPolicies_NotPermanently(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "be_nonperm_remove"}
+	backend.Register("be_nonperm_remove", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	repo := mgr.GetRepo()
+	for i := 1; i <= 2; i++ {
+		require.NoError(t, repo.Update(policies.PolicyData{
+			ID:      fmt.Sprintf("nonperm%d", i),
+			Name:    fmt.Sprintf("NonPerm %d", i),
+			Backend: "be_nonperm_remove",
+			State:   policies.Running,
+		}))
+	}
+
+	mockBe.On("RemovePolicy", mock.Anything).Return(nil)
+
+	err = mgr.RemoveBackendPolicies(mockBe, false)
+	require.NoError(t, err)
+
+	// Policies still exist but state is Unknown
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.Len(t, state, 2)
+	for _, p := range state {
+		assert.Equal(t, policies.Unknown, p.State)
+	}
+}
+
+func TestPoliciesChanged_BackendNotAvailable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	// Add a policy with a backend that is not registered
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{
+		ID:      "p_no_be",
+		Name:    "P No BE",
+		Backend: "unregistered_backend_xyz",
+		State:   policies.Running,
+	}))
+
+	// Trigger policiesChanged via secrets callback — backend not available path
+	secretsMgr.TriggerCallbacks(map[string]bool{"p_no_be": true})
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.FailedToApply, state[0].State)
+	assert.Equal(t, "backend not available", state[0].BackendErr)
+}
+
+func TestPoliciesChanged_SolveSecretsError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "be_secrets_err"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("be_secrets_err", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{
+		ID:      "p_sec_err",
+		Name:    "P Sec Err",
+		Backend: "be_secrets_err",
+		State:   policies.Running,
+		Data:    map[string]any{},
+	}))
+
+	secretsMgr.On("SolvePolicySecrets", mock.Anything).Return(config.PolicyPayload{}, errors.New("secrets error"))
+
+	// Should not panic, just log and continue
+	secretsMgr.TriggerCallbacks(map[string]bool{"p_sec_err": true})
+	mockBe.AssertNotCalled(t, "ApplyPolicy")
+}
