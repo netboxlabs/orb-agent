@@ -93,6 +93,16 @@ func TestCyberArkStart_RejectsURLWithoutHost(t *testing.T) {
 	require.Contains(t, err.Error(), "must include a host")
 }
 
+func TestCyberArkStart_RejectsAppIDWithSlash(t *testing.T) {
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config:    config.CyberArkManager{URL: "https://ccp.example.com", AppID: "team/app"},
+	}
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must not contain '/'")
+}
+
 func TestCyberArkStart_RejectsURLAlreadyAtCCPEndpoint(t *testing.T) {
 	// Operators copying examples from upstream CyberArk integrations
 	// sometimes paste the full endpoint URL. Catch it at startup; otherwise
@@ -312,6 +322,17 @@ func TestCyberArkParseBody_ShortFormRequiresConfiguredAppID(t *testing.T) {
 	_, err := c.parseBody("Lab/DB-Account")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "app_id")
+}
+
+func TestCyberArkParseBody_RejectsAppIDOverrideContainingSlash(t *testing.T) {
+	// The "//" separator marks the end of the AppID, so a body like
+	// "A/B//Safe/Object" would otherwise leak the unsupported segment into
+	// AppID=A/B. The docs claim "/" is reserved across all four name
+	// segments; this lock guarantees the parser actually enforces it.
+	c := cyberarkManagerWith("orb-agent")
+	_, err := c.parseBody("A/B//Lab/DB-Account")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "AppID override must not contain '/'")
 }
 
 // fakeCCP emulates the GET /AIMWebService/api/Accounts endpoint.

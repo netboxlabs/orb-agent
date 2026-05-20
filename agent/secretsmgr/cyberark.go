@@ -71,6 +71,9 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if c.config.AppID == "" {
 		return fmt.Errorf("cyberark: app_id is required")
 	}
+	if strings.Contains(c.config.AppID, "/") {
+		return fmt.Errorf("cyberark: app_id %q must not contain '/'", c.config.AppID)
+	}
 	parsedURL, err := url.Parse(c.config.URL)
 	if err != nil {
 		return fmt.Errorf("cyberark: url %q does not parse: %w", c.config.URL, err)
@@ -275,6 +278,9 @@ func (c *cyberarkManager) parseBody(body string) (cyberarkRef, error) {
 		remainder = body[idx+2:]
 		if appID == "" {
 			return cyberarkRef{}, fmt.Errorf("invalid cyberark reference %q: empty AppID before '//'", body)
+		}
+		if strings.Contains(appID, "/") {
+			return cyberarkRef{}, fmt.Errorf("invalid cyberark reference %q: AppID override must not contain '/'", body)
 		}
 	} else {
 		appID = c.config.AppID
