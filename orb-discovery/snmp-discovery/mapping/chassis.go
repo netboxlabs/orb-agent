@@ -268,7 +268,7 @@ func buildMasterRef(master *diode.Device) *diode.Device {
 //     applied to N members would collapse them onto one NetBox row).
 //   - VcPosition = member.ID; VirtualChassis = {Name: vcName, Master: masterRef}.
 //   - DeviceType from member.Model when populated, else inherit master's.
-//   - Site / Tenant / Role / Platform inherited from master.
+//   - Site / Tenant / Role / Platform / Location inherited from master.
 func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *diode.Device, vcName string) *diode.Device {
 	name := fmt.Sprintf("%s-%d", vcName, member.ID)
 	pos := int64(member.ID)
@@ -279,6 +279,7 @@ func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *di
 		Tenant:     master.Tenant,
 		Role:       master.Role,
 		Platform:   master.Platform,
+		Location:   master.Location,
 		VcPosition: &pos,
 		VirtualChassis: &diode.VirtualChassis{
 			Name:   &vcName,

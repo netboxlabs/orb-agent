@@ -450,6 +450,33 @@ func TestBuildMemberDevice_CarriesVcPositionAndMatcherBlock(t *testing.T) {
 	assert.Equal(t, "WS-C3850-12X", *dev.DeviceType.Model)
 }
 
+// TestBuildMemberDevice_InheritsMasterLocation guards finding #16:
+// when DeviceMapper.applyDefaults attaches `defaults.location` to the
+// master Device (which happens BEFORE TranslateAsStack builds the
+// non-master member devices), every member must also carry that
+// Location. Without this propagation, members would be ingested into
+// NetBox without the operator-configured location while the master /
+// standalone case has it — silently splitting one logical stack
+// across multiple NetBox locations.
+func TestBuildMemberDevice_InheritsMasterLocation(t *testing.T) {
+	site := &diode.Site{Name: strPtr("dc1")}
+	loc := &diode.Location{Name: strPtr("rack-42"), Site: site}
+	master := &diode.Device{
+		Name:     strPtr("stack"),
+		Site:     site,
+		Location: loc,
+	}
+	masterRef := buildMasterRef(master)
+	member := ChassisMember{ID: 2, Serial: "X", Model: "ModelB"}
+
+	dev := buildMemberDevice(master, member, masterRef, "stack")
+
+	require.NotNil(t, dev.Location, "members must inherit master.Location")
+	assert.Same(t, loc, dev.Location,
+		"Location is pointer-shared with master (mirrors Site/Tenant/Role/Platform sharing)")
+	assert.Equal(t, "rack-42", *dev.Location.Name)
+}
+
 func TestBuildMemberDevice_FallsBackToMasterDeviceTypeWhenModelEmpty(t *testing.T) {
 	master := &diode.Device{
 		Name: strPtr("stack"),
