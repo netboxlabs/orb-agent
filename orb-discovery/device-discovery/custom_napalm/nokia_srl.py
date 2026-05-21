@@ -90,7 +90,11 @@ _PHYS_INTF_RE = re.compile(
 )
 
 # Subinterface line: "  ethernet-1/1.0 is up"
-_SUB_INTF_RE = re.compile(r"^\s{2}(\S+\.\d+) is (up|down)", re.IGNORECASE)
+#                    "  ethernet-1/1.0 is down, reason subinterface-admin-disabled"
+_SUB_INTF_RE = re.compile(
+    r"^\s{2}(\S+\.\d+) is (up|down)(?:,\s*reason\s+([\w-]+))?",
+    re.IGNORECASE,
+)
 
 # IP address lines under a subinterface
 _IPV4_ADDR_RE = re.compile(
@@ -117,7 +121,6 @@ def _strip_prompt(text: str) -> str:
 
 
 def _make_intf_entry(m) -> dict:
-    """Build a fresh interface entry dict from a physical-interface regex match."""
     reason = m.group(3)
     return {
         "name": m.group(1),
@@ -126,34 +129,66 @@ def _make_intf_entry(m) -> dict:
         "speed": _parse_speed(m.group(4)) if m.group(4) else -1.0,
         "mtu": -1,
         "description": "",
+        "subs": [],
+    }
+
+
+def _make_sub_entry(name: str, is_up: bool, is_enabled: bool = True) -> dict:
+    return {
+        "name": name,
+        "is_up": is_up,
+        "is_enabled": is_enabled,
+        "mtu": -1,
+        "description": "",
         "ipv4": [],
         "ipv6": [],
     }
 
 
-def _collect_ip_addresses(line: str, current: dict) -> None:
-    """Append any IPv4/IPv6 address found in *line* to *current*'s lists."""
+def _sub_is_enabled_from_reason(reason: str | None) -> bool:
+    # Any reason whose name contains "disabled" indicates admin action; pure
+    # operational-down reasons (lower-layer-down, no-light, …) never use the
+    # word, so this heuristic covers port-admin-disabled,
+    # subinterface-admin-disabled, interface-disabled, etc. without
+    # enumerating every SR Linux release's spelling.
+    if reason and "disabled" in reason.lower():
+        return False
+    return True
+
+
+def _collect_ip_addresses(line: str, sub: dict) -> None:
+    """
+    Append any IPv4/IPv6 address found in *line* to *sub*'s lists.
+
+    SR Linux configures L3 addressing under sub-interfaces, so IPs are
+    always attached to the current sub-interface (never the parent).
+    IPv6 link-local (``fe80::``) is included for parity with the
+    community ``srl`` driver and the device data model.
+    """
     m_ipv4 = _IPV4_ADDR_RE.search(line)
     if m_ipv4:
-        current["ipv4"].append((m_ipv4.group(1), int(m_ipv4.group(2))))
+        sub["ipv4"].append((m_ipv4.group(1), int(m_ipv4.group(2))))
         return
     m_ipv6 = _IPV6_ADDR_RE.search(line)
     if m_ipv6:
-        addr, prefix = m_ipv6.group(1), int(m_ipv6.group(2))
-        if not addr.lower().startswith("fe80"):  # skip link-local
-            current["ipv6"].append((addr, prefix))
+        sub["ipv6"].append((m_ipv6.group(1), int(m_ipv6.group(2))))
 
 
 def _parse_interface_output(output: str) -> list[dict]:
     """
-    Parse ``show interface all`` output into a list of interface dicts.
+    Parse ``show interface all`` output into a list of physical-interface dicts.
 
-    Each dict has: name, is_up, is_enabled, speed, mtu, description,
-    ipv4 (list of (addr, prefix_len)), ipv6 (same).
+    Each dict has: name, is_up, is_enabled, speed, mtu, description, and a
+    ``subs`` list. Each sub has: name, is_up, mtu, description, ipv4, ipv6.
+
+    Indented ``MTU`` / ``Description`` lines populate the currently open
+    sub-interface when one is open; otherwise they populate the parent.
+    IP-address lines are only collected when a sub is open — SR Linux does
+    not configure IPs on the physical parent.
     """
     interfaces: list[dict] = []
     current: dict | None = None
-    current_sub: str | None = None
+    current_sub: dict | None = None
 
     for line in output.splitlines():
         if _SEPARATOR_RE.match(line):
@@ -176,21 +211,28 @@ def _parse_interface_output(output: str) -> list[dict]:
 
         m_sub = _SUB_INTF_RE.match(line)
         if m_sub:
-            current_sub = m_sub.group(1)
+            current_sub = _make_sub_entry(
+                m_sub.group(1),
+                m_sub.group(2).lower() == "up",
+                is_enabled=_sub_is_enabled_from_reason(m_sub.group(3)),
+            )
+            current["subs"].append(current_sub)
             continue
+
+        target = current_sub if current_sub is not None else current
 
         m_mtu = _MTU_RE.search(line)
         if m_mtu:
-            current["mtu"] = int(m_mtu.group(1))
+            target["mtu"] = int(m_mtu.group(1))
             continue
 
         m_desc = _DESC_RE.search(line)
         if m_desc:
-            current["description"] = m_desc.group(1).strip()
+            target["description"] = m_desc.group(1).strip()
             continue
 
-        if current_sub:
-            _collect_ip_addresses(line, current)
+        if current_sub is not None:
+            _collect_ip_addresses(line, current_sub)
 
     return interfaces
 
@@ -281,7 +323,11 @@ class SRLDriver(_napalm_base.NetworkDriver):
         # --- show interface all: interface list ---
         intf_out = self.device.send_command("show interface all")
         parsed = _parse_interface_output(intf_out) if intf_out else []
-        interface_list = [entry["name"] for entry in parsed]
+        interface_list = [
+            name
+            for entry in parsed
+            for name in (entry["name"], *(sub["name"] for sub in entry["subs"]))
+        ]
 
         return {
             "hostname": hostname,
@@ -295,13 +341,20 @@ class SRLDriver(_napalm_base.NetworkDriver):
         }
 
     def get_interfaces(self) -> dict:
-        """Return interface details keyed by interface name."""
+        """
+        Return interface details keyed by interface name.
+
+        Emits one entry per physical interface plus one entry per
+        sub-interface (e.g. ``mgmt0`` and ``mgmt0.0``). The translator
+        maps sub-interface names to NetBox ``virtual`` interfaces with
+        parent linkage automatically.
+        """
         intf_out = self.device.send_command("show interface all")
         if not intf_out:
             return {}
 
         parsed = _parse_interface_output(intf_out)
-        interfaces = {}
+        interfaces: dict = {}
         for entry in parsed:
             interfaces[entry["name"]] = {
                 "is_up": entry["is_up"],
@@ -312,11 +365,27 @@ class SRLDriver(_napalm_base.NetworkDriver):
                 "speed": entry["speed"],
                 "mac_address": "",
             }
+            for sub in entry["subs"]:
+                interfaces[sub["name"]] = {
+                    "is_up": sub["is_up"],
+                    "is_enabled": sub["is_enabled"],
+                    "description": sub["description"],
+                    "last_flapped": -1.0,
+                    "mtu": sub["mtu"],
+                    "speed": -1.0,
+                    "mac_address": "",
+                }
 
         return interfaces
 
     def get_interfaces_ip(self) -> dict:
-        """Return IP addresses per interface."""
+        """
+        Return IP addresses keyed by *sub-interface* name.
+
+        SR Linux configures L3 addressing under sub-interfaces, so the
+        physical parent never carries IPs. Sub-interfaces without IPs are
+        omitted from the result.
+        """
         intf_out = self.device.send_command("show interface all")
         if not intf_out:
             return {}
@@ -324,15 +393,19 @@ class SRLDriver(_napalm_base.NetworkDriver):
         parsed = _parse_interface_output(intf_out)
         interfaces_ip: dict = {}
         for entry in parsed:
-            name = entry["name"]
-            for addr, prefix_len in entry["ipv4"]:
-                interfaces_ip.setdefault(name, {}).setdefault("ipv4", {})[addr] = {
-                    "prefix_length": prefix_len
-                }
-            for addr, prefix_len in entry["ipv6"]:
-                interfaces_ip.setdefault(name, {}).setdefault("ipv6", {})[addr] = {
-                    "prefix_length": prefix_len
-                }
+            for sub in entry["subs"]:
+                if not sub["ipv4"] and not sub["ipv6"]:
+                    continue
+                sub_ip: dict = {}
+                if sub["ipv4"]:
+                    sub_ip["ipv4"] = {
+                        addr: {"prefix_length": prefix} for addr, prefix in sub["ipv4"]
+                    }
+                if sub["ipv6"]:
+                    sub_ip["ipv6"] = {
+                        addr: {"prefix_length": prefix} for addr, prefix in sub["ipv6"]
+                    }
+                interfaces_ip[sub["name"]] = sub_ip
 
         return interfaces_ip
 

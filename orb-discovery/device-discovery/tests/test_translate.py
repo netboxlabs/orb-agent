@@ -1744,3 +1744,79 @@ def test_apply_interface_vlans_rejects_bool_vids():
     assert not iface.HasField("untagged_vlan")
     # tagged was [True, False, 10] → only 10 survives the bool rejection
     assert sorted(v.vid for v in iface.tagged_vlans) == [10]
+
+
+def test_translate_data_subinterface_becomes_virtual_with_parent(
+    sample_device_info, sample_defaults
+):
+    """
+    Sub-interface names translate to NetBox 'virtual' interfaces with parent set.
+
+    Any IPs in interface_ip attach to the sub-interface, not the parent — this
+    pins the driver↔translator contract for the Nokia SR Linux model
+    (parent carries no IPs; subs carry IPs). Same contract applies to
+    Junos-style sub-interfaces.
+    """
+    interfaces = {
+        "mgmt0": {
+            "is_up": True,
+            "is_enabled": True,
+            "description": "",
+            "last_flapped": -1.0,
+            "mtu": -1,
+            "speed": 1000.0,
+            "mac_address": "",
+        },
+        "mgmt0.0": {
+            "is_up": True,
+            "is_enabled": True,
+            "description": "",
+            "last_flapped": -1.0,
+            "mtu": -1,
+            "speed": -1.0,
+            "mac_address": "",
+        },
+    }
+    interfaces_ip = {
+        "mgmt0.0": {
+            "ipv4": {"172.24.0.101": {"prefix_length": 24}},
+            "ipv6": {"fe80::42:acff:fe12:6": {"prefix_length": 64}},
+        },
+    }
+    data = {
+        "device": sample_device_info,
+        "interface": interfaces,
+        "interface_ip": interfaces_ip,
+        "driver": "nokia_srl",
+        "defaults": sample_defaults,
+    }
+
+    entities = list(translate_data(data))
+
+    iface_entities = [e for e in entities if e.HasField("interface")]
+    ip_entities = [e for e in entities if e.HasField("ip_address")]
+
+    by_name = {e.interface.name: e.interface for e in iface_entities}
+    assert "mgmt0" in by_name, "physical parent interface must be emitted"
+    assert "mgmt0.0" in by_name, "sub-interface must be emitted as its own entity"
+
+    parent_iface = by_name["mgmt0"]
+    sub_iface = by_name["mgmt0.0"]
+
+    assert sub_iface.type == "virtual", (
+        "sub-interfaces must be typed 'virtual' so NetBox renders them under the parent"
+    )
+    assert sub_iface.parent.name == "mgmt0", (
+        "sub-interface must carry a parent reference to its physical interface"
+    )
+    assert parent_iface.parent.name == "", (
+        "physical parent must not carry a parent reference (no self-loops)"
+    )
+
+    ip_targets = {
+        ip.ip_address.assigned_object_interface.name for ip in ip_entities
+    }
+    assert ip_targets, "expected at least one IP address entity"
+    assert ip_targets == {"mgmt0.0"}, (
+        "all IPs must be assigned to the sub-interface, not the physical parent"
+    )

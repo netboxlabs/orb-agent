@@ -8,7 +8,9 @@
   "fqdn": "Unknown",
   "interface_list": [
     "ethernet-1/1",
+    "ethernet-1/1.0",
     "ethernet-1/2",
-    "mgmt0"
+    "mgmt0",
+    "mgmt0.0"
   ]
 }

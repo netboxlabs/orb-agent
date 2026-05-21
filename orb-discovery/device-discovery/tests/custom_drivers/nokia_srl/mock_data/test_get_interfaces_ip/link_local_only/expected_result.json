@@ -1,0 +1,9 @@
+{
+  "ethernet-1/1.0": {
+    "ipv6": {
+      "fe80::1812:ff:feff:1": {
+        "prefix_length": 64
+      }
+    }
+  }
+}

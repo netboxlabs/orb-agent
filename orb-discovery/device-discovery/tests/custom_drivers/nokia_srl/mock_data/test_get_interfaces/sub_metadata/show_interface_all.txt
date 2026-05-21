@@ -1,0 +1,18 @@
+===============================================================
+ethernet-1/1 is up, speed 25G, type None
+  ethernet-1/1.0 is up
+    Network-instances:
+      * Name: default (default)
+    Encapsulation   : null
+    Type            : routed
+    MTU      : 9000
+    Description  : uplink to spine-1
+    IPv4 addr    : 10.0.0.1/30 (static, preferred, primary)
+---------------------------------------------------------------
+===============================================================
+Summary
+  1 ethernet interfaces are up, 0 are down
+  1 subinterfaces are up, 0 are down
+===============================================================
+
+--{ running }--[  ]--
