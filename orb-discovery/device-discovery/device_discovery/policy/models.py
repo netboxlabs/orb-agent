@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from croniter import CroniterBadCronError, croniter
 from pydantic import BaseModel, Field, field_validator
@@ -193,6 +193,18 @@ class Options(BaseModel):
             "but absent from the device's VLAN database. Stubs inherit "
             "attributes from defaults.vlan for stable matching. Set "
             "False to drop unknown VIDs from associations."
+        ),
+    )
+    discover_modules: Literal["off", "linecards", "full"] = Field(
+        default="off",
+        description=(
+            "Enable module / module-bay emission for modular chassis. "
+            "'off' (default) skips module discovery entirely — drivers "
+            "are not asked for module data. 'linecards' emits chassis-level "
+            "bays and their non-transceiver modules (linecards, supervisors, "
+            "and any psu/fan a driver classifies explicitly); transceiver "
+            "sub-bays are dropped. 'full' adds the per-port transceiver "
+            "sub-bays."
         ),
     )
 

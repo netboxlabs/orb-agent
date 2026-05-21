@@ -247,6 +247,147 @@ def test_prune_nested_refs_rewrites_nested_device_and_interface_refs():
     assert assigned.device.serial == ""
 
 
+def test_prune_nested_refs_strips_rich_device_from_module_and_module_bay():
+    """
+    Module + ModuleBay entities get their nested Device replaced with a stub.
+
+    Without this pass, a chassis with N transceivers would carry the
+    full Device proto (often with running-config text) on every Module
+    and every ModuleBay — for a 100-port linecard that's a 100×+ wire
+    bloat. The matcher-only stub keeps just the name/type/role fields
+    Diode needs to resolve the chassis.
+    """
+    # Top-level rich device — what nested refs should resolve to.
+    rich_dev = pb.Device(name="sw1", serial="FCW123", status="active")
+    rich_dev.device_type.CopyFrom(
+        pb.DeviceType(model="C9404R", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    # ModuleBay entity (top-level slot) with a rich Device on it.
+    bay = pb.ModuleBay(name="1", position="1")
+    bay.device.CopyFrom(rich_dev)
+
+    # Module entity that's installed in the same chassis; module_bay sub-message
+    # also carries a rich Device copy (this is the bloat path).
+    module = pb.Module(serial="JAE2401LC02")
+    module.device.CopyFrom(rich_dev)
+    module.module_bay.CopyFrom(bay)
+    module.module_type.CopyFrom(
+        pb.ModuleType(model="C9400-LC-48U", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    entities = [Entity(device=rich_dev), Entity(module_bay=bay), Entity(module=module)]
+    prune_nested_refs(entities)
+
+    # ModuleBay.device replaced with stub.
+    pruned_bay = entities[1].module_bay
+    assert pruned_bay.name == "1"
+    assert pruned_bay.device.name == "sw1"
+    assert pruned_bay.device.serial == ""  # rich field stripped
+    assert pruned_bay.device.status == ""  # rich field stripped
+    assert pruned_bay.device.HasField("device_type")  # matcher kept
+
+    # Module.device replaced with stub.
+    pruned_mod = entities[2].module
+    assert pruned_mod.serial == "JAE2401LC02"
+    assert pruned_mod.device.name == "sw1"
+    assert pruned_mod.device.serial == ""
+    assert pruned_mod.device.status == ""
+
+    # Module.module_bay.device is the recursive bloat path — must be stubbed too.
+    assert pruned_mod.HasField("module_bay")
+    assert pruned_mod.module_bay.device.name == "sw1"
+    assert pruned_mod.module_bay.device.serial == ""
+
+
+def test_prune_nested_refs_strips_nested_parent_module_device():
+    """
+    A sub-bay's nested ``module`` ref, if present, gets its device stubbed too.
+
+    ``translate_modules`` currently emits sub-bays device-rooted (no
+    ``module=parent_linecard`` link — see the docstring on
+    ``_emit_bay_recursive`` for why). This test still exercises the pruner's
+    contract on the shape: if any caller does attach a parent Module ref
+    to a ModuleBay, the prune sweep must reduce both the bay's own
+    ``device`` AND the nested ``module.device`` to matcher-only stubs so
+    per-transceiver wire size stays bounded.
+    """
+    rich_dev = pb.Device(name="sw1", serial="FCW123", status="active")
+    rich_dev.device_type.CopyFrom(
+        pb.DeviceType(model="C9404R", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+    parent_module = pb.Module(serial="JAE2401LC02")
+    parent_module.device.CopyFrom(rich_dev)
+    parent_module.module_type.CopyFrom(
+        pb.ModuleType(model="C9400-LC-48U", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    sub_bay = pb.ModuleBay(name="Te2/0/1", position="Te2/0/1")
+    sub_bay.device.CopyFrom(rich_dev)
+    sub_bay.module.CopyFrom(parent_module)
+
+    entities = [Entity(device=rich_dev), Entity(module_bay=sub_bay)]
+    prune_nested_refs(entities)
+
+    pruned = entities[1].module_bay
+    # Own device stubbed.
+    assert pruned.device.serial == ""
+    # Parent module ref kept, its device stubbed too — no recursive bloat.
+    assert pruned.HasField("module")
+    assert pruned.module.serial == "JAE2401LC02"
+    assert pruned.module.device.name == "sw1"
+    assert pruned.module.device.serial == ""
+
+
+def test_prune_nested_refs_stubs_interface_module_reference():
+    """
+    Interface.module is replaced with a matcher-only Module proto.
+
+    The translator attaches the full rich Module (carrying device,
+    module_bay, module_type, description, etc.) to every Interface in
+    the slot. Without stubbing, a 48-port linecard duplicates that rich
+    subtree 48 times in the ingest payload. The stub keeps only the
+    fields Diode needs to resolve the module — device, serial, and a
+    positional module_bay shell — so per-interface wire cost is bounded.
+    """
+    rich_dev = pb.Device(name="sw1", serial="FCW123", status="active")
+    rich_dev.device_type.CopyFrom(
+        pb.DeviceType(model="C9404R", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    bay = pb.ModuleBay(name="2", position="2")
+    bay.device.CopyFrom(rich_dev)
+
+    rich_module = pb.Module(serial="JAE2401LC02", description="48-port UPOE+")
+    rich_module.device.CopyFrom(rich_dev)
+    rich_module.module_bay.CopyFrom(bay)
+    rich_module.module_type.CopyFrom(
+        pb.ModuleType(model="C9400-LC-48U", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    iface = pb.Interface(name="GigabitEthernet2/0/1", type="1000base-t")
+    iface.device.CopyFrom(rich_dev)
+    iface.module.CopyFrom(rich_module)
+
+    entities = [Entity(device=rich_dev), Entity(interface=iface)]
+    prune_nested_refs(entities)
+
+    pruned_iface = entities[1].interface
+    # iface.module kept (matcher present), but rich fields stripped.
+    assert pruned_iface.HasField("module")
+    assert pruned_iface.module.serial == "JAE2401LC02"
+    assert pruned_iface.module.description == ""
+    assert not pruned_iface.module.HasField("module_type")
+    # Nested device on the module ref is also a stub.
+    assert pruned_iface.module.device.name == "sw1"
+    assert pruned_iface.module.device.serial == ""
+    # Module bay positional ref preserved as a stub.
+    assert pruned_iface.module.HasField("module_bay")
+    assert pruned_iface.module.module_bay.name == "2"
+    assert pruned_iface.module.module_bay.device.name == "sw1"
+    assert pruned_iface.module.module_bay.device.serial == ""
+
+
 def test_prune_nested_refs_empty_is_noop():
     """Sweep is a no-op on an empty entity list."""
     entities: list[Entity] = []
@@ -262,3 +403,64 @@ def test_prune_nested_refs_no_top_device_is_noop():
     prune_nested_refs(entities)
     # No rich Device → no-op; rich nested device preserved.
     assert entities[0].interface.device.serial == "XYZ"
+
+
+def test_prune_nested_refs_vc_member_modules_each_get_own_device_stub():
+    """
+    In a VC payload, member 1's Module gets member 1's Device stub, not master's.
+
+    Pins multi-device-aware stubbing for VC-of-modular: a Module
+    entity attached to member-2 must resolve against the member-2
+    top-level Device in the index — not the master Device — so its
+    stubbed device-ref carries the right member name. Without
+    per-member resolution, Diode would reconcile every module under
+    the master chassis instead of the right member.
+    """
+    master = pb.Device(name="stack-sw", serial="FCW0001", status="active")
+    master.device_type.CopyFrom(
+        pb.DeviceType(model="C9300L-48T-4X", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+    member2 = pb.Device(name="stack-sw-2", serial="FCW0002", status="active")
+    member2.device_type.CopyFrom(
+        pb.DeviceType(model="C9300L-48T-4X", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    bay1 = pb.ModuleBay(name="1", position="1")
+    bay1.device.CopyFrom(master)
+    mod1 = pb.Module(serial="NM1")
+    mod1.device.CopyFrom(master)
+    mod1.module_type.CopyFrom(
+        pb.ModuleType(model="C9300-NM-8X", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    bay2 = pb.ModuleBay(name="1", position="1")
+    bay2.device.CopyFrom(member2)
+    mod2 = pb.Module(serial="NM2")
+    mod2.device.CopyFrom(member2)
+    mod2.module_type.CopyFrom(
+        pb.ModuleType(model="C9300-NM-8X", manufacturer=pb.Manufacturer(name="Cisco")),
+    )
+
+    entities = [
+        Entity(device=master),
+        Entity(device=member2),
+        Entity(module_bay=bay1),
+        Entity(module=mod1),
+        Entity(module_bay=bay2),
+        Entity(module=mod2),
+    ]
+    prune_nested_refs(entities)
+
+    pruned_mod1 = entities[3].module
+    pruned_mod2 = entities[5].module
+    # Each Module's stubbed Device carries that MEMBER's name, not master's.
+    assert pruned_mod1.device.name == "stack-sw"
+    assert pruned_mod1.device.serial == ""  # stubbed
+    assert pruned_mod2.device.name == "stack-sw-2"
+    assert pruned_mod2.device.serial == ""
+    # Per-member ModuleBay also resolves to its own device.
+    pruned_bay1 = entities[2].module_bay
+    pruned_bay2 = entities[4].module_bay
+    assert pruned_bay1.device.name == "stack-sw"
+    assert pruned_bay2.device.name == "stack-sw-2"
+

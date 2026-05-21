@@ -1,0 +1,8 @@
+NAME: "Switch 1 Chassis", DESCR: "Cisco Catalyst 9500-48Y4C Switch"
+PID: C9500-48Y4C       , VID: V01 , SN: FCW2501A001
+
+NAME: "Switch 1 Slot 1 Supervisor", DESCR: "Cisco Catalyst 9500 Series Built-in Supervisor"
+PID: C9500-SUP-BUILTIN , VID: V01 , SN: JAE2501SUP1
+
+NAME: "Switch 1 - Power Supply A", DESCR: "Switch 1 - Power Supply A"
+PID: PWR-C5-1KWAC      , VID: V01 , SN: ART2501P0A1

@@ -7,6 +7,7 @@ import logging
 import re
 from collections.abc import Iterable
 
+from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, Prefix
 
 from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
@@ -387,14 +388,41 @@ def _compile_exclude_patterns(patterns: list[str]) -> list[re.Pattern]:
     return compiled
 
 
+def _attach_module_ref(
+    iface: Interface,
+    name: str,
+    iface_module_map: dict[str, pb.Module],
+) -> None:
+    """
+    Attach a module ref on an interface when iface_module_map covers it.
+
+    Free helper (not nested in build_interface_entities) so the parent
+    function stays under the McCabe complexity limit. No-op when the
+    name has no entry in the map.
+    """
+    module = iface_module_map.get(name)
+    if module is not None:
+        iface.module.CopyFrom(module)
+
+
 def build_interface_entities(
     device: Device,
     interfaces: dict,
     interfaces_ip: dict,
     defaults: Defaults,
+    iface_module_map: dict[str, pb.Module] | None = None,
 ) -> list[Entity]:
-    """Create interface entities from interface definitions and IP data."""
+    """
+    Create interface entities from interface definitions and IP data.
+
+    When ``iface_module_map`` is provided (populated by
+    ``translate_modules.emit_modules_if_requested``), the matching
+    interface entity carries a ``module=`` reference alongside its
+    ``device=`` reference, so NetBox knows which line card / sub-module
+    physically owns the port.
+    """
     exclude_patterns = _compile_exclude_patterns(defaults.interface_exclude_patterns or [])
+    iface_module_map = iface_module_map or {}
 
     def is_excluded(name: str) -> bool:
         # Uses search (not match) so patterns match anywhere in the name.
@@ -424,6 +452,7 @@ def build_interface_entities(
         interface = translate_interface(
             device, if_name, interface_info, defaults, parent=parent
         )
+        _attach_module_ref(interface, if_name, iface_module_map)
         interface_entities[if_name] = interface
         entities.append(Entity(interface=interface))
         entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
@@ -435,6 +464,7 @@ def build_interface_entities(
             continue
         parent = resolve_parent(if_name)
         interface = translate_interface(device, if_name, {}, defaults, parent=parent)
+        _attach_module_ref(interface, if_name, iface_module_map)
         interface_entities[if_name] = interface
         entities.append(Entity(interface=interface))
         entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))

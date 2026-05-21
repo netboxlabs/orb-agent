@@ -1,0 +1,352 @@
+# Copyright 2026 NetBox Labs Inc
+"""Unit tests for custom_napalm._modules helper."""
+
+from __future__ import annotations
+
+import pytest
+
+from custom_napalm._modules import (
+    MAX_BAY_DEPTH,
+    MemberModules,
+    ModuleBay,
+    ModuleEntry,
+    classify_module_type_cisco,
+    classify_module_type_junos,
+    to_payload,
+)
+
+# ---- to_payload validation ----------------------------------------------
+
+
+def _bay(name: str, *, serial: str = "S1", mtype: str = "linecard",
+         model: str = "M1", description: str = "",
+         sub_bays: list[ModuleBay] | None = None) -> ModuleBay:
+    """Build a ModuleBay with sane defaults."""
+    return ModuleBay(
+        name=name,
+        position=name,
+        module=ModuleEntry(
+            model=model,
+            serial=serial,
+            type=mtype,  # type: ignore[arg-type]
+            description=description,
+            sub_bays=sub_bays or [],
+        ),
+    )
+
+
+def test_to_payload_empty_input_returns_none() -> None:
+    """Empty members dict → None (no payload to emit)."""
+    assert to_payload({}) is None
+
+
+def test_to_payload_all_invalid_bays_returns_none() -> None:
+    """When every member's bays fail validation, the helper returns None."""
+    assert to_payload({None: MemberModules(bays=[_bay("1", serial="")])}) is None
+
+
+def test_to_payload_drops_bay_with_empty_serial() -> None:
+    """A bay whose module.serial is empty is dropped; valid bays survive."""
+    payload = to_payload({
+        None: MemberModules(bays=[_bay("1", serial=""), _bay("2", serial="OK2")]),
+    })
+    assert payload is not None
+    names = [b["name"] for b in payload["members"][None]["bays"]]
+    assert names == ["2"]
+
+
+def test_to_payload_drops_bay_with_whitespace_only_serial() -> None:
+    """A bay whose serial is whitespace-only is treated as empty."""
+    payload = to_payload({
+        None: MemberModules(bays=[_bay("1", serial="   "), _bay("2", serial="OK2")]),
+    })
+    assert payload is not None
+    assert [b["name"] for b in payload["members"][None]["bays"]] == ["2"]
+
+
+def test_to_payload_drops_bay_with_unknown_type() -> None:
+    """A bay whose module.type is outside the enum is dropped."""
+    bay = ModuleBay(
+        name="1", position="1",
+        module=ModuleEntry(model="M1", serial="S1", type="bogus"),  # type: ignore[arg-type]
+    )
+    assert to_payload({None: MemberModules(bays=[bay])}) is None
+
+
+def test_to_payload_drops_bay_with_no_module() -> None:
+    """An empty bay (module is None) is not emitted today."""
+    bay = ModuleBay(name="1", position="1", module=None)
+    assert to_payload({None: MemberModules(bays=[bay])}) is None
+
+
+def test_to_payload_dedupes_interfaces_by_bay() -> None:
+    """Duplicate ifnames in interfaces_by_bay collapse to first occurrence."""
+    payload = to_payload({
+        None: MemberModules(
+            bays=[_bay("1")],
+            interfaces_by_bay={"1": ["Te1/0/1", "Te1/0/1", "Te1/0/2", "Te1/0/1"]},
+        ),
+    })
+    assert payload is not None
+    assert payload["members"][None]["interfaces_by_bay"]["1"] == ["Te1/0/1", "Te1/0/2"]
+
+
+def test_to_payload_accepts_4tuple_ifnames() -> None:
+    """
+    SVL ifnames like HundredGigE1/2/0/1 are preserved (no longer rejected).
+
+    The 4-tuple rejection that lived in _validate_interfaces_by_bay during
+    the standalone-only revision is gone — SVL deployments emit those
+    ifnames as valid input.
+    """
+    payload = to_payload({
+        1: MemberModules(
+            bays=[_bay("2", serial="LC1", model="C9400-LC-48U")],
+            interfaces_by_bay={"2": ["HundredGigE1/2/0/1", "HundredGigE1/2/0/2"]},
+        ),
+    })
+    assert payload is not None
+    assert payload["members"][1]["interfaces_by_bay"]["2"] == [
+        "HundredGigE1/2/0/1", "HundredGigE1/2/0/2",
+    ]
+
+
+def test_to_payload_rejects_non_string_ifname_warn_and_drop() -> None:
+    """Non-string entries in interfaces_by_bay are warn-dropped, never raised."""
+    payload = to_payload({
+        None: MemberModules(
+            bays=[_bay("1")],
+            interfaces_by_bay={"1": [None, 42, "Te1/0/1"]},  # type: ignore[list-item]
+        ),
+    })
+    assert payload is not None
+    assert payload["members"][None]["interfaces_by_bay"]["1"] == ["Te1/0/1"]
+
+
+def test_to_payload_rejects_non_iterable_ifnames_value() -> None:
+    """A non-list value in interfaces_by_bay is warn-dropped to an empty list."""
+    payload = to_payload({
+        None: MemberModules(
+            bays=[_bay("1")],
+            interfaces_by_bay={"1": None, "2": 42, "3": ["Te3/0/1"]},  # type: ignore[dict-item]
+        ),
+    })
+    assert payload is not None
+    assert payload["members"][None]["interfaces_by_bay"] == {
+        "1": [], "2": [], "3": ["Te3/0/1"],
+    }
+
+
+def test_to_payload_keeps_subbay_at_depth_2() -> None:
+    """Cisco shape: chassis → linecard → transceiver. Depth 2."""
+    transceiver = _bay("Te1/0/1", serial="SFP_SN", mtype="transceiver", model="SFP-10G-LR")
+    linecard = _bay("1", serial="LC_SN", model="C9400-LC", sub_bays=[transceiver])
+    payload = to_payload({None: MemberModules(bays=[linecard])})
+    assert payload is not None
+    member = payload["members"][None]
+    assert member["bays"][0]["module"]["sub_bays"][0]["module"]["type"] == "transceiver"
+
+
+def test_to_payload_keeps_subbay_at_depth_3() -> None:
+    """Junos shape: chassis → FPC → PIC → transceiver. Depth 3."""
+    transceiver = _bay("xe-0/0/0", serial="SFP_SN", mtype="transceiver")
+    pic = _bay("PIC 0", serial="PIC_SN", sub_bays=[transceiver])
+    fpc = _bay("FPC 0", serial="FPC_SN", sub_bays=[pic])
+    payload = to_payload({None: MemberModules(bays=[fpc])})
+    assert payload is not None
+    fpc_p = payload["members"][None]["bays"][0]
+    pic_p = fpc_p["module"]["sub_bays"][0]
+    trans_p = pic_p["module"]["sub_bays"][0]
+    assert trans_p["module"]["type"] == "transceiver"
+
+
+def test_to_payload_drops_subbay_deeper_than_max_depth() -> None:
+    """Anything below depth 3 gets warn-dropped at the offending level."""
+    too_deep = _bay("level4", serial="X")  # would be at depth 4
+    leaf = _bay("level3", serial="L3", sub_bays=[too_deep])
+    mid = _bay("level2", serial="L2", sub_bays=[leaf])
+    top = _bay("level1", serial="L1", sub_bays=[mid])
+    payload = to_payload({None: MemberModules(bays=[top])})
+    assert payload is not None
+    top_p = payload["members"][None]["bays"][0]
+    mid_p = top_p["module"]["sub_bays"][0]
+    leaf_p = mid_p["module"]["sub_bays"][0]
+    assert leaf_p["module"]["sub_bays"] == []
+
+
+def test_to_payload_happy_path_serialized_shape_standalone() -> None:
+    """End-to-end shape for a standalone payload (None member key)."""
+    transceiver = _bay("Te1/0/1", serial="FNS1", mtype="transceiver", model="SFP-10G-LR",
+                       description="10GBASE-LR")
+    linecard = _bay("1", serial="FOC1", model="C9400-LC-48U",
+                    description="48-port UPOE+ line card", sub_bays=[transceiver])
+    payload = to_payload({
+        None: MemberModules(
+            bays=[linecard],
+            interfaces_by_bay={"1": ["Te1/0/1", "Te1/0/2"]},
+        ),
+    })
+    assert payload == {
+        "members": {
+            None: {
+                "bays": [
+                    {
+                        "name": "1",
+                        "position": "1",
+                        "module": {
+                            "model": "C9400-LC-48U",
+                            "serial": "FOC1",
+                            "description": "48-port UPOE+ line card",
+                            "type": "linecard",
+                            "sub_bays": [
+                                {
+                                    "name": "Te1/0/1",
+                                    "position": "Te1/0/1",
+                                    "module": {
+                                        "model": "SFP-10G-LR",
+                                        "serial": "FNS1",
+                                        "description": "10GBASE-LR",
+                                        "type": "transceiver",
+                                        "sub_bays": [],
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                ],
+                "interfaces_by_bay": {"1": ["Te1/0/1", "Te1/0/2"]},
+            },
+        },
+    }
+
+
+def test_to_payload_vc_two_members_each_with_bays() -> None:
+    """VC envelope with two members, each carrying one valid bay."""
+    payload = to_payload({
+        1: MemberModules(
+            bays=[_bay("1", serial="SN1", model="C9300-NM-8X")],
+            interfaces_by_bay={"1": ["Te1/1/1", "Te1/1/2"]},
+        ),
+        2: MemberModules(
+            bays=[_bay("1", serial="SN2", model="C9300-NM-8X")],
+            interfaces_by_bay={"1": ["Te2/1/1", "Te2/1/2"]},
+        ),
+    })
+    assert payload is not None
+    assert set(payload["members"].keys()) == {1, 2}
+    assert payload["members"][1]["bays"][0]["module"]["serial"] == "SN1"
+    assert payload["members"][2]["bays"][0]["module"]["serial"] == "SN2"
+    assert payload["members"][1]["interfaces_by_bay"]["1"] == ["Te1/1/1", "Te1/1/2"]
+    assert payload["members"][2]["interfaces_by_bay"]["1"] == ["Te2/1/1", "Te2/1/2"]
+
+
+def test_to_payload_vc_drops_member_with_no_valid_bays() -> None:
+    """A VC member whose every bay is invalid is dropped; siblings survive."""
+    payload = to_payload({
+        1: MemberModules(bays=[_bay("1", serial="")]),  # all invalid
+        2: MemberModules(bays=[_bay("1", serial="OK2")]),
+    })
+    assert payload is not None
+    assert list(payload["members"].keys()) == [2]
+
+
+def test_to_payload_vc_returns_none_when_no_member_survives() -> None:
+    """Every member's bays drop → returns None."""
+    payload = to_payload({
+        1: MemberModules(bays=[_bay("1", serial="")]),
+        2: MemberModules(bays=[_bay("1", serial="")]),
+    })
+    assert payload is None
+
+
+def test_max_bay_depth_is_three() -> None:
+    """Sanity-pin the depth-3 contract — change with intent."""
+    assert MAX_BAY_DEPTH == 3
+
+
+# ---- _load_expected normalizer ------------------------------------------
+#
+# The base test harness rewrites JSON's string ``"null"`` member keys back
+# to Python ``None`` so fixture comparisons work. Pinned here because the
+# normalizer exists to make module-discovery fixtures round-trip.
+
+
+def test_load_expected_normalizes_null_member_key(tmp_path):
+    """Loader rewrites JSON's string `"null"` member key back to Python None."""
+    from tests.custom_drivers.base_test import _load_expected
+    fixture = tmp_path / "test_x" / "scenario_y"
+    fixture.mkdir(parents=True)
+    (fixture / "expected_result.json").write_text(
+        '{"members": {"null": {"bays": []}}}', encoding="utf-8",
+    )
+    loaded = _load_expected(fixture)
+    assert None in loaded["members"]
+    assert "null" not in loaded["members"]
+
+
+def test_normalize_null_member_keys_handles_nested_list_of_dicts():
+    """The recursive walk descends through lists-of-dicts; rewriting is scoped to members."""
+    from tests.custom_drivers.base_test import _normalize_null_member_keys
+    raw = {
+        "members": {
+            "null": {
+                "bays": [
+                    {"name": "1", "module": {"sub_bays": [{"null": "kept-as-string"}]}},
+                ],
+            },
+            "2": {"bays": []},
+        },
+    }
+    out = _normalize_null_member_keys(raw)
+    # Member keys are normalized: "null" → None, "2" → 2.
+    assert set(out["members"].keys()) == {None, 2}
+    # Deep "null" keys (outside the members level) are NOT rewritten —
+    # the normalization is scoped to member ids and would over-rewrite
+    # genuine "null"-named keys deeper in the tree.
+    deep_subbay = out["members"][None]["bays"][0]["module"]["sub_bays"][0]
+    assert "null" in deep_subbay
+    assert None not in deep_subbay
+
+
+# ---- classify_module_type_cisco -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "pid, expected",
+    [
+        ("SFP-10G-LR", "transceiver"),
+        ("QSFP-40G-SR4", "transceiver"),
+        ("QSFP28-100G-AOC", "transceiver"),
+        ("QSFP-DD-400G", "transceiver"),
+        ("GLC-SX-MMD", "transceiver"),
+        ("CFP-100G-LR4", "transceiver"),
+        ("C9400-LC-48U", "linecard"),
+        ("C9400-SUP-1XL", "linecard"),  # supervisor maps to linecard in v1
+        ("PWR-C4-9000WAC", "linecard"),  # psu maps to linecard in v1
+        ("", "linecard"),
+        ("sfp-10g-lr", "transceiver"),  # case-insensitive
+    ],
+)
+def test_classify_module_type_cisco(pid: str, expected: str) -> None:
+    """Cisco PID → ModuleType: transceiver vs default-linecard."""
+    assert classify_module_type_cisco(pid) == expected
+
+
+# ---- classify_module_type_junos -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "description, expected",
+    [
+        ("10GBASE-LR SFP+ transceiver", "transceiver"),
+        ("SFP-T 1000Base-T", "transceiver"),
+        ("QSFP+ 40GBASE-SR4", "transceiver"),
+        ("MPC4E 32x10GE + 2x100GE", "linecard"),
+        ("Routing Engine RE-S-1800x4", "linecard"),
+        ("Power Supply", "linecard"),
+        ("", "linecard"),
+    ],
+)
+def test_classify_module_type_junos(description: str, expected: str) -> None:
+    """Junos description → ModuleType: transceiver vs default-linecard."""
+    assert classify_module_type_junos(description) == expected

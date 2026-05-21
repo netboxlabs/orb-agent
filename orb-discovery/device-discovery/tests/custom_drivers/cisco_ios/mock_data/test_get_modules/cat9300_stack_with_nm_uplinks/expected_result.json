@@ -1,0 +1,76 @@
+{
+  "members": {
+    "1": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9300-NM-8X",
+            "serial": "FOC2501NM01",
+            "description": "8x10GE Network Module",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "TenGigabitEthernet1/1/1",
+                "position": "TenGigabitEthernet1/1/1",
+                "module": {
+                  "model": "SFP-10G-LR",
+                  "serial": "FNS2501TR01",
+                  "description": "SFP-10GBase-LR",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": [
+          "TenGigabitEthernet1/1/1",
+          "TenGigabitEthernet1/1/2"
+        ],
+        "TenGigabitEthernet1/1/1": [
+          "TenGigabitEthernet1/1/1"
+        ]
+      }
+    },
+    "2": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9300-NM-8X",
+            "serial": "FOC2501NM02",
+            "description": "8x10GE Network Module",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "TenGigabitEthernet2/1/1",
+                "position": "TenGigabitEthernet2/1/1",
+                "module": {
+                  "model": "SFP-10G-LR",
+                  "serial": "FNS2501TR02",
+                  "description": "SFP-10GBase-LR",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": [
+          "TenGigabitEthernet2/1/1",
+          "TenGigabitEthernet2/1/2"
+        ],
+        "TenGigabitEthernet2/1/1": [
+          "TenGigabitEthernet2/1/1"
+        ]
+      }
+    }
+  }
+}

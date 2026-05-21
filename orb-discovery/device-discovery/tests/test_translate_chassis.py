@@ -454,3 +454,69 @@ def test_validation_rejects_non_string_optional_field():
     member_serials = sorted(e.device.serial for e in entities if e.HasField("device"))
     # Member 1 dropped (bad model type) → only 2 valid → translate emits VC for 2 + 3.
     assert member_serials == ["FOC-B", "FOC-C"]
+
+
+# ---- VC with module discovery ------------------------------------------
+
+
+def test_vc_with_modules_emits_per_member_module_entities():
+    """
+    A VC + per-member modules payload emits per-member Module entities.
+
+    Module / ModuleBay entities attach to the right member Device, and
+    each member's Interface entities carry module= refs to their own
+    member's modules. Pins the end-to-end VC-of-modular dispatch from
+    translate_as_stack through emit_modules_if_requested into
+    per-member build_interface_entities.
+    """
+    from device_discovery.policy.models import Options
+
+    data = _base_data(_two_member_payload())
+    data["options"] = Options(discover_modules="linecards")
+    data["modules"] = {
+        "members": {
+            1: {
+                "bays": [{
+                    "name": "1", "position": "1",
+                    "module": {
+                        "model": "C9300-NM-8X", "serial": "NM1",
+                        "description": "", "type": "linecard",
+                        "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {"1": ["GigabitEthernet1/0/1"]},
+            },
+            2: {
+                "bays": [{
+                    "name": "1", "position": "1",
+                    "module": {
+                        "model": "C9300-NM-8X", "serial": "NM2",
+                        "description": "", "type": "linecard",
+                        "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {"1": ["GigabitEthernet2/0/1"]},
+            },
+        },
+    }
+    entities = list(translate_data(data))
+
+    devices = [e.device for e in entities if e.HasField("device")]
+    assert len(devices) == 2  # master + 1 non-master = VC of 2.
+
+    modules = [e.module for e in entities if e.HasField("module")]
+    assert {m.serial for m in modules} == {"NM1", "NM2"}
+    # Modules attach to DIFFERENT member Devices (not both to master).
+    nm1 = next(m for m in modules if m.serial == "NM1")
+    nm2 = next(m for m in modules if m.serial == "NM2")
+    assert nm1.device.name != nm2.device.name
+
+    # Each member's Interface entity carries module= to its OWN member's module.
+    interfaces = [e.interface for e in entities if e.HasField("interface")]
+    iface_m1 = next(i for i in interfaces if i.name == "GigabitEthernet1/0/1")
+    iface_m2 = next(i for i in interfaces if i.name == "GigabitEthernet2/0/1")
+    assert iface_m1.HasField("module")
+    assert iface_m1.module.serial == "NM1"
+    assert iface_m2.HasField("module")
+    assert iface_m2.module.serial == "NM2"
+

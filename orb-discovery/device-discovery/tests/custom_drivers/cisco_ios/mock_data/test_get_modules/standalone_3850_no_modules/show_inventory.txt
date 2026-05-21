@@ -1,0 +1,5 @@
+NAME: "Switch 1", DESCR: "Cisco Catalyst 3850-48T Switch"
+PID: WS-C3850-48T     , VID: V03 , SN: FOC2401L0AB
+
+NAME: "Switch 1 - Power Supply A", DESCR: "Switch 1 - Power Supply A"
+PID: PWR-C1-350WAC    , VID: V01 , SN: ART2401PSA1

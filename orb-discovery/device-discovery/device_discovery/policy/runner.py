@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timedelta
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.base import BaseTrigger
@@ -305,12 +306,45 @@ class PolicyRunner:
                         f"Error getting chassis members: {e}. "
                         "Continuing without chassis data."
                     )
+            self._collect_modules(config, device, data, sanitized_hostname)
             metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
             entity_count = Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
             return entity_count
+
+    def _collect_modules(
+        self,
+        config: Config,
+        device: Any,
+        data: dict,
+        sanitized_hostname: str,
+    ) -> None:
+        """
+        Call the driver's optional get_modules() when discover_modules is enabled.
+
+        Gated by config.options.discover_modules ('off' is a no-op). The
+        driver itself decides whether to emit a standalone or per-member
+        envelope based on its own chassis introspection — the runner is
+        agnostic. Exceptions from the driver are logged at WARNING and
+        data['modules'] is set to None so the translator falls through
+        to the existing single-Device path.
+        """
+        if not (config.options and config.options.discover_modules != "off"):
+            return
+        get_modules = getattr(device, "get_modules", None)
+        if not callable(get_modules):
+            return
+        try:
+            data["modules"] = get_modules()
+        except Exception as e:
+            logger.warning(
+                f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                f"Error getting modules: {e}. "
+                "Continuing without module data."
+            )
+            data["modules"] = None
 
     def run_scan(
         self, hostnames: list[str], trigger: BaseTrigger, scope: Napalm, config: Config

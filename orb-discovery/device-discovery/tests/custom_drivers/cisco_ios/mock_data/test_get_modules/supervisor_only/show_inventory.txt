@@ -1,0 +1,5 @@
+NAME: "Chassis", DESCR: "Cisco Catalyst 9600 Series 4 Slot Chassis"
+PID: C9606R            , VID: V01 , SN: FXS2501L0A1
+
+NAME: "Slot 3 Supervisor 1", DESCR: "Cisco Catalyst 9600 Series Supervisor 1 Module"
+PID: C9600-SUP-1       , VID: V01 , SN: JAE2501SUP1

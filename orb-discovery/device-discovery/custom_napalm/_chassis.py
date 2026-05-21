@@ -107,7 +107,7 @@ _CISCO_IOS_RE = re.compile(
     (?:Gi(?:gabitEthernet)?                 # Gi or GigabitEthernet
        | Te(?:nGigabitEthernet)?            # Te or TenGigabitEthernet
        | Fo(?:rtyGigabitEthernet)?          # Fo or FortyGigabitEthernet
-       | Hu(?:ndredGigE)?                   # Hu or HundredGigE
+       | Hu(?:ndredGigE|ndredGigabitEthernet)?  # Hu, HundredGigE, or HundredGigabitEthernet
        | TwentyFiveGigE | Twe               # 25G mGig
        | TwoGigabitEthernet | Tw            # 2.5G mGig (Catalyst 9300/9400)
        | FiveGigabitEthernet | Fi           # 5G mGig
@@ -120,9 +120,39 @@ _CISCO_IOS_RE = re.compile(
     re.VERBOSE,
 )
 
-# 2) FEX-style 4-tuple (Eth101/1/0/1) — explicit reject so the Cisco regex doesn't
-#    leak into a permissive match if someone changes it later.
-_FEX_4TUPLE_RE = re.compile(r"^(?:Ethernet|Eth|GigabitEthernet|Gi)\d+/\d+/\d+/\d+(?:\.\d+)?$")
+# 2) NX-OS FEX-style 4-tuple (Eth101/1/0/1) — explicit reject so the Cisco
+#    regex doesn't leak into a permissive match. FEX is NX-OS only and uses
+#    the bare ``Ethernet``/``Eth`` prefix; IOS / IOS-XE never carry FEX, so
+#    ``Gi``/``GigabitEthernet`` 4-tuples are NOT FEX and must not be rejected
+#    here (Cat 9500 SVL with 1G FRU uplinks emits e.g.
+#    ``GigabitEthernet1/2/0/43`` — leading digit is the SVL switch id).
+_FEX_4TUPLE_RE = re.compile(r"^(?:Ethernet|Eth)\d+/\d+/\d+/\d+(?:\.\d+)?$")
+
+# 2b) Cisco IOS / IOS-XE 4-tuple — Catalyst 9400/9500 StackWise Virtual.
+#     Captures the leading switch id from "<word><digits>/<digits>/<digits>/<digits>".
+#     Includes ``Gi``/``GigabitEthernet`` for Cat 9500 SVL with 1G FRU
+#     uplinks — those interfaces are 4-tuple, leading digit is the switch
+#     (member) id. No collision with FEX: FEX uses ``Ethernet``/``Eth``
+#     only (NX-OS), and ``_FEX_4TUPLE_RE`` rejects those before this regex
+#     runs.
+_CISCO_IOS_4TUPLE_RE = re.compile(
+    r"""
+    ^                                       # anchor
+    (?:Te(?:nGigabitEthernet)?              # Te or TenGigabitEthernet
+       | Fo(?:rtyGigabitEthernet)?          # Fo or FortyGigabitEthernet
+       | Hu(?:ndredGigE|ndredGigabitEthernet)?  # Hu, HundredGigE, or HundredGigabitEthernet
+       | TwentyFiveGigE | Twe               # 25G mGig
+       | TwoGigabitEthernet | Tw            # 2.5G mGig
+       | FiveGigabitEthernet | Fi           # 5G mGig
+       | GigabitEthernet | Gi               # 1G — Cat 9500 SVL FRU uplinks
+    )
+    (\d+)                                   # switch (member) id
+    /\d+/\d+/\d+                            # slot/subslot/port — exactly three more
+    (?:\.\d+)?                              # optional subinterface
+    $                                       # anchor
+    """,
+    re.VERBOSE,
+)
 
 # 3) Junos / Aruba CX — leading digit-cluster followed by /<digit>/<digit>.
 _JUNOS_RE = re.compile(r"^(?:[a-z]{2}-)?(\d+)/\d+/\d+(?:\.\d+)?$")
@@ -198,6 +228,14 @@ def parse_member_id(if_name: str) -> int | None:
     # Reject FEX 4-tuple before any positive match.
     if _FEX_4TUPLE_RE.match(if_name):
         return None
+
+    # Cisco SVL 4-tuple BEFORE the 3-tuple Cisco regex — the 4-tuple regex
+    # is anchored on the slash count, so the 3-tuple regex would not match
+    # a 4-tuple name anyway, but ordering this match first keeps the
+    # match-by-specificity convention obvious to readers.
+    m = _CISCO_IOS_4TUPLE_RE.match(if_name)
+    if m:
+        return int(m.group(1))
 
     m = _CISCO_IOS_RE.match(if_name)
     if m:

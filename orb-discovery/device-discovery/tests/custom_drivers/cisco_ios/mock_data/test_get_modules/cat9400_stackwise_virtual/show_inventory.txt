@@ -1,0 +1,26 @@
+NAME: "Switch 1", DESCR: "Cisco Catalyst 9400 Series Switch"
+PID: C9404R            , VID: V01 , SN: FXS2501L0A1
+
+NAME: "Switch 1 Chassis", DESCR: "Cisco Catalyst 9400 Series 4 Slot Chassis"
+PID: C9404R            , VID: V01 , SN: FXS2501L0A1
+
+NAME: "Switch 1 Slot 1 Supervisor", DESCR: "Cisco Catalyst 9400 Series Supervisor 1 Module"
+PID: C9400-SUP-1       , VID: V01 , SN: JAE2501SUP1
+
+NAME: "Switch 1 Slot 2 Linecard", DESCR: "Cisco Catalyst 9400 Series 48-Port UPOE+ 10/100/1000(RJ-45)"
+PID: C9400-LC-48U      , VID: V01 , SN: JAE2501LC12
+
+NAME: "HundredGigE1/2/0/1", DESCR: "QSFP-100G-SR4"
+PID: QSFP-100G-SR4     , VID: V02 , SN: FNS2501Q001
+
+NAME: "Switch 2", DESCR: "Cisco Catalyst 9400 Series Switch"
+PID: C9404R            , VID: V01 , SN: FXS2501L0A2
+
+NAME: "Switch 2 Chassis", DESCR: "Cisco Catalyst 9400 Series 4 Slot Chassis"
+PID: C9404R            , VID: V01 , SN: FXS2501L0A2
+
+NAME: "Switch 2 Slot 1 Supervisor", DESCR: "Cisco Catalyst 9400 Series Supervisor 1 Module"
+PID: C9400-SUP-1       , VID: V01 , SN: JAE2501SUP2
+
+NAME: "Switch 2 Slot 2 Linecard", DESCR: "Cisco Catalyst 9400 Series 48-Port 10/100/1000(RJ-45) PoE+"
+PID: C9400-LC-48P      , VID: V01 , SN: JAE2501LC22

@@ -188,10 +188,44 @@ def test_to_payload_preserves_domain():
         ("Trk1",                     None),
         ("lag1",                     None),
 
-        # FEX / 4-tuple — must NOT extract 101 as a member id
+        # NX-OS FEX 3/4-tuple — must NOT extract 101 as a member id.
+        # FEX is NX-OS-only and always uses bare Ethernet/Eth.
         ("Eth101/1/1",               None),
         ("Ethernet101/1/1",          None),
-        ("GigabitEthernet101/1/0/1", None),
+        ("Ethernet101/1/0/1",        None),
+        ("Eth101/1/0/1",             None),
+
+        # Cisco IOS 4-tuple — Catalyst 9400/9500 StackWise Virtual. The
+        # leading integer is the switch (member) id, followed by
+        # slot/subslot/port. The FEX reject pattern fires first on the
+        # bare ``Ethernet``/``Eth`` prefixes (NX-OS-only) so all other
+        # Cisco IOS prefixes are valid SVL — including ``Gi``/
+        # ``GigabitEthernet`` for Cat 9500 SVL with 1G FRU uplinks.
+        ("HundredGigE1/2/0/1",       1),
+        ("HundredGigE2/3/0/24",      2),
+        ("Hu1/2/0/1",                1),
+        ("Hu2/3/0/24",               2),
+        # Canonical long form — the canonicalizer expands Hu*/HundredGigE*
+        # to HundredGigabitEthernet* on entry, so parse_member_id MUST
+        # accept that spelling too or SVL uplinks lose member attribution.
+        ("HundredGigabitEthernet1/2/0/1", 1),
+        ("HundredGigabitEthernet2/3/0/24", 2),
+        ("HundredGigabitEthernet1/0/1",   1),   # 3-tuple long form too
+        ("HundredGigabitEthernet2/0/1.100", 2),
+        ("FortyGigabitEthernet1/2/0/1",  1),
+        ("Fo2/3/0/4",                2),
+        ("TenGigabitEthernet1/2/0/1",    1),
+        ("Te1/2/0/1",                1),
+        ("HundredGigE1/2/0/1.100",   1),   # SVL subinterface
+        ("Hu2/3/0/24.4094",          2),
+        # Cat 9500 SVL with 1G FRU uplinks — bare Gi/GigabitEthernet 4-tuple
+        # IS valid SVL (FEX never uses Gi prefix), leading digit is the
+        # SVL switch id.
+        ("GigabitEthernet1/2/0/43",  1),
+        ("GigabitEthernet2/3/0/1",   2),
+        ("Gi1/2/0/43",               1),
+        ("Gi2/3/0/1",                2),
+        ("GigabitEthernet2/3/0/1.100", 2),
 
         # ProCurve / ArubaOS-Switch port shorthand — deferred to batch 3, return None
         ("A1",                       None),
