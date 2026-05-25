@@ -15,6 +15,7 @@ import re
 
 import napalm.base as _napalm_base
 from napalm.base import models
+from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
@@ -72,6 +73,75 @@ def _parse_uptime(uptime_str: str) -> float:
         int(m.group(4)),
     )
     return float(days * 86400 + hours * 3600 + minutes * 60 + secs)
+
+
+# ---------------------------------------------------------------------------
+# Per-port hardware MAC parser — ``show port detail`` output
+# ---------------------------------------------------------------------------
+
+# SR-OS prints one block per port under `show port detail`, separated by
+# `=====...` banner lines. Within each block:
+#
+#     Classic CLI (older releases):
+#         Interface          : 1/1/1
+#         ...
+#         Hardware Mac       : 90:ec:00:00:00:00
+#
+#     MD-CLI (SR-OS 19+):
+#         Interface         : 1/1/c2/1
+#         ...
+#         Hardware Address  : 90:ec:00:00:00:00
+#
+# The Hardware row reports the burned-in MAC; the Configured row above it
+# is the operator-overridden MAC. NetBox interface MAC matches the burned-in
+# MAC by convention.
+#
+# The MAC capture group accepts colon-, dot-, or dash-separated forms and a
+# wider length range so `napalm.base.helpers.mac()` (not the regex) does the
+# validation. Length 12-17 chars covers `aabbccddeeff`, `aabb.ccdd.eeff`,
+# `aa-bb-cc-dd-ee-ff`, and non-padded variants like `aa:bb:cc:dd:ee:1` that
+# napalm normalises.
+_PORT_INTERFACE_RE = re.compile(
+    r"^\s*Interface\s*:\s*(\S+)", re.MULTILINE,
+)
+_PORT_HW_MAC_RE = re.compile(
+    r"^\s*Hardware\s+(?:Mac|Address)\s*:\s*([0-9a-fA-F:.\-]{12,17})\s*$",
+    re.MULTILINE,
+)
+
+
+def _parse_port_hw_mac_addresses(text: str) -> dict[str, str]:
+    """
+    Return ``{port_id: normalized_mac}`` parsed from ``show port detail``.
+
+    The command emits one block per port. We split on the SR-OS banner
+    (a run of `=` characters) and look for an ``Interface`` line + a
+    ``Hardware Mac`` line within the same block. Blocks without both
+    (e.g. summary banner, totals footer) are silently skipped — the
+    caller treats a missing key as ``"" `` (no MAC).
+    """
+    result: dict[str, str] = {}
+    if not text:
+        return result
+    # SR-OS uses ``=`` banners between port blocks; split on any run of one
+    # or more ``=`` characters on a line by themselves.
+    for block in re.split(r"^=+\s*$", text, flags=re.MULTILINE):
+        iface_m = _PORT_INTERFACE_RE.search(block)
+        mac_m = _PORT_HW_MAC_RE.search(block)
+        if not iface_m or not mac_m:
+            continue
+        port_id, mac_raw = iface_m.group(1), mac_m.group(1)
+        try:
+            result[port_id] = normalize_mac(mac_raw)
+        except Exception:
+            # napalm normalize_mac rejected the value — log and skip rather
+            # than emit a malformed MAC string that downstream NetBox matching
+            # would silently treat as a distinct interface.
+            logger.warning(
+                "nokia_sros_ssh: normalize_mac rejected %r for port %s — emitting empty MAC",
+                mac_raw, port_id,
+            )
+    return result
 
 
 class SROSSSHDriver(_napalm_base.NetworkDriver):
@@ -166,9 +236,19 @@ class SROSSSHDriver(_napalm_base.NetworkDriver):
         }
 
     def get_interfaces(self) -> dict:
-        """Return interface details keyed by interface name."""
+        """
+        Return interface details keyed by interface name.
+
+        Per-port MAC is sourced from ``show port detail`` (no port-id) —
+        SR-OS emits one block per port in a single command, so the
+        join cost is one extra round-trip regardless of port count.
+        """
         port_out = self.device.send_command("show port")
         parsed = parse_output(platform="alcatel_sros", command="show port", data=port_out)
+
+        mac_by_port = _parse_port_hw_mac_addresses(
+            self.device.send_command("show port detail")
+        )
 
         interfaces = {}
         for row in parsed:
@@ -192,7 +272,7 @@ class SROSSSHDriver(_napalm_base.NetworkDriver):
                 "last_flapped": -1.0,
                 "mtu": mtu,
                 "speed": 0.0,
-                "mac_address": "",
+                "mac_address": mac_by_port.get(port_id, ""),
             }
 
         return interfaces

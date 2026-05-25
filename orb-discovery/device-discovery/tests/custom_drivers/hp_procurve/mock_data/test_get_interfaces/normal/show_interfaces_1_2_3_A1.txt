@@ -1,0 +1,32 @@
+ Status and Counters - Port Counters for port 1
+
+  Name (intended)                  : Uplink
+  MAC Address                      : 001234-567801
+  Link Status                      : Up
+  Totals (Since boot or last clear) :
+   Bytes Rx        : 1,234,567          Bytes Tx        : 7,654,321
+   Unicast Rx      : 100                Unicast Tx      : 200
+
+ Status and Counters - Port Counters for port 2
+
+  Name (intended)                  :
+  MAC Address                      : 001234-567802
+  Link Status                      : Down
+  Totals (Since boot or last clear) :
+   Bytes Rx        : 0                  Bytes Tx        : 0
+
+ Status and Counters - Port Counters for port 3
+
+  Name (intended)                  :
+  MAC Address                      : 001234-567803
+  Link Status                      : Down
+  Totals (Since boot or last clear) :
+   Bytes Rx        : 0                  Bytes Tx        : 0
+
+ Status and Counters - Port Counters for port A1
+
+  Name (intended)                  : SFP-uplink
+  MAC Address                      : 001234-5678A1
+  Link Status                      : Up
+  Totals (Since boot or last clear) :
+   Bytes Rx        : 50                 Bytes Tx        : 60

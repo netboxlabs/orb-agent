@@ -15,6 +15,7 @@ import re
 
 import napalm.base as _napalm_base
 from napalm.base import models
+from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import ParsingException, parse_output
 from textfsm import TextFSMError
@@ -166,6 +167,70 @@ _INTF_BRIEF_RE = re.compile(
     r"^((?:Ethernet|Management|Port-channel|Loopback|Ve)\s+\S+)\s+(\S+)\s+(\S+)",
     re.M | re.IGNORECASE,
 )
+
+# --- show interface (no-arg) MAC parser ------------------------------------ #
+# SLX-OS ``show interface`` (no port-arg — the command get_interfaces issues)
+# emits one multi-line block per port:
+#
+#   Ethernet 0/1 is up, line protocol is up (connected)
+#   Hardware is Ethernet, address is 6cb1.580f.b900 (bia 6cb1.580f.b900)
+#   Description: ...
+#   ...
+#
+# We pair each ``<Type> <id>`` header line with the next ``address is <mac>``
+# line in the same block. The MAC capture is permissive — napalm.mac() does
+# the actual validation/normalisation so dotted (``xxxx.xxxx.xxxx``), dashed,
+# and colon-separated forms all resolve. ``bia <mac>`` (burned-in address)
+# appears in parentheses after the configured address; we always take the
+# FIRST ``address is`` value, which is the operational MAC NetBox expects.
+_INTF_HEADER_RE = re.compile(
+    r"^((?:Ethernet|Management|Port-channel|Loopback|Ve)\s+\S+)\s+is\s+\S+",
+    re.M | re.IGNORECASE,
+)
+_INTF_HW_ADDR_RE = re.compile(
+    # End-of-token boundary (\b) prevents the capture group from greedily
+    # absorbing an adjacent string that happens to start with hex chars.
+    # SLX-OS emits a trailing ``(bia <mac>)`` after the configured address
+    # so we need to stop at the boundary, not the end of line.
+    r"^\s*Hardware\s+is\s+\S+,\s+address\s+is\s+([0-9a-fA-F:.\-]{12,17})\b",
+    re.M | re.IGNORECASE,
+)
+
+
+def _parse_intf_hw_addresses(text: str) -> dict[str, str]:
+    """
+    Parse ``show interface`` (no port-arg) multi-block output → ``{name: mac}``.
+
+    Iterates over interface-header positions and, for each one, looks for
+    the next ``Hardware is ..., address is <mac>`` line before the next
+    header. Blocks without a Hardware/address line are silently skipped
+    (loopbacks, VEs, port-channels often lack a per-port burned-in MAC).
+    """
+    result: dict[str, str] = {}
+    if not text:
+        return result
+    headers = list(_INTF_HEADER_RE.finditer(text))
+    for i, hdr in enumerate(headers):
+        name = re.sub(r"\s+", " ", hdr.group(1).strip())
+        # Restrict MAC search to this block: from after the header to the start
+        # of the next header (or end of text for the last block).
+        block_end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        block = text[hdr.end():block_end]
+        mac_m = _INTF_HW_ADDR_RE.search(block)
+        if not mac_m:
+            continue
+        raw = mac_m.group(1)
+        try:
+            result[name] = normalize_mac(raw)
+        except Exception:
+            # napalm normalize_mac rejected the value — log and skip rather
+            # than emit a malformed MAC string that downstream NetBox matching
+            # would silently treat as a distinct interface.
+            logger.warning(
+                "extreme_slx: normalize_mac rejected %r for interface %s — emitting empty MAC",
+                raw, name,
+            )
+    return result
 
 # --- vlan brief parsing ---------------------------------------------------- #
 # Matches leading VLAN row.  The name capture uses a greedy (.+) so that VLAN
@@ -487,10 +552,20 @@ class SLXOSDriver(_napalm_base.NetworkDriver):
         }
 
     def get_interfaces(self) -> dict:
-        """Return interface details keyed by interface name."""
+        """
+        Return interface details keyed by interface name.
+
+        Per-port MAC is sourced from ``show interface`` (no port-arg) —
+        SLX-OS emits one block per port in a single command, so MAC fetch
+        is one extra round-trip regardless of port count.
+        """
         output = self.device.send_command("show interface brief")
         if not output:
             return {}
+
+        mac_by_intf = _parse_intf_hw_addresses(
+            self.device.send_command("show interface")
+        )
 
         interfaces = {}
         for m in _INTF_BRIEF_RE.finditer(output):
@@ -506,7 +581,7 @@ class SLXOSDriver(_napalm_base.NetworkDriver):
                 "last_flapped": -1.0,
                 "mtu": -1,
                 "speed": _speed_mbps(m.group(3)),
-                "mac_address": "",
+                "mac_address": mac_by_intf.get(name, ""),
             }
         return interfaces
 

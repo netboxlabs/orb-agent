@@ -21,6 +21,7 @@ import re
 
 import napalm.base as _napalm_base
 from napalm.base import models
+from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
@@ -231,6 +232,79 @@ def _procurve_aggregate_to_switchport(per_port: dict) -> SwitchportInfo:
     )
 
 
+# --- show interfaces <port-list> MAC parser -------------------------------- #
+# ``show interfaces <port-or-list>`` emits one detail block per port::
+#
+#   Status and Counters - Port Counters for port 1
+#
+#    Name (intended)        : Uplink
+#    MAC Address            : 001234-567890
+#    Link Status            : Up
+#    ...
+#
+# We pair the ``port <name>`` header with the first ``MAC Address`` line in
+# the same block. The MAC capture is permissive — napalm.mac() handles the
+# ProCurve ``xxxxxx-xxxxxx`` form alongside the standard colon-separated
+# variants. Trunk ports (``Trk1``) and other logical interfaces lack a MAC
+# row and are silently skipped.
+_PROCURVE_PORT_HEADER_RE = re.compile(
+    r"^\s*Status\s+and\s+Counters\s*-\s*Port\s+Counters\s+for\s+port\s+(\S+)",
+    re.M | re.IGNORECASE,
+)
+_PROCURVE_MAC_RE = re.compile(
+    r"^\s*MAC\s+Address\s*:\s*([0-9a-fA-F:.\-]{12,17})\s*$",
+    re.M | re.IGNORECASE,
+)
+
+
+def _parse_procurve_intf_mac_addresses(text: str) -> dict[str, str]:
+    """
+    Parse ``show interfaces <port-list>`` multi-block output → ``{port: mac}``.
+
+    Iterates over port-header positions and, for each one, looks for the
+    next ``MAC Address`` line before the next header. Logical interfaces
+    (trunks, VLANs) lack the MAC row and are silently skipped — the caller
+    treats a missing key as ``"" ``.
+    """
+    result: dict[str, str] = {}
+    if not text:
+        return result
+    headers = list(_PROCURVE_PORT_HEADER_RE.finditer(text))
+    for i, hdr in enumerate(headers):
+        port = hdr.group(1).strip()
+        block_end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+        mac_m = _PROCURVE_MAC_RE.search(text[hdr.end():block_end])
+        if not mac_m:
+            continue
+        raw = mac_m.group(1)
+        try:
+            result[port] = normalize_mac(raw)
+        except Exception:
+            # napalm normalize_mac rejected the value — log and skip rather
+            # than emit a malformed MAC string that downstream NetBox matching
+            # would silently treat as a distinct interface.
+            logger.warning(
+                "hp_procurve: normalize_mac rejected %r for port %s — emitting empty MAC",
+                raw, port,
+            )
+    return result
+
+
+# Conservative chunk size for the ``show interfaces <port-list>`` batched
+# call. A 24-port comma-separated list is well under ProCurve / AOS-S CLI
+# input limits (typically ~255 chars) even with longest port-name forms
+# (``A1,A2,...,Trk24``). Larger chassis / stacks fall into multiple chunks
+# of this size, costing one extra round-trip per chunk rather than the
+# per-port iteration the platform-MAC docs warn against.
+_PROCURVE_PORTLIST_CHUNK_SIZE = 24
+
+
+def _chunked(seq: list, size: int):
+    """Yield ``seq`` in fixed-size chunks. Last chunk may be smaller."""
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
 class ProcurveDriver(_napalm_base.NetworkDriver):
     """
     HP/Aruba ProCurve NAPALM driver (read-only subset for device-discovery).
@@ -332,7 +406,18 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
         }
 
     def get_interfaces(self) -> dict:
-        """Return interface details keyed by interface name."""
+        """
+        Return interface details keyed by interface name.
+
+        Per-port MAC is sourced from batched ``show interfaces
+        <port-list>`` calls — ProCurve accepts a comma-separated port
+        list. To stay under ProCurve / AOS-S CLI input limits on large
+        chassis or stacks we chunk the list at
+        ``_PROCURVE_PORTLIST_CHUNK_SIZE`` ports per call, costing
+        ceil(N/chunk_size) round-trips instead of N per-port commands.
+        Logical interfaces (trunks, VLANs, etc.) emit no MAC row and
+        stay ``mac_address=""``.
+        """
         raw = self.device.send_command("show interfaces brief")
         if not raw:
             return {}
@@ -354,6 +439,19 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
                 "speed": _parse_speed(row.get("mode", "")),
                 "mac_address": "",
             }
+
+        # Chunked port-list batching: comma-separated lists longer than ~255
+        # chars can exceed ProCurve / AOS-S CLI input limits on large chassis
+        # / stacks. Issuing ceil(N/24) commands keeps each call well under
+        # the limit while still amortising the per-port iteration cost.
+        for chunk in _chunked(list(interfaces.keys()), _PROCURVE_PORTLIST_CHUNK_SIZE):
+            port_list = ",".join(chunk)
+            mac_by_port = _parse_procurve_intf_mac_addresses(
+                self.device.send_command(f"show interfaces {port_list}")
+            )
+            for port, mac in mac_by_port.items():
+                if port in interfaces:
+                    interfaces[port]["mac_address"] = mac
 
         return interfaces
 

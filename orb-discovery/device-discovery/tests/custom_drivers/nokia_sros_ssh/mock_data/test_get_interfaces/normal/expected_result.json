@@ -6,7 +6,7 @@
     "last_flapped": -1.0,
     "mtu": 9212,
     "speed": 0.0,
-    "mac_address": ""
+    "mac_address": "90:EC:00:00:00:01"
   },
   "1/1/2": {
     "is_enabled": true,
@@ -15,7 +15,7 @@
     "last_flapped": -1.0,
     "mtu": 1518,
     "speed": 0.0,
-    "mac_address": ""
+    "mac_address": "90:EC:00:00:00:02"
   },
   "1/1/3": {
     "is_enabled": true,
@@ -24,6 +24,6 @@
     "last_flapped": -1.0,
     "mtu": 1518,
     "speed": 0.0,
-    "mac_address": ""
+    "mac_address": "90:EC:00:00:00:03"
   }
 }

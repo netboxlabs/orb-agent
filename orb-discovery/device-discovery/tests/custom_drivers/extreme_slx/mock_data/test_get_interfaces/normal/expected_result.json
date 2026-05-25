@@ -6,7 +6,7 @@
     "last_flapped": -1.0,
     "mtu": -1,
     "speed": 1000.0,
-    "mac_address": ""
+    "mac_address": "6C:B1:58:0F:B9:00"
   },
   "Ethernet 0/1": {
     "is_up": true,
@@ -15,7 +15,7 @@
     "last_flapped": -1.0,
     "mtu": -1,
     "speed": 10000.0,
-    "mac_address": ""
+    "mac_address": "6C:B1:58:0F:B9:01"
   },
   "Ethernet 0/2": {
     "is_up": false,
@@ -24,7 +24,7 @@
     "last_flapped": -1.0,
     "mtu": -1,
     "speed": 1000.0,
-    "mac_address": ""
+    "mac_address": "6C:B1:58:0F:B9:02"
   },
   "Ethernet 0/3": {
     "is_up": false,
@@ -33,7 +33,7 @@
     "last_flapped": -1.0,
     "mtu": -1,
     "speed": 1000.0,
-    "mac_address": ""
+    "mac_address": "6C:B1:58:0F:B9:03"
   },
   "Port-channel 1": {
     "is_up": true,

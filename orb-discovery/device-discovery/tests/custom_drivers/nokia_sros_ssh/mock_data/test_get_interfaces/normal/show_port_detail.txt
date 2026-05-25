@@ -1,0 +1,42 @@
+===============================================================================
+Ethernet Interface
+===============================================================================
+Description        : 10/100/Gig Ethernet SFP
+Interface          : 1/1/1                      Oper Speed       : 1 Gbps
+Link-level         : Ethernet                   Config Speed     : 1 Gbps
+Admin State        : up                         Oper Duplex      : full
+Oper State         : up                         Config Duplex    : full
+Physical Link      : Yes                        MTU              : 9212
+IfIndex            : 35684352                   Hold time up     : 0 seconds
+Last State Change  : 12d 7h 23m 38s             Hold time down   : 0 seconds
+Configured Mac     : 90:ec:00:00:00:01
+Hardware Mac       : 90:ec:00:00:00:01
+===============================================================================
+===============================================================================
+Ethernet Interface
+===============================================================================
+Description        : 10/100/Gig Ethernet SFP
+Interface          : 1/1/2                      Oper Speed       : 1 Gbps
+Link-level         : Ethernet                   Config Speed     : 1 Gbps
+Admin State        : up                         Oper Duplex      : full
+Oper State         : up                         Config Duplex    : full
+Physical Link      : Yes                        MTU              : 1518
+IfIndex            : 35684608                   Hold time up     : 0 seconds
+Last State Change  : 12d 7h 23m 38s             Hold time down   : 0 seconds
+Configured Mac     : 90:ec:00:00:00:02
+Hardware Mac       : 90:ec:00:00:00:02
+===============================================================================
+===============================================================================
+Ethernet Interface
+===============================================================================
+Description        :
+Interface          : 1/1/3                      Oper Speed       : N/A
+Link-level         : Ethernet                   Config Speed     : 1 Gbps
+Admin State        : up                         Oper Duplex      : N/A
+Oper State         : down                       Config Duplex    : full
+Physical Link      : No                         MTU              : 1518
+IfIndex            : 35684864                   Hold time up     : 0 seconds
+Last State Change  : 12d 7h 23m 38s             Hold time down   : 0 seconds
+Configured Mac     : 90:ec:00:00:00:03
+Hardware Mac       : 90:ec:00:00:00:03
+===============================================================================
