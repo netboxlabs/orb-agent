@@ -1,0 +1,20 @@
+Interface 1/1/1 is up
+ Admin state is up
+ Description: trunk uplink
+ Hardware: ARUBA_AP, MAC Address: 70:4d:7b:11:22:33
+ MTU 1500
+ Type SYSTEM
+ Full-duplex
+ Speed : 10000 Mb/s
+Interface 1/1/1.100 is up
+ Admin state is up
+ Description: dmz subinterface
+ Hardware: ARUBA_AP, MAC Address: 70:4d:7b:11:22:33
+ MTU 1500
+ Type VLAN_SUBINT
+Interface 1/1/1.200 is up
+ Admin state is up
+ Description: voice subinterface
+ Hardware: ARUBA_AP, MAC Address: 70:4d:7b:11:22:33
+ MTU 1500
+ Type VLAN_SUBINT

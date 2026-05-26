@@ -1,0 +1,14 @@
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP mode DEFAULT qlen 1000
+    link/ether b8:ce:f6:1a:2b:3c brd ff:ff:ff:ff:ff:ff
+    alias OOB mgmt
+3: swp1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9216 qdisc pfifo_fast state UP mode DEFAULT qlen 1000
+    link/ether b8:ce:f6:1a:2b:3d brd ff:ff:ff:ff:ff:ff
+    alias trunk-uplink
+4: swp1.100@swp1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9216 qdisc noqueue state UP mode DEFAULT
+    link/ether b8:ce:f6:1a:2b:3d brd ff:ff:ff:ff:ff:ff
+    alias dmz
+5: swp1.200@swp1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9216 qdisc noqueue state UP mode DEFAULT
+    link/ether b8:ce:f6:1a:2b:3d brd ff:ff:ff:ff:ff:ff
+    alias voice

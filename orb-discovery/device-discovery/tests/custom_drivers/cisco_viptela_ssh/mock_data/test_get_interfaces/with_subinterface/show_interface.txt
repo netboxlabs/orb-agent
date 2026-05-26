@@ -1,0 +1,7 @@
+                                        IF      IF      IF                                                                TCP
+                  AF                    ADMIN   OPER    TRACKER  ENCAP                                     SPEED          MSS                 RX       TX
+VPN  INTERFACE    TYPE  IP ADDRESS      STATUS  STATUS  STATUS   TYPE   PORT TYPE  MTU  HWADDR             MBPS   DUPLEX  ADJUST  UPTIME      PACKETS  PACKETS
+----------------------------------------------------------------------------------------------------------------------------------------------------------------
+0    ge0/0        ipv4  10.0.0.1/30     Up      Up      -        null   transport  1500 00:50:56:bf:01:01  1000   full    -       5:03:24:18  241750   213480
+0    ge0/0.100    ipv4  10.0.100.1/24   Up      Up      -        null   service    1500 00:50:56:bf:01:01  1000   full    -       5:03:24:18  100      100
+0    ge0/0.200    ipv4  10.0.200.1/24   Up      Up      -        null   service    1500 00:50:56:bf:01:01  1000   full    -       5:03:24:18  100      100

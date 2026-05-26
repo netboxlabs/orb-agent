@@ -1,0 +1,55 @@
+Interface eth0
+    state on
+    mac-addr 00:1c:7f:43:08:28
+    type ethernet
+    link-state link up
+    instance 0
+    mtu 1500
+    auto-negotiation on
+    speed 1000M
+    comments trunk uplink
+    ipv4-address 192.168.1.1/24
+    ipv6-address Not Configured
+    ipv6-local-link-address Not Configured
+
+Statistics:
+    TX bytes:0 packets:0 errors:0 dropped:0 overruns:0 carrier:0
+    RX bytes:0 packets:0 errors:0 dropped:0 overruns:0 frame:0
+
+
+Interface eth0.100
+    state on
+    mac-addr 00:1c:7f:43:08:28
+    type vlan
+    link-state link up
+    instance 0
+    mtu 1500
+    auto-negotiation Not configured
+    speed 1000M
+    comments dmz subinterface
+    ipv4-address 10.0.100.1/24
+    ipv6-address Not Configured
+    ipv6-local-link-address Not Configured
+
+Statistics:
+    TX bytes:0 packets:0 errors:0 dropped:0 overruns:0 carrier:0
+    RX bytes:0 packets:0 errors:0 dropped:0 overruns:0 frame:0
+
+
+Interface eth0.200
+    state on
+    mac-addr 00:1c:7f:43:08:28
+    type vlan
+    link-state link up
+    instance 0
+    mtu 1500
+    auto-negotiation Not configured
+    speed 1000M
+    comments voice subinterface
+    ipv4-address 10.0.200.1/24
+    ipv6-address Not Configured
+    ipv6-local-link-address Not Configured
+
+Statistics:
+    TX bytes:0 packets:0 errors:0 dropped:0 overruns:0 carrier:0
+    RX bytes:0 packets:0 errors:0 dropped:0 overruns:0 frame:0

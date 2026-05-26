@@ -1,0 +1,24 @@
+Current Configuration ...
+! Version 9.14.2.21
+!
+hostname ftos-switch01
+!
+interface TenGigabitEthernet 0/0
+ no shutdown
+!
+interface TenGigabitEthernet 0/1
+ no shutdown
+!
+interface TenGigabitEthernet 0/2
+ no shutdown
+ ip address 10.0.0.1/24
+!
+interface TenGigabitEthernet 0/3
+ no shutdown
+ ip address 192.168.1.1/30
+!
+interface ManagementEthernet 0/0
+ no shutdown
+ ip address 172.16.0.1/24
+!
+end

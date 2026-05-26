@@ -405,7 +405,14 @@ class SONiCDriver(_napalm_base.NetworkDriver):
         }
 
     def get_interfaces(self) -> dict:
-        """Return interface details keyed by interface name."""
+        """
+        Return interface details keyed by interface name (physical + sub-interfaces).
+
+        Physical NICs come from ``show interfaces status``; sub-interfaces
+        (``Ethernet0.100``) are enumerated by ``show subinterface status``
+        on modern SONiC. We merge both so the translator sees one entry per
+        parent AND per sub-interface for parent-linkage.
+        """
         # Try both plural and singular command forms
         output = _send_first_nonempty(
             self.device, ("show interfaces status", "show interface status")
@@ -428,7 +435,54 @@ class SONiCDriver(_napalm_base.NetworkDriver):
             if parsed is not None:
                 interfaces[m.group(1)] = parsed
 
+        self._merge_subinterfaces(interfaces)
         return interfaces
+
+    def _merge_subinterfaces(self, interfaces: dict) -> None:
+        """
+        Merge ``show subinterface status`` rows into the in-place result.
+
+        SONiC exposes Linux kernel VLAN devices (``Ethernet0.100``) via a
+        dedicated command — they don't appear in ``show interfaces
+        status``. Sub-interfaces inherit the parent NIC's MAC by design.
+        Orphan subs (parent not seen) are debug-logged and skipped so
+        the translator doesn't see an unparentable virtual interface.
+        """
+        # SONiC versions differ on the canonical form — older releases use
+        # ``show subinterface status`` (singular), newer use the plural.
+        # The unsupported variant returns non-empty CLI error text rather
+        # than an empty string, so probe with ``_send_first_nonempty`` and
+        # also reject obvious error banners.
+        sub_output = _send_first_nonempty(
+            self.device, ("show subinterface status", "show subinterfaces status"),
+        )
+        if not sub_output:
+            return
+        sub_col_map = _parse_intf_status_header(sub_output)
+        for line in sub_output.splitlines():
+            m = re.match(r"^\s*" + _INTF_RE + r"\s", line)
+            if not m:
+                continue
+            name = m.group(1)
+            if name in interfaces or "." not in name:
+                continue
+            parent_name = name.split(".", 1)[0]
+            if parent_name not in interfaces:
+                logger.debug(
+                    "Skipping orphan sub-interface %s — parent %s not found",
+                    name, parent_name,
+                )
+                continue
+            parsed = _parse_interface_line(line, sub_col_map)
+            if parsed is not None:
+                # ``_parse_interface_line`` always populates ``mac_address``
+                # (with ``""`` when the row has no MAC column), so
+                # ``setdefault`` is a no-op. Explicitly overwrite when
+                # empty so the sub inherits the parent NIC's MAC (SONiC
+                # Linux VLAN devices share the parent's hwaddr).
+                if not parsed.get("mac_address"):
+                    parsed["mac_address"] = interfaces[parent_name].get("mac_address", "")
+                interfaces[name] = parsed
 
     def get_interfaces_ip(self) -> dict:
         """Return IP addresses per interface."""

@@ -1,0 +1,40 @@
+{
+  "TenGigabitEthernet 0/0.100": {
+    "ipv4": {
+      "10.0.100.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "TenGigabitEthernet 0/0.200": {
+    "ipv4": {
+      "10.0.200.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "ManagementEthernet 0/0": {
+    "ipv4": {
+      "172.16.0.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "TenGigabitEthernet 0/0": {
+    "ipv6": {
+      "fe80::aabb:ccdd:ee00": {
+        "prefix_length": 64
+      },
+      "2001:db8::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "TenGigabitEthernet 0/1": {
+    "ipv6": {
+      "fe80::aabb:ccdd:ee01": {
+        "prefix_length": 64
+      }
+    }
+  }
+}

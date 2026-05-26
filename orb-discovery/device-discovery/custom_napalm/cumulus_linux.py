@@ -186,6 +186,21 @@ def _parse_decode_syseeprom(output: str) -> dict:
     return data
 
 
+# Linux netlink-emitted interface names decorate VLAN / link-master
+# children with ``@<parent>`` (e.g. ``swp1.100@swp1``, ``vlan10@bridge``).
+# Operator-named interfaces never contain ``@`` — Linux netlink rejects
+# the character — so a present ``@`` is unambiguously the kernel
+# decoration. The regex requires the trailing parent name to be a
+# non-empty interface-like token so we don't strip on a malformed input.
+_LINK_DECORATION_RE = re.compile(r"^(?P<name>[^@\s]+)@(?P<parent>\S+)$")
+
+
+def _strip_link_decoration(name: str) -> str:
+    """Return ``swp1.100`` for an input of ``swp1.100@swp1``; pass through otherwise."""
+    m = _LINK_DECORATION_RE.match(name)
+    return m.group("name") if m else name
+
+
 class CumulusDriver(_napalm_base.NetworkDriver):
     """Cumulus Linux NAPALM driver (read-only subset for device-discovery)."""
 
@@ -262,7 +277,15 @@ class CumulusDriver(_napalm_base.NetworkDriver):
         link_out = self.device.send_command("ip link show")
         try:
             parsed_links = parse_output(platform="linux", command="ip link show", data=link_out)
-            interface_list = [row["interface"] for row in parsed_links if row.get("interface")]
+            # Strip the kernel ``@<parent>`` decoration so interface_list
+            # matches the canonical keys emitted by get_interfaces() /
+            # get_interfaces_ip(). Without this, sub-interfaces would
+            # appear as ``swp1.100@swp1`` in facts but ``swp1.100`` in
+            # the other getters — breaking name-based reconciliation.
+            interface_list = [
+                _strip_link_decoration(row["interface"])
+                for row in parsed_links if row.get("interface")
+            ]
         except Exception:
             logger.debug("Failed to parse 'ip link show' for interface_list", exc_info=True)
             interface_list = []
@@ -292,6 +315,17 @@ class CumulusDriver(_napalm_base.NetworkDriver):
             intf = row.get("interface", "").strip()
             if not intf:
                 continue
+            # Linux ``ip link show`` decorates sub-interface names with the
+            # parent suffix ``@<parent>`` (e.g. ``swp1.100@swp1``). Strip it
+            # so NetBox sees the canonical ``swp1.100`` name, which the
+            # translator's ``extract_parent_interface_name`` then maps back
+            # to the parent interface via the ``.``-split convention.
+            # Defensive: only strip when the suffix matches the kernel
+            # ``<name>@<parent>`` shape — operator-named interfaces never
+            # contain ``@``, but tightening the check avoids corrupting any
+            # future netlink-emitted form that reuses ``@`` for a different
+            # purpose.
+            intf = _strip_link_decoration(intf)
 
             flags = row.get("flags", "") or ""
             state = (row.get("state", "") or "").upper()
@@ -340,6 +374,10 @@ class CumulusDriver(_napalm_base.NetworkDriver):
             intf = row.get("interface", "").strip()
             if not intf:
                 continue
+            # ``ip address show`` decorates sub-interface names with the
+            # parent suffix ``@<parent>`` — strip so the IP key matches
+            # the canonical name emitted by get_interfaces().
+            intf = _strip_link_decoration(intf)
 
             self._merge_ip_family(
                 interfaces_ip, intf, "ipv4",

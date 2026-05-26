@@ -1,0 +1,14 @@
+GigabitEthernet1/0/0 current state : UP
+Line protocol current state : UP
+The Maximum Transmit Unit : 1500 bytes
+Internet Address is 192.168.1.1/24
+
+GigabitEthernet1/0/0.100 current state : UP
+Line protocol current state : UP
+The Maximum Transmit Unit : 1500 bytes
+Internet Address is 10.0.100.1/24
+
+GigabitEthernet1/0/0.200 current state : UP
+Line protocol current state : UP
+The Maximum Transmit Unit : 1500 bytes
+Internet Address is 10.0.200.1/24

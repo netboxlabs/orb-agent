@@ -112,7 +112,19 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
         }
 
     def get_interfaces(self) -> dict:
-        """Return interface details keyed by interface name."""
+        """
+        Return interface details keyed by interface name (physical + sub-interfaces).
+
+        Physical NICs come from ``show interface hardware`` (provides MAC,
+        speed, link state). Sub-interfaces (``ethernet1/1.100``) are not
+        listed by ``show interface hardware`` — they're enumerated by
+        ``show interface logical``. We merge both: physical entries get the
+        full hardware detail; sub-interfaces inherit their parent's MAC
+        (PAN-OS sub-interfaces share the parent MAC by design) and default
+        speed/state. Without this merge, sub-interfaces would have IPs
+        emitted by get_interfaces_ip() but no matching interface entry,
+        and the translator would drop them.
+        """
         hw_out = self.device.send_command("show interface hardware")
         parsed = parse_output(
             platform="paloalto_panos", command="show interface hardware", data=hw_out
@@ -145,6 +157,48 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
                 "mtu": 0,
                 "speed": speed,
                 "mac_address": mac_address,
+            }
+
+        # Merge sub-interfaces from `show interface logical`. PAN-OS
+        # sub-interfaces share the parent NIC's MAC and follow the parent's
+        # link state, so use parent values as the sane default when the
+        # logical output doesn't expose per-sub MAC / speed.
+        logical_out = self.device.send_command("show interface logical")
+        try:
+            logical_parsed = parse_output(
+                platform="paloalto_panos", command="show interface logical", data=logical_out
+            )
+        except Exception:
+            # Don't silently swallow — template drift would otherwise drop
+            # every sub-interface without surfacing the cause. DEBUG keeps
+            # the warning floor low for installs that genuinely return
+            # empty / unparseable logical output.
+            logger.debug("Failed to parse 'show interface logical' output", exc_info=True)
+            logical_parsed = []
+        for row in logical_parsed:
+            intf = row.get("interface", "")
+            if not intf or "." not in intf or intf in interfaces:
+                continue
+            parent_name = intf.split(".", 1)[0]
+            if parent_name not in interfaces:
+                # Orphan sub-interface — parent wasn't enumerated by
+                # ``show interface hardware``. Skipping rather than
+                # emitting with fake defaults so the translator doesn't
+                # see an unparentable virtual interface in NetBox.
+                logger.debug(
+                    "Skipping orphan sub-interface %s — parent %s not found",
+                    intf, parent_name,
+                )
+                continue
+            parent_data = interfaces[parent_name]
+            interfaces[intf] = {
+                "is_up": parent_data["is_up"],
+                "is_enabled": True,
+                "description": "",
+                "last_flapped": -1.0,
+                "mtu": 0,
+                "speed": parent_data["speed"],
+                "mac_address": parent_data["mac_address"],
             }
 
         return interfaces

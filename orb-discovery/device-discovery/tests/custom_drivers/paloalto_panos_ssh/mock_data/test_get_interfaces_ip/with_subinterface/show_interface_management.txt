@@ -1,0 +1,4 @@
+Name: Management
+Link status: Up
+Ip address: 192.0.2.10
+Netmask: 255.255.255.0

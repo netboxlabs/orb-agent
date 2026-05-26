@@ -89,6 +89,26 @@ def _parse_speed(speed_raw: str) -> float:
     return num
 
 
+# Sub-interface lines in ASA / FTD ``show interface`` output carry an
+# ``Encapsulation: 802.1Q VLAN, Vlan ID <N>`` row that the bundled
+# ntc-template ``cisco_asa_show_interface.textfsm`` rejects via its
+# ``^. -> Error`` rule, raising TextFSMError mid-parse. The template DOES
+# capture sub-interface names (``GigabitEthernet0/1.100``) on the
+# ``Interface`` line, so stripping the unrecognised Encap row before
+# parsing lets the template emit one row per physical AND one per
+# sub-interface. VLAN ID is currently unused by get_interfaces /
+# get_interfaces_ip — preserving it is not required.
+_ENCAP_LINE_RE = re.compile(
+    r"^\s+Encapsulation:.*$",
+    re.MULTILINE,
+)
+
+
+def _strip_unparseable_lines(raw: str) -> str:
+    """Pre-filter raw ``show interface`` output so the ntc-template's strict ``^. -> Error`` rule doesn't trip."""
+    return _ENCAP_LINE_RE.sub("", raw)
+
+
 class ASASSHDriver(_napalm_base.NetworkDriver):
     """Cisco ASA NAPALM driver using SSH CLI + ntc-templates (read-only subset for device-discovery)."""
 
@@ -159,9 +179,13 @@ class ASASSHDriver(_napalm_base.NetworkDriver):
         }
 
     def get_interfaces(self) -> dict:
-        """Return interface details keyed by interface name."""
+        """Return interface details keyed by interface name (physical + sub-interfaces)."""
         raw = self.device.send_command("show interface")
-        parsed = parse_output(platform="cisco_asa", command="show interface", data=raw)
+        parsed = parse_output(
+            platform="cisco_asa",
+            command="show interface",
+            data=_strip_unparseable_lines(raw),
+        )
 
         interfaces = {}
         for row in parsed:
@@ -191,9 +215,13 @@ class ASASSHDriver(_napalm_base.NetworkDriver):
         return interfaces
 
     def get_interfaces_ip(self) -> dict:
-        """Return IP addresses per interface."""
+        """Return IP addresses per interface (keyed by physical OR sub-interface name)."""
         raw = self.device.send_command("show interface")
-        parsed = parse_output(platform="cisco_asa", command="show interface", data=raw)
+        parsed = parse_output(
+            platform="cisco_asa",
+            command="show interface",
+            data=_strip_unparseable_lines(raw),
+        )
 
         interfaces_ip: dict = {}
         for row in parsed:

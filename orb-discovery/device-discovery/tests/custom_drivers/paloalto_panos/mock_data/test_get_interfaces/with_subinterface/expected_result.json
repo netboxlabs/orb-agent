@@ -1,0 +1,29 @@
+{
+  "ethernet1/1.100": {
+    "is_up": true,
+    "is_enabled": true,
+    "speed": 0.0,
+    "last_flapped": -1.0,
+    "mac_address": "",
+    "mtu": 0,
+    "description": ""
+  },
+  "ethernet1/1.200": {
+    "is_up": true,
+    "is_enabled": true,
+    "speed": 0.0,
+    "last_flapped": -1.0,
+    "mac_address": "",
+    "mtu": 0,
+    "description": ""
+  },
+  "ethernet1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "speed": 1000.0,
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "mac_address": "00:50:56:01:02:03",
+    "description": "Uplink to Router"
+  }
+}
