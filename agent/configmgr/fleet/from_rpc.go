@@ -110,6 +110,10 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 // Failures are non-fatal: a failed bundle is logged and skipped so that
 // other bundles in the same delivery are still installed.
 func (messaging *Messaging) handlePackages(ctx context.Context, payload messages.PackagesCredentialsRPCPayload) {
+	if messaging.filesManager == nil {
+		messaging.logger.Error("filesManager is nil, cannot install bundles")
+		return
+	}
 	if len(payload.Bundles) == 0 {
 		messaging.logger.Debug("packages_credentials received with empty bundle list, nothing to do")
 		return

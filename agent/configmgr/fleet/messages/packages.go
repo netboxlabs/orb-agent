@@ -1,6 +1,6 @@
 package messages
 
-import "time"
+
 
 // PackagesCredentialsRPCFunc is the function name for packages credentials RPC calls
 const PackagesCredentialsRPCFunc = "packages_credentials"
@@ -11,7 +11,7 @@ type BundleSpec struct {
 	Version   string    `json:"version"`
 	URL       string    `json:"url"`
 	SHA256    string    `json:"sha256"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ExpiresAt int64 `json:"expires_at"`
 }
 
 // PackagesCredentialsRPCPayload is the payload for packages credentials RPC messages

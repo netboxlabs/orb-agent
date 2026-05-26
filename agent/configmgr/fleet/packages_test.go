@@ -80,7 +80,7 @@ func TestHandlePackages_HappyPath(t *testing.T) {
 				Version:   "0.2.0",
 				URL:       "https://example.com/bundle.tar.gz",
 				SHA256:    "abc123",
-				ExpiresAt: time.Now().Add(15 * time.Minute),
+				ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 			},
 		},
 	}
@@ -154,4 +154,15 @@ func TestDispatchToHandlers_PackagesCredentials(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	fm.AssertExpectations(t)
+}
+
+func TestHandlePackages_NilFilesManager(t *testing.T) {
+	messaging := newTestMessagingWithFiles(nil)
+	payload := messages.PackagesCredentialsRPCPayload{
+		Bundles: []messages.BundleSpec{
+			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+		},
+	}
+	// Should not panic when filesManager is nil
+	messaging.handlePackages(context.Background(), payload)
 }
