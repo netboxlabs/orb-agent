@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -56,6 +57,15 @@ func TestManager_EnsureS3RealBundle(t *testing.T) {
 	m := NewManager(slog.Default(), root)
 	require.NoError(t, m.Start(context.Background()))
 
+	// Subscribe before any Ensure call to capture all events
+	var events []FileEvent
+	var mu sync.Mutex
+	m.Subscribe(func(ev FileEvent) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	})
+
 	spec := FileSpec{
 		Name:    s3BundleName,
 		Version: s3BundleVersion,
@@ -64,6 +74,7 @@ func TestManager_EnsureS3RealBundle(t *testing.T) {
 		Extract: true,
 	}
 
+	// First Ensure — should download, extract, and emit EventInstalled
 	path, err := m.Ensure(context.Background(), spec)
 	require.NoError(t, err, "Ensure() against real S3 bundle should succeed")
 
@@ -82,10 +93,22 @@ func TestManager_EnsureS3RealBundle(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, entries, "extracted bundle directory should not be empty")
 
-	// Verify idempotency — second Ensure should not re-download
+	// Verify exactly one EventInstalled was emitted
+	mu.Lock()
+	require.Len(t, events, 1, "first Ensure must emit exactly one event")
+	assert.Equal(t, EventInstalled, events[0].Type)
+	assert.Equal(t, s3BundleName, events[0].Entry.Name)
+	assert.Equal(t, s3BundleVersion, events[0].Entry.Version)
+	mu.Unlock()
+
+	// Second Ensure — same spec, should be a no-op: same path, no new event
 	path2, err := m.Ensure(context.Background(), spec)
 	require.NoError(t, err, "second Ensure() should be idempotent")
 	assert.Equal(t, path, path2)
+
+	mu.Lock()
+	assert.Len(t, events, 1, "idempotent Ensure must not emit a second event")
+	mu.Unlock()
 
 	// Verify state is tracked correctly
 	entry, ok := m.Get(s3BundleName)
