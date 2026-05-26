@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -22,17 +23,27 @@ type Messaging struct {
 	groupManager  *GroupManager
 	resetChan     chan struct{}
 	filesManager  filesmgr.Manager
+	stopCtx       context.Context
+	stopCancel    context.CancelFunc
 }
 
 // NewMessaging creates a new Messaging
 func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager, resetChan chan struct{}, groupManager *GroupManager, filesManager filesmgr.Manager) *Messaging {
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	return &Messaging{
 		logger:        logger,
 		policyManager: policyManager,
 		groupManager:  groupManager,
 		resetChan:     resetChan,
 		filesManager:  filesManager,
+		stopCtx:       stopCtx,
+		stopCancel:    stopCancel,
 	}
+}
+
+// Stop cancels any in-flight bundle installations.
+func (messaging *Messaging) Stop() {
+	messaging.stopCancel()
 }
 
 // DispatchToHandlers dispatches the message to the appropriate handler
@@ -109,7 +120,7 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 // handlePackages installs each bundle delivered by filesmanager.
 // Failures are non-fatal: a failed bundle is logged and skipped so that
 // other bundles in the same delivery are still installed.
-func (messaging *Messaging) handlePackages(ctx context.Context, payload messages.PackagesCredentialsRPCPayload) {
+func (messaging *Messaging) handlePackages(_ context.Context, payload messages.PackagesCredentialsRPCPayload) {
 	if messaging.filesManager == nil {
 		messaging.logger.Error("filesManager is nil, cannot install bundles")
 		return
@@ -122,14 +133,18 @@ func (messaging *Messaging) handlePackages(ctx context.Context, payload messages
 	for _, bundle := range payload.Bundles {
 		// TODO: check bundle.ExpiresAt before calling Ensure to avoid
 		// unnecessary download attempts with expired presigned URLs.
+		installCtx, cancel := context.WithTimeout(messaging.stopCtx, 10*time.Minute)
 		spec := filesmgr.FileSpec{
-			Name:    bundle.Name,
-			Version: bundle.Version,
-			URL:     bundle.URL,
-			SHA256:  bundle.SHA256,
-			Extract: true,
+			Name:       bundle.Name,
+			Version:    bundle.Version,
+			URL:        bundle.URL,
+			SHA256:     bundle.SHA256,
+			Extract:    bundle.Extract,
+			TargetPath: bundle.TargetPath,
+			Mode:       bundle.Mode,
 		}
-		path, err := messaging.filesManager.Ensure(ctx, spec)
+		path, err := messaging.filesManager.Ensure(installCtx, spec)
+		cancel()
 		if err != nil {
 			messaging.logger.Error("failed to install bundle",
 				"name", bundle.Name,

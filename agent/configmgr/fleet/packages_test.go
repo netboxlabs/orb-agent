@@ -80,6 +80,7 @@ func TestHandlePackages_HappyPath(t *testing.T) {
 				Version:   "0.2.0",
 				URL:       "https://example.com/bundle.tar.gz",
 				SHA256:    "abc123",
+				Extract:   true,
 				ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
 			},
 		},
@@ -116,8 +117,8 @@ func TestHandlePackages_PartialFailure(t *testing.T) {
 	messaging := newTestMessagingWithFiles(fm)
 	payload := messages.PackagesCredentialsRPCPayload{
 		Bundles: []messages.BundleSpec{
-			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/meraki.tar.gz", SHA256: "aaa111"},
-			{Name: "nbl_cisco_catalyst_center", Version: "0.1.0", URL: "https://example.com/catalyst.tar.gz", SHA256: "bbb222"},
+			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/meraki.tar.gz", SHA256: "aaa111", Extract: true},
+			{Name: "nbl_cisco_catalyst_center", Version: "0.1.0", URL: "https://example.com/catalyst.tar.gz", SHA256: "bbb222", Extract: true},
 		},
 	}
 	// Should not panic — failure is non-fatal
@@ -140,7 +141,7 @@ func TestDispatchToHandlers_PackagesCredentials(t *testing.T) {
 		Func:          messages.PackagesCredentialsRPCFunc,
 		Payload: messages.PackagesCredentialsRPCPayload{
 			Bundles: []messages.BundleSpec{
-				{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+				{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123", Extract: true},
 			},
 		},
 	}
@@ -160,7 +161,7 @@ func TestHandlePackages_NilFilesManager(_ *testing.T) {
 	messaging := newTestMessagingWithFiles(nil)
 	payload := messages.PackagesCredentialsRPCPayload{
 		Bundles: []messages.BundleSpec{
-			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123", Extract: true},
 		},
 	}
 	// Should not panic when filesManager is nil
