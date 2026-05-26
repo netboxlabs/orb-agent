@@ -480,7 +480,7 @@ func TestSendGroupMembershipsRequest_Success(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, nil, resetChan, &groupManager)
+	messaging := NewMessaging(logger, nil, resetChan, &groupManager, nil)
 
 	var published []byte
 	publishFunc := func(_ context.Context, payload []byte) error {
@@ -500,7 +500,7 @@ func TestSendGroupMembershipsRequest_PublishError(_ *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, nil, resetChan, &groupManager)
+	messaging := NewMessaging(logger, nil, resetChan, &groupManager, nil)
 
 	publishFunc := func(_ context.Context, _ []byte) error {
 		return errors.New("publish failed")

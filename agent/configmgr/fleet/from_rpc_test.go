@@ -1737,7 +1737,7 @@ func TestHandleAgentReset_NoFullReset(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	handlers := NewMessaging(logger, nil, resetChan, &groupManager)
+	handlers := NewMessaging(logger, nil, resetChan, &groupManager, nil)
 
 	// FullReset=false should not send to resetChan
 	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{
@@ -1754,7 +1754,7 @@ func TestHandleGroupMemberships_UnsubscribeError(_ *testing.T) {
 	// Pre-populate the group manager with a group
 	groupManager.Add(messages.GroupMembershipData{GroupID: "group1", Name: "Group 1"})
 
-	handlers := NewMessaging(logger, &mockPolicyManager{}, resetChan, &groupManager)
+	handlers := NewMessaging(logger, &mockPolicyManager{}, resetChan, &groupManager, nil)
 
 	mockRepo := &mockPolicyRepo{}
 	mockRepo.On("GetAll").Return([]policies.PolicyData{}, nil)
@@ -1781,7 +1781,7 @@ func TestHandleGroupMemberships_SubscribeError(_ *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	handlers := NewMessaging(logger, nil, resetChan, &groupManager)
+	handlers := NewMessaging(logger, nil, resetChan, &groupManager, nil)
 
 	mockRepo := &mockPolicyRepo{}
 	mockRepo.On("GetAll").Return([]policies.PolicyData{}, nil)

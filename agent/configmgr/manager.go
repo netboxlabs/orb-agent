@@ -22,12 +22,12 @@ type Manager interface {
 func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string, backendState backend.StateRetriever, fm filesmgr.Manager) Manager {
 	switch active {
 	case "local":
-		return &localConfigManager{logger: logger, pMgr: pMgr}
+		return &localConfigManager{logger: logger, pMgr: pMgr} // fm unused: local/git mode has no fleet bundle delivery
 	case "git":
 		return &gitConfigManager{logger: logger, pMgr: pMgr}
 	case "fleet":
 		return newFleetConfigManager(logger, pMgr, backendState, fm)
 	default:
-		return &localConfigManager{logger: logger, pMgr: pMgr}
+		return &localConfigManager{logger: logger, pMgr: pMgr} // fm unused: local/git mode has no fleet bundle delivery
 	}
 }

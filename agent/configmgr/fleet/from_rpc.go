@@ -116,6 +116,8 @@ func (messaging *Messaging) handlePackages(ctx context.Context, payload messages
 	}
 	messaging.logger.Info("installing bundles", "count", len(payload.Bundles))
 	for _, bundle := range payload.Bundles {
+		// TODO: check bundle.ExpiresAt before calling Ensure to avoid
+		// unnecessary download attempts with expired presigned URLs.
 		spec := filesmgr.FileSpec{
 			Name:    bundle.Name,
 			Version: bundle.Version,
