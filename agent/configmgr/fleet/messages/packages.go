@@ -1,6 +1,5 @@
 package messages
 
-
 // PackagesCredentialsRPCFunc is the function name for packages credentials RPC calls
 const PackagesCredentialsRPCFunc = "packages_credentials"
 
