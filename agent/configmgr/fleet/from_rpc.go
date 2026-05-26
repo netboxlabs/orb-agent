@@ -117,7 +117,7 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 	return nil
 }
 
-// handlePackages installs each bundle delivered by filesmanager.
+// handlePackages installs each bundle delivered by filesmgr.Manager.
 // Failures are non-fatal: a failed bundle is logged and skipped so that
 // other bundles in the same delivery are still installed.
 func (messaging *Messaging) handlePackages(_ context.Context, payload messages.PackagesCredentialsRPCPayload) {
