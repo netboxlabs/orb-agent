@@ -6,12 +6,13 @@ import (
 	"log/slog"
 	"os"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
-	"gopkg.in/yaml.v3"
 )
 
 // Messaging handles the messages from the MQTT broker

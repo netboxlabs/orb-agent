@@ -156,7 +156,7 @@ func TestDispatchToHandlers_PackagesCredentials(t *testing.T) {
 	fm.AssertExpectations(t)
 }
 
-func TestHandlePackages_NilFilesManager(t *testing.T) {
+func TestHandlePackages_NilFilesManager(_ *testing.T) {
 	messaging := newTestMessagingWithFiles(nil)
 	payload := messages.PackagesCredentialsRPCPayload{
 		Bundles: []messages.BundleSpec{
