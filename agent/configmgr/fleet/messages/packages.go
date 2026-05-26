@@ -5,11 +5,11 @@ const PackagesCredentialsRPCFunc = "packages_credentials"
 
 // BundleSpec describes a single bundle delivered by filesmanager
 type BundleSpec struct {
-	Name      string    `json:"name"`
-	Version   string    `json:"version"`
-	URL       string    `json:"url"`
-	SHA256    string    `json:"sha256"`
-	ExpiresAt int64     `json:"expires_at"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	URL       string `json:"url"`
+	SHA256    string `json:"sha256"`
+	ExpiresAt int64  `json:"expires_at"`
 }
 
 // PackagesCredentialsRPCPayload is the payload for packages credentials RPC messages
