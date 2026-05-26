@@ -33,7 +33,7 @@ func TestAddOnReadyHook_RegistersHook(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reset := make(chan struct{}, 1)
 	reconnect := make(chan struct{}, 1)
-	conn := NewMQTTConnection(logger, noopPM{}, reset, reconnect, noopBackendState{})
+	conn := NewMQTTConnection(logger, noopPM{}, reset, reconnect, noopBackendState{}, nil)
 
 	if len(conn.onReadyHooks) != 0 {
 		t.Fatalf("expected 0 hooks initially, got %d", len(conn.onReadyHooks))
@@ -50,7 +50,7 @@ func TestConnect_StoresTopicsBeforeConnecting(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reset := make(chan struct{}, 1)
 	reconnect := make(chan struct{}, 1)
-	conn := NewMQTTConnection(logger, noopPM{}, reset, reconnect, noopBackendState{})
+	conn := NewMQTTConnection(logger, noopPM{}, reset, reconnect, noopBackendState{}, nil)
 
 	details := ConnectionDetails{
 		MQTTURL:  "mqtt://localhost:1883",

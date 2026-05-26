@@ -12,7 +12,7 @@ import (
 
 func TestFleetConfigManager_Stop_ShutsDownBridge(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	mgr := newFleetConfigManager(logger, nil, nil)
+	mgr := newFleetConfigManager(logger, nil, nil, nil)
 
 	// Create a real bridge on an ephemeral port
 	bridge, err := otlpbridge.NewBridgeServer(otlpbridge.BridgeConfig{ListenAddr: ":0", Encoding: "protobuf"}, nil, logger)

@@ -13,6 +13,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -49,13 +50,13 @@ type MQTTConnection struct {
 }
 
 // NewMQTTConnection creates a new MQTTConnection
-func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}, reconnectChan chan struct{}, backendState backend.StateRetriever) *MQTTConnection {
+func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetChan chan struct{}, reconnectChan chan struct{}, backendState backend.StateRetriever, filesManager filesmgr.Manager) *MQTTConnection {
 	groupManager := newGroupManager()
 	return &MQTTConnection{
 		connectionManager:  nil,
 		logger:             logger,
 		heartbeater:        newHeartbeater(logger, backendState, pMgr, &groupManager),
-		messaging:          NewMessaging(logger, pMgr, resetChan, &groupManager),
+		messaging:          NewMessaging(logger, pMgr, resetChan, &groupManager, filesManager),
 		resetChan:          resetChan,
 		onReadyHooks:       make([]func(cm *autopaho.ConnectionManager, topics TokenResponseTopics), 0),
 		topicHandlers:      make(map[string]TopicMessageHandler),

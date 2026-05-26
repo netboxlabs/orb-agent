@@ -73,7 +73,7 @@ func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	// Act with invalid URL
 	backends := make(map[string]backend.Backend)
@@ -98,7 +98,7 @@ func TestFleetConfigManager_Connect_ValidURL(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	// Act with valid URL but don't expect successful connection
 	// since we don't have a real MQTT server
@@ -133,7 +133,7 @@ func TestDispatchQueue_ProcessesJobsSequentially(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	// Track the order of job processing using a channel
 	processedOrder := make([]int, 0, 10)
@@ -197,7 +197,7 @@ func TestDispatchQueue_HandlesQueueFull(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	// Don't start the worker so the queue fills up
 	// Just verify we can enqueue up to the buffer size
@@ -230,7 +230,7 @@ func TestDispatchQueue_NoPanicOnConcurrentShutdown(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	connection.startDispatchWorker()
 
@@ -293,7 +293,7 @@ func TestDispatchQueue_DrainsOnShutdown(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	var processed atomic.Int32
 	const numJobs = 50
@@ -337,7 +337,7 @@ func TestDispatchQueue_LateEnqueueAfterWorkerExit_IsNotOrphaned(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	payload := []byte(`{"schema_version":"1.0","func":"group_membership","payload":{"full_list":false,"groups":[{"group_id":"late-send","name":"Late"}]}}`)
 	var processed atomic.Int32
@@ -423,7 +423,7 @@ func TestDispatchQueue_ConcurrentStopDispatchWorker_NoPanic(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
-	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{})
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
 
 	payload := []byte(`{"schema_version":"1.0","func":"group_membership","payload":{"full_list":false,"groups":[{"group_id":"stop-race","name":"StopRace"}]}}`)
 	jobStarted := make(chan struct{})

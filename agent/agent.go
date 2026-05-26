@@ -121,7 +121,7 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	// Pass a background context to the config manager at construction time. The
 	// manager keeps its own copy and later derives child contexts from the
 	// runtime context supplied in Agent.Start.
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager)
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager, fm)
 
 	return &orbAgent{
 		logger:              logger,

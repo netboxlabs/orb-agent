@@ -6,6 +6,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -18,15 +19,15 @@ type Manager interface {
 
 // New creates a new instance of ConfigManager that is bound to the
 // supplied context.
-func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string, backendState backend.StateRetriever) Manager {
+func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string, backendState backend.StateRetriever, fm filesmgr.Manager) Manager {
 	switch active {
 	case "local":
-		return &localConfigManager{logger: logger, pMgr: pMgr}
+		return &localConfigManager{logger: logger, pMgr: pMgr} // fm unused: local/git mode has no fleet bundle delivery
 	case "git":
 		return &gitConfigManager{logger: logger, pMgr: pMgr}
 	case "fleet":
-		return newFleetConfigManager(logger, pMgr, backendState)
+		return newFleetConfigManager(logger, pMgr, backendState, fm)
 	default:
-		return &localConfigManager{logger: logger, pMgr: pMgr}
+		return &localConfigManager{logger: logger, pMgr: pMgr} // fm unused: local/git mode has no fleet bundle delivery
 	}
 }
