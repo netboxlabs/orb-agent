@@ -2044,6 +2044,109 @@ func TestConfig_VendorPartitioning(t *testing.T) {
 	}
 }
 
+// TestGenericObjectIDs_ChassisModuleColumnsGatedByDiscoverModules asserts that
+// the two ENTITY-MIB columns consumed exclusively by module / module bay
+// discovery (entPhysicalDescr and entPhysicalVendorType, child entries with
+// entity "chassis_module") are skipped from the generic walk OID set when
+// options.discover_modules is off (the default). They must be present when
+// the mode is "linecards" or "full". Pure walk-optimization gating: the
+// downstream TranslateModulesWithAlias path already short-circuits on
+// mode=off, so this purely removes unnecessary SNMP traffic on large
+// modular chassis.
+func TestGenericObjectIDs_ChassisModuleColumnsGatedByDiscoverModules(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	const (
+		descrOID      = ".1.3.6.1.2.1.47.1.1.1.1.2"
+		vendorTypeOID = ".1.3.6.1.2.1.47.1.1.1.1.3"
+		parentOID     = ".1.3.6.1.2.1.47.1.1.1"
+	)
+
+	// Mirror the chassis_inventory parent + chassis_module children block
+	// in policy/mapping.yaml.
+	mappings := []config.MappingEntry{
+		{
+			OID: parentOID, Entity: "chassis_inventory", Field: "_id", IdentifierSize: 2,
+			MappingEntries: []config.MappingEntry{
+				{OID: descrOID, Entity: "chassis_module", Field: "descr"},
+				{OID: vendorTypeOID, Entity: "chassis_module", Field: "vendor_type"},
+				{OID: ".1.3.6.1.2.1.47.1.1.1.1.5", Entity: "chassis_inventory", Field: "class"},
+				{OID: ".1.3.6.1.2.1.47.1.1.1.1.11", Entity: "chassis_inventory", Field: "serialNumber"},
+			},
+		},
+	}
+
+	cases := []struct {
+		name         string
+		opts         config.Options
+		wantIncluded bool
+	}{
+		{
+			name:         "default (unset) -> off, columns absent",
+			opts:         config.Options{},
+			wantIncluded: false,
+		},
+		{
+			name: "explicit off, columns absent",
+			opts: func() config.Options {
+				v := config.DiscoverModulesOff
+				return config.Options{DiscoverModules: &v}
+			}(),
+			wantIncluded: false,
+		},
+		{
+			name: "linecards, columns present",
+			opts: func() config.Options {
+				v := config.DiscoverModulesLinecards
+				return config.Options{DiscoverModules: &v}
+			}(),
+			wantIncluded: true,
+		},
+		{
+			name: "full, columns present",
+			opts: func() config.Options {
+				v := config.DiscoverModulesFull
+				return config.Options{DiscoverModules: &v}
+			}(),
+			wantIncluded: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := mapping.NewConfig(mappings, logger, nil, nil, &config.Defaults{}, tc.opts)
+			if err != nil {
+				t.Fatalf("NewConfig: %v", err)
+			}
+			gen := cfg.GenericObjectIDs()
+			_, hasDescr := gen[descrOID]
+			_, hasVendorType := gen[vendorTypeOID]
+			if tc.wantIncluded {
+				if !hasDescr {
+					t.Errorf("expected %s in generic OIDs", descrOID)
+				}
+				if !hasVendorType {
+					t.Errorf("expected %s in generic OIDs", vendorTypeOID)
+				}
+			} else {
+				if hasDescr {
+					t.Errorf("unexpected %s in generic OIDs (mode=off should skip)", descrOID)
+				}
+				if hasVendorType {
+					t.Errorf("unexpected %s in generic OIDs (mode=off should skip)", vendorTypeOID)
+				}
+			}
+			// Sibling chassis_inventory columns must remain regardless of mode.
+			if _, ok := gen[".1.3.6.1.2.1.47.1.1.1.1.5"]; !ok {
+				t.Error("chassis_inventory column .1.3.6.1.2.1.47.1.1.1.1.5 must be present in all modes")
+			}
+			if _, ok := gen[".1.3.6.1.2.1.47.1.1.1.1.11"]; !ok {
+				t.Error("chassis_inventory column .1.3.6.1.2.1.47.1.1.1.1.11 must be present in all modes")
+			}
+		})
+	}
+}
+
 func TestMappingYAML_QBridgeEntriesPresent(t *testing.T) {
 	body, err := os.ReadFile("../policy/mapping.yaml")
 	if err != nil {

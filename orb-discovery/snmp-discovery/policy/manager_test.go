@@ -1351,3 +1351,28 @@ func TestManagerApplyDefaults_CreateUnknownVlans(t *testing.T) {
 		assert.False(t, *opt, "Explicit false must be preserved — applyDefaults must not overwrite it")
 	})
 }
+
+func TestManager_ParsePolicies_RejectsInvalidDiscoverModules(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	require.NoError(t, err)
+
+	raw := []byte(`
+policies:
+  bad-policy:
+    config:
+      schedule: "@every 1m"
+      options:
+        discover_modules: fulls
+    scope:
+      targets:
+        - host: 192.0.2.1
+      authentication:
+        protocol_version: SNMPv2c
+        community: public
+`)
+	_, err = manager.ParsePolicies(raw)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "discover_modules")
+	assert.Contains(t, err.Error(), "fulls")
+}

@@ -293,6 +293,11 @@ const (
 	// associated mapper is a no-op; data flows via the raw oids map
 	// passed to TranslateAsStack.
 	ChassisInventoryEntityType EntityType = "chassis_inventory"
+	// ChassisModuleEntityType is a pseudo-entity that flags ENTITY-MIB
+	// rows (entPhysicalDescr, entPhysicalVendorType) for consumption by
+	// TranslateModulesWithAlias as a post-pass. Map() on its associated
+	// mapper is a no-op; data flows via the raw oids map.
+	ChassisModuleEntityType EntityType = "chassis_module"
 )
 
 // ObjectIDMapper is a struct that maps ObjectIDs to entities
@@ -431,6 +436,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		"vlan":                             vlanMapper,
 		"interface_vlan":                   vlanMapper,
 		string(ChassisInventoryEntityType): &ChassisInventoryMapper{logger: logger},
+		string(ChassisModuleEntityType):    &ChassisModuleMapper{logger: logger},
 	}
 	postPassMappers := []postPassMapper{vlanMapper}
 	// Validate index_kind on every entry (top-level and nested). A typo
@@ -1493,7 +1499,15 @@ func (m *Config) VendorObjectIDs(vendor string) map[string]int {
 // and VendorObjectIDs. When generic==true it selects entries with an empty
 // Vendor field; otherwise it selects entries matching the given vendor string.
 // Child-expansion follows the same rules as ObjectIDs.
+//
+// Gating: child entries flagged with entity "chassis_module" (ENTITY-MIB
+// entPhysicalDescr / entPhysicalVendorType) are consumed exclusively by
+// the module / module bay post-pass. When discover_modules is off (the
+// default), TranslateModulesWithAlias short-circuits before reading them,
+// so walking those columns is wasted SNMP work on large modular chassis.
+// Skip them from the walk set in mode=off; include them in linecards / full.
 func (m *Config) objectIDsForVendor(vendor string, generic bool) map[string]int {
+	skipChassisModule := m.options.ModuleDiscoveryMode() == config.DiscoverModulesOff
 	out := make(map[string]int)
 	for _, entry := range m.mapping {
 		if generic {
@@ -1507,6 +1521,9 @@ func (m *Config) objectIDsForVendor(vendor string, generic bool) map[string]int 
 		}
 		if len(entry.MappingEntries) > 0 {
 			for _, childEntry := range entry.MappingEntries {
+				if skipChassisModule && childEntry.Entity == string(ChassisModuleEntityType) {
+					continue
+				}
 				if childEntry.IdentifierSize == 0 {
 					out[childEntry.OID] = 1
 				} else {
@@ -1514,6 +1531,9 @@ func (m *Config) objectIDsForVendor(vendor string, generic bool) map[string]int 
 				}
 			}
 		} else {
+			if skipChassisModule && entry.Entity == string(ChassisModuleEntityType) {
+				continue
+			}
 			if entry.IdentifierSize == 0 {
 				out[entry.OID] = 1
 			} else {

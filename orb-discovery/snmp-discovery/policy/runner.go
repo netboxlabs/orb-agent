@@ -544,6 +544,59 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface, r.logger)
+
+	// Module / module bay emission. Opt-in via options.discover_modules
+	// (default = off -> zero behaviour change). Reuses the chassis-path
+	// entAliasMappingTable index for iface <-> transceiver attachment.
+	//
+	// Diode ingest ordering contract:
+	//   Device(s) -> module bay + module -> Interface -> IP -> MAC -> VLAN
+	//
+	// TranslateAsStack already partitioned entitiesForTarget into that
+	// bucket order, but module entities land in their OWN bucket — naively
+	// appending them would leave them at the tail and break ifaceModuleMap
+	// attachment (Interfaces would appear BEFORE the Modules they reference).
+	// Fix: partition-and-prepend. Find the first non-Device/non-VC index in
+	// entitiesForTarget and splice moduleEntities there.
+	//
+	// Early-exit on mode=off so the default-path target poll skips the
+	// ChassisInventoryFromOIDs re-parse + the entAliasMappingTable scan
+	// entirely (both iterate the full oids map). Without this gate,
+	// every target paid the scan cost even though TranslateModulesWithAlias
+	// would short-circuit before emitting anything.
+	if r.config.Options.ModuleDiscoveryMode() != config.DiscoverModulesOff {
+		// TODO(orb-discovery): double-parse — TranslateAsStack already
+		// ran extractInventory internally; ChassisInventoryFromOIDs
+		// runs it again here. Cheap parse on string maps (no SNMP work
+		// repeated), so left as-is for now. Refactor fallout:
+		// TranslateAsStack call sites in mapping/chassis_test.go (9 sites)
+		// would need to accept a pre-parsed inventory parameter; this
+		// caller would then pass it directly instead of re-deriving via
+		// ChassisInventoryFromOIDs. Defer until a broader runner cleanup.
+		chassisInv := mapping.ChassisInventoryFromOIDs(oids, r.logger)
+		memberDevices := mapping.MemberDevicesFromEntities(entitiesForTarget, chassisInv)
+		aliasMap := mapping.AliasMapFromOIDs(oids)
+
+		moduleEntities, ifaceModuleMap := mapping.TranslateModulesWithAlias(
+			oids, chassisInv, memberDevices,
+			&r.config.Options, targetDefaults,
+			r.logger, aliasMap,
+		)
+
+		entitiesForTarget = mapping.SpliceModulesAfterDevices(entitiesForTarget, moduleEntities)
+
+		// Attach Interface.Module on physical-port Interfaces for `full` mode.
+		// Order-safe because modules now precede interfaces in the slice.
+		// Key by ifIndex (globally unique in the SNMP walk space) — keying
+		// by Interface.Name would collide on VC members that reuse the same
+		// canonical name locally. AttachIfaceModules also walks
+		// IPAddress.AssignedObject / MACAddress.AssignedObject so L3
+		// routed-port interfaces (filtered out of the top-level entity
+		// slice by MapObjectIDsToEntity.getAssignedInterfaces) still get
+		// their module set.
+		mapping.AttachIfaceModules(entitiesForTarget, ifaceModuleMap, ifIndexByIface)
+	}
+
 	entities = append(entities, entitiesForTarget...)
 
 	// Update discovered hosts gauge

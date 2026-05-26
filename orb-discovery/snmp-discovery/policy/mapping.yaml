@@ -126,6 +126,12 @@ entries:
     identifier_size: 2
     description: "ENTITY-MIB entPhysicalTable (chassis physical inventory for stack detection)"
     mapping_entries:
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.2"   # entPhysicalDescr
+        entity: "chassis_module"
+        field: "descr"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.3"   # entPhysicalVendorType
+        entity: "chassis_module"
+        field: "vendor_type"
       - oid: ".1.3.6.1.2.1.47.1.1.1.1.4"   # entPhysicalContainedIn
         entity: "chassis_inventory"
         field: "containedIn"

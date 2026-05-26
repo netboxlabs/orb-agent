@@ -182,6 +182,25 @@ func GetDiscoveryAttempts() metric.Int64Counter {
 	return GetCounter("discovery_attempts", "Number of SNMP discovery attempts")
 }
 
+// GetModulesEmitted returns the counter for module entities emitted by
+// SNMP discovery. Attributes at .Add time: vendor, type.
+func GetModulesEmitted() metric.Int64Counter {
+	return GetCounter("modules_emitted", "Number of module entities emitted by SNMP discovery")
+}
+
+// GetModuleBaysEmitted returns the counter for module-bay entities
+// emitted by SNMP discovery. Attribute at .Add time: vendor.
+func GetModuleBaysEmitted() metric.Int64Counter {
+	return GetCounter("module_bays_emitted", "Number of module-bay entities emitted by SNMP discovery")
+}
+
+// GetModulesDropped returns the counter for module rows dropped during
+// extraction. Attribute at .Add time: reason (orphan_containment,
+// dup_serial, orphan_member).
+func GetModulesDropped() metric.Int64Counter {
+	return GetCounter("modules_dropped", "Number of module rows dropped during extraction (orphan/dup/etc.)")
+}
+
 // ResetMeter resets the meter to nil for testing purposes.
 func ResetMeter() {
 	cacheLock.Lock()

@@ -197,6 +197,42 @@ func TestConvenienceFunctions(t *testing.T) {
 	})
 }
 
+// Module-discovery counters — emission/drop instrumentation.
+
+func TestGetModulesEmitted_NotNil(t *testing.T) {
+	err := setupTestMeter(t)
+	require.NoError(t, err)
+
+	counter := metrics.GetModulesEmitted()
+	assert.NotNil(t, counter, "modules_emitted counter should be non-nil once meter is initialized")
+
+	// Wrapper should reuse the underlying cached counter.
+	directCounter := metrics.GetCounter("modules_emitted", "Number of module entities emitted by SNMP discovery")
+	assert.Same(t, counter, directCounter)
+}
+
+func TestGetModuleBaysEmitted_NotNil(t *testing.T) {
+	err := setupTestMeter(t)
+	require.NoError(t, err)
+
+	counter := metrics.GetModuleBaysEmitted()
+	assert.NotNil(t, counter, "module_bays_emitted counter should be non-nil once meter is initialized")
+
+	directCounter := metrics.GetCounter("module_bays_emitted", "Number of module-bay entities emitted by SNMP discovery")
+	assert.Same(t, counter, directCounter)
+}
+
+func TestGetModulesDropped_NotNil(t *testing.T) {
+	err := setupTestMeter(t)
+	require.NoError(t, err)
+
+	counter := metrics.GetModulesDropped()
+	assert.NotNil(t, counter, "modules_dropped counter should be non-nil once meter is initialized")
+
+	directCounter := metrics.GetCounter("modules_dropped", "Number of module rows dropped during extraction (orphan/dup/etc.)")
+	assert.Same(t, counter, directCounter)
+}
+
 // setupTestMeter creates a no-op meter provider for testing
 func setupTestMeter(_ *testing.T) error {
 	ctx := context.Background()

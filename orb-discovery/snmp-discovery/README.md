@@ -373,6 +373,42 @@ This means subinterfaces **always** receive the "virtual" type, even if:
 - Speed-based detection would assign a different type
 
 
+### Module / ModuleBay Discovery
+
+Opt-in emission of NetBox `Module` and `ModuleBay` entities on modular chassis, sourced from the standard ENTITY-MIB `entPhysicalTable`. Vendor-neutral — works on any device that populates the MIB (Cisco IOS / IOS-XE / NX-OS, Juniper, Arista, Aruba CX, Nokia SROS, and others).
+
+Controlled by the `discover_modules` option under `config.options`:
+
+| Mode | Behaviour |
+|---|---|
+| `off` *(default)* | No module / module-bay entities emitted. Zero behaviour change versus prior releases. |
+| `linecards` | One `ModuleBay` + `Module` per top-level chassis slot — line cards and supervisors only. PSU and fan modules are classified for metric labelling but NOT emitted. |
+| `full` | Everything `linecards` emits, plus one `ModuleBay` + `Module` per transceiver sub-bay. Physical interfaces backed by a transceiver carry an `Interface.Module` reference for per-port optic visibility. |
+
+Virtual-chassis-of-modular targets are supported from day one: when the device reports 2+ chassis members, modules are dispatched per-member using the same chassis inventory the VC path produces.
+
+**Sub-bay rendering note (transient, `full` mode only).** Transceiver sub-bays are currently emitted device-rooted rather than nested under the parent line card, due to a Diode reconciler limitation. The transceiver `Module` still installs into the sub-bay via `Module.ModuleBay`, so per-port optic visibility is preserved; only the bay-under-linecard visual hierarchy is missing. This will be restored once the reconciler supports single-batch plan-and-apply.
+
+#### Example
+
+```yaml
+policies:
+  snmp_modular_chassis:
+    config:
+      schedule: "0 */6 * * *"
+      options:
+        discover_modules: linecards   # off | linecards | full
+      defaults:
+        site: "datacenter-01"
+    scope:
+      targets:
+        - host: "10.0.0.1"
+      authentication:
+        protocol_version: "v2c"
+        community: "public"
+```
+
+
 ### Device Model Lookup
 The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values. This only needs to be set if additional or modified files are being provided instead of the ones that are included with orb-discovery and orb-agent.
 

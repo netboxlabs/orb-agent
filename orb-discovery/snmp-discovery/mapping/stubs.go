@@ -266,6 +266,53 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device) {
 			if e.Lag != nil {
 				e.Lag = stubForIface(e.Lag)
 			}
+			if e.Module != nil {
+				// Reduce nested Interface.Module to a matcher-only ref:
+				// chassis Device stub + Serial (if known) + ModuleBay
+				// matcher (if known). The top-level Module entity
+				// carries the full record (module_type, description,
+				// status, etc.); this nested form lets the Diode
+				// reconciler resolve the ref to that top-level row via
+				// the (Device, ModuleBay) or (Device, Serial) match
+				// paths without re-creating it.
+				//
+				// Shape mirrors device-discovery's _module_match_stub
+				// (device-discovery/device_discovery/stubs.py
+				// `_module_match_stub`): emit Device unconditionally,
+				// then conditionally copy Serial and ModuleBay matcher
+				// fields when present on the rich Module. Vendors that
+				// omit transceiver serial in ENTITY-MIB (some Aruba
+				// and low-end OEMs) still populate the bay, so the
+				// (Device, ModuleBay) path alone must keep the ref
+				// resolvable.
+				//
+				// Only when BOTH Serial AND ModuleBay are unusable do
+				// we drop the ref entirely — at that point the stub
+				// carries no identifier and the reconciler would fall
+				// into creation mode and fail the
+				// "module_bay required, module_type required"
+				// validation (we also strip ModuleType).
+				devStub := stubFor(e.Module.Device)
+				stub := &diode.Module{Device: devStub}
+				if e.Module.Serial != nil && *e.Module.Serial != "" {
+					stub.Serial = e.Module.Serial
+				}
+				if e.Module.ModuleBay != nil {
+					stub.ModuleBay = &diode.ModuleBay{
+						Device:   devStub,
+						Name:     e.Module.ModuleBay.Name,
+						Position: e.Module.ModuleBay.Position,
+					}
+				}
+				if stub.Serial == nil && stub.ModuleBay == nil {
+					// Unresolvable: drop the ref so the reconciler
+					// doesn't try to create a Module without the
+					// required validation fields.
+					e.Module = nil
+				} else {
+					e.Module = stub
+				}
+			}
 		case *diode.IPAddress:
 			if iface, ok := e.AssignedObject.(*diode.Interface); ok && iface != nil {
 				e.AssignedObject = stubForIface(iface)
@@ -275,6 +322,8 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device) {
 				e.AssignedObject = stubForIface(iface)
 			}
 		case *diode.Module:
+			e.Device = stubFor(e.Device)
+		case *diode.ModuleBay:
 			e.Device = stubFor(e.Device)
 		}
 	}
