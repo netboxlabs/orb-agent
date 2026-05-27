@@ -1807,6 +1807,7 @@ func TestHeartbeater_GetPolicyState_PropagatesTargetsFromRunData(t *testing.T) {
 					CreatedAt: testTime,
 					UpdatedAt: testTime.Add(5 * time.Minute),
 					Targets:   []string{"10.0.0.5", "10.0.0.6"},
+					Driver:    "ios",
 				},
 				{
 					ID:        "run-c",
@@ -1827,6 +1828,9 @@ func TestHeartbeater_GetPolicyState_PropagatesTargetsFromRunData(t *testing.T) {
 	assert.Equal(t, []string{"192.168.1.1"}, ps["policy-1"].Runs[0].Targets)
 	assert.Equal(t, []string{"10.0.0.5", "10.0.0.6"}, ps["policy-1"].Runs[1].Targets)
 	assert.Nil(t, ps["policy-1"].Runs[2].Targets)
+	assert.Equal(t, "ios", ps["policy-1"].Runs[1].Driver)
+	assert.Empty(t, ps["policy-1"].Runs[0].Driver)
+	assert.Empty(t, ps["policy-1"].Runs[2].Driver)
 
 	mockPMgr.AssertExpectations(t)
 }
@@ -1848,6 +1852,7 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
 					CreatedAt: testTime,
 					UpdatedAt: testTime,
 					Targets:   []string{"10.0.0.1"},
+					Driver:    "ios",
 				},
 			},
 		},
@@ -1871,7 +1876,9 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
 	assert.Equal(t, "1.1", hb2.SchemaVersion)
 	require.Len(t, hb2.PolicyState["policy-1"].Runs, 1)
 	assert.Equal(t, []string{"10.0.0.1"}, hb2.PolicyState["policy-1"].Runs[0].Targets)
+	assert.Equal(t, "ios", hb2.PolicyState["policy-1"].Runs[0].Driver)
 	assert.Contains(t, string(capturedPayload), `"targets":["10.0.0.1"]`)
+	assert.Contains(t, string(capturedPayload), `"driver":"ios"`)
 
 	mockPMgr.AssertExpectations(t)
 }

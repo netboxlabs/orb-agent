@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/go-co-op/gocron/v2"
 	vault "github.com/hashicorp/vault/api"
-	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -18,33 +15,26 @@ import (
 var _ Manager = (*vaultManager)(nil)
 
 type vaultManager struct {
-	logger    *slog.Logger
+	pollingBase
+
 	config    config.VaultManager
-	ctx       context.Context
+	preLogger *slog.Logger
 	client    *vault.Client
-	usedVars  map[string]cachedSecret
-	callback  func(map[string]bool)
 	auth      authMethod
 	token     *vault.Secret
-	scheduler gocron.Scheduler
-}
-
-type cachedSecret struct {
-	Value     string          // The actual secret value
-	policyIDs map[string]bool // The IDs of policies that have used this secret
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
-	v.ctx = ctx
-	v.usedVars = make(map[string]cachedSecret)
+	if v.config.Mount != "" && hasEmptySegment(v.config.Mount) {
+		return fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
+	}
 
-	config := vault.DefaultConfig()
-
-	config.Address = v.config.Address
+	vaultCfg := vault.DefaultConfig()
+	vaultCfg.Address = v.config.Address
 	if v.config.Timeout == nil || *v.config.Timeout == 0 {
-		config.Timeout = 60 * time.Second
+		vaultCfg.Timeout = 60 * time.Second
 	} else {
-		config.Timeout = time.Duration(*v.config.Timeout) * time.Second
+		vaultCfg.Timeout = time.Duration(*v.config.Timeout) * time.Second
 	}
 
 	if v.config.Auth == "" {
@@ -52,7 +42,7 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	}
 
 	var err error
-	v.client, err = vault.NewClient(config)
+	v.client, err = vault.NewClient(vaultCfg)
 	if err != nil {
 		return err
 	}
@@ -71,145 +61,12 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		return err
 	}
 
-	if v.config.Schedule != nil {
-		s, err := gocron.NewScheduler()
-		if err != nil {
-			return fmt.Errorf("failed to create scheduler: %w", err)
-		}
+	v.init(ctx, v.preLogger, "vault", v.fetch)
 
-		v.scheduler = s
-		task := gocron.NewTask(v.pollSecrets)
-
-		if _, err = v.scheduler.NewJob(gocron.CronJob(*v.config.Schedule, false), task,
-			gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
-			return fmt.Errorf("failed to create polling job: %w", err)
-		}
-
-		v.logger.Info("Starting vault secret polling", "cron interval", *v.config.Schedule)
-		v.scheduler.Start()
-	}
-
-	if err = v.addTokenLifecycleWatcher(); err != nil {
+	if err := v.startScheduler(v.config.Schedule); err != nil {
 		return err
 	}
-
-	return nil
-}
-
-// RegisterUpdatePoliciesCallback registers a callback function to be called when secrets are updated
-func (v *vaultManager) RegisterUpdatePoliciesCallback(callback func(map[string]bool)) {
-	v.callback = callback
-}
-
-// SolvePolicySecrets processes a policy payload and replaces vault references with environment variables
-func (v *vaultManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
-	// Create a copy of the payload
-	newPayload := payload
-
-	// Process the Data field
-	processedData, err := v.processValue(payload.Data, payload.ID)
-	if err != nil {
-		return payload, err
-	}
-
-	newPayload.Data = processedData
-	return newPayload, nil
-}
-
-func (v *vaultManager) pollSecrets() {
-	if len(v.usedVars) == 0 || v.callback == nil {
-		return
-	}
-
-	v.logger.Debug("Polling vault secrets for changes", "secretCount", len(v.usedVars))
-	changedPolicyIDs := make(map[string]bool)
-
-	// Check each cached secret
-	for path, cachedSecret := range v.usedVars {
-		currentValue, err := v.getSecret(path)
-		if err != nil {
-			v.logger.Error("Failed to retrieve secret during polling", "path", path, "error", err)
-			for id := range cachedSecret.policyIDs {
-				changedPolicyIDs[id] = false
-			}
-			continue
-		}
-
-		if currentValue != cachedSecret.Value {
-			v.logger.Info("Detected changed secret", "path", path)
-			cachedSecret.Value = currentValue
-			v.usedVars[path] = cachedSecret
-			for id := range cachedSecret.policyIDs {
-				changedPolicyIDs[id] = true
-			}
-		}
-	}
-
-	if len(changedPolicyIDs) > 0 {
-		v.logger.Info("Calling update callback for changed secrets", "policyCount", len(changedPolicyIDs))
-		v.callback(changedPolicyIDs)
-	}
-}
-
-// SolveConfigSecrets processes the configuration secrets and replaces vault references with environment variables
-func (v *vaultManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
-	// Create a copy of the backends
-	newBackends := backends
-	processedBackends, err := v.processValue(newBackends, "_backends")
-	if err != nil {
-		return backends, configManager, fmt.Errorf("failed to process backends: %w", err)
-	}
-	newBackends, ok := processedBackends.(map[string]any)
-	if !ok {
-		return backends, configManager, fmt.Errorf("failed to cast processed backends to map[string]any")
-	}
-
-	// Convert configManager to map[string]any
-	configManagerMap, err := structToMap(configManager)
-	if err != nil {
-		return backends, configManager, fmt.Errorf("failed to convert config manager to map: %w", err)
-	}
-	// Process the config manager map
-	processedConfigManagerMap, err := v.processValue(configManagerMap, "_config_manager")
-	if err != nil {
-		return backends, configManager, fmt.Errorf("failed to process config manager: %w", err)
-	}
-	newConfigManager, err := mapToStruct[config.ManagerConfig](processedConfigManagerMap)
-	if err != nil {
-		return backends, configManager, fmt.Errorf("failed to convert processed map to config manager: %w", err)
-	}
-
-	// Do not track updates on config vars for now
-	v.usedVars = make(map[string]cachedSecret)
-
-	// Process the backends and config manager
-	return newBackends, newConfigManager, nil
-}
-
-// structToMap converts a struct to a map[string]any
-func structToMap(input any) (map[string]any, error) {
-	data, err := yaml.Marshal(input)
-	if err != nil {
-		return nil, err
-	}
-	var result map[string]any
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-// mapToStruct converts a map[string]any to a struct of type T
-func mapToStruct[T any](input any) (T, error) {
-	data, err := yaml.Marshal(input)
-	if err != nil {
-		return *new(T), err
-	}
-	var result T
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		return *new(T), err
-	}
-	return result, nil
+	return v.addTokenLifecycleWatcher()
 }
 
 func (v *vaultManager) addTokenLifecycleWatcher() error {
@@ -248,102 +105,129 @@ func (v *vaultManager) addTokenLifecycleWatcher() error {
 	return nil
 }
 
-func (v *vaultManager) processValue(value any, id string) (any, error) {
-	switch val := value.(type) {
-	case string:
-		return v.processString(val, id)
-	case map[string]any:
-		return v.processMap(val, id)
-	case []any:
-		return v.processSlice(val, id)
-	default:
-		return val, nil
-	}
+// vaultRef captures a parsed ${vault://...} reference.
+type vaultRef struct {
+	mount string
+	path  string
+	field string
 }
 
-// processString processes a string and replaces vault references
-func (v *vaultManager) processString(s string, id string) (string, error) {
-	re := regexp.MustCompile(`\${vault://([^}]+)}`)
-	if !re.MatchString(s) {
-		return s, nil
+// parseBody resolves a placeholder body into (mount, path, field) using one of
+// three grammars, in priority order:
+//
+//  1. Fully qualified — "<mount>//<path-segments>/<field>". The first "//"
+//     terminates the mount, so multi-segment mounts (e.g. "foo/bar") work
+//     unambiguously.
+//  2. Short form — "<path-segments>/<field>". Requires sources.vault.mount to
+//     be configured; the configured mount is used and the body carries only
+//     path/field.
+//  3. Legacy form — "<mount>/<path-segments>/<field>". Single-segment mount.
+//     Preserved verbatim for backward compatibility with existing
+//     placeholders that pre-date this grammar; used only when neither "//"
+//     appears nor a default mount is configured.
+func (v *vaultManager) parseBody(body string) (vaultRef, error) {
+	if body == "" {
+		return vaultRef{}, fmt.Errorf("invalid vault reference: empty body")
 	}
 
-	match := re.FindStringSubmatchIndex(s)
-	if len(match) < 4 {
-		return "", fmt.Errorf("failed to find vault reference in string: %s", s)
+	if idx := strings.Index(body, "//"); idx >= 0 {
+		mount := body[:idx]
+		rest := body[idx+2:]
+		if mount == "" {
+			return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty mount before '//'", body)
+		}
+		if err := validateMount(mount, body); err != nil {
+			return vaultRef{}, err
+		}
+		return splitPathField(mount, rest, body)
 	}
 
-	vaultPath := s[match[2]:match[3]]
-
-	if secrets, exists := v.usedVars[vaultPath]; exists {
-		secrets.policyIDs[id] = true
-		v.usedVars[vaultPath] = secrets
-		return secrets.Value, nil
+	if v.config.Mount != "" {
+		if hasEmptySegment(v.config.Mount) {
+			return vaultRef{}, fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
+		}
+		return splitPathField(v.config.Mount, body, body)
 	}
 
-	secret, err := v.getSecret(vaultPath)
+	parts := strings.Split(body, "/")
+	if len(parts) < 3 {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: legacy form requires '<mount>/<path>/<field>'; for multi-segment mounts use '<mount>//<path>/<field>' or set sources.vault.mount", body)
+	}
+	mount := parts[0]
+	if mount == "" {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty mount", body)
+	}
+	return splitPathField(mount, strings.Join(parts[1:], "/"), body)
+}
+
+// hasEmptySegment reports whether s, split by "/", contains any empty
+// segment — i.e. a leading "/", a trailing "/", or consecutive "//".
+// Used to reject malformed mounts before they reach the Vault client.
+func hasEmptySegment(s string) bool {
+	for _, seg := range strings.Split(s, "/") {
+		if seg == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateMount rejects mounts that contain empty path segments (leading,
+// trailing, or consecutive "/"). Catches inputs like "/foo/bar" or "foo//"
+// that would otherwise reach the Vault client with a malformed mount.
+func validateMount(mount, original string) error {
+	if hasEmptySegment(mount) {
+		return fmt.Errorf("invalid vault reference %q: mount contains an empty path segment", original)
+	}
+	return nil
+}
+
+// splitPathField extracts (path, field) from the part of the body that lives
+// after the mount, validating that no segment is empty (no leading, trailing,
+// or consecutive "/").
+func splitPathField(mount, rest, original string) (vaultRef, error) {
+	parts := strings.Split(rest, "/")
+	if len(parts) < 2 {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: expected at least one path segment and a field after the mount", original)
+	}
+	field := parts[len(parts)-1]
+	pathParts := parts[:len(parts)-1]
+	if field == "" {
+		return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty field", original)
+	}
+	for _, seg := range pathParts {
+		if seg == "" {
+			return vaultRef{}, fmt.Errorf("invalid vault reference %q: empty path segment", original)
+		}
+	}
+	return vaultRef{mount: mount, path: strings.Join(pathParts, "/"), field: field}, nil
+}
+
+// fetch retrieves a secret from Vault. See parseBody for the supported
+// reference grammars.
+func (v *vaultManager) fetch(body string) (string, error) {
+	ref, err := v.parseBody(body)
 	if err != nil {
 		return "", err
 	}
-
-	v.usedVars[vaultPath] = cachedSecret{
-		Value:     secret,
-		policyIDs: map[string]bool{id: true},
-	}
-
-	return secret, nil
-}
-
-// processMap processes a map recursively and replaces vault references in its values
-func (v *vaultManager) processMap(m map[string]any, id string) (map[string]any, error) {
-	result := make(map[string]any)
-	for key, val := range m {
-		processedVal, err := v.processValue(val, id)
-		if err != nil {
-			return nil, fmt.Errorf("failed to process value for key %s: %w", key, err)
-		}
-		result[key] = processedVal
-	}
-	return result, nil
-}
-
-// processSlice processes a slice recursively and replaces vault references in its elements
-func (v *vaultManager) processSlice(s []any, id string) ([]any, error) {
-	result := make([]any, len(s))
-	for i, val := range s {
-		processedVal, err := v.processValue(val, id)
-		if err != nil {
-			return nil, fmt.Errorf("failed to process value at index %d: %w", i, err)
-		}
-		result[i] = processedVal
-	}
-	return result, nil
-}
-
-// getSecret retrieves a secret from the vault
-func (v *vaultManager) getSecret(path string) (string, error) {
-	// Split the path by forward slashes
-	parts := strings.Split(path, "/")
-	if len(parts) < 3 {
-		return "", fmt.Errorf("invalid vault path format: %s", path)
-	}
-	secret, err := v.client.KVv2(parts[0]).Get(v.ctx, strings.Join(parts[1:len(parts)-1], "/"))
+	resolved := fmt.Sprintf("mount=%q path=%q field=%q", ref.mount, ref.path, ref.field)
+	secret, err := v.client.KVv2(ref.mount).Get(v.ctx, ref.path)
 	if err != nil {
-		return "", fmt.Errorf("failed to get secret path %s: %w", path, err)
+		return "", fmt.Errorf("failed to get secret path %s (%s): %w", body, resolved, err)
 	}
 	if secret == nil || secret.Data == nil {
-		return "", fmt.Errorf("secret not found: %s", path)
+		return "", fmt.Errorf("secret not found: %s (%s)", body, resolved)
 	}
-	value, ok := secret.Data[parts[len(parts)-1]]
+	value, ok := secret.Data[ref.field]
 	if !ok {
-		return "", fmt.Errorf("secret not found: %s", path)
+		return "", fmt.Errorf("secret not found: %s (%s)", body, resolved)
 	}
 	strValue, ok := value.(string)
 	if !ok {
-		return "", fmt.Errorf("secret is not a string: %s", path)
+		return "", fmt.Errorf("secret is not a string: %s (%s)", body, resolved)
 	}
 	if strValue == "" {
-		return "", fmt.Errorf("secret is empty: %s", path)
+		return "", fmt.Errorf("secret is empty: %s (%s)", body, resolved)
 	}
 	return strValue, nil
 }

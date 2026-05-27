@@ -4,7 +4,10 @@ The Git configuration manager outlines a policy management system where an agent
 **Important**: The `config_manager` and `backends` sections must still be passed directly to the agent via the config file at startup time. These components are not yet dynamically reconfigurable, so ensure the relevant settings are correctly defined before launching the agent.
 
 ### Config
-The following sample of a git configuration
+
+The `config_manager.sources.git` section supports three authentication modes. Pick the snippet that matches your repository and omit the fields you do not use — mixing basic and SSH fields in the same config is not needed.
+
+**Public repository (no auth):**
 ```yaml
 orb:
   labels:
@@ -17,16 +20,42 @@ orb:
         url: "https://github.com/myorg/policyrepo"
         schedule: "* * * * *"
         branch: develop
-        auth: "basic"
-        username: "username"
-        password: ${PASSWORD|TOKEN}
-        private_key: path/to/certificate.pem
-        skip_tls: True #defaults false
   backends:
     network_discovery:
     device_discovery:
-    ...
 ```
+
+**Basic authentication** (HTTPS with username + password or personal access token):
+```yaml
+orb:
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "https://github.com/myorg/policyrepo"
+        schedule: "* * * * *"
+        branch: develop
+        auth: basic
+        username: git-user
+        password: ${GIT_TOKEN}
+        skip_tls: false  # optional; set true for self-signed certificates
+```
+
+**SSH authentication** (private key):
+```yaml
+orb:
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "git@github.com:myorg/policyrepo.git"
+        schedule: "* * * * *"
+        branch: develop
+        auth: ssh
+        private_key: /opt/orb/id_ed25519
+        password: ${SSH_PASSPHRASE}  # optional; omit if the key is unprotected
+```
+See [SSH Authentication](#ssh-authentication) below for the required `known_hosts` setup.
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|

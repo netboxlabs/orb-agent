@@ -95,7 +95,7 @@ func TestPktvisorBackendStart(t *testing.T) {
 	err = be.Configure(logger, repo, map[string]any{
 		"host": serverURL.Hostname(),
 		"port": serverURL.Port(),
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	baseCtx := context.WithValue(context.Background(), config.ContextKey("agent_id"), "test-agent")
@@ -197,7 +197,7 @@ func TestPktvisorGetRunningStatusAPIFailure(t *testing.T) {
 	err = be.Configure(logger, repo, map[string]any{
 		"host": serverURL.Hostname(),
 		"port": serverURL.Port(),
-	}, config.BackendCommons{})
+	}, config.BackendCommons{}, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

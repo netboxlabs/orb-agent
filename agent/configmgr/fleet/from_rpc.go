@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
@@ -20,16 +22,28 @@ type Messaging struct {
 	policyManager policymgr.PolicyManager
 	groupManager  *GroupManager
 	resetChan     chan struct{}
+	filesManager  filesmgr.Manager
+	stopCtx       context.Context
+	stopCancel    context.CancelFunc
 }
 
 // NewMessaging creates a new Messaging
-func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager, resetChan chan struct{}, groupManager *GroupManager) *Messaging {
+func NewMessaging(logger *slog.Logger, policyManager policymgr.PolicyManager, resetChan chan struct{}, groupManager *GroupManager, filesManager filesmgr.Manager) *Messaging {
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	return &Messaging{
 		logger:        logger,
 		policyManager: policyManager,
 		groupManager:  groupManager,
 		resetChan:     resetChan,
+		filesManager:  filesManager,
+		stopCtx:       stopCtx,
+		stopCancel:    stopCancel,
 	}
+}
+
+// Stop cancels any in-flight bundle installations.
+func (messaging *Messaging) Stop() {
+	messaging.stopCancel()
 }
 
 // DispatchToHandlers dispatches the message to the appropriate handler
@@ -69,7 +83,6 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			return err
 		}
 		messaging.handleAgentGroupRemoval(groupRemoved.Payload, topicActions.Unsubscribe)
-
 	case messages.DatasetRemovedRPCFunc:
 		var r messages.DatasetRemovedRPC
 		if err := json.Unmarshal(payload, &r); err != nil {
@@ -91,10 +104,59 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			return err
 		}
 		messaging.handleAgentReset(ctx, r.Payload)
+	case messages.PackagesCredentialsRPCFunc:
+		var r messages.PackagesCredentialsRPC
+		if err := json.Unmarshal(payload, &r); err != nil {
+			messaging.logger.Error("error decoding packages credentials message from core", "error", messages.ErrSchemaMalformed)
+			return err
+		}
+		messaging.handlePackages(ctx, r.Payload)
 	default:
 		messaging.logger.Debug("unknown rpc function", "func", rpc.Func)
 	}
 	return nil
+}
+
+// handlePackages installs each bundle delivered by filesmgr.Manager.
+// Failures are non-fatal: a failed bundle is logged and skipped so that
+// other bundles in the same delivery are still installed.
+func (messaging *Messaging) handlePackages(_ context.Context, payload messages.PackagesCredentialsRPCPayload) {
+	if messaging.filesManager == nil {
+		messaging.logger.Error("filesManager is nil, cannot install bundles")
+		return
+	}
+	if len(payload.Bundles) == 0 {
+		messaging.logger.Debug("packages_credentials received with empty bundle list, nothing to do")
+		return
+	}
+	messaging.logger.Info("installing bundles", "count", len(payload.Bundles))
+	for _, bundle := range payload.Bundles {
+		// TODO: check bundle.ExpiresAt before calling Ensure to avoid
+		// unnecessary download attempts with expired presigned URLs.
+		installCtx, cancel := context.WithTimeout(messaging.stopCtx, 10*time.Minute)
+		spec := filesmgr.FileSpec{
+			Name:       bundle.Name,
+			Version:    bundle.Version,
+			URL:        bundle.URL,
+			SHA256:     bundle.SHA256,
+			Extract:    bundle.Extract,
+			TargetPath: bundle.TargetPath,
+			Mode:       bundle.Mode,
+		}
+		path, err := messaging.filesManager.Ensure(installCtx, spec)
+		cancel()
+		if err != nil {
+			messaging.logger.Error("failed to install bundle",
+				"name", bundle.Name,
+				"version", bundle.Version,
+				"error", err)
+			continue
+		}
+		messaging.logger.Info("bundle installed",
+			"name", bundle.Name,
+			"version", bundle.Version,
+			"path", path)
+	}
 }
 
 func (messaging *Messaging) handleGroupMemberships(ctx context.Context, groupMemberships messages.GroupMembershipRPCPayload, orgID string, agentID string, topicActions TopicActions) {
@@ -159,30 +221,42 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 		}
 	}
 
+	applied := 0
+	skipped := 0
 	for _, payload := range rpc {
-		if payload.Action != "sanitize" {
-			// If the policy data is a string and Format is "yaml" (or empty), try to unmarshal it as YAML
-			// This handles cases where Format="yaml" or where the backend sends YAML without setting Format
-			if dataStr, ok := payload.Data.(string); ok && dataStr != "" && (payload.Format == "yaml" || payload.Format == "") {
-				var structuredData map[string]any
-				if err := yaml.Unmarshal([]byte(dataStr), &structuredData); err != nil {
-					// If unmarshaling fails, log a warning only if Format was explicitly set to yaml
-					if payload.Format == "yaml" {
-						messaging.logger.Warn("failed to unmarshal YAML policy data",
-							"policy_id", payload.ID,
-							"policy_name", payload.Name,
-							"error", err)
-					}
-					// Continue with original string data - let the backend handle it
-				} else {
-					// Successfully unmarshaled - use the structured data
-					payload.Data = structuredData
-				}
-			}
-			messaging.policyManager.ManagePolicy(config.PolicyPayload(payload))
+		if payload.Action == "sanitize" {
+			skipped++
+			continue
 		}
+		// If the policy data is a string and Format is "yaml" (or empty), try to unmarshal it as YAML
+		// This handles cases where Format="yaml" or where the backend sends YAML without setting Format
+		if dataStr, ok := payload.Data.(string); ok && dataStr != "" && (payload.Format == "yaml" || payload.Format == "") {
+			var structuredData map[string]any
+			if err := yaml.Unmarshal([]byte(dataStr), &structuredData); err != nil {
+				// If unmarshaling fails, log a warning only if Format was explicitly set to yaml
+				if payload.Format == "yaml" {
+					messaging.logger.Warn("failed to unmarshal YAML policy data",
+						"policy_id", payload.ID,
+						"policy_name", payload.Name,
+						"error", err)
+				}
+				// Continue with original string data - let the backend handle it
+			} else {
+				// Successfully unmarshaled - use the structured data
+				payload.Data = structuredData
+			}
+		}
+		messaging.policyManager.ManagePolicy(config.PolicyPayload(payload))
+		applied++
 	}
-	messaging.logger.Info("successfully processed agent policies", "count", len(rpc))
+	messaging.logger.Debug("agent_policy RPC handled", "applied", applied, "skipped", skipped)
+
+	managed, err := messaging.policyManager.GetPolicyState()
+	if err != nil {
+		messaging.logger.Warn("failed to read agent managed policy count after RPC", "error", err)
+		return
+	}
+	messaging.logger.Info("agent managed policies", "count", len(managed))
 }
 
 func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPCPayload, unsubscribeFromTopic func(topic string) error) {

@@ -31,7 +31,7 @@ Currently, only the `local` and `git` sources are supported for config manager.
 - [Git](./docs/configs/git.md)
 
 ### Secrets Manager
-The `secrets_manager` section specifies how Orb agent should retrieve and inject secrets into policies. The secrets manager can reference external secret stores like HashiCorp Vault to retrieve sensitive information such as credentials without hardcoding them in configuration files.
+The `secrets_manager` section specifies how Orb agent should retrieve and inject secrets into policies. The secrets manager can reference external secret stores like HashiCorp Vault, Doppler, CyberArk, or Delinea Secret Server to retrieve sensitive information such as credentials without hardcoding them in configuration files.
 
 ```yaml
 orb:
@@ -51,6 +51,9 @@ orb:
 
 Supported secrets managers:
 - [HashiCorp Vault](./docs/secretsmgr/vault.md)
+- [Doppler](./docs/secretsmgr/doppler.md)
+- [CyberArk (CCP)](./docs/secretsmgr/cyberark.md) (beta)
+- [Delinea Secret Server](./docs/secretsmgr/delinea.md) (beta)
 
 ### Backends
 The `backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
@@ -65,10 +68,10 @@ orb:
 
 #### Discovery Backends
 Only the `network_discovery`, `device_discovery`, `worker` and `snmp_discovery` backends are currently supported. They do not require any special configuration.
-- [Device Discovery](./docs/backends/device_discovery.md) 
+- [Device Discovery](./docs/backends/device_discovery/README.md) ([supported platforms](./docs/backends/device_discovery/supported_platforms.md))
 - [Network Discovery](./docs/backends/network_discovery.md)
 - [Worker](./docs/backends/worker.md)
-- [SNMP Discovery](./docs/backends/snmp_discovery.md)
+- [SNMP Discovery](./docs/backends/snmp_discovery/README.md) ([supported platforms](./docs/backends/snmp_discovery/supported_platforms.md))
 
 #### Observability Backends
 Observability backends focus on collecting and exporting rich telemetry from network traffic or probes so you can feed metrics into your monitoring stack.
@@ -107,7 +110,7 @@ orb:
   policies:
     device_discovery:
       device_policy_1:
-        # see docs/backends/device_discovery.md
+        # see docs/backends/device_discovery/README.md
     network_discovery:
       network_policy_1:
        # see docs/backends/network_discovery.md

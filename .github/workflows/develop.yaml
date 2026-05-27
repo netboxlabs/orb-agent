@@ -1,12 +1,6 @@
 name: Orb Agent - develop
 on:
   workflow_dispatch:
-    inputs:
-      docker_tag:
-        description: 'Docker tag to use for the image'
-        required: false
-        default: 'develop'
-        type: string
   push:
     branches: [ develop ]
     paths:
@@ -67,7 +61,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,scope=${{ matrix.platform }},mode=max
-          no-cache-filters: python-builder
+          no-cache-filters: python-builder,network-discovery,snmp-discovery,pktvisor,otlpinf
+          pull: true
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
@@ -114,5 +109,5 @@ jobs:
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
-            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.docker_tag || 'develop' }} \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop \
             $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)

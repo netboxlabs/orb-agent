@@ -7,6 +7,15 @@ import (
 	"github.com/go-jose/go-jose/v4/jwt"
 )
 
+// jwtParseSignatureAlgorithms lists algorithms allowed when parsing tokens from the
+// OAuth token endpoint. EdDSA matches orb-auth (Ed25519 / isc-jwt); others cover common IdPs.
+var jwtParseSignatureAlgorithms = []jose.SignatureAlgorithm{
+	jose.HS256, jose.HS384, jose.HS512,
+	jose.RS256, jose.RS384, jose.RS512,
+	jose.ES256, jose.ES384, jose.ES512,
+	jose.EdDSA,
+}
+
 // JWTClaims represents the JWT claims we extract for topic templating
 type JWTClaims struct {
 	AgentID  string
@@ -23,8 +32,7 @@ func ParseJWTClaims(tokenString string) (*JWTClaims, error) {
 	}
 
 	// Parse the JWT token without verification (since we already trust it from the token endpoint)
-	// We accept common signature algorithms used in JWTs
-	token, err := jwt.ParseSigned(tokenString, []jose.SignatureAlgorithm{jose.HS256, jose.HS384, jose.HS512, jose.RS256, jose.RS384, jose.RS512, jose.ES256, jose.ES384, jose.ES512})
+	token, err := jwt.ParseSigned(tokenString, jwtParseSignatureAlgorithms)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse JWT token: %w", err)
 	}

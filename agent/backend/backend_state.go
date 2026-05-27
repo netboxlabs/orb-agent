@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -174,6 +175,10 @@ func nsToTime(ns int64) time.Time {
 func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 	runs := make([]policies.RunData, len(statusRuns))
 	for i, sr := range statusRuns {
+		targets := sr.Targets
+		if sr.Targets == nil {
+			targets = targetsFromMetadata(sr.Metadata)
+		}
 		runs[i] = policies.RunData{
 			ID:          sr.ID,
 			Status:      sr.Status,
@@ -181,8 +186,27 @@ func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 			EntityCount: sr.EntityCount,
 			CreatedAt:   nsToTime(sr.CreatedAt),
 			UpdatedAt:   nsToTime(sr.UpdatedAt),
-			Targets:     sr.Targets,
+			Targets:     targets,
+			Driver:      sr.Driver,
 		}
 	}
 	return runs
+}
+
+// targetsFromMetadata extracts a targets list from the metadata map emitted by
+// discovery backends that have not yet adopted the top-level targets field.
+// network-discovery v1.x encodes targets as a JSON array string at metadata["targets"].
+func targetsFromMetadata(meta map[string]string) []string {
+	if len(meta) == 0 {
+		return nil
+	}
+	raw, ok := meta["targets"]
+	if !ok || raw == "" {
+		return nil
+	}
+	var targets []string
+	if err := json.Unmarshal([]byte(raw), &targets); err != nil {
+		return nil
+	}
+	return targets
 }

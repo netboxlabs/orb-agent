@@ -18,6 +18,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -122,17 +123,6 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		pvOptions = append(pvOptions, "--otel")
 		pvOptions = append(pvOptions, "--otel-host", p.otelReceiverHost)
 		pvOptions = append(pvOptions, "--otel-port", strconv.Itoa(p.otelReceiverPort))
-	}
-
-	// the macros should be properly configured to enable crashpad
-	// pvOptions = append(pvOptions, "--cp-token", PKTVISOR_CP_TOKEN)
-	// pvOptions = append(pvOptions, "--cp-url", PKTVISOR_CP_URL)
-	// pvOptions = append(pvOptions, "--cp-path", PKTVISOR_CP_PATH)
-	// pvOptions = append(pvOptions, "--default-geo-city", "/geo-db/city.mmdb")
-	// pvOptions = append(pvOptions, "--default-geo-asn", "/geo-db/asn.mmdb")
-	// pvOptions = append(pvOptions, "--default-service-registry", "/iana/custom-iana.csv")
-	if ctx.Value("agent_id") != nil {
-		pvOptions = append(pvOptions, "--cp-custom", ctx.Value("agent_id").(string))
 	}
 
 	p.logger.Info("pktvisor startup", "arguments", pvOptions)
@@ -327,7 +317,7 @@ func (p *pktvisorBackend) Stop(ctx context.Context) error {
 
 // Configure this will set configurations, but if not set, will use the following defaults
 func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
-	config map[string]any, common config.BackendCommons,
+	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
 	p.logger = logger.With("backend", "pktvisor")
 	p.policyRepo = repo

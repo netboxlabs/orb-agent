@@ -192,6 +192,10 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 			if len(runs[i].Targets) == 0 {
 				runs[i].Targets = existing.Targets
 			}
+			// Same semantics for resolved NAPALM driver on device-discovery runs.
+			if runs[i].Driver == "" {
+				runs[i].Driver = existing.Driver
+			}
 		} else {
 			// New run: use the backend's timestamps if provided; fall back to now.
 			if runs[i].CreatedAt.IsZero() {

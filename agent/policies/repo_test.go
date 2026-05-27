@@ -890,8 +890,85 @@ func TestUpdateRuns_UpdatesTargetsWhenBackendReportsNewNonEmptyList(t *testing.T
 	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3"}, got.Runs[0].Targets, "non-empty update should replace existing")
 }
 
+func TestUpdateRuns_NewRunStoresDriver(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	err = repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Driver: "ios"},
+	})
+	require.NoError(t, err)
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, "ios", got.Runs[0].Driver)
+}
+
+func TestUpdateRuns_PreservesDriverWhenBackendOmitsIt(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Driver: "ios"},
+	}))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "completed"},
+	}))
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, "completed", got.Runs[0].Status)
+	assert.Equal(t, "ios", got.Runs[0].Driver, "driver should be preserved when backend omits the field")
+}
+
+func TestUpdateRuns_UpdatesDriverWhenBackendReportsNewNonEmptyValue(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:      "test-id",
+		Name:    "test-policy",
+		Backend: "test-backend",
+		Version: 1,
+		State:   policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Driver: "ios"},
+	}))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running", Driver: "eos"},
+	}))
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Equal(t, "eos", got.Runs[0].Driver, "non-empty update should replace existing driver")
+}
+
 func TestIsTerminalRunStatus(t *testing.T) {
-	t.Parallel()
 	assert.True(t, policies.IsTerminalRunStatus("completed"))
 	assert.True(t, policies.IsTerminalRunStatus("failed"))
 	assert.False(t, policies.IsTerminalRunStatus("running"))

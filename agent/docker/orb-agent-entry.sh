@@ -3,6 +3,9 @@
 # entry point for orb-agent
 #
 
+# Recreate writable dirs in case the user bind-mounted over /opt/orb.
+mkdir -p /opt/orb/files /opt/orb/pip-cache
+
 if [ "${INSTALL_DRIVERS_PATH}" != '' ]; then
   cd "$(dirname "$(realpath "${INSTALL_DRIVERS_PATH}")")"
   echo "Installing additional drivers"
@@ -29,7 +32,7 @@ if [ -f "asn.mmdb.gz" ]; then
 fi
 
 ## Agent Configuration ##
-DEFAULT_CONFIG_PATH="/opt/orb/default_config.yaml"
+DEFAULT_CONFIG_PATH="${ORB_DEFAULT_CONFIG:-/usr/local/share/orb-agent/default_config.yaml}"
 agent_args=("$@")
 
 if [ -n "${FLEET_CLIENT_ID}" ] && [ -n "${FLEET_CLIENT_SECRET}" ]; then
