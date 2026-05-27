@@ -1,0 +1,3 @@
+Interface               Admin Link Proto    Local                 Remote
+xe-0/0/0                up    up
+xe-0/0/0.0              up    up   inet     10.1.1.1/30

@@ -55,3 +55,8 @@ class TestEOSDriver(BaseDriverTest):
     def test_get_vlans(self, scenario):
         """Skip: inherited from napalm.eos.eos.EOSDriver — covered upstream."""
         pytest.skip("inherited from napalm.eos.eos.EOSDriver — covered upstream")
+
+    def test_eos_driver_exposes_get_modules(self) -> None:
+        """get_modules() must exist on EOSDriver after this batch lands."""
+        assert hasattr(EOSDriver, "get_modules")
+        assert callable(getattr(EOSDriver, "get_modules"))

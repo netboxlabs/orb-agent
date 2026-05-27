@@ -16,6 +16,13 @@ snippet) so the production logic is what's pinned. Covers:
 import logging
 from unittest.mock import MagicMock
 
+import pytest
+
+from custom_napalm.eos import EOSDriver
+from custom_napalm.ios import IOSDriver
+from custom_napalm.junos import JunOSDriver
+from custom_napalm.nxos import NXOSDriver
+from custom_napalm.nxos_ssh import NXOSSSHDriver
 from device_discovery.policy.models import Config, Defaults, Options
 from device_discovery.policy.runner import PolicyRunner
 
@@ -130,3 +137,17 @@ def test_collect_modules_swallows_driver_exception(caplog) -> None:
         "Error getting modules" in r.message and "boom" in r.message
         for r in caplog.records
     )
+
+
+# Confirms every driver class shipping a public get_modules() entry point is
+# callable. Catches accidental rename / decorator drift without exercising the
+# per-driver internals (those live in the per-driver test modules).
+@pytest.mark.parametrize(
+    "driver_cls",
+    [IOSDriver, EOSDriver, JunOSDriver, NXOSDriver, NXOSSSHDriver],
+    ids=["ios", "eos", "junos", "nxos", "nxos_ssh"],
+)
+def test_driver_exposes_get_modules(driver_cls) -> None:
+    """Every batch-2 driver MUST expose a callable get_modules method."""
+    assert hasattr(driver_cls, "get_modules")
+    assert callable(getattr(driver_cls, "get_modules"))

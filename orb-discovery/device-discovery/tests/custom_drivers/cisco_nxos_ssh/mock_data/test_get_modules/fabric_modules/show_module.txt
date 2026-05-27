@@ -1,0 +1,23 @@
+Mod Ports             Module-Type                      Model           Status
+--- ----- ------------------------------------- ---------------------- ---------
+1   0     Supervisor Module-3                   N9K-SUP-A              active *
+2   0     Supervisor Module-3                   N9K-SUP-A              ha-standby
+3   36    36x100GbE QSFP Module                 N9K-X9736C-FX          ok
+
+Xbar Ports             Module-Type                      Model           Status
+--- ----- ------------------------------------- ---------------------- ---------
+21  0     Fabric Module                         N9K-C9508-FM-E         ok
+22  0     Fabric Module                         N9K-C9508-FM-E         ok
+
+Mod Sw                  Hw      Slot
+--- ------------------- ------  ----
+1   10.1(2)             1.0     SUP1
+2   10.1(2)             1.0     SUP2
+3   10.1(2)             1.0     LC3
+
+
+Mod  MAC-Address(es)                         Serial-Num
+---  --------------------------------------  ----------
+1    00:11:22:33:00:01 to 00:11:22:33:00:0f  FOC12340SUP1
+2    00:11:22:33:00:10 to 00:11:22:33:00:1f  FOC12340SUP2
+3    00:11:22:33:00:20 to 00:11:22:33:00:2f  FOC12340LC03

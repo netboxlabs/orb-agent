@@ -1,0 +1,93 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "FPC 0",
+          "position": "0",
+          "module": {
+            "model": "750-068369",
+            "serial": "ABCD1234",
+            "description": "MPC7E 3D MRATE-12xQSFPP-XGE-XLGE-CGE",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "PIC 0",
+                "position": "0",
+                "module": {
+                  "model": "BUILTIN",
+                  "serial": "BUILTIN",
+                  "description": "12x10GE OTN+12x10GE-SFPP",
+                  "type": "linecard",
+                  "sub_bays": [
+                    {
+                      "name": "xe-0/0/0",
+                      "position": "0",
+                      "module": {
+                        "model": "SFP-10G-LR",
+                        "serial": "OPT12340001",
+                        "description": "SFP+-10G-LR",
+                        "type": "transceiver",
+                        "sub_bays": []
+                      }
+                    },
+                    {
+                      "name": "Xcvr 1",
+                      "position": "1",
+                      "module": {
+                        "model": "SFP-10G-SR",
+                        "serial": "OPT12340002",
+                        "description": "SFP+-10G-SR",
+                        "type": "transceiver",
+                        "sub_bays": []
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "FPC 1",
+          "position": "1",
+          "module": {
+            "model": "750-068369",
+            "serial": "ABCD5678",
+            "description": "MPC7E 3D MRATE-12xQSFPP-XGE-XLGE-CGE",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "PIC 0",
+                "position": "0",
+                "module": {
+                  "model": "BUILTIN",
+                  "serial": "BUILTIN",
+                  "description": "12x10GE OTN+12x10GE-SFPP",
+                  "type": "linecard",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "Routing Engine 0",
+          "position": "0",
+          "module": {
+            "model": "740-031116",
+            "serial": "RE12340001",
+            "description": "RE-S-1800x4",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "FPC 0": ["ge-0/0/5", "ge-0/0/5.0", "xe-0/0/0"],
+        "FPC 1": ["xe-1/0/0"],
+        "xe-0/0/0": ["xe-0/0/0"]
+      }
+    }
+  }
+}

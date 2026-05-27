@@ -86,50 +86,48 @@ class MemberModules:
     interfaces_by_bay: dict[str, list[str]] = field(default_factory=dict)
 
 
-# ---- module-type classifiers --------------------------------------------
+# ---- vendor-neutral optic recognition --------------------------------------
 #
-# The ModuleType enum covers linecard / supervisor / fan / psu / transceiver.
-# The classifiers here only auto-distinguish ``transceiver`` from
-# ``linecard`` based on PID / description — that's what the
-# ``linecards`` mode filter in translate_modules needs (drop transceivers,
-# keep everything else). Drivers that want finer classification can build
-# their own type strings; e.g. the IOS driver classifies ``Slot N
-# Supervisor`` rows as ``supervisor`` from the NAME hint. PSU / fan are
-# emitted today only if a driver chooses to set them explicitly.
+# MSA / SFF prefixes are industry-standardized — they're the same across
+# Cisco, Arista, Juniper, Nokia, etc. Linecard / supervisor / fan / psu
+# PID prefixes are vendor-specific and live in each driver's private
+# classifier (see ios.py, eos.py, junos.py, nxos.py, nxos_ssh.py).
 
-_CISCO_TRANSCEIVER_PREFIXES = (
+
+_OPTIC_PREFIXES = (
     "SFP-",
     "SFP+",
+    "SFP28-",
+    "SFP56-",
     "QSFP-",
     "QSFP+",
     "QSFP28",
+    "QSFP56-",
     "QSFP-DD",
+    "QDD-",  # Cisco 400G QSFP-DD optics (QDD-400G-DR4-S) — not a QSFP-DD literal prefix
+    "OSFP-",
     "GLC-",
     "X2-",
     "CFP-",
     "CFP2-",
+    "XENPAK-",
+    "XFP-",
     "CVR-",
 )
 
 
-def classify_module_type_cisco(pid: str) -> ModuleType:
-    """Map a Cisco PID/model string to a ModuleType. v1: distinguish transceiver."""
-    if not pid:
-        return "linecard"
-    upper = pid.upper()
-    if upper.startswith(_CISCO_TRANSCEIVER_PREFIXES):
-        return "transceiver"
-    return "linecard"
+def is_optic_pid(pid: str) -> bool:
+    """
+    Return True when ``pid`` starts with a standardized optic PID prefix.
 
-
-def classify_module_type_junos(description: str) -> ModuleType:
-    """Map a Junos description string to a ModuleType. v1: distinguish transceiver."""
-    if not description:
-        return "linecard"
-    lower = description.lower()
-    if "transceiver" in lower or "sfp" in lower or "qsfp" in lower:
-        return "transceiver"
-    return "linecard"
+    Recognizes MSA/SFF transceiver designators that are shared across
+    every vendor. Driver classifiers should call this first; only if it
+    returns False should they consult vendor-specific linecard /
+    supervisor / chassis prefixes.
+    """
+    if not pid or not pid.strip():
+        return False
+    return pid.strip().upper().startswith(_OPTIC_PREFIXES)
 
 
 # ---- payload assembly ----------------------------------------------------

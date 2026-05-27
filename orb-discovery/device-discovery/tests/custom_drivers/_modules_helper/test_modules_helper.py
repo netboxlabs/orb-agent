@@ -3,15 +3,11 @@
 
 from __future__ import annotations
 
-import pytest
-
 from custom_napalm._modules import (
     MAX_BAY_DEPTH,
     MemberModules,
     ModuleBay,
     ModuleEntry,
-    classify_module_type_cisco,
-    classify_module_type_junos,
     to_payload,
 )
 
@@ -306,47 +302,3 @@ def test_normalize_null_member_keys_handles_nested_list_of_dicts():
     deep_subbay = out["members"][None]["bays"][0]["module"]["sub_bays"][0]
     assert "null" in deep_subbay
     assert None not in deep_subbay
-
-
-# ---- classify_module_type_cisco -----------------------------------------
-
-
-@pytest.mark.parametrize(
-    "pid, expected",
-    [
-        ("SFP-10G-LR", "transceiver"),
-        ("QSFP-40G-SR4", "transceiver"),
-        ("QSFP28-100G-AOC", "transceiver"),
-        ("QSFP-DD-400G", "transceiver"),
-        ("GLC-SX-MMD", "transceiver"),
-        ("CFP-100G-LR4", "transceiver"),
-        ("C9400-LC-48U", "linecard"),
-        ("C9400-SUP-1XL", "linecard"),  # supervisor maps to linecard in v1
-        ("PWR-C4-9000WAC", "linecard"),  # psu maps to linecard in v1
-        ("", "linecard"),
-        ("sfp-10g-lr", "transceiver"),  # case-insensitive
-    ],
-)
-def test_classify_module_type_cisco(pid: str, expected: str) -> None:
-    """Cisco PID → ModuleType: transceiver vs default-linecard."""
-    assert classify_module_type_cisco(pid) == expected
-
-
-# ---- classify_module_type_junos -----------------------------------------
-
-
-@pytest.mark.parametrize(
-    "description, expected",
-    [
-        ("10GBASE-LR SFP+ transceiver", "transceiver"),
-        ("SFP-T 1000Base-T", "transceiver"),
-        ("QSFP+ 40GBASE-SR4", "transceiver"),
-        ("MPC4E 32x10GE + 2x100GE", "linecard"),
-        ("Routing Engine RE-S-1800x4", "linecard"),
-        ("Power Supply", "linecard"),
-        ("", "linecard"),
-    ],
-)
-def test_classify_module_type_junos(description: str, expected: str) -> None:
-    """Junos description → ModuleType: transceiver vs default-linecard."""
-    assert classify_module_type_junos(description) == expected

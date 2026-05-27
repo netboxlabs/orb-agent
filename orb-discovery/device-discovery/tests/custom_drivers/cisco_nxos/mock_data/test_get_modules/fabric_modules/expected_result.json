@@ -1,0 +1,91 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "N9K-SUP-A",
+            "serial": "FOC12340SUP1",
+            "description": "Supervisor Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "2",
+          "position": "2",
+          "module": {
+            "model": "N9K-SUP-A",
+            "serial": "FOC12340SUP2",
+            "description": "Supervisor Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "3",
+          "position": "3",
+          "module": {
+            "model": "N9K-X9736C-FX",
+            "serial": "FOC12340LC03",
+            "description": "36-port 100G linecard",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "Ethernet3/1",
+                "position": "Ethernet3/1",
+                "module": {
+                  "model": "QSFP-100G-LR4",
+                  "serial": "OPT12340001",
+                  "description": "QSFP-100G-LR4",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              },
+              {
+                "name": "Ethernet3/2",
+                "position": "Ethernet3/2",
+                "module": {
+                  "model": "QSFP-100G-SR4",
+                  "serial": "OPT12340002",
+                  "description": "QSFP-100G-SR4",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "21",
+          "position": "21",
+          "module": {
+            "model": "N9K-C9508-FM-E",
+            "serial": "FOC12340FM21",
+            "description": "Fabric Module",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "22",
+          "position": "22",
+          "module": {
+            "model": "N9K-C9508-FM-E",
+            "serial": "FOC12340FM22",
+            "description": "Fabric Module",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "3": ["Ethernet3/1", "Ethernet3/2"],
+        "Ethernet3/1": ["Ethernet3/1"],
+        "Ethernet3/2": ["Ethernet3/2"]
+      }
+    }
+  }
+}

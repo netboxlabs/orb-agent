@@ -1,0 +1,83 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "Supervisor1",
+          "position": "1",
+          "module": {
+            "model": "DCS-7500R-SUP",
+            "serial": "JPE12340002",
+            "description": "Supervisor card 1",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "Linecard1",
+          "position": "1",
+          "module": {
+            "model": "7500R-36CQ-LC",
+            "serial": "JPE12340003",
+            "description": "36x100GbE QSFP100 linecard",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "Ethernet1/1",
+                "position": "Ethernet1/1",
+                "module": {
+                  "model": "QSFP-100G-LR4",
+                  "serial": "XCV12340001",
+                  "description": "QSFP-100G-LR4",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              },
+              {
+                "name": "Ethernet1/2",
+                "position": "Ethernet1/2",
+                "module": {
+                  "model": "QSFP-100G-SR4",
+                  "serial": "XCV12340002",
+                  "description": "QSFP-100G-SR4",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "Linecard2",
+          "position": "2",
+          "module": {
+            "model": "7500R-36CQ-LC",
+            "serial": "JPE12340004",
+            "description": "36x100GbE QSFP100 linecard",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "Ethernet2/1",
+                "position": "Ethernet2/1",
+                "module": {
+                  "model": "QSFP-100G-LR4",
+                  "serial": "XCV12340003",
+                  "description": "QSFP-100G-LR4",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "Linecard1": ["Ethernet1/1", "Ethernet1/2"],
+        "Linecard2": ["Ethernet2/1"],
+        "Ethernet1/1": ["Ethernet1/1"],
+        "Ethernet1/2": ["Ethernet1/2"],
+        "Ethernet2/1": ["Ethernet2/1"]
+      }
+    }
+  }
+}

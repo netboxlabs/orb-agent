@@ -1,11 +1,12 @@
 # Copyright 2026 NetBox Labs Inc
 """
-IOS NAPALM driver subclass adding ``get_interfaces_vlans()``.
+IOS NAPALM driver subclass adding ``get_interfaces_vlans()`` and ``get_modules()``.
 
 Parses ``show interfaces switchport`` via ntc-templates, normalizes each
 row into a :class:`custom_napalm._vlan.SwitchportInfo`, and delegates to
 the generic classifier. The classifier handles voice promotion, DTP
 fallback, wildcard signaling, and clamping — none of that is duplicated here.
+``get_modules()`` adds Module / module-bay discovery for modular IOS-XE chassis.
 """
 
 import logging
@@ -26,7 +27,10 @@ from custom_napalm._modules import (
     ModuleEntry as _ModuleEntry,
 )
 from custom_napalm._modules import (
-    classify_module_type_cisco,
+    ModuleType as _ModuleType,
+)
+from custom_napalm._modules import (
+    is_optic_pid,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -237,6 +241,29 @@ class IOSDriver(NapalmIOSDriver):
         slot / FRU row was recognized.
         """
         return _ios_get_modules_impl(self)
+
+
+# Cisco IOS PID classifier. PSU / fan prefixes ("PWR-", "FAN") are
+# recognized but never emitted (mirrors PR #419 contract — see spec
+# Out-of-scope: PSU/fan classified for labelling only).
+def classify_module_type_cisco_ios(pid: str) -> _ModuleType:
+    """
+    Map a Cisco IOS PID/model string to a ModuleType.
+
+    v1: distinguish transceiver vs everything else. PSU and FAN are
+    recognized so they don't accidentally classify as linecard, but
+    are filtered upstream and never reach Diode emission.
+    """
+    if not pid:
+        return "linecard"
+    if is_optic_pid(pid):
+        return "transceiver"
+    upper = pid.strip().upper()
+    if upper.startswith("PWR-") or upper.startswith("PSU-"):
+        return "psu"
+    if upper.startswith("FAN-") or upper == "FAN":
+        return "fan"
+    return "linecard"
 
 
 # Two NAME formats are seen in the wild for stack members:
@@ -478,7 +505,7 @@ def _classify_slot_module(pid: str, role_hint: str) -> str:
     role_word = (role_hint or "").lower()
     if role_word.startswith("sup"):
         return "supervisor"
-    pid_type = classify_module_type_cisco(pid)
+    pid_type = classify_module_type_cisco_ios(pid)
     # A "Slot N" row that PID-classifies as transceiver is almost certainly
     # an inventory mislabel — keep it a linecard rather than risk dropping
     # the bay in linecards mode.
@@ -538,7 +565,7 @@ def _parse_inventory_rows(
                 name=slot, position=slot,
                 module=_ModuleEntry(
                     model=pid, serial=sn,
-                    type=classify_module_type_cisco(pid),
+                    type=classify_module_type_cisco_ios(pid),
                     description=descr,
                 ),
             )
@@ -564,7 +591,7 @@ def _parse_inventory_rows(
             # cases where a non-transceiver Cisco-prefix row (e.g. a
             # rare stack-hardware row that happens to use a real port
             # prefix) sneaks past the narrow ifname regex.
-            module_type = classify_module_type_cisco(pid)
+            module_type = classify_module_type_cisco_ios(pid)
             if module_type != "transceiver":
                 continue
             # In VC mode the leading integer of the ifname is the

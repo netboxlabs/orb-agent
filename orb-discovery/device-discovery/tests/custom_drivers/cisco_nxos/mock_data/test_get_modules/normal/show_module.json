@@ -1,0 +1,18 @@
+{
+  "TABLE_modinfo": {
+    "ROW_modinfo": [
+      {"modinf": "\"1\"", "modules": "\"1\"", "ports": "0", "type": "\"Supervisor Module-3\"", "model": "\"N9K-SUP-A\"", "status": "active *"},
+      {"modinf": "\"2\"", "modules": "\"2\"", "ports": "0", "type": "\"Supervisor Module-3\"", "model": "\"N9K-SUP-A\"", "status": "ha-standby"},
+      {"modinf": "\"3\"", "modules": "\"3\"", "ports": "36", "type": "\"Nexus 9K 36x100GbE\"", "model": "\"N9K-X9736C-FX\"", "status": "ok"},
+      {"modinf": "\"4\"", "modules": "\"4\"", "ports": "36", "type": "\"Nexus 9K 36x100GbE\"", "model": "\"N9K-X9736C-FX\"", "status": "ok"}
+    ]
+  },
+  "TABLE_modwwninfo": {
+    "ROW_modwwninfo": [
+      {"modwwn": "1", "sn": "FOC12340SUP1"},
+      {"modwwn": "2", "sn": "FOC12340SUP2"},
+      {"modwwn": "3", "sn": "FOC12340LC03"},
+      {"modwwn": "4", "sn": "FOC12340LC04"}
+    ]
+  }
+}
