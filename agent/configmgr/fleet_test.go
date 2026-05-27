@@ -93,7 +93,7 @@ func TestFleetConfigManager_Start_TokenError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Create config with invalid token URL
 	cfg := config.Config{
@@ -190,7 +190,7 @@ func TestFleetConfigManager_GetContext(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	originalCtx := context.Background()
 	type contextKey string
@@ -292,7 +292,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 func TestFleetConfigManager_configToSafeString(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	tests := []struct {
 		name         string
@@ -371,7 +371,7 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 func TestFleetConfigManager_configToSafeString_DoesNotModifyOriginal(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Arrange
 	originalSecret := "my-secret-password"
@@ -405,7 +405,7 @@ func TestFleetConfigManager_MonitorTokenExpiry_Configuration(t *testing.T) {
 	// Test that monitorTokenExpiry uses default values when config is not set
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Set config with no monitoring settings (should use defaults)
 	cfg := config.Config{
@@ -449,7 +449,7 @@ func TestFleetConfigManager_MonitorTokenExpiry_CustomConfiguration(t *testing.T)
 	// Test that monitorTokenExpiry uses custom config values
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Set config with custom monitoring settings
 	checkInterval := 60
@@ -497,7 +497,7 @@ func TestFleetConfigManager_Stop_CancelsMonitor(t *testing.T) {
 	// Test that Stop() properly cancels the token expiry monitor
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Initialize monitor context
 	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
@@ -530,7 +530,7 @@ func TestFleetConfigManager_Stop_HandlesNilMonitorCancel(t *testing.T) {
 	// Test that Stop() handles nil monitorCancel gracefully
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Don't initialize monitorCancel (should be nil)
 	fleetManager.monitorCancel = nil
@@ -547,7 +547,7 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiredToken(t *testing.T)
 	// Test that monitor detects expired token and triggers reconnection
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Set up config
 	cfg := config.Config{
@@ -647,7 +647,7 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testi
 	// Test that monitor detects token expiring soon and triggers reconnection
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Set up config
 	cfg := config.Config{
@@ -756,7 +756,7 @@ func TestFleetConfigManager_MonitorTokenExpiry_DetectsExpiringSoonToken(t *testi
 func TestFleetConfigManager_MonitorTokenExpiry_NoSpuriousReconnectForShortLivedToken(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Use a 1-second check interval so the ticker fires within the test window.
 	// The default is 30 seconds which would never tick during a short test.
@@ -827,7 +827,7 @@ func TestFleetConfigManager_OnReadyHook_InitializesBridgeOnFirstCall(t *testing.
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Verify bridge is nil initially
 	assert.Nil(t, fleetManager.otlpBridge, "bridge should be nil initially")
@@ -891,7 +891,7 @@ func TestFleetConfigManager_OnReadyHook_SkipsInitializationOnReconnect(t *testin
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Pre-initialize the bridge (simulating it was already created)
 	bridgeConfig := otlpbridge.BridgeConfig{
@@ -966,7 +966,7 @@ func TestFleetConfigManager_OnReadyHook_UsesConfiguredGRPCPort(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Create config with custom gRPC port
 	customPort := 9999
@@ -1049,7 +1049,7 @@ func TestFleetConfigManager_OnReadyHook_UsesDefaultGRPCPort(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
-	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{})
+	fleetManager := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
 	// Create config without gRPC port configured (should use default)
 	cfg := config.Config{

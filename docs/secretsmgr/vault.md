@@ -27,6 +27,7 @@ orb:
 |--------|------|----------|-------------|
 | `address` | string | Yes | The URL of your Vault server |
 | `namespace` | string | No | Vault Enterprise namespace |
+| `mount` | string | No | Default KV-v2 mount path. When set, placeholders may omit the mount and use the short form `${vault://path/to/secret/key}`. Supports multi-segment mounts (e.g. `foo/bar`). |
 | `timeout` | int | No | Request timeout in seconds (default: 60) |
 | `auth` | string | Yes | Authentication method (see below) |
 | `auth_args` | map | Yes | Authentication method arguments |
@@ -87,16 +88,56 @@ auth_args:
 
 ## Usage
 
-To use a secret from Vault in your policy configuration, use the following format:
+The Orb Agent supports three reference grammars; pick whichever fits your Vault layout. They are checked in priority order — fully qualified, short form, then legacy.
+
+### Fully qualified (recommended for multi-segment mounts)
 
 ```
-${vault://engine/path/to/secret/key}
+${vault://<mount>//<path-segments>/<key>}
 ```
 
-For example, if you have a KV v2 secret engine mounted at `kv` with a secret at `path/credentials` that has a key `password` with value `secretvalue`, you would reference it as:
+The `//` separator marks the end of the mount, so multi-segment mounts work unambiguously. Examples:
 
 ```
-${vault://kv/path/credentials/password}
+${vault://kv//app/cred/password}              # mount=kv,        path=app/cred,  key=password
+${vault://foo/bar//app/cred/password}         # mount=foo/bar,   path=app/cred,  key=password
+${vault://team/svc/prd//api/key}              # mount=team/svc/prd, path=api,    key=key
+```
+
+### Short form (uses configured default `mount`)
+
+When `sources.vault.mount` is set, you can omit the mount from each placeholder:
+
+```yaml
+sources:
+  vault:
+    mount: foo/bar
+```
+
+```
+${vault://<path-segments>/<key>}
+```
+
+Example — with the YAML above, the placeholder resolves against `foo/bar`:
+
+```
+${vault://app/cred/password}                  # mount=foo/bar (from yaml), path=app/cred, key=password
+```
+
+> ⚠ **When `sources.vault.mount` is set, every unqualified placeholder is interpreted as path-only under that mount.** A placeholder that looks legacy-style — for example `${vault://kv/app/cred/password}` with `mount: foo/bar` configured — is **not** treated as legacy; it resolves to `mount=foo/bar`, path=`kv/app/cred`, key=`password`, and will almost certainly miss. If you need to target a different mount from the configured default, use the fully qualified form: `${vault://kv//app/cred/password}`.
+
+### Legacy (single-segment mount, no separator)
+
+For backward compatibility with placeholders that pre-date the `//` separator:
+
+```
+${vault://<mount>/<path-segments>/<key>}
+```
+
+The first segment is assumed to be a single-segment mount. **Only works for mounts mounted at one path segment**; multi-segment mounts will resolve to the wrong API endpoint and fail. Use the qualified form above for those.
+
+```
+${vault://kv/path/credentials/password}       # mount=kv, path=path/credentials, key=password
 ```
 
 ### Example

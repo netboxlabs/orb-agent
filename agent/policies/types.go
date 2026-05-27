@@ -15,6 +15,7 @@ type RunData struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	Targets     []string  `json:"targets,omitempty"`
+	Driver      string    `json:"driver,omitempty"`
 }
 
 // PolicyData represents a policy

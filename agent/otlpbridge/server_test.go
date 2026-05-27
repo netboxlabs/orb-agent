@@ -161,3 +161,41 @@ func TestBridgeServer_Enqueue_DefaultQueueLimit(t *testing.T) {
 
 	assert.Equal(t, defaultMaxPendingQueue, cap(bridge.msgCh), "should use default when MaxPendingQueue is 0")
 }
+
+func TestBridgeServer_GetIngestTopic(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	bridge, err := NewBridgeServer(BridgeConfig{Encoding: "json"}, nil, logger)
+	require.NoError(t, err)
+	defer bridge.cancel()
+
+	bridge.SetIngestTopic("ingest/topic")
+	assert.Equal(t, "ingest/topic", bridge.GetIngestTopic())
+}
+
+func TestBridgeServer_GetTelemetryTopic(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	bridge, err := NewBridgeServer(BridgeConfig{Encoding: "json"}, nil, logger)
+	require.NoError(t, err)
+	defer bridge.cancel()
+
+	bridge.SetTelemetryTopic("telemetry/topic")
+	assert.Equal(t, "telemetry/topic", bridge.GetTelemetryTopic())
+}
+
+func TestBridgeServer_GetPolicyRepo(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	bridge, err := NewBridgeServer(BridgeConfig{Encoding: "json"}, nil, logger)
+	require.NoError(t, err)
+	defer bridge.cancel()
+
+	assert.Nil(t, bridge.GetPolicyRepo())
+}
+
+func TestRandomClientID(t *testing.T) {
+	id1 := randomClientID()
+	id2 := randomClientID()
+	assert.True(t, strings.HasPrefix(id1, "otlp-bridge-"))
+	assert.True(t, strings.HasPrefix(id2, "otlp-bridge-"))
+	assert.NotEqual(t, id1, id2)
+	assert.Len(t, id1, len("otlp-bridge-")+16) // 8 bytes = 16 hex chars
+}

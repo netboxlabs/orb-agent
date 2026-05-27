@@ -31,6 +31,7 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 			EntityCount: entityCount,
 			CreatedAt:   ts1Ns,
 			UpdatedAt:   ts2Ns,
+			Driver:      "ios",
 		},
 		{
 			ID:        "run-failed",
@@ -58,6 +59,7 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 	assert.Equal(t, int64(42), r0.EntityCount)
 	assert.Equal(t, ts1, r0.CreatedAt)
 	assert.Equal(t, ts2, r0.UpdatedAt)
+	assert.Equal(t, "ios", r0.Driver)
 
 	// Failed run: no entity count
 	r1 := runs[1]
@@ -67,6 +69,7 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 	assert.Zero(t, r1.EntityCount)
 	assert.Equal(t, ts3, r1.CreatedAt)
 	assert.Equal(t, ts4, r1.UpdatedAt)
+	assert.Empty(t, r1.Driver)
 
 	// Running run: zero int64 timestamps (omitted/missing) become zero time.Time
 	// so that UpdateRuns' IsZero() fallback fires correctly.
@@ -77,6 +80,7 @@ func TestConvertToRunData_MapsAllFields(t *testing.T) {
 	assert.Zero(t, r2.EntityCount)
 	assert.True(t, r2.CreatedAt.IsZero(), "zero int64 should map to zero time.Time, not Unix epoch")
 	assert.True(t, r2.UpdatedAt.IsZero(), "zero int64 should map to zero time.Time, not Unix epoch")
+	assert.Empty(t, r2.Driver)
 
 	// PolicyID should never be set by the converter (repo owns that)
 	for _, r := range runs {
@@ -166,6 +170,26 @@ func TestConvertToRunData_FallsBackToMetadataTargets(t *testing.T) {
 	assert.Equal(t, []string{"192.168.1.0/24", "10.0.0.0/8"}, runs[0].Targets)
 }
 
+func TestConvertToRunData_CopiesDriver(t *testing.T) {
+	statusRuns := []PolicyStatusRun{
+		{
+			ID:     "run-1",
+			Status: "completed",
+			Driver: "eos",
+		},
+		{
+			ID:     "run-2",
+			Status: "running",
+		},
+	}
+
+	runs := convertToRunData(statusRuns)
+
+	require.Len(t, runs, 2)
+	assert.Equal(t, "eos", runs[0].Driver)
+	assert.Empty(t, runs[1].Driver)
+}
+
 func TestConvertToRunData_TopLevelTargetsTakePrecedenceOverMetadata(t *testing.T) {
 	statusRuns := []PolicyStatusRun{
 		{
@@ -211,4 +235,31 @@ func TestTargetsFromMetadata_MissingKey(t *testing.T) {
 
 func TestTargetsFromMetadata_Nil(t *testing.T) {
 	assert.Nil(t, targetsFromMetadata(nil))
+}
+
+func TestPolicyStatusRun_DriverOmittedWhenEmptyOnWire(t *testing.T) {
+	payload := []byte(`{"id":"run-1","status":"running","created_at":0,"updated_at":0}`)
+
+	var r PolicyStatusRun
+	require.NoError(t, json.Unmarshal(payload, &r))
+
+	assert.Empty(t, r.Driver)
+}
+
+func TestPolicyStatusRun_DriverUnmarshaledWhenPresent(t *testing.T) {
+	payload := []byte(`{"id":"run-1","status":"completed","driver":"junos","created_at":0,"updated_at":0}`)
+
+	var r PolicyStatusRun
+	require.NoError(t, json.Unmarshal(payload, &r))
+
+	assert.Equal(t, "junos", r.Driver)
+}
+
+func TestPolicyStatusRun_DriverMarshaledAsOmitempty(t *testing.T) {
+	r := PolicyStatusRun{ID: "run-1", Status: "running"}
+
+	body, err := json.Marshal(r)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(body), "driver")
 }

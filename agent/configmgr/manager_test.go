@@ -13,6 +13,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -60,7 +61,7 @@ type mockBackend struct {
 	name string
 }
 
-func (m *mockBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo, cfg map[string]any, commons config.BackendCommons) error {
+func (m *mockBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo, cfg map[string]any, commons config.BackendCommons, _ filesmgr.Manager) error {
 	args := m.Called(logger, repo, cfg, commons)
 	return args.Error(0)
 }
@@ -140,7 +141,7 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -158,7 +159,7 @@ func TestManagerNew(t *testing.T) {
 			},
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -179,7 +180,7 @@ func TestManagerNew(t *testing.T) {
 		}
 
 		mockBackendState := &mockBackendState{}
-		mgr := configmgr.New(logger, pMgr, cfg.Active, mockBackendState)
+		mgr := configmgr.New(logger, pMgr, cfg.Active, mockBackendState, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the expected implementation
 		ctx := context.Background()
@@ -192,7 +193,7 @@ func TestManagerNew(t *testing.T) {
 			Active: "unknown",
 		}
 
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		assert.NotNil(t, mgr)
 		// Check we got the local implementation
 		ctx := context.Background()

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
@@ -34,9 +36,18 @@ const (
 )
 
 type workerBackend struct {
-	logger     *slog.Logger
-	policyRepo policies.PolicyRepo
-	exec       string
+	logger       *slog.Logger
+	policyRepo   policies.PolicyRepo
+	exec         string
+	filesManager filesmgr.Manager
+
+	// lastResolveExecWarning records the last bad path that triggered a fallback
+	// warning, so the warning isn't re-emitted on every resolveExecPath call for
+	// the same misconfiguration. Concurrent Stop/Start sequences against the
+	// same backend are serialized by orbAgent.backendRestartLock (defined in
+	// agent.go), so this field is accessed under that effective lock — no
+	// additional synchronization needed here.
+	lastResolveExecWarning string
 
 	apiHost     string
 	apiPort     string
@@ -74,7 +85,7 @@ func Register() bool {
 }
 
 func (d *workerBackend) checkWorkerSupportsDebug() bool {
-	cmd := exec.Command(d.exec, "--help")
+	cmd := exec.Command(d.resolveExecPath(), "--help")
 	output, err := cmd.Output()
 	if err != nil {
 		d.logger.Warn("unable to check orb-worker help, skipping --debug flag",
@@ -94,10 +105,11 @@ func (d *workerBackend) checkWorkerSupportsDebug() bool {
 }
 
 func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
-	config map[string]any, common config.BackendCommons,
+	config map[string]any, common config.BackendCommons, fm filesmgr.Manager,
 ) error {
 	d.logger = logger.With("backend", "worker")
 	d.policyRepo = repo
+	d.filesManager = fm
 	d.diodeTargetFromOtel = false
 	d.debug = common.Debug
 
@@ -206,7 +218,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
 		Buffered:  false,
 		Streaming: true,
-	}, d.exec, dOptions...)
+	}, d.resolveExecPath(), dOptions...)
 	d.statusChan = d.proc.Start()
 
 	// log STDOUT and STDERR lines streaming from Cmd
@@ -371,6 +383,37 @@ func (d *workerBackend) GetRunningStatus() (backend.RunningStatus, string, error
 
 func (d *workerBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
+}
+
+func (d *workerBackend) ManagedBinaryName() string { return "orb-worker" }
+
+// resolveExecPath returns the path to the orb-worker binary. If FilesManager
+// tracks an entry under the name "orb-worker" and that entry points to a
+// regular file, that path is used. If the entry path is a directory (e.g.
+// when Ensure was called with Extract:true and no filename suffix) or the stat
+// fails, a warning is logged and the baked-in binary path is used as fallback.
+// The warning is emitted at most once per distinct bad path to avoid log spam
+// when a persistent misconfiguration causes every exec.Command call to fall back.
+func (d *workerBackend) resolveExecPath() string {
+	if d.filesManager == nil {
+		return d.exec
+	}
+	entry, ok := d.filesManager.Get("orb-worker")
+	if !ok || entry.Path == "" {
+		return d.exec
+	}
+	info, err := os.Stat(entry.Path)
+	if err != nil || info.IsDir() {
+		if d.lastResolveExecWarning != entry.Path {
+			d.logger.Warn("filesmgr orb-worker entry is not a regular file; falling back to baked binary",
+				"path", entry.Path, "error", err)
+			d.lastResolveExecWarning = entry.Path
+		}
+		return d.exec
+	}
+	// Path is valid — clear warning state so a future regression re-logs.
+	d.lastResolveExecWarning = ""
+	return entry.Path
 }
 
 func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {

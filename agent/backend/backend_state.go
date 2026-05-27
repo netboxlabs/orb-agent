@@ -187,6 +187,7 @@ func convertToRunData(statusRuns []PolicyStatusRun) []policies.RunData {
 			CreatedAt:   nsToTime(sr.CreatedAt),
 			UpdatedAt:   nsToTime(sr.UpdatedAt),
 			Targets:     targets,
+			Driver:      sr.Driver,
 		}
 	}
 	return runs

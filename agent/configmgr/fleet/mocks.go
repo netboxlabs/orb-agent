@@ -13,14 +13,20 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 // RawJWTWithClaims builds a raw JWT string with the given claims.
 // Signature is a dummy value; ParseUnverified only inspects header/payload.
 func RawJWTWithClaims(claims map[string]any) string {
+	return RawJWTWithClaimsAlg(claims, "RS256")
+}
+
+// RawJWTWithClaimsAlg is like RawJWTWithClaims but sets the JWS "alg" header (for tests).
+func RawJWTWithClaimsAlg(claims map[string]any, alg string) string {
 	header := map[string]any{
-		"alg": "RS256",
+		"alg": alg,
 		"kid": "test-key",
 		"typ": "JWT",
 	}
@@ -34,7 +40,7 @@ type mockBackend struct {
 	mock.Mock
 }
 
-func (m *mockBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo, config map[string]any, commons config.BackendCommons) error {
+func (m *mockBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo, config map[string]any, commons config.BackendCommons, _ filesmgr.Manager) error {
 	args := m.Called(logger, repo, config, commons)
 	return args.Error(0)
 }

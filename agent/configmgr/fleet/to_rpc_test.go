@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -62,7 +63,7 @@ func TestMessaging_SendCapabilities_Success(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForToRPC{}
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	// Create mock backends
 	mockBackend1 := &mockBackend{}
@@ -150,7 +151,7 @@ func TestMessaging_SendCapabilities_BackendVersionError(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForToRPC{}
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	// Create mock backends - one succeeds, one fails on version
 	mockBackend1 := &mockBackend{}
@@ -214,7 +215,7 @@ func TestMessaging_SendCapabilities_BackendCapabilitiesError(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForToRPC{}
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	// Create mock backends - one succeeds, one fails on capabilities
 	mockBackend1 := &mockBackend{}
@@ -278,7 +279,7 @@ func TestMessaging_SendCapabilities_PublishError(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForToRPC{}
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	mockBackend1 := &mockBackend{}
 	mockBackend1.On("Version").Return("1.0.0", nil)
@@ -324,7 +325,7 @@ func TestMessaging_SendCapabilities_EmptyBackends(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForToRPC{}
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	backends := map[string]backend.Backend{} // Empty backends
 	labels := map[string]string{}
@@ -370,7 +371,7 @@ func TestMessaging_SendCapabilities_AllBackendsFail(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForToRPC{}
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	// All backends fail
 	mockBackend1 := &mockBackend{}
@@ -419,7 +420,7 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForToRPC{}
 	resetChan := make(chan struct{}, 1)
 	groupManager := newGroupManager()
-	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager)
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	mockBackend1 := &mockBackend{}
 	mockBackend1.On("Version").Return("test-version", nil)
@@ -473,4 +474,38 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	assert.IsType(t, map[string]interface{}{}, backendInfo.Data["object_val"])
 
 	mockBackend1.AssertExpectations(t)
+}
+
+func TestSendGroupMembershipsRequest_Success(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	messaging := NewMessaging(logger, nil, resetChan, &groupManager, nil)
+
+	var published []byte
+	publishFunc := func(_ context.Context, payload []byte) error {
+		published = payload
+		return nil
+	}
+
+	messaging.sendGroupMembershipsRequest(context.Background(), publishFunc)
+	assert.NotEmpty(t, published)
+
+	var rpc map[string]any
+	require.NoError(t, json.Unmarshal(published, &rpc))
+	assert.Equal(t, "group_membership_req", rpc["func"])
+}
+
+func TestSendGroupMembershipsRequest_PublishError(_ *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	messaging := NewMessaging(logger, nil, resetChan, &groupManager, nil)
+
+	publishFunc := func(_ context.Context, _ []byte) error {
+		return errors.New("publish failed")
+	}
+
+	// Should log error but not panic
+	messaging.sendGroupMembershipsRequest(context.Background(), publishFunc)
 }

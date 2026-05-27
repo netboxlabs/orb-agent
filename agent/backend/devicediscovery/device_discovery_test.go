@@ -116,7 +116,7 @@ func TestDeviceDiscoveryBackendStart(t *testing.T) {
 		"agent_name":         "device-agent",
 		"dry_run":            false,
 		"dry_run_output_dir": "/tmp/device",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -216,7 +216,7 @@ func TestDeviceDiscoveryUsesOtelTargetWithoutCredentials(t *testing.T) {
 		"client_id":     "device-client",
 		"client_secret": "device-secret",
 		"agent_name":    "device-agent",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -241,7 +241,7 @@ func TestDeviceDiscoveryBackendCompleted(t *testing.T) {
 
 	require.NoError(t, be.Configure(slog.Default(), nil, map[string]any{
 		"host": "invalid-host",
-	}, config.BackendCommons{}))
+	}, config.BackendCommons{}, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -308,7 +308,7 @@ func TestDeviceDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T) 
 		"agent_name":         "device-agent",
 		"dry_run":            true,
 		"dry_run_output_dir": "/tmp/device-dry-run",
-	}, commons)
+	}, commons, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

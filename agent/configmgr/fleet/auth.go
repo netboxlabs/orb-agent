@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/netboxlabs/orb-agent/agent/redact"
@@ -278,7 +277,7 @@ func parseJWTExpiry(tokenString string) (time.Time, error) {
 	}
 
 	// Parse the JWT token without verification
-	token, err := jwt.ParseSigned(tokenString, []jose.SignatureAlgorithm{jose.HS256, jose.HS384, jose.HS512, jose.RS256, jose.RS384, jose.RS512, jose.ES256, jose.ES384, jose.ES512})
+	token, err := jwt.ParseSigned(tokenString, jwtParseSignatureAlgorithms)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to parse JWT token: %w", err)
 	}

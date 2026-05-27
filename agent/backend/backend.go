@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
@@ -19,6 +20,7 @@ type PolicyStatusRun struct {
 	CreatedAt   int64             `json:"created_at"` // nanoseconds since epoch
 	UpdatedAt   int64             `json:"updated_at"` // nanoseconds since epoch
 	Targets     []string          `json:"targets,omitempty"`
+	Driver      string            `json:"driver,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
@@ -79,7 +81,7 @@ func (s RunningStatus) String() string {
 
 // Backend is the interface that all backends must implement
 type Backend interface {
-	Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons) error
+	Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error
 	Version() (string, error)
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
 	Stop(ctx context.Context) error
@@ -92,6 +94,17 @@ type Backend interface {
 
 	ApplyPolicy(data policies.PolicyData, updatePolicy bool) error
 	RemovePolicy(data policies.PolicyData) error
+}
+
+// ManagedBinary is an optional interface implemented by backends whose
+// runtime binary is delivered via FilesManager. The agent type-asserts on
+// this interface when dispatching file-driven restarts. Backends that don't
+// implement this interface are never affected by FilesManager events.
+type ManagedBinary interface {
+	// ManagedBinaryName returns the logical name FilesManager tracks for
+	// this backend's binary (e.g., "orb-worker"). Backends that don't
+	// implement this interface are never affected by FilesManager events.
+	ManagedBinaryName() string
 }
 
 var registry = make(map[string]Backend)

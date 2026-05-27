@@ -51,7 +51,7 @@ func TestLocalConfigManager(t *testing.T) {
 		})).Return()
 
 		// Create and start the manager
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		err := mgr.Start(context.Background(), testConfig, backends)
 
 		// Verify
@@ -70,7 +70,7 @@ func TestLocalConfigManager(t *testing.T) {
 		backends := map[string]backend.Backend{}
 
 		// Create the manager
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		err := mgr.Start(context.Background(), testConfig, backends)
 
 		// Should return an error
@@ -99,7 +99,7 @@ func TestLocalConfigManager(t *testing.T) {
 		backends := map[string]backend.Backend{}
 
 		// Create the manager
-		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{})
+		mgr := configmgr.New(logger, pMgr, cfg.Active, &mockBackendState{}, nil)
 		err := mgr.Start(context.Background(), testConfig, backends)
 
 		// Should return an error
