@@ -201,7 +201,7 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 			},
 			orgID:               "org123",
 			expectedTopics:      []string{},
-			expectedUnsubscribe: []string{"group1"},
+			expectedUnsubscribe: []string{"orgs/org123/groups/group1"},
 			setupMocks: func(m *mockPolicyManager) {
 				mockRepo := &mockPolicyRepo{}
 				mockRepo.On("GetAll").Return([]policies.PolicyData{}, nil)
@@ -852,10 +852,10 @@ func TestMessageHandlers_handleAgentGroupRemoval_RemovesPolicyWhenNoGroupsRemain
 	}
 
 	// Act
-	handlers.handleAgentGroupRemoval(groupRemoval, mockUnsubscribeFromTopic)
+	handlers.handleAgentGroupRemoval(groupRemoval, "org1", mockUnsubscribeFromTopic)
 
 	// Assert
-	assert.Equal(t, []string{"group1"}, unsubscribedTopics)
+	assert.Equal(t, []string{"orgs/org1/groups/group1"}, unsubscribedTopics)
 	mockPMgr.AssertExpectations(t)
 }
 
@@ -905,10 +905,10 @@ func TestMessageHandlers_handleAgentGroupRemoval_RemovesDatasetsWhenGroupsRemain
 	}
 
 	// Act
-	handlers.handleAgentGroupRemoval(groupRemoval, mockUnsubscribeFromTopic)
+	handlers.handleAgentGroupRemoval(groupRemoval, "org1", mockUnsubscribeFromTopic)
 
 	// Assert
-	assert.Equal(t, []string{"group1"}, unsubscribedTopics)
+	assert.Equal(t, []string{"orgs/org1/groups/group1"}, unsubscribedTopics)
 	// Should NOT call RemovePolicy since group2 remains
 	mockPMgr.AssertNotCalled(t, "RemovePolicy", mock.Anything, mock.Anything, mock.Anything)
 }
@@ -933,7 +933,7 @@ func TestMessageHandlers_handleAgentGroupRemoval_UnsubscribeFails(t *testing.T) 
 	}
 
 	// Act
-	handlers.handleAgentGroupRemoval(groupRemoval, mockUnsubscribeFromTopic)
+	handlers.handleAgentGroupRemoval(groupRemoval, "org1", mockUnsubscribeFromTopic)
 
 	// Assert - should return early without calling GetRepo
 	mockPMgr.AssertNotCalled(t, "GetRepo")
