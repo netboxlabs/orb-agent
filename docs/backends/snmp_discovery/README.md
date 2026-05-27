@@ -15,8 +15,12 @@ The SNMP discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/dio
 * [Site](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/site/main.go)
 * [VLAN](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/vlan/main.go)
 * [VirtualChassis](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/virtual_chassis/main.go)
+* [Module](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/module/main.go)
+* [ModuleBay](https://github.com/netboxlabs/diode-sdk-go/blob/develop/docs/examples/module_bay/main.go)
 
 When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), snmp-discovery emits one `VirtualChassis` entity plus one `Device` per stack member, and routes each interface/IP to the member that physically owns it — see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) below. Standalone switches and devices not in stack mode fall through to the existing single-`Device` path with no change in behaviour.
+
+When a target is a modular chassis and the `discover_modules` policy option is enabled, snmp-discovery additionally emits `Module` and `ModuleBay` entities for each chassis slot (and, in `full` mode, each transceiver sub-bay) — see [Modules / ModuleBays](#modules--modulebays) below. Defaults to `off`, so existing operators see zero behaviour change unless they explicitly opt in.
 
 When a device exposes the relevant MIBs, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. VLAN discovery uses Q-BRIDGE-MIB (RFC 4363) as the generic source and a Cisco-specific overlay (CISCO-VLAN-MEMBERSHIP-MIB, CISCO-VOICE-VLAN-MIB) on Cisco devices that don't fully implement Q-BRIDGE — see [SNMP Discovery — Supported Platforms](./supported_platforms.md#interface--vlan-associations) for which device classes are covered.
 
@@ -45,6 +49,34 @@ When the target reports 2+ chassis rows in `ENTITY-MIB` (`entPhysicalTable`) wit
 **Member AssetTag is cleared.** Diode's highest-precedence matcher for `dcim.device` is `asset_tag` (unique). The master Device carries the policy `defaults.asset_tag` value if configured; member Devices have it explicitly cleared so multiple members do not collapse onto one NetBox row through a shared asset tag. Master / standalone AssetTag behaviour from `defaults.asset_tag` is unchanged.
 
 **Orphaned member ports.** If a chassis row is dropped from the validated payload (empty serial, duplicate serial collapsed against a lower-id row, etc.) but the device still reports ports owned by that member, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
+
+## Modules / ModuleBays
+
+When the `discover_modules` policy option is enabled, snmp-discovery emits NetBox `Module` and `ModuleBay` entities for each chassis slot reported in `ENTITY-MIB` `entPhysicalTable` (and, in `full` mode, for each transceiver sub-bay). Discovery is **vendor-neutral**: rows are selected by `entPhysicalClass` alone — `chassis(3)` anchors the device, `container(5)` rows become module bays, `module(9)` rows become modules — with PID-prefix classification used only to split modules into `supervisor` / `linecard` / `transceiver` / `psu` / `fan` types. Any vendor that populates `entPhysicalTable` per ENTITY-MIB (RFC 6933) is supported; see the [supported platforms page](./supported_platforms.md#modules--modulebays) for the list known-tested. The option defaults to `off` so existing operators see zero behaviour change unless they explicitly opt in.
+
+**Three modes:**
+
+| `discover_modules` | What gets emitted |
+|---|---|
+| `off` *(default)* | No module / module-bay entities. Existing behaviour. |
+| `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors). PSU and fan modules are recognised by the PID classifier so they label correctly in metrics, but are **never** emitted as `Module` entities — useful when operators care about the slot inventory but not power/cooling FRUs. Transceiver sub-bays are skipped. |
+| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. Per-port linkage uses `entAliasMappingTable` (RFC 6933) when present to map transceiver rows to their owning `ifIndex`. |
+
+**Emission order** (standalone modular chassis): `Device` → all `ModuleBay` + `Module` entries → `Interface` / `IPAddress` entries. The order matters because each interface entity may reference the module installed in its bay; emitting modules first lets the Diode reconciler resolve `Interface.module` against the just-created module.
+
+**Virtual-chassis-of-modular** (e.g. Cisco StackWise Virtual on Catalyst 9500 / 9600, Catalyst 9300 stack with FRU uplink modules). When a VC member is itself a modular chassis, modules and bays are dispatched per member via the `ChassisInventory.Members` map: each `Module` / `ModuleBay` carries `device=` set to the member that physically owns the slot, and the `Module.module_bay` reference points at that member's bay. Master identity follows the same lowest-member-id pinning as the VC envelope itself. The emission order becomes: `Device(master)` → `VirtualChassis` → `Device(non-master members)` → all `ModuleBay` + `Module` per member → `Interface` / `IPAddress` per member.
+
+**Empty bays.** A `container(5)` row with no `module(9)` child (an Aruba CX 8400 pattern, where empty line-card slots still surface as containers) is emitted as a bare `ModuleBay` with no installed Module. This faithfully captures the physical chassis surface so operators see populated *and* empty slots in NetBox.
+
+**Chassis-rooted modules.** On fixed-FRU switches where a `module(9)` row's `entPhysicalContainedIn` chain leads directly to the `chassis(3)` row without an intermediate `container(5)` bay, snmp-discovery synthesises a `ModuleBay` named `Slot <ParentRelPos>` derived from the module's own `entPhysicalParentRelPos`. The module is then installed in the synthesised bay, keeping the `Device → ModuleBay → Module` shape uniform regardless of how the vendor models its inventory tree.
+
+**Interface.Module routing.** The reference from an interface to the transceiver installed on it is populated through a bay matcher (Device + Serial + `ModuleBay{Name, Position, Device}`) so the Diode reconciler resolves to the standalone Module already emitted in the same payload, rather than creating a duplicate inline. When `entAliasMappingTable` is populated, transceiver rows are mapped to their owning `ifIndex` via that table; otherwise transceiver attachment falls back to the row's parent-bay name.
+
+**Current sub-bay rendering trade-off (transient).** In `full` mode the transceiver sub-bay is emitted device-rooted — i.e. without a `module=parent_linecard` link. As a result, NetBox renders the transceiver sub-bay at chassis level (alongside the line-card slot bays) instead of visually nested under its parent line card. The transceiver `Module` itself is still installed in the sub-bay correctly via `Module.module_bay`, so per-port optic visibility works as expected; only the bay-under-linecard hierarchy is lost. The link is dropped because, in the current per-entity reconciler, attaching `module=parent_linecard` on a sub-bay causes the parent Module to be re-created from inside the sub-bay's changeset and conflicts at apply with the line card already created by the prior top-level Module entity. The link will be restored once the reconciler resolves nested parent-module refs against committed sibling entities in a single ingest call.
+
+**Metrics.** Three OTLP counters cover module discovery operationally: `modules_emitted{vendor,type}`, `module_bays_emitted{vendor}`, and `modules_dropped{reason}` (e.g. PSU/fan filtered from `linecards`, malformed row, missing parent). PSU and fan rows count in `modules_dropped` rather than `modules_emitted` even though their PIDs are recognised by the classifier.
+
+**Supported vendors.** Module discovery works on any vendor that populates `entPhysicalTable` per RFC 6933 — see the [supported platforms page](./supported_platforms.md#modules--modulebays) for the platforms known-tested in v1.
 
 ## Configuration
 The `snmp_discovery` backend does not require any special configuration in the backends section. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
@@ -81,6 +113,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
 | create_unknown_vlans | bool | no | Auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's `dot1qVlanStaticTable`. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `true`. Set `false` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). |
+| discover_modules | string | no | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards and supervisors; PSU / fan recognised by the PID classifier but never emitted), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Detection is vendor-neutral via `ENTITY-MIB::entPhysicalTable` — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 
 #### Defaults Parameters
 | Parameter | Type | Required | Description |

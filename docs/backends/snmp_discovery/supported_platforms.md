@@ -114,3 +114,20 @@ When a switchport has both Q-BRIDGE membership and the Cisco overlay rows, the o
 
 **Trunk-allowed-all detection:** trunks are marked `tagged-all` only when the membership-derived allowed set covers the full active 1..4094 range. Q-BRIDGE exposes membership, not the operator's configured intent — so a trunk explicitly configured with `1-4094` and one currently a member of all VLANs look identical at the SNMP layer.
 
+## Modules / ModuleBays
+
+Module / module-bay discovery is **vendor-neutral**: it works on any device that populates `ENTITY-MIB::entPhysicalTable` (RFC 6933) with the standard class hierarchy (`chassis(3)` → `container(5)` → `module(9)`), plus optionally `entAliasMappingTable` for per-port transceiver-to-`ifIndex` linkage. There are no per-vendor branches in the implementation — the same code path covers every vendor below. Emission is gated by the `discover_modules` policy option (`off` / `linecards` / `full`); see the [SNMP discovery README](./README.md#modules--modulebays) for the contract, the three modes, and the current sub-bay rendering trade-off.
+
+| Platform | Status |
+|---|---|
+| Cisco IOS-XE (Catalyst 9404R / 9407R / 9410R) | Vendor-neutral via ENTITY-MIB — tested |
+| Cisco NX-OS (Nexus 9500 modular chassis) | Vendor-neutral via ENTITY-MIB — tested |
+| Juniper JunOS (MX / EX modular chassis) | Vendor-neutral via ENTITY-MIB — tested |
+| Arista EOS (7280R / 7500R chassis) | Vendor-neutral via ENTITY-MIB — tested |
+| Aruba CX (8400 chassis, including empty-bay surfacing) | Vendor-neutral via ENTITY-MIB — tested |
+| Nokia SROS (7750 SR / 7250 IXR) | Vendor-neutral via ENTITY-MIB — tested |
+
+Any other vendor that populates `entPhysicalTable` per RFC 6933 will be discovered with no code change; report gaps as a GitHub issue against [orb-discovery](https://github.com/netboxlabs/orb-discovery/issues).
+
+**PID classifier.** Module rows (`entPhysicalClass = module(9)`) are split into `supervisor` / `linecard` / `transceiver` / `psu` / `fan` types by matching `entPhysicalModelName` (the vendor product ID) against a small set of prefix rules: `SUP*` / `SUPV*` / `SUP\d` → `supervisor`; optic prefixes `SFP-` / `QSFP-` / `X2-` / `GLC-` / `CFP-` / `XENPAK-` / `XFP-` → `transceiver`; `PSU-` / `PWR-` or `-PWR-` infixes → `psu`; `FAN` / `-FAN-` → `fan`; everything else inside a chassis slot defaults to `linecard`. The classifier is shared across all vendors — no Cisco-only / Arista-only branch. PSU and fan modules are recognised so they label correctly in OTLP metrics, but **never** emitted as `Module` entities (counted in `modules_dropped` instead) — the inventory surface in NetBox stays scoped to line cards, supervisors, and transceivers.
+
