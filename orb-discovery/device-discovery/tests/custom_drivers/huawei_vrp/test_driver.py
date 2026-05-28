@@ -22,6 +22,11 @@ class TestVRPDriver(BaseDriverTest):
     fake_device_cls = FakeCLIDevice
     mock_data_root = Path(__file__).parent / "mock_data"
 
+    def test_vrp_driver_exposes_get_modules(self):
+        """VRPDriver must expose a callable get_modules (fails hard, no skip)."""
+        assert hasattr(self.driver_cls, "get_modules")
+        assert callable(self.driver_cls.get_modules)
+
 
 # --- VRP iStack helper unit tests --------------------------------------------
 

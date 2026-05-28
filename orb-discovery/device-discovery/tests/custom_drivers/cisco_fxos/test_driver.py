@@ -13,3 +13,8 @@ class TestFXOSDriver(BaseDriverTest):
     driver_cls = FXOSDriver
     fake_device_cls = FakeCLIDevice
     mock_data_root = Path(__file__).parent / "mock_data"
+
+    def test_fxos_driver_exposes_get_modules(self):
+        """FXOSDriver must expose a callable get_modules (fails hard, no skip)."""
+        assert hasattr(self.driver_cls, "get_modules")
+        assert callable(self.driver_cls.get_modules)

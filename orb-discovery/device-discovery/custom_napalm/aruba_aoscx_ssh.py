@@ -462,6 +462,20 @@ class AOSCXSSHDriver(_napalm_base.NetworkDriver):
         """
         return _aoscx_ssh_get_chassis_members_impl(self)
 
+    def get_modules(self) -> dict | None:
+        """
+        Module discovery is unsupported over the AOS-CX SSH transport.
+
+        AOS-CX has no `show modules` CLI inventory that ntc-templates can
+        parse, so modular discovery requires the REST `aruba_aoscx` driver.
+        Always returns None (with a one-time debug log).
+        """
+        logger.debug(
+            "aruba_aoscx_ssh.get_modules: modular discovery requires the REST "
+            "aruba_aoscx transport; returning None"
+        )
+        return None
+
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from ``show vlan port-config``."""
         try:

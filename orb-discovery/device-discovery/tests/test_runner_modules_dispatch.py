@@ -18,7 +18,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_napalm.aruba_aoscx import AOSCXDriver
+from custom_napalm.aruba_aoscx_ssh import AOSCXSSHDriver
+from custom_napalm.cisco_fxos import FXOSDriver
 from custom_napalm.eos import EOSDriver
+from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.ios import IOSDriver
 from custom_napalm.junos import JunOSDriver
 from custom_napalm.nxos import NXOSDriver
@@ -144,10 +148,20 @@ def test_collect_modules_swallows_driver_exception(caplog) -> None:
 # per-driver internals (those live in the per-driver test modules).
 @pytest.mark.parametrize(
     "driver_cls",
-    [IOSDriver, EOSDriver, JunOSDriver, NXOSDriver, NXOSSSHDriver],
-    ids=["ios", "eos", "junos", "nxos", "nxos_ssh"],
+    [
+        IOSDriver,
+        EOSDriver,
+        JunOSDriver,
+        NXOSDriver,
+        NXOSSSHDriver,
+        FXOSDriver,
+        VRPDriver,
+        AOSCXDriver,
+        AOSCXSSHDriver,
+    ],
+    ids=["ios", "eos", "junos", "nxos", "nxos_ssh", "fxos", "vrp", "aoscx", "aoscx_ssh"],
 )
 def test_driver_exposes_get_modules(driver_cls) -> None:
-    """Every batch-2 driver MUST expose a callable get_modules method."""
+    """Every driver MUST expose a callable get_modules method."""
     assert hasattr(driver_cls, "get_modules")
     assert callable(getattr(driver_cls, "get_modules"))

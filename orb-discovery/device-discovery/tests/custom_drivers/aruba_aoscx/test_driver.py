@@ -25,6 +25,11 @@ class TestAOSCXDriver(BaseDriverTest):
         driver.session = FakePyaoscxSession(mock_dir)
         return driver
 
+    def test_aruba_rest_driver_exposes_get_modules(self):
+        """AOSCXDriver must expose a callable get_modules (fails hard, no skip)."""
+        assert hasattr(self.driver_cls, "get_modules")
+        assert callable(self.driver_cls.get_modules)
+
 
 def test_chassis_members_404_logs_debug_not_warning(caplog):
     """

@@ -1,0 +1,12 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1", "position": "1", "module": {"model": "FPR9K-SM-36", "serial": "JMX2401SM01", "description": "Firepower 9300 Security Module", "type": "linecard", "sub_bays": []}},
+        {"name": "2", "position": "2", "module": {"model": "FPR9K-SM-36", "serial": "JMX2401SM02", "description": "Firepower 9300 Security Module", "type": "linecard", "sub_bays": []}},
+        {"name": "Network Module 1", "position": "1", "module": {"model": "FPR9K-NM-4X40G", "serial": "JMX2401NM01", "description": "Firepower 4x40G QSFP Network Module", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

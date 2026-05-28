@@ -20,6 +20,21 @@ from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
 from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
+from custom_napalm._modules import (
+    MemberModules as _MemberModules,
+)
+from custom_napalm._modules import (
+    ModuleBay as _ModuleBay,
+)
+from custom_napalm._modules import (
+    ModuleEntry as _ModuleEntry,
+)
+from custom_napalm._modules import (
+    is_optic_pid,
+)
+from custom_napalm._modules import (
+    to_payload as _modules_to_payload,
+)
 from custom_napalm._vlan import (
     SwitchportInfo,
     classify_switchport,
@@ -364,6 +379,88 @@ def _huawei_vrp_get_chassis_members_impl(driver) -> dict | None:
     return to_payload(members, domain=None)
 
 
+def classify_module_type_vrp(board: str, model: str) -> str:
+    """
+    Classify a Huawei VRP display-device board row.
+
+    MPU (main processing unit) -> supervisor; LPU (line) / SFU (fabric) ->
+    linecard; PWR/FAN -> psu/fan (not emitted). Board-type token is the
+    primary signal (CE-MPUA, CE-L36CQ-FD, CE-SFU08D, ...). Unknown board
+    types (e.g. CMU monitoring units) classify as `other` and the emit loop
+    drops them — defaulting to linecard would mis-discover non-forwarding
+    auxiliary FRUs as NetBox linecards.
+    """
+    b = (board or "").upper()
+    if is_optic_pid(model):
+        return "transceiver"
+    if "MPU" in b:
+        return "supervisor"
+    if "LPU" in b or "SFU" in b or b.startswith("CE-L"):
+        return "linecard"
+    if "PWR" in b or "POWER" in b:
+        return "psu"
+    if "FAN" in b:
+        return "fan"
+    return "other"
+
+
+def _vrp_get_modules_impl(driver) -> dict | None:
+    """
+    Standalone modular slot-bay discovery for Huawei CE12800.
+
+    Joins `display device` (slot + board type) with `display esn`
+    (slot -> serial). Scoped to the CloudEngine `Device status:` 8-column
+    layout that the `huawei_vrp_display_device` ntc-template parses. NE40E
+    `display device` uses a different 6-column layout the template does
+    not match, so NE40E returns no modules in v1 (documented limitation
+    alongside no optic sub-bays and no CSS-of-modular dispatch).
+    """
+    try:
+        dev_raw = driver.device.send_command("display device")
+        esn_raw = driver.device.send_command("display esn")
+    except Exception as e:
+        logger.warning("vrp.get_modules: display command failed: %s", e)
+        return None
+    try:
+        rows = parse_output(platform="huawei_vrp", command="display device", data=dev_raw or "")
+    except Exception:
+        logger.warning("vrp.get_modules: display device parse failed")
+        return None
+    if not rows:
+        return None
+    # REUSE the existing parser. `_parse_vrp_esn_by_slot` returns {int slot: serial}
+    # (int keys — already in the driver, used by get_chassis_members). Do NOT invent
+    # a new ESN parser; the `ESN of slot N: SN` format it accepts matches the fixture.
+    sn_by_slot = _parse_vrp_esn_by_slot(esn_raw or "")
+
+    bays: list[_ModuleBay] = []
+    for row in rows:
+        slot = str(row.get("slot") or "").strip()
+        # Board type lands in `pid` on the CE `Device status:` layout; `card`
+        # is `-`. Verified by running the template.
+        board = str(row.get("pid") or "").strip()
+        if not slot or not board or board == "-":
+            continue
+        try:
+            slot_id = int(slot)
+        except ValueError:
+            continue
+        serial = sn_by_slot.get(slot_id, "")  # int key — matches _parse_vrp_esn_by_slot
+        if not serial:
+            continue  # serial-less slot is dropped by _validate_bay anyway
+        mtype = classify_module_type_vrp(board, board)
+        if mtype in ("psu", "fan", "other"):
+            continue
+        bays.append(_ModuleBay(
+            name=slot, position=slot,
+            module=_ModuleEntry(model=board, serial=serial, type=mtype, description=""),
+        ))
+
+    if not bays:
+        return None
+    return _modules_to_payload({None: _MemberModules(bays=bays, interfaces_by_bay={})})
+
+
 class VRPDriver(_napalm_base.NetworkDriver):
     """Huawei VRP NAPALM driver (read-only subset for device-discovery)."""
 
@@ -594,6 +691,16 @@ class VRPDriver(_napalm_base.NetworkDriver):
         + 4-tuple interface-routing branch).
         """
         return _huawei_vrp_get_chassis_members_impl(self)
+
+    def get_modules(self) -> dict | None:
+        """
+        Return Module / ModuleBay slot inventory for a Huawei modular chassis.
+
+        Standalone CE12800 / NE40E only. No optic sub-bays (no display
+        transceiver template) and no CSS-of-modular dispatch (documented
+        v1 limitations). Returns None for non-modular / unparsable output.
+        """
+        return _vrp_get_modules_impl(self)
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from ``display port vlan``."""
