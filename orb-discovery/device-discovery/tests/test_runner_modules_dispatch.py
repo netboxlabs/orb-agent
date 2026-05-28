@@ -24,6 +24,8 @@ from custom_napalm.cisco_fxos import FXOSDriver
 from custom_napalm.eos import EOSDriver
 from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.ios import IOSDriver
+from custom_napalm.iosxr import IOSXRDriver
+from custom_napalm.iosxr_netconf import IOSXRNETCONFDriver
 from custom_napalm.junos import JunOSDriver
 from custom_napalm.nxos import NXOSDriver
 from custom_napalm.nxos_ssh import NXOSSSHDriver
@@ -149,17 +151,18 @@ def test_collect_modules_swallows_driver_exception(caplog) -> None:
 @pytest.mark.parametrize(
     "driver_cls",
     [
-        IOSDriver,
-        EOSDriver,
-        JunOSDriver,
-        NXOSDriver,
-        NXOSSSHDriver,
-        FXOSDriver,
-        VRPDriver,
-        AOSCXDriver,
-        AOSCXSSHDriver,
+        pytest.param(IOSDriver, id="ios"),
+        pytest.param(EOSDriver, id="eos"),
+        pytest.param(IOSXRDriver, id="iosxr"),
+        pytest.param(IOSXRNETCONFDriver, id="iosxr_netconf"),
+        pytest.param(JunOSDriver, id="junos"),
+        pytest.param(NXOSDriver, id="nxos"),
+        pytest.param(NXOSSSHDriver, id="nxos_ssh"),
+        pytest.param(FXOSDriver, id="fxos"),
+        pytest.param(VRPDriver, id="vrp"),
+        pytest.param(AOSCXDriver, id="aoscx"),
+        pytest.param(AOSCXSSHDriver, id="aoscx_ssh"),
     ],
-    ids=["ios", "eos", "junos", "nxos", "nxos_ssh", "fxos", "vrp", "aoscx", "aoscx_ssh"],
 )
 def test_driver_exposes_get_modules(driver_cls) -> None:
     """Every driver MUST expose a callable get_modules method."""

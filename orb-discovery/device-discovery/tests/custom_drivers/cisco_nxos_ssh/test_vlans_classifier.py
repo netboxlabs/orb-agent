@@ -1,6 +1,6 @@
-"""Unit tests for custom_napalm._nxos_common shared NX-OS field mapper."""
+"""Unit tests for custom_napalm.nxos_ssh.nxos_row_to_switchport_info (inlined from former _nxos_common)."""
 
-from custom_napalm._nxos_common import _maybe_int, nxos_row_to_switchport_info
+from custom_napalm.nxos_ssh import _maybe_int, nxos_row_to_switchport_info
 
 
 def test_maybe_int_rejects_bool_true():

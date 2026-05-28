@@ -9,6 +9,7 @@ Flavours:
   FakePyaoscxSession -- intercepts request() for pyaoscx-based AOS-CX drivers.
   FakeNetconfConn    -- intercepts get() / get_config() for NETCONF drivers.
   FakeRestDevice     -- intercepts get_resp() for Cisco ASA REST drivers.
+  FakeIOSXRDevice    -- intercepts _execute_show() for pyIOSXR-based IOS-XR drivers.
 
 File-name mapping
 -----------------
@@ -452,3 +453,52 @@ class FakePyEZDevice:
         filename = _cli_filename(command)
         path = self._mock_dir / filename
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+class FakeIOSXRDevice:
+    r"""
+    Drop-in replacement for napalm.pyIOSXR.IOSXR.
+
+    Intercepts the pyIOSXR private API `_execute_show(cmd)` (which returns
+    plain text from the XR XML-Agent `<CLI><Exec>...</Exec></CLI>` wrap)
+    and serves `<mock_dir>/<sanitized-cmd>.txt`. Filename mapping mirrors
+    FakeCLIDevice: every run of non-(\w|-) chars becomes a single `_`,
+    leading/trailing `_` stripped.
+
+    Examples:
+        "show inventory"  -> show_inventory.txt
+        "show version"    -> show_version.txt
+
+    A missing file returns "" — silent, no error — so optional commands
+    the driver might call don't crash the fake.
+
+    """
+
+    _SANITIZE_RE = re.compile(r"[^\w-]+")
+
+    def __init__(self, mock_dir):
+        """Store the directory containing mock show-command output files."""
+        self._mock_dir = Path(mock_dir)
+
+    def _sanitize(self, cmd: str) -> str:
+        """Map a CLI show command to its mock filename (FakeCLIDevice rule)."""
+        return self._SANITIZE_RE.sub("_", cmd).strip("_")
+
+    def _execute_show(self, show_command: str) -> str:
+        """Return the mock text response for `show_command`, or '' if missing."""
+        f = self._mock_dir / f"{self._sanitize(show_command)}.txt"
+        if not f.exists():
+            return ""
+        return f.read_text()
+
+    # No-op methods so unrelated upstream-driver paths that touch these
+    # don't crash in tests; we never assert on their return values.
+    def open(self):
+        """No-op; the real pyIOSXR.open() establishes the XML-Agent session."""
+
+    def close(self):
+        """No-op; the real pyIOSXR.close() tears down the session."""
+
+    def is_alive(self):
+        """Always True in tests so liveness checks don't gate the fake."""
+        return True

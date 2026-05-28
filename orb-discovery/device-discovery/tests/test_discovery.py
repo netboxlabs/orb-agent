@@ -275,6 +275,7 @@ def test_napalm_driver_list(mock_packages_distributions, mock_import_module):
     expected_drivers = [
         "eos",
         "ios",
+        "iosxr",
         "iosxr_netconf",
         "junos",
         "nxos",
@@ -302,7 +303,7 @@ def test_napalm_driver_list_error(mock_packages_distributions, mock_import_modul
 
     mock_import_module.side_effect = Exception("Import failed")
     mock_packages_distributions.return_value = mock_distributions
-    expected_drivers = ["eos", "ios", "iosxr_netconf", "junos", "nxos", "nxos_ssh"]
+    expected_drivers = ["eos", "ios", "iosxr", "iosxr_netconf", "junos", "nxos", "nxos_ssh"]
 
     with patch("device_discovery.discovery.logger") as mock_logger:
         drivers = napalm_driver_list()
@@ -476,6 +477,20 @@ def test_default_discovery_drivers_excludes_custom_napalm():
         assert driver not in _default_discovery_drivers, (
             f"Custom driver '{driver}' must not appear in default auto-discovery pool"
         )
+
+
+def test_supported_drivers_has_no_duplicates():
+    """
+    Names that exist in both native NAPALM and custom_napalm must appear once.
+
+    The list is the union of two sources (`napalm_driver_list()` plus
+    `custom_napalm_driver_list()`); without dedup, every name we override
+    (eos, ios, nxos, junos, iosxr_netconf, nxos_ssh) shows up twice. NAPALM's
+    lookup picks the custom override regardless, but the visible drivers list
+    used by validators and the /api/v1/drivers endpoint should be clean.
+    """
+    duplicates = [d for d in set(supported_drivers) if supported_drivers.count(d) > 1]
+    assert not duplicates, f"supported_drivers contains duplicates: {duplicates}"
 
 
 def test_discover_device_driver_uses_provided_drivers(mock_get_network_driver):

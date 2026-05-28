@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <data>
+    <inventory xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-invmgr-oper">
+      <entities>
+        <entity>
+          <name>Rack 0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9006 4 Line Card Slot Chassis with V2 AC PEM</description>
+              <model-name>ASR-9006-AC-V2</model-name>
+              <serial-number>FOX1234ABCD</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/RSP0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR9K Route Switch Processor with 440G/slot Fabric and 12GB</description>
+              <model-name>A9K-RSP880-LT-SE</model-name>
+              <serial-number>FOX5678EFGH</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/RSP1/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR9K Route Switch Processor with 440G/slot Fabric and 12GB</description>
+              <model-name>A9K-RSP880-LT-SE</model-name>
+              <serial-number>FOX5678EFGI</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9000 24-Port 10GE Line Card, Service Edge Optimized</description>
+              <model-name>A9K-24X10GE-SE</model-name>
+              <serial-number>FOX9012JKLM</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/0/0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>Cisco SFP+ 10G LR Optics</description>
+              <model-name>SFP-10G-LR</model-name>
+              <serial-number>OPTIC00000001</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/1/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9000 8-Port 100GE Line Card</description>
+              <model-name>A9K-8X100GE-SE</model-name>
+              <serial-number>FOX9012JKLN</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+      </entities>
+    </inventory>
+  </data>
+</rpc-reply>

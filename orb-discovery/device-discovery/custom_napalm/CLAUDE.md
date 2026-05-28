@@ -240,10 +240,6 @@ def get_interfaces_vlans(self) -> dict[str, dict]:
     return result
 ```
 
-For Cisco NX-OS, both the NX-API and SSH paths share
-`custom_napalm/_nxos_common.nxos_row_to_switchport_info()` — pass it the
-NX-API/ntc-templates row dict directly.
-
 ## Mock fakes for structured-API drivers
 
 For drivers that use a non-CLI transport, use these test fakes:

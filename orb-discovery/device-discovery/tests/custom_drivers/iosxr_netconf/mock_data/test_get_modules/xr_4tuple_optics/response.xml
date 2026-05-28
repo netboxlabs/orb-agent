@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <data>
+    <inventory xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-invmgr-oper">
+      <entities>
+        <entity>
+          <name>0/RP0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR9K Route Switch Processor</description>
+              <model-name>A9K-RSP880-LT-SE</model-name>
+              <serial-number>FOX5678EFGH</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9000 24-Port 10GE Line Card</description>
+              <model-name>A9K-24X10GE-SE</model-name>
+              <serial-number>FOX9012JKLM</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>module mau 0/0/CPU0/2</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>Cisco SFP+ 10G LR Optics</description>
+              <model-name>SFP-10G-LR</model-name>
+              <serial-number>OPTIC00000002</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/0/CPU0/3</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>Cisco QSFP-28 100G Optics</description>
+              <model-name>QSFP-100G-LR4</model-name>
+              <serial-number>OPTIC00000003</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+      </entities>
+    </inventory>
+  </data>
+</rpc-reply>

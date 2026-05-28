@@ -67,7 +67,7 @@ def napalm_driver_list() -> list[str]:
                    discovered driver names from the installed packages.
 
     """
-    napalm_packages = ["eos", "ios", "iosxr_netconf", "junos", "nxos", "nxos_ssh"]
+    napalm_packages = ["eos", "ios", "iosxr", "iosxr_netconf", "junos", "nxos", "nxos_ssh"]
     prefix = "napalm_"
     for dist in packages_distributions():
         if dist.startswith(prefix):
@@ -105,7 +105,14 @@ def custom_napalm_driver_list() -> list[str]:
 
 
 _default_discovery_drivers = napalm_driver_list()
-supported_drivers = _default_discovery_drivers + custom_napalm_driver_list()
+# Dedup the union so native names that also have a custom_napalm override
+# (e.g. eos, ios, nxos) appear once. NAPALM's get_network_driver() looks
+# up custom_napalm.<name> before napalm.<name>, so the custom override is
+# always selected at runtime regardless of this list's order — the dedup
+# is cosmetic but keeps the /api/v1/drivers payload clean.
+supported_drivers = list(
+    dict.fromkeys(_default_discovery_drivers + custom_napalm_driver_list()),
+)
 
 
 def set_napalm_logs_level(level: int):
