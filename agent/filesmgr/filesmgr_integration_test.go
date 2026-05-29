@@ -17,33 +17,40 @@ import (
 )
 
 // TestManager_EnsureFromS3 is an integration test that downloads a real bundle
-// from the nbl-orb-bundles-dev S3 bucket via a presigned URL and verifies the
+// from a private S3 bucket via a presigned URL and verifies the
 // full Ensure flow: download, SHA256 verification, extraction, and symlink.
 //
 // Requirements:
-//   - AWS credentials must be active (use: assume observability-dev-netboxlabs-AWSAdministratorAccess)
+//   - AWS credentials must be active with read access to the configured S3 bucket
+//   - The following environment variables must be set:
+//     S3_TEST_BUCKET, S3_TEST_REGION, S3_TEST_KEY, S3_TEST_SHA256,
+//     S3_TEST_BUNDLE_NAME, S3_TEST_BUNDLE_VERSION
 //   - Run with: go test -v -tags integration -timeout 120s ./agent/filesmgr/... -run TestManager_EnsureFromS3
 
-const (
-	s3Bucket       = "nbl-orb-bundles-dev"
-	s3Region       = "us-east-2"
-	s3Key          = "nbl_cisco_meraki/2.12.0/bundle.tar.gz"
-	s3BundleSHA256 = "fd4c5fda92bf1ae36d589dcd331db7f2cdbb8807792af7fa85ca8b0105a9f5b1"
-	s3BundleName   = "nbl_cisco_meraki"
-	s3BundleVer    = "2.12.0"
-)
-
-func presignS3URL(t *testing.T) string {
+func s3TestConfig(t *testing.T) (bucket, region, key, sha256, name, version string) {
 	t.Helper()
-	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(s3Region))
+	get := func(env string) string {
+		v := os.Getenv(env)
+		if v == "" {
+			t.Skipf("skipping S3 integration test: %s not set", env)
+		}
+		return v
+	}
+	return get("S3_TEST_BUCKET"), get("S3_TEST_REGION"), get("S3_TEST_KEY"),
+		get("S3_TEST_SHA256"), get("S3_TEST_BUNDLE_NAME"), get("S3_TEST_BUNDLE_VERSION")
+}
+
+func presignS3URL(t *testing.T, bucket, region, key string) string {
+	t.Helper()
+	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
 	require.NoError(t, err, "load AWS config")
 
 	client := s3.NewFromConfig(cfg)
 	presignClient := s3.NewPresignClient(client)
 
 	req, err := presignClient.PresignGetObject(context.Background(), &s3.GetObjectInput{
-		Bucket: &[]string{s3Bucket}[0],
-		Key:    &[]string{s3Key}[0],
+		Bucket: &bucket,
+		Key:    &key,
 	}, s3.WithPresignExpires(15*time.Minute))
 	require.NoError(t, err, "presign S3 URL")
 	return req.URL
@@ -54,7 +61,8 @@ func TestManager_EnsureFromS3(t *testing.T) {
 		t.Skip("skipping S3 integration test: no AWS credentials found")
 	}
 
-	url := presignS3URL(t)
+	bucket, region, key, sha256, bundleName, bundleVer := s3TestConfig(t)
+	url := presignS3URL(t, bucket, region, key)
 
 	root := t.TempDir()
 	m := NewManager(slog.Default(), root)
@@ -67,30 +75,30 @@ func TestManager_EnsureFromS3(t *testing.T) {
 
 	// First Ensure — download, verify SHA256, extract, symlink
 	path, err := m.Ensure(context.Background(), FileSpec{
-		Name:    s3BundleName,
-		Version: s3BundleVer,
+		Name:    bundleName,
+		Version: bundleVer,
 		URL:     url,
-		SHA256:  s3BundleSHA256,
+		SHA256:  sha256,
 		Extract: true,
 	})
 	require.NoError(t, err)
 
-	expectedPath := filepath.Join(root, s3BundleName, "current")
+	expectedPath := filepath.Join(root, bundleName, "current")
 	assert.Equal(t, expectedPath, path)
 
-	target, err := os.Readlink(filepath.Join(root, s3BundleName, "current"))
+	target, err := os.Readlink(filepath.Join(root, bundleName, "current"))
 	require.NoError(t, err)
-	assert.Equal(t, s3BundleVer, target)
+	assert.Equal(t, bundleVer, target)
 
-	assert.DirExists(t, filepath.Join(root, s3BundleName, s3BundleVer))
+	assert.DirExists(t, filepath.Join(root, bundleName, bundleVer))
 	assert.Equal(t, 1, eventCount, "expected exactly one install event")
 
 	// Second Ensure — must be idempotent
 	path2, err := m.Ensure(context.Background(), FileSpec{
-		Name:    s3BundleName,
-		Version: s3BundleVer,
+		Name:    bundleName,
+		Version: bundleVer,
 		URL:     url,
-		SHA256:  s3BundleSHA256,
+		SHA256:  sha256,
 		Extract: true,
 	})
 	require.NoError(t, err)
