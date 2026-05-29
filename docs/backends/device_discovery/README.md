@@ -108,7 +108,7 @@ Current supported options:
 | discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[paloalto_panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`paloalto_panos`, `paloalto_panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. See the [supported platforms page](./supported_platforms.md) for the full list. |
 | create_unknown_vlans | bool | When discovering interface↔VLAN associations, auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's VLAN database. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `True`. Set `False` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). Only drivers that implement `get_interfaces_vlans()` populate these associations — see the [supported platforms page](./supported_platforms.md). |
 | discover_modules | str | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards, supervisors, etc. — transceiver sub-bays skipped), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Only drivers that implement `get_modules()` populate module data — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
-| propagate_defaults_to_prefix_scope | bool | When `True`, an unset `defaults.prefix.scope_site` falls back to `defaults.site` (the literal placeholder `"undefined"` is skipped) and an unset `defaults.prefix.scope_location` falls back to `defaults.location`. Defaults to `False` — preserves the no-cascade behaviour. **`scope_region` / `scope_site_group` are always explicit-only** (no top-level field to inherit from). Explicit `defaults.prefix.scope_*` always wins over the cascade. See the [Prefix scope](#prefix-scope-netbox-42) section below and [orb-agent#100](https://github.com/netboxlabs/orb-agent/issues/100) for the multi-site /24 caveat. |
+| propagate_defaults_to_prefix_scope | bool | When `True`, an unset `defaults.prefix.scope_site` falls back to `defaults.site` (the literal placeholder `"undefined"` is skipped) and an unset `defaults.prefix.scope_location` falls back to `defaults.location`. Defaults to `False` — preserves the no-cascade behaviour ([orb-agent#100](https://github.com/netboxlabs/orb-agent/issues/100)). `scope_region` / `scope_site_group` are always explicit-only. Explicit `defaults.prefix.scope_*` always wins over the cascade. |
 
 #### Defaults
 Current supported defaults:
@@ -161,10 +161,10 @@ Current supported defaults:
 | ├─ description | str  | Prefix description        |
 | ├─ comments   | str  | Prefix comments            |
 | ├─ tags       | list | Prefix tags                |
-| ├─ scope_site | str  | NetBox Prefix `scope_site`. See [Prefix scope](#prefix-scope-netbox-42) for the oneof precedence rule and cascade behaviour. |
-| ├─ scope_location | str  | NetBox Prefix `scope_location`. |
-| ├─ scope_region | str  | NetBox Prefix `scope_region` — explicit-only (no cascade). |
-| ├─ scope_site_group | str | NetBox Prefix `scope_site_group` — explicit-only (no cascade). |
+| ├─ scope_site | str  | Prefix `scope_site` (see [Prefix](#prefix) for the oneof precedence rule and cascade behaviour) |
+| ├─ scope_location | str  | Prefix `scope_location` |
+| ├─ scope_region | str  | Prefix `scope_region` — explicit-only (no cascade) |
+| ├─ scope_site_group | str | Prefix `scope_site_group` — explicit-only (no cascade) |
 | vrf | map | VRF-specific defaults (used within ipaddress and prefix) |
 | ├─ name | str | VRF name |
 | ├─ rd | str | Route distinguisher (e.g. `65000:100`) |
@@ -392,33 +392,9 @@ Prefixes are derived from IP addresses discovered on interfaces. The network add
 |-------|--------|-------|
 | Prefix (network address) | Derived from IP address | Auto-computed |
 | VRF / Role / Tenant | **Not collected** | Must be set via `defaults.prefix.*` |
-| Scope (site / location / region / site_group) | **Not collected** | See [Prefix scope](#prefix-scope-netbox-42) below |
+| Scope (site / location / region / site_group) | **Not collected** | Set via `defaults.prefix.scope_*` (see Nested Defaults) or opt into the cascade via `options.propagate_defaults_to_prefix_scope` |
 
-#### Prefix scope (NetBox 4.2+)
-
-NetBox 4.2+ Prefix entities carry a single **scope**: exactly one of `scope_site`, `scope_location`, `scope_region`, or `scope_site_group` (it's a protobuf `oneof` — only one is on the wire per Prefix). All four fields are available under `defaults.prefix`:
-
-```yaml
-defaults:
-  prefix:
-    scope_site: DC-East
-    # OR scope_location / scope_region / scope_site_group — set only one.
-```
-
-If more than one `scope_*` is set, **the most-specific wins**: `scope_location` > `scope_site` > `scope_site_group` > `scope_region`. The others are dropped at emission time.
-
-Setting any `scope_*` is **explicit-only by default** — `defaults.site` (used for Device / Location / Rack scope) does **not** auto-fill `Prefix.scope_site`. Single-site agents that want the cascade can flip the opt-in:
-
-```yaml
-options:
-  propagate_defaults_to_prefix_scope: true
-```
-
-When `true`, an unset `defaults.prefix.scope_site` falls back to `defaults.site` (the literal `"undefined"` placeholder is skipped) and an unset `scope_location` falls back to `defaults.location`. Explicit `defaults.prefix.scope_*` still wins over the cascade. `scope_region` / `scope_site_group` have no top-level field to inherit from and remain explicit-only.
-
-**Multi-site /24 caveat ([orb-agent#100](https://github.com/netboxlabs/orb-agent/issues/100)):** agents that discover the same /24 from switches in multiple sites should leave both knobs unset. With nothing set, the agent emits the Prefix with no scope and the Diode plugin preserves the existing NetBox scope value rather than overwriting it. This is the default behaviour.
-
-**Limitation:** clearing an existing scope requires editing NetBox directly. Removing a `scope_*` field from YAML emits no scope, which the Diode plugin treats as "no value" — it does not overwrite. A `force_clear` mechanism may land in a follow-up if customers ask.
+Prefix scope is a `oneof` — a Prefix carries exactly one of `scope_site`, `scope_location`, `scope_region`, `scope_site_group`. When multiple `defaults.prefix.scope_*` are set, the most-specific wins on the wire: `scope_location` > `scope_site` > `scope_site_group` > `scope_region`. By default `defaults.site` does NOT auto-fill `Prefix.scope_site` — set `options.propagate_defaults_to_prefix_scope: true` to enable the cascade (see [orb-agent#100](https://github.com/netboxlabs/orb-agent/issues/100) for the multi-site /24 caveat that motivates explicit-by-default). Clearing an existing scope requires editing NetBox directly.
 
 ### VLAN
 
