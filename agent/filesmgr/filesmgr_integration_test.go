@@ -16,16 +16,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestManager_EnsureFromS3 is an integration test that downloads a real bundle
-// from a private S3 bucket via a presigned URL and verifies the
-// full Ensure flow: download, SHA256 verification, extraction, and symlink.
+// TestManager_EnsureFromS3 is a LOCAL DEVELOPER integration test — it is NOT
+// intended for CI/CD pipelines. It validates the full end-to-end Ensure flow
+// against a real S3 bucket: presigned URL generation, download, SHA256
+// verification, extraction, current symlink creation, and idempotency.
 //
-// Requirements:
-//   - AWS credentials must be active with read access to the configured S3 bucket
-//   - The following environment variables must be set:
-//     S3_TEST_BUCKET, S3_TEST_REGION, S3_TEST_KEY, S3_TEST_SHA256,
-//     S3_TEST_BUNDLE_NAME, S3_TEST_BUNDLE_VERSION
-//   - Run with: go test -v -tags integration -timeout 120s ./agent/filesmgr/... -run TestManager_EnsureFromS3
+// This test is guarded by the "integration" build tag and is skipped
+// automatically when any required environment variable is unset, so it will
+// never run accidentally in standard `go test ./...` invocations.
+//
+// To run locally:
+//
+//  1. Obtain AWS credentials with read access to your S3 bucket.
+//  2. Export the following environment variables:
+//       S3_TEST_BUCKET        — bucket name
+//       S3_TEST_REGION        — AWS region (e.g. us-east-2)
+//       S3_TEST_KEY           — object key of the bundle tarball
+//       S3_TEST_SHA256        — expected SHA256 hex digest of the tarball
+//       S3_TEST_BUNDLE_NAME   — logical bundle name
+//       S3_TEST_BUNDLE_VERSION — bundle version string
+//  3. Run:
+//       go test -v -tags integration -timeout 120s ./agent/filesmgr/... -run TestManager_EnsureFromS3
 
 func s3TestConfig(t *testing.T) (bucket, region, key, sha256, name, version string) {
 	t.Helper()
