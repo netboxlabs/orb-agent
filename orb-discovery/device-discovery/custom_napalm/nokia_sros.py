@@ -4,7 +4,8 @@
 Custom Nokia SR-OS NETCONF NAPALM driver.
 
 Implements only the methods used by device-discovery:
-  get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
+  get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans,
+  get_modules.
 
 Uses ncclient for NETCONF/YANG transport and lxml for structured XML parsing
 against Nokia's YANG models (urn:nokia.com:sros:ns:yang:sr:*).
@@ -27,6 +28,20 @@ import napalm.base as _napalm_base
 from lxml import etree
 from napalm.base import models
 from napalm.base.helpers import convert
+from ncclient import NCClientError
+
+from custom_napalm._modules import (
+    MemberModules as _MemberModules,
+)
+from custom_napalm._modules import (
+    ModuleBay as _ModuleBay,
+)
+from custom_napalm._modules import (
+    ModuleEntry as _ModuleEntry,
+)
+from custom_napalm._modules import (
+    to_payload as _modules_to_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +192,65 @@ _FILTER_INTERFACES_IP = f"""
             </vprn>
         </service>
     </configure>
+</filter>
+"""
+
+# Subtree filter for module / module bay discovery. Returns the chassis
+# fingerprint plus every card (CPM, IOM, IMM, SFM) with its nested MDA list.
+_FILTER_MODULES = f"""
+<filter xmlns="{_NS_NC}">
+    <state xmlns="{_NS_STATE}">
+        <chassis>
+            <hardware-data>
+                <part-number/>
+                <serial-number/>
+                <manufactured-string/>
+            </hardware-data>
+        </chassis>
+        <card>
+            <slot-number/>
+            <equipped-type/>
+            <hardware-data>
+                <part-number/>
+                <serial-number/>
+            </hardware-data>
+            <mda>
+                <mda-slot/>
+                <equipped-type/>
+                <hardware-data>
+                    <part-number/>
+                    <serial-number/>
+                </hardware-data>
+            </mda>
+        </card>
+        <sfm>
+            <sfm-slot/>
+            <equipped-type/>
+            <hardware-data>
+                <part-number/>
+                <serial-number/>
+            </hardware-data>
+        </sfm>
+    </state>
+</filter>
+"""
+
+# Separate filter for transceiver inventory under each port. Issued as a
+# second RPC so the cheap card-only path stays small for chassis without
+# optics enumerated.
+_FILTER_PORTS_TRANSCEIVER = f"""
+<filter xmlns="{_NS_NC}">
+    <state xmlns="{_NS_STATE}">
+        <port>
+            <port-id/>
+            <transceiver>
+                <model/>
+                <serial-number/>
+                <part-number/>
+                <vendor-manufacture-code/>
+            </transceiver>
+        </port>
+    </state>
 </filter>
 """
 
@@ -385,6 +459,287 @@ def _parse_last_flapped(flap_str: str) -> float:
             continue
     logger.debug("Cannot parse last-oper-change: %s", flap_str)
     return -1.0
+
+
+# ---------------------------------------------------------------------------
+# get_modules — module / module bay discovery via NETCONF
+# ---------------------------------------------------------------------------
+
+
+def classify_module_type_nokia_sros(equipped_type: str) -> str:
+    """
+    Classify a Nokia SR-OS card / MDA by its equipped-type string.
+
+      iom*, imm*, xcm*  -> linecard  (XCM = 7950 XRS forwarding card)
+      cpm*              -> supervisor
+      sfm*              -> linecard (no separate fabric type today)
+      anything else     -> "other" (envelope drops on emit)
+    """
+    et = (equipped_type or "").strip().lower()
+    if et.startswith(("iom", "imm", "xcm")):
+        return "linecard"
+    if et.startswith("cpm"):
+        return "supervisor"
+    if et.startswith("sfm"):
+        return "linecard"
+    return "other"
+
+
+def _nokia_sros_rows_from_state_xml(state_root: etree._Element) -> list[dict]:
+    """Walk state/card[/mda] and return a flat row list (cards + nested MDAs)."""
+    rows: list[dict] = []
+    for card in state_root.findall("state_ns:card", _NSMAP):
+        slot_el = card.find("state_ns:slot-number", _NSMAP)
+        et_el = card.find("state_ns:equipped-type", _NSMAP)
+        hw = card.find("state_ns:hardware-data", _NSMAP)
+        pn_el = hw.find("state_ns:part-number", _NSMAP) if hw is not None else None
+        sn_el = hw.find("state_ns:serial-number", _NSMAP) if hw is not None else None
+        slot = (slot_el.text or "").strip() if slot_el is not None else ""
+        if not slot:
+            continue
+        rows.append({
+            "kind": "card",
+            "slot": slot,
+            "parent_slot": None,
+            "mda_slot": None,
+            "equipped_type": (et_el.text or "").strip() if et_el is not None else "",
+            "pid": (pn_el.text or "").strip() if pn_el is not None else "",
+            "sn": (sn_el.text or "").strip() if sn_el is not None else "",
+        })
+        for mda in card.findall("state_ns:mda", _NSMAP):
+            mslot_el = mda.find("state_ns:mda-slot", _NSMAP)
+            met_el = mda.find("state_ns:equipped-type", _NSMAP)
+            mhw = mda.find("state_ns:hardware-data", _NSMAP)
+            mpn = mhw.find("state_ns:part-number", _NSMAP) if mhw is not None else None
+            msn = mhw.find("state_ns:serial-number", _NSMAP) if mhw is not None else None
+            mslot = (mslot_el.text or "").strip() if mslot_el is not None else ""
+            if not mslot:
+                continue
+            rows.append({
+                "kind": "mda",
+                "slot": f"{slot}/{mslot}",
+                "parent_slot": slot,
+                "mda_slot": mslot,
+                "equipped_type": (met_el.text or "").strip() if met_el is not None else "",
+                "pid": (mpn.text or "").strip() if mpn is not None else "",
+                "sn": (msn.text or "").strip() if msn is not None else "",
+            })
+    # SFMs live in a SEPARATE state subtree (not under <card>). Emit each as
+    # a top-level bay; the existing classifier maps `sfm*` -> `linecard`.
+    # Bay names are prefixed `SFM <N>` to avoid collision with same-numbered
+    # card slots in a chassis that uses both namespaces.
+    for sfm in state_root.findall("state_ns:sfm", _NSMAP):
+        sslot_el = sfm.find("state_ns:sfm-slot", _NSMAP)
+        set_el = sfm.find("state_ns:equipped-type", _NSMAP)
+        shw = sfm.find("state_ns:hardware-data", _NSMAP)
+        spn = shw.find("state_ns:part-number", _NSMAP) if shw is not None else None
+        ssn = shw.find("state_ns:serial-number", _NSMAP) if shw is not None else None
+        sslot = (sslot_el.text or "").strip() if sslot_el is not None else ""
+        if not sslot:
+            continue
+        rows.append({
+            "kind": "card",
+            "slot": f"SFM {sslot}",
+            "parent_slot": None,
+            "mda_slot": None,
+            "equipped_type": (set_el.text or "").strip() if set_el is not None else "",
+            "pid": (spn.text or "").strip() if spn is not None else "",
+            "sn": (ssn.text or "").strip() if ssn is not None else "",
+        })
+    return rows
+
+
+def _nokia_sros_transceiver_rows_from_state_xml(state_root: etree._Element) -> list[dict]:
+    """
+    Walk state/port[*] and return per-port rows.
+
+    Every discovered port emits a row regardless of transceiver presence —
+    copper / RJ45 / empty-cage ports also need a parent-bay routing entry.
+    Model and serial fields are populated only when a transceiver is
+    installed AND exposes both values; otherwise the row is port_id-only.
+    """
+    rows: list[dict] = []
+    for port in state_root.findall("state_ns:port", _NSMAP):
+        port_id_el = port.find("state_ns:port-id", _NSMAP)
+        if port_id_el is None:
+            continue
+        port_id = (port_id_el.text or "").strip()
+        if not port_id:
+            continue
+        model = ""
+        sn = ""
+        tx = port.find("state_ns:transceiver", _NSMAP)
+        if tx is not None:
+            model_el = tx.find("state_ns:model", _NSMAP)
+            sn_el = tx.find("state_ns:serial-number", _NSMAP)
+            part_el = tx.find("state_ns:part-number", _NSMAP)
+            model = (model_el.text or "").strip() if model_el is not None else ""
+            sn = (sn_el.text or "").strip() if sn_el is not None else ""
+            if not model and part_el is not None:
+                model = (part_el.text or "").strip()
+        rows.append({"port_id": port_id, "model": model, "sn": sn})
+    return rows
+
+
+def _nokia_sros_slot_sort_key(slot: str) -> tuple[int, int | str]:
+    """Stable order for SR-OS chassis slots: letter slots (CPM-A/B) first, then numeric."""
+    if slot.isalpha():
+        return (0, slot)
+    try:
+        return (1, int(slot))
+    except ValueError:
+        return (2, slot)
+
+
+def _nokia_sros_build_card_bays(rows: list[dict]) -> list[_ModuleBay]:
+    """First pass: emit one top-level bay per card row, sorted for stable output."""
+    bays: list[_ModuleBay] = []
+    for row in rows:
+        if row.get("kind") != "card":
+            continue
+        pid = row.get("pid") or ""
+        sn = row.get("sn") or ""
+        et = row.get("equipped_type") or ""
+        slot = row.get("slot") or ""
+        if not (pid and sn and slot):
+            continue
+        mtype = classify_module_type_nokia_sros(et)
+        if mtype == "other":
+            continue
+        bays.append(_ModuleBay(
+            name=slot,
+            position=slot,
+            module=_ModuleEntry(
+                model=pid, serial=sn, type=mtype, description=et,
+            ),
+        ))
+    bays.sort(key=lambda b: _nokia_sros_slot_sort_key(b.name))
+    return bays
+
+
+def _nokia_sros_attach_mda_sub_bays(
+    rows: list[dict],
+    bays: list[_ModuleBay],
+) -> dict[str, _ModuleBay]:
+    """Second pass: nest MDA sub-bays under their parent card. Returns mda-path -> bay."""
+    bays_by_slot: dict[str, _ModuleBay] = {bay.name: bay for bay in bays}
+    mda_bays_by_path: dict[str, _ModuleBay] = {}
+    for row in rows:
+        if row.get("kind") != "mda":
+            continue
+        parent_slot = row.get("parent_slot") or ""
+        mda_slot = row.get("mda_slot") or ""
+        pid = row.get("pid") or ""
+        sn = row.get("sn") or ""
+        et = row.get("equipped_type") or ""
+        if not (parent_slot and mda_slot and pid and sn):
+            continue
+        parent_bay = bays_by_slot.get(parent_slot)
+        if parent_bay is None or parent_bay.module is None:
+            continue
+        mda_bay = _ModuleBay(
+            name=f"{parent_slot}/{mda_slot}",
+            position=f"{parent_slot}/{mda_slot}",
+            module=_ModuleEntry(
+                model=pid, serial=sn, type="linecard", description=et,
+            ),
+        )
+        parent_bay.module.sub_bays.append(mda_bay)
+        mda_bays_by_path[f"{parent_slot}/{mda_slot}"] = mda_bay
+    return mda_bays_by_path
+
+
+def _nokia_sros_attach_transceiver_sub_bays(
+    transceiver_rows: list[dict],
+    mda_bays_by_path: dict[str, _ModuleBay],
+) -> dict[str, list[str]]:
+    """Route every port to its parent bays; emit transceiver sub-bay only when populated."""
+    interfaces_by_bay: dict[str, list[str]] = {}
+    for row in transceiver_rows:
+        port_id = row.get("port_id") or ""
+        if not port_id:
+            continue
+        parts = port_id.split("/")
+        if len(parts) < 3:
+            continue
+        mda_path = f"{parts[0]}/{parts[1]}"
+        mda_bay = mda_bays_by_path.get(mda_path)
+        if mda_bay is None or mda_bay.module is None:
+            continue
+        # Routing layers are emitted for EVERY discovered port (copper,
+        # empty cage, optic-without-data, …) — get_interfaces() emits the
+        # physical port regardless of optic, so it needs a module to land
+        # on in both linecards and full modes:
+        #   - card-slot key   -> linecards mode routing
+        #   - mda-path key    -> full mode at MDA depth
+        card_slot = parts[0]
+        interfaces_by_bay.setdefault(card_slot, []).append(port_id)
+        interfaces_by_bay.setdefault(mda_path, []).append(port_id)
+        # Transceiver sub-bay (and its per-port deepest-wins routing key)
+        # only emit when the optic exposes both model and serial.
+        model = row.get("model") or ""
+        sn = row.get("sn") or ""
+        if model and sn:
+            mda_bay.module.sub_bays.append(_ModuleBay(
+                name=port_id, position=port_id,
+                module=_ModuleEntry(model=model, serial=sn, type="transceiver", description=""),
+            ))
+            interfaces_by_bay[port_id] = [port_id]
+    return interfaces_by_bay
+
+
+def _nokia_sros_get_modules_impl(driver) -> dict | None:
+    """
+    Module discovery for Nokia SR-OS via NETCONF.
+
+    Two RPCs: first the card+MDA tree, then a best-effort transceiver pass.
+    Returns None if no card survives validation; the transceiver pass is
+    non-fatal — a card-only envelope still ships if the second RPC fails.
+    """
+    # Narrow except scope: ncclient transport / RPC errors and lxml parse
+    # errors are recoverable (return None / log + continue). Programming
+    # errors (AttributeError on driver.conn=None, ImportError) propagate
+    # so they surface as bugs instead of being silently masked.
+    try:
+        reply = driver.conn.get(filter=_FILTER_MODULES)
+    except NCClientError as e:
+        logger.warning("nokia_sros.get_modules: card RPC failed: %s", e)
+        return None
+    if getattr(reply, "data_xml", None) is None:
+        logger.warning("nokia_sros.get_modules: card RPC returned empty data_xml")
+        return None
+    try:
+        state = _parse_xml(reply.data_xml).find(".//state_ns:state", _NSMAP)
+    except etree.XMLSyntaxError as e:
+        logger.warning("nokia_sros.get_modules: card XML parse failed: %s", e)
+        return None
+    if state is None:
+        return None
+    rows = _nokia_sros_rows_from_state_xml(state)
+    bays = _nokia_sros_build_card_bays(rows)
+    if not bays:
+        return None
+    mda_bays_by_path = _nokia_sros_attach_mda_sub_bays(rows, bays)
+
+    interfaces_by_bay: dict[str, list[str]] = {}
+    try:
+        tx_reply = driver.conn.get(filter=_FILTER_PORTS_TRANSCEIVER)
+        if getattr(tx_reply, "data_xml", None) is None:
+            logger.warning("nokia_sros.get_modules: transceiver RPC returned empty data_xml")
+        else:
+            tx_state = _parse_xml(tx_reply.data_xml).find(".//state_ns:state", _NSMAP)
+            if tx_state is not None:
+                tx_rows = _nokia_sros_transceiver_rows_from_state_xml(tx_state)
+                interfaces_by_bay = _nokia_sros_attach_transceiver_sub_bays(
+                    tx_rows, mda_bays_by_path,
+                )
+    except (NCClientError, etree.XMLSyntaxError) as e:
+        # Non-fatal: cards-only payload still ships.
+        logger.warning("nokia_sros.get_modules: transceiver RPC failed: %s", e)
+
+    return _modules_to_payload({
+        None: _MemberModules(bays=bays, interfaces_by_bay=interfaces_by_bay),
+    })
 
 
 class SROSDriver(_napalm_base.NetworkDriver):
@@ -695,3 +1050,7 @@ class SROSDriver(_napalm_base.NetworkDriver):
     def get_vlans(self) -> dict:
         """Nokia SR-OS uses a service-based architecture — no traditional VLAN table."""
         return {}
+
+    def get_modules(self) -> dict | None:
+        """Return per-chassis module / module bay inventory or None."""
+        return _nokia_sros_get_modules_impl(self)

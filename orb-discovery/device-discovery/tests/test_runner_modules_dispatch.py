@@ -27,6 +27,8 @@ from custom_napalm.ios import IOSDriver
 from custom_napalm.iosxr import IOSXRDriver
 from custom_napalm.iosxr_netconf import IOSXRNETCONFDriver
 from custom_napalm.junos import JunOSDriver
+from custom_napalm.nokia_sros import SROSDriver
+from custom_napalm.nokia_sros_ssh import SROSSSHDriver
 from custom_napalm.nxos import NXOSDriver
 from custom_napalm.nxos_ssh import NXOSSSHDriver
 from device_discovery.policy.models import Config, Defaults, Options
@@ -162,6 +164,8 @@ def test_collect_modules_swallows_driver_exception(caplog) -> None:
         pytest.param(VRPDriver, id="vrp"),
         pytest.param(AOSCXDriver, id="aoscx"),
         pytest.param(AOSCXSSHDriver, id="aoscx_ssh"),
+        pytest.param(SROSDriver, id="nokia_sros"),
+        pytest.param(SROSSSHDriver, id="nokia_sros_ssh"),
     ],
 )
 def test_driver_exposes_get_modules(driver_cls) -> None:
