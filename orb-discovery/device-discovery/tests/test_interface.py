@@ -15,6 +15,7 @@ from device_discovery.policy.models import (
     InterfacePattern,
     IpamParameters,
     ObjectParameters,
+    PrefixParameters,
     VlanParameters,
 )
 from device_discovery.translate import translate_device
@@ -67,7 +68,7 @@ def sample_defaults():
         device=DeviceParameters(comments="testing", tags=["devtag"]),
         interface=ObjectParameters(description="testing", tags=["inttag"]),
         ipaddress=IpamParameters(description="ip test", tags=["iptag"]),
-        prefix=IpamParameters(description="prefix test", tags=["prefixtag"]),
+        prefix=PrefixParameters(description="prefix test", tags=["prefixtag"]),
         vlan=VlanParameters(comments="test"),
     )
 
@@ -671,3 +672,249 @@ def test_build_interface_entities_invalid_exclude_pattern_skipped(sample_diode_d
     # invalid pattern "[invalid" is skipped; valid "^tap" still excludes tap0
     assert "tap0" not in interface_names
     assert "eth0" in interface_names
+
+
+def _extract_prefix(entities):
+    """Return the first Prefix entity from a list of Entity wrappers."""
+    for entity in entities:
+        if hasattr(entity, "prefix") and entity.prefix.prefix:
+            return entity.prefix
+    return None
+
+
+def test_prefix_emission_no_defaults_scope_empty(sample_diode_device):
+    """Baseline: no defaults.prefix → all four scope_* empty (orb-agent#100 guard)."""
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(site="DC-East")  # site set but propagate_* is False — NO cascade
+    options = Options()  # propagate_defaults_to_prefix_scope defaults to False
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    assert prefix is not None
+    # scope_site / scope_location are Site / Location proto messages; empty
+    # means their .name is "" (no scope attached).
+    assert prefix.scope_site.name == ""
+    assert prefix.scope_location.name == ""
+
+
+def test_prefix_emission_explicit_scope_site(sample_diode_device):
+    """Explicit defaults.prefix.scope_site → emitted scope_site, location empty."""
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options, PrefixParameters
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(prefix=PrefixParameters(scope_site="DC-East"))
+    options = Options()
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    assert prefix is not None
+    assert prefix.scope_site.name == "DC-East"
+    assert prefix.scope_location.name == ""
+
+
+def test_prefix_emission_both_scope_fields_explicit(sample_diode_device):
+    """Both explicit scope_* set → most-specific wins (location > site)."""
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options, PrefixParameters
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(
+        prefix=PrefixParameters(
+            scope_site="DC-East",
+            scope_location="Floor-3",
+        ),
+    )
+    options = Options()
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    # Protobuf scope is a oneof — only the most-specific value is on the wire.
+    assert prefix.scope_location.name == "Floor-3"
+    # Site is embedded inside the Location for NetBox uniqueness (locations
+    # are unique within site, not globally).
+    assert prefix.scope_location.site.name == "DC-East"
+    assert not prefix.scope_site.name
+
+
+def test_prefix_emission_cascade_off_blocks_defaults_site(sample_diode_device):
+    """Regression guard for orb-agent#100: cascade off → defaults.site does NOT touch Prefix scope."""
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(site="DC-East", location="Floor-3")
+    options = Options(propagate_defaults_to_prefix_scope=False)  # explicit False
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    assert prefix.scope_site.name == ""
+    assert prefix.scope_location.name == ""
+
+
+def test_prefix_emission_cascade_on_inherits_site_and_location(sample_diode_device):
+    """Cascade on + no explicit scope_* → defaults.location wins over defaults.site by precedence."""
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(site="DC-East", location="Floor-3")
+    options = Options(propagate_defaults_to_prefix_scope=True)
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    # location is more specific than site → it wins under the oneof precedence rule.
+    assert prefix.scope_location.name == "Floor-3"
+    # Site is embedded so NetBox can disambiguate "Floor-3 in DC-East" from
+    # any other site's "Floor-3" — locations are unique within site, not globally.
+    assert prefix.scope_location.site.name == "DC-East"
+    assert not prefix.scope_site.name
+
+
+def test_prefix_emission_explicit_beats_cascade(sample_diode_device):
+    """Explicit defaults.prefix.scope_site wins over cascade from defaults.site."""
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options, PrefixParameters
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(
+        site="DC-East",
+        prefix=PrefixParameters(scope_site="DC-West"),  # explicit wins
+    )
+    options = Options(propagate_defaults_to_prefix_scope=True)
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    assert prefix.scope_site.name == "DC-West"
+
+
+def test_prefix_emission_explicit_scope_blocks_cross_field_cascade(sample_diode_device):
+    """
+    Cross-field regression: any explicit defaults.prefix.scope_* skips the entire cascade.
+
+    Without this guard, an operator who explicitly sets scope_site would
+    have it silently overridden by a cascaded scope_location (more
+    specific → wins the oneof precedence). The cascade is skipped
+    wholesale when any explicit prefix scope is set.
+    """
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options, PrefixParameters
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(
+        site="DC-East",
+        location="Floor-3",  # would cascade to scope_location and win precedence
+        prefix=PrefixParameters(scope_site="DC-West"),  # explicit scope_site — operator's choice
+    )
+    options = Options(propagate_defaults_to_prefix_scope=True)
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    # Explicit scope_site wins; scope_location is NOT cascaded because explicit mode.
+    assert prefix.scope_site.name == "DC-West"
+    assert not prefix.scope_location.name
+
+
+def test_prefix_emission_cascade_skips_undefined_site_placeholder(sample_diode_device):
+    """The literal 'undefined' default for defaults.site is not cascaded — it's a placeholder, not a real site."""
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults()  # site defaults to "undefined"
+    options = Options(propagate_defaults_to_prefix_scope=True)
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    assert prefix.scope_site.name == ""  # not "undefined"
+
+
+def test_prefix_emission_legacy_ipam_parameters_assignment_does_not_crash(sample_diode_device):
+    """
+    Back-compat regression for in-process callers assigning a bare IpamParameters.
+
+    Pydantic does not validate field assignment after construction, so a
+    library caller could do `defaults.prefix = IpamParameters(role="x")`
+    without coercion to PrefixParameters. The scope reads in
+    _resolve_prefix_scope_kwargs must tolerate the missing attributes
+    rather than crashing the entire discovery cycle with AttributeError.
+    """
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, IpamParameters, Options
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults()
+    # Legacy in-process pattern: bypass Pydantic validation and assign a
+    # plain IpamParameters. Missing scope_site / scope_location attributes
+    # must not raise.
+    defaults.prefix = IpamParameters(role="customer-edge")
+    options = Options()
+
+    # Must not raise AttributeError on the scope reads.
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    assert prefix is not None
+    assert prefix.scope_site.name == ""
+    assert prefix.scope_location.name == ""
+    # Non-scope IpamParameters fields still flow through (role inherited).
+    assert prefix.role.name == "customer-edge"
+
+
+def test_prefix_emission_scope_location_alone_emits_without_site(sample_diode_device):
+    """
+    Explicit scope_location alone (no scope_site) emits bare Location.
+
+    When the operator only sets scope_location and we have no site context
+    (neither explicit scope_site nor a cascade site to embed), we pass a
+    bare Location(name=...) — the operator owns the ambiguity. We do NOT
+    fabricate a site or fall back to defaults.site without the cascade
+    flag.
+    """
+    from device_discovery.interface import build_interface_entities
+    from device_discovery.policy.models import Defaults, Options, PrefixParameters
+
+    interfaces = {"Eth1/1": {"is_enabled": True, "speed": 10000, "mtu": 1500, "mac_address": "", "description": ""}}
+    interfaces_ip = {"Eth1/1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    defaults = Defaults(
+        site="DC-East",  # set but cascade is off — must NOT leak into Location
+        prefix=PrefixParameters(scope_location="Floor-3"),  # explicit, no scope_site
+    )
+    options = Options()  # cascade off
+
+    entities = build_interface_entities(
+        sample_diode_device, interfaces, interfaces_ip, defaults, options=options,
+    )
+    prefix = _extract_prefix(entities)
+    assert prefix.scope_location.name == "Floor-3"
+    # No site embedded — operator didn't provide one and cascade is off.
+    assert prefix.scope_location.site.name == ""

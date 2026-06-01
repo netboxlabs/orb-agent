@@ -8,10 +8,10 @@ import re
 from collections.abc import Iterable
 
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
-from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, Prefix
+from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, Location, Prefix
 
 from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
-from device_discovery.policy.models import Defaults
+from device_discovery.policy.models import Defaults, Options
 
 logger = logging.getLogger(__name__)
 
@@ -270,8 +270,78 @@ def translate_interface(
     return interface
 
 
+def _resolve_prefix_scope_kwargs(
+    defaults: Defaults,
+    options: "Options | None",
+) -> dict[str, str]:
+    """
+    Pick a single Prefix scope_* kwarg honoring the protobuf oneof.
+
+    Reads the two explicit scope fields off ``defaults.prefix`` and, when
+    ``options.propagate_defaults_to_prefix_scope`` is True, falls back to
+    ``defaults.site`` (skipping the "undefined" placeholder) and
+    ``defaults.location``. Explicit per-prefix scope always wins over the
+    cascade.
+
+    ``Prefix.scope_{site,location}`` is a protobuf oneof, so only one value
+    travels on the wire — picks the most-specific non-empty candidate
+    (location > site) so callers don't accidentally clobber a granular
+    scope with a broader one.
+    """
+    prefix_scope_site: str | None = None
+    prefix_scope_location: str | None = None
+
+    if defaults.prefix:
+        # getattr fallback so a caller that bypasses Pydantic and assigns
+        # a bare IpamParameters (missing scope_*) to defaults.prefix
+        # post-construction doesn't crash with AttributeError mid-discovery.
+        # Normal YAML / Pydantic-validation paths get PrefixParameters with
+        # the attributes already present — getattr is the no-op fast path.
+        prefix_scope_site = getattr(defaults.prefix, "scope_site", None) or None
+        prefix_scope_location = getattr(defaults.prefix, "scope_location", None) or None
+
+    # Opt-in cascade: defaults.site / defaults.location → Prefix scope.
+    # Any explicit defaults.prefix.scope_* puts the operator in "explicit
+    # mode" and the cascade is skipped wholesale — otherwise a cascaded
+    # more-specific scope (e.g. cascaded scope_location) could win the
+    # oneof precedence over an operator's explicit less-specific choice
+    # (e.g. explicit scope_site). The literal "undefined" placeholder for
+    # defaults.site is treated as no-value (see Defaults model).
+    any_explicit_prefix_scope = bool(prefix_scope_site or prefix_scope_location)
+    if (
+        options
+        and options.propagate_defaults_to_prefix_scope
+        and not any_explicit_prefix_scope
+    ):
+        if defaults.site and defaults.site != "undefined":
+            prefix_scope_site = defaults.site
+        if defaults.location:
+            prefix_scope_location = defaults.location
+
+    # NetBox Locations are unique within their parent site, not globally —
+    # emit Location(name=..., site=...) when a site is available so the
+    # Diode plugin can disambiguate "Floor-1 in DC-East" from "Floor-1 in
+    # DC-West". Mirrors translate_device's Location(name=..., site=...).
+    scope_kwargs: dict[str, str | Location] = {}
+    for scope_name, scope_val in (
+        ("scope_location", prefix_scope_location),
+        ("scope_site", prefix_scope_site),
+    ):
+        if not scope_val:
+            continue
+        if scope_name == "scope_location" and prefix_scope_site:
+            scope_kwargs[scope_name] = Location(name=scope_val, site=prefix_scope_site)
+        else:
+            scope_kwargs[scope_name] = scope_val
+        break
+    return scope_kwargs
+
+
 def translate_interface_ips(
-    interface: Interface, interfaces_ip: dict, defaults: Defaults
+    interface: Interface,
+    interfaces_ip: dict,
+    defaults: Defaults,
+    options: "Options | None" = None,
 ) -> Iterable[Entity]:
     """
     Translate IP address and Prefixes information for an interface.
@@ -279,9 +349,12 @@ def translate_interface_ips(
     Args:
     ----
         interface (Interface): The interface entity.
-        if_name (str): The name of the interface.
         interfaces_ip (dict): Dictionary containing interface IP information.
         defaults (Defaults): Default configuration.
+        options (Options | None): Policy options; when
+            ``propagate_defaults_to_prefix_scope`` is True the top-level
+            ``defaults.site`` / ``defaults.location`` cascade onto the
+            emitted Prefix scope.
 
     Returns:
     -------
@@ -321,6 +394,8 @@ def translate_interface_ips(
         prefix_tenant = translate_tenant(defaults.prefix.tenant)
         prefix_vrf = translate_vrf(defaults.prefix.vrf)
 
+    scope_kwargs = _resolve_prefix_scope_kwargs(defaults, options)
+
     ip_entities = []
 
     for if_ip_name, ip_info in interfaces_ip.items():
@@ -339,6 +414,7 @@ def translate_interface_ips(
                                 tags=prefix_tags,
                                 comments=prefix_comments,
                                 description=prefix_description,
+                                **scope_kwargs,
                             )
                         )
                     )
@@ -411,6 +487,7 @@ def build_interface_entities(
     interfaces_ip: dict,
     defaults: Defaults,
     iface_module_map: dict[str, pb.Module] | None = None,
+    options: "Options | None" = None,
 ) -> list[Entity]:
     """
     Create interface entities from interface definitions and IP data.
@@ -455,7 +532,7 @@ def build_interface_entities(
         _attach_module_ref(interface, if_name, iface_module_map)
         interface_entities[if_name] = interface
         entities.append(Entity(interface=interface))
-        entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
+        entities.extend(translate_interface_ips(interface, interfaces_ip, defaults, options=options))
 
     for if_name in sorted(interfaces_ip.keys(), key=interface_sort_key):
         if if_name in interface_entities:
@@ -467,6 +544,6 @@ def build_interface_entities(
         _attach_module_ref(interface, if_name, iface_module_map)
         interface_entities[if_name] = interface
         entities.append(Entity(interface=interface))
-        entities.extend(translate_interface_ips(interface, interfaces_ip, defaults))
+        entities.extend(translate_interface_ips(interface, interfaces_ip, defaults, options=options))
 
     return entities

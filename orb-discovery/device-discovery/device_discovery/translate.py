@@ -685,6 +685,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
         interface_related_entities = build_interface_entities(
             device_for_interfaces, interfaces, interfaces_ip, defaults,
             iface_module_map=iface_module_map,
+            options=options,
         )
         # assign_primary_ip must run before the Device is wrapped into Entity
         # because Entity(device=...) copies the message; subsequent mutations

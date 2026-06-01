@@ -261,6 +261,7 @@ def _build_per_member_interfaces(
     grouped_ips: dict[int, dict],
     defaults: Defaults,
     iface_module_map: dict[str, pb.Module] | None = None,
+    options: "Options | None" = None,
 ) -> dict[int, list[Entity]]:
     """
     Run build_interface_entities once per member and return the per-member entity lists.
@@ -282,6 +283,7 @@ def _build_per_member_interfaces(
         out[mid] = build_interface_entities(
             device_for_iface, sub_interfaces, sub_ips, defaults,
             iface_module_map=iface_module_map,
+            options=options,
         )
     return out
 
@@ -370,6 +372,7 @@ def translate_as_stack(
     interface_entities_by_member = _build_per_member_interfaces(
         member_ids, member_devices, grouped_interfaces, grouped_ips, defaults,
         iface_module_map=iface_module_map,
+        options=options,
     )
 
     # Primary-IP back-pointer is only meaningful on the master (mgmt IP).

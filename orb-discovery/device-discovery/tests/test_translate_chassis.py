@@ -520,3 +520,29 @@ def test_vc_with_modules_emits_per_member_module_entities():
     assert iface_m2.HasField("module")
     assert iface_m2.module.serial == "NM2"
 
+
+
+def test_vc_cascade_propagates_options_through_per_member_builder():
+    """
+    VC path regression: options.propagate_defaults_to_prefix_scope must reach the per-member interface builder.
+
+    Without the fix at translate_chassis.py:282, build_interface_entities
+    runs without options on the VC path → emitted Prefix has no scope
+    even when defaults.site + propagate_* are set. This test asserts
+    the cascade works end-to-end through translate_data → translate_as_stack
+    → _build_per_member_interfaces → build_interface_entities.
+    """
+    from device_discovery.policy.models import Options
+
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(site="DC-East")
+    data["options"] = Options(propagate_defaults_to_prefix_scope=True)
+    data["interface_ip"]["GigabitEthernet2/0/9"] = {
+        "ipv4": {"10.0.2.9": {"prefix_length": 24}},
+    }
+
+    entities = list(translate_data(data))
+    prefixes = [e.prefix for e in entities if e.HasField("prefix")]
+    assert prefixes, "expected at least one Prefix from interface_ip on the VC path"
+    # Cascade from defaults.site → Prefix.scope_site (NetBox 4.2+ scope oneof).
+    assert prefixes[0].scope_site.name == "DC-East"

@@ -112,6 +112,13 @@ class IpamParameters(ObjectParameters):
     vrf: str | VrfParameters | None = Field(default=None, description="IPAM VRF, optional")
 
 
+class PrefixParameters(IpamParameters):
+    """Model for prefix-specific parameters."""
+
+    scope_site: str | None = Field(default=None, description="Prefix scope site, optional")
+    scope_location: str | None = Field(default=None, description="Prefix scope location, optional")
+
+
 class Defaults(BaseModel):
     """Model for default configuration."""
 
@@ -151,12 +158,29 @@ class Defaults(BaseModel):
     ipaddress: IpamParameters | None = Field(
         default=None, description="IP Address parameters, optional"
     )
-    prefix: IpamParameters | None = Field(
+    prefix: PrefixParameters | None = Field(
         default=None, description="Prefix parameters, optional"
     )
     vlan: VlanParameters | None = Field(
         default=None, description="VLAN parameters, optional"
     )
+
+    @field_validator("prefix", mode="before")
+    @classmethod
+    def coerce_ipam_to_prefix_parameters(cls, v: object) -> object:
+        """
+        Coerce a bare IpamParameters to PrefixParameters for back-compat.
+
+        Legacy in-process callers used to build ``Defaults(prefix=
+        IpamParameters(role="x"))`` before PrefixParameters existed.
+        Without this coercion Pydantic raises ValidationError because
+        IpamParameters isn't a PrefixParameters subclass. Round-trip
+        through model_dump → dict so the matching fields land on the
+        new model.
+        """
+        if isinstance(v, IpamParameters) and not isinstance(v, PrefixParameters):
+            return v.model_dump()
+        return v
 
 
 class Options(BaseModel):
@@ -205,6 +229,17 @@ class Options(BaseModel):
             "and any psu/fan a driver classifies explicitly); transceiver "
             "sub-bays are dropped. 'full' adds the per-port transceiver "
             "sub-bays."
+        ),
+    )
+    propagate_defaults_to_prefix_scope: bool = Field(
+        default=False,
+        description=(
+            "When True AND no explicit defaults.prefix.scope_* is set, "
+            "defaults.site cascades to Prefix.scope_site (unless it's "
+            "the literal placeholder 'undefined') and defaults.location "
+            "cascades to Prefix.scope_location. Any explicit "
+            "defaults.prefix.scope_* skips the cascade wholesale. "
+            "Default False preserves the no-cascade behavior."
         ),
     )
 

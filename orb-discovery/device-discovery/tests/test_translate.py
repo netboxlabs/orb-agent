@@ -16,6 +16,7 @@ from device_discovery.policy.models import (
     Napalm,
     ObjectParameters,
     Options,
+    PrefixParameters,
     TenantParameters,
     VlanParameters,
     VrfParameters,
@@ -114,7 +115,7 @@ def sample_defaults():
         device=DeviceParameters(comments="testing", tags=["devtag"]),
         interface=ObjectParameters(description="testing", tags=["inttag"]),
         ipaddress=IpamParameters(description="ip test", tags=["iptag"]),
-        prefix=IpamParameters(description="prefix test", tags=["prefixtag"]),
+        prefix=PrefixParameters(description="prefix test", tags=["prefixtag"]),
         vlan=VlanParameters(comments="test"),
     )
 
@@ -200,7 +201,7 @@ def test_translate_interface_ips_with_vrf_parameters(
 ):
     """Ensure VRF parameters translate into VRF entities with route distinguisher."""
     sample_defaults.ipaddress = IpamParameters(vrf=sample_vrf_parameters)
-    sample_defaults.prefix = IpamParameters(vrf=VrfParameters(name="Prefix-VRF", rd="65000:200"))
+    sample_defaults.prefix = PrefixParameters(vrf=VrfParameters(name="Prefix-VRF", rd="65000:200"))
     device = translate_device(sample_device_info, sample_defaults)
     interface = translate_interface(
         device,
@@ -227,7 +228,7 @@ def test_translate_interface_ips_with_vrf_string(
 ):
     """Ensure plain string VRF still works (backwards compatibility)."""
     sample_defaults.ipaddress = IpamParameters(vrf="plain-vrf")
-    sample_defaults.prefix = IpamParameters(vrf="plain-prefix-vrf")
+    sample_defaults.prefix = PrefixParameters(vrf="plain-prefix-vrf")
     device = translate_device(sample_device_info, sample_defaults)
     interface = translate_interface(
         device,
