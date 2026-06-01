@@ -20,6 +20,19 @@ from napalm.base.exceptions import ConnectionException
 from napalm.base.helpers import mac as standardize_mac
 from napalm.base.utils.string_parsers import convert_uptime_string_seconds
 
+from custom_napalm._modules import (
+    MemberModules as _MemberModules,
+)
+from custom_napalm._modules import (
+    ModuleBay as _ModuleBay,
+)
+from custom_napalm._modules import (
+    ModuleEntry as _ModuleEntry,
+)
+from custom_napalm._modules import (
+    to_payload as _modules_to_payload,
+)
+
 logger = logging.getLogger(__name__)
 
 _SECRET_TAG_RE = re.compile(
@@ -65,6 +78,184 @@ def _extract_ip_info(parsed_intf_dict: dict) -> dict:
     if ip_info == {intf: {}}:
         return {}
     return ip_info
+
+
+# ---------------------------------------------------------------------------
+# get_modules — module / module bay discovery via PAN-OS XML API
+# ---------------------------------------------------------------------------
+
+
+_MODULAR_PANOS_PREFIXES = ("PA-7050", "PA-7080", "PA-7500", "PA-5450")
+
+
+def _is_modular_panos(model: str | None) -> bool:
+    """
+    Return True when PAN-OS model identifies an in-scope modular chassis.
+
+    Handles trailing variants like ``PA-7050B`` or ``PA-5450-AC`` by prefix
+    match on the uppercased model string. Fixed-config / VM-series /
+    Panorama appliances short-circuit before any chassis-inventory RPC.
+    Accepts ``None`` to tolerate missing facts entries.
+    """
+    upper = (model or "").strip().upper()
+    return any(upper.startswith(p) for p in _MODULAR_PANOS_PREFIXES)
+
+
+# SKU card-type classifier. Each entry is a hyphen-bounded token that
+# appears in PaloAlto card PIDs (e.g. `MPC` matches `PA-7500-MPC-A` AND
+# `PA-XXX-MPC`). The token must be preceded by `-` and followed by either
+# `-` or end-of-string — naked-substring matching would over-trigger.
+#
+# ORDER MATTERS (first-match-wins). The generic invariant: any token that
+# is a strict substring of another token MUST appear AFTER the longer
+# token. None of the current entries actually exhibit the substring
+# relation, but `test_panos_sku_classifier_ordering_invariant` enforces
+# the rule across the whole table — so future additions like a `PC`
+# token (substring of MPC / NPC / DPC / LPC) would be caught.
+_PANOS_SKU_CLASSIFIER: tuple[tuple[str, str], ...] = (
+    ("MPC", "supervisor"),
+    ("SMC", "supervisor"),
+    ("SFC", "linecard"),
+    ("NPC", "linecard"),
+    ("LFC", "linecard"),
+    ("LPC", "linecard"),
+    ("DPC", "linecard"),
+    ("BC", "linecard"),
+    ("NC", "linecard"),
+)
+
+
+def classify_module_type_panos(part_number: str) -> str:
+    """Classify a PAN-OS card by hyphen-bounded token in the SKU (case-insensitive)."""
+    pid = (part_number or "").upper()
+    for token, mtype in _PANOS_SKU_CLASSIFIER:
+        if f"-{token}-" in pid or pid.endswith(f"-{token}"):
+            return mtype
+    return "other"
+
+
+def _panos_token_from_sku(part_number: str) -> str:
+    """Extract canonical card-type token from a PaloAlto SKU (e.g. "NPC" from "PA-7000-100G-NPC-A")."""
+    pid = (part_number or "").upper()
+    for token, _ in _PANOS_SKU_CLASSIFIER:
+        if f"-{token}-" in pid or pid.endswith(f"-{token}"):
+            return token
+    return ""
+
+
+def _extract_model_from_info_xml(xml_text: str) -> str:
+    """
+    Extract <model> text from a `<show><system><info>` response.
+
+    Returns empty string if the model element is absent or parsing fails.
+    """
+    if not xml_text:
+        return ""
+    try:
+        root = xml.etree.ElementTree.fromstring(xml_text)
+    except xml.etree.ElementTree.ParseError as e:
+        logger.warning("paloalto_panos.get_modules: system info parse failed: %s", e)
+        return ""
+    model_el = root.find(".//system/model")
+    return (model_el.text or "").strip() if model_el is not None else ""
+
+
+def _parse_chassis_inventory_xml(xml_text: str) -> list[dict]:
+    """
+    Parse `<show><chassis><inventory></inventory></chassis></show>` response.
+
+    Walks ``chassis/slots/entry/*`` and returns one row per ``<entry>``,
+    with empty strings for any missing child element. Filtering of rows
+    that lack a usable PID or serial happens downstream in
+    ``_panos_build_bays``; this layer is intentionally permissive so the
+    PA-5450 Base Card row (blank ``<slot>``) reaches the builder.
+    """
+    rows: list[dict] = []
+    try:
+        root = xml.etree.ElementTree.fromstring(xml_text)
+    except xml.etree.ElementTree.ParseError as e:
+        logger.warning("paloalto_panos.get_modules: chassis inventory parse failed: %s", e)
+        return rows
+    for entry in root.findall(".//chassis/slots/entry"):
+        slot_el = entry.find("slot")
+        pn_el = entry.find("part-number")
+        sn_el = entry.find("serial")
+        # Empty / missing <slot> is allowed at the parser layer — the
+        # builder synthesizes a bay name from the SKU token for cards like
+        # the PA-5450 Base Card that PAN-OS prints without a slot id.
+        rows.append({
+            "slot": (slot_el.text or "").strip() if slot_el is not None else "",
+            "pid": (pn_el.text or "").strip() if pn_el is not None else "",
+            "sn": (sn_el.text or "").strip() if sn_el is not None else "",
+        })
+    return rows
+
+
+def _panos_build_bays(rows: list[dict]) -> list[_ModuleBay]:
+    """Build one top-level bay per inventory row; description derived from SKU token."""
+    bays: list[_ModuleBay] = []
+    for row in rows:
+        slot = row.get("slot") or ""
+        pid = row.get("pid") or ""
+        sn = row.get("sn") or ""
+        if not (pid and sn):
+            continue
+        mtype = classify_module_type_panos(pid)
+        if mtype == "other":
+            continue
+        token = _panos_token_from_sku(pid)
+        # PA-5450 Base Card prints with a blank Slot column in real PAN-OS
+        # output — synthesize a bay name from the SKU token so the bay
+        # still emits with a stable human-readable id.
+        if not slot:
+            slot = token
+        if not slot:
+            continue
+        bays.append(_ModuleBay(
+            name=slot, position=slot,
+            module=_ModuleEntry(
+                model=pid, serial=sn, type=mtype, description=token,
+            ),
+        ))
+    return bays
+
+
+def _panos_get_modules_impl(driver) -> dict | None:
+    """
+    Module discovery for PaloAlto PAN-OS via XML API.
+
+    1. Issue `<show><system><info></info></system></show>`, read model.
+    2. Short-circuit on non-modular models (no second RPC).
+    3. Issue `<show><chassis><inventory></inventory></chassis></show>` op RPC.
+    4. Parse slots and emit canonical envelope.
+
+    Goes direct to a lightweight model lookup instead of calling
+    ``driver.get_facts()`` — that getter issues a heavy
+    `<show><interface>all</interface></show>` RPC that we don't need just
+    to decide whether the chassis is modular.
+    """
+    try:
+        driver.device.op(cmd="<show><system><info></info></system></show>")
+        info_xml = driver.device.xml_root()
+    except pan.xapi.PanXapiError as e:
+        logger.warning("paloalto_panos.get_modules: system info RPC failed: %s", e)
+        return None
+    model = _extract_model_from_info_xml(info_xml or "")
+    if not _is_modular_panos(model):
+        return None
+    try:
+        driver.device.op(cmd="<show><chassis><inventory></inventory></chassis></show>")
+        xml_text = driver.device.xml_root()
+    except pan.xapi.PanXapiError as e:
+        logger.warning("paloalto_panos.get_modules: chassis inventory RPC failed: %s", e)
+        return None
+    rows = _parse_chassis_inventory_xml(xml_text or "")
+    bays = _panos_build_bays(rows)
+    if not bays:
+        return None
+    return _modules_to_payload({
+        None: _MemberModules(bays=bays, interfaces_by_bay={}),
+    })
 
 
 class PANOSDriver(_napalm_base.NetworkDriver):
@@ -295,3 +486,7 @@ class PANOSDriver(_napalm_base.NetworkDriver):
         device-discovery can continue without VLAN data.
         """
         return {}
+
+    def get_modules(self) -> dict | None:
+        """Return per-chassis module / module bay inventory or None."""
+        return _panos_get_modules_impl(self)

@@ -31,6 +31,8 @@ from custom_napalm.nokia_sros import SROSDriver
 from custom_napalm.nokia_sros_ssh import SROSSSHDriver
 from custom_napalm.nxos import NXOSDriver
 from custom_napalm.nxos_ssh import NXOSSSHDriver
+from custom_napalm.paloalto_panos import PANOSDriver
+from custom_napalm.paloalto_panos_ssh import PANOSSHDriver
 from device_discovery.policy.models import Config, Defaults, Options
 from device_discovery.policy.runner import PolicyRunner
 
@@ -166,6 +168,8 @@ def test_collect_modules_swallows_driver_exception(caplog) -> None:
         pytest.param(AOSCXSSHDriver, id="aoscx_ssh"),
         pytest.param(SROSDriver, id="nokia_sros"),
         pytest.param(SROSSSHDriver, id="nokia_sros_ssh"),
+        pytest.param(PANOSDriver, id="paloalto_panos"),
+        pytest.param(PANOSSHDriver, id="paloalto_panos_ssh"),
     ],
 )
 def test_driver_exposes_get_modules(driver_cls) -> None:

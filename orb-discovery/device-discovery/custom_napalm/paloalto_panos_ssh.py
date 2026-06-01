@@ -17,6 +17,19 @@ from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._modules import (
+    MemberModules as _MemberModules,
+)
+from custom_napalm._modules import (
+    ModuleBay as _ModuleBay,
+)
+from custom_napalm._modules import (
+    ModuleEntry as _ModuleEntry,
+)
+from custom_napalm._modules import (
+    to_payload as _modules_to_payload,
+)
+
 logger = logging.getLogger(__name__)
 
 _SECRET_TAG_RE = re.compile(
@@ -42,6 +55,168 @@ def _parse_uptime(uptime_str: str) -> int:
 def _netmask_to_prefix(netmask: str) -> int:
     """Convert dotted-decimal netmask to CIDR prefix length."""
     return sum(bin(int(octet)).count("1") for octet in netmask.split("."))
+
+
+# ---------------------------------------------------------------------------
+# get_modules — module / module bay discovery via PAN-OS SSH CLI
+# ---------------------------------------------------------------------------
+
+# Duplicated from custom_napalm.paloalto_panos per Approach A (per-driver
+# bespoke). The substring table and ordering invariant are identical;
+# a cross-driver test asserts the tuples stay in sync.
+
+
+_MODULAR_PANOS_PREFIXES_SSH = ("PA-7050", "PA-7080", "PA-7500", "PA-5450")
+
+
+def _is_modular_panos_ssh(model: str | None) -> bool:
+    """Return True when PAN-OS model identifies an in-scope modular chassis."""
+    upper = (model or "").strip().upper()
+    return any(upper.startswith(p) for p in _MODULAR_PANOS_PREFIXES_SSH)
+
+
+_PANOS_SSH_SKU_CLASSIFIER: tuple[tuple[str, str], ...] = (
+    ("MPC", "supervisor"),
+    ("SMC", "supervisor"),
+    ("SFC", "linecard"),
+    ("NPC", "linecard"),
+    ("LFC", "linecard"),
+    ("LPC", "linecard"),
+    ("DPC", "linecard"),
+    ("BC", "linecard"),
+    ("NC", "linecard"),
+)
+
+
+def classify_module_type_panos_ssh(part_number: str) -> str:
+    """Classify a PAN-OS card by hyphen-bounded token in the SKU (case-insensitive)."""
+    pid = (part_number or "").upper()
+    for token, mtype in _PANOS_SSH_SKU_CLASSIFIER:
+        if f"-{token}-" in pid or pid.endswith(f"-{token}"):
+            return mtype
+    return "other"
+
+
+def _panos_ssh_token_from_sku(part_number: str) -> str:
+    """Extract the canonical card-type token from a PaloAlto SKU (Approach A duplicate)."""
+    pid = (part_number or "").upper()
+    for token, _ in _PANOS_SSH_SKU_CLASSIFIER:
+        if f"-{token}-" in pid or pid.endswith(f"-{token}"):
+            return token
+    return ""
+
+
+# `show chassis inventory` text-table row regex. The regex captures only
+# the three driver-relevant columns (Slot / PID / Serial) and stops; the
+# trailing Ports / Revision / Power(w) columns are left for finditer to
+# skip when it advances to the next `^` anchor. The PID is anchored to
+# the `PA-` prefix so header / separator lines never mis-match.
+_PANOS_INVENTORY_ROW_RE = re.compile(
+    # Real PAN-OS `show chassis inventory` column layout (per Palo Alto KB
+    # kA14u000000wlKJCAY):
+    #   Slot  Component             Serial Number   Ports  Revision  Power(w)
+    # Driver-relevant columns are Slot / Component (PID) / Serial — trailing
+    # Ports/Revision/Power columns are skipped via the open-ended tail.
+    #
+    # Slot accepts alphanumerics OR may be empty: PA-5450 Base Card rows
+    # in real PAN-OS output (per Palo Alto KB kA14u000000bpuACAQ) print
+    # the Slot column blank before the numbered NC/DPC/MPC slots — the
+    # BC card has no slot id of its own. PA-7000 line slots are numeric;
+    # PA-5450 base / system slots may carry letter labels like `BSC` /
+    # `SYS`. PID matches PA-... AND the PAN-PA-... form Palo Alto's
+    # compatibility docs use (PAN-PA-7000-100G-NPC-A, PAN-PA-5400-BC-A).
+    # Serial accepts alphanumerics, hyphens, and dots — covers documented
+    # 12-digit PA-7000/PA-5450 serials AND vendor-prefixed forms.
+    r"^\s*(?P<slot>[A-Za-z0-9]*)\s*"
+    r"(?P<pid>(?:PAN-)?PA-\S+)\s+"
+    r"(?P<sn>[A-Za-z0-9.\-]+)"
+    # No end-of-line anchor — `\s` includes `\n` even under MULTILINE, so
+    # consuming trailing columns greedily would eat across rows. After the
+    # serial column, finditer advances to the next `^` match.
+    ,
+    re.MULTILINE,
+)
+
+
+def _parse_chassis_inventory_text(text: str) -> list[dict]:
+    """Parse `show chassis inventory` text rows; PID-anchored regex."""
+    rows: list[dict] = []
+    for m in _PANOS_INVENTORY_ROW_RE.finditer(text or ""):
+        rows.append({
+            "slot": m.group("slot"),
+            "pid": m.group("pid"),
+            "sn": m.group("sn"),
+        })
+    return rows
+
+
+def _panos_ssh_build_bays(rows: list[dict]) -> list[_ModuleBay]:
+    """Build one top-level bay per inventory row; description derived from SKU."""
+    bays: list[_ModuleBay] = []
+    for row in rows:
+        slot = row.get("slot") or ""
+        pid = row.get("pid") or ""
+        sn = row.get("sn") or ""
+        if not (pid and sn):
+            continue
+        mtype = classify_module_type_panos_ssh(pid)
+        if mtype == "other":
+            continue
+        token = _panos_ssh_token_from_sku(pid)
+        # PA-5450 Base Card prints with a blank Slot column in real PAN-OS
+        # output — synthesize a bay name from the SKU token so the bay
+        # still emits with a stable human-readable id.
+        if not slot:
+            slot = token
+        if not slot:
+            continue
+        bays.append(_ModuleBay(
+            name=slot, position=slot,
+            module=_ModuleEntry(
+                model=pid, serial=sn, type=mtype, description=token,
+            ),
+        ))
+    return bays
+
+
+# `show system info` model row, e.g. "model: PA-7080"
+_PANOS_SSH_MODEL_RE = re.compile(r"^\s*model\s*:\s*(?P<model>\S+)\s*$", re.MULTILINE)
+
+
+def _extract_model_from_system_info(text: str) -> str:
+    """Extract `model:` field from `show system info` text output."""
+    m = _PANOS_SSH_MODEL_RE.search(text or "")
+    return m.group("model") if m else ""
+
+
+def _panos_ssh_get_modules_impl(driver) -> dict | None:
+    """
+    Module discovery for PaloAlto PAN-OS via SSH CLI.
+
+    1. Issue `show system info`, read the model.
+    2. Short-circuit on non-modular models.
+    3. Issue `show chassis inventory` and parse the fixed-width table.
+    """
+    try:
+        info_text = driver.device.send_command("show system info")
+    except Exception as e:
+        logger.warning("paloalto_panos_ssh.get_modules: show system info failed: %s", e)
+        return None
+    model = _extract_model_from_system_info(info_text or "")
+    if not _is_modular_panos_ssh(model):
+        return None
+    try:
+        inv_text = driver.device.send_command("show chassis inventory")
+    except Exception as e:
+        logger.warning("paloalto_panos_ssh.get_modules: show chassis inventory failed: %s", e)
+        return None
+    rows = _parse_chassis_inventory_text(inv_text or "")
+    bays = _panos_ssh_build_bays(rows)
+    if not bays:
+        return None
+    return _modules_to_payload({
+        None: _MemberModules(bays=bays, interfaces_by_bay={}),
+    })
 
 
 class PANOSSHDriver(_napalm_base.NetworkDriver):
@@ -266,3 +441,7 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
     def get_vlans(self) -> dict:
         """PAN-OS does not expose a traditional VLAN table via SSH CLI."""
         return {}
+
+    def get_modules(self) -> dict | None:
+        """Return per-chassis module / module bay inventory or None."""
+        return _panos_ssh_get_modules_impl(self)

@@ -1,0 +1,10 @@
+hostname: pa7080-lab
+ip-address: 192.0.2.10
+netmask: 255.255.255.0
+default-gateway: 192.0.2.1
+mac-address: aa:bb:cc:dd:ee:01
+time: Mon Jun  1 12:00:00 2026
+serial: 007901234500
+sw-version: 11.1.4
+model: PA-7080
+family: 7000
