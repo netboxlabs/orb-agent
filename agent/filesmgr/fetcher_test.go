@@ -282,3 +282,37 @@ func TestFetcher_FollowsRedirectAndExtracts(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "hi", string(got))
 }
+
+func TestHasKnownArchiveSuffix(t *testing.T) {
+	cases := map[string]bool{
+		"/path/to/bundle.tar.gz":     true,
+		"/path/to/bundle.tgz":        true,
+		"/path/to/bundle.zip":        true,
+		"/path/to/bundle.tar.xz":     true,
+		"/path/to/bundle.tar":        true,
+		"/path/to/bundle.gz":         true,
+		"/BUNDLE.TAR.GZ":             true,  // case-insensitive
+		"/bundles/test-bundle/1.0.0": false, // extension-less control-plane path
+		"/bundles/name/2.12.0":       false,
+		"/download":                  false,
+		"":                           false,
+	}
+	for path, want := range cases {
+		if got := hasKnownArchiveSuffix(path); got != want {
+			t.Errorf("hasKnownArchiveSuffix(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// TestFetcher_ZipURLNotForcedToTarGz guards the Codex review concern: a URL that
+// already names a non-tar.gz archive must keep its format. We assert the guard
+// logic (hasKnownArchiveSuffix) recognizes .zip so fetch() will NOT inject
+// ?archive=tar.gz over it; go-getter's own .zip decompressor then handles it.
+func TestFetcher_ZipURLNotForcedToTarGz(t *testing.T) {
+	if !hasKnownArchiveSuffix("/some/object.zip") {
+		t.Fatal(".zip must be recognized so the tar.gz default is not forced over it")
+	}
+	if hasKnownArchiveSuffix("/bundles/x/1.0.0") {
+		t.Fatal("extension-less path must NOT be treated as a known archive (default applies)")
+	}
+}
