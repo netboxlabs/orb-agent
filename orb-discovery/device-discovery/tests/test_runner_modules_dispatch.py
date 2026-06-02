@@ -22,6 +22,8 @@ from custom_napalm.aruba_aoscx import AOSCXDriver
 from custom_napalm.aruba_aoscx_ssh import AOSCXSSHDriver
 from custom_napalm.cisco_fxos import FXOSDriver
 from custom_napalm.eos import EOSDriver
+from custom_napalm.extreme_exos import ExosDriver
+from custom_napalm.hp_comware import ComwareDriver
 from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.ios import IOSDriver
 from custom_napalm.iosxr import IOSXRDriver
@@ -170,6 +172,8 @@ def test_collect_modules_swallows_driver_exception(caplog) -> None:
         pytest.param(SROSSSHDriver, id="nokia_sros_ssh"),
         pytest.param(PANOSDriver, id="paloalto_panos"),
         pytest.param(PANOSSHDriver, id="paloalto_panos_ssh"),
+        pytest.param(ComwareDriver, id="hp_comware"),
+        pytest.param(ExosDriver, id="extreme_exos"),
     ],
 )
 def test_driver_exposes_get_modules(driver_cls) -> None:

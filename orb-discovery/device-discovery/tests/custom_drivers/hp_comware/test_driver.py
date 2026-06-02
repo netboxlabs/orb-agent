@@ -5,8 +5,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from custom_napalm.hp_comware import (
+    _COMWARE_FAMILY_PREFIXES,
+    _COMWARE_SUPERVISOR_TOKENS,
     ComwareDriver,
+    _comware_classify_module,
     _comware_get_chassis_members_impl,
+    _comware_is_modular,
     _normalize_irf_mac,
     _parse_comware_irf,
 )
@@ -184,3 +188,108 @@ def test_chassis_members_manuinfo_failure_drops_members_logs_warning(caplog):
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert any("display device manuinfo failed" in r.message for r in warning_records)
     assert any(r.exc_info is not None and r.exc_info[0] is RuntimeError for r in warning_records)
+
+
+# --- get_modules attribute test ---------------------------------------------
+
+
+def test_driver_exposes_get_modules():
+    """ComwareDriver MUST expose a callable get_modules method."""
+    assert hasattr(ComwareDriver, "get_modules")
+    assert callable(ComwareDriver.get_modules)
+
+
+# --- classifier unit tests ---------------------------------------------------
+
+
+def test_classifier_supervisor_by_mpu_token():
+    """SKUs containing ``MPU`` classify as supervisor across every family."""
+    assert _comware_classify_module("LSQM1MPUC0") == "supervisor"   # S7500E
+    assert _comware_classify_module("LSUM1MPUH1") == "supervisor"   # S10500
+    assert _comware_classify_module("LSXM1MPUD0") == "supervisor"   # S10500
+    assert _comware_classify_module("LSXM2MPUD0") == "supervisor"   # S12500X-AF
+    assert _comware_classify_module("LSXM2MPUA1") == "supervisor"   # S12900
+
+
+def test_classifier_supervisor_by_sup_token():
+    """The rarer ``SUP``-token variants (e.g. ``LSUM1SUPXD0``) also classify as supervisor."""
+    assert _comware_classify_module("LSUM1SUPXD0") == "supervisor"
+
+
+def test_classifier_interface_cards_with_supervisor_prefix_are_linecards():
+    """
+    LSQM / LSUM / LSXM interface cards (NOT containing MPU/SUP) classify as linecard.
+
+    This is the regression that the family-prefix-only classifier failed: H3C
+    reuses the same family prefix for MPU and interface cards, so prefix
+    matching alone would mis-emit every interface card as a supervisor.
+    """
+    assert _comware_classify_module("LSQM1FH48EA") == "linecard"   # S7500E interface
+    assert _comware_classify_module("LSQM1FV48EA") == "linecard"
+    assert _comware_classify_module("LSXM2SF40C") == "linecard"    # S12500X-AF fabric
+    assert _comware_classify_module("LSXM2QGS56QHB1") == "linecard"  # interface card
+    assert _comware_classify_module("LSXM2FX48LEB1") == "linecard"
+    assert _comware_classify_module("LSUM1QGS24XEC0") == "linecard"  # S10500 interface
+
+
+def test_classifier_other_family_prefixes_are_linecards():
+    """LSQS / LSXS / LSQ1 / LSQ2 / LSQK / LSX1 / LSX2 / LSR / LSU classify as linecard."""
+    for prefix in ("LSQS", "LSXS", "LSQ1", "LSQ2", "LSQK", "LSX1", "LSX2", "LSR", "LSU"):
+        assert _comware_classify_module(f"{prefix}1FX48LEB1") == "linecard", prefix
+
+
+def test_classifier_case_insensitive():
+    """Classifier is case-insensitive (real output is uppercase; defensive)."""
+    assert _comware_classify_module("lsxm2mpud0") == "supervisor"
+    assert _comware_classify_module("lsxs1fab320a") == "linecard"
+
+
+def test_classifier_unknown_returns_other():
+    """SKUs that match no family prefix classify as 'other' (dropped by impl)."""
+    assert _comware_classify_module("XYZ-UNKNOWN") == "other"
+    assert _comware_classify_module("") == "other"
+    assert _comware_classify_module("   ") == "other"
+
+
+def test_classifier_supervisor_token_wins_over_family_prefix():
+    """
+    Supervisor-token check runs BEFORE family-prefix fallback.
+
+    Without this ordering, an MPU SKU on an LSQM/LSUM/LSXM-family chassis
+    would classify as linecard via the family-prefix branch.
+    """
+    sku = "LSXM2MPUD0"
+    assert sku.startswith(_COMWARE_FAMILY_PREFIXES)
+    assert any(token in sku for token in _COMWARE_SUPERVISOR_TOKENS)
+    assert _comware_classify_module(sku) == "supervisor"
+
+
+# --- family detection unit tests --------------------------------------------
+
+
+def test_is_modular_accepts_documented_families():
+    """All four modular families resolve to True."""
+    assert _comware_is_modular("S7503E")
+    assert _comware_is_modular("S10508")
+    assert _comware_is_modular("S12508X-AF")
+    assert _comware_is_modular("S12916-AF")
+
+
+def test_is_modular_handles_vendor_prefixed_models():
+    """Vendor-prefixed and HPE-rebranded model strings still resolve correctly."""
+    assert _comware_is_modular("H3C S12508X-AF")
+    assert _comware_is_modular("HPE FlexFabric S12500")
+    assert _comware_is_modular("HP S10508")
+    # HPE rebrand strips the ``S`` prefix on the family name.
+    assert _comware_is_modular("HPE FlexFabric 12500 Switch")
+    # Comware-5 HP-branded ``A`` prefix on the family name.
+    assert _comware_is_modular("HP A10500")
+
+
+def test_is_modular_rejects_fixed_families():
+    """Fixed pizza-box families return False."""
+    assert not _comware_is_modular("S5500-28C-EI")
+    assert not _comware_is_modular("S5800-32F")
+    assert not _comware_is_modular("S6800-54QF")
+    assert not _comware_is_modular("")
+    assert not _comware_is_modular("Unknown")

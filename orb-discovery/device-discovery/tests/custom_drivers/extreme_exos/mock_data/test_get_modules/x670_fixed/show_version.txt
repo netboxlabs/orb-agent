@@ -1,0 +1,7 @@
+Switch      : 800396-00-13 Rev 13.0 BootROM: 1.0.5.7   IMG: 30.7.1.4
+System Type : X670-48x-FB
+SysName     : x670-lab
+SysSerial   : 1234X-67000
+PowerSupply : Internal-PS
+
+Image   : Version 30.7.1.4 build by release-manager

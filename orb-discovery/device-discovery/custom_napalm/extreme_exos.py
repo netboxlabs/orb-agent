@@ -17,6 +17,18 @@ from napalm.base import models
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
 
+from custom_napalm._modules import (
+    MemberModules as _MemberModules,
+)
+from custom_napalm._modules import (
+    ModuleBay as _ModuleBay,
+)
+from custom_napalm._modules import (
+    ModuleEntry as _ModuleEntry,
+)
+from custom_napalm._modules import (
+    to_payload as _modules_to_payload,
+)
 from custom_napalm._vlan import (
     SwitchportInfo,
     classify_switchport,
@@ -221,6 +233,182 @@ def _parse_uptime(uptime_str: str) -> float:
     return seconds
 
 
+# --- module / module bay discovery ------------------------------------------
+#
+# Extreme EXOS modular families publish per-slot inventory via
+# ``show slot detail``. Only the BlackDiamond X8 chassis is in scope — the
+# X870 / X8-X32 are fixed pizza-box switches even though their model strings
+# share the ``X8`` family token, so family detection uses a negative
+# lookahead to reject those variants.
+
+# Negative lookahead: ``X8`` is the family token, but ``X8-32`` (BD-X8-X32
+# stackable) and ``X870`` (fixed pizza-box) must NOT match. ``\b`` does NOT
+# work here because the regex word-boundary fires between ``8`` and ``-`` in
+# ``BD-X8-32``, accepting the wrong model.
+_MODULAR_EXOS_RE = re.compile(
+    r"(?:BD-|BLACKDIAMOND\s+)X8(?![-\w])", re.IGNORECASE
+)
+
+# Block header regex for ``show slot detail``. EXOS prints one block per
+# physical slot with a header like ``Slot-1 information:``,
+# ``MSM-A information:``, ``FM-2 information:``. The header vocabulary is
+# a defensive over-approximation (``Slot|MSM|MM|IO|FM``) — real BD-X8 output
+# only emits ``Slot-N`` / ``MSM-X`` / ``FM-N``, but matching the broader set
+# costs nothing and survives future firmware variations. ``[-\s]`` separator
+# accepts both ``Slot 1`` and ``Slot-1`` headers; the slot name is normalised
+# below. ``IGNORECASE`` is essential — the field regexes below already match
+# case-insensitively, so the header regex must do the same or it will silently
+# drop every block on a future firmware that emits ``slot-1 information:``.
+_EXOS_SLOT_HEADER_RE = re.compile(
+    r"^(?P<slot>(?:Slot|MSM|MM|IO|FM)[-\s][A-Za-z0-9]+)\s+information:\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_EXOS_HW_TYPE_RE = re.compile(
+    r"^\s*Hw\s+Module\s+Type\s*:\s*(?P<type>\S+)", re.MULTILINE | re.IGNORECASE
+)
+# Real EXOS prints two whitespace-separated tokens on the BD-X8 serial line
+# (``Serial number: 800432-00-09 1534G-01368`` — Extreme part-number plus the
+# unique serial). Capture everything to end-of-line, then collapse whitespace
+# so the persisted serial is the full operator-meaningful string.
+_EXOS_SERIAL_RE = re.compile(
+    r"^\s*Serial\s+number\s*:\s*(?P<serial>\S.*?)\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Card-family classifier. Order matters: ``BDX-MM`` (supervisor) is checked
+# before the generic ``BDXA-`` / ``BDXB-`` linecard prefixes. ``BDXA-FM``
+# (Fabric Modules — ``BDXA-FM20T`` / ``BDXA-FM10T``) classify as linecards
+# because NetBox has no fabric module type today. Extreme's BD-X8 install
+# guide lists fabric modules only under the ``BDXA-FM`` family — any future
+# ``BDXB-FM*`` SKU still classifies as linecard via the generic ``BDXB-``
+# fallback.
+_EXOS_MODULE_CLASSIFIER: tuple[tuple[str, str], ...] = (
+    ("BDX-MM", "supervisor"),
+    ("BDXA-FM", "linecard"),
+    ("BDXA-", "linecard"),
+    ("BDXB-", "linecard"),
+)
+
+
+def _exos_is_modular(model: str) -> bool:
+    r"""
+    True when ``model`` is a BlackDiamond X8 chassis.
+
+    Accepts ``BD-X8`` and ``BlackDiamond X8``. Rejects ``BD-X8-32`` /
+    ``BD-X8-X32`` (fixed stackable) and ``X670`` / ``X870`` (fixed
+    pizza-box). The negative-lookahead anchor ``(?![-\w])`` rejects any
+    suffix character that would otherwise match a ``\b``-boundary.
+    """
+    if not model:
+        return False
+    return bool(_MODULAR_EXOS_RE.search(model))
+
+
+def _exos_classify_module(hw_type: str) -> str:
+    """
+    Classify an EXOS ``Hw Module Type`` value into a module type.
+
+    Returns ``"supervisor"`` / ``"linecard"`` per ``_EXOS_MODULE_CLASSIFIER``
+    or ``"other"`` for SKUs that match no documented prefix. Empty input
+    returns ``"other"``.
+    """
+    sku = (hw_type or "").strip().upper()
+    if not sku:
+        return "other"
+    for prefix, mtype in _EXOS_MODULE_CLASSIFIER:
+        if sku.startswith(prefix):
+            return mtype
+    return "other"
+
+
+def _parse_show_slot_detail(text: str) -> list[dict[str, str]]:
+    """
+    Parse EXOS ``show slot detail`` block-per-slot output into a row list.
+
+    Each row contains ``slot`` (normalised: whitespace → ``-``),
+    ``hw_module_type``, and ``serial``. Blocks missing either Hw Module
+    Type or Serial number are dropped silently (typical empty-slot output).
+    """
+    rows: list[dict[str, str]] = []
+    matches = list(_EXOS_SLOT_HEADER_RE.finditer(text or ""))
+    if not matches:
+        return rows
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        block = text[start:end]
+        hw = _EXOS_HW_TYPE_RE.search(block)
+        sn = _EXOS_SERIAL_RE.search(block)
+        if not hw or not sn:
+            continue
+        slot_name = re.sub(r"\s+", "-", m.group("slot").strip())
+        # Collapse internal whitespace runs to a single space so variable
+        # spacing in real EXOS output (e.g. extra padding between the
+        # part-number and unique-serial tokens) never produces an
+        # accidentally non-unique or ugly persisted serial.
+        serial = " ".join(sn.group("serial").split())
+        rows.append({
+            "slot": slot_name,
+            "hw_module_type": hw.group("type"),
+            "serial": serial,
+        })
+    return rows
+
+
+def _exos_get_modules_impl(driver) -> dict | None:
+    """
+    Per-chassis module / module bay discovery for BlackDiamond X8.
+
+    Reads ``show version`` for family detection; non-modular pizza-boxes
+    short-circuit to ``None``. For modular chassis, parses
+    ``show slot detail`` block-per-slot, classifies each block's
+    ``Hw Module Type``, and emits one ``MemberModules`` envelope keyed
+    ``None`` (no stack-of-modular dispatch for EXOS).
+    """
+    try:
+        ver_output = driver.device.send_command("show version")
+    except Exception:
+        logger.warning("exos.get_modules: show version failed", exc_info=True)
+        return None
+
+    # ``show version`` on a BD-X8 prints the System Type on a dedicated line
+    # on most firmwares, but Extreme's command reference also documents BD-X8
+    # output that lists ``Switch : BD-X8 ...`` / ``Chassis``/``Slot-*`` /
+    # ``FM-*`` entries without an explicit ``System Type`` line. Scan the
+    # full output for the BD-X8 signature rather than gating on one field —
+    # the regex already rejects ``BD-X8-32`` / ``X670`` / ``X870`` variants.
+    if not _exos_is_modular(ver_output or ""):
+        return None
+
+    try:
+        raw = driver.device.send_command("show slot detail")
+    except Exception:
+        logger.warning("exos.get_modules: show slot detail failed", exc_info=True)
+        return None
+
+    rows = _parse_show_slot_detail(raw or "")
+    bays: list[_ModuleBay] = []
+    for row in rows:
+        mtype = _exos_classify_module(row["hw_module_type"])
+        if mtype not in ("supervisor", "linecard"):
+            continue
+        bays.append(_ModuleBay(
+            name=row["slot"],
+            position=row["slot"],
+            module=_ModuleEntry(
+                model=row["hw_module_type"],
+                serial=row["serial"],
+                type=mtype,
+                description="",
+            ),
+        ))
+    if not bays:
+        return None
+    return _modules_to_payload(
+        {None: _MemberModules(bays=bays, interfaces_by_bay={})}
+    )
+
+
 class ExosDriver(_napalm_base.NetworkDriver):
     """Extreme EXOS NAPALM driver (read-only subset for device-discovery)."""
 
@@ -275,7 +463,7 @@ class ExosDriver(_napalm_base.NetworkDriver):
             if m:
                 hostname = m.group(1)
 
-            m = re.search(r"^System Type\s*:\s*(\S+)", ver_output, re.M)
+            m = re.search(r"^System Type\s*:\s*(.+?)\s*$", ver_output, re.M)
             if m:
                 model = m.group(1)
 
@@ -455,6 +643,17 @@ class ExosDriver(_napalm_base.NetworkDriver):
             self._add_untagged_vlan_ports(vlans, ports_output)
 
         return vlans
+
+    def get_modules(self) -> dict | None:
+        """
+        Return module / module bay inventory for BlackDiamond X8.
+
+        Modular BD-X8 chassis emit a single ``members[None]`` envelope
+        containing MSM / FM / I/O blades parsed from ``show slot detail``.
+        Non-modular pizza-boxes (X670 / X870 / BD-X8-X32) and unparseable
+        output return ``None``.
+        """
+        return _exos_get_modules_impl(self)
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from ``show ports information detail``."""
