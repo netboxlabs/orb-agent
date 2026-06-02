@@ -47,7 +47,11 @@ FROM python:3.14-alpine
 
 ENV TZ=UTC
 
-RUN apk add --no-cache \
+# apk upgrade pulls the latest patched versions of base/transitive packages
+# (e.g. libssh2, brought in by nmap) so image scans stay clean without
+# per-package version pins. It also busts any stale layer cache.
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
         bash \
         ca-certificates \
         git \

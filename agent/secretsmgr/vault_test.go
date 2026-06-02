@@ -50,7 +50,8 @@ func setupSharedVault(t *testing.T) {
 			DisableMlock: true,
 			DisableTLS:   true,
 			ClusterOptions: testcluster.ClusterOptions{
-				NumCores: 1,
+				ClusterName: "orb-agent-secretsmgr",
+				NumCores:    1,
 				VaultNodeConfig: &testcluster.VaultNodeConfig{
 					LogLevel: "INFO",
 					StorageOptions: map[string]string{
@@ -60,8 +61,17 @@ func setupSharedVault(t *testing.T) {
 			},
 		}
 
-		// Create cluster (this is the slow part - only done once)
-		sharedVaultCluster = docker.NewTestDockerCluster(t, opts)
+		// Create cluster (this is the slow part - only done once).
+		// Use NewDockerCluster rather than NewTestDockerCluster: the latter
+		// registers t.Cleanup(dc.Cleanup) against the first test that triggers
+		// this sync.Once, which would tear the container down as soon as that
+		// test finishes and break every subsequent test. This cluster is shared
+		// across all tests and is cleaned up explicitly in TestMain instead.
+		cluster, err := docker.NewDockerCluster(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("failed to create shared Vault cluster: %v", err)
+		}
+		sharedVaultCluster = cluster
 		sharedVaultClient = sharedVaultCluster.Nodes()[0].APIClient()
 
 		// Wait for Vault to be ready
@@ -85,7 +95,7 @@ func setupSharedVault(t *testing.T) {
 			Type:    "kv",
 			Options: map[string]string{"version": "2"},
 		}
-		err := sharedVaultClient.Sys().Mount("testsecret", mountInput)
+		err = sharedVaultClient.Sys().Mount("testsecret", mountInput)
 		if err != nil {
 			// Mount might already exist, check if it's already mounted
 			mounts, err2 := sharedVaultClient.Sys().ListMounts()
