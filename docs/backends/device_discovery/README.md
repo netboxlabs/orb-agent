@@ -108,6 +108,7 @@ Current supported options:
 | discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[paloalto_panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`paloalto_panos`, `paloalto_panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. See the [supported platforms page](./supported_platforms.md) for the full list. |
 | create_unknown_vlans | bool | When discovering interface↔VLAN associations, auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's VLAN database. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `True`. Set `False` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). Only drivers that implement `get_interfaces_vlans()` populate these associations — see the [supported platforms page](./supported_platforms.md). |
 | discover_modules | str | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards, supervisors, etc. — transceiver sub-bays skipped), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Only drivers that implement `get_modules()` populate module data — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
+| propagate_defaults_to_prefix_scope | bool | When `True` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to `Prefix.scope_site` (the literal placeholder `"undefined"` is skipped) and `defaults.location` cascades to `Prefix.scope_location`. Defaults to `False`. Setting any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale. |
 
 #### Defaults
 Current supported defaults:
@@ -160,6 +161,8 @@ Current supported defaults:
 | ├─ description | str  | Prefix description        |
 | ├─ comments   | str  | Prefix comments            |
 | ├─ tags       | list | Prefix tags                |
+| ├─ scope_site | str  | Prefix `scope_site` (see [Prefix](#prefix) for the oneof precedence rule and cascade behaviour) |
+| ├─ scope_location | str  | Prefix `scope_location` |
 | vrf | map | VRF-specific defaults (used within ipaddress and prefix) |
 | ├─ name | str | VRF name |
 | ├─ rd | str | Route distinguisher (e.g. `65000:100`) |
@@ -386,8 +389,10 @@ Prefixes are derived from IP addresses discovered on interfaces. The network add
 | Field | Source | Notes |
 |-------|--------|-------|
 | Prefix (network address) | Derived from IP address | Auto-computed |
-| Site | — | Inherited from the interface's site |
 | VRF / Role / Tenant | **Not collected** | Must be set via `defaults.prefix.*` |
+| Scope (site / location) | **Not collected** | Set via `defaults.prefix.scope_*` (see Nested Defaults) or opt into the cascade via `options.propagate_defaults_to_prefix_scope` |
+
+Prefix scope is a `oneof` — a Prefix carries one of `scope_site` or `scope_location`. When both `defaults.prefix.scope_*` are set, the most-specific wins on the wire: `scope_location` > `scope_site`. By default `defaults.site` does NOT auto-fill `Prefix.scope_site` — set `options.propagate_defaults_to_prefix_scope: true` to enable the cascade. Any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale, so a cascaded more-specific scope can't override an operator's explicit less-specific choice. Clearing an existing scope requires editing NetBox directly.
 
 ### VLAN
 
