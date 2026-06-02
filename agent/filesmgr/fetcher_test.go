@@ -244,3 +244,41 @@ func TestFetcher_ReEnsureExtractedReplacesExistingDst(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dst, "v1.txt"), "v1.txt must be gone after replacement")
 	assert.NoFileExists(t, markerPath, "marker must be gone after dst replacement")
 }
+
+// TestFetcher_FollowsRedirectAndExtracts verifies that when the bundle URL is
+// an extension-less control-plane path that 302-redirects to the actual archive
+// (e.g. a presigned storage URL), the fetcher still extracts the archive and
+// verifies its checksum. go-getter selects its decompressor from the SOURCE URL
+// path (or an explicit ?archive= hint) BEFORE the request, so it never sees the
+// redirect target's .tar.gz suffix — the fetcher must supply the archive hint
+// from FileSpec.Extract.
+func TestFetcher_FollowsRedirectAndExtracts(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"hello.txt": "hi"})
+	sum := sha256Hex(archive)
+
+	mux := http.NewServeMux()
+	// Extension-less path, like the control-plane bundle endpoint.
+	mux.HandleFunc("/bundles/test-bundle/1.0.0", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/blob", http.StatusFound)
+	})
+	mux.HandleFunc("/blob", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(archive)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "v1")
+	f := newFetcher(nil)
+	err := f.fetch(context.Background(), FileSpec{
+		Name:    "test-bundle",
+		URL:     srv.URL + "/bundles/test-bundle/1.0.0",
+		SHA256:  sum,
+		Extract: true,
+	}, dst)
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(dst, "hello.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(got))
+}

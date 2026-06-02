@@ -169,6 +169,17 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 	// Build the go-getter URL with the checksum query so go-getter verifies it.
 	q := u.Query()
 	q.Set("checksum", "sha256:"+spec.SHA256)
+	// When extracting, force the archive type explicitly. go-getter normally
+	// infers the decompressor from the source URL's path suffix, but a
+	// control-plane URL (e.g. /bundles/<name>/<version>) is extension-less and
+	// 302-redirects to the real object; go-getter decides the decompressor from
+	// the SOURCE path BEFORE following the redirect, so it would never see the
+	// archive suffix. Without this hint it treats the request as a plain
+	// directory download and rejects the checksum ("checksum cannot be
+	// specified for directory download"). Bundles are gzipped tarballs.
+	if spec.Extract {
+		q.Set("archive", "tar.gz")
+	}
 	u.RawQuery = q.Encode()
 
 	var stagePath string
