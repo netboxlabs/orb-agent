@@ -82,7 +82,8 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 			messaging.logger.Error("failed to unmarshal payload", "error", err)
 			return err
 		}
-		messaging.handleAgentGroupRemoval(groupRemoved.Payload, topicActions.Unsubscribe)
+		messaging.handleAgentGroupRemoval(groupRemoved.Payload, orgID, topicActions.Unsubscribe)
+
 	case messages.DatasetRemovedRPCFunc:
 		var r messages.DatasetRemovedRPC
 		if err := json.Unmarshal(payload, &r); err != nil {
@@ -259,8 +260,11 @@ func (messaging *Messaging) handleAgentPolicies(rpc []messages.AgentPolicyRPCPay
 	messaging.logger.Info("agent managed policies", "count", len(managed))
 }
 
-func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPCPayload, unsubscribeFromTopic func(topic string) error) {
-	err := unsubscribeFromTopic(rpc.AgentGroupID)
+func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPCPayload, orgID string, unsubscribeFromTopic func(topic string) error) {
+	// Must unsubscribe the same fully-qualified topic we subscribed to in
+	// handleGroupMemberships (orgs/<org>/groups/<id>). Passing the bare group ID
+	// here is an MQTT filter mismatch and silently leaves the subscription live.
+	err := unsubscribeFromTopic(groupTopic(orgID, rpc.AgentGroupID))
 	if err != nil {
 		messaging.logger.Error("failed to unsubscribe from group topic", "error", err)
 		return
