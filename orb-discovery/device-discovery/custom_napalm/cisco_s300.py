@@ -20,6 +20,8 @@ from custom_napalm._vlan import SwitchportInfo, classify_switchport, parse_vlan_
 
 logger = logging.getLogger(__name__)
 
+_MAX_INTERFACE_RANGE_EXPANSION = 128
+
 # Config sanitization — S300 sensitive CLI fields:
 #   username <name> [privilege <n>] password [<enc-type>] <hash>
 #   enable password [level <n>] [<enc-type>] <hash>
@@ -85,6 +87,22 @@ def _expand_interface_range(range_str: str) -> list[str]:
         if m:
             prefix = m.group(1)
             start, end = int(m.group(2)), int(m.group(3))
+            if end < start:
+                logger.debug(
+                    "Skipping reversed S300 interface range %r (end %d < start %d)",
+                    token,
+                    end,
+                    start,
+                )
+                continue
+            range_size = end - start + 1
+            if range_size > _MAX_INTERFACE_RANGE_EXPANSION:
+                logger.debug(
+                    "Skipping oversized S300 interface range %r with %d members",
+                    token,
+                    range_size,
+                )
+                continue
             result.extend(f"{prefix}{i}" for i in range(start, end + 1))
         else:
             result.append(token)
@@ -248,6 +266,7 @@ def _parse_vlan_ports_raw(raw: str) -> dict[str, list[str]]:
 
     """
     vlan_ports: dict[str, list[str]] = {}
+    vlan_seen: dict[str, set[str]] = {}
     current_id: str | None = None
     ports_col: int | None = None
 
@@ -271,8 +290,10 @@ def _parse_vlan_ports_raw(raw: str) -> dict[str, list[str]]:
         for token in _INTF_TOKEN_RE.findall(search_text):
             expanded = _expand_interface_range(token)
             entry = vlan_ports.setdefault(current_id, [])
+            seen = vlan_seen.setdefault(current_id, set())
             for intf in expanded:
-                if intf not in entry:
+                if intf not in seen:
+                    seen.add(intf)
                     entry.append(intf)
 
     return vlan_ports
