@@ -26,44 +26,6 @@ When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), dev
 
 When a target is a modular chassis and the `discover_modules` policy option is enabled, device-discovery additionally emits `Module` and `ModuleBay` entities for each chassis slot (and, in `full` mode, each transceiver sub-bay) — see [Modules / ModuleBays](#modules--modulebays) below. Defaults to `off`, so existing operators see zero behaviour change.
 
-## Switch stacks / Virtual Chassis
-
-When a driver implements stack-member discovery and the target reports 2+ members with serials, device-discovery emits a NetBox `VirtualChassis` plus one `Device` per member, and routes each interface and IP address to the correct member based on the interface name prefix (e.g. `GigabitEthernet1/0/1` → member 1, `GigabitEthernet2/0/12` → member 2). Standalone switches, devices not in stack mode, and members without a serial (which Diode cannot resolve) fall back to the existing single-`Device` path with no change in behaviour.
-
-**Emission shape** (in order):
-1. **Master `Device`** — plain (no `vc_position`, no `virtual_chassis` ref). Named `<hostname>-<id>` where `<hostname>` is the management hostname and `<id>` is the master's stack-member id.
-2. **`VirtualChassis`** — named `<hostname>`, with `master` set to the inline matcher block of the master Device.
-3. **N − 1 member `Device` entities** — each carries `vc_position = <member id>` and an inline `virtual_chassis` ref pointing to the same matcher block.
-4. **Interface / IPAddress entities** — routed to the member device whose id matches the interface name prefix. Logical interfaces with no parseable member id (`Vlan*`, `Loopback*`, `Port-channel*`, etc.) land on the master.
-
-**Master pinning.** The logical master sent to Diode is always the **lowest stack-member id present**, regardless of live role. This is required because the NetBox Diode plugin resolves an existing `VirtualChassis` via its `unique_master` matcher — pinning to the lowest id keeps the master Device stable across StackWise role failovers so re-runs upsert the existing VC instead of creating a new one. The other matcher fields used for VC re-identification (asset_tag, primary_ip4/6, name+site+tenant, and `metadata.source_match`) are carried consistently on both the rich master Device and the inline VC `master` ref so the plugin's matcher cascade resolves through the same record on every cycle.
-
-**Orphaned member ports.** If a member is dropped from the validated payload (missing serial, duplicate id, etc.) but the device still reports its ports via `show interfaces`, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
-
-**Supported drivers.** Stack discovery is opt-in per driver (analogous to interface↔VLAN associations). See the [supported platforms page](./supported_platforms.md#switch-stacks--virtual-chassis-vc) for the current list; vendors land as follow-up PRs as the underlying drivers gain stack-discovery support.
-
-When a driver supports it, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. Trunks that allow every VLAN (e.g. Cisco IOS `Trunking VLANs Enabled: ALL` or `1-4094`) are emitted as `tagged-all` so NetBox sees the proper 802.1Q semantics rather than a `tagged` interface with an empty allowed-VLAN list. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. Malformed CLI rows that the driver cannot parse fail closed (plain `tagged` mode with no tagged VLANs and a logged warning) — they never silently widen an interface to all VLANs. Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately.
-
-## Modules / ModuleBays
-
-When a driver implements module discovery and the `discover_modules` policy option is enabled, device-discovery emits NetBox `Module` and `ModuleBay` entities for each chassis slot (e.g. a Catalyst 9404R supervisor + line cards in slots 1–4) and, in `full` mode, for each transceiver sub-bay reported by the device. Standalone non-modular switches (e.g. a Cat 3850 / 9300 with no removable line cards) and devices whose driver does not implement module discovery fall back to the existing emission with no change in behaviour. The option defaults to `off` so existing operators see zero behaviour change unless they explicitly opt in.
-
-**Three modes:**
-
-| `discover_modules` | What gets emitted |
-|---|---|
-| `off` *(default)* | No module / module-bay entities. Existing behaviour. |
-| `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors, PSU / fan modules a driver classifies explicitly). Transceiver sub-bays are skipped — useful when operators care about the slot inventory but not per-port optics. |
-| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. |
-
-**Emission order** (standalone modular chassis): `Device` → all `ModuleBay` + `Module` entries → `Interface` / `IPAddress` entries. The order matters because each interface entity may reference the module installed in its bay; emitting modules first lets the Diode reconciler resolve `Interface.module` against the just-created module.
-
-**Virtual-chassis-of-modular** (e.g. Catalyst 9300 stack with FRU uplinks, Catalyst 9400 / 9500 in StackWise Virtual mode). When a VC member is itself a modular chassis, modules and bays are dispatched per member: each `Module` / `ModuleBay` carries `device=` set to the member that physically owns the slot, and the `Module.module_bay` reference points at that member's bay. The emission order becomes: `Device(master)` → `VirtualChassis` → `Device(non-master members)` → all `ModuleBay` + `Module` per member → `Interface` / `IPAddress` per member. Stack members that are non-modular emit no module entries; the VC stack envelope is unchanged.
-
-**Current sub-bay rendering trade-off (transient).** In `full` mode the transceiver sub-bay is emitted device-rooted — i.e. without a `module=parent_linecard` link. As a result, NetBox renders the transceiver sub-bay at chassis level (alongside the line-card slot bays) instead of visually nested under its parent line card. The transceiver `Module` itself is still installed in the sub-bay correctly via `Module.module_bay`, so per-port optic visibility works as expected; only the bay-under-linecard hierarchy is lost. The link is dropped because, in the current per-entity reconciler, attaching `module=parent_linecard` on a sub-bay causes the parent Module to be re-created from inside the sub-bay's changeset and conflicts at apply with the line card already created by the prior top-level Module entity. The link will be restored once the reconciler resolves nested parent-module refs against committed sibling entities in a single ingest call.
-
-**Supported drivers.** Module discovery is opt-in per driver (analogous to interface↔VLAN associations and stack discovery). See the [supported platforms page](./supported_platforms.md#modules--modulebays) for the current list; vendors land as follow-up PRs as the underlying drivers gain module-discovery support.
-
 ## Configuration
 The `device_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
 
@@ -336,6 +298,44 @@ orb:
 In this example:
 - The `credentials` section defines reusable credentials using the anchor `&ios_credentials`.
 - The `<<: *ios_credentials` alias is used to include the credentials in multiple devices within the `scope` section.
+
+## Switch stacks / Virtual Chassis
+
+When a driver implements stack-member discovery and the target reports 2+ members with serials, device-discovery emits a NetBox `VirtualChassis` plus one `Device` per member, and routes each interface and IP address to the correct member based on the interface name prefix (e.g. `GigabitEthernet1/0/1` → member 1, `GigabitEthernet2/0/12` → member 2). Standalone switches, devices not in stack mode, and members without a serial (which Diode cannot resolve) fall back to the existing single-`Device` path with no change in behaviour.
+
+**Emission shape** (in order):
+1. **Master `Device`** — plain (no `vc_position`, no `virtual_chassis` ref). Named `<hostname>-<id>` where `<hostname>` is the management hostname and `<id>` is the master's stack-member id.
+2. **`VirtualChassis`** — named `<hostname>`, with `master` set to the inline matcher block of the master Device.
+3. **N − 1 member `Device` entities** — each carries `vc_position = <member id>` and an inline `virtual_chassis` ref pointing to the same matcher block.
+4. **Interface / IPAddress entities** — routed to the member device whose id matches the interface name prefix. Logical interfaces with no parseable member id (`Vlan*`, `Loopback*`, `Port-channel*`, etc.) land on the master.
+
+**Master pinning.** The logical master sent to Diode is always the **lowest stack-member id present**, regardless of live role. This is required because the NetBox Diode plugin resolves an existing `VirtualChassis` via its `unique_master` matcher — pinning to the lowest id keeps the master Device stable across StackWise role failovers so re-runs upsert the existing VC instead of creating a new one. The other matcher fields used for VC re-identification (asset_tag, primary_ip4/6, name+site+tenant, and `metadata.source_match`) are carried consistently on both the rich master Device and the inline VC `master` ref so the plugin's matcher cascade resolves through the same record on every cycle.
+
+**Orphaned member ports.** If a member is dropped from the validated payload (missing serial, duplicate id, etc.) but the device still reports its ports via `show interfaces`, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
+
+**Supported drivers.** Stack discovery is opt-in per driver (analogous to interface↔VLAN associations). See the [supported platforms page](./supported_platforms.md#switch-stacks--virtual-chassis-vc) for the current list; vendors land as follow-up PRs as the underlying drivers gain stack-discovery support.
+
+When a driver supports it, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. Trunks that allow every VLAN (e.g. Cisco IOS `Trunking VLANs Enabled: ALL` or `1-4094`) are emitted as `tagged-all` so NetBox sees the proper 802.1Q semantics rather than a `tagged` interface with an empty allowed-VLAN list. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. Malformed CLI rows that the driver cannot parse fail closed (plain `tagged` mode with no tagged VLANs and a logged warning) — they never silently widen an interface to all VLANs. Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately.
+
+## Modules / ModuleBays
+
+When a driver implements module discovery and the `discover_modules` policy option is enabled, device-discovery emits NetBox `Module` and `ModuleBay` entities for each chassis slot (e.g. a Catalyst 9404R supervisor + line cards in slots 1–4) and, in `full` mode, for each transceiver sub-bay reported by the device. Standalone non-modular switches (e.g. a Cat 3850 / 9300 with no removable line cards) and devices whose driver does not implement module discovery fall back to the existing emission with no change in behaviour. The option defaults to `off` so existing operators see zero behaviour change unless they explicitly opt in.
+
+**Three modes:**
+
+| `discover_modules` | What gets emitted |
+|---|---|
+| `off` *(default)* | No module / module-bay entities. Existing behaviour. |
+| `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors, PSU / fan modules a driver classifies explicitly). Transceiver sub-bays are skipped — useful when operators care about the slot inventory but not per-port optics. |
+| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. |
+
+**Emission order** (standalone modular chassis): `Device` → all `ModuleBay` + `Module` entries → `Interface` / `IPAddress` entries. The order matters because each interface entity may reference the module installed in its bay; emitting modules first lets the Diode reconciler resolve `Interface.module` against the just-created module.
+
+**Virtual-chassis-of-modular** (e.g. Catalyst 9300 stack with FRU uplinks, Catalyst 9400 / 9500 in StackWise Virtual mode). When a VC member is itself a modular chassis, modules and bays are dispatched per member: each `Module` / `ModuleBay` carries `device=` set to the member that physically owns the slot, and the `Module.module_bay` reference points at that member's bay. The emission order becomes: `Device(master)` → `VirtualChassis` → `Device(non-master members)` → all `ModuleBay` + `Module` per member → `Interface` / `IPAddress` per member. Stack members that are non-modular emit no module entries; the VC stack envelope is unchanged.
+
+**Current sub-bay rendering trade-off (transient).** In `full` mode the transceiver sub-bay is emitted device-rooted — i.e. without a `module=parent_linecard` link. As a result, NetBox renders the transceiver sub-bay at chassis level (alongside the line-card slot bays) instead of visually nested under its parent line card. The transceiver `Module` itself is still installed in the sub-bay correctly via `Module.module_bay`, so per-port optic visibility works as expected; only the bay-under-linecard hierarchy is lost. The link is dropped because, in the current per-entity reconciler, attaching `module=parent_linecard` on a sub-bay causes the parent Module to be re-created from inside the sub-bay's changeset and conflicts at apply with the line card already created by the prior top-level Module entity. The link will be restored once the reconciler resolves nested parent-module refs against committed sibling entities in a single ingest call.
+
+**Supported drivers.** Module discovery is opt-in per driver (analogous to interface↔VLAN associations and stack discovery). See the [supported platforms page](./supported_platforms.md#modules--modulebays) for the current list; vendors land as follow-up PRs as the underlying drivers gain module-discovery support.
 
 ## What NAPALM Collects Automatically
 
