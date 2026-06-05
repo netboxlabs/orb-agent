@@ -38,6 +38,7 @@ DEFAULT_INTERFACE_PATTERNS = [
     InterfacePattern(match=r"^Tunnel\d+", type="virtual"),
     # Management Interfaces
     InterfacePattern(match=r"^(Management|mgmt)\d+", type="1000base-t"),
+    InterfacePattern(match=r"^management$", type="1000base-t"),
     InterfacePattern(match=r"^(fxp|em)\d+", type="1000base-t"),
     # Cumulus Linux Switch Ports
     InterfacePattern(match=r"^swp\d+", type="1000base-t"),

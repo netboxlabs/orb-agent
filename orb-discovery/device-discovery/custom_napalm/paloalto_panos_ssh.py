@@ -8,6 +8,7 @@ Implements only the methods used by device-discovery:
 Uses ntc-templates 9.x for structured parsing.
 """
 
+import ipaddress
 import logging
 import re
 
@@ -52,9 +53,147 @@ def _parse_uptime(uptime_str: str) -> int:
     return days * 86400 + hours * 3600 + minutes * 60 + secs
 
 
-def _netmask_to_prefix(netmask: str) -> int:
-    """Convert dotted-decimal netmask to CIDR prefix length."""
-    return sum(bin(int(octet)).count("1") for octet in netmask.split("."))
+def _netmask_to_prefix(netmask: str) -> int | None:
+    """
+    Convert dotted-decimal netmask to a CIDR prefix length; None if malformed.
+
+    Uses stdlib ``ipaddress`` so wrong-length, out-of-range, AND non-contiguous
+    masks (e.g. ``255.0.255.0``) are all rejected — a plain 1-bit count would
+    accept the latter as a bogus ``/16``.
+    """
+    try:
+        return ipaddress.ip_network(f"0.0.0.0/{netmask}").prefixlen
+    except ValueError:
+        return None
+
+
+def _is_link_local_v6(addr: str) -> bool:
+    """Return True if *addr* is an IPv6 link-local address (the full ``fe80::/10``)."""
+    try:
+        return ipaddress.ip_address(addr).is_link_local
+    except ValueError:
+        # Unparseable — fall back to the fe80::/10 textual prefixes (fe8/fe9/fea/feb).
+        return addr.lower().startswith(("fe8", "fe9", "fea", "feb"))
+
+
+# `show system info` does not expose the mgmt IPv6 through the ntc-template,
+# so parse it directly from the raw text.
+# Accept both observed labels: `ip-address-v6` (this repo's real-device-derived
+# `show system info` fixture) and `ipv6-address` (the XML-API tag name / Palo Alto
+# CLI examples). Matching both is robust to the exact CLI build without betting on
+# one. Safety comes from the `^` start-of-line anchor plus matching the FULL field
+# label up to the `:` (not a prefix match) — so the separate
+# `ipv6-link-local-address:` line never matches (it diverges at `link-...`).
+_PANOS_SSH_MGMT_IPV6_RE = re.compile(
+    r"^(?:ip-address-v6|ipv6-address):\s+(?P<addr>\S+)", re.MULTILINE
+)
+
+
+def _mgmt_ipv6_from_system_info(text: str) -> tuple[str, int] | None:
+    """
+    Extract ``(addr, prefix)`` for the management IPv6 from ``show system info``.
+
+    Returns ``None`` for unknown / link-local (``fe80::/10``) / prefix-less
+    values — skipping a prefix-less address rather than assuming ``/64`` mirrors
+    the checkpoint_gaia / dell_ftos / aruba_os convention.
+    """
+    m = _PANOS_SSH_MGMT_IPV6_RE.search(text or "")
+    if not m:
+        return None
+    raw = m.group("addr").strip()
+    if raw.lower() in ("unknown", "n/a", ""):
+        return None
+    if "/" not in raw:
+        logger.debug("paloalto_panos_ssh: skipping mgmt IPv6 %s: no prefix length", raw)
+        return None
+    addr, plen = raw.rsplit("/", 1)
+    if _is_link_local_v6(addr):
+        logger.debug("paloalto_panos_ssh: skipping mgmt IPv6 %s: link-local", raw)
+        return None
+    # Validate it's a real, unscoped IPv6 before emitting — a malformed value or a
+    # zone index (e.g. `2001:db8::1%mgmt`) would otherwise crash translation when
+    # `ipaddress.ip_network(addr/prefix)` is built downstream.
+    try:
+        if ipaddress.ip_address(addr).version != 6 or "%" in addr:
+            raise ValueError
+    except ValueError:
+        logger.debug("paloalto_panos_ssh: skipping mgmt IPv6 %s: not a valid global IPv6", raw)
+        return None
+    try:
+        plen_int = int(plen)
+    except ValueError:
+        logger.debug("paloalto_panos_ssh: skipping mgmt IPv6 %s: bad prefix", raw)
+        return None
+    if not (0 <= plen_int <= 128):
+        logger.debug("paloalto_panos_ssh: skipping mgmt IPv6 %s: prefix out of range", raw)
+        return None
+    return addr, plen_int
+
+
+def _usable_mgmt_ipv4(ipv4: str, netmask: str) -> int | None:
+    """
+    Return the CIDR prefix for a usable management IPv4, or None.
+
+    Skips junk / ``0.0.0.0`` values, addresses that aren't valid IPv4, and
+    unparseable / non-contiguous netmasks — so a malformed ``ip_address`` can't
+    reach translation and crash ``ipaddress.ip_network(...)``.
+    """
+    ipv4 = (ipv4 or "").strip()
+    netmask = (netmask or "").strip()
+    if ipv4.lower() in ("unknown", "n/a", "0.0.0.0", ""):
+        return None
+    if netmask.lower() in ("unknown", "n/a", "0.0.0.0", ""):
+        return None
+    try:
+        if ipaddress.ip_address(ipv4).version != 4:
+            return None
+    except ValueError:
+        logger.debug("paloalto_panos_ssh: skipping mgmt IPv4 %s: not a valid address", ipv4)
+        return None
+    return _netmask_to_prefix(netmask)
+
+
+def _mgmt_interface_from_system_info(sysinfo_parsed: list[dict], sysinfo_out: str) -> dict:
+    """
+    Build the NAPALM ``get_interfaces`` entry for the management interface.
+
+    The management port is not listed by ``show interface hardware``; its MAC
+    comes from ``show system info``. Emitted whenever a usable management IP
+    (IPv4 or IPv6) is present — i.e. exactly the cases where
+    ``get_interfaces_ip`` emits a management IP, so the MAC is carried even on
+    IPv6-only management planes. A missing / malformed MAC yields an empty
+    ``mac_address`` rather than dropping the entry.
+    """
+    if not sysinfo_parsed:
+        return {}
+    row = sysinfo_parsed[0]
+    # Emit the management interface for EXACTLY the cases get_interfaces_ip()
+    # emits a management IPv4 (valid IPv4 + parseable netmask) — otherwise a
+    # malformed address / netmask would yield an interface-without-IP artifact.
+    ipv4_usable = (
+        _usable_mgmt_ipv4(row.get("ip_address") or "", row.get("netmask") or "") is not None
+    )
+    # The global IPv6 lives in the raw text (ntc-template doesn't expose it),
+    # mirroring get_interfaces_ip's IPv6 sourcing.
+    ipv6_usable = _mgmt_ipv6_from_system_info(sysinfo_out) is not None
+    if not (ipv4_usable or ipv6_usable):
+        return {}
+    mac_raw = (row.get("mac_address") or "").strip()
+    try:
+        mgmt_mac = normalize_mac(mac_raw) if mac_raw else ""
+    except Exception:
+        mgmt_mac = ""
+    return {
+        "management": {
+            "is_up": True,
+            "is_enabled": True,
+            "description": "",
+            "last_flapped": -1.0,
+            "mtu": 0,
+            "speed": 0.0,
+            "mac_address": mgmt_mac,
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +515,14 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
                 "mac_address": parent_data["mac_address"],
             }
 
+        # Management interface — MAC comes from `show system info`; the mgmt
+        # port is not listed by `show interface hardware`.
+        sysinfo_out = self.device.send_command("show system info")
+        sysinfo_parsed = parse_output(
+            platform="paloalto_panos", command="show system info", data=sysinfo_out
+        )
+        interfaces.update(_mgmt_interface_from_system_info(sysinfo_parsed, sysinfo_out))
+
         return interfaces
 
     def get_interfaces_ip(self) -> dict:
@@ -400,19 +547,27 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
             except (ValueError, AttributeError):
                 continue
 
-        # Management interface
-        mgmt_out = self.device.send_command("show interface management")
-        mgmt_parsed = parse_output(
-            platform="paloalto_panos", command="show interface management", data=mgmt_out
+        # Management interface — PAN-OS exposes the mgmt-plane IP via
+        # `show system info`, NOT `show interface management` (whose
+        # ntc-template raises TextFSMError on the real `Interface Type:` line).
+        sysinfo_out = self.device.send_command("show system info")
+        sysinfo_parsed = parse_output(
+            platform="paloalto_panos", command="show system info", data=sysinfo_out
         )
-        for row in mgmt_parsed:
-            ipv4 = row.get("ipv4_address", "")
-            netmask = row.get("ipv4_netmask", "")
-            if ipv4 and netmask and ipv4 not in ("unknown", "N/A", ""):
-                prefix = _netmask_to_prefix(netmask)
+        if sysinfo_parsed:
+            row = sysinfo_parsed[0]
+            ipv4 = (row.get("ip_address") or "").strip()
+            prefix = _usable_mgmt_ipv4(ipv4, row.get("netmask") or "")
+            if prefix is not None:
                 interfaces_ip.setdefault("management", {}).setdefault("ipv4", {})[ipv4] = {
                     "prefix_length": prefix
                 }
+        mgmt_v6 = _mgmt_ipv6_from_system_info(sysinfo_out)
+        if mgmt_v6 is not None:
+            addr, plen = mgmt_v6
+            interfaces_ip.setdefault("management", {}).setdefault("ipv6", {})[addr] = {
+                "prefix_length": plen
+            }
 
         return interfaces_ip
 

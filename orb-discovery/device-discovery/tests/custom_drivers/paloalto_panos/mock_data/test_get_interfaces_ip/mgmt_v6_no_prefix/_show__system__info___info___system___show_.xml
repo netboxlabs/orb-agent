@@ -1,0 +1,9 @@
+<response status="success">
+  <result>
+    <system>
+      <ip-address>10.0.0.5</ip-address>
+      <netmask>255.255.255.0</netmask>
+      <ipv6-address>2001:db8::99</ipv6-address>
+    </system>
+  </result>
+</response>

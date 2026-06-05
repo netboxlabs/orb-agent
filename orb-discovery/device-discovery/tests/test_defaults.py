@@ -158,3 +158,14 @@ def test_most_specific_match_wins_with_builtins():
     # GigabitEthernet should match the Gig pattern
     result = match_interface_type("GigabitEthernet0/0", DEFAULT_INTERFACE_PATTERNS)
     assert result == "1000base-t"
+
+
+def test_bare_management_interface_matches_copper_type():
+    """PAN-OS mgmt interface is named bare 'management' (no trailing digit)."""
+    assert match_interface_type("management", DEFAULT_INTERFACE_PATTERNS) == "1000base-t"
+
+
+def test_numbered_management_still_matches():
+    """Existing numbered mgmt ports keep matching the pre-existing pattern."""
+    assert match_interface_type("Management0", DEFAULT_INTERFACE_PATTERNS) == "1000base-t"
+    assert match_interface_type("mgmt0", DEFAULT_INTERFACE_PATTERNS) == "1000base-t"

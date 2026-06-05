@@ -165,3 +165,88 @@ def test_panos_modular_prefixes_in_sync():
     from custom_napalm.paloalto_panos import _MODULAR_PANOS_PREFIXES
     from custom_napalm.paloalto_panos_ssh import _MODULAR_PANOS_PREFIXES_SSH
     assert _MODULAR_PANOS_PREFIXES == _MODULAR_PANOS_PREFIXES_SSH
+
+
+def test_mgmt_ipv6_from_system_info_parses_addr_and_prefix():
+    """Mgmt IPv6 with an explicit prefix is parsed to (addr, prefix_length)."""
+    from custom_napalm.paloalto_panos_ssh import _mgmt_ipv6_from_system_info
+    text = "hostname: fw1\nip-address-v6: 2001:db8:abcd::5/64\noperational-mode: normal\n"
+    assert _mgmt_ipv6_from_system_info(text) == ("2001:db8:abcd::5", 64)
+
+
+def test_mgmt_ipv6_from_system_info_skips_unknown_link_local_and_no_prefix():
+    """Unknown / link-local / prefix-less / empty mgmt IPv6 all yield None."""
+    from custom_napalm.paloalto_panos_ssh import _mgmt_ipv6_from_system_info
+    assert _mgmt_ipv6_from_system_info("ip-address-v6: unknown\n") is None
+    assert _mgmt_ipv6_from_system_info("ip-address-v6: fe80::1/64\n") is None
+    assert _mgmt_ipv6_from_system_info("ip-address-v6: 2001:db8::9\n") is None
+    assert _mgmt_ipv6_from_system_info("") is None
+
+
+def test_mgmt_ipv6_from_system_info_skips_out_of_range_prefix():
+    """An IPv6 prefix outside 0..128 is rejected."""
+    from custom_napalm.paloalto_panos_ssh import _mgmt_ipv6_from_system_info
+    assert _mgmt_ipv6_from_system_info("ip-address-v6: 2001:db8::1/999\n") is None
+
+
+def test_netmask_to_prefix_rejects_non_contiguous_and_malformed():
+    """Non-contiguous / wrong-length / out-of-range netmasks return None."""
+    from custom_napalm.paloalto_panos_ssh import _netmask_to_prefix
+    assert _netmask_to_prefix("255.255.255.0") == 24
+    assert _netmask_to_prefix("255.0.255.0") is None
+    assert _netmask_to_prefix("255.255.255.255.255") is None
+
+
+def test_mgmt_ipv6_from_system_info_skips_non_fe80_link_local():
+    """Link-local beyond fe80 (fe80::/10) is rejected, not just the fe80 prefix."""
+    from custom_napalm.paloalto_panos_ssh import _mgmt_ipv6_from_system_info
+    assert _mgmt_ipv6_from_system_info("ip-address-v6: fe9c::1/64\n") is None
+    assert _mgmt_ipv6_from_system_info("ip-address-v6: feaf::2/64\n") is None
+
+
+def test_mgmt_interface_skipped_when_netmask_unparseable():
+    """Valid IPv4 + unparseable/0.0.0.0 netmask (no IPv6) emits no mgmt interface, mirroring get_interfaces_ip()."""
+    from custom_napalm.paloalto_panos_ssh import _mgmt_interface_from_system_info
+
+    # Non-contiguous netmask, no IPv6 -> no management interface.
+    assert _mgmt_interface_from_system_info(
+        [{"ip_address": "10.0.0.5", "netmask": "255.0.255.0", "mac_address": "0e:0c:29:aa:bb:00"}],
+        "ip-address-v6: unknown\n",
+    ) == {}
+    # 0.0.0.0 netmask, no IPv6 -> no management interface.
+    assert _mgmt_interface_from_system_info(
+        [{"ip_address": "10.0.0.5", "netmask": "0.0.0.0", "mac_address": "0e:0c:29:aa:bb:00"}],
+        "",
+    ) == {}
+    # Sanity: valid netmask still emits.
+    assert "management" in _mgmt_interface_from_system_info(
+        [{"ip_address": "10.0.0.5", "netmask": "255.255.255.0", "mac_address": "0e:0c:29:aa:bb:00"}],
+        "",
+    )
+
+
+def test_mgmt_ipv6_from_system_info_accepts_both_field_labels():
+    """Both `ip-address-v6:` and the XML-style `ipv6-address:` labels are parsed."""
+    from custom_napalm.paloalto_panos_ssh import _mgmt_ipv6_from_system_info
+    assert _mgmt_ipv6_from_system_info("ip-address-v6: 2001:db8::5/64\n") == ("2001:db8::5", 64)
+    assert _mgmt_ipv6_from_system_info("ipv6-address: 2001:db8::5/64\n") == ("2001:db8::5", 64)
+    # The separate link-local field must never be picked up by the global-address regex.
+    assert _mgmt_ipv6_from_system_info("ipv6-link-local-address: fe80::1/64\n") is None
+
+
+def test_mgmt_ipv6_from_system_info_skips_malformed_and_scoped():
+    """A non-IPv6 / malformed value or a zone-index address is rejected."""
+    from custom_napalm.paloalto_panos_ssh import _mgmt_ipv6_from_system_info
+    assert _mgmt_ipv6_from_system_info("ipv6-address: not-an-addr/64\n") is None
+    assert _mgmt_ipv6_from_system_info("ipv6-address: 10.0.0.5/24\n") is None  # IPv4, not v6
+    assert _mgmt_ipv6_from_system_info("ipv6-address: 2001:db8::1%mgmt/64\n") is None  # zone index
+
+
+def test_usable_mgmt_ipv4_rejects_invalid_addresses():
+    """_usable_mgmt_ipv4 returns None for malformed / non-IPv4 / junk values."""
+    from custom_napalm.paloalto_panos_ssh import _usable_mgmt_ipv4
+    assert _usable_mgmt_ipv4("not-an-ip", "255.255.255.0") is None
+    assert _usable_mgmt_ipv4("2001:db8::5", "255.255.255.0") is None  # IPv6, not v4
+    assert _usable_mgmt_ipv4("10.0.0.5", "255.0.255.0") is None       # non-contiguous netmask
+    assert _usable_mgmt_ipv4("0.0.0.0", "255.255.255.0") is None      # junk address
+    assert _usable_mgmt_ipv4("10.0.0.5", "255.255.255.0") == 24       # valid

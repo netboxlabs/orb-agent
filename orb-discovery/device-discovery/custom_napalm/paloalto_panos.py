@@ -7,10 +7,12 @@ Implements only the methods used by device-discovery:
   get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
 """
 
+import ipaddress
 import json
 import logging
 import re
 import xml.etree.ElementTree
+import xml.parsers.expat
 
 import napalm.base as _napalm_base
 import pan.xapi
@@ -78,6 +80,150 @@ def _extract_ip_info(parsed_intf_dict: dict) -> dict:
     if ip_info == {intf: {}}:
         return {}
     return ip_info
+
+
+# Management-plane values that are not real addresses.
+_PANOS_MGMT_SKIP = {"", "unknown", "n/a", "0.0.0.0"}
+
+
+def _netmask_to_prefix(netmask: str) -> int | None:
+    """
+    Convert dotted-decimal netmask to a CIDR prefix length; None if malformed.
+
+    Uses stdlib ``ipaddress`` so wrong-length, out-of-range, AND non-contiguous
+    masks (e.g. ``255.0.255.0``) are all rejected — a plain 1-bit count would
+    accept the latter as a bogus ``/16``.
+    """
+    try:
+        return ipaddress.ip_network(f"0.0.0.0/{netmask}").prefixlen
+    except ValueError:
+        return None
+
+
+def _is_link_local_v6(addr: str) -> bool:
+    """Return True if *addr* is an IPv6 link-local address (the full ``fe80::/10``)."""
+    try:
+        return ipaddress.ip_address(addr).is_link_local
+    except ValueError:
+        # Unparseable — fall back to the fe80::/10 textual prefixes (fe8/fe9/fea/feb).
+        return addr.lower().startswith(("fe8", "fe9", "fea", "feb"))
+
+
+def _usable_mgmt_ipv6(ipv6_raw: str) -> tuple[str, int] | None:
+    """
+    Parse a usable global management ``(addr, prefix)`` from the ``ipv6-address`` field.
+
+    Returns None for skip values, link-local (``fe80::/10``), prefix-less, or
+    out-of-range entries. IPv6 without an explicit ``/prefix`` is skipped (not
+    assumed ``/64``), mirroring the checkpoint_gaia / dell_ftos / aruba_os convention.
+    """
+    raw = (ipv6_raw or "").strip()
+    if raw.lower() in _PANOS_MGMT_SKIP:
+        return None
+    if "/" not in raw:
+        logger.debug("paloalto_panos: skipping mgmt IPv6 %s: no prefix length", raw)
+        return None
+    addr, plen = raw.rsplit("/", 1)
+    if _is_link_local_v6(addr):
+        logger.debug("paloalto_panos: skipping mgmt IPv6 %s: link-local", raw)
+        return None
+    # Validate it's a real, unscoped IPv6 before emitting — a malformed value or a
+    # zone index (e.g. `2001:db8::1%mgmt`) would otherwise crash translation when
+    # `ipaddress.ip_network(addr/prefix)` is built downstream.
+    try:
+        if ipaddress.ip_address(addr).version != 6 or "%" in addr:
+            raise ValueError
+    except ValueError:
+        logger.debug("paloalto_panos: skipping mgmt IPv6 %s: not a valid global IPv6", raw)
+        return None
+    try:
+        plen_int = int(plen)
+    except ValueError:
+        logger.debug("paloalto_panos: skipping mgmt IPv6 %s: bad prefix", raw)
+        return None
+    if not (0 <= plen_int <= 128):
+        logger.debug("paloalto_panos: skipping mgmt IPv6 %s: prefix out of range", raw)
+        return None
+    return addr, plen_int
+
+
+def _mgmt_interface_from_system_info(system_info: dict) -> dict:
+    """
+    Build the NAPALM ``get_interfaces`` entry for the management interface.
+
+    The management port is not listed by ``show interface all``; its MAC
+    comes from ``show system info``. Emitted whenever a usable management IP
+    (IPv4 or IPv6) is present — i.e. exactly the cases where
+    ``get_interfaces_ip`` emits a management IP, so the MAC is carried even on
+    IPv6-only management planes. A missing / malformed MAC yields an empty
+    ``mac_address`` rather than dropping the entry.
+    """
+    if not _mgmt_ip_from_system_info(system_info):
+        return {}
+    mac_raw = (system_info.get("mac-address") or "").strip()
+    try:
+        mgmt_mac = standardize_mac(mac_raw) if mac_raw else ""
+    except Exception:
+        mgmt_mac = ""
+    return {
+        "management": {
+            "is_up": True,
+            "is_enabled": True,
+            "speed": 0.0,
+            "last_flapped": -1.0,
+            "mtu": 0,
+            "mac_address": mgmt_mac,
+            "description": "",
+        }
+    }
+
+
+def _usable_mgmt_ipv4(ipv4: str, netmask: str) -> int | None:
+    """
+    Return the CIDR prefix for a usable management IPv4, or None.
+
+    Skips junk / ``0.0.0.0`` values, addresses that aren't valid IPv4, and
+    unparseable / non-contiguous netmasks — so a malformed ``ip-address`` can't
+    reach translation and crash ``ipaddress.ip_network(...)``.
+    """
+    ipv4 = (ipv4 or "").strip()
+    netmask = (netmask or "").strip()
+    if ipv4.lower() in _PANOS_MGMT_SKIP or netmask.lower() in _PANOS_MGMT_SKIP:
+        return None
+    try:
+        if ipaddress.ip_address(ipv4).version != 4:
+            return None
+    except ValueError:
+        logger.debug("paloalto_panos: skipping mgmt IPv4 %s: not a valid address", ipv4)
+        return None
+    return _netmask_to_prefix(netmask)
+
+
+def _mgmt_ip_from_system_info(system_info: dict) -> dict:
+    """
+    Build the NAPALM ``interface_ip`` fragment for the management interface.
+
+    PAN-OS exposes the management-plane IP in ``show system info``
+    (``ip-address`` / ``netmask`` / ``ipv6-address``), not in
+    ``show interface all``. Returns ``{"management": {...}}`` or ``{}`` when
+    nothing usable is present. IPv6 without an explicit ``/prefix`` is skipped
+    (matching the checkpoint_gaia / dell_ftos / aruba_os convention) rather
+    than assuming ``/64``; link-local ``fe80::`` is ignored.
+    """
+    mgmt: dict = {}
+
+    ipv4 = (system_info.get("ip-address") or "").strip()
+    prefix = _usable_mgmt_ipv4(ipv4, system_info.get("netmask") or "")
+    if prefix is not None:
+        mgmt.setdefault("ipv4", {})[ipv4] = {"prefix_length": prefix}
+
+    mgmt_v6 = _usable_mgmt_ipv6(system_info.get("ipv6-address") or "")
+    if mgmt_v6 is not None:
+        mgmt.setdefault("ipv6", {})[mgmt_v6[0]] = {"prefix_length": mgmt_v6[1]}
+
+    if not mgmt:
+        return {}
+    return {"management": mgmt}
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +478,31 @@ class PANOSDriver(_napalm_base.NetworkDriver):
         self.device.op(cmd="<show><config><candidate></candidate></config></show>")
         return str(self.device.xml_root())
 
+    def _system_info_dict(self) -> dict:
+        """
+        Return the parsed ``show system info`` ``result.system`` dict, or {} on failure.
+
+        Best-effort: a failed RPC (``PanXapiError`` — timeout / auth / API error), a
+        malformed/unparseable XML body (``ExpatError``), or an unexpected payload all
+        yield {} rather than propagating. The management-IP lookup is an enhancement
+        layered on top of ``get_interfaces()`` / ``get_interfaces_ip()``, so a
+        system-info failure must not fail those getters once their data-plane
+        interfaces/IPs have been collected.
+        """
+        try:
+            self.device.op(cmd="<show><system><info></info></system></show>")
+            parsed = xmltodict.parse(self.device.xml_root())
+            system = parsed["response"]["result"]["system"]
+        except pan.xapi.PanXapiError as e:
+            logger.warning("paloalto_panos: `show system info` RPC failed: %s", e)
+            return {}
+        except xml.parsers.expat.ExpatError as e:
+            logger.warning("paloalto_panos: `show system info` XML parse failed: %s", e)
+            return {}
+        except (KeyError, TypeError, AttributeError):
+            return {}
+        return system or {}
+
     # ------------------------------------------------------------------
     # NAPALM getters
     # ------------------------------------------------------------------
@@ -431,25 +602,36 @@ class PANOSDriver(_napalm_base.NetworkDriver):
                 "description": interface_descr.get(intf, ""),
             }
 
+        # Management interface — MAC comes from `show system info`
+        # (the management port is not listed by `show interface all`).
+        interface_dict.update(_mgmt_interface_from_system_info(self._system_info_dict()))
+
         return interface_dict
 
     def get_interfaces_ip(self):
-        """Return IP addresses per interface."""
+        """Return IP addresses per interface (data-plane + management)."""
         self.device.op(cmd="<show><interface>all</interface></show>")
         interface_info_xml = xmltodict.parse(self.device.xml_root())
         result = interface_info_xml.get("response", {}).get("result", {}) or {}
         ifnet = result.get("ifnet") or {}
         entry = ifnet.get("entry")
-        if not entry:
-            return {}
-
-        interface_info = entry if isinstance(entry, list) else [entry]
 
         ip_interfaces = {}
-        for intf_dict in interface_info:
-            ip_info = _extract_ip_info(intf_dict)
-            if ip_info:
-                ip_interfaces.update(ip_info)
+        if entry:
+            interface_info = entry if isinstance(entry, list) else [entry]
+            for intf_dict in interface_info:
+                ip_info = _extract_ip_info(intf_dict)
+                if ip_info:
+                    ip_interfaces.update(ip_info)
+
+        # PAN-OS exposes the management-plane IP only via `show system info`.
+        # Merge (don't clobber): the MGT port is genuinely absent from
+        # `show interface all` today, but a nested merge is collision-safe if a
+        # future PAN-OS ever lists a "management" key there too.
+        for intf, families in _mgmt_ip_from_system_info(self._system_info_dict()).items():
+            dest = ip_interfaces.setdefault(intf, {})
+            for family, addrs in families.items():
+                dest.setdefault(family, {}).update(addrs)
 
         return ip_interfaces
 
