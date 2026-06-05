@@ -259,9 +259,9 @@ func TestFetcher_FollowsRedirectAndExtracts(t *testing.T) {
 	mux := http.NewServeMux()
 	// Extension-less path, like the control-plane bundle endpoint.
 	mux.HandleFunc("/bundles/test-bundle/1.0.0", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/blob", http.StatusFound)
+		http.Redirect(w, r, "/blob.tar.gz", http.StatusFound)
 	})
-	mux.HandleFunc("/blob", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/blob.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/gzip")
 		_, _ = w.Write(archive)
 	})
@@ -290,7 +290,7 @@ func TestHasKnownArchiveSuffix(t *testing.T) {
 		"/path/to/bundle.zip":        true,
 		"/path/to/bundle.tar.xz":     true,
 		"/path/to/bundle.tar":        true,
-		"/path/to/bundle.gz":         true,
+		"/path/to/bundle.gz":         false,
 		"/BUNDLE.TAR.GZ":             true,  // case-insensitive
 		"/bundles/test-bundle/1.0.0": false, // extension-less control-plane path
 		"/bundles/name/2.12.0":       false,
@@ -304,8 +304,8 @@ func TestHasKnownArchiveSuffix(t *testing.T) {
 	}
 }
 
-// TestFetcher_ZipURLNotForcedToTarGz guards the Codex review concern: a URL that
-// already names a non-tar.gz archive must keep its format. We assert the guard
+// TestFetcher_ZipURLNotForcedToTarGz guards against forcing tar.gz when the URL
+// already names a non-tar.gz archive. We assert the guard
 // logic (hasKnownArchiveSuffix) recognizes .zip so fetch() will NOT inject
 // ?archive=tar.gz over it; go-getter's own .zip decompressor then handles it.
 func TestFetcher_ZipURLNotForcedToTarGz(t *testing.T) {

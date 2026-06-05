@@ -44,12 +44,12 @@ var httpGetters = map[string]getter.Getter{
 
 // knownArchiveSuffixes lists the archive extensions go-getter recognizes from a
 // URL path, longest-first so multi-part suffixes (e.g. "tar.gz") are matched
-// before their single-part tails (e.g. "gz"). Mirrors go-getter's default
-// decompressor keys.
+// before their single-part tails (e.g. "gz"). Keep this in sync with the
+// github.com/hashicorp/go-getter version in go.mod.
 var knownArchiveSuffixes = []string{
-	"tar.bz2", "tar.gz", "tar.xz", "tar.zst",
-	"tbz2", "tgz", "txz", "tzst",
-	"tar", "bz2", "gz", "xz", "zip", "zst",
+	"tar.bz2", "tar.gz", "tar.xz",
+	"tbz2", "tgz", "txz",
+	"tar", "zip",
 }
 
 // hasKnownArchiveSuffix reports whether urlPath ends in an archive extension
@@ -203,7 +203,12 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 	// caller already passed ?archive= or the URL path carries a recognized
 	// archive suffix (.zip, .tar.xz, ...), respect that so non-tar.gz archives
 	// keep working. The default (tar.gz) covers the extension-less bundle case.
-	if spec.Extract && q.Get("archive") == "" && !hasKnownArchiveSuffix(u.Path) {
+
+	urlPathForSuffixCheck := u.Path
+	if idx := strings.Index(urlPathForSuffixCheck, "//"); idx >= 0 {
+		urlPathForSuffixCheck = urlPathForSuffixCheck[:idx]
+	}
+	if spec.Extract && q.Get("archive") == "" && !hasKnownArchiveSuffix(urlPathForSuffixCheck) {
 		q.Set("archive", "tar.gz")
 	}
 	u.RawQuery = q.Encode()
