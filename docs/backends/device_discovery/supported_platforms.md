@@ -10,6 +10,70 @@ The backend connects to network devices over SSH / NETCONF / vendor APIs via [NA
 
 When a scope entry does not specify a `driver`, device-discovery attempts driver detection automatically. Only the **standard NAPALM drivers** below are tried during auto-discovery. Custom drivers must be used explicitly by either setting `driver:` on the scope entry, or by listing them in the `discovery_drivers` option (see [Custom Driver Discovery Example](./README.md#custom-driver-discovery-example)).
 
+## Standard NAPALM drivers
+
+These drivers ship with the [NAPALM](https://napalm.readthedocs.io/en/latest/support/) library and are eligible for auto-discovery.
+
+| Driver | Vendor | Platform / OS |
+|--------|--------|---------------|
+| `eos` | Arista | EOS |
+| `ios` | Cisco | IOS / IOS-XE |
+| `iosxr` | Cisco | IOS-XR (XML agent) |
+| `iosxr_netconf` | Cisco | IOS-XR (NETCONF) |
+| `junos` | Juniper | Junos |
+| `nxos` | Cisco | NX-OS (NX-API) |
+| `nxos_ssh` | Cisco | NX-OS (SSH) |
+
+## Custom NAPALM drivers
+
+These drivers are bundled with device-discovery. They are **not** tried during auto-discovery unless explicitly listed in `discovery_drivers`; otherwise set `driver:` on the scope entry.
+
+| Driver | Vendor | Platform / OS |
+|--------|--------|---------------|
+| `alcatel_aos` | Nokia / Alcatel-Lucent Enterprise | AOS |
+| `aruba_aoscx` | HPE Aruba Networking | AOS-CX (REST) |
+| `aruba_aoscx_ssh` | HPE Aruba Networking | AOS-CX (SSH) |
+| `aruba_os` | HPE Aruba Networking | ArubaOS (controllers) |
+| `aruba_osswitch` | HPE Aruba Networking | ArubaOS-Switch (ex-ProCurve) |
+| `avaya_ers` | Extreme Networks (ex-Avaya) | Ethernet Routing Switch (ERS) |
+| `brocade_fastiron` | Ruckus / CommScope (ex-Brocade) | FastIron (ICX) |
+| `brocade_netiron` | Extreme Networks (ex-Brocade) | NetIron (MLX / CES / CER) |
+| `checkpoint_gaia` | Check Point | Gaia |
+| `ciena_saos` | Ciena | SAOS |
+| `cisco_apic` | Cisco | ACI APIC |
+| `cisco_asa` | Cisco | ASA |
+| `cisco_asa_ssh` | Cisco | ASA (SSH) |
+| `cisco_ftd_ssh` | Cisco | Firepower Threat Defense (FTD) |
+| `cisco_fxos` | Cisco | FXOS |
+| `cisco_s300` | Cisco | Small Business 300/350/550 series |
+| `cisco_viptela_ssh` | Cisco | Viptela / SD-WAN |
+| `cisco_wlc` | Cisco | Wireless LAN Controller (AireOS) |
+| `cumulus_linux` | NVIDIA (ex-Cumulus) | Cumulus Linux |
+| `dell_ftos` | Dell | Force10 / FTOS |
+| `dell_powerconnect` | Dell | PowerConnect |
+| `dell_sonic` | Dell | Enterprise SONiC |
+| `ericsson_ipos` | Ericsson | IPOS (ex-Redback SmartEdge) |
+| `extreme_exos` | Extreme Networks | EXOS |
+| `extreme_slx` | Extreme Networks | SLX-OS |
+| `extreme_vsp` | Extreme Networks | VSP / VOSS |
+| `fortinet_fortios_ssh` | Fortinet | FortiOS |
+| `hp_comware` | HPE / H3C | Comware |
+| `hp_procurve` | HPE | ProCurve (legacy) |
+| `huawei_smartax` | Huawei | SmartAX (OLT) |
+| `huawei_vrp` | Huawei | VRP |
+| `mellanox_mlnxos` | NVIDIA / Mellanox | MLNX-OS |
+| `mikrotik_routeros` | MikroTik | RouterOS |
+| `nokia_srl` | Nokia | SR Linux |
+| `nokia_sros` | Nokia | SR OS (gNMI/NETCONF) |
+| `nokia_sros_ssh` | Nokia | SR OS (SSH) |
+| `paloalto_panos` | Palo Alto Networks | PAN-OS (XML API) |
+| `paloalto_panos_ssh` | Palo Alto Networks | PAN-OS (SSH) |
+| `ubiquiti_edgerouter` | Ubiquiti | EdgeRouter (EdgeOS) |
+| `ubiquiti_edgeswitch` | Ubiquiti | EdgeSwitch |
+| `ubiquiti_unifiswitch` | Ubiquiti | UniFi Switch |
+
+The source for the custom drivers is maintained at [orb-discovery/device-discovery/custom_napalm](https://github.com/netboxlabs/orb-discovery/tree/develop/device-discovery/custom_napalm).
+
 ## Interface ↔ VLAN associations
 
 Drivers that implement `get_interfaces_vlans()` populate per-interface switching configuration on the emitted `Interface` entities (mode, untagged/access VLAN, tagged VLAN list). Drivers without the method continue to emit interfaces without VLAN associations — this is opt-in per driver.
@@ -170,70 +234,6 @@ Drivers that implement `get_modules()` discover the per-slot module inventory on
 **HP / H3C Comware (`hp_comware`).** Module discovery covers the H3C / HPE modular families S7500E, S10500, S12500 / S12500X-AF, and S12900. Family detection runs against the `display version` model string using substring family tokens (`S75` / `S105` / `S125` / `S129` for the H3C-branded forms `S7503E` / `S10510` / `S12508X-AF` / `S12916-AF`, plus the HPE-rebrand variants `7500` / `10500` / `12500` / `12900` for `HPE FlexFabric 12500` / `HP A10500` / etc.) — these match every chassis variant while cleanly rejecting fixed pizza-box families (`S5500-28C-EI`, `S5800-32F`, `S6800-54QF`) so the non-modular tail incurs no extra command round-trip. For modular families the driver parses the `hp_comware_display_device_manuinfo` ntc-template (filldown `CHASSIS_ID` + `SLOT_TYPE` / `SLOT_ID` / `DEVICE_NAME` / `DEVICE_SERIAL_NUMBER`) and partitions surviving Slot rows by `chassis_id`. Standalone modular chassis emit a single `members[None]` envelope (matching the single-device translate path's `{None: device}` map); IRF-of-modular emits one envelope per IRF member chassis (`members[1]`, `members[2]`, …) for the multi-member `translate_as_stack` path — the same code path covers both deployments without a separate command. **Supervisor identification is by SKU substring, not family prefix**: H3C reuses the same family prefix (`LSQM` / `LSUM` / `LSXM`) for both MPU (supervisor) and interface cards on the same chassis, so the role is encoded in the SKU body — `LSQM1MPUC0` (supervisor) vs `LSQM1FH48EA` (interface card). The classifier looks for `MPU` / `SUP` substrings first → `supervisor`; anything else matching a documented modular-family prefix (LSUM / LSQM / LSXM / LSQS / LSXS / LSQ1 / LSQ2 / LSQK / LSX1 / LSX2 / LSR / LSU) → `linecard` (SFU / fabric cards land here too because NetBox has no fabric module type today). Subslot / Fan / Power rows are dropped — sub-bay discovery (e.g. SFP sub-modules under an LSXM2 daughtercard) is a documented v1 limitation queued for a follow-up batch.
 
 **Extreme EXOS (`extreme_exos`).** Module discovery is scoped to the BlackDiamond X8 modular chassis. Other EXOS hardware in the field — the X670 / X870 fixed pizza-boxes, the BD-X8-X32 stackable variant — share the `X8` family token in their model strings but are not modular and must not produce module entries. Family detection scans the **full `show version` output** (not just `System Type:`, which Extreme's command-reference BD-X8 example omits in favour of `Switch :` / `Chassis :` / `Slot-*` / `FM-*` lines) using a regex with a negative-lookahead anchor (`(?:BD-|BLACKDIAMOND\s+)X8(?![-\w])`) rather than a Python `\b` word-boundary, because `\b` fires between the digit `8` and the dash in `BD-X8-32` and would accept the wrong model. For BD-X8 chassis the driver parses `show slot detail` directly — no `extreme_exos_show_slot_detail` ntc-template exists, so a block-per-slot regex walks each `Slot-N information:` / `MSM-A information:` / `FM-1 information:` block (case-insensitive) and extracts the `Hw Module Type` and `Serial number` fields. The serial capture is whitespace-tolerant: real BD-X8 prints two whitespace-separated tokens (`Serial number: 800432-00-09 1534G-01368` — part-number plus unique serial), and the parser collapses internal whitespace runs to a single space so the persisted value is stable. The classifier maps `BDX-MM` (Management Module) to `supervisor` and the I/O / Fabric Module families (`BDXA-FM` / `BDXA-` / `BDXB-`) to `linecard`; Fabric Modules emit as `linecard` because NetBox has no fabric module type today. Any hypothetical `BDXB-FM*` SKU still classifies as linecard via the generic `BDXB-` fallback. Slot header parsing tolerates both `Slot-N` and `Slot N` (space-separator) layouts that EXOS releases interchangeably emit; space variants are normalised to hyphenated bay names (`Slot 1` → `Slot-1`) so bay identifiers stay consistent across releases. Single-member envelope keyed by `None`; EXOS has no stack-of-modular dispatch in v1.
-
-## Standard NAPALM drivers
-
-These drivers ship with the [NAPALM](https://napalm.readthedocs.io/en/latest/support/) library and are eligible for auto-discovery.
-
-| Driver | Vendor | Platform / OS |
-|--------|--------|---------------|
-| `eos` | Arista | EOS |
-| `ios` | Cisco | IOS / IOS-XE |
-| `iosxr` | Cisco | IOS-XR (XML agent) |
-| `iosxr_netconf` | Cisco | IOS-XR (NETCONF) |
-| `junos` | Juniper | Junos |
-| `nxos` | Cisco | NX-OS (NX-API) |
-| `nxos_ssh` | Cisco | NX-OS (SSH) |
-
-## Custom NAPALM drivers
-
-These drivers are bundled with device-discovery. They are **not** tried during auto-discovery unless explicitly listed in `discovery_drivers`; otherwise set `driver:` on the scope entry.
-
-| Driver | Vendor | Platform / OS |
-|--------|--------|---------------|
-| `alcatel_aos` | Nokia / Alcatel-Lucent Enterprise | AOS |
-| `aruba_aoscx` | HPE Aruba Networking | AOS-CX (REST) |
-| `aruba_aoscx_ssh` | HPE Aruba Networking | AOS-CX (SSH) |
-| `aruba_os` | HPE Aruba Networking | ArubaOS (controllers) |
-| `aruba_osswitch` | HPE Aruba Networking | ArubaOS-Switch (ex-ProCurve) |
-| `avaya_ers` | Extreme Networks (ex-Avaya) | Ethernet Routing Switch (ERS) |
-| `brocade_fastiron` | Ruckus / CommScope (ex-Brocade) | FastIron (ICX) |
-| `brocade_netiron` | Extreme Networks (ex-Brocade) | NetIron (MLX / CES / CER) |
-| `checkpoint_gaia` | Check Point | Gaia |
-| `ciena_saos` | Ciena | SAOS |
-| `cisco_apic` | Cisco | ACI APIC |
-| `cisco_asa` | Cisco | ASA |
-| `cisco_asa_ssh` | Cisco | ASA (SSH) |
-| `cisco_ftd_ssh` | Cisco | Firepower Threat Defense (FTD) |
-| `cisco_fxos` | Cisco | FXOS |
-| `cisco_s300` | Cisco | Small Business 300/350/550 series |
-| `cisco_viptela_ssh` | Cisco | Viptela / SD-WAN |
-| `cisco_wlc` | Cisco | Wireless LAN Controller (AireOS) |
-| `cumulus_linux` | NVIDIA (ex-Cumulus) | Cumulus Linux |
-| `dell_ftos` | Dell | Force10 / FTOS |
-| `dell_powerconnect` | Dell | PowerConnect |
-| `dell_sonic` | Dell | Enterprise SONiC |
-| `ericsson_ipos` | Ericsson | IPOS (ex-Redback SmartEdge) |
-| `extreme_exos` | Extreme Networks | EXOS |
-| `extreme_slx` | Extreme Networks | SLX-OS |
-| `extreme_vsp` | Extreme Networks | VSP / VOSS |
-| `fortinet_fortios_ssh` | Fortinet | FortiOS |
-| `hp_comware` | HPE / H3C | Comware |
-| `hp_procurve` | HPE | ProCurve (legacy) |
-| `huawei_smartax` | Huawei | SmartAX (OLT) |
-| `huawei_vrp` | Huawei | VRP |
-| `mellanox_mlnxos` | NVIDIA / Mellanox | MLNX-OS |
-| `mikrotik_routeros` | MikroTik | RouterOS |
-| `nokia_srl` | Nokia | SR Linux |
-| `nokia_sros` | Nokia | SR OS (gNMI/NETCONF) |
-| `nokia_sros_ssh` | Nokia | SR OS (SSH) |
-| `paloalto_panos` | Palo Alto Networks | PAN-OS (XML API) |
-| `paloalto_panos_ssh` | Palo Alto Networks | PAN-OS (SSH) |
-| `ubiquiti_edgerouter` | Ubiquiti | EdgeRouter (EdgeOS) |
-| `ubiquiti_edgeswitch` | Ubiquiti | EdgeSwitch |
-| `ubiquiti_unifiswitch` | Ubiquiti | UniFi Switch |
-
-The source for the custom drivers is maintained at [orb-discovery/device-discovery/custom_napalm](https://github.com/netboxlabs/orb-discovery/tree/develop/device-discovery/custom_napalm).
 
 ## Querying supported drivers at runtime
 
