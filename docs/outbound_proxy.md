@@ -48,10 +48,11 @@ orb:
 ### Example environment file
 
 ```sh
-# Diode endpoint and credentials
+# Diode endpoint and credentials.
+# docker --env-file does not expand ${...}, so use concrete values here.
 DIODE_URL=grpcs://diode.example.com/diode
-DIODE_CLIENT_ID=${DIODE_CLIENT_ID}
-DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET}
+DIODE_CLIENT_ID=your-diode-client-id
+DIODE_CLIENT_SECRET=your-diode-client-secret
 
 # Route outbound Diode traffic through the corporate proxy
 HTTPS_PROXY=http://proxy.example.com:8080
@@ -69,11 +70,14 @@ docker run --net=host \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
-Or pass the variables individually:
+Or pass the variables individually (the Diode credentials must be supplied alongside the proxy variables):
 
 ```sh
 docker run --net=host \
   -v ${PWD}:/opt/orb/ \
+  -e DIODE_URL=grpcs://diode.example.com/diode \
+  -e DIODE_CLIENT_ID=your-diode-client-id \
+  -e DIODE_CLIENT_SECRET=your-diode-client-secret \
   -e HTTPS_PROXY=http://proxy.example.com:8080 \
   -e NO_PROXY=internal-target.example.com,10.0.0.0/8 \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
