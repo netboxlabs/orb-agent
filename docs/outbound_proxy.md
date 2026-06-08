@@ -15,11 +15,13 @@ Both clients respect the conventional proxy environment variables used by Go and
 
 | Variable | Purpose |
 |----------|---------|
-| `HTTPS_PROXY` | Proxy URL used for outbound HTTPS / gRPC-over-TLS connections (the common case for a remote Diode endpoint). |
-| `HTTP_PROXY` | Proxy URL used for plain HTTP connections. |
+| `HTTPS_PROXY` | Proxy URL for the outbound Diode connection. Set this for any remote Diode target — see the note below, it applies even when the target is plain `grpc://`. |
+| `HTTP_PROXY` | Proxy URL for plain HTTP calls. Generally not needed for Diode egress; prefer `HTTPS_PROXY`. |
 | `NO_PROXY` | Comma-separated list of hosts, domains, or IPs that must bypass the proxy and be reached directly. |
 
 Both lowercase (`https_proxy`, `no_proxy`) and uppercase forms are recognized.
+
+> **Use `HTTPS_PROXY` for the Diode connection, even with a `grpc://` target.** The network and SNMP discovery backends use the Go SDK, and `grpc-go` selects its proxy from `HTTPS_PROXY` (and `NO_PROXY`) regardless of whether the Diode target is `grpcs://` or plain `grpc://`. Setting only `HTTP_PROXY` will not route the gRPC data stream for those backends. When in doubt, set `HTTPS_PROXY`.
 
 When a proxy variable is set, the agent routes the Diode connection — both the initial authentication request and the data stream — through the proxy using the standard `CONNECT` tunneling method. The `target` in your `agent.yaml` stays unchanged; the proxy is selected purely from the environment.
 
