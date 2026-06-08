@@ -15,13 +15,17 @@ Both clients respect the conventional proxy environment variables used by Go and
 
 | Variable | Purpose |
 |----------|---------|
-| `HTTPS_PROXY` | Proxy URL for the outbound Diode connection. Set this for any remote Diode target — see the note below, it applies even when the target is plain `grpc://`. |
-| `HTTP_PROXY` | Proxy URL for plain HTTP calls. Generally not needed for Diode egress; prefer `HTTPS_PROXY`. |
+| `HTTPS_PROXY` | Proxy URL used for a TLS Diode target (`grpcs://`), and for all Go SDK egress regardless of scheme (see note). |
+| `HTTP_PROXY` | Proxy URL used for a plain Diode target (`grpc://`) via the Python SDK (see note). |
 | `NO_PROXY` | Comma-separated list of hosts, domains, or IPs that must bypass the proxy and be reached directly. |
 
 Both lowercase (`https_proxy`, `no_proxy`) and uppercase forms are recognized.
 
-> **Use `HTTPS_PROXY` for the Diode connection, even with a `grpc://` target.** The network and SNMP discovery backends use the Go SDK, and `grpc-go` selects its proxy from `HTTPS_PROXY` (and `NO_PROXY`) regardless of whether the Diode target is `grpcs://` or plain `grpc://`. Setting only `HTTP_PROXY` will not route the gRPC data stream for those backends. When in doubt, set `HTTPS_PROXY`.
+> **Which variable applies depends on the backend's SDK and the target scheme.** The two SDKs select the proxy differently:
+> - **Go SDK** (network & SNMP discovery): `grpc-go` always resolves the proxy from `HTTPS_PROXY` / `NO_PROXY`, whether the target is `grpcs://` or plain `grpc://`.
+> - **Python SDK** (device discovery & worker): a secure `grpcs://` target uses `HTTPS_PROXY` (falling back to `HTTP_PROXY`); a plain `grpc://` target uses `HTTP_PROXY`.
+>
+> The simplest robust approach — especially when an agent runs multiple backends, or to avoid reasoning about the target scheme — is to **set both `HTTP_PROXY` and `HTTPS_PROXY` to the same proxy URL** (plus `NO_PROXY`). The examples below do this.
 
 When a proxy variable is set, the agent routes the Diode connection — both the initial authentication request and the data stream — through the proxy using the standard `CONNECT` tunneling method. The `target` in your `agent.yaml` stays unchanged; the proxy is selected purely from the environment.
 
@@ -56,7 +60,9 @@ DIODE_URL=grpcs://diode.example.com/diode
 DIODE_CLIENT_ID=your-diode-client-id
 DIODE_CLIENT_SECRET=your-diode-client-secret
 
-# Route outbound Diode traffic through the corporate proxy
+# Route outbound Diode traffic through the corporate proxy.
+# Set both so it applies to every backend SDK and target scheme.
+HTTP_PROXY=http://proxy.example.com:8080
 HTTPS_PROXY=http://proxy.example.com:8080
 
 # Reach internal discovery targets directly (bypass the proxy)
@@ -80,6 +86,7 @@ docker run --net=host \
   -e DIODE_URL=grpcs://diode.example.com/diode \
   -e DIODE_CLIENT_ID=your-diode-client-id \
   -e DIODE_CLIENT_SECRET=your-diode-client-secret \
+  -e HTTP_PROXY=http://proxy.example.com:8080 \
   -e HTTPS_PROXY=http://proxy.example.com:8080 \
   -e NO_PROXY=internal-target.example.com,10.0.0.0/8 \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
