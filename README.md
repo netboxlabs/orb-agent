@@ -172,6 +172,9 @@ podman run -d --privileged --net=host \
 
 **Note for rootless podman users:** If running podman without root/sudo privileges, network discovery requires specific configuration to avoid raw socket limitations. The command above requires `sudo` for full NMAP functionality. For rootless operation, see the [Network Discovery backend documentation](./docs/backends/network_discovery.md#rootless-podman-deployment) for TCP connect scan configuration.
 
+### Outbound proxy
+If the agent must send outbound traffic to your Diode target through a corporate forward proxy, see the [Outbound Proxy Support](./docs/outbound_proxy.md) guide for the supported proxy environment variables and examples.
+
 ### Configuration samples
 You can find complete sample configurations [here](./docs/config_samples.md) of how to configure Orb agent to run network and device discoveries, as well as the relevant `docker run` commands.
 
