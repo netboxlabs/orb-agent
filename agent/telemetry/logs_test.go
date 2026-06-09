@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/version"
@@ -281,7 +283,7 @@ func TestBuildResource(t *testing.T) {
 	}
 }
 
-func TestResilientLogExporterWarnsOnce(t *testing.T) {
+func TestResilientLogExporterLogsOnce(t *testing.T) {
 	t.Parallel()
 
 	exp := &mockExporter{exportErr: errors.New("boom")}
@@ -303,8 +305,82 @@ func TestResilientLogExporterWarnsOnce(t *testing.T) {
 	if exp.exportCount != 2 {
 		t.Fatalf("expected export to be called twice, got %d", exp.exportCount)
 	}
-	if handler.errorCount != 1 {
-		t.Fatalf("expected error log only once, got %d", handler.errorCount)
+	if handler.logCount != 1 {
+		t.Fatalf("expected failure log only once, got %d", handler.logCount)
+	}
+	if handler.lastLevel != slog.LevelError {
+		t.Fatalf("expected non-transient failure at ERROR, got %v", handler.lastLevel)
+	}
+}
+
+func TestResilientLogExporterTransientStartupLogsDebug(t *testing.T) {
+	t.Parallel()
+
+	exp := &mockExporter{exportErr: errors.New("connection refused")}
+	handler := &levelRecordingHandler{}
+	logger := slog.New(handler)
+	resilient := newResilientLogExporter(exp, logger, "localhost:4317")
+
+	ctx := context.Background()
+	if err := resilient.Export(ctx, nil); err == nil {
+		t.Fatalf("expected export error to propagate")
+	}
+	if handler.logCount != 1 {
+		t.Fatalf("expected failure log only once, got %d", handler.logCount)
+	}
+	if handler.lastLevel != slog.LevelDebug {
+		t.Fatalf("expected transient startup failure at DEBUG, got %v", handler.lastLevel)
+	}
+}
+
+func TestResilientLogExporterTransientAfterGraceLogsWarn(t *testing.T) {
+	t.Parallel()
+
+	exp := &mockExporter{exportErr: status.Error(codes.Unavailable, "transport closing")}
+	handler := &levelRecordingHandler{}
+	logger := slog.New(handler)
+	resilient := newResilientLogExporter(exp, logger, "localhost:4317")
+	r, ok := resilient.(*resilientLogExporter)
+	if !ok {
+		t.Fatalf("expected resilientLogExporter type")
+	}
+	r.createdAt = time.Now().Add(-otlpExportStartupGrace - time.Second)
+
+	ctx := context.Background()
+	if err := resilient.Export(ctx, nil); err == nil {
+		t.Fatalf("expected export error to propagate")
+	}
+	if handler.logCount != 1 {
+		t.Fatalf("expected failure log only once, got %d", handler.logCount)
+	}
+	if handler.lastLevel != slog.LevelWarn {
+		t.Fatalf("expected transient failure after grace at WARN, got %v", handler.lastLevel)
+	}
+}
+
+func TestIsTransientOTLPErr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "connection refused", err: errors.New("dial tcp 127.0.0.1:4337: connect: connection refused"), want: true},
+		{name: "export timeout", err: errors.New("exporter export timeout: unavailable"), want: true},
+		{name: "unavailable", err: status.Error(codes.Unavailable, "server down"), want: true},
+		{name: "other", err: errors.New("permission denied"), want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isTransientOTLPErr(tt.err); got != tt.want {
+				t.Fatalf("isTransientOTLPErr() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -424,8 +500,9 @@ func (m *mockExporter) Shutdown(context.Context) error {
 }
 
 type levelRecordingHandler struct {
-	mu         sync.Mutex
-	errorCount int
+	mu        sync.Mutex
+	logCount  int
+	lastLevel slog.Level
 }
 
 func (h *levelRecordingHandler) Enabled(context.Context, slog.Level) bool {
@@ -435,9 +512,8 @@ func (h *levelRecordingHandler) Enabled(context.Context, slog.Level) bool {
 func (h *levelRecordingHandler) Handle(_ context.Context, record slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if record.Level == slog.LevelError {
-		h.errorCount++
-	}
+	h.logCount++
+	h.lastLevel = record.Level
 	return nil
 }
 

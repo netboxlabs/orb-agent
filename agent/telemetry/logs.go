@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	otelslog "go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel/attribute"
@@ -14,10 +15,14 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
+
+const otlpExportStartupGrace = 30 * time.Second
 
 // multiHandler broadcasts log records to multiple handlers.
 type multiHandler struct {
@@ -203,9 +208,10 @@ func normalizeEndpoint(raw string) (string, bool, error) {
 
 // resilientLogExporter wraps an exporter to provide resilience and error logging.
 type resilientLogExporter struct {
-	endpoint string
-	logger   *slog.Logger
-	warnOnce sync.Once
+	endpoint  string
+	logger    *slog.Logger
+	createdAt time.Time
+	logOnce   sync.Once
 
 	mu       sync.RWMutex
 	exporter sdklog.Exporter
@@ -217,10 +223,41 @@ func newResilientLogExporter(exp sdklog.Exporter, logger *slog.Logger, endpoint 
 		return nil
 	}
 	return &resilientLogExporter{
-		endpoint: endpoint,
-		logger:   logger,
-		exporter: exp,
+		endpoint:  endpoint,
+		logger:    logger,
+		createdAt: time.Now(),
+		exporter:  exp,
 	}
+}
+
+func isTransientOTLPErr(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+	if strings.Contains(msg, "connection refused") || strings.Contains(msg, "exporter export timeout") {
+		return true
+	}
+
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+			return true
+		}
+	}
+
+	return false
+}
+
+func (r *resilientLogExporter) exportFailureLogLevel(err error) slog.Level {
+	if isTransientOTLPErr(err) {
+		if time.Since(r.createdAt) < otlpExportStartupGrace {
+			return slog.LevelDebug
+		}
+		return slog.LevelWarn
+	}
+	return slog.LevelError
 }
 
 func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
@@ -233,9 +270,9 @@ func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Reco
 	}
 
 	if err := exp.Export(ctx, records); err != nil {
-		r.warnOnce.Do(func() {
+		r.logOnce.Do(func() {
 			if r.logger != nil {
-				r.logger.Error("OTLP gRPC log export failed",
+				r.logger.Log(ctx, r.exportFailureLogLevel(err), "OTLP gRPC log export failed",
 					"endpoint", r.endpoint,
 					"error", err)
 			}
