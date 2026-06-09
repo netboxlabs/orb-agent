@@ -483,6 +483,22 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		}
 	}
 
+	var fleetCM *configmgr.FleetConfigManager
+	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
+		var ok bool
+		fleetCM, ok = a.configManager.(*configmgr.FleetConfigManager)
+		if ok {
+			if err = fleetCM.StartOTLPBridge(ctx, a.config); err != nil {
+				return err
+			}
+			defer func() {
+				if err != nil {
+					_ = fleetCM.StopOTLPBridge(context.Background())
+				}
+			}()
+		}
+	}
+
 	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
 		return err
 	}
