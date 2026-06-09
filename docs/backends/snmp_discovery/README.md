@@ -88,7 +88,12 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
 | ipaddress    | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
-| ├─ vrf   | string \| map  | IP address VRF. Accepts either a bare VRF name (`vrf: production`) or a map with `name` plus optional `rd` / `description` / `comments` / `tags` — matches the device-discovery `vrf` shape. The scalar form leaves Route Distinguisher empty so NetBox can match an existing VRF whose `rd` column is null. **`name` is required** when using the map form: setting `rd` / `description` / `comments` / `tags` without a `name` (either at the policy level or via `override_defaults`) drops the VRF entirely — the agent logs a warning once per discovery run pointing at the misconfigured field. **`vrf: null` / `vrf: ~`** is accepted as decode safety (prevents creating a phantom VRF named `"null"`); it does NOT clear an inherited VRF default at override-merge time — `MergeDefaults` follows the same non-empty-wins semantic as every other override field, so `vrf: null` and an absent `vrf` key are indistinguishable during merge. |
+| ├─ vrf   | string \| map  | IP address VRF name, or VRF object with route distinguisher |
+| ├──── name | string  | VRF name |
+| ├──── rd | string  | Route distinguisher (e.g. `65000:100`) |
+| ├──── description | string  | VRF description |
+| ├──── comments | string  | VRF comments |
+| ├──── tags | list  | VRF tags |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
 | vlan    | map  | VLAN-specific defaults  |
