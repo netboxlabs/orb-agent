@@ -84,6 +84,52 @@ func newFleetConfigManagerWithConnection(logger *slog.Logger, pMgr policymgr.Pol
 	}
 }
 
+func fleetOTLPGRPCPort(cfg config.Config) int {
+	grpcPort := 4317
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+	}
+	return grpcPort
+}
+
+// StartOTLPBridge starts the local OTLP gRPC bridge so backends can export
+// telemetry before the MQTT connection is established. Safe to call once;
+// subsequent calls are no-ops when the bridge is already running.
+func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg config.Config) error {
+	if fleetManager.otlpBridge != nil {
+		return nil
+	}
+
+	grpcPort := fleetOTLPGRPCPort(cfg)
+	bridgeConfig := otlpbridge.BridgeConfig{
+		ListenAddr: fmt.Sprintf(":%d", grpcPort),
+		Encoding:   "json",
+	}
+
+	var err error
+	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+	if err != nil {
+		return fmt.Errorf("failed to create OTLP bridge: %w", err)
+	}
+	if err := fleetManager.otlpBridge.Start(ctx); err != nil {
+		_ = fleetManager.otlpBridge.Stop(ctx)
+		fleetManager.otlpBridge = nil
+		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
+	}
+	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
+	return nil
+}
+
+// StopOTLPBridge shuts down the OTLP bridge if it was started.
+func (fleetManager *FleetConfigManager) StopOTLPBridge(ctx context.Context) error {
+	if fleetManager.otlpBridge == nil {
+		return nil
+	}
+	err := fleetManager.otlpBridge.Stop(ctx)
+	fleetManager.otlpBridge = nil
+	return err
+}
+
 // Start initializes and starts the Fleet configuration manager
 func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
@@ -111,22 +157,11 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 
 	// Start OTLP bridge server early, before MQTT connection.
 	// Port binding errors are local/permanent so we fail immediately.
-	grpcPort := 4317
-	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
-		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+	// The bridge may already be running when Agent.Start() called StartOTLPBridge
+	// before backends were started.
+	if err := fleetManager.StartOTLPBridge(ctx, cfg); err != nil {
+		return err
 	}
-	bridgeConfig := otlpbridge.BridgeConfig{
-		ListenAddr: fmt.Sprintf(":%d", grpcPort),
-		Encoding:   "json",
-	}
-	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
-	if err != nil {
-		return fmt.Errorf("failed to create OTLP bridge: %w", err)
-	}
-	if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
-		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
-	}
-	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
 
 	// Create a shared cancellable context for the reconnect worker, token expiry
 	// monitor, and reset handler so that Stop() can terminate all goroutines with
@@ -173,12 +208,12 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 		// Non-retriable: bad credentials
 		var authErr *fleet.AuthError
 		if errors.As(startupErr, &authErr) {
-			_ = fleetManager.otlpBridge.Stop(context.Background())
+			_ = fleetManager.StopOTLPBridge(context.Background())
 			return fmt.Errorf("startup aborted, credentials rejected: %w", startupErr)
 		}
 
 		if maxStartupRetries > 0 && attempt >= maxStartupRetries {
-			_ = fleetManager.otlpBridge.Stop(context.Background())
+			_ = fleetManager.StopOTLPBridge(context.Background())
 			return fmt.Errorf("startup failed after %d attempts: %w", attempt, startupErr)
 		}
 
@@ -197,7 +232,7 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 
 		select {
 		case <-ctx.Done():
-			_ = fleetManager.otlpBridge.Stop(context.Background())
+			_ = fleetManager.StopOTLPBridge(context.Background())
 			return fmt.Errorf("startup cancelled: %w", ctx.Err())
 		case <-time.After(startupBackoff):
 		}
@@ -616,11 +651,9 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 		fleetManager.connCancel()
 	}
 
-	if fleetManager.otlpBridge != nil {
-		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
-			fleetManager.logger.Error("error while stopping OTLP bridge", slog.Any("error", err))
-			return err
-		}
+	if err := fleetManager.StopOTLPBridge(ctx); err != nil {
+		fleetManager.logger.Error("error while stopping OTLP bridge", slog.Any("error", err))
+		return err
 	}
 	return nil
 }
