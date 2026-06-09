@@ -88,7 +88,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
 | ipaddress    | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
-| ├─ vrf   | string  | IP address vrf                    |
+| ├─ vrf   | string \| map  | IP address VRF. Accepts either a bare VRF name (`vrf: production`) or a map with `name` plus optional `rd` / `description` / `comments` / `tags` — matches the device-discovery `vrf` shape. The scalar form leaves Route Distinguisher empty so NetBox can match an existing VRF whose `rd` column is null. |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
 | vlan    | map  | VLAN-specific defaults  |
@@ -179,7 +179,12 @@ config:
       description: "SNMP discovered IP"
       role: "management"
       tenant: "network-ops"
-      vrf: "management"
+      # vrf accepts either a bare name (rd left empty) ...
+      # vrf: "management"
+      # ... or a map with name + optional rd / description / comments / tags:
+      vrf:
+        name: "management"
+        rd: "65000:100"
     interface:
       description: "Auto-discovered interface"
       if_type: "ethernet"
