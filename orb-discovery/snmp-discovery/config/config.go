@@ -1,6 +1,66 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// VrfParameters mirrors device-discovery's VrfParameters: a polymorphic
+// config primitive that accepts either a scalar string (interpreted as
+// VRF Name) or a map of {name, rd, description, comments, tags}. This
+// lets operators attach a Route Distinguisher (and richer metadata) to
+// the discovered IP addresses' VRF so NetBox can match an existing
+// (name, rd) tuple instead of being forced into the legacy rd=name
+// fallback.
+type VrfParameters struct {
+	Name        string   `yaml:"name"`
+	Rd          string   `yaml:"rd,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	Comments    string   `yaml:"comments,omitempty"`
+	Tags        []string `yaml:"tags,omitempty"`
+}
+
+// UnmarshalYAML accepts both shapes:
+//   - scalar:  vrf: production
+//   - mapping: vrf: {name: production, rd: "65000:100"}
+//
+// The scalar form populates only Name (Rd left empty), which differs
+// from the pre-fix behaviour where the agent silently set Rd=Name.
+//
+// Explicit YAML null (vrf: null, vrf: ~) decodes to the zero value
+// instead of the literal string "null" — this is decode safety to
+// avoid creating a phantom VRF named "null". It does NOT, by itself,
+// clear an inherited VRF default at override merge time: MergeDefaults
+// treats the zero value the same way as an absent override key
+// (non-empty-wins, matching every other override_defaults field).
+func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
+	// Reset up front so a stale receiver (re-decoded into the same
+	// struct) doesn't keep Rd / Description / Comments / Tags from a
+	// previous pass when the new YAML only sets Name via the scalar
+	// form.
+	*v = VrfParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		// YAML null tag: leave the struct as the zero value.
+		if node.Tag == "!!null" {
+			return nil
+		}
+		v.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		type alias VrfParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		*v = VrfParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("vrf: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
 
 // Status represents the status of the snmp-discovery service
 type Status struct {
@@ -38,12 +98,12 @@ type Authentication struct {
 
 // IPAddressDefaults represents default values for a specific entity type
 type IPAddressDefaults struct {
-	Description string   `yaml:"description,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Comments    string   `yaml:"comments,omitempty"`
-	Role        string   `yaml:"role,omitempty"`
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Vrf         string   `yaml:"vrf,omitempty"`
+	Description string        `yaml:"description,omitempty"`
+	Tags        []string      `yaml:"tags,omitempty"`
+	Comments    string        `yaml:"comments,omitempty"`
+	Role        string        `yaml:"role,omitempty"`
+	Tenant      string        `yaml:"tenant,omitempty"`
+	Vrf         VrfParameters `yaml:"vrf,omitempty"`
 }
 
 // InterfaceDefaults represents default values for a specific entity type
@@ -136,8 +196,24 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.IPAddress.Tenant != "" {
 		merged.IPAddress.Tenant = overrideDefaults.IPAddress.Tenant
 	}
-	if overrideDefaults.IPAddress.Vrf != "" {
-		merged.IPAddress.Vrf = overrideDefaults.IPAddress.Vrf
+	// Merge VRF defaults field-by-field so a per-target override can refine
+	// a single VrfParameters knob (e.g. rd) without having to restate every
+	// other field already set at the policy level. Matches the
+	// Device/VLAN/Interface non-zero-value-wins pattern.
+	if overrideDefaults.IPAddress.Vrf.Name != "" {
+		merged.IPAddress.Vrf.Name = overrideDefaults.IPAddress.Vrf.Name
+	}
+	if overrideDefaults.IPAddress.Vrf.Rd != "" {
+		merged.IPAddress.Vrf.Rd = overrideDefaults.IPAddress.Vrf.Rd
+	}
+	if overrideDefaults.IPAddress.Vrf.Description != "" {
+		merged.IPAddress.Vrf.Description = overrideDefaults.IPAddress.Vrf.Description
+	}
+	if overrideDefaults.IPAddress.Vrf.Comments != "" {
+		merged.IPAddress.Vrf.Comments = overrideDefaults.IPAddress.Vrf.Comments
+	}
+	if len(overrideDefaults.IPAddress.Vrf.Tags) > 0 {
+		merged.IPAddress.Vrf.Tags = overrideDefaults.IPAddress.Vrf.Tags
 	}
 
 	// Merge Interface defaults

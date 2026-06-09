@@ -1,6 +1,7 @@
 package mapping_test
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"os"
@@ -287,7 +288,7 @@ func TestIPAddressMapper_Map(t *testing.T) {
 					Description: "IP Address specific description",
 					Tenant:      "ip-address-tenant",
 					Role:        "ip-address-role",
-					Vrf:         "ip-address-vrf",
+					Vrf:         config.VrfParameters{Name: "ip-address-vrf"},
 				},
 			},
 			expectedEntity: &diode.IPAddress{
@@ -297,9 +298,62 @@ func TestIPAddressMapper_Map(t *testing.T) {
 					Name: mapping.StringPtr("ip-address-tenant"),
 				},
 				Role: mapping.StringPtr("ip-address-role"),
+				// Scalar form: Vrf.Name set, Vrf.Rd left nil so NetBox can
+				// match an existing VRF whose rd column is null. The
+				// pre-fix rd=name hardcode is the behaviour change.
 				Vrf: &diode.VRF{
 					Name: mapping.StringPtr("ip-address-vrf"),
-					Rd:   mapping.StringPtr("ip-address-vrf"),
+				},
+			},
+			expectError: false,
+		},
+		{
+			// Rich VrfParameters form propagates Rd / Description /
+			// Comments / Tags onto the emitted diode.VRF.
+			name: "ipAddress with rich VRF defaults (name + rd + description + comments + tags)",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.4.20.1.1.192.168.1.1": {
+					OID:    "1.3.6.1.2.1.4.20.1.1.192.168.1.1",
+					Index:  "192.168.1.1",
+					Parent: "1.3.6.1.2.1.4.20.1.1",
+					Value:  "192.168.1.1",
+					Type:   mapping.IPAddress,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.4.20.1.1",
+				Entity: "ipAddress",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.4.20.1.1",
+						Entity: "ipAddress",
+						Field:  "address",
+					},
+				},
+			},
+			defaults: &config.Defaults{
+				IPAddress: config.IPAddressDefaults{
+					Vrf: config.VrfParameters{
+						Name:        "prod",
+						Rd:          "65000:100",
+						Description: "Prod VRF",
+						Comments:    "Imported via SNMP",
+						Tags:        []string{"auto", "vrf"},
+					},
+				},
+			},
+			expectedEntity: &diode.IPAddress{
+				Address: mapping.StringPtr("192.168.1.1/32"),
+				Vrf: &diode.VRF{
+					Name:        mapping.StringPtr("prod"),
+					Rd:          mapping.StringPtr("65000:100"),
+					Description: mapping.StringPtr("Prod VRF"),
+					Comments:    mapping.StringPtr("Imported via SNMP"),
+					Tags: []*diode.Tag{
+						{Name: mapping.StringPtr("auto")},
+						{Name: mapping.StringPtr("vrf")},
+					},
 				},
 			},
 			expectError: false,
@@ -324,8 +378,20 @@ func TestIPAddressMapper_Map(t *testing.T) {
 			assert.Equal(t, tt.expectedEntity.Description, ipAddress.Description)
 			assert.Equal(t, tt.expectedEntity.Role, ipAddress.Role)
 			if tt.expectedEntity.Vrf != nil {
+				require.NotNil(t, ipAddress.Vrf,
+					"expected a VRF, got nil — subsequent field assertions would panic")
 				assert.Equal(t, tt.expectedEntity.Vrf.Name, ipAddress.Vrf.Name)
 				assert.Equal(t, tt.expectedEntity.Vrf.Rd, ipAddress.Vrf.Rd)
+				assert.Equal(t, tt.expectedEntity.Vrf.Description, ipAddress.Vrf.Description)
+				assert.Equal(t, tt.expectedEntity.Vrf.Comments, ipAddress.Vrf.Comments)
+				require.Len(t, ipAddress.Vrf.Tags, len(tt.expectedEntity.Vrf.Tags),
+					"VRF tag count mismatch — would panic on per-element indexing below")
+				for i, expectedTag := range tt.expectedEntity.Vrf.Tags {
+					assert.Equal(t, expectedTag.Name, ipAddress.Vrf.Tags[i].Name)
+				}
+			} else {
+				assert.Nil(t, ipAddress.Vrf,
+					"expected no VRF on the emitted IPAddress, got one")
 			}
 			if tt.expectedEntity.Tags != nil {
 				assert.Equal(t, len(tt.expectedEntity.Tags), len(ipAddress.Tags))
@@ -3060,6 +3126,76 @@ func TestMaskToPrefixSize(t *testing.T) {
 			_ = tt.expectError // Both paths now produce the same result.
 		})
 	}
+}
+
+// TestIPAddressMapper_Map_VRFNameEmptyWarns locks in the gate behaviour
+// when an operator sets VRF sub-fields (Rd, Description, Comments, Tags)
+// without a Name. The row drops silently in the proto (NetBox VRF
+// matching keys on Name + Rd, and there's nothing to attach without
+// Name), but the mapper emits a WARNING so the misconfiguration is
+// visible in the logs instead of silently producing IPs with no VRF.
+func TestIPAddressMapper_Map_VRFNameEmptyWarns(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	registry := mapping.NewEntityRegistry(logger)
+	mapper := mapping.NewIPAddressMapper(logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.4.20.1.1.10.0.0.1": {
+			OID:    "1.3.6.1.2.1.4.20.1.1.10.0.0.1",
+			Index:  "10.0.0.1",
+			Parent: "1.3.6.1.2.1.4.20.1.1",
+			Value:  "10.0.0.1",
+			Type:   mapping.IPAddress,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.4.20.1.1",
+		Entity: "ipAddress",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{
+				OID:    "1.3.6.1.2.1.4.20.1.1",
+				Entity: "ipAddress",
+				Field:  "address",
+			},
+		},
+	}
+	defaults := &config.Defaults{
+		IPAddress: config.IPAddressDefaults{
+			Vrf: config.VrfParameters{
+				Rd:          "65000:100",
+				Description: "leftover sub-fields",
+				Tags:        []string{"orphan"},
+			},
+		},
+	}
+
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+	require.NotNil(t, entity)
+	ip := entity.(*diode.IPAddress)
+	assert.Nil(t, ip.Vrf, "VRF must NOT be emitted when Name is empty even if other VRF fields are set")
+	logOut := buf.String()
+	assert.Contains(t, logOut, "VRF defaults dropped: name is empty",
+		"expected a warning surfacing the misconfiguration in the logs")
+	assert.Contains(t, logOut, "65000:100", "warning should include the dropped Rd value for debugging")
+	assert.Contains(t, logOut, "override_defaults",
+		"warning should also point at the per-target override path, not only the policy-level path")
+
+	// Rate-limit: applyDefaults runs per discovered IP. With the same
+	// misconfig, subsequent calls must NOT keep appending duplicate
+	// warnings to the log — sync.Once gates it to one line per mapper.
+	buf.Reset()
+	for i := 0; i < 5; i++ {
+		// Reset the entity registry between calls so each iteration
+		// is treated as a fresh row (otherwise Map() short-circuits on
+		// the cached registry entry from the first call).
+		registry = mapping.NewEntityRegistry(logger)
+		mapper.Map(values, mappingEntry, registry, defaults)
+	}
+	assert.NotContains(t, buf.String(), "VRF defaults dropped",
+		"warning must fire at most once per mapper lifetime; subsequent calls must stay silent")
 }
 
 func TestIPAddressMapper_Map_AddressPrefixSize(t *testing.T) {
