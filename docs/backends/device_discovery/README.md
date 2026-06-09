@@ -112,14 +112,18 @@ Current supported defaults:
 | ipaddress    | map  | IP address-specific defaults  |
 | ├─ role   | str  | IP address role                  |
 | ├─ tenant   | str  | IP address tenant              |
-| ├─ vrf   | str/map  | IP address VRF name, or VRF object with route distinguisher |
+| ├─ vrf   | str/map  | IP address VRF name, or VRF object with route distinguisher. Used for both address families unless an AF-specific override below is set. |
+| ├─ vrf_ipv4   | str/map  | IPv4-specific VRF override (same shape as `vrf`). When set, IPv4 IP addresses are emitted with this VRF; IPv6 still uses `vrf`. |
+| ├─ vrf_ipv6   | str/map  | IPv6-specific VRF override (same shape as `vrf`). When set, IPv6 IP addresses are emitted with this VRF; IPv4 still uses `vrf`. |
 | ├─ description | str  | IP address description      |
 | ├─ comments   | str  | IP address comments          |
 | ├─ tags       | list | IP address tags              |
 | prefix       | map  | Prefix-specific defaults      |
 | ├─ role   | str  | Prefix role                    |
 | ├─ tenant   | str  | Prefix tenant                |
-| ├─ vrf   | str/map  | Prefix VRF name, or VRF object with route distinguisher |
+| ├─ vrf   | str/map  | Prefix VRF name, or VRF object with route distinguisher. Used for both address families unless an AF-specific override below is set. |
+| ├─ vrf_ipv4   | str/map  | IPv4-specific VRF override for prefixes (same shape as `vrf`). When set, IPv4 prefixes use this VRF; IPv6 still uses `vrf`. |
+| ├─ vrf_ipv6   | str/map  | IPv6-specific VRF override for prefixes (same shape as `vrf`). When set, IPv6 prefixes use this VRF; IPv4 still uses `vrf`. |
 | ├─ description | str  | Prefix description        |
 | ├─ comments   | str  | Prefix comments            |
 | ├─ tags       | list | Prefix tags                |
