@@ -28,7 +28,7 @@ jobs:
         run: docker pull "docker.io/netboxlabs/${SERVICE}:latest"
 
       - name: Scan for vulnerabilities
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
         with:
           image-ref: docker.io/netboxlabs/${{ matrix.service }}:latest
           format: json
@@ -40,7 +40,7 @@ jobs:
           exit-code: "0"
 
       - name: Build rescan summary
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           SERVICE: ${{ matrix.service }}
         with:
@@ -84,7 +84,7 @@ jobs:
 
       - name: Upload SARIF to GitHub Code Scanning
         if: "!cancelled()"
-        uses: github/codeql-action/upload-sarif@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
+        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
         with:
           sarif_file: trivy-results.sarif
           category: ${{ matrix.service }}-rescan

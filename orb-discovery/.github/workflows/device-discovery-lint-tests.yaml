@@ -32,9 +32,9 @@ jobs:
       run:
         working-directory: ${{ env.BE_DIR }}
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Setup Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python }}
     - name: Install dependencies
@@ -50,7 +50,7 @@ jobs:
         pytest --junitxml=pytest.xml --cov-report=term-missing:skip-covered --cov=device_discovery/ | tee pytest-coverage.txt
 
     - name: Pytest coverage comment
-      uses: MishaKav/pytest-coverage-comment@81882822c5b22af01f91bd3eacb1cefb6ad73dc2 #v1.1.53
+      uses: MishaKav/pytest-coverage-comment@dd5b80bde6d16941f336518e92929e89069d8451 # v1.7.2
       if: github.event.pull_request.head.repo.full_name == github.repository
       with:
         pytest-coverage-path: ${{ env.BE_DIR }}/pytest-coverage.txt

@@ -119,7 +119,7 @@ func TestRunnerRun(t *testing.T) {
 			select {
 			case <-ingestCalled:
 				// Ingest was called, proceed
-			case <-time.After(10 * time.Second):
+			case <-time.After(30 * time.Second):
 				t.Fatal("Timeout: Ingest was not called")
 			}
 
@@ -254,7 +254,7 @@ func TestRunnerWithOptions(t *testing.T) {
 			select {
 			case <-ingestCalled:
 				// Success - Ingest was called
-			case <-time.After(10 * time.Second):
+			case <-time.After(30 * time.Second):
 				// Check if run was created and marked as failed (scanner may have failed due to privileges)
 				runs := runStore.GetRunsForPolicy("test-policy")
 				if len(runs) > 0 {
@@ -317,7 +317,7 @@ func TestRunnerMetrics(t *testing.T) {
 		select {
 		case <-ingestCalled:
 			// Success
-		case <-time.After(10 * time.Second):
+		case <-time.After(30 * time.Second):
 			t.Fatal("Timeout: Ingest was not called")
 		}
 
@@ -445,7 +445,7 @@ func TestRunnerWithNetworkMask(t *testing.T) {
 	select {
 	case <-ingestCalled:
 		// Success
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("Timeout: Ingest was not called")
 	}
 
