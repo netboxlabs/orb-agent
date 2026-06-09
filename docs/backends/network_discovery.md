@@ -47,6 +47,7 @@ Current supported defaults:
 |  Key  | Type | Description  |
 |:-----:|:----:|:-------------:|
 | vrf | str | VRF name to assign to discovered IP addresses |
+| rd | str | Route Distinguisher (RD) for the VRF (only used when `vrf` is set). Optional — when omitted the VRF is emitted without an RD so NetBox can match an existing VRF whose `rd` is null. |
 | tenant | str | Tenant name to assign to discovered IP addresses |
 | role | str | Role to assign to discovered IP addresses |
 | comments | str | NetBox Comments information to be added to discovered IP |
