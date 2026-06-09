@@ -378,6 +378,17 @@ def translate_interface_ips(
     prefix_tenant = None
     prefix_vrf = None
 
+    # Per-address-family VRF overrides: when `defaults.ipaddress.vrf_ipv4`
+    # / `vrf_ipv6` (or the prefix equivalents) are set, the family-specific
+    # value wins for that AF; otherwise we fall back to the AF-agnostic
+    # `defaults.ipaddress.vrf` / `defaults.prefix.vrf`. Computed once here
+    # and picked inside the per-IP loop below by the existing `ip_version`
+    # discriminator.
+    ip_vrf_ipv4 = None
+    ip_vrf_ipv6 = None
+    prefix_vrf_ipv4 = None
+    prefix_vrf_ipv6 = None
+
     if defaults.ipaddress:
         ip_tags.extend(defaults.ipaddress.tags or [])
         ip_comments = defaults.ipaddress.comments
@@ -385,6 +396,8 @@ def translate_interface_ips(
         ip_role = defaults.ipaddress.role
         ip_tenant = translate_tenant(defaults.ipaddress.tenant)
         ip_vrf = translate_vrf(defaults.ipaddress.vrf)
+        ip_vrf_ipv4 = translate_vrf(defaults.ipaddress.vrf_ipv4)
+        ip_vrf_ipv6 = translate_vrf(defaults.ipaddress.vrf_ipv6)
 
     if defaults.prefix:
         prefix_tags.extend(defaults.prefix.tags or [])
@@ -393,6 +406,8 @@ def translate_interface_ips(
         prefix_role = defaults.prefix.role
         prefix_tenant = translate_tenant(defaults.prefix.tenant)
         prefix_vrf = translate_vrf(defaults.prefix.vrf)
+        prefix_vrf_ipv4 = translate_vrf(defaults.prefix.vrf_ipv4)
+        prefix_vrf_ipv6 = translate_vrf(defaults.prefix.vrf_ipv6)
 
     scope_kwargs = _resolve_prefix_scope_kwargs(defaults, options)
 
@@ -401,6 +416,14 @@ def translate_interface_ips(
     for if_ip_name, ip_info in interfaces_ip.items():
         if interface.name == if_ip_name:
             for ip_version, default_prefix in (("ipv4", 32), ("ipv6", 128)):
+                # Resolve the per-AF VRF: AF-specific override wins,
+                # falls back to the AF-agnostic default.
+                af_ip_vrf = (
+                    ip_vrf_ipv4 if ip_version == "ipv4" else ip_vrf_ipv6
+                ) or ip_vrf
+                af_prefix_vrf = (
+                    prefix_vrf_ipv4 if ip_version == "ipv4" else prefix_vrf_ipv6
+                ) or prefix_vrf
                 for ip, details in ip_info.get(ip_version, {}).items():
                     ip_address = f"{ip}/{details.get('prefix_length', default_prefix)}"
                     network = ipaddress.ip_network(ip_address, strict=False)
@@ -408,7 +431,7 @@ def translate_interface_ips(
                         Entity(
                             prefix=Prefix(
                                 prefix=str(network),
-                                vrf=prefix_vrf,
+                                vrf=af_prefix_vrf,
                                 role=prefix_role,
                                 tenant=prefix_tenant,
                                 tags=prefix_tags,
@@ -429,7 +452,7 @@ def translate_interface_ips(
                                 ),
                                 role=ip_role,
                                 tenant=ip_tenant,
-                                vrf=ip_vrf,
+                                vrf=af_ip_vrf,
                                 tags=ip_tags,
                                 comments=ip_comments,
                                 description=ip_description,

@@ -110,6 +110,20 @@ class IpamParameters(ObjectParameters):
         default=None, description="IPAM tenant, optional"
     )
     vrf: str | VrfParameters | None = Field(default=None, description="IPAM VRF, optional")
+    vrf_ipv4: str | VrfParameters | None = Field(
+        default=None,
+        description=(
+            "IPv4-specific VRF override. When set, IPv4 IP addresses / "
+            "prefixes use this VRF; falls back to ``vrf`` when unset."
+        ),
+    )
+    vrf_ipv6: str | VrfParameters | None = Field(
+        default=None,
+        description=(
+            "IPv6-specific VRF override. When set, IPv6 IP addresses / "
+            "prefixes use this VRF; falls back to ``vrf`` when unset."
+        ),
+    )
 
 
 class PrefixParameters(IpamParameters):
