@@ -59,6 +59,7 @@ type Scope struct {
 // Defaults represents the supported default values for a policy
 type Defaults struct {
 	Vrf         string   `yaml:"vrf,omitempty"`
+	Rd          string   `yaml:"rd,omitempty"`
 	Tenant      string   `yaml:"tenant,omitempty"`
 	Role        string   `yaml:"role,omitempty"`
 	Description string   `yaml:"description,omitempty"`

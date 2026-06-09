@@ -454,6 +454,115 @@ func TestRunnerWithNetworkMask(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestRunnerEmitsVrf locks in the behaviour change introduced when
+// defaults.rd was promoted to a first-class field: when defaults.vrf is set,
+// Vrf.Name is always populated; Vrf.Rd is set ONLY when defaults.rd is also
+// provided. Previously Rd was hardcoded to mirror Name, which forced NetBox
+// to create a fresh VRF for every name instead of matching an existing one
+// with a different (or empty) RD.
+func TestRunnerEmitsVrf(t *testing.T) {
+	tests := []struct {
+		name        string
+		vrfDefault  string
+		rdDefault   string
+		expectVrf   bool
+		expectName  string
+		expectRdSet bool
+		expectRd    string
+	}{
+		{
+			name:        "vrf only - rd left nil",
+			vrfDefault:  "production",
+			rdDefault:   "",
+			expectVrf:   true,
+			expectName:  "production",
+			expectRdSet: false,
+		},
+		{
+			name:        "vrf + rd",
+			vrfDefault:  "production",
+			rdDefault:   "65000:100",
+			expectVrf:   true,
+			expectName:  "production",
+			expectRdSet: true,
+			expectRd:    "65000:100",
+		},
+		{
+			name:       "no vrf - rd ignored",
+			vrfDefault: "",
+			rdDefault:  "65000:100",
+			expectVrf:  false,
+		},
+		{
+			name:       "neither set",
+			vrfDefault: "",
+			rdDefault:  "",
+			expectVrf:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			mockClient := new(MockClient)
+			runStore := policy.NewRunStore()
+			ctx := context.Background()
+
+			policyConfig := config.Policy{
+				Config: config.PolicyConfig{
+					Schedule: nil,
+					Defaults: config.Defaults{
+						Vrf: tt.vrfDefault,
+						Rd:  tt.rdDefault,
+					},
+				},
+				Scope: config.Scope{
+					Targets:    []string{"127.0.0.1"},
+					FastMode:   boolPtr(true),
+					MaxRetries: intPtr(0),
+				},
+			}
+
+			runner, err := policy.NewRunner(ctx, logger, "test-policy", policyConfig, mockClient, runStore)
+			assert.NoError(t, err)
+
+			ingestCalled := make(chan bool, 1)
+			mockClient.On("Ingest", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				entities := args.Get(1).([]diode.Entity)
+				assert.NotEmpty(t, entities, "expected at least one IPAddress entity")
+				ip := entities[0].(*diode.IPAddress)
+				if tt.expectVrf {
+					assert.NotNil(t, ip.Vrf, "Vrf should be emitted when defaults.vrf is set")
+					if ip.Vrf != nil {
+						assert.NotNil(t, ip.Vrf.Name)
+						assert.Equal(t, tt.expectName, *ip.Vrf.Name)
+						if tt.expectRdSet {
+							assert.NotNil(t, ip.Vrf.Rd, "Vrf.Rd should be set when defaults.rd is set")
+							if ip.Vrf.Rd != nil {
+								assert.Equal(t, tt.expectRd, *ip.Vrf.Rd)
+							}
+						} else {
+							assert.Nil(t, ip.Vrf.Rd,
+								"Vrf.Rd MUST be nil when defaults.rd is unset (no rd=name fallback)")
+						}
+					}
+				} else {
+					assert.Nil(t, ip.Vrf, "Vrf should not be emitted when defaults.vrf is empty")
+				}
+				ingestCalled <- true
+			}).Return(&diodepb.IngestResponse{}, nil)
+
+			runner.Start()
+			select {
+			case <-ingestCalled:
+			case <-time.After(30 * time.Second):
+				t.Fatal("Timeout: Ingest was not called")
+			}
+			err = runner.Stop()
+			assert.NoError(t, err)
+		})
+	}
+}
+
 func boolPtr(b bool) *bool {
 	return &b
 }

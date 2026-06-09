@@ -371,10 +371,11 @@ func (r *Runner) run() {
 			ip.Comments = diode.String(r.config.Defaults.Comments)
 		}
 		if r.config.Defaults.Vrf != "" {
-			ip.Vrf = &diode.VRF{
-				Name: diode.String(r.config.Defaults.Vrf),
-				Rd:   diode.String(r.config.Defaults.Vrf),
+			vrf := &diode.VRF{Name: diode.String(r.config.Defaults.Vrf)}
+			if r.config.Defaults.Rd != "" {
+				vrf.Rd = diode.String(r.config.Defaults.Rd)
 			}
+			ip.Vrf = vrf
 		}
 		if r.config.Defaults.Tenant != "" {
 			ip.Tenant = &diode.Tenant{
