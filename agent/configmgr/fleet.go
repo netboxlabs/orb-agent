@@ -112,6 +112,7 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 		return fmt.Errorf("failed to create OTLP bridge: %w", err)
 	}
 	if err := fleetManager.otlpBridge.Start(ctx); err != nil {
+		_ = fleetManager.otlpBridge.Stop(ctx)
 		fleetManager.otlpBridge = nil
 		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
 	}

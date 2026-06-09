@@ -211,7 +211,9 @@ type resilientLogExporter struct {
 	endpoint  string
 	logger    *slog.Logger
 	createdAt time.Time
-	logOnce   sync.Once
+	debugOnce sync.Once
+	warnOnce  sync.Once
+	errorOnce sync.Once
 
 	mu       sync.RWMutex
 	exporter sdklog.Exporter
@@ -260,6 +262,28 @@ func (r *resilientLogExporter) exportFailureLogLevel(err error) slog.Level {
 	return slog.LevelError
 }
 
+func (r *resilientLogExporter) logExportFailure(ctx context.Context, err error) {
+	if r.logger == nil {
+		return
+	}
+
+	level := r.exportFailureLogLevel(err)
+	log := func() {
+		r.logger.Log(ctx, level, "OTLP gRPC log export failed",
+			"endpoint", r.endpoint,
+			"error", err)
+	}
+
+	switch level {
+	case slog.LevelDebug:
+		r.debugOnce.Do(log)
+	case slog.LevelWarn:
+		r.warnOnce.Do(log)
+	default:
+		r.errorOnce.Do(log)
+	}
+}
+
 func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Record) error {
 	r.mu.RLock()
 	exp := r.exporter
@@ -270,13 +294,7 @@ func (r *resilientLogExporter) Export(ctx context.Context, records []sdklog.Reco
 	}
 
 	if err := exp.Export(ctx, records); err != nil {
-		r.logOnce.Do(func() {
-			if r.logger != nil {
-				r.logger.Log(ctx, r.exportFailureLogLevel(err), "OTLP gRPC log export failed",
-					"endpoint", r.endpoint,
-					"error", err)
-			}
-		})
+		r.logExportFailure(ctx, err)
 		return err
 	}
 

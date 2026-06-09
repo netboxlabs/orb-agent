@@ -333,6 +333,41 @@ func TestResilientLogExporterTransientStartupLogsDebug(t *testing.T) {
 	}
 }
 
+func TestResilientLogExporterEscalatesFromDebugToWarn(t *testing.T) {
+	t.Parallel()
+
+	exp := &mockExporter{exportErr: errors.New("connection refused")}
+	handler := &levelRecordingHandler{}
+	logger := slog.New(handler)
+	resilient := newResilientLogExporter(exp, logger, "localhost:4317")
+	r, ok := resilient.(*resilientLogExporter)
+	if !ok {
+		t.Fatalf("expected resilientLogExporter type")
+	}
+
+	ctx := context.Background()
+	if err := resilient.Export(ctx, nil); err == nil {
+		t.Fatalf("expected export error to propagate")
+	}
+	if handler.logCount != 1 {
+		t.Fatalf("expected one DEBUG failure log during grace, got %d", handler.logCount)
+	}
+	if handler.lastLevel != slog.LevelDebug {
+		t.Fatalf("expected transient startup failure at DEBUG, got %v", handler.lastLevel)
+	}
+
+	r.createdAt = time.Now().Add(-otlpExportStartupGrace - time.Second)
+	if err := resilient.Export(ctx, nil); err == nil {
+		t.Fatalf("expected export error to propagate after grace")
+	}
+	if handler.logCount != 2 {
+		t.Fatalf("expected WARN log after grace period, got %d logs", handler.logCount)
+	}
+	if handler.lastLevel != slog.LevelWarn {
+		t.Fatalf("expected transient failure after grace at WARN, got %v", handler.lastLevel)
+	}
+}
+
 func TestResilientLogExporterTransientAfterGraceLogsWarn(t *testing.T) {
 	t.Parallel()
 
