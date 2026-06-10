@@ -235,6 +235,19 @@ Drivers that implement `get_modules()` discover the per-slot module inventory on
 
 **Extreme EXOS (`extreme_exos`).** Module discovery is scoped to the BlackDiamond X8 modular chassis. Other EXOS hardware in the field — the X670 / X870 fixed pizza-boxes, the BD-X8-X32 stackable variant — share the `X8` family token in their model strings but are not modular and must not produce module entries. Family detection scans the **full `show version` output** (not just `System Type:`, which Extreme's command-reference BD-X8 example omits in favour of `Switch :` / `Chassis :` / `Slot-*` / `FM-*` lines) using a regex with a negative-lookahead anchor (`(?:BD-|BLACKDIAMOND\s+)X8(?![-\w])`) rather than a Python `\b` word-boundary, because `\b` fires between the digit `8` and the dash in `BD-X8-32` and would accept the wrong model. For BD-X8 chassis the driver parses `show slot detail` directly — no `extreme_exos_show_slot_detail` ntc-template exists, so a block-per-slot regex walks each `Slot-N information:` / `MSM-A information:` / `FM-1 information:` block (case-insensitive) and extracts the `Hw Module Type` and `Serial number` fields. The serial capture is whitespace-tolerant: real BD-X8 prints two whitespace-separated tokens (`Serial number: 800432-00-09 1534G-01368` — part-number plus unique serial), and the parser collapses internal whitespace runs to a single space so the persisted value is stable. The classifier maps `BDX-MM` (Management Module) to `supervisor` and the I/O / Fabric Module families (`BDXA-FM` / `BDXA-` / `BDXB-`) to `linecard`; Fabric Modules emit as `linecard` because NetBox has no fabric module type today. Any hypothetical `BDXB-FM*` SKU still classifies as linecard via the generic `BDXB-` fallback. Slot header parsing tolerates both `Slot-N` and `Slot N` (space-separator) layouts that EXOS releases interchangeably emit; space variants are normalised to hyphenated bay names (`Slot 1` → `Slot-1`) so bay identifiers stay consistent across releases. Single-member envelope keyed by `None`; EXOS has no stack-of-modular dispatch in v1.
 
+## VRFs
+
+Drivers that implement the standard NAPALM `get_network_instances()` getter discover the VRFs configured on the device and attach them to the IP addresses and prefixes of each VRF's member interfaces. Emission is gated by the `discover_vrfs` policy option (defaults to `false`); see the [device discovery README](./README.md#vrfs) for the filtering rules, route-distinguisher handling, and precedence over the `defaults.*.vrf` settings.
+
+| Driver | Status |
+|--------|--------|
+| `ios` | Supported (Cisco IOS / IOS-XE) — upstream NAPALM `get_network_instances()` (`show vrf detail` + `show ip interface brief`). |
+| `eos` | Supported (Arista EOS) — upstream NAPALM `get_network_instances()`. |
+| `junos` | Supported (Juniper Junos) — upstream NAPALM `get_network_instances()`; both `vrf` (L3VPN) and `virtual-router` (VRF-lite, incl. `mgmt_junos`) routing instances translate to VRFs. |
+| `nxos` | Supported (Cisco NX-OS via NX-API) — upstream NAPALM `get_network_instances()` (`show vrf detail \| json` + `show vrf interface \| json`). |
+| `nxos_ssh` | Supported (Cisco NX-OS via SSH) — same coverage as `nxos`. |
+| other drivers | Unsupported — upstream NAPALM does not implement `get_network_instances()` for `iosxr` / `iosxr_netconf`, and the remaining custom drivers do not implement it yet. Enabling `discover_vrfs` on these drivers logs a warning per discovery cycle and discovery continues without VRF data. Driver support lands in follow-up batches. |
+
 ## Querying supported drivers at runtime
 
 device-discovery exposes its effective driver list via its capabilities endpoint:
