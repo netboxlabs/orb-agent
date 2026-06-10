@@ -246,7 +246,11 @@ Drivers that implement the standard NAPALM `get_network_instances()` getter disc
 | `junos` | Supported (Juniper Junos) — upstream NAPALM `get_network_instances()`; both `vrf` (L3VPN) and `virtual-router` (VRF-lite, incl. `mgmt_junos`) routing instances translate to VRFs. |
 | `nxos` | Supported (Cisco NX-OS via NX-API) — upstream NAPALM `get_network_instances()` (`show vrf detail \| json` + `show vrf interface \| json`). |
 | `nxos_ssh` | Supported (Cisco NX-OS via SSH) — same coverage as `nxos`. |
-| other drivers | Unsupported — upstream NAPALM does not implement `get_network_instances()` for `iosxr` / `iosxr_netconf`, and the remaining custom drivers do not implement it yet. Enabling `discover_vrfs` on these drivers logs a warning per discovery cycle and discovery continues without VRF data. Driver support lands in follow-up batches. |
+| `iosxr` | Supported (Cisco IOS-XR via pyIOSXR / XML-Agent over SSH) — `show vrf all detail` parsed driver-locally (the cisco_xr ntc-template FSM mis-parses VRF blocks without an address family or with import/export route policies attached, so a stuck-state-free block parser is used instead). An unconfigured RD (`not set`) is treated as absent. |
+| `iosxr_netconf` | Supported (Cisco IOS-XR via NETCONF) — one subtree-filtered get on the `Cisco-IOS-XR-mpls-vpn-oper` `l3vpn/vrfs` model, the same data source the CLI command renders. Same coverage as `iosxr`. |
+| `nokia_sros` | Supported (Nokia SR OS via NETCONF) — VPRN services map to VRFs (one get on `configure/service/vprn`); the route distinguisher comes from `bgp-ipvpn/mpls` and is absent on VPRNs without an MPLS L3VPN backbone. VPRN member interfaces are keyed `<service>/<interface>`, matching how the driver names them for IP discovery. The Base router is the default routing table; `nokia_sros_ssh` is not yet supported for VRF discovery. |
+| `nokia_srl` | Supported (Nokia SR Linux via SSH) — network instances are SR Linux's native routing model; three targeted `info from state network-instance` calls discover types, interface membership, and the BGP-VPN route distinguisher. `ip-vrf` instances map to VRFs; `mac-vrf` (L2) and the `default` instance are excluded. |
+| other drivers | Unsupported — the remaining custom drivers do not implement `get_network_instances()` yet. Enabling `discover_vrfs` on these drivers logs a warning per discovery cycle and discovery continues without VRF data. Driver support lands in follow-up batches. |
 
 ## Querying supported drivers at runtime
 
