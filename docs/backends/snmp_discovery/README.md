@@ -86,19 +86,19 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | interface    | map  | Interface-specific defaults    |
 | ├─ description | string  | Interface description        |
 | ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
-| ipaddress    | map  | IP address-specific defaults  |
+| ip_address   | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
 | ├─ vrf   | string \| map  | IP address VRF name, or VRF object with route distinguisher |
 | ├──── name | string  | VRF name |
 | ├──── rd | string  | Route distinguisher (e.g. `65000:100`) |
-| ├──── description | string  | VRF description |
+| ├────description | string  | VRF description |
 | ├──── comments | string  | VRF comments |
 | ├──── tags | list  | VRF tags |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
 | vlan    | map  | VLAN-specific defaults  |
 | ├─ description | string  | VLAN description |
-| ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ipaddress` defaults pattern. |
+| ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ip_address` defaults pattern. |
 | ├─ group | string | VLAN group name. When set, every emitted VLAN is attached to an `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
 | ├─ tenant | string | VLAN tenant |
 | ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
