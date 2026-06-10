@@ -92,7 +92,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├──── name | string  | VRF name |
 | ├──── rd | string  | Route distinguisher (e.g. `65000:100`) |
 | ├────description | string  | VRF description |
-| ├────comments | string  | VRF comments |
+| ├──── comments | string  | VRF comments |
 | ├──── tags | list  | VRF tags |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
