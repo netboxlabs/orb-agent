@@ -26,12 +26,18 @@ from netboxlabs.diode.sdk.ingester import (
 )
 
 from device_discovery.interface import build_interface_entities
-from device_discovery.policy.models import Defaults, Options, TenantParameters, VrfParameters
+from device_discovery.policy.models import (
+    Defaults,
+    Options,
+    TenantParameters,
+    VrfParameters,
+)
 from device_discovery.translate_chassis import (
     translate_as_stack,
     validate_chassis_payload,
 )
 from device_discovery.translate_modules import emit_modules_if_requested
+from device_discovery.vrf import build_discovered_vrfs
 
 logger = logging.getLogger(__name__)
 
@@ -196,9 +202,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
         tenant = translate_tenant(defaults.vlan.tenant)
         role = defaults.vlan.role
         if group:
-            group = VLANGroup(
-                name=group, slug=slugify(group), scope_site=defaults.site
-            )
+            group = VLANGroup(name=group, slug=slugify(group), scope_site=defaults.site)
 
     clean_name = " ".join(vlan_name.strip().split())
     vlan = VLAN(
@@ -661,17 +665,45 @@ def translate_data(data: dict) -> Iterable[Entity]:
 
     _resolve_platform(data, options)
 
+    # Discovered VRFs are gated here as well as in the runner (which only
+    # populates data["network_instances"] when the option is on), so callers
+    # invoking translate_data() directly with a pre-populated payload still
+    # honor the opt-in — mirroring how emit_modules_if_requested gates on
+    # discover_modules.
+    discovered_vrfs: list[pb.VRF] = []
+    iface_vrf_map: dict[str, pb.VRF] = {}
+    if options.discover_vrfs:
+        discovered_vrfs, iface_vrf_map = build_discovered_vrfs(
+            data.get("network_instances"),
+            defaults,
+        )
+
     chassis_members = validate_chassis_payload(data.get("chassis_members"))
     if device_info and chassis_members is not None:
-        entities.extend(translate_as_stack(data, chassis_members, defaults, options))
-        _apply_interface_vlan_associations(
-            data, [e for e in entities if e.HasField("interface")], defaults, options, new_stubs,
+        entities.extend(
+            translate_as_stack(
+                data,
+                chassis_members,
+                defaults,
+                options,
+                iface_vrf_map=iface_vrf_map,
+            )
         )
+        _apply_interface_vlan_associations(
+            data,
+            [e for e in entities if e.HasField("interface")],
+            defaults,
+            options,
+            new_stubs,
+        )
+        entities.extend(Entity(vrf=vrf) for vrf in discovered_vrfs)
         _emit_vlans_and_stubs(entities, data.get("vlan"), defaults, new_stubs)
         return entities
 
     if device_info:
-        device = translate_device(device_info, defaults, config_info, options, netbox_id=netbox_id)
+        device = translate_device(
+            device_info, defaults, config_info, options, netbox_id=netbox_id
+        )
         device_for_interfaces = copy.deepcopy(device)
         device_for_interfaces.ClearField("config")
         # Emit Module / ModuleBay entities into a separate list so the
@@ -680,23 +712,37 @@ def translate_data(data: dict) -> Iterable[Entity]:
         # below so each Interface entity can carry module= refs.
         module_entities: list[Entity] = []
         iface_module_map = emit_modules_if_requested(
-            data, options, {None: device_for_interfaces}, module_entities,
+            data,
+            options,
+            {None: device_for_interfaces},
+            module_entities,
         )
         interface_related_entities = build_interface_entities(
-            device_for_interfaces, interfaces, interfaces_ip, defaults,
+            device_for_interfaces,
+            interfaces,
+            interfaces_ip,
+            defaults,
             iface_module_map=iface_module_map,
             options=options,
+            iface_vrf_map=iface_vrf_map,
         )
         # assign_primary_ip must run before the Device is wrapped into Entity
         # because Entity(device=...) copies the message; subsequent mutations
         # on `device` would not propagate to the wrapped copy.
         assign_primary_ip(device, interface_related_entities, target_hostname)
         _apply_interface_vlan_associations(
-            data, interface_related_entities, defaults, options, new_stubs,
+            data,
+            interface_related_entities,
+            defaults,
+            options,
+            new_stubs,
         )
         entities.append(Entity(device=device))
         entities.extend(module_entities)
         entities.extend(interface_related_entities)
 
+    # Emit discovered VRFs as standalone entities too, so VRFs whose
+    # interfaces carry no IPs (or no interfaces at all) still land in NetBox.
+    entities.extend(Entity(vrf=vrf) for vrf in discovered_vrfs)
     _emit_vlans_and_stubs(entities, data.get("vlan"), defaults, new_stubs)
     return entities

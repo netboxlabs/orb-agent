@@ -307,6 +307,7 @@ class PolicyRunner:
                         "Continuing without chassis data."
                     )
             self._collect_modules(config, device, data, sanitized_hostname)
+            self._collect_network_instances(config, device, data, sanitized_hostname)
             metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
             entity_count = Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")
@@ -345,6 +346,35 @@ class PolicyRunner:
                 "Continuing without module data."
             )
             data["modules"] = None
+
+    def _collect_network_instances(
+        self,
+        config: Config,
+        device: Any,
+        data: dict,
+        sanitized_hostname: str,
+    ) -> None:
+        """
+        Call the driver's get_network_instances() when discover_vrfs is enabled.
+
+        Gated by config.options.discover_vrfs (False is a no-op). The NAPALM
+        base class defines get_network_instances() raising NotImplementedError,
+        so drivers without support land in the except branch: discovery
+        continues without VRF data and the gap is logged at WARNING.
+        """
+        if not (config.options and config.options.discover_vrfs):
+            return
+        get_network_instances = getattr(device, "get_network_instances", None)
+        if not callable(get_network_instances):
+            return
+        try:
+            data["network_instances"] = get_network_instances()
+        except Exception as e:
+            logger.warning(
+                f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                f"Error getting network instances: {e}. "
+                "Continuing without VRF data."
+            )
 
     def run_scan(
         self, hostnames: list[str], trigger: BaseTrigger, scope: Napalm, config: Config

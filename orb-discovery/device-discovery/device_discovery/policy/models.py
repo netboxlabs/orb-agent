@@ -256,6 +256,17 @@ class Options(BaseModel):
             "Default False preserves the no-cascade behavior."
         ),
     )
+    discover_vrfs: bool = Field(
+        default=False,
+        description=(
+            "Discover VRFs from the device via the driver's "
+            "get_network_instances() and attach them to the IP addresses "
+            "and prefixes of interfaces inside each VRF. A discovered VRF "
+            "takes precedence over defaults vrf / vrf_ipv4 / vrf_ipv6 for "
+            "those interfaces; interfaces in the default routing table "
+            "keep the configured defaults. Default False."
+        ),
+    )
 
 
 class Config(BaseModel):
