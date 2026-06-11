@@ -22,6 +22,8 @@ When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), snm
 
 When a target is a modular chassis and the `discover_modules` policy option is enabled, snmp-discovery additionally emits `Module` and `ModuleBay` entities for each chassis slot (and, in `full` mode, each transceiver sub-bay) — see [Modules / ModuleBays](#modules--modulebays) below. Defaults to `off`, so existing operators see zero behaviour change unless they explicitly opt in.
 
+When the `discover_vrfs` policy option is enabled, snmp-discovery emits a `VRF` entity for each VRF reported by the device's VRF MIB tables and attaches it to the IP addresses of the VRF's member interfaces — see [VRFs](#vrfs) below. Defaults to `false`, so existing operators see zero behaviour change.
+
 When a device exposes the relevant MIBs, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. VLAN discovery uses Q-BRIDGE-MIB (RFC 4363) as the generic source and a Cisco-specific overlay (CISCO-VLAN-MEMBERSHIP-MIB, CISCO-VOICE-VLAN-MIB) on Cisco devices that don't fully implement Q-BRIDGE — see [SNMP Discovery — Supported Platforms](./supported_platforms.md#interface--vlan-associations) for which device classes are covered.
 
 Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately. The same caveat applies on device-discovery.
@@ -62,6 +64,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 |:---------:|:----:|:--------:|:-----------:|
 | create_unknown_vlans | bool | no | Auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's `dot1qVlanStaticTable`. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `true`. Set `false` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). |
 | discover_modules | string | no | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards and supervisors; PSU / fan recognised by the PID classifier but never emitted), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Detection is vendor-neutral via `ENTITY-MIB::entPhysicalTable` — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
+| discover_vrfs | bool | no | When `true`, discovers VRFs from the device's VRF MIB tables and attaches them to the IP addresses of each VRF's member interfaces (matched by `ifIndex`). A discovered VRF takes precedence over the `vrf` / `vrf_ipv4` / `vrf_ipv6` defaults for those interfaces; other addresses keep the configured defaults. Defaults to `false` — the VRF tables are not even walked when off. See [VRFs](#vrfs) for the MIB tiers, route-distinguisher handling, and limitations. |
 
 #### Defaults Parameters
 | Parameter | Type | Required | Description |
@@ -94,6 +97,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├────description | string  | VRF description |
 | ├──── comments | string  | VRF comments |
 | ├──── tags | list  | VRF tags |
+| ├─ vrf_ipv4   | string \| map  | IPv4-specific VRF override (same shape as `vrf`). When set, IPv4 addresses use this VRF; IPv6 still uses `vrf`. The override replaces `vrf` wholesale for its family — it does not inherit `vrf.name`. |
+| ├─ vrf_ipv6   | string \| map  | IPv6-specific VRF override (same shape as `vrf`). When set, IPv6 addresses use this VRF; IPv4 still uses `vrf`. |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
 | vlan    | map  | VLAN-specific defaults  |
@@ -190,6 +195,10 @@ config:
       vrf:
         name: "management"
         rd: "65000:100"
+      # Per-address-family overrides (optional): the family-specific VRF
+      # wins for that family's addresses, replacing vrf wholesale.
+      # vrf_ipv4: "ipv4-vrf"
+      # vrf_ipv6: { name: "ipv6-vrf", rd: "65000:6" }
     interface:
       description: "Auto-discovered interface"
       if_type: "ethernet"
@@ -263,6 +272,25 @@ When the target reports 2+ chassis rows in `ENTITY-MIB` (`entPhysicalTable`) wit
 **Member AssetTag is cleared.** Diode's highest-precedence matcher for `dcim.device` is `asset_tag` (unique). The master Device carries the policy `defaults.asset_tag` value if configured; member Devices have it explicitly cleared so multiple members do not collapse onto one NetBox row through a shared asset tag. Master / standalone AssetTag behaviour from `defaults.asset_tag` is unchanged.
 
 **Orphaned member ports.** If a chassis row is dropped from the validated payload (empty serial, duplicate serial collapsed against a lower-id row, etc.) but the device still reports ports owned by that member, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
+
+## VRFs
+
+When the `discover_vrfs` policy option is enabled (defaults to `false`), snmp-discovery walks the device's VRF MIB tables and emits a NetBox `VRF` entity per VRF, attached to the `IPAddress` entities of the VRF's member interfaces (membership is matched by `ifIndex`, so no name canonicalization is involved). With the option off, the VRF table columns are not walked at all — zero additional SNMP load.
+
+**MIB tiers.** Three sources are tried in order until one yields VRFs:
+
+1. **MPLS-L3VPN-STD-MIB** (RFC 4382) — the standards path (`mplsL3VpnVrfTable` for names + route distinguishers, `mplsL3VpnIfConfTable` for membership). Implemented by Cisco IOS/IOS-XE/IOS-XR, Juniper, Nokia, Huawei, and others.
+2. **MPLS-VPN-MIB** (the pre-standard experimental arc) — same table shapes; common on older Cisco IOS.
+3. **CISCO-VRF-MIB** — VRF-lite platforms without the MPLS feature MIBs. No route distinguisher is available on this tier.
+
+A tier that exposes VRF names but no membership (split-arc agents) merges membership from the lower tiers; lower tiers never introduce additional VRF names on their own.
+
+**Precedence.** A discovered VRF wins over the `defaults.ip_address.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for member interfaces' addresses; every other address keeps the configured defaults. The device's primary IP reference is kept consistent with its underlying IP address entity, so NetBox (where IP identity is address + VRF) never sees the same address in two VRF contexts.
+
+**Route distinguishers.** Both the RFC 4382 8-byte binary encoding (type 0/1/2) and the display-string form some agents return are decoded to the canonical `ASN:nn` / `IP:nn` text. Unset or undecodable RDs stay off the wire entirely, so the VRF matches NetBox records whose RD is empty — the same caveat as device-discovery applies: if a VRF with the same name already exists in NetBox **with** an RD while the device reports none, the first cycle creates a separate RD-less VRF record.
+
+**Limitation — VRF-scoped addresses.** Some platforms only expose VRF-scoped IP addresses through SNMPv3 contexts or `community@vrf` conventions; snmp-discovery walks the standard IP-MIB tables in the default context and attaches VRFs to whatever addresses are visible there. Addresses hidden behind per-VRF contexts are not discovered (same as before this feature); per-context walking is a possible follow-up.
+
 
 ## Modules / ModuleBays
 
