@@ -1,0 +1,48 @@
+{
+  "Vrf-empty": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "Vrf-empty",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "Vrf-red": {
+    "interfaces": {
+      "interface": {
+        "Ethernet0": {},
+        "Ethernet4": {},
+        "Vlan40": {}
+      }
+    },
+    "name": "Vrf-red",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "mgmt": {
+    "interfaces": {
+      "interface": {
+        "eth0": {}
+      }
+    },
+    "name": "mgmt",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

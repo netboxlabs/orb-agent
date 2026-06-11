@@ -765,6 +765,45 @@ def _comware_get_modules_impl(driver) -> dict | None:
     return _modules_to_payload(members)
 
 
+# "display ip vpn-instance instance-name <name>" detail fields. Parsed
+# driver-locally — the ntc-template for this command error-exits on routine
+# output lines it doesn't enumerate (e.g. "Route & Tunnel selection time").
+_COMWARE_VPN_RD_RE = re.compile(r"^\s*Route Distinguisher\s*:\s*(\S+)\s*$")
+_COMWARE_VPN_IFACES_RE = re.compile(r"^\s*Interfaces\s*:\s*(.*)$")
+
+
+def _comware_parse_vpn_instance_detail(raw: str) -> tuple[str, list[str]]:
+    """
+    Return (rd, member interfaces) from a VPN-instance detail block.
+
+    Interface collection starts at the "Interfaces :" line (members are
+    comma-separated, possibly wrapping onto indented continuation lines)
+    and stops at the first line carrying a "key : value" colon — every
+    other detail field uses that layout, while wrapped interface names
+    never contain a colon.
+    """
+    rd = ""
+    interfaces: list[str] = []
+    in_ifaces = False
+    for line in raw.splitlines():
+        m = _COMWARE_VPN_RD_RE.match(line)
+        if m:
+            rd = m.group(1)
+            in_ifaces = False
+            continue
+        m = _COMWARE_VPN_IFACES_RE.match(line)
+        if m:
+            in_ifaces = True
+            interfaces.extend(p.strip() for p in m.group(1).split(",") if p.strip())
+            continue
+        if in_ifaces:
+            if line.strip() and ":" not in line:
+                interfaces.extend(p.strip() for p in line.split(",") if p.strip())
+            else:
+                in_ifaces = False
+    return rd, interfaces
+
+
 class ComwareDriver(_napalm_base.NetworkDriver):
     """HP Comware NAPALM driver (read-only subset for device-discovery)."""
 
@@ -994,6 +1033,63 @@ class ComwareDriver(_napalm_base.NetworkDriver):
         unparseable output return ``None``.
         """
         return _comware_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (VPN instances as VRFs), NAPALM OC shape.
+
+        ``display ip vpn-instance`` (ntc-template, tolerates RD-less rows)
+        enumerates the instances; one ``display ip vpn-instance
+        instance-name <name>`` per instance supplies the RD and the
+        member interface list, parsed driver-locally — the ntc-template
+        for the detail command error-exits on routine output lines it
+        doesn't enumerate (e.g. "Route & Tunnel selection time"). The
+        public network (global routing table) is not a VPN instance and
+        is represented by the seeded DEFAULT_INSTANCE with empty
+        membership.
+        """
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        sum_raw = self.device.send_command("display ip vpn-instance")
+        sum_rows: list[dict] = []
+        if sum_raw and sum_raw.strip():
+            try:
+                sum_rows = parse_output(
+                    platform="hp_comware",
+                    command="display ip vpn-instance",
+                    data=sum_raw,
+                )
+            except Exception:
+                logger.warning(
+                    "Comware display ip vpn-instance parse failed", exc_info=True
+                )
+        for row in sum_rows:
+            vpn_name = (row.get("name") or "").strip()
+            # Never let a row overwrite the seeded DEFAULT_INSTANCE.
+            if not vpn_name or vpn_name == "default":
+                continue
+            rd = (row.get("rd") or "").strip()
+            det_raw = self.device.send_command(
+                f"display ip vpn-instance instance-name {vpn_name}"
+            )
+            det_rd, det_ifaces = _comware_parse_vpn_instance_detail(det_raw or "")
+            rd = det_rd or rd
+            interfaces = {ifname: {} for ifname in det_ifaces}
+            instances[vpn_name] = {
+                "name": vpn_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": rd},
+                "interfaces": {"interface": interfaces},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config from `display interface brief` + `display vlan all`."""

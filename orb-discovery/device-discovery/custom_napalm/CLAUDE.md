@@ -51,6 +51,11 @@ namespace, `N` sorts before your class name and the base class (whose `__init__`
 `device-discovery` calls exactly five NAPALM getters. Implement all five; unimplemented ones
 must return the correct empty type so the rest of the pipeline doesn't break.
 
+Beyond the required five, drivers should also implement the optional getters where the
+platform supports the concept — see [`get_interfaces_vlans`](#optional-method-get_interfaces_vlans)
+(switchport/VLAN associations) and [`get_network_instances`](#optional-method-get_network_instances)
+(VRF discovery; implement on every platform with an L3 VRF concept).
+
 | Method | Return type | Empty return |
 |--------|-------------|--------------|
 | `get_facts()` | `dict` | `{}` |
@@ -239,6 +244,68 @@ def get_interfaces_vlans(self) -> dict[str, dict]:
         result[ifname] = classify_switchport(info)
     return result
 ```
+
+## Optional method: `get_network_instances`
+
+A driver SHOULD implement the standard NAPALM `get_network_instances()`
+when the platform has an L3 VRF concept (VRF / VPN-instance / VPRN /
+network-instance / routing-instance). The runner calls it behind the
+`discover_vrfs` policy option; the translator emits one NetBox `VRF`
+entity per instance and attaches it to the IP addresses / prefixes of
+the instance's member interfaces. L2-only platforms (access switches,
+WLCs, OLTs) skip it — the NAPALM base-class stub raises
+`NotImplementedError`, which the runner logs and tolerates.
+
+**Output shape** — the NAPALM OpenConfig dict, keyed by instance name:
+
+```python
+{
+    "MGMT": {
+        "name": "MGMT",
+        "type": "L3VRF",          # or DEFAULT_INSTANCE / L2VSI / raw vendor type
+        "state": {"route_distinguisher": "65000:1"},   # "" when unconfigured
+        "interfaces": {"interface": {"Management1": {}}},
+    },
+    "default": { ... "type": "DEFAULT_INSTANCE" ... },
+}
+```
+
+**Conventions every implementation follows** (established in the
+iosxr / nokia / huawei / comware / cumulus / sonic batches):
+
+- **Seed a `DEFAULT_INSTANCE`** for the global routing table with
+  **empty** interface membership — the discovery pipeline only consumes
+  VRF memberships; every interface not claimed by a VRF is in the
+  default table by definition. Use the platform's own name for it
+  (`default`, `Base`, …).
+- **Guard the seed**: skip any parsed row whose name collides with the
+  seeded default-instance key, so device data can never re-type the
+  global table as an L3VRF.
+- **RD only when real**: emit `""` (never sentinels) when the device
+  reports no RD — normalize forms like `not set` / `<not set>`. The
+  translator keeps `rd` off the wire when empty so the VRF matches
+  NetBox records with a NULL rd.
+- **Member names must match `get_interfaces()` / `get_interfaces_ip()`
+  naming exactly** — the VRF→IP attachment joins on interface name
+  (e.g. SR OS VPRN members are keyed `<service>/<interface>` because
+  that's how the driver names them for IP discovery; Linux kernel
+  `@parent` decorations are stripped).
+- **Honor the `name` filter on every return path** (including degraded
+  ones): `{name: instance}` for a known name, `{}` for unknown.
+- **Parse defensively**: prefer ntc-templates only after verifying they
+  survive real-device output — several (cisco_xr `show vrf all detail`,
+  comware `display ip vpn-instance instance-name`, huawei summary)
+  error-exit or mis-attribute on routine lines, and those drivers parse
+  driver-locally instead. Guard against CLI error banners on platforms
+  that return them as non-empty output (SONiC).
+
+**Tests**: add `mock_data/test_get_network_instances/<scenario>/`
+fixtures — `BaseDriverTest.test_get_network_instances` auto-discovers
+them and validates the OC shape (it skips drivers without fixtures or
+without an implementation). Cover at minimum a `normal` scenario and an
+empty/no-VRFs scenario; pin any output variant your parser specifically
+handles. Also add the driver to the ownership pin matrix in
+`tests/test_runner_vrf_dispatch.py`.
 
 ## Mock fakes for structured-API drivers
 
@@ -929,6 +996,7 @@ Before opening a PR with a new driver, confirm all of the following:
 - [ ] Driver file is `custom_napalm/<vendor>_<os>[_ssh].py` (flat file, not a package; matches the netmiko platform string where one exists).
 - [ ] Class inherits from `_napalm_base.NetworkDriver` (uses `import napalm.base as _napalm_base`).
 - [ ] All five getters are implemented: `get_facts`, `get_interfaces`, `get_interfaces_ip`, `get_config`, `get_vlans`.
+- [ ] `get_network_instances` is implemented when the platform has an L3 VRF concept (see [Optional method: `get_network_instances`](#optional-method-get_network_instances)), with `test_get_network_instances/` fixtures and a row in the `tests/test_runner_vrf_dispatch.py` ownership matrix.
 - [ ] `get_facts` returns all required keys including a float `uptime`.
 - [ ] Driver is re-exported in `custom_napalm/__init__.py`.
 - [ ] `pip install -e .` shows `custom_napalm` in `netboxlabs_device_discovery.egg-info/top_level.txt`.

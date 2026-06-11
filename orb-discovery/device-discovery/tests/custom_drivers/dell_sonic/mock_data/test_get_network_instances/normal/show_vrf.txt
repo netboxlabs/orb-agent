@@ -1,0 +1,7 @@
+VRF        Interfaces
+---------  ------------
+Vrf-red    Ethernet0
+           Ethernet4
+           Vlan40
+mgmt       eth0
+Vrf-empty

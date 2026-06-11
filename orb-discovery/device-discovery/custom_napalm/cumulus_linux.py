@@ -495,6 +495,68 @@ class CumulusDriver(_napalm_base.NetworkDriver):
             result[ifname] = classify_switchport(info)
         return result
 
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (Linux VRF devices), NAPALM OC shape.
+
+        ``ip vrf show`` (linux ntc-template) enumerates the VRF devices;
+        one ``ip link show master <vrf>`` per VRF lists its enslaved
+        interfaces (kernel ``@<parent>`` decorations stripped to match
+        get_interfaces() naming). Linux VRFs carry no route
+        distinguisher — RD lives in the FRR BGP layer, not the kernel —
+        so it is always emitted empty. The default routing table is
+        represented by the seeded DEFAULT_INSTANCE with empty membership.
+        """
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        vrf_raw = self.device.send_command("ip vrf show")
+        vrf_rows: list[dict] = []
+        if vrf_raw and vrf_raw.strip():
+            try:
+                vrf_rows = parse_output(
+                    platform="linux", command="ip vrf show", data=vrf_raw
+                )
+            except Exception:
+                logger.warning("Cumulus ip vrf show parse failed", exc_info=True)
+        for row in vrf_rows:
+            vrf_name = (row.get("name") or "").strip()
+            # Never let a row overwrite the seeded DEFAULT_INSTANCE.
+            if not vrf_name or vrf_name == "default":
+                continue
+            interfaces: dict = {}
+            link_raw = self.device.send_command(f"ip link show master {vrf_name}")
+            if link_raw and link_raw.strip():
+                try:
+                    link_rows = parse_output(
+                        platform="linux", command="ip link show", data=link_raw
+                    )
+                except Exception:
+                    logger.warning(
+                        "Cumulus ip link show master %s parse failed",
+                        vrf_name,
+                        exc_info=True,
+                    )
+                    link_rows = []
+                for link in link_rows:
+                    ifname = _strip_link_decoration((link.get("interface") or "").strip())
+                    if ifname:
+                        interfaces[ifname] = {}
+            instances[vrf_name] = {
+                "name": vrf_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": interfaces},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances
+
 
 def _split_bridge_vlans(vlans: list) -> tuple[int | None, list[int]]:
     """

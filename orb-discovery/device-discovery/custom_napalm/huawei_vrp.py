@@ -461,6 +461,40 @@ def _vrp_get_modules_impl(driver) -> dict | None:
     return _modules_to_payload({None: _MemberModules(bays=bays, interfaces_by_bay={})})
 
 
+# "display ip vpn-instance" summary rows: name, optional RD (AS:nn or
+# IP:nn form), address-family column. Parsed driver-locally because the
+# ntc-template for this command requires an RD on every row and
+# error-exits on VPN instances without one configured. The AF column
+# prints "ipv4-family" / "ipv6-family" on some VRP releases and plain
+# "IPv4" / "IPv6" on others (the ntc-templates real-device fixture uses
+# the latter) — both forms anchor the row.
+_VRP_VPN_SUMMARY_ROW_RE = re.compile(
+    r"^\s*(?P<name>\S+)\s+(?:(?P<rd>\S+:\S+)\s+)?(?i:ipv[46](?:-family)?)\s*$"
+)
+
+
+def _vrp_parse_vpn_instance_rds(raw: str) -> dict[str, str]:
+    """
+    Map VPN-instance name → RD ("" when unconfigured) from the summary.
+
+    VRP configures the RD per address family, so an instance prints one
+    row per AF and the RD may live on either — the first non-empty RD
+    wins. The header line never matches (its name column is
+    "VPN-Instance" and its AF column is "Address-family", which the
+    ipv4/ipv6 anchor rejects).
+    """
+    rds: dict[str, str] = {}
+    for line in raw.splitlines():
+        m = _VRP_VPN_SUMMARY_ROW_RE.match(line)
+        if not m:
+            continue
+        name = m.group("name")
+        rd = m.group("rd") or ""
+        if name not in rds or (rd and not rds[name]):
+            rds[name] = rd
+    return rds
+
+
 class VRPDriver(_napalm_base.NetworkDriver):
     """Huawei VRP NAPALM driver (read-only subset for device-discovery)."""
 
@@ -724,3 +758,60 @@ class VRPDriver(_napalm_base.NetworkDriver):
             info = _huawei_row_to_switchport_info(row)
             result[ifname] = classify_switchport(info)
         return result
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (VPN instances as VRFs), NAPALM OC shape.
+
+        Names and member interfaces come from ``display ip vpn-instance
+        interface`` (ntc-template). Route distinguishers come from a
+        driver-local scan of the ``display ip vpn-instance`` summary —
+        the ntc-template for that command requires an RD on every row
+        and error-exits on VPN instances without one configured. The
+        global routing table (``_public_``) is not a VPN instance and is
+        represented by the seeded DEFAULT_INSTANCE with empty membership.
+        """
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        ifc_raw = self.device.send_command("display ip vpn-instance interface")
+        rows: list[dict] = []
+        if ifc_raw and ifc_raw.strip():
+            try:
+                rows = parse_output(
+                    platform="huawei_vrp",
+                    command="display ip vpn-instance interface",
+                    data=ifc_raw,
+                )
+            except Exception:
+                logger.warning(
+                    "VRP display ip vpn-instance interface parse failed",
+                    exc_info=True,
+                )
+        rd_by_name = _vrp_parse_vpn_instance_rds(
+            self.device.send_command("display ip vpn-instance") or ""
+        )
+        for row in rows:
+            vpn_name = (row.get("name") or "").strip()
+            # Never let a row overwrite the seeded DEFAULT_INSTANCE.
+            if not vpn_name or vpn_name == "default":
+                continue
+            interfaces = {
+                ifname.strip(): {}
+                for ifname in (row.get("interface_list") or [])
+                if ifname and ifname.strip()
+            }
+            instances[vpn_name] = {
+                "name": vpn_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": rd_by_name.get(vpn_name, "")},
+                "interfaces": {"interface": interfaces},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

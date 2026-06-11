@@ -17,7 +17,11 @@ from unittest.mock import MagicMock
 import pytest
 from napalm.base.base import NetworkDriver
 
+from custom_napalm.cumulus_linux import CumulusDriver
+from custom_napalm.dell_sonic import SONiCDriver
 from custom_napalm.eos import EOSDriver
+from custom_napalm.hp_comware import ComwareDriver
+from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.ios import IOSDriver
 from custom_napalm.iosxr import IOSXRDriver
 from custom_napalm.iosxr_netconf import IOSXRNETCONFDriver
@@ -135,6 +139,10 @@ def test_collect_network_instances_swallows_not_implemented(caplog) -> None:
         pytest.param(IOSXRNETCONFDriver, "custom_napalm.", id="iosxr_netconf"),
         pytest.param(SROSDriver, "custom_napalm.", id="nokia_sros"),
         pytest.param(SRLDriver, "custom_napalm.", id="nokia_srl"),
+        pytest.param(VRPDriver, "custom_napalm.", id="huawei_vrp"),
+        pytest.param(ComwareDriver, "custom_napalm.", id="hp_comware"),
+        pytest.param(CumulusDriver, "custom_napalm.", id="cumulus_linux"),
+        pytest.param(SONiCDriver, "custom_napalm.", id="dell_sonic"),
     ],
 )
 def test_driver_implements_get_network_instances(

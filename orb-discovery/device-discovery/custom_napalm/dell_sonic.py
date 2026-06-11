@@ -578,6 +578,44 @@ class SONiCDriver(_napalm_base.NetworkDriver):
             result[ifname] = classify_switchport(info)
         return result
 
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (SONiC VRFs), NAPALM OC shape.
+
+        ``show vrf`` lists each configured VRF with its member
+        interfaces (one per row, continuation rows indented). SONiC's
+        ``show vrf`` carries no route distinguisher — RD lives in the
+        FRR BGP layer — so it is always emitted empty. The default
+        routing table is not listed by the command and is represented
+        by the seeded DEFAULT_INSTANCE with empty membership. The
+        management VRF (``mgmt``) is a real VRF and is kept.
+        """
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        # _send_first_nonempty treats SONiC's non-empty CLI error banners
+        # ("% Error: Invalid input ...") as empty — without it, an
+        # unsupported "show vrf" would parse the banner into a junk VRF.
+        raw = _send_first_nonempty(self.device, ("show vrf",))
+        for vrf_name, members in _parse_show_vrf(raw or "").items():
+            # Never let a row overwrite the seeded DEFAULT_INSTANCE.
+            if vrf_name == "default":
+                continue
+            instances[vrf_name] = {
+                "name": vrf_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {m: {} for m in members}},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances
+
 
 _SONIC_SWITCHPORT_HEADER_RE = re.compile(
     r"^\s*Interface\s+Mode\s+Untagged\s+Tagged\s*$",
@@ -794,3 +832,42 @@ def _extract_interface_names(output: str) -> list[str]:
             if m:
                 names.append(m.group(1))
     return names
+
+
+_SONIC_VRF_SEPARATOR_RE = re.compile(r"^[-+\s]+$")
+
+
+def _parse_show_vrf(raw: str) -> dict[str, list[str]]:
+    """
+    Parse SONiC ``show vrf`` into vrf name → member interface names.
+
+    Layout: a header row (``VRF  Interfaces``), a dashed separator, then
+    one row per VRF whose name starts at column 0 with its first member
+    interface beside it; additional members continue on indented rows.
+    Member cells may also be comma-separated on some SONiC builds.
+    """
+    members_by_vrf: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in (raw or "").splitlines():
+        if not line.strip():
+            continue
+        if _SONIC_VRF_SEPARATOR_RE.match(line):
+            continue
+        tokens = [t for cell in line.split() for t in cell.split(",") if t]
+        if not line[0].isspace():
+            # Header row only when the second column says "Interfaces" —
+            # "Vrf" alone is a legal VRF name and must not be dropped.
+            if (
+                tokens[0].lower() == "vrf"
+                and len(tokens) > 1
+                and tokens[1].lower() == "interfaces"
+            ):
+                current = None
+                continue
+            current = tokens[0]
+            members_by_vrf.setdefault(current, [])
+            tokens = tokens[1:]
+        if current is None:
+            continue
+        members_by_vrf[current].extend(tokens)
+    return members_by_vrf
