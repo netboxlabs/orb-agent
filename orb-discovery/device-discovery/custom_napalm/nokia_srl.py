@@ -185,6 +185,48 @@ def _strip_prompt(text: str) -> str:
     return _SRL_PROMPT_RE.sub("", text).rstrip()
 
 
+# SR Linux network-instance types → NAPALM OC network-instance types.
+# Unknown types pass through raw so the consumer can decide.
+_SRL_NI_TYPE_MAP = {
+    "ip-vrf": "L3VRF",
+    "default": "DEFAULT_INSTANCE",
+    "mac-vrf": "L2VSI",
+}
+
+# Block headers in `info from state network-instance ...` output. Names may
+# be quoted when they contain spaces; the value group strips the quotes.
+_SRL_NI_HEADER_RE = re.compile(r'^\s*network-instance\s+"?([^"{\s][^"{]*?)"?\s*\{\s*$')
+# Optional module prefix (srl_nokia-network-instance:ip-vrf) tolerated and
+# stripped — only the short identity name is captured.
+_SRL_NI_TYPE_RE = re.compile(r'^\s*type\s+"?(?:[\w.-]+:)?([\w-]+)"?\s*$')
+_SRL_NI_IFACE_RE = re.compile(r'^\s*interface\s+"?([^"{\s][^"{]*?)"?\s*\{\s*$')
+_SRL_NI_RD_RE = re.compile(r'^\s*rd\s+"?(\S+?)"?\s*$')
+
+
+def _parse_ni_blocks(text: str, line_re: re.Pattern) -> dict[str, list[str]]:
+    """
+    Collect per-network-instance matches from `info from state` block output.
+
+    The output nests everything under ``network-instance <name> {`` block
+    headers; this walks line-by-line, tracks the current instance, and
+    records each ``line_re`` group(1) hit against it.
+    """
+    out: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in (text or "").splitlines():
+        m = _SRL_NI_HEADER_RE.match(line)
+        if m:
+            current = m.group(1).strip()
+            out.setdefault(current, [])
+            continue
+        if current is None:
+            continue
+        m = line_re.match(line)
+        if m:
+            out[current].append(m.group(1).strip())
+    return out
+
+
 def _make_intf_entry(m) -> dict:
     reason = m.group(3)
     return {
@@ -508,3 +550,54 @@ class SRLDriver(_napalm_base.NetworkDriver):
     def get_vlans(self) -> dict:
         """SR Linux uses network instances, not traditional VLANs."""
         return {}
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances keyed by name, NAPALM OC shape.
+
+        Network instances are SR Linux's native routing model. Three
+        targeted ``info from state`` calls keep the payloads small:
+        instance types, interface membership, and the BGP-VPN route
+        distinguisher (only present on instances participating in an
+        EVPN / IP-VPN backbone). Type mapping: ``ip-vrf`` → L3VRF,
+        ``default`` → DEFAULT_INSTANCE, ``mac-vrf`` → L2VSI; unknown
+        types pass through raw.
+        """
+        type_out = self.device.send_command(
+            "info from state network-instance * type"
+        )
+        if not type_out or not type_out.strip():
+            return {}
+        types = _parse_ni_blocks(type_out, _SRL_NI_TYPE_RE)
+        iface_out = self.device.send_command(
+            "info from state network-instance * interface * name"
+        )
+        ifaces = _parse_ni_blocks(iface_out, _SRL_NI_IFACE_RE)
+        rd_out = self.device.send_command(
+            "info from state network-instance * protocols bgp-vpn "
+            "bgp-instance * route-distinguisher rd"
+        )
+        rds = _parse_ni_blocks(rd_out, _SRL_NI_RD_RE)
+
+        instances: dict = {}
+        for ni_name, type_hits in types.items():
+            raw_type = type_hits[0] if type_hits else ""
+            ni_type = _SRL_NI_TYPE_MAP.get(raw_type, raw_type)
+            rd_hits = rds.get(ni_name) or []
+            # Default-instance membership is left empty like the other
+            # batch drivers: the discovery pipeline only consumes VRF
+            # memberships, and every interface not claimed by a VRF is
+            # in the default table by definition.
+            if ni_type == "DEFAULT_INSTANCE":
+                members: dict = {}
+            else:
+                members = {ifname: {} for ifname in ifaces.get(ni_name) or []}
+            instances[ni_name] = {
+                "name": ni_name,
+                "type": ni_type,
+                "state": {"route_distinguisher": rd_hits[0] if rd_hits else ""},
+                "interfaces": {"interface": members},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

@@ -1,0 +1,11 @@
+    network-instance vrf-red {
+        protocols {
+            bgp-vpn {
+                bgp-instance 1 {
+                    route-distinguisher {
+                        rd 65000:300
+                    }
+                }
+            }
+        }
+    }

@@ -1,0 +1,22 @@
+VRF RED; RD 65000:100; VPN ID not set
+VRF mode: Regular
+Description Customer RED L3VPN
+Interfaces:
+  GigabitEthernet0/0/0/1
+  GigabitEthernet0/0/0/2.100
+Address family IPV4 Unicast
+  Import VPN route-target communities:
+    RT:65000:100
+  Export VPN route-target communities:
+    RT:65000:100
+  No import route policy
+  No export route policy
+
+VRF MGMT; RD not set; VPN ID not set
+VRF mode: Regular
+Description not set
+Interfaces:
+  MgmtEth0/RP0/CPU0/0
+Address family IPV4 Unicast
+  No import route policy
+  No export route policy

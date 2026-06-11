@@ -261,6 +261,40 @@ class BaseDriverTest:
             expected = json.loads(expected_path.read_text(encoding="utf-8"))
             assert result == expected
 
+    def test_get_network_instances(self, scenario: str) -> None:
+        """Verify get_network_instances payload shape (driver-optional)."""
+        from napalm.base.base import NetworkDriver
+
+        if self.driver_cls.get_network_instances is NetworkDriver.get_network_instances:
+            pytest.skip(
+                f"{self.driver_cls.__name__} does not implement get_network_instances"
+            )
+        mock_dir = self._mock_dir("test_get_network_instances", scenario)
+        if not mock_dir.is_dir():
+            # Covers drivers that inherit the getter from upstream NAPALM
+            # (ios/eos/junos/nxos) — those are exercised by upstream, not here.
+            pytest.skip("no get_network_instances fixtures for this driver")
+        driver = self._build_driver(mock_dir)
+        result = driver.get_network_instances()
+
+        assert isinstance(result, dict), "get_network_instances must return a dict"
+        for ni_name, ni in result.items():
+            assert isinstance(ni, dict), f"{ni_name}: instance must be a dict"
+            assert ni.get("name") == ni_name, f"{ni_name}: name/key mismatch"
+            assert isinstance(ni.get("type"), str), f"{ni_name}: missing type"
+            state = ni.get("state")
+            assert isinstance(state, dict) and "route_distinguisher" in state, (
+                f"{ni_name}: missing state.route_distinguisher"
+            )
+            interfaces = ni.get("interfaces")
+            assert isinstance(interfaces, dict) and isinstance(
+                interfaces.get("interface"), dict
+            ), f"{ni_name}: malformed interfaces envelope"
+
+        expected = _load_expected(mock_dir)
+        if (mock_dir / "expected_result.json").exists():
+            assert result == expected
+
     def test_get_modules(self, scenario: str) -> None:
         """Verify get_modules payload shape (driver-optional)."""
         mock_dir = self._mock_dir("test_get_modules", scenario)

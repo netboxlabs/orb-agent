@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 _INVMGR_NS = "http://cisco.com/ns/yang/Cisco-IOS-XR-invmgr-oper"
 _NS_MAP = {"imo": _INVMGR_NS}  # prefix matches upstream napalm.iosxr_netconf convention
 
+# NETCONF replies are untrusted device input — disable entity resolution
+# and network access so a hostile payload can't XXE local files. Used by
+# every XML parse in this driver.
+_SAFE_XML_PARSER = ETREE.XMLParser(resolve_entities=False, no_network=True)
+
 # Focused subtree filter: just the entity name + inv-basic-bag fields we
 # need. Empty leaf elements ("<name/>") mean "select all instances". Mirrors
 # the upstream FACTS_RPC_REQ pattern in napalm/iosxr_netconf/constants.py.
@@ -118,7 +123,10 @@ def _iosxr_netconf_rows_from_xml(xml_text: str) -> list[dict]:
     if not xml_text:
         return []
     try:
-        root = ETREE.fromstring(xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text)
+        root = ETREE.fromstring(
+            xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text,
+            parser=_SAFE_XML_PARSER,
+        )
     except ETREE.XMLSyntaxError as e:
         logger.warning("iosxr_netconf.get_modules: XML parse failed: %s", e)
         return []
@@ -257,9 +265,113 @@ def _iosxr_netconf_get_modules_impl(driver) -> dict | None:
     })
 
 
+_MPLS_VPN_NS = "http://cisco.com/ns/yang/Cisco-IOS-XR-mpls-vpn-oper"
+_VPN_NS_MAP = {"mvo": _MPLS_VPN_NS}
+
+# Focused subtree filter on the L3VPN operational model — the same data
+# source "show vrf all detail" renders. One RPC returns every VRF with its
+# route distinguisher and member interface list.
+_VRF_FILTER = f"""
+<l3vpn xmlns="{_MPLS_VPN_NS}">
+  <vrfs>
+    <vrf>
+      <vrf-name/>
+      <route-distinguisher/>
+      <interface>
+        <interface-name/>
+      </interface>
+    </vrf>
+  </vrfs>
+</l3vpn>
+"""
+
+
+def _iosxr_netconf_default_instance() -> dict:
+    """
+    Return the DEFAULT_INSTANCE entry for the global routing table.
+
+    Interface membership is intentionally left empty — the discovery
+    pipeline only consumes VRF (L3VRF) memberships, and every interface
+    not claimed by a VRF is in the default table by definition.
+    """
+    return {
+        "name": "default",
+        "type": "DEFAULT_INSTANCE",
+        "state": {"route_distinguisher": ""},
+        "interfaces": {"interface": {}},
+    }
+
+
+def _iosxr_netconf_filter_instances(instances: dict, name: str) -> dict:
+    """Apply the NAPALM name-filter contract on every return path."""
+    if name:
+        return {name: instances[name]} if name in instances else {}
+    return instances
+
+
+def _iosxr_netconf_get_network_instances_impl(driver, name: str = "") -> dict:
+    """
+    VRF discovery for IOS-XR via NETCONF (Cisco-IOS-XR-mpls-vpn-oper).
+
+    Walks l3vpn/vrfs/vrf entries to the same OC shape the SSH driver
+    produces from "show vrf all detail". An unconfigured RD surfaces as
+    the literal "not set" (mirroring the CLI rendering) or empty —
+    both normalize to "".
+    """
+    try:
+        reply = driver.device.get(filter=("subtree", _VRF_FILTER))
+    except NCClientError as e:
+        logger.warning("iosxr_netconf.get_network_instances: NETCONF get failed: %s", e)
+        # Deliberately {} (not the seeded default instance): a transport
+        # failure means the device state is unknown, and an empty dict is
+        # the unambiguous "discovery failed" signal. The seeded default is
+        # returned only on paths where the device DID respond — there the
+        # default table is a platform invariant, not fabricated knowledge.
+        return {}
+    xml_text = getattr(reply, "xml", None) or getattr(reply, "data_xml", None) or ""
+    instances: dict = {"default": _iosxr_netconf_default_instance()}
+    if not xml_text:
+        return _iosxr_netconf_filter_instances(instances, name)
+    try:
+        root = ETREE.fromstring(
+            xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text,
+            parser=_SAFE_XML_PARSER,
+        )
+    except ETREE.XMLSyntaxError as e:
+        logger.warning("iosxr_netconf.get_network_instances: XML parse failed: %s", e)
+        return _iosxr_netconf_filter_instances(instances, name)
+    for vrf_el in root.findall(".//mvo:l3vpn/mvo:vrfs/mvo:vrf", _VPN_NS_MAP):
+        name_el = vrf_el.find("mvo:vrf-name", _VPN_NS_MAP)
+        vrf_name = (name_el.text or "").strip() if name_el is not None else ""
+        # Never let a model row overwrite the seeded DEFAULT_INSTANCE —
+        # a row named "default" is the global table, not an L3VRF.
+        if not vrf_name or vrf_name == "default":
+            continue
+        rd_el = vrf_el.find("mvo:route-distinguisher", _VPN_NS_MAP)
+        rd = (rd_el.text or "").strip() if rd_el is not None else ""
+        if rd.lower() == "not set":
+            rd = ""
+        interfaces: dict = {}
+        for if_el in vrf_el.findall("mvo:interface/mvo:interface-name", _VPN_NS_MAP):
+            ifname = (if_el.text or "").strip()
+            if ifname:
+                interfaces[ifname] = {}
+        instances[vrf_name] = {
+            "name": vrf_name,
+            "type": "L3VRF",
+            "state": {"route_distinguisher": rd},
+            "interfaces": {"interface": interfaces},
+        }
+    return _iosxr_netconf_filter_instances(instances, name)
+
+
 class IOSXRNETCONFDriver(_UpstreamIOSXRNetconfDriver):
     """Custom IOS-XR NETCONF driver shim adding get_modules()."""
 
     def get_modules(self) -> dict | None:
         """Return per-rack module / module-bay inventory or None."""
         return _iosxr_netconf_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """Return network instances (VRFs) keyed by name, NAPALM OC shape."""
+        return _iosxr_netconf_get_network_instances_impl(self, name)

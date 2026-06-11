@@ -247,9 +247,123 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
     })
 
 
+# "show vrf all detail" block headers: VRF <name>; RD <rd>; VPN ID <id>.
+_IOSXR_VRF_HEADER_RE = re.compile(r"^\s*VRF (\S+); RD (.+?); VPN ID")
+# Member rows under the "Interfaces:" section — one indented ifname per line,
+# same character class the cisco_xr ntc-template uses for interface names.
+_IOSXR_VRF_IFACE_RE = re.compile(r"^\s+([\w./-]+)\s*$")
+_IOSXR_VRF_IFACES_HDR_RE = re.compile(r"^\s*Interfaces:\s*$")
+
+
+def _iosxr_parse_vrf_blocks(raw: str) -> list[dict]:
+    """
+    Driver-local parse of "show vrf all detail" into name/rd/interfaces rows.
+
+    Deliberately NOT the cisco_xr ntc-template: its FSM only leaves the
+    Interfaces / route-target states on specific follow-up lines ("Address
+    family ...", "No import route policy"), so a VRF block without an
+    address family, or with an import/export route policy attached
+    (`Import route policy: RPL_IN` — routine in production L3VPN),
+    swallows the NEXT VRF's header and misattributes its interfaces.
+    A line-stateful walk keyed on the unambiguous block header has no
+    such stuck states: interface collection starts at "Interfaces:" and
+    stops at the first line that isn't a lone indented interface name.
+    """
+    rows: list[dict] = []
+    current: dict | None = None
+    in_interfaces = False
+    for line in raw.splitlines():
+        m = _IOSXR_VRF_HEADER_RE.match(line)
+        if m:
+            current = {"vrf": m.group(1), "rd": m.group(2), "interfaces": []}
+            rows.append(current)
+            in_interfaces = False
+            continue
+        if current is None:
+            continue
+        if _IOSXR_VRF_IFACES_HDR_RE.match(line):
+            in_interfaces = True
+            continue
+        if in_interfaces:
+            m = _IOSXR_VRF_IFACE_RE.match(line)
+            if m:
+                current["interfaces"].append(m.group(1))
+            else:
+                in_interfaces = False
+    return rows
+
+
+def _iosxr_default_instance() -> dict:
+    """
+    Return the DEFAULT_INSTANCE entry for the global routing table.
+
+    Its interface membership is intentionally left empty: enumerating
+    default-table interfaces needs a second command, and the discovery
+    pipeline only consumes VRF (L3VRF) memberships — every interface not
+    claimed by a VRF is in the default table by definition.
+    """
+    return {
+        "name": "default",
+        "type": "DEFAULT_INSTANCE",
+        "state": {"route_distinguisher": ""},
+        "interfaces": {"interface": {}},
+    }
+
+
+def _iosxr_get_network_instances_impl(driver, name: str = "") -> dict:
+    """
+    VRF discovery for IOS-XR via pyIOSXR ("show vrf all detail").
+
+    Parsed driver-locally (see _iosxr_parse_vrf_blocks for why the
+    cisco_xr ntc-template is not used); each row carries the VRF name,
+    its route distinguisher (the literal "not set" when unconfigured —
+    normalized to ""), and the member interface list.
+    """
+    try:
+        raw = driver.device._execute_show("show vrf all detail")
+    except (ConnectError, IOSXRTimeoutError, InvalidInputError, XMLCLIError) as e:
+        logger.warning("iosxr.get_network_instances: show vrf all detail failed: %s", e)
+        # Deliberately {} (not the seeded default instance): a transport
+        # failure means the device state is unknown, and an empty dict is
+        # the unambiguous "discovery failed" signal. The seeded default is
+        # returned only on paths where the device DID respond — there the
+        # default table is a platform invariant, not fabricated knowledge.
+        return {}
+
+    instances: dict = {"default": _iosxr_default_instance()}
+    rows = _iosxr_parse_vrf_blocks(raw) if raw else []
+    for row in rows:
+        vrf = (row.get("vrf") or "").strip()
+        # Never let a parsed row overwrite the seeded DEFAULT_INSTANCE —
+        # a row named "default" is the global table, not an L3VRF.
+        if not vrf or vrf == "default":
+            continue
+        rd = (row.get("rd") or "").strip()
+        if rd.lower() == "not set":
+            rd = ""
+        interfaces = {
+            ifname.strip(): {}
+            for ifname in (row.get("interfaces") or [])
+            if ifname and ifname.strip()
+        }
+        instances[vrf] = {
+            "name": vrf,
+            "type": "L3VRF",
+            "state": {"route_distinguisher": rd},
+            "interfaces": {"interface": interfaces},
+        }
+    if name:
+        return {name: instances[name]} if name in instances else {}
+    return instances
+
+
 class IOSXRDriver(_UpstreamIOSXRDriver):
     """Custom IOS-XR driver shim adding get_modules() to the upstream class."""
 
     def get_modules(self) -> dict | None:
         """Return per-rack module / module-bay inventory or None."""
         return _iosxr_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """Return network instances (VRFs) keyed by name, NAPALM OC shape."""
+        return _iosxr_get_network_instances_impl(self, name)

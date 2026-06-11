@@ -1,0 +1,22 @@
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="urn:uuid:5">
+  <data>
+    <l3vpn xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-mpls-vpn-oper">
+      <vrfs>
+        <vrf>
+          <vrf-name>default</vrf-name>
+          <route-distinguisher>not set</route-distinguisher>
+          <interface>
+            <interface-name>GigabitEthernet0/0/0/9</interface-name>
+          </interface>
+        </vrf>
+        <vrf>
+          <vrf-name>RED</vrf-name>
+          <route-distinguisher>65000:100</route-distinguisher>
+          <interface>
+            <interface-name>GigabitEthernet0/0/0/1</interface-name>
+          </interface>
+        </vrf>
+      </vrfs>
+    </l3vpn>
+  </data>
+</rpc-reply>

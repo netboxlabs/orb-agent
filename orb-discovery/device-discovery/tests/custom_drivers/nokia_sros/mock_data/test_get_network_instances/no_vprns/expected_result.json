@@ -1,0 +1,12 @@
+{
+  "Base": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "Base",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  }
+}

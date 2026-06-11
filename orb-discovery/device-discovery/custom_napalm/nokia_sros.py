@@ -254,6 +254,28 @@ _FILTER_PORTS_TRANSCEIVER = f"""
 </filter>
 """
 
+# Subtree filter for VRF (VPRN service) discovery. One RPC returns every
+# VPRN with its route distinguisher (bgp-ipvpn/mpls) and member interfaces.
+_FILTER_NETWORK_INSTANCES = f"""
+<filter xmlns="{_NS_NC}">
+    <configure xmlns="{_NS_CONF}">
+        <service>
+            <vprn>
+                <service-name/>
+                <bgp-ipvpn>
+                    <mpls>
+                        <route-distinguisher/>
+                    </mpls>
+                </bgp-ipvpn>
+                <interface>
+                    <interface-name/>
+                </interface>
+            </vprn>
+        </service>
+    </configure>
+</filter>
+"""
+
 # ---------------------------------------------------------------------------
 # Config sanitization — Nokia SR-OS YANG XML sensitive element content
 # ---------------------------------------------------------------------------
@@ -742,6 +764,89 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
     })
 
 
+def _nokia_sros_filter_instances(instances: dict, name: str) -> dict:
+    """Apply the NAPALM name-filter contract on every return path."""
+    if name:
+        return {name: instances[name]} if name in instances else {}
+    return instances
+
+
+def _nokia_sros_get_network_instances_impl(driver, name: str = "") -> dict:
+    """
+    VRF discovery for Nokia SR-OS via NETCONF: VPRN services as L3VRFs.
+
+    SR OS models VRFs as VPRN services — each maps to a NetBox VRF, with
+    member interfaces keyed "<service>/<interface>" to match how
+    get_interfaces_ip() names them. The Base router is the global routing
+    table and is emitted as the DEFAULT_INSTANCE with empty membership:
+    the discovery pipeline only consumes VRF memberships, and interfaces
+    of the Base and management router contexts (which get_interfaces_ip
+    keys "<router>/<interface>" for non-Base routers) are deliberately
+    not claimed by any VRF. The RD lives at vprn/bgp-ipvpn/mpls and is
+    absent on VPRNs without an MPLS L3VPN backbone.
+    """
+    instances: dict = {
+        "Base": {
+            "name": "Base",
+            "type": "DEFAULT_INSTANCE",
+            "state": {"route_distinguisher": ""},
+            "interfaces": {"interface": {}},
+        },
+    }
+    try:
+        reply = driver.conn.get(filter=_FILTER_NETWORK_INSTANCES)
+    except NCClientError as e:
+        logger.warning("nokia_sros.get_network_instances: VPRN RPC failed: %s", e)
+        # Deliberately {} (not the seeded default instance): a transport
+        # failure means the device state is unknown, and an empty dict is
+        # the unambiguous "discovery failed" signal. The seeded default is
+        # returned only on paths where the device DID respond — there the
+        # default table is a platform invariant, not fabricated knowledge.
+        return {}
+    if getattr(reply, "data_xml", None) is None:
+        logger.warning(
+            "nokia_sros.get_network_instances: VPRN RPC returned empty data_xml"
+        )
+        return _nokia_sros_filter_instances(instances, name)
+    try:
+        root = _parse_xml(reply.data_xml)
+    except etree.XMLSyntaxError as e:
+        logger.warning("nokia_sros.get_network_instances: XML parse failed: %s", e)
+        return _nokia_sros_filter_instances(instances, name)
+    for vprn in root.findall(
+        ".//configure_ns:service/configure_ns:vprn", _NSMAP,
+    ):
+        svc_el = vprn.find("configure_ns:service-name", _NSMAP)
+        svc_name = (svc_el.text or "").strip() if svc_el is not None else ""
+        # Never let a VPRN row overwrite the seeded DEFAULT_INSTANCE —
+        # "Base" is the global routing table, not an L3VRF. Mirrors the
+        # IOS-XR drivers' guard against rows named "default".
+        if not svc_name or svc_name == "Base":
+            continue
+        rd_el = vprn.find(
+            "configure_ns:bgp-ipvpn/configure_ns:mpls/configure_ns:route-distinguisher",
+            _NSMAP,
+        )
+        rd = (rd_el.text or "").strip() if rd_el is not None else ""
+        interfaces: dict = {}
+        for if_el in vprn.findall(
+            "configure_ns:interface/configure_ns:interface-name", _NSMAP,
+        ):
+            ifname = (if_el.text or "").strip()
+            if ifname:
+                # Keyed "<service>/<interface>" to match how
+                # get_interfaces_ip() names VPRN interfaces — downstream
+                # VRF attachment joins on exact interface names.
+                interfaces[f"{svc_name}/{ifname}"] = {}
+        instances[svc_name] = {
+            "name": svc_name,
+            "type": "L3VRF",
+            "state": {"route_distinguisher": rd},
+            "interfaces": {"interface": interfaces},
+        }
+    return _nokia_sros_filter_instances(instances, name)
+
+
 class SROSDriver(_napalm_base.NetworkDriver):
     """Nokia SR-OS NAPALM driver using NETCONF/YANG (read-only subset for device-discovery)."""
 
@@ -1054,3 +1159,7 @@ class SROSDriver(_napalm_base.NetworkDriver):
     def get_modules(self) -> dict | None:
         """Return per-chassis module / module bay inventory or None."""
         return _nokia_sros_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """Return network instances (VPRNs as VRFs) keyed by name, NAPALM OC shape."""
+        return _nokia_sros_get_network_instances_impl(self, name)
