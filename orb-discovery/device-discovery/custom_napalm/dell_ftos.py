@@ -715,3 +715,200 @@ class FTOSDriver(_napalm_base.NetworkDriver):
             info = _ftos_row_to_switchport_info(row)
             result[ifname] = classify_switchport(info)
         return result
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (OS9 VRFs), NAPALM OC shape.
+
+        Parsed driver-locally from ``show ip vrf`` (no ntc-template
+        exists): one row per VRF with abbreviated comma-separated member
+        interfaces that may wrap onto indented continuation lines and
+        use trailing-number ranges (``Gi 1/3-1/5``). Member abbreviations
+        expand to the full template forms (``Gi 1/2`` →
+        ``GigabitEthernet 1/2``) because that is how this driver's
+        get_interfaces()/get_interfaces_ip() key interfaces — the
+        VRF→IP join is by exact name. The VRF named
+        ``default`` (id 0) is the global routing table
+        (DEFAULT_INSTANCE, empty membership); the ``management`` VRF
+        (id 511) is a real VRF and is kept. OS9 keeps the RD in
+        per-VRF BGP config — not collected in this pass.
+
+        NOTE: built from the vendor-documented output format; not yet
+        validated against a live OS9 device.
+        """
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        raw = self.device.send_command("show ip vrf")
+        for vrf_name, members in _ftos_parse_show_ip_vrf(raw or "").items():
+            # Never let a row overwrite the seeded DEFAULT_INSTANCE.
+            if vrf_name == "default":
+                continue
+            instances[vrf_name] = {
+                "name": vrf_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {m: {} for m in members}},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances
+
+
+# "show ip vrf" rows: name, numeric VRF id, comma-separated abbreviated
+# member interfaces that may wrap onto indented continuation lines. The
+# header ("VRF-Name  VRF-ID  Interfaces") never matches — its second
+# column is not numeric.
+_FTOS_VRF_ROW_RE = re.compile(r"^\s*(?P<name>\S+)\s+(?P<vrf_id>\d+)\b(?P<rest>.*)$")
+# Abbreviated member groups: one interface abbreviation followed by a
+# comma-compressed number list — "Gi 1/2", "Te 1/3-1/5", and Dell's
+# compressed forms "Te 0/14,16-17" / "Fo 0/48,52,56,60" where the numbers
+# after the first inherit its slot head. A comma followed by a space starts
+# a new group ("Gi 1/2, Vl 100"), matching the documented column layout.
+_FTOS_VRF_GROUP_RE = re.compile(
+    r"\b([A-Z][a-zA-Z]{0,2}) (\d[\d/.\-]*(?:,[\d/.\-]+)*)"
+)
+
+
+def _ftos_member_tokens(text: str) -> list[str]:
+    """
+    Expand abbreviated member groups into one "<Abbrev> <position>" token each.
+
+    Within a group's comma list, items carrying a "/" set the slot head;
+    bare numbers and bare ranges inherit the most recent head
+    ("Te 0/14,16-17" → "Te 0/14", "Te 0/16-17").
+    """
+    tokens: list[str] = []
+    for abbrev, numlist in _FTOS_VRF_GROUP_RE.findall(text):
+        head = ""
+        for item in numlist.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if "/" in item:
+                # Derive the inheritable head from the LEFT side of a
+                # range so "1/3-1/5" yields head "1", not "1/3-1".
+                left = item.partition("-")[0]
+                if "/" in left:
+                    head = left.rsplit("/", 1)[0]
+                tokens.append(f"{abbrev} {item}")
+            elif head:
+                tokens.append(f"{abbrev} {head}/{item}")
+            else:
+                tokens.append(f"{abbrev} {item}")
+    return tokens
+# show ip vrf abbreviations → the full interface names the dell_force10
+# ntc-templates emit (and therefore how get_interfaces()/get_interfaces_ip()
+# key interfaces — the VRF→IP join is by exact name). Unknown abbreviations
+# pass through unexpanded and simply never join.
+_FTOS_ABBREV_TO_FULL = {
+    "Fa": "FastEthernet",
+    "Gi": "GigabitEthernet",
+    "Te": "TenGigabitEthernet",
+    # OS9 displays the higher speeds lowercase-first ("fortyGigE 0/48
+    # is up") and the getters key with device casing.
+    "Tf": "twentyFiveGigE",
+    "Fo": "fortyGigE",
+    "Fi": "fiftyGigE",
+    "Hu": "hundredGigE",
+    "Ma": "ManagementEthernet",
+    "Vl": "Vlan",
+    "Po": "Port-channel",
+    "Lo": "Loopback",
+    "Tu": "Tunnel",
+}
+
+
+def _ftos_expand_member_range(token: str) -> list[str]:
+    """
+    Expand a trailing-number member range ("Gi 1/3-1/5" → Gi 1/3..1/5).
+
+    Tokens without a range (or with an unparseable or cross-slot one —
+    "Gi 1/3-2/5") pass through unchanged — an unexpanded token simply
+    never joins an interface name, which is safer than guessing.
+    """
+    if "-" not in token:
+        return [token]
+    prefix, _, value = token.partition(" ")
+    left, _, right = value.partition("-")
+    left_head, _, left_last = left.rpartition("/")
+    right_head, _, right_last = right.rpartition("/")
+    if right_head and right_head != left_head:
+        # Cross-slot range: expanding only the trailing number would
+        # fabricate interface names that may belong to other VRFs.
+        return [token]
+    try:
+        start, end = int(left_last), int(right_last)
+    except ValueError:
+        return [token]
+    if end < start or end - start > 512:
+        return [token]
+    head = f"{left_head}/" if left_head else ""
+    return [f"{prefix} {head}{n}" for n in range(start, end + 1)]
+
+
+def _ftos_expand_member_name(token: str) -> str:
+    """Expand "Gi 1/2" to the full "GigabitEthernet 1/2" template form."""
+    abbrev, _, rest = token.partition(" ")
+    full = _FTOS_ABBREV_TO_FULL.get(abbrev)
+    return f"{full} {rest}" if full and rest else token
+
+
+# Wrapped member lines align under the Interfaces column (far right of the
+# 34-char name + id columns); VRF rows start at the left margin. Requiring
+# deep indentation keeps a short uppercase VRF name row ("RED  1  Gi 1/7")
+# from ever being mistaken for a continuation of the previous VRF.
+_FTOS_CONTINUATION_MIN_INDENT = 8
+
+
+def _ftos_is_member_continuation(line: str) -> bool:
+    """
+    True when a line holds only wrapped member tokens (no name/id columns).
+
+    A continuation like ``Te 1/20`` would otherwise satisfy the row regex
+    ("Te" as the name, "1" as the id) — but unlike a real row, a
+    continuation is deeply indented under the Interfaces column AND
+    removing every member token (plus separators) leaves nothing behind.
+    """
+    indent = len(line) - len(line.lstrip())
+    if indent < _FTOS_CONTINUATION_MIN_INDENT:
+        return False
+    residue = _FTOS_VRF_GROUP_RE.sub("", line).replace(",", "").strip()
+    return not residue
+
+
+def _ftos_parse_show_ip_vrf(raw: str) -> dict[str, list[str]]:
+    """Parse ``show ip vrf`` into vrf name → expanded member interface names."""
+    members_by_vrf: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        if _ftos_is_member_continuation(line):
+            # Continuation with no owning row (e.g. orphaned by a paging
+            # header): drop it rather than letting the row regex turn it
+            # into a phantom VRF named after an abbreviation.
+            if current is None:
+                continue
+            member_text = line
+        else:
+            m = _FTOS_VRF_ROW_RE.match(line)
+            if not m:
+                # Header / footer / unparseable row: reset so a later
+                # orphaned continuation can't attach to a stale VRF.
+                current = None
+                continue
+            current = m.group("name")
+            members_by_vrf.setdefault(current, [])
+            member_text = m.group("rest")
+        for token in _ftos_member_tokens(member_text):
+            members_by_vrf[current].extend(
+                _ftos_expand_member_name(t)
+                for t in _ftos_expand_member_range(token)
+            )
+    return members_by_vrf

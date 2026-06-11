@@ -354,6 +354,65 @@ def _netiron_aggregate_to_switchport(per_port: dict) -> SwitchportInfo:
 # ---------------------------------------------------------------------------
 
 
+# "show vrf" rows: name, default RD, A|A|A status flags, route count, then
+# space-separated member interfaces wrapping onto indented continuations.
+_NETIRON_VRF_ROW_RE = re.compile(
+    r"^(?P<name>\S+)\s+(?P<rd>\S+(?:\s+[Ss]et)?)\s+[ADI](?:\s*\|\s*[ADI-]?){2}\s+"
+    r"(?P<routes>\d+)\s*(?P<ifaces>.*)$"
+)
+# Member tokens in the Interfaces column: ve150, e1/5, eth 2/3, lag5,
+# loopback1, po10 (case-insensitive).
+_NETIRON_VRF_MEMBER_RE = re.compile(
+    r"\b(e(?:th(?:ernet)?)?\s?\d+/\d+|ve\s?\d+|lag\s?\d+|loopback\s?\d+|po\s?\d+)\b",
+    re.IGNORECASE,
+)
+# Ethernet member shorthand ("e1/5", "eth 2/3") → bare slot/port key used
+# by the canonical-name map.
+_NETIRON_VRF_ETH_RE = re.compile(r"^e(?:th(?:ernet)?)?\s?(\d+/\d+)$", re.IGNORECASE)
+# RD column sentinels NetIron prints when no RD is configured. The row
+# regex's rd group accepts an optional trailing "Set" token so the
+# two-word "Not Set" form reaches this check intact.
+_NETIRON_RD_UNSET = frozenset(
+    {"(null)", "null", "-", "n/a", "none", "not set", "notset"}
+)
+
+
+def _netiron_parse_show_vrf(raw: str) -> dict[str, tuple[str, list[str]]]:
+    """Parse ``show vrf`` into vrf name → (rd, raw member tokens)."""
+    out: dict[str, tuple[str, list[str]]] = {}
+    current: str | None = None
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        m = _NETIRON_VRF_ROW_RE.match(line)
+        if m:
+            current = m.group("name")
+            rd = m.group("rd").strip()
+            if rd.lower() in _NETIRON_RD_UNSET:
+                rd = ""
+            members = _NETIRON_VRF_MEMBER_RE.findall(m.group("ifaces"))
+            out[current] = (rd, members)
+            continue
+        if current is not None and line[:1].isspace():
+            rd, members = out[current]
+            members.extend(_NETIRON_VRF_MEMBER_RE.findall(line))
+            out[current] = (rd, members)
+        else:
+            current = None
+    return out
+
+
+def _netiron_canonical_member(token: str, canonical_map: dict[str, str]) -> str:
+    """Canonicalise a show-vrf member token via the bare-id name map."""
+    token = token.strip()
+    m = _NETIRON_VRF_ETH_RE.match(token)
+    if m:
+        bare = m.group(1)
+    else:
+        bare = token.replace(" ", "").lower()
+    return canonical_map.get(bare, token)
+
+
 class NetIronDriver(_napalm_base.NetworkDriver):
     """Brocade/Extreme NetIron NAPALM driver (read-only subset for device-discovery)."""
 
@@ -719,3 +778,47 @@ class NetIronDriver(_napalm_base.NetworkDriver):
                     continue
                 out[f"{prefix.lower()}{m.group(2)}"] = full
         return out
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (NetIron VRFs), NAPALM OC shape.
+
+        Parsed driver-locally from ``show vrf`` (no ntc-template exists):
+        one row per VRF with the default RD and a space-separated member
+        interface list that may wrap onto indented continuation lines.
+        Member tokens (``ve150``, ``e1/5``) are canonicalised through the
+        same bare-id map get_interfaces_vlans() uses so they join the
+        canonical names get_interfaces() emits (``Ve150``,
+        ``GigabitEthernet1/5``). The global routing table is seeded as
+        ``default-vrf`` (DEFAULT_INSTANCE, empty membership).
+
+        NOTE: built from the vendor-documented output format; not yet
+        validated against a live NetIron device.
+        """
+        instances: dict = {
+            "default-vrf": {
+                "name": "default-vrf",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        raw = self.device.send_command("show vrf")
+        rows = _netiron_parse_show_vrf(raw or "")
+        canonical_map = self._netiron_canonical_name_map() if rows else {}
+        for vrf_name, (rd, members) in rows.items():
+            # Never let a row overwrite the seeded DEFAULT_INSTANCE.
+            if vrf_name == "default-vrf":
+                continue
+            interfaces = {
+                _netiron_canonical_member(m, canonical_map): {} for m in members
+            }
+            instances[vrf_name] = {
+                "name": vrf_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": rd},
+                "interfaces": {"interface": interfaces},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

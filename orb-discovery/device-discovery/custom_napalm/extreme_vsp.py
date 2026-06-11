@@ -354,6 +354,27 @@ def _vsp_row_to_switchport_info(row: dict) -> SwitchportInfo:
 # ---------------------------------------------------------------------------
 
 
+# "show ip vrf" rows: name + numeric VRF id (the header's second column is
+# "NAME"/"ID" text and footer lines have non-numeric second tokens, so
+# neither matches).
+_VSP_VRF_ROW_RE = re.compile(r"^(?P<name>\S+)\s+(?P<vrf_id>\d+)\b")
+
+
+def _vsp_parse_show_ip_vrf(raw: str) -> list[str]:
+    """Return VRF names from ``show ip vrf``, in display order."""
+    names: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("=", "-")):
+            continue
+        # Match against the stripped line so indented VRF rows (releases
+        # vary in table padding) are not silently skipped.
+        m = _VSP_VRF_ROW_RE.match(stripped)
+        if m and m.group("name") not in names:
+            names.append(m.group("name"))
+    return names
+
+
 class VSPDriver(_napalm_base.NetworkDriver):
     """Avaya/Extreme VSP NAPALM driver (read-only subset for device-discovery)."""
 
@@ -551,3 +572,51 @@ class VSPDriver(_napalm_base.NetworkDriver):
             info = _vsp_row_to_switchport_info(row)
             result[port] = classify_switchport(info)
         return result
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (VOSS VRFs / L3VSNs), NAPALM OC shape.
+
+        ``show ip vrf`` enumerates the VRFs (parsed driver-locally — no
+        ntc-template exists); one ``show ip interface vrf <name>`` per
+        VRF lists its L3 interfaces, parsed with the same row shape
+        get_interfaces_ip() uses so member names join exactly.
+        ``GlobalRouter`` (VRF id 0) is the global routing table
+        (DEFAULT_INSTANCE, empty membership); the segmented management
+        instance (id 512) is a real VRF and is kept. VOSS keeps the RD
+        in per-VRF IP-VPN config — not collected in this pass.
+
+        NOTE: built from the vendor-documented output format; not yet
+        validated against a live VOSS device.
+        """
+        instances: dict = {
+            "GlobalRouter": {
+                "name": "GlobalRouter",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        raw = self.device.send_command("show ip vrf")
+        vrf_names = _vsp_parse_show_ip_vrf(raw or "")
+        if name:
+            # Apply the name filter before the per-VRF membership commands
+            # so a single-VRF request doesn't pay N+1 CLI round-trips.
+            vrf_names = [v for v in vrf_names if v == name]
+        for vrf_name in vrf_names:
+            # Never let a row overwrite the seeded DEFAULT_INSTANCE.
+            if vrf_name == "GlobalRouter":
+                continue
+            members_raw = self.device.send_command(
+                f"show ip interface vrf {vrf_name}"
+            )
+            members = _parse_interfaces_ip(members_raw or "")
+            instances[vrf_name] = {
+                "name": vrf_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {m: {} for m in members}},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

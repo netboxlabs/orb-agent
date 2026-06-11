@@ -1,0 +1,12 @@
+{
+  "default-vrf": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default-vrf",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  }
+}

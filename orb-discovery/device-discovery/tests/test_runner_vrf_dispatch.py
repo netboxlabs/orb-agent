@@ -18,10 +18,14 @@ import pytest
 from napalm.base.base import NetworkDriver
 
 from custom_napalm.aruba_aoscx import AOSCXDriver
+from custom_napalm.brocade_netiron import NetIronDriver
 from custom_napalm.cisco_viptela_ssh import ViptelaSSHDriver
 from custom_napalm.cumulus_linux import CumulusDriver
+from custom_napalm.dell_ftos import FTOSDriver
 from custom_napalm.dell_sonic import SONiCDriver
 from custom_napalm.eos import EOSDriver
+from custom_napalm.extreme_slx import SLXOSDriver
+from custom_napalm.extreme_vsp import VSPDriver
 from custom_napalm.hp_comware import ComwareDriver
 from custom_napalm.huawei_vrp import VRPDriver
 from custom_napalm.ios import IOSDriver
@@ -153,6 +157,10 @@ def test_collect_network_instances_swallows_not_implemented(caplog) -> None:
         pytest.param(ViptelaSSHDriver, "custom_napalm.", id="cisco_viptela_ssh"),
         pytest.param(PANOSDriver, "custom_napalm.", id="paloalto_panos"),
         pytest.param(PANOSSHDriver, "custom_napalm.", id="paloalto_panos_ssh"),
+        pytest.param(SLXOSDriver, "custom_napalm.", id="extreme_slx"),
+        pytest.param(FTOSDriver, "custom_napalm.", id="dell_ftos"),
+        pytest.param(NetIronDriver, "custom_napalm.", id="brocade_netiron"),
+        pytest.param(VSPDriver, "custom_napalm.", id="extreme_vsp"),
     ],
 )
 def test_driver_implements_get_network_instances(

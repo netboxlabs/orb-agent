@@ -257,6 +257,67 @@ _MGMT_IP_RE = re.compile(
     r"^\s*(Management\s+\S+)\s+(\d[\d.]+(?:/\d+)?)\s",
     re.IGNORECASE,
 )
+# Same pre-stripped Management rows, but capturing the Vrf column so VRF
+# discovery doesn't lose mgmt-vrf membership (or the VRF itself when it
+# appears only on Management interfaces).
+_MGMT_VRF_RE = re.compile(
+    r"^\s*(Management\s+\S+)\s+\S+\s+(\S+)\s",
+    re.IGNORECASE,
+)
+# Regex fallback for VRF discovery when the ntc-template fails entirely —
+# the interface + Vrf columns of the same interface-type set
+# _INTF_IP_FALLBACK_RE covers, so a single unparseable row can't empty the
+# whole VRF discovery result. Other row types (e.g. Tunnel) are skipped by
+# design: interface discovery doesn't emit them either, so their VRF
+# membership could never join an Interface/IP entity.
+_INTF_VRF_FALLBACK_RE = re.compile(
+    r"^\s*((?:Ethernet|Management|Port-channel|Loopback|Ve)\s+\S+)\s+\S+\s+(\S+)\s",
+    re.IGNORECASE,
+)
+
+
+def _slx_vrf_memberships(output: str) -> list[tuple[str, str]]:
+    """
+    Extract (interface, vrf) pairs from ``show ip interface brief`` output.
+
+    Management rows are pre-stripped before template parsing (the
+    ntc-template error-exits on them) and recovered with _MGMT_VRF_RE;
+    when the template fails on any other row, the whole output falls back
+    to _INTF_VRF_FALLBACK_RE — the same contract get_interfaces_ip()
+    follows for addresses.
+    """
+    memberships: list[tuple[str, str]] = []
+    filtered = "\n".join(
+        line for line in output.splitlines() if not _MGMT_LINE_RE.match(line)
+    )
+    try:
+        rows = parse_output(
+            platform="extreme_slxos",
+            command="show ip interface brief",
+            data=filtered,
+        )
+    except (TextFSMError, ParsingException):
+        logger.warning(
+            "slxos: ntc-template failed for 'show ip interface brief'; "
+            "falling back to regex for VRF discovery",
+            exc_info=True,
+        )
+        for line in output.splitlines():
+            m = _INTF_VRF_FALLBACK_RE.match(line)
+            if m:
+                memberships.append((m.group(1).strip(), m.group(2).strip()))
+        return memberships
+    memberships.extend(
+        ((row.get("interface") or "").strip(), (row.get("vrf") or "").strip())
+        for row in rows
+    )
+    # Recover the pre-stripped Management rows' Vrf column (the fallback
+    # branch above already covers them).
+    for line in output.splitlines():
+        m = _MGMT_VRF_RE.match(line)
+        if m:
+            memberships.append((m.group(1).strip(), m.group(2).strip()))
+    return memberships
 # Regex fallback covering all known interface types, used when ntc-template
 # parse_output() fails entirely so no interface address is silently dropped.
 _INTF_IP_FALLBACK_RE = re.compile(
@@ -696,3 +757,49 @@ class SLXOSDriver(_napalm_base.NetworkDriver):
             info = _slx_aggregate_to_switchport(data)
             result[port] = classify_switchport(info)
         return result
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (SLX-OS VRFs), NAPALM OC shape.
+
+        Derived from the Vrf column of ``show ip interface brief`` — the
+        same template-parsed rows get_interfaces_ip() consumes, so member
+        names join exactly. ``default-vrf`` is the global routing table
+        (DEFAULT_INSTANCE, empty membership); ``mgmt-vrf`` is a real VRF
+        and is kept. Management interfaces are pre-stripped before
+        template parsing (the ntc-template error-exits on those rows)
+        and recovered with a dedicated regex — mirroring how
+        get_interfaces_ip() recovers their addresses — so mgmt-vrf
+        survives even when it appears only on Management interfaces.
+        Limitations: enumeration is membership-derived (an interface-less
+        VRF does not appear) and route distinguishers are not collected
+        (they live in ``show vrf detail``).
+        """
+        instances: dict = {
+            "default-vrf": {
+                "name": "default-vrf",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        output = self.device.send_command("show ip interface brief")
+        memberships: list[tuple[str, str]] = []
+        if output and output.strip():
+            memberships = _slx_vrf_memberships(output)
+        for ifname, vrf_name in memberships:
+            # default-vrf rows belong to the seeded DEFAULT_INSTANCE.
+            if not vrf_name or not ifname or vrf_name == "default-vrf":
+                continue
+            instances.setdefault(
+                vrf_name,
+                {
+                    "name": vrf_name,
+                    "type": "L3VRF",
+                    "state": {"route_distinguisher": ""},
+                    "interfaces": {"interface": {}},
+                },
+            )["interfaces"]["interface"][ifname] = {}
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

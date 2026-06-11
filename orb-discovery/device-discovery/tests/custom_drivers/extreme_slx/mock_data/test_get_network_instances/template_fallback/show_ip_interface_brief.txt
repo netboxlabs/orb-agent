@@ -1,0 +1,7 @@
+Flags:  I - Insight Enabled     U - Unnumbered interface
+Interface              IP-Address          Vrf                                           Status                    Protocol
+==================     ==========          ========================================      ====================      ========
+Ethernet 0/1           172.16.128.44       default-vrf                                   up                        up
+Tunnel 7               10.50.0.1           CUST-TUN                                      up                        up
+Ve 4                   10.17.17.1          MGMT                                          up                        up
+Management 0           10.255.255.1/24     mgmt-vrf                                      up                        up
