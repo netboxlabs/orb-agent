@@ -666,6 +666,50 @@ def _nokia_sros_ssh_get_modules_impl(driver) -> dict | None:
     return _nokia_sros_ssh_assemble(card_rows, mda_rows, transceiver_rows)
 
 
+# "show service service-using vprn" rows: id, type, Adm, Opr, customer id,
+# optional service name. Parsed driver-locally — the ntc-template's row rule
+# requires a non-empty Service Name token, and SR OS service names are
+# optional, so a single unnamed VPRN error-exits the template and would
+# silently drop every VPRN on the box.
+_SROS_SSH_VPRN_ROW_RE = re.compile(
+    r"^\s*(?P<sid>\d+)\s+VPRN\s+\S+\s+\S+\s+\d+(?:\s+(?P<name>.*\S))?\s*$"
+)
+
+
+def _sros_ssh_parse_vprn_services(raw: str) -> list[tuple[str, str]]:
+    """Return (service_id, service_name-or-"") rows from service-using output."""
+    services: list[tuple[str, str]] = []
+    for line in (raw or "").splitlines():
+        m = _SROS_SSH_VPRN_ROW_RE.match(line)
+        if m:
+            services.append((m.group("sid"), (m.group("name") or "").strip()))
+    return services
+
+
+def _sros_ssh_vprn_member_interfaces(device, sid: str) -> dict:
+    """Return {interface_name: {}} for one VPRN from "show service id <id> interface"."""
+    interfaces: dict = {}
+    ifc_raw = device.send_command(f"show service id {sid} interface")
+    if not (ifc_raw and ifc_raw.strip()):
+        return interfaces
+    try:
+        ifc_rows = parse_output(
+            platform="alcatel_sros",
+            command=f"show service id {sid} interface",
+            data=ifc_raw,
+        )
+    except Exception:
+        logger.warning(
+            "SR OS show service id %s interface parse failed", sid, exc_info=True
+        )
+        return interfaces
+    for ifc in ifc_rows:
+        ifname = (ifc.get("interface_name") or "").strip()
+        if ifname:
+            interfaces[ifname] = {}
+    return interfaces
+
+
 class SROSSSHDriver(_napalm_base.NetworkDriver):
     """Nokia/Alcatel SR-OS NAPALM driver using SSH CLI + ntc-templates (read-only subset for device-discovery)."""
 
@@ -859,3 +903,51 @@ class SROSSSHDriver(_napalm_base.NetworkDriver):
     def get_modules(self) -> dict | None:
         """Return per-chassis module / module bay inventory or None."""
         return _nokia_sros_ssh_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (VPRN services as VRFs), NAPALM OC shape.
+
+        ``show service service-using vprn`` enumerates the VPRNs, parsed
+        driver-locally — SR OS service names are optional and the
+        ntc-template error-exits on the unnamed form. One ``show service
+        id <id> interface`` per service lists its member interfaces,
+        keyed ``<service>/<interface>`` like the NETCONF sibling: SR OS
+        interface names are scoped per routing instance, so plain names
+        could false-join a VPRN interface onto a same-named Base router
+        interface's IPs. (This driver's get_interfaces_ip() currently
+        covers only the Base router, so VPRN memberships don't attach to
+        IPs yet — the prefix keeps that future extension collision-free.)
+        The VRF name prefers the configured service name, falling back
+        to the numeric service id. Route distinguishers are not
+        collected in this first pass — on the classic CLI the RD lives
+        in per-service BGP config, not the templated service views. The
+        Base router is the global routing table, seeded as the
+        DEFAULT_INSTANCE.
+        """
+        instances: dict = {
+            "Base": {
+                "name": "Base",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        svc_raw = self.device.send_command("show service service-using vprn")
+        for sid, svc_name in _sros_ssh_parse_vprn_services(svc_raw or ""):
+            vrf_name = svc_name or sid
+            # Never let a service overwrite the seeded DEFAULT_INSTANCE.
+            if vrf_name == "Base":
+                continue
+            members = _sros_ssh_vprn_member_interfaces(self.device, sid)
+            instances[vrf_name] = {
+                "name": vrf_name,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {
+                    "interface": {f"{vrf_name}/{m}": {} for m in members},
+                },
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

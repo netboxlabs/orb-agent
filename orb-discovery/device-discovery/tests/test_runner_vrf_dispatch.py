@@ -17,6 +17,8 @@ from unittest.mock import MagicMock
 import pytest
 from napalm.base.base import NetworkDriver
 
+from custom_napalm.aruba_aoscx import AOSCXDriver
+from custom_napalm.cisco_viptela_ssh import ViptelaSSHDriver
 from custom_napalm.cumulus_linux import CumulusDriver
 from custom_napalm.dell_sonic import SONiCDriver
 from custom_napalm.eos import EOSDriver
@@ -28,8 +30,11 @@ from custom_napalm.iosxr_netconf import IOSXRNETCONFDriver
 from custom_napalm.junos import JunOSDriver
 from custom_napalm.nokia_srl import SRLDriver
 from custom_napalm.nokia_sros import SROSDriver
+from custom_napalm.nokia_sros_ssh import SROSSSHDriver
 from custom_napalm.nxos import NXOSDriver
 from custom_napalm.nxos_ssh import NXOSSSHDriver
+from custom_napalm.paloalto_panos import PANOSDriver
+from custom_napalm.paloalto_panos_ssh import PANOSSHDriver
 from device_discovery.policy.models import Config, Defaults, Options
 from device_discovery.policy.runner import PolicyRunner
 
@@ -143,6 +148,11 @@ def test_collect_network_instances_swallows_not_implemented(caplog) -> None:
         pytest.param(ComwareDriver, "custom_napalm.", id="hp_comware"),
         pytest.param(CumulusDriver, "custom_napalm.", id="cumulus_linux"),
         pytest.param(SONiCDriver, "custom_napalm.", id="dell_sonic"),
+        pytest.param(AOSCXDriver, "custom_napalm.", id="aruba_aoscx"),
+        pytest.param(SROSSSHDriver, "custom_napalm.", id="nokia_sros_ssh"),
+        pytest.param(ViptelaSSHDriver, "custom_napalm.", id="cisco_viptela_ssh"),
+        pytest.param(PANOSDriver, "custom_napalm.", id="paloalto_panos"),
+        pytest.param(PANOSSHDriver, "custom_napalm.", id="paloalto_panos_ssh"),
     ],
 )
 def test_driver_implements_get_network_instances(

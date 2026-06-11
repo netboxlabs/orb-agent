@@ -424,6 +424,38 @@ def _aruba_get_modules_impl(driver) -> dict | None:
     })
 
 
+def _aoscx_build_members_by_vrf(interfaces_data: object) -> dict[str, dict]:
+    """Group interface names by the VRF each one references."""
+    members_by_vrf: dict[str, dict] = {}
+    if isinstance(interfaces_data, dict):
+        for if_name, intf in interfaces_data.items():
+            if not isinstance(intf, dict):
+                continue
+            vrf_name = _aoscx_vrf_ref_name(intf.get("vrf"))
+            if vrf_name:
+                members_by_vrf.setdefault(vrf_name, {})[if_name] = {}
+    return members_by_vrf
+
+
+def _aoscx_vrf_ref_name(ref: object) -> str:
+    """
+    Resolve an interface's ``vrf`` REST reference to the VRF name.
+
+    At depth 2 the reference is a single-key dict mapping the VRF name to
+    its resource URL; tolerate a plain URL/name string defensively. A
+    multi-key dict is NOT a name→URL reference (it would be an expanded
+    VRF object, whose keys are attribute names) — return "" rather than
+    a garbage attribute name.
+    """
+    if isinstance(ref, dict):
+        if len(ref) == 1:
+            return str(next(iter(ref)))
+        return ""
+    if isinstance(ref, str) and ref:
+        return ref.rstrip("/").rsplit("/", 1)[-1]
+    return ""
+
+
 class AOSCXDriver(_napalm_base.NetworkDriver):
     """Aruba AOS-CX NAPALM driver using pyaoscx v2 REST API (read-only subset)."""
 
@@ -731,6 +763,56 @@ class AOSCXDriver(_napalm_base.NetworkDriver):
         Returns None for fixed switches (no line_card subsystems).
         """
         return _aruba_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (AOS-CX VRFs), NAPALM OC shape.
+
+        ``system/vrfs?depth=2`` enumerates the VRFs (with the EVPN route
+        distinguisher when the firmware exposes an ``rd`` attribute);
+        member interfaces come from each interface's ``vrf`` reference in
+        ``system/interfaces?depth=2`` — the same resource the IP getter
+        reads, so names join exactly. The factory VRF named ``default``
+        is the global routing table and is emitted as the
+        DEFAULT_INSTANCE with empty membership.
+        """
+        from napalm.base.exceptions import CommandErrorException
+
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        try:
+            vrfs_data = self._get("system/vrfs?depth=2")
+        except CommandErrorException:
+            logger.warning("AOS-CX system/vrfs GET failed", exc_info=True)
+            vrfs_data = {}
+        try:
+            interfaces_data = self._get("system/interfaces?depth=2")
+        except CommandErrorException:
+            logger.warning("AOS-CX system/interfaces GET failed", exc_info=True)
+            interfaces_data = {}
+        members_by_vrf = _aoscx_build_members_by_vrf(interfaces_data)
+        if isinstance(vrfs_data, dict):
+            for vrf_name, vrf_obj in vrfs_data.items():
+                # The factory "default" VRF is the seeded DEFAULT_INSTANCE.
+                if not vrf_name or vrf_name == "default":
+                    continue
+                rd_raw = vrf_obj.get("rd") if isinstance(vrf_obj, dict) else None
+                rd = rd_raw.strip() if isinstance(rd_raw, str) else ""
+                instances[vrf_name] = {
+                    "name": vrf_name,
+                    "type": "L3VRF",
+                    "state": {"route_distinguisher": rd},
+                    "interfaces": {"interface": members_by_vrf.get(vrf_name, {})},
+                }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances
 
 
 # ---------------------------------------------------------------------------

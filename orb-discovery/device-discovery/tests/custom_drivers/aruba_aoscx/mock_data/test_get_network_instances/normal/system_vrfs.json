@@ -1,0 +1,15 @@
+{
+  "default": {
+    "name": "default",
+    "type": "user"
+  },
+  "CUST-A": {
+    "name": "CUST-A",
+    "rd": "65000:400",
+    "type": "user"
+  },
+  "mgmt": {
+    "name": "mgmt",
+    "type": "user"
+  }
+}

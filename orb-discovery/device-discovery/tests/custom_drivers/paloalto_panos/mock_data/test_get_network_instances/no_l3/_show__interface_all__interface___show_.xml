@@ -1,0 +1,12 @@
+<response status="success">
+  <result>
+    <ifnet>
+      <entry>
+        <name>ethernet1/1</name>
+        <zone></zone>
+        <fwd>N/A</fwd>
+        <ip>N/A</ip>
+      </entry>
+    </ifnet>
+  </result>
+</response>

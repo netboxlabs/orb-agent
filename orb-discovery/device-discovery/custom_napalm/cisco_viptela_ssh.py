@@ -398,3 +398,44 @@ class ViptelaSSHDriver(_napalm_base.NetworkDriver):
         via the CLI; VPN segmentation is used instead.  Returns an empty dict.
         """
         return {}
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (SD-WAN VPN segments as VRFs), NAPALM OC shape.
+
+        Derived from the VPN column of the same 'show interface' rows the
+        interface getters parse, so member names join exactly. Transport
+        VPN 0 is the underlay — the closest analog to a global routing
+        table — and is emitted as the DEFAULT_INSTANCE with empty
+        membership. Service VPNs (and the management VPN 512) map to
+        VRFs named by their VPN number. Viptela VPNs carry no route
+        distinguisher at this layer.
+        """
+        instances: dict = {
+            "0": {
+                "name": "0",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        members_by_vpn: dict[str, dict] = {}
+        for row in self._parsed_interfaces():
+            vpn = (row.get("vpn") or "").strip()
+            ifname = (row.get("interface") or "").strip()
+            if not vpn or not ifname:
+                continue
+            members_by_vpn.setdefault(vpn, {})[ifname] = {}
+        for vpn in sorted(members_by_vpn, key=lambda v: (len(v), v)):
+            # Transport VPN 0 is the seeded DEFAULT_INSTANCE.
+            if vpn == "0":
+                continue
+            instances[vpn] = {
+                "name": vpn,
+                "type": "L3VRF",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": members_by_vpn[vpn]},
+            }
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

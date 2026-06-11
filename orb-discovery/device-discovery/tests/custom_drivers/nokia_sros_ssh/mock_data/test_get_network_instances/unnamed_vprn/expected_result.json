@@ -1,0 +1,34 @@
+{
+  "300": {
+    "interfaces": {
+      "interface": {
+        "300/unnamed-if1": {}
+      }
+    },
+    "name": "300",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "Base": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "Base",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "CUST GREEN WAN": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "CUST GREEN WAN",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

@@ -358,6 +358,23 @@ def _panos_ssh_get_modules_impl(driver) -> dict | None:
     })
 
 
+# FORWARDING values on "show interface logical" rows: "vr:<name>" (classic
+# virtual routers), "logical-router:<name>" (Advanced Routing, PAN-OS
+# 10.2+); L2 / HA / unassigned interfaces report "N/A" or other tokens.
+# Per-driver-bespoke duplicate of the XML driver's helper.
+_PANOS_SSH_FWD_PREFIXES = ("vr:", "logical-router:")
+
+
+def _panos_ssh_vr_from_fwd(fwd: object) -> str:
+    """Return the virtual-router name from a FORWARDING cell, or "" when non-L3."""
+    if not isinstance(fwd, str):
+        return ""
+    for prefix in _PANOS_SSH_FWD_PREFIXES:
+        if fwd.startswith(prefix):
+            return fwd[len(prefix):].strip()
+    return ""
+
+
 class PANOSSHDriver(_napalm_base.NetworkDriver):
     """PAN-OS NAPALM driver using SSH CLI + ntc-templates (read-only subset for device-discovery)."""
 
@@ -600,3 +617,57 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
     def get_modules(self) -> dict | None:
         """Return per-chassis module / module bay inventory or None."""
         return _panos_ssh_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (PAN-OS virtual routers), NAPALM OC shape.
+
+        Derived from the FORWARDING column of the same ``show interface
+        logical`` rows the interface getters parse (``vr:<name>``, or
+        ``logical-router:<name>`` with Advanced Routing on 10.2+), so
+        member names join exactly. VSYS are NOT VRFs and are never
+        mapped. The factory virtual router named ``default`` is treated
+        as the global routing table (DEFAULT_INSTANCE, empty
+        membership). No route distinguisher on PAN-OS virtual routers.
+        Limitation: enumeration is membership-derived, so a virtual
+        router with no interfaces assigned does not appear.
+        """
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        logical_out = self.device.send_command("show interface logical")
+        rows: list[dict] = []
+        if logical_out and logical_out.strip():
+            try:
+                rows = parse_output(
+                    platform="paloalto_panos",
+                    command="show interface logical",
+                    data=logical_out,
+                )
+            except Exception:
+                logger.warning(
+                    "PAN-OS show interface logical parse failed", exc_info=True
+                )
+        for row in rows:
+            ifname = (row.get("interface") or "").strip()
+            vr_name = _panos_ssh_vr_from_fwd(row.get("forwarding"))
+            # The factory "default" VR is the seeded DEFAULT_INSTANCE.
+            if not ifname or not vr_name or vr_name == "default":
+                continue
+            instances.setdefault(
+                vr_name,
+                {
+                    "name": vr_name,
+                    "type": "L3VRF",
+                    "state": {"route_distinguisher": ""},
+                    "interfaces": {"interface": {}},
+                },
+            )["interfaces"]["interface"][ifname] = {}
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

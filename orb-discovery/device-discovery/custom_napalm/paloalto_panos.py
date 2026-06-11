@@ -404,6 +404,22 @@ def _panos_get_modules_impl(driver) -> dict | None:
     })
 
 
+# "fwd" values on PAN-OS interface entries: "vr:<name>" (classic virtual
+# routers), "logical-router:<name>" (Advanced Routing, PAN-OS 10.2+); L2 /
+# HA / unassigned interfaces report "N/A" or other non-routing tokens.
+_PANOS_FWD_PREFIXES = ("vr:", "logical-router:")
+
+
+def _panos_vr_from_fwd(fwd: object) -> str:
+    """Return the virtual-router name from a fwd field, or "" when non-L3."""
+    if not isinstance(fwd, str):
+        return ""
+    for prefix in _PANOS_FWD_PREFIXES:
+        if fwd.startswith(prefix):
+            return fwd[len(prefix):].strip()
+    return ""
+
+
 class PANOSDriver(_napalm_base.NetworkDriver):
     """PAN-OS NAPALM driver (read-only subset for device-discovery)."""
 
@@ -672,3 +688,53 @@ class PANOSDriver(_napalm_base.NetworkDriver):
     def get_modules(self) -> dict | None:
         """Return per-chassis module / module bay inventory or None."""
         return _panos_get_modules_impl(self)
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """
+        Return network instances (PAN-OS virtual routers), NAPALM OC shape.
+
+        Derived from the ``fwd`` field of the same ``show interface all``
+        op-command the interface getters consume — L3 interfaces report
+        ``vr:<name>`` (or ``logical-router:<name>`` with Advanced Routing
+        on PAN-OS 10.2+), so member names join exactly. VSYS are NOT
+        VRFs and are never mapped. The factory virtual router named
+        ``default`` is treated as the global routing table
+        (DEFAULT_INSTANCE, empty membership). PAN-OS virtual routers
+        carry no route distinguisher. Limitation: enumeration is
+        membership-derived, so a virtual router with no interfaces
+        assigned does not appear.
+        """
+        instances: dict = {
+            "default": {
+                "name": "default",
+                "type": "DEFAULT_INSTANCE",
+                "state": {"route_distinguisher": ""},
+                "interfaces": {"interface": {}},
+            },
+        }
+        self.device.op(cmd="<show><interface>all</interface></show>")
+        parsed = xmltodict.parse(self.device.xml_root())
+        result = (parsed.get("response") or {}).get("result") or {}
+        entries = (result.get("ifnet") or {}).get("entry") or []
+        if isinstance(entries, dict):
+            entries = [entries]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            ifname = (entry.get("name") or "").strip()
+            vr_name = _panos_vr_from_fwd(entry.get("fwd"))
+            # The factory "default" VR is the seeded DEFAULT_INSTANCE.
+            if not ifname or not vr_name or vr_name == "default":
+                continue
+            instances.setdefault(
+                vr_name,
+                {
+                    "name": vr_name,
+                    "type": "L3VRF",
+                    "state": {"route_distinguisher": ""},
+                    "interfaces": {"interface": {}},
+                },
+            )["interfaces"]["interface"][ifname] = {}
+        if name:
+            return {name: instances[name]} if name in instances else {}
+        return instances

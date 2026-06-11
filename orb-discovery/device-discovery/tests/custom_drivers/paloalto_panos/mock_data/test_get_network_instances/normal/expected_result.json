@@ -1,0 +1,37 @@
+{
+  "adv-lr": {
+    "interfaces": {
+      "interface": {
+        "ethernet1/4": {}
+      }
+    },
+    "name": "adv-lr",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "cust-vr": {
+    "interfaces": {
+      "interface": {
+        "ethernet1/2": {},
+        "ethernet1/2.100": {}
+      }
+    },
+    "name": "cust-vr",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  }
+}
