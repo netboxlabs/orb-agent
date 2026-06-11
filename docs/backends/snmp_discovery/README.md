@@ -65,6 +65,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | create_unknown_vlans | bool | no | Auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's `dot1qVlanStaticTable`. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `true`. Set `false` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). |
 | discover_modules | string | no | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards and supervisors; PSU / fan recognised by the PID classifier but never emitted), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Detection is vendor-neutral via `ENTITY-MIB::entPhysicalTable` — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 | discover_vrfs | bool | no | When `true`, discovers VRFs from the device's VRF MIB tables and attaches them to the IP addresses of each VRF's member interfaces (matched by `ifIndex`). A discovered VRF takes precedence over the `vrf` / `vrf_ipv4` / `vrf_ipv6` defaults for those interfaces; other addresses keep the configured defaults. Defaults to `false` — the VRF tables are not even walked when off. See [VRFs](#vrfs) for the MIB tiers, route-distinguisher handling, and limitations. |
+| emit_prefixes | bool | no | Derive one `Prefix` entity per unique (network, VRF) from the discovered IP addresses, matching device-discovery's behavior. **Defaults to `true`** — set `false` to opt out. See [Prefixes](#prefixes). |
+| propagate_defaults_to_prefix_scope | bool | no | When `true` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to the Prefix scope site and `defaults.location` to the scope location (location wins, carrying the site). Defaults to `false`. Any explicit `defaults.prefix.scope_*` skips the cascade wholesale. |
 
 #### Defaults Parameters
 | Parameter | Type | Required | Description |
@@ -91,14 +93,26 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
 | ip_address   | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
-| ├─ vrf   | string \| map  | IP address VRF name, or VRF object with route distinguisher |
-| ├──── name | string  | VRF name |
-| ├──── rd | string  | Route distinguisher (e.g. `65000:100`) |
-| ├────description | string  | VRF description |
-| ├──── comments | string  | VRF comments |
-| ├──── tags | list  | VRF tags |
+| ├─ vrf   | string \| map  | IP address VRF name, or a VRF map (see the [vrf map](#vrf-map) below). Used for both address families unless an AF-specific override is set. |
 | ├─ vrf_ipv4   | string \| map  | IPv4-specific VRF override (same shape as `vrf`). When set, IPv4 addresses use this VRF; IPv6 still uses `vrf`. The override replaces `vrf` wholesale for its family — it does not inherit `vrf.name`. |
 | ├─ vrf_ipv6   | string \| map  | IPv6-specific VRF override (same shape as `vrf`). When set, IPv6 addresses use this VRF; IPv4 still uses `vrf`. |
+| prefix   | map  | Prefix-specific defaults applied to derived Prefix entities (see [Prefixes](#prefixes)) |
+| ├─ description | string  | Prefix description |
+| ├─ comments | string  | Prefix comments |
+| ├─ tags | list  | Prefix tags |
+| ├─ role | string  | Prefix role |
+| ├─ tenant | string  | Prefix tenant |
+| ├─ vrf   | string \| map  | Prefix VRF (same `vrf` map shape; independent of `ip_address.vrf`) |
+| ├─ vrf_ipv4   | string \| map  | IPv4-specific prefix VRF override |
+| ├─ vrf_ipv6   | string \| map  | IPv6-specific prefix VRF override |
+| ├─ scope_site | string  | Prefix scope site. Setting any explicit scope skips the `propagate_defaults_to_prefix_scope` cascade wholesale. |
+| ├─ scope_location | string  | Prefix scope location (wins over `scope_site` on the wire, carrying the site for NetBox's per-site location uniqueness) |
+| vrf | map | VRF-specific defaults (used within `ip_address` and `prefix`, incl. the `vrf_ipv4` / `vrf_ipv6` overrides) |
+| ├─ name | string  | VRF name |
+| ├─ rd | string  | Route distinguisher (e.g. `65000:100`) |
+| ├─ description | string  | VRF description |
+| ├─ comments | string  | VRF comments |
+| ├─ tags | list  | VRF tags |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
 | vlan    | map  | VLAN-specific defaults  |
@@ -290,6 +304,16 @@ A tier that exposes VRF names but no membership (split-arc agents) merges member
 **Route distinguishers.** Both the RFC 4382 8-byte binary encoding (type 0/1/2) and the display-string form some agents return are decoded to the canonical `ASN:nn` / `IP:nn` text. Unset or undecodable RDs stay off the wire entirely, so the VRF matches NetBox records whose RD is empty — the same caveat as device-discovery applies: if a VRF with the same name already exists in NetBox **with** an RD while the device reports none, the first cycle creates a separate RD-less VRF record.
 
 **Limitation — VRF-scoped addresses.** Some platforms only expose VRF-scoped IP addresses through SNMPv3 contexts or `community@vrf` conventions; snmp-discovery walks the standard IP-MIB tables in the default context and attaches VRFs to whatever addresses are visible there. Addresses hidden behind per-VRF contexts are not discovered (same as before this feature); per-context walking is a possible follow-up.
+
+
+## Prefixes
+
+Prefix entities are derived from the discovered IP addresses — the network of each address/prefix-length — exactly as device-discovery does. One `Prefix` is emitted per unique (network, VRF) pair per target. **This is on by default** (`emit_prefixes: true`); set `emit_prefixes: false` in the policy options to opt out.
+
+- **VRF**: a prefix whose addresses were attached to a discovered VRF (see [VRFs](#vrfs)) carries that VRF; everything else resolves from `defaults.prefix.vrf` / `vrf_ipv4` / `vrf_ipv6` (independent of the `ip_address` knobs).
+- **Scope**: explicit `defaults.prefix.scope_site` / `scope_location` always win; with `propagate_defaults_to_prefix_scope: true` and no explicit scope, `defaults.site` / `defaults.location` cascade in.
+- **Safety guards**: zero-length networks (agent-quirk `0.0.0.0` masks) and IPv4-mapped IPv6 addresses never derive prefixes.
+- **Data-quality note**: when an agent doesn't implement `ipAddressPrefixTable`, addresses fall back to host length, so their derived prefixes are `/32` / `/128` — the same shape device-discovery emits for loopbacks. Opt out if host prefixes are unwanted in your IPAM tree.
 
 
 ## Modules / ModuleBays
