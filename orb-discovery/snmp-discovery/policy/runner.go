@@ -597,6 +597,35 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		mapping.AttachIfaceModules(entitiesForTarget, ifaceModuleMap, ifIndexByIface)
 	}
 
+	// VRF discovery: translate the walked VRF MIB rows (the columns are
+	// only in the walk set when discover_vrfs is on) and attach the
+	// discovered VRFs to the IP addresses of their member interfaces by
+	// ifIndex — overwriting the vrf / vrf_ipv4 / vrf_ipv6 defaults for
+	// those interfaces, which remain the fallback everywhere else. Runs
+	// after stack translation so both single-device and stack paths are
+	// covered; VRF entities append at the tail like VLANs (IP-attached
+	// refs reconcile against them by name+rd).
+	vrfByAddress := map[string]*diode.VRF{}
+	if r.config.Options.VrfDiscoveryEnabled() {
+		vrfEntities, vrfByIfIndex := mapping.TranslateVrfs(oids, targetDefaults, r.logger)
+		if len(vrfEntities) > 0 {
+			vrfByAddress = mapping.AttachVrfs(entitiesForTarget, vrfByIfIndex, ifIndexByIface, r.logger)
+			entitiesForTarget = append(entitiesForTarget, vrfEntities...)
+		}
+	}
+
+	// Prefix derivation (default on, opt-out via emit_prefixes: false):
+	// one Prefix per unique (network, VRF) derived from the discovered IP
+	// addresses, matching device-discovery's behavior. Runs after VRF
+	// attachment so prefixes of VRF-member addresses carry the discovered
+	// VRF; everything else follows defaults.prefix.
+	if r.config.Options.PrefixEmissionEnabled() {
+		prefixEntities := mapping.DerivePrefixes(
+			entitiesForTarget, vrfByAddress, targetDefaults, &r.config.Options, r.logger,
+		)
+		entitiesForTarget = append(entitiesForTarget, prefixEntities...)
+	}
+
 	entities = append(entities, entitiesForTarget...)
 
 	// Update discovered hosts gauge

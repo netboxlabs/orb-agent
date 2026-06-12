@@ -230,3 +230,43 @@ entries:
       - oid: ".1.3.6.1.4.1.9.9.68.1.5.1.1"
         entity: "interface_vlan"
         field: "vmVoiceVlanId"
+
+  # --- VRF discovery (gated by options.discover_vrfs) ------------------- #
+  # Three MIB tiers, resolved in order by mapping.TranslateVrfs: the
+  # standards-based MPLS-L3VPN-STD-MIB, the pre-standard MPLS-VPN-MIB
+  # (experimental arc, common on older Cisco IOS), and CISCO-VRF-MIB for
+  # VRF-lite platforms without the MPLS feature MIBs. The "vrf" entity is
+  # a pseudo-type: rows are consumed wholesale by the runner-level VRF
+  # translation pass, not by per-row mappers.
+  - oid: ".1.3.6.1.2.1.10.166.11.1.2.2.1.4"
+    entity: "vrf"
+    field: "mplsL3VpnVrfRD"
+    identifier_size: 1
+    description: "MPLS-L3VPN-STD-MIB mplsL3VpnVrfRD (VRF names + route distinguishers)"
+  - oid: ".1.3.6.1.2.1.10.166.11.1.2.1.1.2"
+    entity: "vrf"
+    field: "mplsL3VpnIfVpnClassification"
+    identifier_size: 1
+    description: "MPLS-L3VPN-STD-MIB mplsL3VpnIfConfTable (VRF interface membership)"
+  - oid: ".1.3.6.1.3.118.1.2.2.1.3"
+    entity: "vrf"
+    field: "mplsVpnVrfRouteDistinguisher"
+    identifier_size: 1
+    description: "MPLS-VPN-MIB mplsVpnVrfRouteDistinguisher (legacy VRF names + RDs)"
+  - oid: ".1.3.6.1.3.118.1.2.1.1.2"
+    entity: "vrf"
+    field: "mplsVpnIfVpnClassification"
+    identifier_size: 1
+    description: "MPLS-VPN-MIB mplsVpnIfConfTable (legacy VRF interface membership)"
+  - oid: ".1.3.6.1.4.1.9.9.711.1.1.1.1.2"
+    entity: "vrf"
+    field: "cvVrfName"
+    identifier_size: 1
+    vendor: "cisco"
+    description: "CISCO-VRF-MIB cvVrfName (VRF-lite names, no RD)"
+  - oid: ".1.3.6.1.4.1.9.9.711.1.2.1.1.2"
+    entity: "vrf"
+    field: "cvVrfInterfaceType"
+    identifier_size: 1
+    vendor: "cisco"
+    description: "CISCO-VRF-MIB cvVrfInterfaceTable (VRF-lite interface membership)"

@@ -298,6 +298,12 @@ const (
 	// TranslateModulesWithAlias as a post-pass. Map() on its associated
 	// mapper is a no-op; data flows via the raw oids map.
 	ChassisModuleEntityType EntityType = "chassis_module"
+	// VrfEntityType is a pseudo-entity that flags VRF MIB rows
+	// (MPLS-L3VPN-STD-MIB / MPLS-VPN-MIB / CISCO-VRF-MIB) for
+	// consumption by TranslateVrfs as a runner-level pass. Map() on its
+	// associated mapper is a no-op; data flows via the raw oids map.
+	// The columns are only walked when options.discover_vrfs is true.
+	VrfEntityType EntityType = "vrf"
 )
 
 // ObjectIDMapper is a struct that maps ObjectIDs to entities
@@ -437,6 +443,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		"interface_vlan":                   vlanMapper,
 		string(ChassisInventoryEntityType): &ChassisInventoryMapper{logger: logger},
 		string(ChassisModuleEntityType):    &ChassisModuleMapper{logger: logger},
+		string(VrfEntityType):              &VrfMapper{logger: logger},
 	}
 	postPassMappers := []postPassMapper{vlanMapper}
 	// Validate index_kind on every entry (top-level and nested). A typo
@@ -473,7 +480,8 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		// starts with the same numeric prefix.
 		if Entry.Entity == string(VLANEntityType) ||
 			Entry.Entity == string(InterfaceVLANEntityType) ||
-			Entry.Entity == string(ChassisInventoryEntityType) {
+			Entry.Entity == string(ChassisInventoryEntityType) ||
+			Entry.Entity == string(VrfEntityType) {
 			postPassPrefixes = append(postPassPrefixes, m.OID+".")
 		}
 	}
@@ -1508,6 +1516,10 @@ func (m *Config) VendorObjectIDs(vendor string) map[string]int {
 // Skip them from the walk set in mode=off; include them in linecards / full.
 func (m *Config) objectIDsForVendor(vendor string, generic bool) map[string]int {
 	skipChassisModule := m.options.ModuleDiscoveryMode() == config.DiscoverModulesOff
+	// VRF MIB columns are consumed exclusively by the runner-level
+	// TranslateVrfs pass; walking them with discover_vrfs off would be
+	// wasted SNMP work, so they are excluded from the walk set entirely.
+	skipVrf := !m.options.VrfDiscoveryEnabled()
 	out := make(map[string]int)
 	for _, entry := range m.mapping {
 		if generic {
@@ -1524,6 +1536,9 @@ func (m *Config) objectIDsForVendor(vendor string, generic bool) map[string]int 
 				if skipChassisModule && childEntry.Entity == string(ChassisModuleEntityType) {
 					continue
 				}
+				if skipVrf && childEntry.Entity == string(VrfEntityType) {
+					continue
+				}
 				if childEntry.IdentifierSize == 0 {
 					out[childEntry.OID] = 1
 				} else {
@@ -1532,6 +1547,9 @@ func (m *Config) objectIDsForVendor(vendor string, generic bool) map[string]int 
 			}
 		} else {
 			if skipChassisModule && entry.Entity == string(ChassisModuleEntityType) {
+				continue
+			}
+			if skipVrf && entry.Entity == string(VrfEntityType) {
 				continue
 			}
 			if entry.IdentifierSize == 0 {
