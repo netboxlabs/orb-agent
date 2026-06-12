@@ -1,6 +1,6 @@
 # Device Discovery — Supported Platforms
 
-This page lists the vendors, operating systems, and NAPALM drivers supported by the [device discovery](./README.md) backend.
+This page lists the vendors, operating systems, and NAPALM drivers supported by the [device discovery](./README.md) backend — currently **48 drivers (7 standard + 41 custom) covering 17+ network vendors**, all available out of the box.
 
 The backend connects to network devices over SSH / NETCONF / vendor APIs via [NAPALM](https://napalm.readthedocs.io/). Support is driver-bound: a device is supported only if a corresponding NAPALM driver exists.
 
