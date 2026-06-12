@@ -169,6 +169,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,scope=${{ matrix.platform }},mode=max
           no-cache-filters: python-builder,network-discovery,snmp-discovery,pktvisor,otlpinf,final
+          pull: true
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
