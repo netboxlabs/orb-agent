@@ -17,7 +17,7 @@ RUN --mount=target=. \
 
 FROM alpine:3.23
 
-RUN apk update && apk add --no-cache nmap
+RUN apk update && apk --no-cache upgrade && apk add --no-cache nmap
 
 COPY --from=builder /build/network-discovery /usr/local/bin/network-discovery
 
