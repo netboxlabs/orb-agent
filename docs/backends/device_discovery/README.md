@@ -1,7 +1,14 @@
 # Device Discovery
 The device discovery backend leverages [NAPALM](https://napalm.readthedocs.io/en/latest/index.html) to connect to network devices and collect network information.
 
-For the full list of vendors and NAPALM drivers supported by this backend (standard and custom), see [Device Discovery — Supported Platforms](./supported_platforms.md).
+## Supported Platforms
+
+Device discovery supports **48 NAPALM drivers covering 17+ network vendors** out of the box:
+
+* **7 standard NAPALM drivers** — Arista EOS, Cisco IOS/IOS-XE, IOS-XR, NX-OS, and Juniper Junos. These are tried automatically during driver auto-discovery.
+* **41 custom drivers bundled with the backend** — extending coverage to Palo Alto Networks, Fortinet, Check Point, Huawei, Nokia, HPE Aruba, Extreme Networks, Dell, NVIDIA (Cumulus/Mellanox), MikroTik, Ubiquiti, Ruckus/Brocade, Ciena, Ericsson, and more. No extra installation is needed — select them with `driver:` on a scope entry or opt them into auto-discovery via the `discovery_drivers` option.
+
+For the full driver list with vendor and platform details — including which drivers support VLAN associations, switch stacks / Virtual Chassis, and module discovery — see [Device Discovery — Supported Platforms](./supported_platforms.md).
 
 ## Diode Entities
 The device discovery backend uses [Diode Python SDK](https://github.com/netboxlabs/diode-sdk-python) to ingest the following entities:
