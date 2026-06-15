@@ -20,8 +20,10 @@ keys off **PR titles** — so titles must follow the convention below.
   This fires on changes under `agent/`, `cmd/`, **or** `orb-discovery/` (the
   backends), so a backend-only change still refreshes the develop image
   continuously.
-- A required check (**Validate PR title**) blocks merge into `develop` when the
-  title doesn't match the convention.
+- The **Validate PR title** check runs on every PR targeting `develop`. Once it
+  is marked a required status check in branch protection, it blocks merge when
+  the title doesn't match the convention; until then it reports status without
+  blocking.
 
 ## PR title convention (enforced)
 
