@@ -65,6 +65,7 @@ jobs:
           comment-author: 'github-actions[bot]'
           body-includes: Go test coverage
       - name: Post comment
+        continue-on-error: true  # Fork PRs have read-only tokens and cannot post comments
         if: github.event_name == 'pull_request'
         uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9 # v5.0.0
         with:
