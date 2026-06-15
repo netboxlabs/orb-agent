@@ -62,7 +62,12 @@ jobs:
                   { "type": "fix", "release": "patch" },
                   { "type": "feat", "release": "minor" },
                   { "type": "perf", "release": "patch" },
-                  { "type": "chore", "scope": "deps", "release": "patch" }
+                  { "type": "chore", "scope": "deps", "release": "patch" },
+                  { "scope": "device-discovery", "release": false },
+                  { "scope": "network-discovery", "release": false },
+                  { "scope": "snmp-discovery", "release": false },
+                  { "scope": "gnmi-discovery", "release": false },
+                  { "scope": "worker", "release": false }
                 ]
               }],
               "@semantic-release/release-notes-generator",

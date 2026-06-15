@@ -66,7 +66,12 @@ jobs:
                   { "type": "fix", "release": "patch" },
                   { "type": "feat", "release": "minor" },
                   { "type": "perf", "release": "patch" },
-                  { "type": "chore", "scope": "deps", "release": "patch" }
+                  { "type": "chore", "scope": "deps", "release": "patch" },
+                  { "scope": "device-discovery", "release": false },
+                  { "scope": "network-discovery", "release": false },
+                  { "scope": "snmp-discovery", "release": false },
+                  { "scope": "gnmi-discovery", "release": false },
+                  { "scope": "worker", "release": false }
                 ]
               }],
               "@semantic-release/release-notes-generator",
@@ -103,7 +108,7 @@ jobs:
       - name: Set release version
         id: release-version
         run: |
-          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed 's/v//g')" >> "$GITHUB_OUTPUT"
+          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed 's/^v//')" >> "$GITHUB_OUTPUT"
     outputs:
       new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
       new-release-version: ${{ steps.release-version.outputs.release-version }}
@@ -266,7 +271,12 @@ jobs:
                   { "type": "fix", "release": "patch" },
                   { "type": "feat", "release": "minor" },
                   { "type": "perf", "release": "patch" },
-                  { "type": "chore", "scope": "deps", "release": "patch" }
+                  { "type": "chore", "scope": "deps", "release": "patch" },
+                  { "scope": "device-discovery", "release": false },
+                  { "scope": "network-discovery", "release": false },
+                  { "scope": "snmp-discovery", "release": false },
+                  { "scope": "gnmi-discovery", "release": false },
+                  { "scope": "worker", "release": false }
                 ]
               }],
               "@semantic-release/release-notes-generator",
