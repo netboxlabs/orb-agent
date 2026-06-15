@@ -8,14 +8,18 @@ keys off **PR titles** — so titles must follow the convention below.
 ## How releases work
 
 - PRs are **squash-merged into `develop`**; the PR title becomes the single
-  commit message. `develop` is later promoted to `release`, which triggers the
-  release workflow.
-- The **orb-agent image** is the aggregating artifact: a new agent release
-  includes every change since the last `vX.Y.Z` tag — agent changes **and**
-  backend changes — and the release notes list them grouped by type and scope.
-- Pushing to `develop` rebuilds and publishes `orb-agent:develop`. This fires on
-  changes under `agent/`, `cmd/`, or `orb-discovery/` (the backends), so a
-  backend-only change refreshes the develop image too.
+  commit message. `develop` is later promoted to `release`.
+- **A versioned agent release fires only on agent-scoped changes** (under
+  `agent/` or `cmd/`) or via a manual `workflow_dispatch`. A backend-only change
+  does **not** cut a new agent version — backends release on their own cadence,
+  and a small backend release should not force an agent version bump.
+- When an agent release does fire, it **aggregates everything**: the release
+  notes include every commit since the last `vX.Y.Z` tag — agent changes and any
+  interim backend changes — grouped by type and scope.
+- Pushing to `develop` rebuilds and publishes the `orb-agent:develop` image.
+  This fires on changes under `agent/`, `cmd/`, **or** `orb-discovery/` (the
+  backends), so a backend-only change still refreshes the develop image
+  continuously.
 - A required check (**Validate PR title**) blocks merge into `develop` when the
   title doesn't match the convention.
 

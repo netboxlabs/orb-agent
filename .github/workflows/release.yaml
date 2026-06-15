@@ -4,11 +4,14 @@ on:
   push:
     branches: [ release ]
     paths:
+      # Agent releases fire only on agent-scoped changes (or the manual
+      # workflow_dispatch above). Backend-only changes under orb-discovery/**
+      # deliberately do NOT cut a new agent version — they ship via the
+      # continuously-rebuilt develop image and are folded into the next agent
+      # release notes (which aggregate every commit since the last vX.Y.Z tag).
       - "agent/**"
       - "cmd/**"
-      - "orb-discovery/**"
       - "!agent/docker/**"
-      - "!orb-discovery/**/docker/**"
 
 concurrency:
   group: ${{ github.workflow }}
