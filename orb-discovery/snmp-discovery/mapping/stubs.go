@@ -57,8 +57,10 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 // as required for create. As of this branch:
 //
 //   - AssetTag IS populated (via PolicyConfig.Defaults.AssetTag,
-//     literal or OID reference). The stub MUST carry it so rich and
-//     stub resolve via the same matcher precedence path.
+//     literal or OID reference, or from the chassis row's
+//     entPhysicalAssetID when asset tag discovery is enabled). The stub
+//     MUST carry it so rich and stub resolve via the same matcher
+//     precedence path.
 //
 //   - VcPosition and VirtualChassis ARE populated on non-master
 //     member Devices when emitting a stack, but are intentionally

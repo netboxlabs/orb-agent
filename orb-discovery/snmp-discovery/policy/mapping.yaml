@@ -150,6 +150,9 @@ entries:
       - oid: ".1.3.6.1.2.1.47.1.1.1.1.13"  # entPhysicalModelName
         entity: "chassis_inventory"
         field: "modelName"
+      - oid: ".1.3.6.1.2.1.47.1.1.1.1.15"  # entPhysicalAssetID
+        entity: "chassis_asset"
+        field: "assetID"
 
   # ENTITY-MIB entAliasMappingTable — maps entPhysicalIndex -> ifIndex
   # for stack-member interface routing. Column .2 holds an OID like

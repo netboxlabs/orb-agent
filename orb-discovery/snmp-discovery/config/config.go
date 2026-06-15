@@ -403,6 +403,17 @@ type Options struct {
 	// defaults for those interfaces.
 	DiscoverVrfs *bool `yaml:"discover_vrfs,omitempty"`
 
+	// Tri-state pointer so unset (default = off) is distinguishable
+	// from an explicit false. When true, the ENTITY-MIB
+	// entPhysicalAssetID column is walked with the chassis inventory
+	// and discovered values populate Device.asset_tag — the standalone
+	// chassis row's tag goes on the target device; each virtual-chassis
+	// member gets its own per-row tag. defaults.asset_tag, when
+	// set, takes precedence on the target device. asset_tag is the
+	// Diode plugin's highest-precedence device matcher, so duplicate
+	// tags within one target are suppressed rather than emitted.
+	DiscoverAssetTags *bool `yaml:"discover_asset_tags,omitempty"`
+
 	// Tri-state pointer; unset defaults to TRUE — Prefix entities are
 	// derived from every discovered IP address (network of address/len),
 	// matching device-discovery's behavior. Set false to opt out.
@@ -431,6 +442,12 @@ func (o *Options) PrefixScopeCascadeEnabled() bool {
 // defaulting to false.
 func (o *Options) VrfDiscoveryEnabled() bool {
 	return o != nil && o.DiscoverVrfs != nil && *o.DiscoverVrfs
+}
+
+// AssetTagDiscoveryEnabled returns the effective discover_asset_tags
+// toggle, defaulting to false.
+func (o *Options) AssetTagDiscoveryEnabled() bool {
+	return o != nil && o.DiscoverAssetTags != nil && *o.DiscoverAssetTags
 }
 
 // ModuleDiscoveryMode returns the effective mode, defaulting to "off".

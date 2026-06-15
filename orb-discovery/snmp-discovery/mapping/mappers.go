@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
@@ -1009,12 +1008,6 @@ func (m *InterfaceMapper) FormatMACAddress(input string) (string, error) {
 	return output, nil
 }
 
-// assetTagMaxLen mirrors NetBox's dcim.Device.asset_tag column
-// (CharField(max_length=50)). Resolved AssetTag values that exceed
-// this length are warn-skipped rather than truncated so we don't
-// introduce silent uniqueness collisions.
-const assetTagMaxLen = 50
-
 // DeviceMapper is a struct that maps devices to entities
 type DeviceMapper struct {
 	manufacturers data.ManufacturerRetriever
@@ -1085,16 +1078,9 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 
 	if defaults.AssetTag != "" {
 		if resolved, ok := data.ResolveDefault(defaults.AssetTag, walked); ok {
-			// NetBox CharField(max_length=N) counts characters, not bytes;
-			// use rune count so non-ASCII tags at exactly 50 chars are
-			// accepted instead of being skipped on byte count alone.
-			runeCount := utf8.RuneCountInString(resolved)
-			if runeCount > assetTagMaxLen {
-				m.logger.Warn(
-					"defaults.asset_tag resolved value exceeds NetBox max length; skipping",
-					"max_length", assetTagMaxLen,
-					"value_length", runeCount,
-				)
+			if reason, ok := vetAssetTag(resolved); !ok {
+				m.logger.Warn("defaults.asset_tag resolved value skipped: "+reason,
+					"default", defaults.AssetTag)
 			} else {
 				entity.AssetTag = &resolved
 			}

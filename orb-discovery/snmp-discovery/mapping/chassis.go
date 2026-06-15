@@ -42,6 +42,7 @@ func (m *ChassisInventoryMapper) Map(
 // as a top-level chassis (class=3, containedIn=0). The ID is the
 // derived logical member id (see deriveMemberID); EntPhysicalIndex is
 // the raw row index used for entAliasMappingTable chain walks.
+// AssetTag is the trimmed entPhysicalAssetID value ("" when unset or not walked).
 type ChassisMember struct {
 	ID               int
 	EntPhysicalIndex string
@@ -49,6 +50,7 @@ type ChassisMember struct {
 	Model            string
 	EntName          string
 	ParentRelPos     int
+	AssetTag         string
 }
 
 // ChassisInventory is the deduped, validated, member-id-sorted set of
@@ -71,6 +73,7 @@ const (
 	oidEntPhysicalName        = ".1.3.6.1.2.1.47.1.1.1.1.7."
 	oidEntPhysicalSerialNum   = ".1.3.6.1.2.1.47.1.1.1.1.11."
 	oidEntPhysicalModelName   = ".1.3.6.1.2.1.47.1.1.1.1.13."
+	oidEntPhysicalAssetID     = ".1.3.6.1.2.1.47.1.1.1.1.15."
 
 	entPhysicalClassChassis = "3"
 	entPhysicalClassStack   = "11"
@@ -139,6 +142,7 @@ func extractInventory(oids ObjectIDValueMap, logger *slog.Logger) ChassisInvento
 			Model:            trimSNMPString(oids[oidEntPhysicalModelName+idx].Value),
 			EntName:          trimSNMPString(oids[oidEntPhysicalName+idx].Value),
 			ParentRelPos:     parentRel,
+			AssetTag:         trimSNMPString(oids[oidEntPhysicalAssetID+idx].Value),
 		})
 	}
 
@@ -272,9 +276,12 @@ func buildMasterRef(master *diode.Device) *diode.Device {
 //     "Switch 2" is intentionally not used: it would produce poor
 //     NetBox names and collide across stacks in the same site).
 //   - Serial = per-member entPhysicalSerialNum.
-//   - AssetTag = nil (CLEARED — Diode's highest-precedence matcher
-//     for dcim.device is unique on asset_tag; defaults.device.asset_tag
-//     applied to N members would collapse them onto one NetBox row).
+//   - AssetTag = nil here; the caller sets a per-row entPhysicalAssetID
+//     value afterwards when asset tag discovery produced one for this
+//     member. defaults.asset_tag is never copied to members —
+//     Diode's highest-precedence matcher for dcim.device is unique on
+//     asset_tag, so one operator-supplied tag applied to N members
+//     would collapse them onto one NetBox row.
 //   - VcPosition = member.ID; VirtualChassis = {Name: vcName, Master: masterRef}.
 //   - DeviceType from member.Model when populated, else inherit master's.
 //   - Site / Tenant / Role / Platform / Location inherited from master.
@@ -319,12 +326,6 @@ func sortByID(members []ChassisMember) []ChassisMember {
 	return members
 }
 
-// strPtrCopy returns a pointer to a copy of s.
-func strPtrCopy(s string) *string {
-	c := s
-	return &c
-}
-
 // strDeref dereferences p or returns "" when nil.
 func strDeref(p *string) string {
 	if p == nil {
@@ -366,6 +367,79 @@ func deriveMemberID(m ChassisMember, ordinalFallback int) int {
 	return ordinalFallback
 }
 
+// resolveAssetTags maps member ID -> the entPhysicalAssetID value that
+// is safe to emit for that chassis row. Returns nil when every member
+// has an empty tag (fast-exit, no allocation). Filter order per row:
+//
+//  1. empty — silent skip;
+//  2. vetAssetTag — rejects invalid UTF-8, control bytes, well-known
+//     placeholders, and values exceeding assetTagMaxLen (warn-logged);
+//  3. masterTag collision — members[0] (lowest ID, sorted ascending)
+//     carrying the same tag as the operator-supplied defaults agrees
+//     with the default and is dropped at Debug level; any other member
+//     sharing masterTag is a genuine collision and is warn-logged;
+//  4. duplicate across chassis rows — two or more rows sharing the same
+//     tag after the earlier filters would create a NetBox uniqueness
+//     violation; both are warn-logged and dropped.
+//
+// Dropping is required, not cosmetic: asset_tag is unique in NetBox
+// and is the Diode plugin's highest-precedence device matcher, so a
+// duplicate would collapse two devices onto one NetBox row.
+// Callers pass inv.Members which is ID-sorted ascending; members[0]
+// is always the master row.
+func resolveAssetTags(members []ChassisMember, masterTag string, logger *slog.Logger) map[int]string {
+	// Early exit: skip allocation when nothing was walked.
+	hasTag := false
+	for _, m := range members {
+		if m.AssetTag != "" {
+			hasTag = true
+			break
+		}
+	}
+	if !hasTag {
+		return nil
+	}
+
+	counts := make(map[string]int, len(members))
+	for _, m := range members {
+		if m.AssetTag != "" {
+			counts[m.AssetTag]++
+		}
+	}
+
+	out := make(map[int]string, len(members))
+	for i, m := range members {
+		tag := m.AssetTag
+		if tag == "" {
+			continue
+		}
+		if reason, ok := vetAssetTag(tag); !ok {
+			logger.Warn("asset tag skipped: "+reason,
+				"member_id", m.ID, "entPhysicalIndex", m.EntPhysicalIndex)
+			continue
+		}
+		if masterTag != "" && tag == masterTag {
+			if i == 0 {
+				// The device's own row agreeing with the operator's
+				// configured default is healthy, not a collision.
+				logger.Debug("asset tag agrees with defaults asset_tag",
+					"member_id", m.ID)
+			} else {
+				logger.Warn("asset tag skipped: collides with defaults asset_tag",
+					"asset_tag", tag, "member_id", m.ID)
+			}
+			continue
+		}
+		if counts[tag] > 1 {
+			logger.Warn("asset tag skipped: duplicate across chassis rows",
+				"asset_tag", tag, "member_id", m.ID)
+			continue
+		}
+		out[m.ID] = tag
+	}
+	return out
+}
+
 // TranslateAsStack inspects the raw oids map for ENTITY-MIB chassis
 // inventory. Three outcomes:
 //
@@ -383,27 +457,62 @@ func deriveMemberID(m ChassisMember, ordinalFallback int) int {
 // case alias-table routing is skipped and ifName parsing drives all
 // routing decisions.
 //
+// claimAssetTag, when non-nil, is consulted once per tag at
+// application time; returning false suppresses the tag (used by the
+// runner to prevent the same wire tag appearing on devices from
+// different targets of one policy — NetBox asset_tag is unique and
+// the highest-precedence Diode matcher, so cross-target duplicates
+// would merge two devices onto one record). nil means always allow.
+//
 // Must be called from the runner AFTER mapper.MapObjectIDsToEntity
 // returns and BEFORE annotate*/Ingest. See runner.go.
 func TranslateAsStack(
 	entities []diode.Entity,
 	oids ObjectIDValueMap,
 	ifIndexByIface map[*diode.Interface]int,
+	claimAssetTag func(tag string) bool,
 	logger *slog.Logger,
 ) []diode.Entity {
 	master := CurrentDeviceFrom(entities)
 	if master == nil {
 		return entities
 	}
+
+	// Register the operator-supplied defaults tag (if any) with the
+	// claimer before any discovered-tag processing — including for
+	// devices with no chassis rows at all. A defaults-owned value must
+	// not be claimable as a DISCOVERED tag by another target of this
+	// policy: cloned EEPROM data reporting the same string would emit
+	// and merge onto this device's NetBox record via the asset_tag
+	// matcher. The result is deliberately ignored — defaults always
+	// stick to this device; the claimer warns on conflicting ownership.
+	if dt := strDeref(master.AssetTag); dt != "" && claimAssetTag != nil {
+		claimAssetTag(dt)
+	}
+
 	inv := extractInventory(oids, logger)
 	if len(inv.Members) == 0 {
 		return entities
+	}
+
+	// Asset tags from entPhysicalAssetID (column walked only when
+	// discover_asset_tags is on — absent data makes this a no-op).
+	// strDeref(master.AssetTag) carries the operator-supplied defaults
+	// value into the collision check.
+	assetTags := resolveAssetTags(inv.Members, strDeref(master.AssetTag), logger)
+
+	// Nil-safe wrapper: claimAssetTag == nil means always allow.
+	claim := func(tag string) bool {
+		return claimAssetTag == nil || claimAssetTag(tag)
 	}
 
 	// Standalone (1 chassis row): set Serial, return unchanged shape.
 	if !inv.IsStack() {
 		s := inv.Members[0].Serial
 		master.Serial = &s
+		if tag, ok := assetTags[inv.Members[0].ID]; ok && master.AssetTag == nil && claim(tag) {
+			master.AssetTag = StringPtr(tag)
+		}
 		return entities
 	}
 
@@ -421,9 +530,14 @@ func TranslateAsStack(
 			mfg = master.DeviceType.Manufacturer
 		}
 		master.DeviceType = &diode.DeviceType{
-			Model:        strPtrCopy(lowest.Model),
+			Model:        StringPtr(lowest.Model),
 			Manufacturer: mfg,
 		}
+	}
+
+	// Must precede buildMasterRef so the matcher stub carries the same asset_tag as the rich master.
+	if tag, ok := assetTags[lowest.ID]; ok && master.AssetTag == nil && claim(tag) {
+		master.AssetTag = StringPtr(tag)
 	}
 
 	vcName := ""
@@ -442,6 +556,9 @@ func TranslateAsStack(
 	memberDevices := make([]*diode.Device, 0, len(inv.Members)-1)
 	for _, m := range inv.Members[1:] {
 		dev := buildMemberDevice(master, m, masterRef, vcName)
+		if tag, ok := assetTags[m.ID]; ok && claim(tag) {
+			dev.AssetTag = StringPtr(tag)
+		}
 		memberByID[m.ID] = dev
 		memberDevices = append(memberDevices, dev)
 	}

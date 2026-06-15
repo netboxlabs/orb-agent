@@ -176,3 +176,33 @@ func TestDeviceMapper_applyDefaults_AssetTagFiftyOneRunesNonASCIISkips(t *testin
 	require.NotNil(t, entity.AssetTag)
 	assert.Equal(t, "ORIGINAL", *entity.AssetTag)
 }
+
+// TestDeviceMapper_applyDefaults_AssetTagPlaceholderViaOIDSkips guards the
+// Fix 1 finding: a defaults.asset_tag that is an OID reference which resolves
+// to a well-known placeholder ("UNKNOWN", "N/A", etc.) must be rejected just
+// like a directly-configured placeholder. Before the fix, the resolved value
+// bypassed vetAssetTag and was ingested into NetBox as-is, poisoning the
+// highest-precedence device matcher.
+func TestDeviceMapper_applyDefaults_AssetTagPlaceholderViaOIDSkips(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	defaults := &config.Defaults{AssetTag: ".1.3.6.1.2.1.1.4.0"}
+	walked := map[string]string{".1.3.6.1.2.1.1.4.0": "UNKNOWN"}
+	m.applyDefaults(entity, defaults, walked)
+	assert.Nil(t, entity.AssetTag,
+		"OID reference resolving to a placeholder must be rejected")
+}
+
+// TestDeviceMapper_applyDefaults_AssetTagGarbageViaOIDSkips guards the Fix 1
+// finding: a defaults.asset_tag OID reference that resolves to a value
+// containing embedded NUL or control bytes must be rejected; those bytes make
+// the asset_tag unsafe as a NetBox unique identifier.
+func TestDeviceMapper_applyDefaults_AssetTagGarbageViaOIDSkips(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	defaults := &config.Defaults{AssetTag: ".1.3.6.1.2.1.1.4.0"}
+	walked := map[string]string{".1.3.6.1.2.1.1.4.0": "TAG\x00\x01"}
+	m.applyDefaults(entity, defaults, walked)
+	assert.Nil(t, entity.AssetTag,
+		"OID reference resolving to a value with control bytes must be rejected")
+}
