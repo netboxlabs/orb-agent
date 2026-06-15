@@ -74,14 +74,16 @@ Other scopes:
 | `chore(deps)` | patch |
 | everything else (`docs`, `ci`, `test`, `refactor`, `build`, other `chore`) | none |
 
-> **Agent version vs. backend scopes.** The mapping above is the per-component
-> rule. For the **agent** release specifically, backend-scoped commits
+> **Agent version vs. non-agent scopes.** The mapping above is the per-component
+> rule. For the **agent** release specifically, both the backend scopes
 > (`device-discovery`, `network-discovery`, `snmp-discovery`, `gnmi-discovery`,
-> `worker`) are set to `release: false` — they still appear in the aggregated
-> agent release notes but do **not** bump the agent version. The one exception
-> is a backend **breaking change** (`BREAKING CHANGE:` footer), which
-> `semantic-release` always treats as major; such a change will bump the agent
-> to a major as well.
+> `worker`) and the no-release scopes (`repo`, `ci`, `docs`, `deps-dev`) are set
+> to `release: false`, so even a releasing *type* on those scopes (e.g.
+> `feat(repo)`, `fix(ci)`) does **not** bump the agent version. Backend commits
+> still appear in the aggregated agent release notes. The one exception is a
+> backend **breaking change** (`BREAKING CHANGE:` footer), which
+> `semantic-release` always treats as major; such a change bumps the agent to a
+> major as well.
 
 ### Keep PRs scoped
 

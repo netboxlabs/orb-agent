@@ -67,7 +67,11 @@ jobs:
                   { "scope": "network-discovery", "release": false },
                   { "scope": "snmp-discovery", "release": false },
                   { "scope": "gnmi-discovery", "release": false },
-                  { "scope": "worker", "release": false }
+                  { "scope": "worker", "release": false },
+                  { "scope": "repo", "release": false },
+                  { "scope": "ci", "release": false },
+                  { "scope": "docs", "release": false },
+                  { "scope": "deps-dev", "release": false }
                 ]
               }],
               "@semantic-release/release-notes-generator",
