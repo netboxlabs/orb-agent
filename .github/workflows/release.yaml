@@ -6,7 +6,9 @@ on:
     paths:
       - "agent/**"
       - "cmd/**"
+      - "orb-discovery/**"
       - "!agent/docker/**"
+      - "!orb-discovery/**/docker/**"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -28,66 +30,62 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "lts/*"
       - name: Write package.json
-        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
-        with:
-          path: ./package.json
-          write-mode: overwrite
-          contents: |
-            {
-              "name": "${{ env.APP_NAME }}",
-              "version": "1.0.0",
-              "devDependencies": {
-                "semantic-release-export-data": "^1.0.1",
-                "semantic-release": "25.0.0-beta.6",
-                "@semantic-release/changelog": "^6.0.3"
-              }
+        run: |
+          cat > ./package.json <<'EOF'
+          {
+            "name": "${{ env.APP_NAME }}",
+            "version": "1.0.0",
+            "devDependencies": {
+              "semantic-release-export-data": "^1.0.1",
+              "semantic-release": "25.0.0-beta.6",
+              "@semantic-release/changelog": "^6.0.3"
             }
+          }
+          EOF
       - name: Write .releaserc.json
-        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
-        with:
-          path: ./.releaserc.json
-          write-mode: overwrite
-          contents: |
-            {
-              "branches": "release",
-              "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
-              "debug": "true",
-              "tagFormat": "v${version}",
-              "plugins": [
-                ["semantic-release-export-data"],
-                ["@semantic-release/commit-analyzer", {
-                  "releaseRules": [
-                    { "message": "*", "release": "patch"},
-                    { "message": "fix*", "release": "patch" },
-                    { "message": "feat*", "release": "minor" },
-                    { "message": "major*",  "release": "major" }
-                  ]
-                }],
-                "@semantic-release/release-notes-generator",
-                [
-                  "@semantic-release/changelog",
-                  {
-                    "changelogFile": "CHANGELOG.md",
-                    "changelogTitle": "# Semantic Versioning Changelog"
-                  }
-                ],
-                [
-                  "@semantic-release/github",
-                  {
-                    "assets": [
-                      {
-                        "path": "release/**"
-                      }
-                    ]
-                  }
+        run: |
+          cat > ./.releaserc.json <<'EOF'
+          {
+            "branches": "release",
+            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
+            "debug": "true",
+            "tagFormat": "v${version}",
+            "plugins": [
+              ["semantic-release-export-data"],
+              ["@semantic-release/commit-analyzer", {
+                "releaseRules": [
+                  { "message": "*", "release": "patch"},
+                  { "message": "fix*", "release": "patch" },
+                  { "message": "feat*", "release": "minor" },
+                  { "message": "major*",  "release": "major" }
                 ]
+              }],
+              "@semantic-release/release-notes-generator",
+              [
+                "@semantic-release/changelog",
+                {
+                  "changelogFile": "CHANGELOG.md",
+                  "changelogTitle": "# Semantic Versioning Changelog"
+                }
+              ],
+              [
+                "@semantic-release/github",
+                {
+                  "assets": [
+                    {
+                      "path": "release/**"
+                    }
+                  ]
+                }
               ]
-            }
+            ]
+          }
+          EOF
       - name: setup semantic-release
         run: npm install --legacy-peer-deps
       - name: release dry-run
@@ -97,11 +95,11 @@ jobs:
         id: get-next-version
       - name: Set short sha output
         id: short-sha
-        run: echo "::set-output name=short-sha::${GITHUB_SHA::7}"
+        run: echo "short-sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Set release version
         id: release-version
         run: |
-          echo "::set-output name=release-version::`echo ${{ steps.get-next-version.outputs.new-release-version }} | sed 's/v//g'`"
+          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed 's/v//g')" >> "$GITHUB_OUTPUT"
     outputs:
       new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
       new-release-version: ${{ steps.release-version.outputs.release-version }}
@@ -114,7 +112,7 @@ jobs:
     needs: get-next-version
     if: needs.get-next-version.outputs.new-release-published == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
 
   build:
@@ -140,13 +138,13 @@ jobs:
             runner: blacksmith-2vcpu-ubuntu-2404-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Login to Docker Hub
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 #v3.4.0
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -161,7 +159,7 @@ jobs:
 
       - name: Build image and push by digest
         id: build
-        uses: docker/build-push-action@1dc73863535b631f98b2378be8619f83b136f4a0 # v6.17.0
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           file: agent/docker/Dockerfile
@@ -181,7 +179,7 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.runner }}
           path: /tmp/digests/*
@@ -202,17 +200,17 @@ jobs:
       IMAGE_NAME: netboxlabs/orb-agent
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: /tmp/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Login to Docker Hub
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 #v3.4.0
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -231,66 +229,62 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "lts/*"
       - name: Write package.json
-        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
-        with:
-          path: ./package.json
-          write-mode: overwrite
-          contents: |
-            {
-              "name": "${{ env.APP_NAME }}",
-              "version": "1.0.0",
-              "devDependencies": {
-                "semantic-release-export-data": "^1.0.1",
-                "semantic-release": "25.0.0-beta.6",
-                "@semantic-release/changelog": "^6.0.3"
-              }
+        run: |
+          cat > ./package.json <<'EOF'
+          {
+            "name": "${{ env.APP_NAME }}",
+            "version": "1.0.0",
+            "devDependencies": {
+              "semantic-release-export-data": "^1.0.1",
+              "semantic-release": "25.0.0-beta.6",
+              "@semantic-release/changelog": "^6.0.3"
             }
+          }
+          EOF
       - name: Write .releaserc.json
-        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 #v1.3
-        with:
-          path: ./.releaserc.json
-          write-mode: overwrite
-          contents: |
-            {
-              "branches": "release",
-              "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
-              "debug": "true",
-              "tagFormat": "v${version}",
-              "plugins": [
-                ["semantic-release-export-data"],
-                ["@semantic-release/commit-analyzer", {
-                  "releaseRules": [
-                    { "message": "*", "release": "patch"},
-                    { "message": "fix*", "release": "patch" },
-                    { "message": "feat*", "release": "minor" },
-                    { "message": "major*",  "release": "major" }
-                  ]
-                }],
-                "@semantic-release/release-notes-generator",
-                [
-                  "@semantic-release/changelog",
-                  {
-                    "changelogFile": "CHANGELOG.md",
-                    "changelogTitle": "# Semantic Versioning Changelog"
-                  }
-                ],
-                [
-                  "@semantic-release/github",
-                  {
-                    "assets": [
-                      {
-                        "path": "release/**"
-                      }
-                    ]
-                  }
+        run: |
+          cat > ./.releaserc.json <<'EOF'
+          {
+            "branches": "release",
+            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
+            "debug": "true",
+            "tagFormat": "v${version}",
+            "plugins": [
+              ["semantic-release-export-data"],
+              ["@semantic-release/commit-analyzer", {
+                "releaseRules": [
+                  { "message": "*", "release": "patch"},
+                  { "message": "fix*", "release": "patch" },
+                  { "message": "feat*", "release": "minor" },
+                  { "message": "major*",  "release": "major" }
                 ]
+              }],
+              "@semantic-release/release-notes-generator",
+              [
+                "@semantic-release/changelog",
+                {
+                  "changelogFile": "CHANGELOG.md",
+                  "changelogTitle": "# Semantic Versioning Changelog"
+                }
+              ],
+              [
+                "@semantic-release/github",
+                {
+                  "assets": [
+                    {
+                      "path": "release/**"
+                    }
+                  ]
+                }
               ]
-            }
+            ]
+          }
+          EOF
       - name: setup semantic-release
         run: npm install --legacy-peer-deps
       - name: Release

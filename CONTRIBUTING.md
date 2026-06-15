@@ -1,0 +1,82 @@
+# Contributing to orb-agent
+
+orb-agent is being prepared to host the discovery backends (device, network,
+snmp, gnmi) and the worker alongside the agent in a single repository. To keep
+versioning and release notes coherent across all of these, the release pipeline
+keys off **PR titles** — so titles must follow the convention below.
+
+## How releases work
+
+- PRs are **squash-merged into `develop`**; the PR title becomes the single
+  commit message. `develop` is later promoted to `release`, which triggers the
+  release workflow.
+- The **orb-agent image** is the aggregating artifact: a new agent release
+  includes every change since the last `vX.Y.Z` tag — agent changes **and**
+  backend changes — and the release notes list them grouped by type and scope.
+- Pushing to `develop` rebuilds and publishes `orb-agent:develop`. This fires on
+  changes under `agent/`, `cmd/`, or `orb-discovery/` (the backends), so a
+  backend-only change refreshes the develop image too.
+- A required check (**Validate PR title**) blocks merge into `develop` when the
+  title doesn't match the convention.
+
+## PR title convention (enforced)
+
+Use a Conventional Commits title with **one scope** from the allowlist:
+
+```
+<type>(<scope>): <subject>
+```
+
+The automated check requires an allowlisted scope and rejects unknown scopes or
+a subject that starts with an uppercase letter.
+
+### Allowed types
+
+`feat`, `fix`, `perf`, `refactor`, `chore`, `docs`, `test`, `build`, `ci`, `revert`
+
+### Allowed scopes
+
+Agent:
+
+- `agent` — the orb-agent itself. `feat`/`fix`/`perf` here cuts an agent release.
+
+Releasable backends (reserved for the monorepo merge — they cut that backend's
+release once the backends land, and contribute to the aggregated agent release):
+
+- `device-discovery`
+- `gnmi-discovery` *(reserved; backend and its release workflow land separately)*
+- `network-discovery`
+- `snmp-discovery`
+- `worker`
+
+Other scopes:
+
+- `deps` / `deps-dev` — dependency bumps (e.g. from Dependabot). `chore(deps)`
+  cuts a **patch**; `chore(deps-dev)` does not release.
+- `ci` — CI / workflow changes (no release)
+- `docs` — documentation (no release)
+- `repo` — repo-wide / cross-cutting changes (no release)
+
+### Type → release mapping
+
+| Type / commit | Release |
+|---------------|---------|
+| breaking (`!` suffix or `BREAKING CHANGE:` footer) | major |
+| `feat` | minor |
+| `fix` | patch |
+| `perf` | patch |
+| `chore(deps)` | patch |
+| everything else (`docs`, `ci`, `test`, `refactor`, `build`, other `chore`) | none |
+
+### Keep PRs scoped
+
+Prefer one component per PR so the scope is unambiguous. Cross-cutting work
+should use the `repo` scope or be split into per-component PRs.
+
+## Examples
+
+- `feat(agent): add fleet-mode backend restart backoff`
+- `fix(agent): respect context cancellation in policy apply`
+- `docs(device-discovery): lead with supported driver and vendor counts`
+- `chore(deps): bump go.opentelemetry.io/otel/sdk`
+- `ci(repo): bump GitHub Actions to Node 24-compatible releases`
