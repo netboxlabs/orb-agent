@@ -6,6 +6,8 @@ on:
     paths:
       - "agent/**"
       - "cmd/**"
+      - "go.mod"
+      - "go.sum"
       - "orb-discovery/**"
       - "!agent/docker/**"
       - "!orb-discovery/**/docker/**"

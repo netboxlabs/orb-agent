@@ -11,6 +11,8 @@ on:
       # release notes (which aggregate every commit since the last vX.Y.Z tag).
       - "agent/**"
       - "cmd/**"
+      - "go.mod"
+      - "go.sum"
       - "!agent/docker/**"
 
 concurrency:
@@ -46,7 +48,8 @@ jobs:
             "devDependencies": {
               "semantic-release-export-data": "^1.0.1",
               "semantic-release": "25.0.0-beta.6",
-              "@semantic-release/changelog": "^6.0.3"
+              "@semantic-release/changelog": "^6.0.3",
+              "conventional-changelog-conventionalcommits": "^9.0.0"
             }
           }
           EOF
@@ -61,6 +64,7 @@ jobs:
             "plugins": [
               ["semantic-release-export-data"],
               ["@semantic-release/commit-analyzer", {
+                "preset": "conventionalcommits",
                 "releaseRules": [
                   { "breaking": true, "release": "major" },
                   { "type": "fix", "release": "patch" },
@@ -78,7 +82,7 @@ jobs:
                   { "scope": "deps-dev", "release": false }
                 ]
               }],
-              "@semantic-release/release-notes-generator",
+              ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
               [
                 "@semantic-release/changelog",
                 {
@@ -255,7 +259,8 @@ jobs:
             "devDependencies": {
               "semantic-release-export-data": "^1.0.1",
               "semantic-release": "25.0.0-beta.6",
-              "@semantic-release/changelog": "^6.0.3"
+              "@semantic-release/changelog": "^6.0.3",
+              "conventional-changelog-conventionalcommits": "^9.0.0"
             }
           }
           EOF
@@ -270,6 +275,7 @@ jobs:
             "plugins": [
               ["semantic-release-export-data"],
               ["@semantic-release/commit-analyzer", {
+                "preset": "conventionalcommits",
                 "releaseRules": [
                   { "breaking": true, "release": "major" },
                   { "type": "fix", "release": "patch" },
@@ -287,7 +293,7 @@ jobs:
                   { "scope": "deps-dev", "release": false }
                 ]
               }],
-              "@semantic-release/release-notes-generator",
+              ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
               [
                 "@semantic-release/changelog",
                 {
