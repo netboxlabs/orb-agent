@@ -23,6 +23,7 @@ The device discovery backend uses [Diode Python SDK](https://github.com/netboxla
 * [IP Address](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/ip_address.py)
 * [Prefix](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/prefix.py)
 * [VLAN](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/vlan.py)
+* [VRF](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/vrf.py)
 * [VirtualChassis](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/virtual_chassis_example.py)
 * [Module](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/module.py)
 * [ModuleBay](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/module_bay.py)
@@ -32,6 +33,8 @@ Interfaces are attached to the device and ip addresses will be attached to the i
 When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), device-discovery emits one `VirtualChassis` entity plus one `Device` per member, and routes each interface/IP to the member that physically owns it — see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) below. Drivers that do not implement stack discovery (or devices not in stack mode) fall through to the existing single-`Device` path with no change in behaviour.
 
 When a target is a modular chassis and the `discover_modules` policy option is enabled, device-discovery additionally emits `Module` and `ModuleBay` entities for each chassis slot (and, in `full` mode, each transceiver sub-bay) — see [Modules / ModuleBays](#modules--modulebays) below. Defaults to `off`, so existing operators see zero behaviour change.
+
+When the `discover_vrfs` policy option is enabled, device-discovery emits a `VRF` entity for each VRF configured on the device and attaches it to the IP addresses and prefixes of the interfaces inside that VRF — see [VRFs](#vrfs) below. Defaults to `false`, so existing operators see zero behaviour change.
 
 ## Configuration
 The `device_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
@@ -78,6 +81,7 @@ Current supported options:
 | create_unknown_vlans | bool | When discovering interface↔VLAN associations, auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's VLAN database. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `True`. Set `False` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). Only drivers that implement `get_interfaces_vlans()` populate these associations — see the [supported platforms page](./supported_platforms.md). |
 | discover_modules | str | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards, supervisors, etc. — transceiver sub-bays skipped), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Only drivers that implement `get_modules()` populate module data — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 | propagate_defaults_to_prefix_scope | bool | When `True` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to `Prefix.scope_site` (the literal placeholder `"undefined"` is skipped) and `defaults.location` cascades to `Prefix.scope_location`. Defaults to `False`. Setting any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale. |
+| discover_vrfs | bool | When `True`, discovers VRFs from the device via the driver's `get_network_instances()` and attaches each VRF to the IP addresses and prefixes of its member interfaces. A discovered VRF takes precedence over the `defaults.*.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for those interfaces; interfaces in the default routing table keep the configured defaults. Defaults to `False`. Only drivers that implement `get_network_instances()` populate VRF data — see the [supported platforms page](./supported_platforms.md#vrfs). See [VRFs](#vrfs) for filtering rules and route-distinguisher handling. |
 
 #### Defaults
 Current supported defaults:
@@ -348,6 +352,24 @@ When a driver implements module discovery and the `discover_modules` policy opti
 
 **Supported drivers.** Module discovery is opt-in per driver (analogous to interface↔VLAN associations and stack discovery). See the [supported platforms page](./supported_platforms.md#modules--modulebays) for the current list; vendors land as follow-up PRs as the underlying drivers gain module-discovery support.
 
+## VRFs
+
+When the `discover_vrfs` policy option is enabled (defaults to `false`), device-discovery calls the driver's standard NAPALM `get_network_instances()` getter and emits a NetBox `VRF` entity per VRF configured on the device. Each discovered VRF is attached to the `IPAddress` and `Prefix` entities of the interfaces inside that VRF; interfaces in the default routing table carry no discovered VRF and keep whatever `defaults.*.vrf` configuration is in effect.
+
+**Precedence.** Device state beats policy defaults: for an interface inside a discovered VRF, the discovered VRF wins over `defaults.ipaddress.vrf` / `vrf_ipv4` / `vrf_ipv6` (and the `defaults.prefix` equivalents). The defaults remain the fallback for all other interfaces, so mixed configurations work as expected.
+
+**Filtering.** Not every network instance a device reports is an operator-meaningful VRF. The following are skipped:
+
+* the default instance (the global routing table),
+* L2 instance types (VPLS / EVPN / L2VPN instances — these have no NetBox VRF equivalent),
+* platform-internal instances whose names start with `__` (e.g. Cisco's `__Platform_iVRF:_ID00_`).
+
+Management VRFs (e.g. Cisco `Mgmt-vrf`, Junos `mgmt_junos`) are real VRFs and are kept.
+
+**Route distinguisher.** The `rd` field is set only when the device reports a real value. Devices without MPLS routinely report an empty or placeholder RD — those stay off the wire, so the VRF matches a NetBox VRF record whose RD is empty rather than creating one with a bogus RD. Note the Diode reconciliation caveat: an ingested VRF without an RD only matches NetBox VRFs whose RD is unset. If a VRF with the same name already exists in NetBox **with** an RD configured, the first discovery cycle creates a separate RD-less VRF record alongside it (subsequent cycles converge on the RD-less record). If you pre-seed VRFs in NetBox and want discovery to match them, either leave their RD unset or make sure the device reports the same RD.
+
+**Supported drivers.** VRF discovery is available on drivers that implement `get_network_instances()` — see the [supported platforms page](./supported_platforms.md#vrfs) for the current list. On drivers without support, enabling the option logs a warning per cycle and discovery continues without VRF data.
+
 ## What NAPALM Collects Automatically
 
 The tables below show which fields are populated automatically from the device versus which must be provided via `defaults` in the policy configuration.
@@ -390,7 +412,7 @@ The tables below show which fields are populated automatically from the device v
 | Address (with prefix length) | `get_interfaces_ip()` | Auto-collected; IPv4 and IPv6 |
 | Assigned interface | — | Automatically linked to the interface |
 | Role | **Not collected** | Must be set via `defaults.ipaddress.role` |
-| VRF | **Not collected** | Must be set via `defaults.ipaddress.vrf` |
+| VRF | `get_network_instances()` when `options.discover_vrfs: true` | Otherwise set via `defaults.ipaddress.vrf` (a discovered VRF wins over the defaults — see [VRFs](#vrfs)) |
 | Tenant | **Not collected** | Must be set via `defaults.ipaddress.tenant` |
 
 ### Prefix
@@ -400,7 +422,8 @@ Prefixes are derived from IP addresses discovered on interfaces. The network add
 | Field | Source | Notes |
 |-------|--------|-------|
 | Prefix (network address) | Derived from IP address | Auto-computed |
-| VRF / Role / Tenant | **Not collected** | Must be set via `defaults.prefix.*` |
+| VRF | `get_network_instances()` when `options.discover_vrfs: true` | Otherwise set via `defaults.prefix.vrf` (a discovered VRF wins over the defaults — see [VRFs](#vrfs)) |
+| Role / Tenant | **Not collected** | Must be set via `defaults.prefix.*` |
 | Scope (site / location) | **Not collected** | Set via `defaults.prefix.scope_*` (see Nested Defaults) or opt into the cascade via `options.propagate_defaults_to_prefix_scope` |
 
 Prefix scope is a `oneof` — a Prefix carries one of `scope_site` or `scope_location`. When both `defaults.prefix.scope_*` are set, the most-specific wins on the wire: `scope_location` > `scope_site`. By default `defaults.site` does NOT auto-fill `Prefix.scope_site` — set `options.propagate_defaults_to_prefix_scope: true` to enable the cascade. Any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale, so a cascaded more-specific scope can't override an operator's explicit less-specific choice. Clearing an existing scope requires editing NetBox directly.
