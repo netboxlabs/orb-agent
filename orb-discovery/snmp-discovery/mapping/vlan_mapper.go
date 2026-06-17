@@ -379,7 +379,11 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 				p = &pending{}
 				byVid[vid] = p
 			}
-			p.name = v.Value
+			// Strip NUL padding/whitespace many vendor agents (e.g. FS
+			// switches) append to dot1qVlanStaticName. NetBox/PostgreSQL
+			// rejects NUL bytes in text fields, and a NUL-only name must
+			// collapse to "" so the VLAN<vid> default applies below.
+			p.name = trimSNMPString(v.Value)
 		case strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus):
 			vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus))
 			if !ok {

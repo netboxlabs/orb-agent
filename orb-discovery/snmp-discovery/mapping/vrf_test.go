@@ -160,6 +160,27 @@ func TestTranslateVrfs_CiscoTierFallback(t *testing.T) {
 	assert.False(t, orphan)
 }
 
+func TestTranslateVrfs_CiscoTierStripsNullBytesFromName(t *testing.T) {
+	// cvVrfName padded/interrupted with NUL bytes (vendor agent quirk) must
+	// be sanitized — NetBox rejects NUL anywhere in the field.
+	oids := ObjectIDValueMap{
+		oidCvVrfName + ".1":         octets("MGMT\x00"),
+		oidCvVrfName + ".2":         octets("CU\x00ST"),
+		oidCvVrfInterface + ".1.30": octets("1"),
+		oidCvVrfInterface + ".2.31": octets("1"),
+	}
+	entities, byIfIndex := TranslateVrfs(oids, nil, slog.Default())
+	require.Len(t, entities, 2)
+	names := map[string]bool{}
+	for _, e := range entities {
+		names[*(e.(*diode.VRF)).Name] = true
+	}
+	assert.True(t, names["MGMT"], "trailing NUL must be stripped")
+	assert.True(t, names["CUST"], "interior NUL must be removed")
+	assert.NotNil(t, byIfIndex[30])
+	assert.NotNil(t, byIfIndex[31])
+}
+
 func TestTranslateVrfs_StdTierWinsOverLowerTiers(t *testing.T) {
 	red := oidIdx("RED")
 	oids := stdTierOids()

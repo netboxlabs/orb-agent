@@ -356,6 +356,64 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 	}
 }
 
+// TestVlanMapper_EmitVLANs_StripsNullBytesFromName verifies that NUL-padded or
+// NUL-interrupted dot1qVlanStaticName values (seen on FS switches and other vendor
+// agents) are sanitized before reaching the Diode payload. NetBox/PostgreSQL rejects
+// NUL bytes in text fields, so an unsanitized name breaks ingestion.
+func TestVlanMapper_EmitVLANs_StripsNullBytesFromName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+
+	rows := ObjectIDValueMap{
+		// VID 680: NUL-padded name as an FS switch reports it.
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.680": Value{Value: "Video\x00", Type: OctetString},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.680": Value{Value: "1", Type: Integer},
+		// VID 690: name is nothing but NUL bytes — must be treated as empty
+		// and fall back to the "VLAN<vid>" default rather than emitting a
+		// NUL-only name.
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.690": Value{Value: "\x00", Type: OctetString},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.690": Value{Value: "1", Type: Integer},
+		// VID 700: interior NUL (not just trailing padding) must also be
+		// removed — PostgreSQL rejects a NUL anywhere in the field.
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.700": Value{Value: "Vo\x00IP", Type: OctetString},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.700": Value{Value: "1", Type: Integer},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{CreateUnknownVlans: ptrBool(true)})
+	emitted := vm.PostMap(rows, registry, &config.Defaults{})
+
+	byVid := map[int64]*diode.VLAN{}
+	for _, e := range emitted {
+		if v, ok := e.(*diode.VLAN); ok && v.Vid != nil {
+			byVid[*v.Vid] = v
+		}
+	}
+
+	got, ok := byVid[680]
+	if !ok || got.Name == nil {
+		t.Fatal("expected VLAN entity for VID 680 with a name")
+	}
+	if *got.Name != "Video" {
+		t.Errorf("VID 680 Name: got %q, want %q", *got.Name, "Video")
+	}
+
+	stub, ok := byVid[690]
+	if !ok || stub.Name == nil {
+		t.Fatal("expected VLAN entity for VID 690 with a name")
+	}
+	if *stub.Name != "VLAN690" {
+		t.Errorf("VID 690 Name: got %q, want %q (NUL-only name should be empty)", *stub.Name, "VLAN690")
+	}
+
+	interior, ok := byVid[700]
+	if !ok || interior.Name == nil {
+		t.Fatal("expected VLAN entity for VID 700 with a name")
+	}
+	if *interior.Name != "VoIP" {
+		t.Errorf("VID 700 Name: got %q, want %q (interior NUL must be removed)", *interior.Name, "VoIP")
+	}
+}
+
 // applyVLANDefaults: when defaults.Site is a real value and a VLAN Group is
 // configured, the Group must carry Name + Slug + Scope = Site{Name: defaults.Site}.
 func TestApplyVLANDefaults_GroupScopeSite_WhenSiteDefined(t *testing.T) {

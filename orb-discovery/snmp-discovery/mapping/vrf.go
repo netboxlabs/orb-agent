@@ -291,7 +291,12 @@ func collectCiscoVrfs(oids ObjectIDValueMap, logger *slog.Logger) map[string]*vr
 				logger.Debug("vrf: non-integer cvVrfId index, skipping row", "oid", oid)
 				continue
 			}
-			if name := value.Value; name != "" {
+			// cvVrfName is read as a value (unlike the std/legacy tiers,
+			// whose names come from the OID index and are control-rejected
+			// by octetsToString). Sanitize NUL padding/whitespace here so a
+			// "RED\x00" name both ingests cleanly and matches "RED" from
+			// another tier during the cross-tier merge.
+			if name := trimSNMPString(value.Value); name != "" {
 				namesByID[id] = name
 			}
 			continue

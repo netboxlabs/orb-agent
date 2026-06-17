@@ -334,14 +334,17 @@ func strDeref(p *string) string {
 	return *p
 }
 
-// trimSNMPString trims surrounding whitespace AND embedded NUL bytes
-// from ENTITY-MIB DisplayString-like values. Many vendor agents pad
-// short strings with trailing NUL bytes, which strings.TrimSpace leaves
-// in place — a NUL-padded "FOC1234\x00" would otherwise compare unequal
-// to "FOC1234" returned by another agent, breaking dedup and stable
-// matching against NetBox on subsequent runs.
+// trimSNMPString removes every NUL byte (interior as well as padding) and
+// trims surrounding whitespace from DisplayString-like SNMP values. It is the
+// canonical sanitizer for any device-provided text bound for a NetBox/Diode
+// field. Two reasons NUL handling matters: many vendor agents pad short
+// strings with trailing NUL bytes — a NUL-padded "FOC1234\x00" would compare
+// unequal to "FOC1234" from another agent, breaking dedup and stable matching
+// across runs — and NetBox/PostgreSQL rejects a NUL anywhere in a text field,
+// failing ingestion outright. strings.ReplaceAll returns the input unchanged
+// (no allocation) when there is no NUL, so the common clean case is cheap.
 func trimSNMPString(s string) string {
-	return strings.Trim(s, " \t\r\n\x00")
+	return strings.Trim(strings.ReplaceAll(s, "\x00", ""), " \t\r\n")
 }
 
 var trailingIntRe = regexp.MustCompile(`(\d+)\s*$`)

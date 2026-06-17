@@ -794,7 +794,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					// overwrite an already-set clean Name (typically from
 					// ifName via name_alternate, which arrives first
 					// under slices.Reverse) with a descriptive ifDescr.
-					name := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					name := trimSNMPString(value.Value)
 					if name == "" {
 						continue
 					}
@@ -817,7 +817,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					// does NOT match single-space canonical names like
 					// Dell FTOS "TenGigabitEthernet 0/0" or Extreme SLX
 					// "Port-channel 1" — those keep their ifDescr.
-					alt := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					alt := trimSNMPString(value.Value)
 					if alt == "" {
 						continue
 					}
@@ -829,7 +829,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						fieldFound = true
 					}
 				case "description":
-					description := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					description := trimSNMPString(value.Value)
 					if description != "" {
 						if len(description) > 200 {
 							description = description[:197] + "..."
@@ -1130,13 +1130,13 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 				m.logger.Debug("mapping value to device entity with mapper", "object_id", objectID, "value", value, "mapping_entry", propertyMappingEntry)
 				switch propertyMappingEntry.Field {
 				case "name":
-					name := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					name := trimSNMPString(value.Value)
 					if name != "" {
 						deviceEntity.Name = &name
 						fieldFound = true
 					}
 				case "description":
-					description := strings.TrimRight(value.Value, "\x00 \t\n\r")
+					description := trimSNMPString(value.Value)
 					if description != "" {
 						if len(description) > 200 {
 							description = description[:197] + "..."

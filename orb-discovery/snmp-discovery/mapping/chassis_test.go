@@ -236,6 +236,32 @@ func TestExtractInventory_NULOnlySerialDropped(t *testing.T) {
 	assert.Equal(t, "VALID", inv.Members[0].Serial)
 }
 
+// TestTrimSNMPString pins the contract: surrounding whitespace AND every
+// NUL byte (including interior ones) are removed. NetBox/PostgreSQL rejects
+// NUL anywhere in a text field, so a trailing-only trim is not enough.
+func TestTrimSNMPString(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"clean passthrough", "GigabitEthernet0/1", "GigabitEthernet0/1"},
+		{"trailing nul pad", "Video\x00", "Video"},
+		{"trailing nul run", "FOC1234\x00\x00\x00", "FOC1234"},
+		{"leading and trailing space", "  Eng  ", "Eng"},
+		{"interior nul", "Video\x00Backup", "VideoBackup"},
+		{"interior nul plus pad", "A\x00B\x00", "AB"},
+		{"nul only", "\x00\x00", ""},
+		{"empty", "", ""},
+		{"surrounding ws and interior nul", " a\x00b \t", "ab"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, trimSNMPString(tc.in))
+		})
+	}
+}
+
 func TestDeriveMemberID_ParentRelPosWins(t *testing.T) {
 	m := ChassisMember{ParentRelPos: 5, EntName: "Switch 9"}
 	assert.Equal(t, 5, deriveMemberID(m, 0))

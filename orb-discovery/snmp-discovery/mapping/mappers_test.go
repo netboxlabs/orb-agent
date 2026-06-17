@@ -1454,6 +1454,60 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name: "interior null bytes are stripped from interface name and description",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.1.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.1",
+					Value:  "1",
+					Type:   mapping.Integer,
+				},
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth\x000",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.31.1.1.1.18.1": {
+					OID:    "1.3.6.1.2.1.31.1.1.1.18.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.31.1.1.1.18",
+					Value:  "up\x00link",
+					Type:   mapping.OctetString,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.1",
+						Entity: "interface",
+						Field:  "_id",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.31.1.1.1.18",
+						Entity: "interface",
+						Field:  "description",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Interface{
+				Name:        mapping.StringPtr("eth0"),
+				Description: mapping.StringPtr("uplink"),
+			},
+			expectError: false,
+		},
+		{
 			name: "null-byte-only description falls back to configured default",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.2.2.1.1.1": {
