@@ -40,7 +40,7 @@ RUN python -m pip install --upgrade --no-cache-dir pip==26.1 && \
     rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
 # Install Python packages
-RUN pip3 install --no-cache-dir netboxlabs-device-discovery netboxlabs-orb-worker
+RUN pip3 install --no-cache-dir netboxlabs-device-discovery netboxlabs-orb-worker==1.16.0
 
 ########################################################################
 # Stage name is referenced by no-cache-filters in the build workflows so
