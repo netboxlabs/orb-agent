@@ -380,6 +380,15 @@ const (
 	DiscoverModulesFull      = "full"
 )
 
+// InterfaceNameSource* are the accepted values for
+// options.interface_name_source. Auto (the default) keeps the legacy
+// ifDescr-preferred heuristic.
+const (
+	InterfaceNameSourceAuto    = "auto"
+	InterfaceNameSourceIfName  = "ifname"
+	InterfaceNameSourceIfDescr = "ifdescr"
+)
+
 // Options represents per-policy global behavior toggles peer to Defaults.
 type Options struct {
 	CreateUnknownVlans *bool `yaml:"create_unknown_vlans,omitempty"`
@@ -424,6 +433,14 @@ type Options struct {
 	// to Prefix scope location (the more specific location wins).
 	// Defaults to false. Mirrors device-discovery.
 	PropagateDefaultsToPrefixScope *bool `yaml:"propagate_defaults_to_prefix_scope,omitempty"`
+
+	// Tri-state pointer; nil / "auto" select the legacy heuristic (ifDescr
+	// preferred, ifName promoted when ifDescr is empty or a hardware
+	// description). "ifname" / "ifdescr" force the NetBox Interface.Name
+	// source, each falling back to the other field when its primary is
+	// empty for a given interface. Unknown values normalize to "auto"
+	// (with a warning) at policy parse.
+	InterfaceNameSource *string `yaml:"interface_name_source,omitempty"`
 }
 
 // PrefixEmissionEnabled returns the effective emit_prefixes toggle,
@@ -456,6 +473,16 @@ func (o *Options) ModuleDiscoveryMode() string {
 		return DiscoverModulesOff
 	}
 	return *o.DiscoverModules
+}
+
+// InterfaceNameSourceMode returns the configured interface-name source
+// verbatim, defaulting to "auto" when unset. Unknown values are normalized
+// to "auto" (with a warning) at policy parse (Manager.applyDefaults), not here.
+func (o *Options) InterfaceNameSourceMode() string {
+	if o == nil || o.InterfaceNameSource == nil {
+		return InterfaceNameSourceAuto
+	}
+	return *o.InterfaceNameSource
 }
 
 // PolicyConfig represents the configuration of a policy

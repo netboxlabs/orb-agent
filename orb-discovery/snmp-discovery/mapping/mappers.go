@@ -703,10 +703,58 @@ type InterfaceMapper struct {
 	logger           *slog.Logger
 	patternMatcher   *PatternMatcher
 	userPatternCount int
+	nameSource       string
 }
 
-// NewInterfaceMapper creates a new InterfaceMapper
-func NewInterfaceMapper(logger *slog.Logger, patterns []config.InterfacePattern) (*InterfaceMapper, error) {
+// resolveInterfaceName selects Interface.Name from the two SNMP sources
+// (both already trimSNMPString-sanitized) per the policy's
+// interface_name_source. It returns "" only when both inputs are empty,
+// so the caller's empty-name handling is preserved.
+func resolveInterfaceName(source, ifDescr, ifName string) string {
+	switch source {
+	case config.InterfaceNameSourceIfName:
+		if ifName != "" {
+			return ifName
+		}
+		return ifDescr
+	case config.InterfaceNameSourceIfDescr:
+		if ifDescr != "" {
+			return ifDescr
+		}
+		return ifName
+	default: // auto (and any unrecognized value, defensively)
+		// ifDescr preferred; ifName is promoted only when ifDescr is empty,
+		// or ifDescr is a hardware description while ifName is not. This
+		// reproduces the legacy inline name/name_alternate resolution —
+		// including its treatment of DefaultInterfaceName as the unset
+		// sentinel: a literal ifName of "unknown" is not promoted over a
+		// descriptive ifDescr (the old code's currentClean guard excluded it).
+		if ifDescr == "" {
+			return ifName
+		}
+		if looksDescriptive(ifDescr) && ifName != "" &&
+			ifName != DefaultInterfaceName && !looksDescriptive(ifName) {
+			return ifName
+		}
+		return ifDescr
+	}
+}
+
+// NewInterfaceMapper creates a new InterfaceMapper. nameSource is one of
+// config.InterfaceNameSource{Auto,IfName,IfDescr}; an empty or unrecognized
+// value is normalized to "auto". This normalization is a silent defensive
+// belt — the user-facing warning for an unknown value is emitted once at
+// policy parse (Manager.applyDefaults), because this constructor runs once
+// per target per scrape.
+func NewInterfaceMapper(logger *slog.Logger, patterns []config.InterfacePattern, nameSource string) (*InterfaceMapper, error) {
+	switch nameSource {
+	case config.InterfaceNameSourceIfName, config.InterfaceNameSourceIfDescr:
+		// recognized; keep as-is
+	default:
+		// "auto", "", and any unrecognized value all resolve to auto.
+		nameSource = config.InterfaceNameSourceAuto
+	}
+
 	var patternMatcher *PatternMatcher
 	userPatternCount := len(patterns)
 
@@ -726,6 +774,7 @@ func NewInterfaceMapper(logger *slog.Logger, patterns []config.InterfacePattern)
 		logger:           logger,
 		patternMatcher:   patternMatcher,
 		userPatternCount: userPatternCount,
+		nameSource:       nameSource,
 	}, nil
 }
 
@@ -770,7 +819,8 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	interfaceEntity := entityRegistry.GetOrCreateEntity(InterfaceEntityType, getIndex(values)).(*diode.Interface)
 
 	fieldFound := false
-	var snmpIfType string // Store SNMP ifType for final type resolution
+	var snmpIfType string            // Store SNMP ifType for final type resolution
+	var ifDescrRaw, ifNameRaw string // ifDescr / ifName; Name resolved post-loop
 
 	valueKeys := make([]ObjectIDIndex, 0, len(values))
 	for objectID := range values {
@@ -787,47 +837,12 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				m.logger.Debug("mapping value to interface entity with mapper", "object_id", objectID, "value", value)
 				switch propertyMappingEntry.Field {
 				case "name":
-					// ifDescr is the preferred source for Interface.Name
-					// across all vendors except those whose ifDescr is a
-					// hardware description (Dell PowerConnect:
-					// "Unit: 1 Slot: 0 Port: 1 Gigabit - Level"). Don't
-					// overwrite an already-set clean Name (typically from
-					// ifName via name_alternate, which arrives first
-					// under slices.Reverse) with a descriptive ifDescr.
-					name := trimSNMPString(value.Value)
-					if name == "" {
-						continue
-					}
-					currentClean := interfaceEntity.Name != nil &&
-						*interfaceEntity.Name != "" &&
-						*interfaceEntity.Name != DefaultInterfaceName &&
-						!looksDescriptive(*interfaceEntity.Name)
-					if currentClean && looksDescriptive(name) {
-						// Keep the already-set clean Name; don't downgrade.
-						continue
-					}
-					interfaceEntity.Name = &name
-					fieldFound = true
+					// Capture ifDescr; Interface.Name is resolved once after
+					// the loop per interface_name_source (resolveInterfaceName).
+					ifDescrRaw = trimSNMPString(value.Value)
 				case "name_alternate":
-					// Fallback for vendors where ifDescr is empty/absent
-					// (e.g. FortiGate, Nokia TiMOS 7750), AND for vendors
-					// whose ifDescr is a hardware description (Dell
-					// PowerConnect). The latter is detected by looksDescriptive
-					// (requires a ": " substring), which intentionally
-					// does NOT match single-space canonical names like
-					// Dell FTOS "TenGigabitEthernet 0/0" or Extreme SLX
-					// "Port-channel 1" — those keep their ifDescr.
-					alt := trimSNMPString(value.Value)
-					if alt == "" {
-						continue
-					}
-					if interfaceEntity.Name == nil ||
-						*interfaceEntity.Name == "" ||
-						*interfaceEntity.Name == DefaultInterfaceName ||
-						(looksDescriptive(*interfaceEntity.Name) && !looksDescriptive(alt)) {
-						interfaceEntity.Name = &alt
-						fieldFound = true
-					}
+					// Capture ifName (ifXTable); see resolveInterfaceName.
+					ifNameRaw = trimSNMPString(value.Value)
 				case "description":
 					description := trimSNMPString(value.Value)
 					if description != "" {
@@ -929,6 +944,14 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				}
 			}
 		}
+	}
+
+	// Resolve Interface.Name from the two SNMP sources once, after the
+	// property loop, so the choice is explicit and order-independent.
+	// Done before type resolution below, which reads interfaceEntity.Name.
+	if name := resolveInterfaceName(m.nameSource, ifDescrRaw, ifNameRaw); name != "" {
+		interfaceEntity.Name = &name
+		fieldFound = true
 	}
 
 	// Resolve interface type after all fields are collected

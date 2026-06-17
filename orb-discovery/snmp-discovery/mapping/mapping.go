@@ -429,7 +429,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		interfacePatterns = defaults.InterfacePatterns
 	}
 
-	interfaceMapper, err := NewInterfaceMapper(logger, interfacePatterns)
+	interfaceMapper, err := NewInterfaceMapper(logger, interfacePatterns, options.InterfaceNameSourceMode())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create interface mapper: %w", err)
 	}

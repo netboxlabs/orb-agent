@@ -784,3 +784,20 @@ func TestVrfParameters_UnmarshalYAML(t *testing.T) {
 		assert.Empty(t, wrapper.Vrf.Tags)
 	})
 }
+
+func TestOptions_InterfaceNameSourceMode(t *testing.T) {
+	auto := "auto"
+	ifname := "ifname"
+	ifdescr := "ifdescr"
+	bogus := "wat"
+
+	var nilOpts *Options
+	assert.Equal(t, InterfaceNameSourceAuto, nilOpts.InterfaceNameSourceMode(), "nil receiver defaults to auto")
+	assert.Equal(t, InterfaceNameSourceAuto, (&Options{}).InterfaceNameSourceMode(), "unset field defaults to auto")
+	assert.Equal(t, "auto", (&Options{InterfaceNameSource: &auto}).InterfaceNameSourceMode())
+	assert.Equal(t, "ifname", (&Options{InterfaceNameSource: &ifname}).InterfaceNameSourceMode())
+	assert.Equal(t, "ifdescr", (&Options{InterfaceNameSource: &ifdescr}).InterfaceNameSourceMode())
+	// Accessor returns the raw value verbatim; normalization of unknowns
+	// happens at policy parse (Manager.applyDefaults), not here.
+	assert.Equal(t, "wat", (&Options{InterfaceNameSource: &bogus}).InterfaceNameSourceMode())
+}

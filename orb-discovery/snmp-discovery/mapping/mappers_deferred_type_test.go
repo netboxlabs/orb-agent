@@ -17,7 +17,7 @@ func TestInterfaceMapper_DeferredTypeResolution(t *testing.T) {
 		userPatterns := []config.InterfacePattern{
 			{Match: `^GigabitEthernet\d+`, Type: "custom-gigabit"},
 		}
-		mapper, err := NewInterfaceMapper(logger, userPatterns)
+		mapper, err := NewInterfaceMapper(logger, userPatterns, config.InterfaceNameSourceAuto)
 		assert.NoError(t, err)
 
 		// Simulate SNMP data where type OID comes before name OID
@@ -80,7 +80,7 @@ func TestInterfaceMapper_DeferredTypeResolution(t *testing.T) {
 		userPatterns := []config.InterfacePattern{
 			{Match: `^TenGigabitEthernet\d+`, Type: "custom-tengig"},
 		}
-		mapper, err := NewInterfaceMapper(logger, userPatterns)
+		mapper, err := NewInterfaceMapper(logger, userPatterns, config.InterfaceNameSourceAuto)
 		assert.NoError(t, err)
 
 		// Simulate SNMP data where name OID comes before type OID
@@ -146,7 +146,7 @@ func TestInterfaceMapper_DeferredTypeResolution(t *testing.T) {
 
 	t.Run("Built-in pattern matching with deferred resolution", func(t *testing.T) {
 		// Create mapper with no user patterns, only built-ins
-		mapper, err := NewInterfaceMapper(logger, nil)
+		mapper, err := NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 		assert.NoError(t, err)
 
 		values := map[ObjectIDIndex]*ObjectIDValue{
@@ -202,7 +202,7 @@ func TestInterfaceMapper_DeferredTypeResolution(t *testing.T) {
 
 	t.Run("Deferred resolution with no pattern matcher", func(t *testing.T) {
 		// Create mapper without patterns
-		mapper, err := NewInterfaceMapper(logger, nil)
+		mapper, err := NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 		assert.NoError(t, err)
 		// Clear pattern matcher to simulate old behavior
 		mapper.patternMatcher = nil

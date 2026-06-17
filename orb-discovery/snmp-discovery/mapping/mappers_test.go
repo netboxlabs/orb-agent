@@ -1884,7 +1884,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := slog.Default()
 			registry := mapping.NewEntityRegistry(logger)
-			mapper, err := mapping.NewInterfaceMapper(logger, nil)
+			mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 			assert.NoError(t, err)
 			entity := mapper.Map(tt.values, tt.mappingEntry, registry, tt.defaults)
 
@@ -2062,7 +2062,7 @@ func TestInterfaceMapper_Map_ZeroSpeedAndMtu(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
-			mapper, err := mapping.NewInterfaceMapper(logger, nil)
+			mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 			assert.NoError(t, err)
 			entity := mapper.Map(tt.values, tt.mappingEntry, registry, nil)
 			assert.NotNil(t, entity)
@@ -2141,7 +2141,7 @@ func TestInterfaceMapper_Map_HighSpeed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			registry := mapping.NewEntityRegistry(logger)
-			mapper, err := mapping.NewInterfaceMapper(logger, nil)
+			mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 			assert.NoError(t, err)
 			entity := mapper.Map(tt.values, tt.mappingEntry, registry, nil)
 			assert.NotNil(t, entity)
@@ -2154,7 +2154,7 @@ func TestInterfaceMapper_Map_HighSpeed(t *testing.T) {
 
 func TestInterfaceMapper_FormatMACAddress(t *testing.T) {
 	logger := slog.Default()
-	mapper, err := mapping.NewInterfaceMapper(logger, nil)
+	mapper, err := mapping.NewInterfaceMapper(logger, nil, config.InterfaceNameSourceAuto)
 	assert.NoError(t, err)
 
 	tests := []struct {
@@ -4737,4 +4737,68 @@ func TestDeviceMapper_Map_DefaultsResolveFromSysContactOnly(t *testing.T) {
 
 	require.NotNil(t, device.AssetTag)
 	assert.Equal(t, "asset-from-contact", *device.AssetTag)
+}
+
+func TestInterfaceMapper_Map_NameSourceModes(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	// Mirrors the production ifTable group: top-level _id, with name /
+	// name_alternate / description as sub-entries (no _id sub-entry).
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.2.2.1.1",
+		Entity: "interface",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"},
+			{OID: "1.3.6.1.2.1.31.1.1.1.1", Entity: "interface", Field: "name_alternate"},
+			{OID: "1.3.6.1.2.1.31.1.1.1.18", Entity: "interface", Field: "description"},
+		},
+	}
+	// Build the value map, omitting a name OID when its value is "" so the
+	// "source field absent for this row" path is exercised.
+	mkValues := func(ifDescr, ifName string) map[mapping.ObjectIDIndex]*mapping.ObjectIDValue {
+		v := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+			"1.3.6.1.2.1.2.2.1.1.1":     {OID: "1.3.6.1.2.1.2.2.1.1.1", Index: "1", Parent: "1.3.6.1.2.1.2.2.1.1", Value: "1", Type: mapping.Integer},
+			"1.3.6.1.2.1.31.1.1.1.18.1": {OID: "1.3.6.1.2.1.31.1.1.1.18.1", Index: "1", Parent: "1.3.6.1.2.1.31.1.1.1.18", Value: "uplink to core", Type: mapping.OctetString},
+		}
+		if ifDescr != "" {
+			v["1.3.6.1.2.1.2.2.1.2.1"] = &mapping.ObjectIDValue{OID: "1.3.6.1.2.1.2.2.1.2.1", Index: "1", Parent: "1.3.6.1.2.1.2.2.1.2", Value: ifDescr, Type: mapping.OctetString}
+		}
+		if ifName != "" {
+			v["1.3.6.1.2.1.31.1.1.1.1.1"] = &mapping.ObjectIDValue{OID: "1.3.6.1.2.1.31.1.1.1.1.1", Index: "1", Parent: "1.3.6.1.2.1.31.1.1.1.1", Value: ifName, Type: mapping.OctetString}
+		}
+		return v
+	}
+	const descr = "Unit: 1 Slot: 0 Port: 1 Gigabit - Level" // looksDescriptive == true
+	cases := []struct {
+		name     string
+		source   string
+		ifDescr  string
+		ifName   string
+		wantName string
+	}{
+		{"auto clean ifdescr wins", config.InterfaceNameSourceAuto, "GigabitEthernet0/1", "Gi0/1", "GigabitEthernet0/1"},
+		{"auto descriptive ifdescr yields to ifname", config.InterfaceNameSourceAuto, descr, "Gi0/1", "Gi0/1"},
+		{"auto empty ifdescr uses ifname", config.InterfaceNameSourceAuto, "", "Gi0/1", "Gi0/1"},
+		{"auto both descriptive keeps ifdescr", config.InterfaceNameSourceAuto, descr, "Slot: 2 Port: 3 - foo", descr},
+		{"auto both empty keeps unknown placeholder", config.InterfaceNameSourceAuto, "", "", mapping.DefaultInterfaceName},
+		{"ifname wins", config.InterfaceNameSourceIfName, "GigabitEthernet0/1", "Gi0/1", "Gi0/1"},
+		{"ifname empty falls back to ifdescr", config.InterfaceNameSourceIfName, "GigabitEthernet0/1", "", "GigabitEthernet0/1"},
+		{"ifname strips NUL padding then resolves", config.InterfaceNameSourceIfName, "GigabitEthernet0/1", "Gi0/1\x00", "Gi0/1"},
+		{"ifname NUL-only falls back to ifdescr", config.InterfaceNameSourceIfName, "GigabitEthernet0/1", "\x00\x00", "GigabitEthernet0/1"},
+		{"ifdescr wins", config.InterfaceNameSourceIfDescr, "GigabitEthernet0/1", "Gi0/1", "GigabitEthernet0/1"},
+		{"ifdescr empty falls back to ifname", config.InterfaceNameSourceIfDescr, "", "Gi0/1", "Gi0/1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := mapping.NewInterfaceMapper(logger, nil, tc.source)
+			require.NoError(t, err)
+			reg := mapping.NewEntityRegistry(logger)
+			got := m.Map(mkValues(tc.ifDescr, tc.ifName), mappingEntry, reg, nil).(*diode.Interface)
+			require.NotNil(t, got.Name)
+			assert.Equal(t, tc.wantName, *got.Name)
+			require.NotNil(t, got.Description)
+			assert.Equal(t, "uplink to core", *got.Description, "ifAlias description unaffected by name source")
+		})
+	}
 }

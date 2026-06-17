@@ -124,6 +124,16 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		trueVal := true
 		policy.Config.Options.CreateUnknownVlans = &trueVal
 	}
+
+	if src := policy.Config.Options.InterfaceNameSource; src != nil {
+		switch *src {
+		case config.InterfaceNameSourceAuto, config.InterfaceNameSourceIfName, config.InterfaceNameSourceIfDescr:
+			// recognized
+		default:
+			m.logger.Warn("unknown interface_name_source; using auto", "value", *src)
+			policy.Config.Options.InterfaceNameSource = nil // normalize → auto
+		}
+	}
 }
 
 // validateAuthentication validates a single authentication configuration

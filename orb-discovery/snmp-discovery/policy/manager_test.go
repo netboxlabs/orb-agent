@@ -141,6 +141,52 @@ func TestManagerParsePolicies(t *testing.T) {
 		assert.Equal(t, "no policies found in the request", err.Error())
 	})
 
+	t.Run("Unknown interface_name_source normalizes to auto", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              options:
+                interface_name_source: wat
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  port: 162
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+    `)
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		require.Contains(t, policies, "policy1")
+		opts := policies["policy1"].Config.Options
+		assert.Nil(t, opts.InterfaceNameSource, "unknown value normalized to nil")
+		assert.Equal(t, config.InterfaceNameSourceAuto, opts.InterfaceNameSourceMode())
+	})
+
+	t.Run("Valid interface_name_source is preserved", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              options:
+                interface_name_source: ifname
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  port: 162
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+    `)
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		require.Contains(t, policies, "policy1")
+		opts := policies["policy1"].Config.Options
+		require.NotNil(t, opts.InterfaceNameSource)
+		assert.Equal(t, "ifname", *opts.InterfaceNameSource)
+	})
+
 	t.Run("Environment Variable Resolution - Community", func(t *testing.T) {
 		// Set test environment variable
 		err := os.Setenv("SNMP_COMMUNITY", "test-community")
