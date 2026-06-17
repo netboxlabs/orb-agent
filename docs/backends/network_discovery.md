@@ -39,7 +39,7 @@ Config defines data for the whole scope and is optional overall.
 |:---------:|:----:|:--------:|:-----------:|
 | schedule | cron format | no  |  If defined, it will execute scope following cron schedule time. If not defined, it will execute scope only once  |
 | defaults | map | no  |  key value pair that defines default values  |
-| timeout | int | no | Timeout in minutes for the nmap scan operation. The default value is 2 minutes.
+| timeout | int | no | Timeout in minutes for the nmap scan operation. The default value is 5 minutes.
 
 #### Defaults
 Current supported defaults:
