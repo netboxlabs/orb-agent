@@ -22,6 +22,8 @@ When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), snm
 
 When a target is a modular chassis and the `discover_modules` policy option is enabled, snmp-discovery additionally emits `Module` and `ModuleBay` entities for each chassis slot (and, in `full` mode, each transceiver sub-bay) — see [Modules / ModuleBays](#modules--modulebays) below. Defaults to `off`, so existing operators see zero behaviour change unless they explicitly opt in.
 
+When the `discover_vrfs` policy option is enabled, snmp-discovery emits a `VRF` entity for each VRF reported by the device's VRF MIB tables and attaches it to the IP addresses of the VRF's member interfaces — see [VRFs](#vrfs) below. Defaults to `false`, so existing operators see zero behaviour change.
+
 When the `discover_asset_tags` policy option is enabled, snmp-discovery reads `ENTITY-MIB::entPhysicalAssetID` and populates `asset_tag` on each emitted device — including per-member tags on virtual-chassis stacks. Defaults to `false`, so existing operators see zero behaviour change. Note that NetBox `asset_tag` values are unique and act as the highest-precedence device matcher during ingestion: enable this only if the tags provisioned on your devices are trustworthy and unique.
 
 When a device exposes the relevant MIBs, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. VLAN discovery uses Q-BRIDGE-MIB (RFC 4363) as the generic source and a Cisco-specific overlay (CISCO-VLAN-MEMBERSHIP-MIB, CISCO-VOICE-VLAN-MIB) on Cisco devices that don't fully implement Q-BRIDGE — see [SNMP Discovery — Supported Platforms](./supported_platforms.md#interface--vlan-associations) for which device classes are covered.
@@ -65,6 +67,9 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | create_unknown_vlans | bool | no | Auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's `dot1qVlanStaticTable`. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `true`. Set `false` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). |
 | discover_asset_tags | bool | no | When `true`, walks `ENTITY-MIB::entPhysicalAssetID` and populates each device's `asset_tag` from its chassis row — standalone devices get the chassis tag; each virtual-chassis member gets its own per-member tag. An operator-supplied `defaults.asset_tag` (literal or OID reference) always takes precedence on the target device. Values that are empty, non-printable, well-known placeholders (`UNKNOWN`, `N/A`, `None`, `0`, …), longer than NetBox's 50-character limit, or duplicated across chassis rows of the same target are skipped with a warning — `asset_tag` is unique in NetBox and is the highest-precedence device matcher, so a duplicated tag would merge two devices into one record. The same protection applies across targets of one policy: the first target to report a tag owns it for the lifetime of the policy, and other targets reporting the same value (vendor-cloned EEPROM data) are skipped with a warning. Defaults to `false` — the column is not even walked when off. |
 | discover_modules | string | no | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards and supervisors; PSU / fan recognised by the PID classifier but never emitted), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Detection is vendor-neutral via `ENTITY-MIB::entPhysicalTable` — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
+| discover_vrfs | bool | no | When `true`, discovers VRFs from the device's VRF MIB tables and attaches them to the IP addresses of each VRF's member interfaces (matched by `ifIndex`). A discovered VRF takes precedence over the `vrf` / `vrf_ipv4` / `vrf_ipv6` defaults for those interfaces; other addresses keep the configured defaults. Defaults to `false` — the VRF tables are not even walked when off. See [VRFs](#vrfs) for the MIB tiers, route-distinguisher handling, and limitations. |
+| emit_prefixes | bool | no | Derive one `Prefix` entity per unique (network, VRF) from the discovered IP addresses, matching device-discovery's behavior. **Defaults to `true`** — set `false` to opt out. See [Prefixes](#prefixes). |
+| propagate_defaults_to_prefix_scope | bool | no | When `true` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to the Prefix scope site and `defaults.location` to the scope location (location wins, carrying the site). Defaults to `false`. Any explicit `defaults.prefix.scope_*` skips the cascade wholesale. |
 
 #### Defaults Parameters
 | Parameter | Type | Required | Description |
@@ -91,12 +96,26 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
 | ip_address   | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
-| ├─ vrf   | string \| map  | IP address VRF name, or VRF object with route distinguisher |
-| ├──── name | string  | VRF name |
-| ├──── rd | string  | Route distinguisher (e.g. `65000:100`) |
-| ├────description | string  | VRF description |
-| ├──── comments | string  | VRF comments |
-| ├──── tags | list  | VRF tags |
+| ├─ vrf   | string \| map  | IP address VRF name, or a VRF map (see the [vrf map](#vrf-map) below). Used for both address families unless an AF-specific override is set. |
+| ├─ vrf_ipv4   | string \| map  | IPv4-specific VRF override (same shape as `vrf`). When set, IPv4 addresses use this VRF; IPv6 still uses `vrf`. The override replaces `vrf` wholesale for its family — it does not inherit `vrf.name`. |
+| ├─ vrf_ipv6   | string \| map  | IPv6-specific VRF override (same shape as `vrf`). When set, IPv6 addresses use this VRF; IPv4 still uses `vrf`. |
+| prefix   | map  | Prefix-specific defaults applied to derived Prefix entities (see [Prefixes](#prefixes)) |
+| ├─ description | string  | Prefix description |
+| ├─ comments | string  | Prefix comments |
+| ├─ tags | list  | Prefix tags |
+| ├─ role | string  | Prefix role |
+| ├─ tenant | string  | Prefix tenant |
+| ├─ vrf   | string \| map  | Prefix VRF (same `vrf` map shape; independent of `ip_address.vrf`) |
+| ├─ vrf_ipv4   | string \| map  | IPv4-specific prefix VRF override |
+| ├─ vrf_ipv6   | string \| map  | IPv6-specific prefix VRF override |
+| ├─ scope_site | string  | Prefix scope site. Setting any explicit scope skips the `propagate_defaults_to_prefix_scope` cascade wholesale. |
+| ├─ scope_location | string  | Prefix scope location (wins over `scope_site` on the wire, carrying the site for NetBox's per-site location uniqueness) |
+| vrf | map | VRF-specific defaults (used within `ip_address` and `prefix`, incl. the `vrf_ipv4` / `vrf_ipv6` overrides) |
+| ├─ name | string  | VRF name |
+| ├─ rd | string  | Route distinguisher (e.g. `65000:100`) |
+| ├─ description | string  | VRF description |
+| ├─ comments | string  | VRF comments |
+| ├─ tags | list  | VRF tags |
 | ├─ tenant   | string  | IP address tenant              |
 | ├─ description | string  | IP address description      |
 | vlan    | map  | VLAN-specific defaults  |
@@ -193,6 +212,10 @@ config:
       vrf:
         name: "management"
         rd: "65000:100"
+      # Per-address-family overrides (optional): the family-specific VRF
+      # wins for that family's addresses, replacing vrf wholesale.
+      # vrf_ipv4: "ipv4-vrf"
+      # vrf_ipv6: { name: "ipv6-vrf", rd: "65000:6" }
     interface:
       description: "Auto-discovered interface"
       if_type: "ethernet"
@@ -266,6 +289,35 @@ When the target reports 2+ chassis rows in `ENTITY-MIB` (`entPhysicalTable`) wit
 **Member AssetTag is cleared.** Diode's highest-precedence matcher for `dcim.device` is `asset_tag` (unique). The master Device carries the policy `defaults.asset_tag` value if configured; member Devices have it explicitly cleared so multiple members do not collapse onto one NetBox row through a shared asset tag. Master / standalone AssetTag behaviour from `defaults.asset_tag` is unchanged. When the `discover_asset_tags` option is enabled, members instead receive their own per-row `entPhysicalAssetID` values — only the operator-supplied defaults tag is never replicated to members.
 
 **Orphaned member ports.** If a chassis row is dropped from the validated payload (empty serial, duplicate serial collapsed against a lower-id row, etc.) but the device still reports ports owned by that member, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
+
+## VRFs
+
+When the `discover_vrfs` policy option is enabled (defaults to `false`), snmp-discovery walks the device's VRF MIB tables and emits a NetBox `VRF` entity per VRF, attached to the `IPAddress` entities of the VRF's member interfaces (membership is matched by `ifIndex`, so no name canonicalization is involved). With the option off, the VRF table columns are not walked at all — zero additional SNMP load.
+
+**MIB tiers.** Three sources are tried in order until one yields VRFs:
+
+1. **MPLS-L3VPN-STD-MIB** (RFC 4382) — the standards path (`mplsL3VpnVrfTable` for names + route distinguishers, `mplsL3VpnIfConfTable` for membership). Implemented by Cisco IOS/IOS-XE/IOS-XR, Juniper, Nokia, Huawei, and others.
+2. **MPLS-VPN-MIB** (the pre-standard experimental arc) — same table shapes; common on older Cisco IOS.
+3. **CISCO-VRF-MIB** — VRF-lite platforms without the MPLS feature MIBs. No route distinguisher is available on this tier.
+
+A tier that exposes VRF names but no membership (split-arc agents) merges membership from the lower tiers; lower tiers never introduce additional VRF names on their own.
+
+**Precedence.** A discovered VRF wins over the `defaults.ip_address.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for member interfaces' addresses; every other address keeps the configured defaults. The device's primary IP reference is kept consistent with its underlying IP address entity, so NetBox (where IP identity is address + VRF) never sees the same address in two VRF contexts.
+
+**Route distinguishers.** Both the RFC 4382 8-byte binary encoding (type 0/1/2) and the display-string form some agents return are decoded to the canonical `ASN:nn` / `IP:nn` text. Unset or undecodable RDs stay off the wire entirely, so the VRF matches NetBox records whose RD is empty — the same caveat as device-discovery applies: if a VRF with the same name already exists in NetBox **with** an RD while the device reports none, the first cycle creates a separate RD-less VRF record.
+
+**Limitation — VRF-scoped addresses.** Some platforms only expose VRF-scoped IP addresses through SNMPv3 contexts or `community@vrf` conventions; snmp-discovery walks the standard IP-MIB tables in the default context and attaches VRFs to whatever addresses are visible there. Addresses hidden behind per-VRF contexts are not discovered (same as before this feature); per-context walking is a possible follow-up.
+
+
+## Prefixes
+
+Prefix entities are derived from the discovered IP addresses — the network of each address/prefix-length — exactly as device-discovery does. One `Prefix` is emitted per unique (network, VRF) pair per target. **This is on by default** (`emit_prefixes: true`); set `emit_prefixes: false` in the policy options to opt out.
+
+- **VRF**: a prefix whose addresses were attached to a discovered VRF (see [VRFs](#vrfs)) carries that VRF; everything else resolves from `defaults.prefix.vrf` / `vrf_ipv4` / `vrf_ipv6` (independent of the `ip_address` knobs).
+- **Scope**: explicit `defaults.prefix.scope_site` / `scope_location` always win; with `propagate_defaults_to_prefix_scope: true` and no explicit scope, `defaults.site` / `defaults.location` cascade in.
+- **Safety guards**: zero-length networks (agent-quirk `0.0.0.0` masks) and IPv4-mapped IPv6 addresses never derive prefixes.
+- **Data-quality note**: when an agent doesn't implement `ipAddressPrefixTable`, addresses fall back to host length, so their derived prefixes are `/32` / `/128` — the same shape device-discovery emits for loopbacks. Opt out if host prefixes are unwanted in your IPAM tree.
+
 
 ## Modules / ModuleBays
 
