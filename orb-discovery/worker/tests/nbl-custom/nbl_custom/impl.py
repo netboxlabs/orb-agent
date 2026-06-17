@@ -40,6 +40,11 @@ class ScopeMap(BaseModel):
 class MockBackend(Backend):
     """Mock backend class."""
 
+    @classmethod
+    def describe(cls) -> Metadata:
+        """Mock describe method (no-instance metadata accessor)."""
+        return Metadata(name="mock_custom", app_name="mock_app", app_version="1.0.0")
+
     def setup(self) -> Metadata:
         """Mock setup method."""
         return Metadata(name="mock_custom", app_name="mock_app", app_version="1.0.0")

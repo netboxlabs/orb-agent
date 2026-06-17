@@ -1,6 +1,6 @@
 [project]
 name = "netboxlabs-orb-worker"
-version = "1.0.0"  # Overwritten during the build process
+version = "1.99.0.dev0"  # Placeholder, overwritten by CI before build (worker-release.yaml: `toml set project.version`). Kept above all sibling pins so editable / pip-install-from-source flows resolve.
 description = "NetBox Labs, Worker backend for Orb Agent"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,6 +34,7 @@ dependencies = [
     "pydantic~=2.9",
     "uvicorn~=0.32",
     "PyYAML~=6.0",
+    "typing-extensions~=4.5",
     "opentelemetry-api~=1.32",
     "opentelemetry-sdk~=1.32",
     "opentelemetry-exporter-otlp~=1.32",
