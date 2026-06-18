@@ -261,8 +261,12 @@ class CumulusDriver(_napalm_base.NetworkDriver):
 
         eeprom = _parse_decode_syseeprom(self.device.send_command("decode-syseeprom"))
         model = eeprom.get("product_name") or eeprom.get("part_number") or "Unknown"
-        # Use the EEPROM vendor when present; Nvidia is the default for ONIE/Cumulus hardware.
-        vendor = eeprom.get("manufacturer") or "Nvidia"
+        # Use the EEPROM vendor when present; NVIDIA is the default for ONIE/Cumulus hardware.
+        # ONIE EEPROMs spell the NVIDIA vendor inconsistently ("Nvidia"/"NVIDIA"); fold it to
+        # the NDX/DTL manufacturer name.
+        vendor = eeprom.get("manufacturer") or "NVIDIA"
+        if vendor.lower() == "nvidia":
+            vendor = "NVIDIA"
         # Prefer EEPROM serial; fall back to DMI sysfs (available on VMs without decode-syseeprom).
         serial_number = eeprom.get("serial_number") or ""
         if not serial_number:

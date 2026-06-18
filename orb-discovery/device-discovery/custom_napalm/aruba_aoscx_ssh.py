@@ -312,7 +312,7 @@ class AOSCXSSHDriver(_napalm_base.NetworkDriver):
 
         return {
             "hostname": row.get("hostname", "Unknown"),
-            "vendor": row.get("vendor", "Aruba") or "Aruba",
+            "vendor": "HPE",
             "model": (row.get("product", "") or "Unknown").strip(),
             "os_version": row.get("version", "Unknown"),
             "serial_number": row.get("serial", "Unknown"),

@@ -603,7 +603,7 @@ class SLXOSDriver(_napalm_base.NetworkDriver):
 
         return {
             "hostname": hostname,
-            "vendor": "Extreme",
+            "vendor": "Extreme Networks",
             "model": model,
             "os_version": os_version,
             "serial_number": serial_number,

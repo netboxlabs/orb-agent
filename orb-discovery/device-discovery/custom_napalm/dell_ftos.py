@@ -476,7 +476,11 @@ class FTOSDriver(_napalm_base.NetworkDriver):
         return os_version, uptime, model
 
     def _facts_from_stack_unit(self) -> tuple[str, str, str]:
-        """Return (serial_number, model, vendor) from 'show system stack-unit 0' (regex)."""
+        """
+        Return (serial_number, model, vendor) from 'show system stack-unit 0'.
+
+        serial_number and model are parsed via regex; vendor is the constant "Dell".
+        """
         serial_number = "Unknown"
         model = "Unknown"
         vendor = "Dell"
@@ -491,10 +495,6 @@ class FTOSDriver(_napalm_base.NetworkDriver):
                 val = stripped.split(":", 1)[-1].strip()
                 if val:
                     model = val
-            elif stripped.startswith("Mfg By"):
-                val = stripped.split(":", 1)[-1].strip()
-                if val:
-                    vendor = val
         return serial_number, model, vendor
 
     def get_facts(self) -> dict:
@@ -503,7 +503,7 @@ class FTOSDriver(_napalm_base.NetworkDriver):
 
         Facts are assembled from four commands:
         - 'show version'          → os_version, uptime (ntc-template)
-        - 'show system stack-unit 0' → serial_number, model, vendor (regex)
+        - 'show system stack-unit 0' → serial_number, model (regex); vendor is constant "Dell"
         - 'show running-config'   → hostname (regex on first 'hostname' line)
         - 'show interfaces'       → interface_list (regex scan for interface names)
         """

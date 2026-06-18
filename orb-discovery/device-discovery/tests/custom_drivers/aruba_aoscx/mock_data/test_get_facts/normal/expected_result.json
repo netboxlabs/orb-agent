@@ -1,6 +1,6 @@
 {
   "hostname": "aruba-cx-6300",
-  "vendor": "Aruba",
+  "vendor": "HPE",
   "model": "6300M 24-port SFP+ 4-port SFP56",
   "os_version": "GL.10.10.0001",
   "serial_number": "CN29FP60KT",

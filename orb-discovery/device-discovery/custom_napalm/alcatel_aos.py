@@ -340,13 +340,12 @@ class AlcatelAOSDriver(_napalm_base.NetworkDriver):
             model = chass.get("model_name", "Unknown").strip() or "Unknown"
             serial_number = chass.get("serial_number", "Unknown").strip() or "Unknown"
 
-        # Split description on model name to extract vendor / os_version.
+        # Split description on model name to extract the os_version.
         # description format: "Alcatel-Lucent Enterprise OS6860E-24 8.5.152.R01 ..."
         if parsed_sys and model != "Unknown":
             desc = parsed_sys[0].get("description", "")
             if model in desc:
-                before, _, after = desc.partition(model)
-                vendor = before.strip().rstrip(",") or "Alcatel-Lucent"
+                _, _, after = desc.partition(model)
                 os_version = after.strip().lstrip(",").strip() or "Unknown"
             elif desc:
                 os_version = desc.strip()

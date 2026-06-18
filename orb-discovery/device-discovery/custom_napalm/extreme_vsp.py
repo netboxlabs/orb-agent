@@ -451,7 +451,7 @@ class VSPDriver(_napalm_base.NetworkDriver):
         """Return general device facts."""
         facts: dict = {
             "hostname": "Unknown",
-            "vendor": "Extreme",
+            "vendor": "Extreme Networks",
             "model": "VSP",
             "os_version": "Unknown",
             "serial_number": "Unknown",

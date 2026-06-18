@@ -1,6 +1,6 @@
 {
   "hostname": "leaf01",
-  "vendor": "Nvidia",
+  "vendor": "NVIDIA",
   "model": "SN2410M",
   "os_version": "Cumulus Linux 5.7.0",
   "serial_number": "MT2123X07890A",

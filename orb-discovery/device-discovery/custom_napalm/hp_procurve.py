@@ -396,7 +396,7 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
 
         return {
             "hostname": hostname,
-            "vendor": "HP",
+            "vendor": "HPE",
             "model": model,
             "os_version": os_version,
             "serial_number": serial_number,

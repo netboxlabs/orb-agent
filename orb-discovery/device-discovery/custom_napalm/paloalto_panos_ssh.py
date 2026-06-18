@@ -433,7 +433,7 @@ class PANOSSHDriver(_napalm_base.NetworkDriver):
 
         return {
             "hostname": row.get("hostname", "Unknown"),
-            "vendor": "Palo Alto Networks",
+            "vendor": "Palo Alto",
             "model": row.get("model", "Unknown"),
             "os_version": row.get("os", "Unknown"),
             "serial_number": row.get("serial", "Unknown"),

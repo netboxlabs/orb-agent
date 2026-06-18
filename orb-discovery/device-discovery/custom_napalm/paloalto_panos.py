@@ -536,7 +536,7 @@ class PANOSDriver(_napalm_base.NetworkDriver):
 
         if system_info:
             facts["hostname"] = system_info["hostname"]
-            facts["vendor"] = "Palo Alto Networks"
+            facts["vendor"] = "Palo Alto"
             facts["uptime"] = float(convert_uptime_string_seconds(system_info["uptime"]))
             facts["os_version"] = system_info["sw-version"]
             facts["serial_number"] = system_info["serial"]

@@ -1,6 +1,6 @@
 {
   "hostname": "procurve-lab-sw1",
-  "vendor": "HP",
+  "vendor": "HPE",
   "model": "HP ProCurve Switch 2650",
   "os_version": "R.11.72",
   "serial_number": "SG80HC0086",

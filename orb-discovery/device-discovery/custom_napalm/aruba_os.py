@@ -198,7 +198,7 @@ class ArubaOSDriver(_napalm_base.NetworkDriver):
 
         return {
             "hostname": hostname,
-            "vendor": "HPE Aruba",
+            "vendor": "HPE",
             "model": model,
             "os_version": os_version,
             "serial_number": serial_number,
