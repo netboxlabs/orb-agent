@@ -25,6 +25,7 @@ func (m *mockFilesManager) Start(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
 }
+
 func (m *mockFilesManager) Stop(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
