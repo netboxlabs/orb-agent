@@ -96,6 +96,18 @@ type orbAgent struct {
 
 var _ Agent = (*orbAgent)(nil)
 
+// filesDeliveryManager returns the engine when fleet files delivery is active,
+// or nil to disable bundle installation. The fleet messaging layer treats a nil
+// files manager as "delivery off" (it nil-guards Ensure and the catch-up send),
+// so this is how files_manager.active gates fleet bundle delivery. The agent
+// keeps the real engine regardless, for backend-binary management.
+func filesDeliveryManager(cfg config.FilesManagerConfig, engine filesmgr.Manager) filesmgr.Manager {
+	if cfg.Active == "fleet" {
+		return engine
+	}
+	return nil
+}
+
 // New creates a new agent
 func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
@@ -116,7 +128,8 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	// Pass a background context to the config manager at construction time. The
 	// manager keeps its own copy and later derives child contexts from the
 	// runtime context supplied in Agent.Start.
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager, fm)
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager,
+		filesDeliveryManager(c.OrbAgent.FilesManager, fm))
 
 	return &orbAgent{
 		logger:              logger,
