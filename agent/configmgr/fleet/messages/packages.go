@@ -6,8 +6,9 @@ import "os"
 const PackagesCredentialsRPCFunc = "packages_credentials"
 
 // BundleSpec is the transport-facing shape of a bundle delivered over MQTT.
-// It maps to filesmgr.FileSpec in handlePackages. A nil Extract means "omitted"
-// and defaults to true (bundles are tarballs); an explicit false is honored.
+// It maps to filesmgr.FileSpec in FleetFilesManager.HandlePackages. A nil Extract
+// means "omitted" and defaults to true (bundles are tarballs); an explicit false
+// is honored.
 type BundleSpec struct {
 	Name       string      `json:"name"`
 	Version    string      `json:"version"`

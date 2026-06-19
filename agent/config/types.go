@@ -143,9 +143,9 @@ type BackendCommons struct {
 
 // FilesManagerConfig configures the FilesManager subsystem.
 type FilesManagerConfig struct {
-	// Active selects the files-manager mode: "fleet" enables fleet bundle
-	// delivery; "local" or "" leaves the engine running for backend-binary
-	// management with no bundle delivery.
+	// Active selects the files-manager source type. "fleet" enables fleet
+	// bundle delivery; any other value — including "" and the reserved
+	// "local"/"git"/"cron" — currently disables file delivery (no-op manager).
 	Active string `yaml:"active"`
 	// Root is the directory under which FilesManager stores all managed files.
 	// Defaults to /opt/orb/files when unset.
