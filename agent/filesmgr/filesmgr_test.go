@@ -1136,7 +1136,7 @@ func TestNew_FleetWhenActive(t *testing.T) {
 	// Default root applied to the embedded engine.
 	eng, ok := ff.Manager.(*filesmgr)
 	require.True(t, ok)
-	assert.Equal(t, "/opt/orb/files", eng.root)
+	assert.Equal(t, defaultRoot, eng.root)
 }
 
 func TestNew_FleetUsesConfiguredRoot(t *testing.T) {

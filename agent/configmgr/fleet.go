@@ -512,6 +512,8 @@ func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) er
 		}
 		pubCtx, cancel := context.WithTimeout(base, bundleListReqPublishTimeout)
 		defer cancel()
+		// SendBundleListRequest logs publish failures; the closure only publishes
+		// and returns the error so the failure is logged once.
 		fleetFM.SendBundleListRequest(pubCtx, func(ctx context.Context, payload []byte) error {
 			_, err := cm.Publish(ctx, &paho.Publish{
 				Topic:   outbox,
@@ -519,9 +521,6 @@ func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) er
 				QoS:     1,
 				Retain:  false,
 			})
-			if err != nil {
-				fleetManager.logger.Error("failed to publish bundle_list_req", "error", err)
-			}
 			return err
 		})
 	})

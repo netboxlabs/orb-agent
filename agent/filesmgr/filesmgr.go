@@ -63,7 +63,7 @@ func New(logger *slog.Logger, cfg config.FilesManagerConfig) Manager {
 			if l == nil {
 				l = slog.Default()
 			}
-			l.Info("files_manager.active has no source type implemented yet, file delivery disabled", "active", cfg.Active)
+			l.Debug("files_manager.active has no source type implemented yet, file delivery disabled", "active", cfg.Active)
 		}
 		return &dummyFilesManager{}
 	}
