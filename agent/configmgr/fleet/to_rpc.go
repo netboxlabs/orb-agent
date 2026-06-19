@@ -99,3 +99,21 @@ func (messaging *Messaging) sendAgentPoliciesRequest(ctx context.Context, orgID 
 
 	return nil
 }
+
+func (messaging *Messaging) sendBundleListRequest(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
+	body, err := json.Marshal(messages.RPC{
+		SchemaVersion: messages.CurrentRPCSchemaVersion,
+		Func:          messages.BundleListReqRPCFunc,
+		Payload:       messages.BundleListReqRPCPayload{},
+	})
+	if err != nil {
+		messaging.logger.Error("failed to marshal bundle_list_req, skipping", "error", err)
+		return
+	}
+	messaging.logger.Debug("sending bundle_list_req", "value", string(body))
+	if err := publishFunc(ctx, body); err != nil {
+		messaging.logger.Error("error sending bundle_list_req", "error", err)
+		return
+	}
+	messaging.logger.Debug("bundle_list_req sent")
+}

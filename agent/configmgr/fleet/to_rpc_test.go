@@ -509,3 +509,27 @@ func TestSendGroupMembershipsRequest_PublishError(_ *testing.T) {
 	// Should log error but not panic
 	messaging.sendGroupMembershipsRequest(context.Background(), publishFunc)
 }
+
+func TestSendBundleListRequest(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := &Messaging{logger: logger}
+
+	var captured []byte
+	m.sendBundleListRequest(context.Background(), func(_ context.Context, payload []byte) error {
+		captured = payload
+		return nil
+	})
+
+	require.NotNil(t, captured)
+
+	// Assert the full envelope, including an empty-object payload (RPC.Payload is `any`,
+	// so a nil/wrong payload would otherwise slip through).
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(captured, &raw))
+	var fn, schema string
+	require.NoError(t, json.Unmarshal(raw["func"], &fn))
+	require.NoError(t, json.Unmarshal(raw["schema_version"], &schema))
+	assert.Equal(t, messages.BundleListReqRPCFunc, fn)
+	assert.Equal(t, messages.CurrentRPCSchemaVersion, schema)
+	assert.JSONEq(t, "{}", string(raw["payload"]))
+}

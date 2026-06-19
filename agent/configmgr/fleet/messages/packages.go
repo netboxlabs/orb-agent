@@ -30,3 +30,11 @@ type PackagesCredentialsRPC struct {
 	Func          string                        `json:"func"`
 	Payload       PackagesCredentialsRPCPayload `json:"payload"`
 }
+
+// BundleListReqRPCFunc asks the control plane to (re)deliver the agent's current
+// bundle set. Matches the orb-pro fleetamqp BundleListReqRPCFunc.
+const BundleListReqRPCFunc = "bundle_list_req"
+
+// BundleListReqRPCPayload is intentionally empty — fleet resolves the agent and
+// its groups from the routing key.
+type BundleListReqRPCPayload struct{}
