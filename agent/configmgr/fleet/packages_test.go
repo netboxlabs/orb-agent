@@ -67,18 +67,18 @@ func boolPtr(b bool) *bool { return &b }
 func TestHandlePackages_HappyPath(t *testing.T) {
 	fm := &mockFilesManager{}
 	fm.On("Ensure", mock.Anything, filesmgr.FileSpec{
-		Name:    "nbl_cisco_meraki",
+		Name:    "nbl_custom_worker",
 		Version: "0.2.0",
 		URL:     "https://example.com/bundle.tar.gz",
 		SHA256:  "abc123",
 		Extract: true,
-	}).Return("/opt/orb/files/nbl_cisco_meraki/0.2.0", nil)
+	}).Return("/opt/orb/files/nbl_custom_worker/0.2.0", nil)
 
 	messaging := newTestMessagingWithFiles(fm)
 	payload := messages.PackagesCredentialsRPCPayload{
 		Bundles: []messages.BundleSpec{
 			{
-				Name:      "nbl_cisco_meraki",
+				Name:      "nbl_custom_worker",
 				Version:   "0.2.0",
 				URL:       "https://example.com/bundle.tar.gz",
 				SHA256:    "abc123",
@@ -93,17 +93,17 @@ func TestHandlePackages_HappyPath(t *testing.T) {
 func TestHandlePackages_ExtractDefaultsTrueWhenAbsent(t *testing.T) {
 	fm := &mockFilesManager{}
 	fm.On("Ensure", mock.Anything, filesmgr.FileSpec{
-		Name:    "nbl_cisco_meraki",
+		Name:    "nbl_custom_worker",
 		Version: "0.2.0",
 		URL:     "https://example.com/bundle.tar.gz",
 		SHA256:  "abc123",
 		Extract: true, // BundleSpec omitted extract -> defaults to true
-	}).Return("/opt/orb/files/nbl_cisco_meraki/0.2.0", nil)
+	}).Return("/opt/orb/files/nbl_custom_worker/0.2.0", nil)
 
 	messaging := newTestMessagingWithFiles(fm)
 	messaging.handlePackages(context.Background(), messages.PackagesCredentialsRPCPayload{
 		Bundles: []messages.BundleSpec{
-			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+			{Name: "nbl_custom_worker", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
 		},
 	})
 	fm.AssertExpectations(t)
@@ -139,25 +139,25 @@ func TestHandlePackages_EmptyBundles(t *testing.T) {
 func TestHandlePackages_PartialFailure(t *testing.T) {
 	fm := &mockFilesManager{}
 	fm.On("Ensure", mock.Anything, filesmgr.FileSpec{
-		Name:    "nbl_cisco_meraki",
+		Name:    "nbl_custom_worker",
 		Version: "0.2.0",
-		URL:     "https://example.com/meraki.tar.gz",
+		URL:     "https://example.com/worker.tar.gz",
 		SHA256:  "aaa111",
 		Extract: true,
 	}).Return("", assert.AnError)
 	fm.On("Ensure", mock.Anything, filesmgr.FileSpec{
-		Name:    "nbl_cisco_catalyst_center",
+		Name:    "nbl_custom_collector",
 		Version: "0.1.0",
-		URL:     "https://example.com/catalyst.tar.gz",
+		URL:     "https://example.com/collector.tar.gz",
 		SHA256:  "bbb222",
 		Extract: true,
-	}).Return("/opt/orb/files/nbl_cisco_catalyst_center/0.1.0", nil)
+	}).Return("/opt/orb/files/nbl_custom_collector/0.1.0", nil)
 
 	messaging := newTestMessagingWithFiles(fm)
 	payload := messages.PackagesCredentialsRPCPayload{
 		Bundles: []messages.BundleSpec{
-			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/meraki.tar.gz", SHA256: "aaa111"},
-			{Name: "nbl_cisco_catalyst_center", Version: "0.1.0", URL: "https://example.com/catalyst.tar.gz", SHA256: "bbb222"},
+			{Name: "nbl_custom_worker", Version: "0.2.0", URL: "https://example.com/worker.tar.gz", SHA256: "aaa111"},
+			{Name: "nbl_custom_collector", Version: "0.1.0", URL: "https://example.com/collector.tar.gz", SHA256: "bbb222"},
 		},
 	}
 	// Should not panic — failure is non-fatal
@@ -168,7 +168,7 @@ func TestHandlePackages_PartialFailure(t *testing.T) {
 func TestDispatchToHandlers_PackagesCredentials(t *testing.T) {
 	fm := &mockFilesManager{}
 	fm.On("Ensure", mock.Anything, mock.AnythingOfType("filesmgr.FileSpec")).
-		Return("/opt/orb/files/nbl_cisco_meraki/0.2.0", nil)
+		Return("/opt/orb/files/nbl_custom_worker/0.2.0", nil)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	resetChan := make(chan struct{}, 1)
@@ -180,7 +180,7 @@ func TestDispatchToHandlers_PackagesCredentials(t *testing.T) {
 		Func:          messages.PackagesCredentialsRPCFunc,
 		Payload: messages.PackagesCredentialsRPCPayload{
 			Bundles: []messages.BundleSpec{
-				{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+				{Name: "nbl_custom_worker", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
 			},
 		},
 	}
@@ -200,7 +200,7 @@ func TestHandlePackages_NilFilesManager(_ *testing.T) {
 	messaging := newTestMessagingWithFiles(nil)
 	payload := messages.PackagesCredentialsRPCPayload{
 		Bundles: []messages.BundleSpec{
-			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+			{Name: "nbl_custom_worker", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
 		},
 	}
 	// Should not panic when filesManager is nil
