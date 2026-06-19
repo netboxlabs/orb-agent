@@ -465,7 +465,9 @@ func TestMapCapabilities_CumulusTokenRecognized(t *testing.T) {
 		},
 	}
 	result := mapCapabilities(resp)
-	assert.Equal(t, "Cumulus", result.Vendor)
+	// The cumulus token resolves to the NVIDIA manufacturer (Cumulus is
+	// NVIDIA's NOS, not a NetBox manufacturer of its own).
+	assert.Equal(t, "NVIDIA", result.Vendor)
 }
 
 func TestMapCapabilities_MellanoxTokenRecognized(t *testing.T) {

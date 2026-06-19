@@ -461,17 +461,19 @@ func (s *gnmicSession) Close() error {
 }
 
 // vendorCanonical maps a lower-cased vendor token (as it may appear within a
-// SupportedModel Organization string) to the clean display name surfaced as the
-// discovered vendor. NVIDIA Cumulus may report "NVIDIA", "Cumulus", or
-// "Mellanox" depending on release; all three are recognized so the derived
-// vendor still lines up with the nvidia_cumulus overlay's aliases.
+// SupportedModel Organization string) to the canonical NetBox manufacturer
+// surfaced as the discovered vendor. NVIDIA Cumulus may report "NVIDIA",
+// "Cumulus", or "Mellanox" depending on release; the "cumulus" token resolves
+// to the NVIDIA manufacturer (Cumulus is NVIDIA's NOS, not a NetBox
+// manufacturer of its own), so every NVIDIA-Cumulus spelling still lines up
+// with the nvidia_cumulus overlay's aliases.
 var vendorCanonical = map[string]string{
 	"arista":   "Arista",
 	"nokia":    "Nokia",
 	"cisco":    "Cisco",
 	"juniper":  "Juniper",
 	"nvidia":   "NVIDIA",
-	"cumulus":  "Cumulus",
+	"cumulus":  "NVIDIA",
 	"mellanox": "Mellanox",
 	"huawei":   "Huawei",
 	"dell":     "Dell",
