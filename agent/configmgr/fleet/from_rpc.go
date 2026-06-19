@@ -123,7 +123,7 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 // other bundles in the same delivery are still installed.
 func (messaging *Messaging) handlePackages(_ context.Context, payload messages.PackagesCredentialsRPCPayload) {
 	if messaging.filesManager == nil {
-		messaging.logger.Error("filesManager is nil, cannot install bundles")
+		messaging.logger.Warn("received fleet bundles but files_manager.active != fleet; ignoring")
 		return
 	}
 	if len(payload.Bundles) == 0 {
@@ -135,12 +135,16 @@ func (messaging *Messaging) handlePackages(_ context.Context, payload messages.P
 		// TODO: check bundle.ExpiresAt before calling Ensure to avoid
 		// unnecessary download attempts with expired presigned URLs.
 		installCtx, cancel := context.WithTimeout(messaging.stopCtx, 10*time.Minute)
+		extract := true
+		if bundle.Extract != nil {
+			extract = *bundle.Extract
+		}
 		spec := filesmgr.FileSpec{
 			Name:       bundle.Name,
 			Version:    bundle.Version,
 			URL:        bundle.URL,
 			SHA256:     bundle.SHA256,
-			Extract:    bundle.Extract,
+			Extract:    extract,
 			TargetPath: bundle.TargetPath,
 			Mode:       bundle.Mode,
 		}
