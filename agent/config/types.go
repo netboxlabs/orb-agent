@@ -141,12 +141,26 @@ type BackendCommons struct {
 	Debug bool // Debug flag from CLI (not from YAML config)
 }
 
-// FilesManagerConfig holds optional configuration for the FilesManager subsystem.
+// FilesManagerConfig configures the FilesManager subsystem.
 type FilesManagerConfig struct {
+	// Active selects the files-manager mode: "fleet" enables fleet bundle
+	// delivery; "local" or "" leaves the engine running for backend-binary
+	// management with no bundle delivery.
+	Active string `yaml:"active"`
 	// Root is the directory under which FilesManager stores all managed files.
 	// Defaults to /opt/orb/files when unset.
 	Root string `yaml:"root"`
+	// Sources holds per-source options.
+	Sources FilesSources `yaml:"sources"`
 }
+
+// FilesSources holds files-manager source configuration.
+type FilesSources struct {
+	Fleet FleetFilesManager `yaml:"fleet"`
+}
+
+// FleetFilesManager holds fleet-files-source options. Reserved for now.
+type FleetFilesManager struct{}
 
 // OrbAgent represents the configuration for the Orb agent
 type OrbAgent struct {
