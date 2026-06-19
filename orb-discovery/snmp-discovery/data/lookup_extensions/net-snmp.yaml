@@ -1,0 +1,25 @@
+# Net-SNMP agent OS sysObjectIDs — generic catch-all for devices that run the
+# net-snmp agent (Linux/BSD appliances, Raspberry Pi, pfSense/OPNsense, generic
+# servers) and report an OS-based sysObjectID under .1.3.6.1.4.1.8072.3.2 instead
+# of a vendor product OID (NET-SNMP-TC). This populates the model with the OS as a
+# readability hint; PEN 8072 is not an NDX manufacturer, so it does not map a device
+# to an NDX device-type. The .255 'unknown' sentinel is omitted (no value over the
+# raw-OID fallback).
+devices:
+  .1.3.6.1.4.1.8072.3.2.1: hpux9
+  .1.3.6.1.4.1.8072.3.2.2: sunos4
+  .1.3.6.1.4.1.8072.3.2.3: solaris
+  .1.3.6.1.4.1.8072.3.2.4: osf
+  .1.3.6.1.4.1.8072.3.2.5: ultrix
+  .1.3.6.1.4.1.8072.3.2.6: hpux10
+  .1.3.6.1.4.1.8072.3.2.7: netbsd
+  .1.3.6.1.4.1.8072.3.2.8: freebsd
+  .1.3.6.1.4.1.8072.3.2.9: irix
+  .1.3.6.1.4.1.8072.3.2.10: linux
+  .1.3.6.1.4.1.8072.3.2.11: bsdi
+  .1.3.6.1.4.1.8072.3.2.12: openbsd
+  .1.3.6.1.4.1.8072.3.2.13: win32
+  .1.3.6.1.4.1.8072.3.2.14: hpux11
+  .1.3.6.1.4.1.8072.3.2.15: aix
+  .1.3.6.1.4.1.8072.3.2.16: macosx
+  .1.3.6.1.4.1.8072.3.2.17: dragonfly
