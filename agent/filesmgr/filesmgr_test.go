@@ -1132,6 +1132,16 @@ func TestNew_UsesConfiguredRoot(t *testing.T) {
 	assert.Equal(t, "/custom/files", impl.root)
 }
 
+func TestDeliveryManager(t *testing.T) {
+	engine := New(slog.Default(), config.FilesManagerConfig{})
+
+	// Disabled: the fleet messaging layer treats nil as "delivery off".
+	assert.Nil(t, DeliveryManager(config.FilesManagerConfig{Active: ""}, engine))
+	assert.Nil(t, DeliveryManager(config.FilesManagerConfig{Active: "local"}, engine))
+	// Active: the same engine is returned for the fleet delivery path.
+	assert.Equal(t, engine, DeliveryManager(config.FilesManagerConfig{Active: "fleet"}, engine))
+}
+
 // TestManager_StartCleansUpStaleBackupDirs verifies that .filesmgr-backup-*
 // directories left behind by a crashed renameSwap call are removed on the next
 // Start(). This covers:

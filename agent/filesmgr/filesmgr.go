@@ -50,14 +50,29 @@ type filesmgr struct {
 const defaultRoot = "/opt/orb/files"
 
 // New constructs a Manager from configuration, mirroring secretsmgr.New. The
-// returned engine is always the disk implementation — fleet activation is
-// decided by the caller (see agent.New), not here.
+// returned engine is always the disk implementation: it is needed in every mode
+// (e.g. backend-binary management). Whether the fleet bundle-delivery path uses
+// it is decided separately by DeliveryManager, keyed off cfg.Active.
 func New(logger *slog.Logger, cfg config.FilesManagerConfig) Manager {
 	root := cfg.Root
 	if root == "" {
 		root = defaultRoot
 	}
 	return NewManager(logger, root)
+}
+
+// DeliveryManager reports which Manager the fleet bundle-delivery path should
+// use for the given config: the engine when files delivery is active
+// (files_manager.active == "fleet"), or nil to disable it. The fleet messaging
+// layer treats a nil files manager as "delivery off" — it nil-guards both the
+// install (Ensure) and the bundle_list_req catch-up. Callers keep the real
+// engine separately (from New) for uses independent of fleet delivery, such as
+// backend-binary management.
+func DeliveryManager(cfg config.FilesManagerConfig, engine Manager) Manager {
+	if cfg.Active == "fleet" {
+		return engine
+	}
+	return nil
 }
 
 // NewManager constructs a default Manager rooted at the given directory.

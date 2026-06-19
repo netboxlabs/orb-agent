@@ -356,11 +356,3 @@ func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 	// Verify the extracted config has the custom port.
 	assert.Equal(t, "grpc://localhost:9999", orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should use configured port")
 }
-
-func TestFilesDeliveryManager(t *testing.T) {
-	engine := filesmgr.New(slog.Default(), config.FilesManagerConfig{})
-
-	assert.Nil(t, filesDeliveryManager(config.FilesManagerConfig{Active: ""}, engine))
-	assert.Nil(t, filesDeliveryManager(config.FilesManagerConfig{Active: "local"}, engine))
-	assert.Equal(t, engine, filesDeliveryManager(config.FilesManagerConfig{Active: "fleet"}, engine))
-}

@@ -102,7 +102,7 @@ func (messaging *Messaging) sendAgentPoliciesRequest(ctx context.Context, orgID 
 
 // sendBundleListRequestIfActive sends the bundle catch-up request only when fleet
 // files delivery is active. A nil files manager means delivery is off (see
-// agent.filesDeliveryManager), so this is a no-op in that case.
+// filesmgr.DeliveryManager), so this is a no-op in that case.
 func (messaging *Messaging) sendBundleListRequestIfActive(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
 	if messaging.filesManager == nil {
 		return
