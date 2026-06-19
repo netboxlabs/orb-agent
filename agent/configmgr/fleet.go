@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -478,6 +479,39 @@ func (fleetManager *FleetConfigManager) BindSecretsManager(sm secretsmgr.Manager
 			slog.String("updated_topic", topics.SecretsUpdated))
 	})
 
+	return nil
+}
+
+// BindFilesManager wires a fleet files manager to the MQTT connection: on every
+// (re)connect it sends the bundle_list_req catch-up so the control plane
+// re-delivers the agent's current bundle set. If the files manager is not the
+// fleet type (files delivery disabled), it warns that fleet-delivered bundles
+// will not be installed and otherwise does nothing — incoming packages_credentials
+// are routed to the fleet type separately, by Messaging.DispatchToHandlers.
+func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) error {
+	fleetFM, ok := fm.(*filesmgr.FleetFilesManager)
+	if !ok {
+		fleetManager.logger.Warn("files_manager.active != fleet while config_manager.active == fleet; fleet-delivered bundles will not be installed")
+		return nil
+	}
+
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		outbox := topics.Outbox
+		fleetFM.SendBundleListRequest(context.Background(), func(ctx context.Context, payload []byte) error {
+			_, err := cm.Publish(ctx, &paho.Publish{
+				Topic:   outbox,
+				Payload: payload,
+				QoS:     1,
+				Retain:  false,
+			})
+			if err != nil {
+				fleetManager.logger.Error("failed to publish bundle_list_req", "error", err)
+			}
+			return err
+		})
+	})
+
+	fleetManager.logger.Info("Fleet files manager bound to MQTT")
 	return nil
 }
 

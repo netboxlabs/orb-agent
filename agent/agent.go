@@ -116,8 +116,7 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	// Pass a background context to the config manager at construction time. The
 	// manager keeps its own copy and later derives child contexts from the
 	// runtime context supplied in Agent.Start.
-	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager,
-		filesmgr.DeliveryManager(c.OrbAgent.FilesManager, fm))
+	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager, fm)
 
 	return &orbAgent{
 		logger:              logger,
@@ -425,6 +424,18 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		if fleetCM, ok := a.configManager.(*configmgr.FleetConfigManager); ok {
 			if err := fleetCM.BindSecretsManager(a.secretsManager); err != nil {
 				a.logger.Error("error binding fleet secrets manager", "error", err)
+				return err
+			}
+		}
+	}
+
+	// Bind the fleet files manager so it sends the bundle_list_req catch-up on
+	// connect. Gated on the config manager being fleet; BindFilesManager handles
+	// the non-fleet files-manager case itself (warns and does nothing).
+	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
+		if fleetCM, ok := a.configManager.(*configmgr.FleetConfigManager); ok {
+			if err := fleetCM.BindFilesManager(a.filesManager); err != nil {
+				a.logger.Error("error binding fleet files manager", "error", err)
 				return err
 			}
 		}

@@ -1117,29 +1117,35 @@ func TestManager_StartPreservesNonTrackedVersionDirs(t *testing.T) {
 	assert.DirExists(t, trackedVersionDir, "tracked version dir must not be removed on Start")
 }
 
-func TestNew_DefaultsRootWhenEmpty(t *testing.T) {
-	m := New(slog.Default(), config.FilesManagerConfig{})
-	require.NotNil(t, m)
-	impl, ok := m.(*filesmgr)
-	require.True(t, ok)
-	assert.Equal(t, "/opt/orb/files", impl.root)
+func TestNew_DummyWhenInactive(t *testing.T) {
+	for _, active := range []string{"", "local", "unknown"} {
+		m := New(slog.Default(), config.FilesManagerConfig{Active: active})
+		require.NotNil(t, m)
+		_, ok := m.(*dummyFilesManager)
+		assert.True(t, ok, "active=%q should yield the dummy files manager", active)
+		// Dummy Get always reports not-installed so consumers fall back to baked binaries.
+		_, found := m.Get("anything")
+		assert.False(t, found)
+	}
 }
 
-func TestNew_UsesConfiguredRoot(t *testing.T) {
-	m := New(slog.Default(), config.FilesManagerConfig{Root: "/custom/files"})
-	impl, ok := m.(*filesmgr)
+func TestNew_FleetWhenActive(t *testing.T) {
+	m := New(slog.Default(), config.FilesManagerConfig{Active: "fleet"})
+	ff, ok := m.(*FleetFilesManager)
 	require.True(t, ok)
-	assert.Equal(t, "/custom/files", impl.root)
+	// Default root applied to the embedded engine.
+	eng, ok := ff.Manager.(*filesmgr)
+	require.True(t, ok)
+	assert.Equal(t, "/opt/orb/files", eng.root)
 }
 
-func TestDeliveryManager(t *testing.T) {
-	engine := New(slog.Default(), config.FilesManagerConfig{})
-
-	// Disabled: the fleet messaging layer treats nil as "delivery off".
-	assert.Nil(t, DeliveryManager(config.FilesManagerConfig{Active: ""}, engine))
-	assert.Nil(t, DeliveryManager(config.FilesManagerConfig{Active: "local"}, engine))
-	// Active: the same engine is returned for the fleet delivery path.
-	assert.Equal(t, engine, DeliveryManager(config.FilesManagerConfig{Active: "fleet"}, engine))
+func TestNew_FleetUsesConfiguredRoot(t *testing.T) {
+	m := New(slog.Default(), config.FilesManagerConfig{Active: "fleet", Root: "/custom/files"})
+	ff, ok := m.(*FleetFilesManager)
+	require.True(t, ok)
+	eng, ok := ff.Manager.(*filesmgr)
+	require.True(t, ok)
+	assert.Equal(t, "/custom/files", eng.root)
 }
 
 // TestManager_StartCleansUpStaleBackupDirs verifies that .filesmgr-backup-*
