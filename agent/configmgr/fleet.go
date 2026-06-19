@@ -482,6 +482,10 @@ func (fleetManager *FleetConfigManager) BindSecretsManager(sm secretsmgr.Manager
 	return nil
 }
 
+// bundleListReqPublishTimeout caps a single bundle_list_req catch-up publish so a
+// non-acking broker cannot block the OnReadyHook goroutine indefinitely.
+const bundleListReqPublishTimeout = 30 * time.Second
+
 // BindFilesManager wires a fleet files manager to the MQTT connection: on every
 // (re)connect it sends the bundle_list_req catch-up so the control plane
 // re-delivers the agent's current bundle set. If the files manager is not the
@@ -497,7 +501,18 @@ func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) er
 
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		outbox := topics.Outbox
-		fleetFM.SendBundleListRequest(context.Background(), func(ctx context.Context, payload []byte) error {
+		// Bound the catch-up publish: QoS-1 Publish blocks until the broker acks
+		// or the context is cancelled. Derive from the connection lifetime ctx so
+		// Stop cancels it, and cap it with a timeout so a broker that stops acking
+		// cannot hang the hook goroutine or accumulate stuck publishes across
+		// reconnects.
+		base := fleetManager.connCtx
+		if base == nil {
+			base = context.Background()
+		}
+		pubCtx, cancel := context.WithTimeout(base, bundleListReqPublishTimeout)
+		defer cancel()
+		fleetFM.SendBundleListRequest(pubCtx, func(ctx context.Context, payload []byte) error {
 			_, err := cm.Publish(ctx, &paho.Publish{
 				Topic:   outbox,
 				Payload: payload,

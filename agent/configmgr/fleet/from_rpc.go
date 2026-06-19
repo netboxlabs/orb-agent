@@ -111,7 +111,7 @@ func (messaging *Messaging) DispatchToHandlers(ctx context.Context, payload []by
 		if installer, ok := messaging.filesManager.(bundleInstaller); ok {
 			installer.HandlePackages(ctx, r.Payload)
 		} else {
-			messaging.logger.Debug("packages_credentials received but files delivery is not fleet-active; ignoring")
+			messaging.logger.Warn("received fleet bundles but files_manager.active != fleet; ignoring (set files_manager.active: fleet to install)")
 		}
 	default:
 		messaging.logger.Debug("unknown rpc function", "func", rpc.Func)
