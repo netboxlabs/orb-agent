@@ -312,6 +312,24 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 				connection.groupMembershipFailCount = 0
 				return nil
 			})
+			// Catch-up: ask fleet to (re)deliver our current bundle set. No-op
+			// when files delivery is inactive (nil files manager). Fires on the
+			// initial connect and every reconnect; Ensure is idempotent, so a
+			// redundant delivery is harmless.
+			go connection.messaging.sendBundleListRequestIfActive(ctx, func(ctx context.Context, payload []byte) error {
+				_, err := cm.Publish(ctx, &paho.Publish{
+					Topic:   details.Topics.Outbox,
+					Payload: payload,
+					QoS:     1,
+					Retain:  false,
+				})
+				if err != nil {
+					connection.logger.Error("failed to publish bundle_list_req", "error", err)
+					return err
+				}
+				connection.logger.Debug("bundle_list_req sent", "topic", details.Topics.Outbox)
+				return nil
+			})
 		},
 		OnConnectError: func(err error) {
 			connection.logger.Error("MQTT connection error", "error", err)

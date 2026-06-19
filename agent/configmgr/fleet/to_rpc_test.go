@@ -533,3 +533,27 @@ func TestSendBundleListRequest(t *testing.T) {
 	assert.Equal(t, messages.CurrentRPCSchemaVersion, schema)
 	assert.JSONEq(t, "{}", string(raw["payload"]))
 }
+
+func TestSendBundleListRequestIfActive_Disabled(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := &Messaging{logger: logger} // filesManager nil => disabled
+
+	called := false
+	m.sendBundleListRequestIfActive(context.Background(), func(context.Context, []byte) error {
+		called = true
+		return nil
+	})
+	assert.False(t, called, "catch-up must not publish when files delivery is disabled")
+}
+
+func TestSendBundleListRequestIfActive_Enabled(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := &Messaging{logger: logger, filesManager: &mockFilesManager{}}
+
+	called := false
+	m.sendBundleListRequestIfActive(context.Background(), func(context.Context, []byte) error {
+		called = true
+		return nil
+	})
+	assert.True(t, called, "catch-up must publish when files delivery is active")
+}
