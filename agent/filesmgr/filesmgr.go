@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
 // swapSymlink atomically replaces linkPath so it points to target.
@@ -42,6 +44,20 @@ type filesmgr struct {
 
 	// perNameMu serializes Ensure calls for the same logical name.
 	perNameMu sync.Map // name -> *sync.Mutex
+}
+
+// defaultRoot is the directory used when FilesManagerConfig.Root is empty.
+const defaultRoot = "/opt/orb/files"
+
+// New constructs a Manager from configuration, mirroring secretsmgr.New. The
+// returned engine is always the disk implementation — fleet activation is
+// decided by the caller (see agent.New), not here.
+func New(logger *slog.Logger, cfg config.FilesManagerConfig) Manager {
+	root := cfg.Root
+	if root == "" {
+		root = defaultRoot
+	}
+	return NewManager(logger, root)
 }
 
 // NewManager constructs a default Manager rooted at the given directory.

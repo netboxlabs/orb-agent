@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
 func serveTarGz(_ *testing.T, archive []byte) *httptest.Server {
@@ -1113,6 +1115,21 @@ func TestManager_StartPreservesNonTrackedVersionDirs(t *testing.T) {
 
 	// The tracked version directory must also still exist.
 	assert.DirExists(t, trackedVersionDir, "tracked version dir must not be removed on Start")
+}
+
+func TestNew_DefaultsRootWhenEmpty(t *testing.T) {
+	m := New(slog.Default(), config.FilesManagerConfig{})
+	require.NotNil(t, m)
+	impl, ok := m.(*filesmgr)
+	require.True(t, ok)
+	assert.Equal(t, "/opt/orb/files", impl.root)
+}
+
+func TestNew_UsesConfiguredRoot(t *testing.T) {
+	m := New(slog.Default(), config.FilesManagerConfig{Root: "/custom/files"})
+	impl, ok := m.(*filesmgr)
+	require.True(t, ok)
+	assert.Equal(t, "/custom/files", impl.root)
 }
 
 // TestManager_StartCleansUpStaleBackupDirs verifies that .filesmgr-backup-*

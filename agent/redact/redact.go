@@ -80,7 +80,7 @@ func redactValue(val reflect.Value, fieldName string) any {
 	}
 
 	// Handle pointers
-	if val.Kind() == reflect.Ptr {
+	if val.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			return nil
 		}
