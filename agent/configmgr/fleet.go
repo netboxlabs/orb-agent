@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -478,6 +479,53 @@ func (fleetManager *FleetConfigManager) BindSecretsManager(sm secretsmgr.Manager
 			slog.String("updated_topic", topics.SecretsUpdated))
 	})
 
+	return nil
+}
+
+// bundleListReqPublishTimeout caps a single bundle_list_req catch-up publish so a
+// non-acking broker cannot block the OnReadyHook goroutine indefinitely.
+const bundleListReqPublishTimeout = 30 * time.Second
+
+// BindFilesManager wires a fleet files manager to the MQTT connection: on every
+// (re)connect it sends the bundle_list_req catch-up so the control plane
+// re-delivers the agent's current bundle set. If the files manager is not the
+// fleet type (files delivery disabled), it warns that fleet-delivered bundles
+// will not be installed and otherwise does nothing — incoming packages_credentials
+// are routed to the fleet type separately, by Messaging.DispatchToHandlers.
+func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) error {
+	fleetFM, ok := fm.(*filesmgr.FleetFilesManager)
+	if !ok {
+		fleetManager.logger.Warn("files_manager.active != fleet while config_manager.active == fleet; fleet-delivered bundles will not be installed")
+		return nil
+	}
+
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		outbox := topics.Outbox
+		// Bound the catch-up publish: QoS-1 Publish blocks until the broker acks
+		// or the context is cancelled. Derive from the connection lifetime ctx so
+		// Stop cancels it, and cap it with a timeout so a broker that stops acking
+		// cannot hang the hook goroutine or accumulate stuck publishes across
+		// reconnects.
+		base := fleetManager.connCtx
+		if base == nil {
+			base = context.Background()
+		}
+		pubCtx, cancel := context.WithTimeout(base, bundleListReqPublishTimeout)
+		defer cancel()
+		// SendBundleListRequest logs publish failures; the closure only publishes
+		// and returns the error so the failure is logged once.
+		fleetFM.SendBundleListRequest(pubCtx, func(ctx context.Context, payload []byte) error {
+			_, err := cm.Publish(ctx, &paho.Publish{
+				Topic:   outbox,
+				Payload: payload,
+				QoS:     1,
+				Retain:  false,
+			})
+			return err
+		})
+	})
+
+	fleetManager.logger.Info("Fleet files manager bound to MQTT")
 	return nil
 }
 

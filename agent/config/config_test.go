@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -161,4 +162,21 @@ func TestResolveEnvInSliceError(t *testing.T) {
 	}
 	err = config.ResolveEnvInSlice(data)
 	assert.Error(t, err, "expected error for unset environment variable in nested slice")
+}
+
+func TestFilesManagerConfigParsing(t *testing.T) {
+	raw := `
+version: 1.0
+orb:
+  files_manager:
+    active: fleet
+    root: /custom/files
+    sources:
+      fleet: {}
+`
+	var c config.Config
+	err := yaml.Unmarshal([]byte(raw), &c)
+	assert.NoError(t, err)
+	assert.Equal(t, "fleet", c.OrbAgent.FilesManager.Active)
+	assert.Equal(t, "/custom/files", c.OrbAgent.FilesManager.Root)
 }
