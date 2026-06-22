@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 )
 
 // vrfName returns a VRF's name, or "" for the global table.

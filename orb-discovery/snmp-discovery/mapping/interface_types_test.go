@@ -3,7 +3,7 @@ package mapping_test
 import (
 	"testing"
 
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 	"github.com/stretchr/testify/assert"
 )
 

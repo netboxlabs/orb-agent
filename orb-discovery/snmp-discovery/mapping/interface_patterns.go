@@ -1,6 +1,6 @@
 package mapping
 
-import "github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+import "github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 
 // DefaultInterfacePatterns provides vendor-agnostic interface type detection
 // Covers 80-90% of common deployments across major vendors

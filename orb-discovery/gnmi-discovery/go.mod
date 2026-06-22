@@ -1,4 +1,4 @@
-module github.com/netboxlabs/orb-discovery/gnmi-discovery
+module github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery
 
 go 1.26.4
 

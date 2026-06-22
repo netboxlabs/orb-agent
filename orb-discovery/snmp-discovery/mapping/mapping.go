@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/data"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 )
 
 // Value is a struct that contains a value and a type of an SNMP object

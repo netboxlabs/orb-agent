@@ -13,9 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/snmp"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

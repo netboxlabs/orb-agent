@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/config"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/env"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/gnmi"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/metrics"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/policy"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/server"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/version"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/env"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/metrics"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/policy"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/server"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/version"
 )
 
 // AppName is the application name

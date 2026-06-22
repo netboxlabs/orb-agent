@@ -10,9 +10,9 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
-	"github.com/netboxlabs/orb-discovery/network-discovery/config"
-	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
-	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/metrics"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

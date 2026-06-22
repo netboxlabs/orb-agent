@@ -38,7 +38,15 @@ make fix-lint               # lint with --fix (gci + gofumpt formatters)
 
 # Dependencies
 make deps                   # go mod tidy
+
+# Local multi-module workspace (agent + Go discovery backends)
+make work                   # generate a git-ignored go.work for local dev
+                            # use GOWORK=off for single-module commands
 ```
+
+The discovery backends live in their own modules under `orb-discovery/`. `go.work`
+is a local convenience only — it is git-ignored, and the agent image and CI build
+the agent as a single module.
 
 After editing, always run `make fix-lint` — gci (import ordering) and gofumpt (formatting) are enforced in CI.
 

@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/netboxlabs/orb-discovery/network-discovery/config"
-	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
-	"github.com/netboxlabs/orb-discovery/network-discovery/policy"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/metrics"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/policy"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )

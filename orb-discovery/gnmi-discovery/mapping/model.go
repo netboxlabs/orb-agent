@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/gnmi"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
 )
 
 // DeviceModel is the reconciled in-memory state of one target. Pruning is

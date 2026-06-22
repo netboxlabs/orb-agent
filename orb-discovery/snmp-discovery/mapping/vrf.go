@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
 
 // VRF discovery table columns, tried in tiers until one yields rows.

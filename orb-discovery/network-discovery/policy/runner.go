@@ -13,8 +13,8 @@ import (
 	"github.com/Ullaakut/nmap/v3"
 	"github.com/go-co-op/gocron/v2"
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/network-discovery/config"
-	"github.com/netboxlabs/orb-discovery/network-discovery/metrics"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/metrics"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )

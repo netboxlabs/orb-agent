@@ -3,7 +3,7 @@ package version_test
 import (
 	"testing"
 
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/version"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/version"
 	"github.com/stretchr/testify/assert"
 )
 

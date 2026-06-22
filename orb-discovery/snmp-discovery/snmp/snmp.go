@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gosnmp/gosnmp"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 )
 
 // SlogAdapter adapts slog.Logger to implement gosnmp.LoggerInterface

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/gnmi-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 )
 
 // parseNetworkInstanceStatePath extracts (niName, leaf) for the NI state leaves we

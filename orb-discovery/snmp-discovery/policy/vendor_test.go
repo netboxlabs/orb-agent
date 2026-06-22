@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/mapping"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 )
 
 func TestResolveVendor(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
 
 // HostResolverForTest is the resolver interface re-exported for tests.

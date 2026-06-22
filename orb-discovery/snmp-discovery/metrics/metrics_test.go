@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/netboxlabs/orb-discovery/snmp-discovery/metrics"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"

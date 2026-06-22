@@ -19,8 +19,8 @@ COPY --from=builder /build/snmp-discovery /usr/local/bin/snmp-discovery
 
 LABEL maintainer="techops@netboxlabs.com"
 LABEL org.opencontainers.image.title="Orb SNMP Discovery"
-LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery"
-LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-discovery/tree/release/snmp-discovery"
+LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-agent/orb-discovery/tree/release/snmp-discovery"
+LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-agent/orb-discovery/tree/release/snmp-discovery"
 LABEL org.opencontainers.image.description="NetBox Labs snmp-discovery image"
 LABEL org.opencontainers.image.vendor="NetBox Labs, Inc"
 LABEL org.opencontainers.image.authors="techops@netboxlabs.com"

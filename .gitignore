@@ -5,3 +5,8 @@ build/
 .vscode/
 
 docs/.cursor
+
+# Local multi-module dev workspace (regenerate with `make work`); not committed —
+# the agent image and CI build the agent as a single module. See AGENTS.md.
+go.work
+go.work.sum
