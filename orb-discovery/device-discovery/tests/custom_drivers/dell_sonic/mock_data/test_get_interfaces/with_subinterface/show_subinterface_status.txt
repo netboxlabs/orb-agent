@@ -1,0 +1,4 @@
+Name             Admin    Oper    Speed    Description             MTU
+---------------  -------  ------  -------  ----------------------  -----
+Ethernet0.100    up       up      100G     DMZ subinterface        1500
+Ethernet0.200    up       up      100G     Voice subinterface      1500

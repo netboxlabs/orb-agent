@@ -1,0 +1,12 @@
+<response status="success">
+  <result>
+    <hw>
+      <name>ethernet1/1</name>
+      <id>16</id>
+      <state>up</state>
+      <state_c>auto</state_c>
+      <mac>00:50:56:01:02:03</mac>
+      <speed>1000</speed>
+    </hw>
+  </result>
+</response>

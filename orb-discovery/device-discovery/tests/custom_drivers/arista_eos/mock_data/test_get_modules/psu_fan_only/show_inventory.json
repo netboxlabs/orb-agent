@@ -1,0 +1,27 @@
+{
+  "systemInformation": {"name": "DCS-7508R-BND", "serialNum": "JPE12360001"},
+  "cardSlots": {},
+  "xcvrSlots": {},
+  "powerSupplySlots": {
+    "PowerSupply1": {
+      "modelName": "PWR-2911-AC-RED",
+      "serialNum": "PSU12360001",
+      "name": "PowerSupply1",
+      "description": "Power Supply 2200W"
+    },
+    "PowerSupply2": {
+      "modelName": "PWR-2911-AC-RED",
+      "serialNum": "PSU12360002",
+      "name": "PowerSupply2",
+      "description": "Power Supply 2200W"
+    }
+  },
+  "fanTraySlots": {
+    "Fan1": {
+      "modelName": "FAN-7500R-F",
+      "serialNum": "FAN12360001",
+      "name": "Fan1",
+      "description": "Fan tray"
+    }
+  }
+}

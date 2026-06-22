@@ -1,0 +1,41 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "TW02AAA0001",
+      "model": "6300M-24SR4",
+      "role": "active",
+      "priority": 200,
+      "mac": "94:f1:28:22:00:00",
+      "state": "up"
+    },
+    {
+      "id": 2,
+      "serial": "TW02AAA0002",
+      "model": "6300M-24SR4",
+      "role": "standby",
+      "priority": 128,
+      "mac": "94:f1:28:22:00:80",
+      "state": "up"
+    },
+    {
+      "id": 3,
+      "serial": "TW02AAA0003",
+      "model": "6300M-48G-PoE+-4SFP56",
+      "role": "member",
+      "priority": 64,
+      "mac": "94:f1:28:22:01:00",
+      "state": "up"
+    },
+    {
+      "id": 4,
+      "serial": "TW02AAA0004",
+      "model": "6300M-48G-PoE+-4SFP56",
+      "role": "member",
+      "priority": 64,
+      "mac": "94:f1:28:22:01:80",
+      "state": "up"
+    }
+  ],
+  "domain": "2"
+}

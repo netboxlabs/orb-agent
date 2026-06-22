@@ -1,0 +1,14 @@
+{
+  "hostname": "fastiron-sw01",
+  "vendor": "Brocade",
+  "model": "ICX6430-48",
+  "os_version": "08.0.50T7f2",
+  "serial_number": "CYH3456M1234",
+  "uptime": 1308310.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1/1/1",
+    "1/1/2",
+    "mgmt1"
+  ]
+}

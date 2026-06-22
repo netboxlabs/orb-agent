@@ -1,0 +1,5 @@
+Name                             IPv6 Address/Prefix Length                        Status   Device
+--------------------------------+-------------------------------------------------+--------+------------
+tunnel_6to4                                                                        Disabled 6to4 Tunnel
+loopback                         ::1/128                                           Active   Loopback
+EMP-CMMA-CHAS1                   fe80::eae7:32ff:feab:1f32/64                      Inactive EMP

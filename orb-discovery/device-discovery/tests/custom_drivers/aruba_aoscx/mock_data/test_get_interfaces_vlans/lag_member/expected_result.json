@@ -1,0 +1,4 @@
+{
+  "1/1/1": {"mode": "routed", "tagged": [], "untagged": null},
+  "lag1": {"mode": "trunk", "tagged": [100], "untagged": null}
+}

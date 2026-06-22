@@ -1,0 +1,21 @@
+Management 1 is up, line protocol is up
+Hardware is Ethernet, address is 6cb1.580f.b900 (bia 6cb1.580f.b900)
+MTU 1500 bytes
+
+Ethernet 0/1 is up, line protocol is up (connected)
+Hardware is Ethernet, address is 6cb1.580f.b901 (bia 6cb1.580f.b901)
+Description: trunk uplink
+MTU 9216 bytes
+LineSpeed Actual    : 10000 Mbit, Mode of Operation: Full duplex
+
+Ethernet 0/1.100 is up, line protocol is up
+Hardware is Ethernet, address is 6cb1.580f.b901 (bia 6cb1.580f.b901)
+Description: dmz subinterface
+MTU 1500 bytes
+LineSpeed Actual    : 10000 Mbit
+
+Ethernet 0/1.200 is up, line protocol is up
+Hardware is Ethernet, address is 6cb1.580f.b901 (bia 6cb1.580f.b901)
+Description: voice subinterface
+MTU 1500 bytes
+LineSpeed Actual    : 10000 Mbit

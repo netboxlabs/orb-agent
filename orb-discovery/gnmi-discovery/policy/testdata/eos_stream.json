@@ -1,0 +1,11 @@
+[
+  {"updates":[
+    {"path":"/system/state/hostname","value":"spine1"},
+    {"path":"/system/state/software-version","value":"4.30.1F"},
+    {"path":"/interfaces/interface[name=Ethernet1]/state/admin-status","value":"UP"},
+    {"path":"/interfaces/interface[name=Ethernet1]/state/mtu","value":9214},
+    {"path":"/components/component[name=Linecard1]/state/type","value":"LINECARD"},
+    {"path":"/components/component[name=Linecard1]/state/serial-no","value":"JPE123"}
+  ]},
+  {"syncDone":true}
+]

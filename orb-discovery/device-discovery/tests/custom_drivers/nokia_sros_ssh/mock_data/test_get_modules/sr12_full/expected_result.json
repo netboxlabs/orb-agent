@@ -1,0 +1,25 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "A", "position": "A", "module": {"model": "3HE07016AA", "serial": "NS-CPMA-001", "description": "cpm5", "type": "supervisor", "sub_bays": []}},
+        {"name": "B", "position": "B", "module": {"model": "3HE07016AA", "serial": "NS-CPMB-002", "description": "cpm5", "type": "supervisor", "sub_bays": []}},
+        {"name": "1", "position": "1", "module": {"model": "3HE09576AA", "serial": "NS-IOM1-001", "description": "iom4-e", "type": "linecard", "sub_bays": [
+          {"name": "1/1", "position": "1/1", "module": {"model": "3HE09579AA", "serial": "NS-MDA1-001", "description": "me10-10gb-sfp+", "type": "linecard", "sub_bays": [
+            {"name": "1/1/1", "position": "1/1/1", "module": {"model": "SFP-10G-LR", "serial": "OPTIC10G0001", "description": "", "type": "transceiver", "sub_bays": []}}
+          ]}},
+          {"name": "1/2", "position": "1/2", "module": {"model": "3HE09580AA", "serial": "NS-MDA1-002", "description": "me4-100gb-qsfp28", "type": "linecard", "sub_bays": [
+            {"name": "1/2/1", "position": "1/2/1", "module": {"model": "QSFP-100G-SR4", "serial": "OPTIC100G0001", "description": "", "type": "transceiver", "sub_bays": []}}
+          ]}}
+        ]}},
+        {"name": "2", "position": "2", "module": {"model": "3HE09576AA", "serial": "NS-IOM2-001", "description": "iom4-e", "type": "linecard", "sub_bays": [
+          {"name": "2/1", "position": "2/1", "module": {"model": "3HE09579AA", "serial": "NS-MDA2-001", "description": "me10-10gb-sfp+", "type": "linecard", "sub_bays": []}}
+        ]}},
+        {"name": "SFM 1", "position": "SFM 1", "module": {"model": "3HE08648AA", "serial": "NS-SFM1-001", "description": "sfm5-12", "type": "linecard", "sub_bays": []}},
+        {"name": "SFM 2", "position": "SFM 2", "module": {"model": "3HE08648AA", "serial": "NS-SFM2-001", "description": "sfm5-12", "type": "linecard", "sub_bays": []}},
+        {"name": "SFM 3", "position": "SFM 3", "module": {"model": "3HE08648AA", "serial": "NS-SFM3-001", "description": "sfm5-12", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {"1": ["1/1/1", "1/1/2", "1/2/1"], "1/1": ["1/1/1", "1/1/2"], "1/1/1": ["1/1/1"], "1/2": ["1/2/1"], "1/2/1": ["1/2/1"], "2": ["2/1/1"], "2/1": ["2/1/1"]}
+    }
+  }
+}

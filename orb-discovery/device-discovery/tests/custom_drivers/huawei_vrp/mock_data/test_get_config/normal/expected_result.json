@@ -1,0 +1,5 @@
+{
+  "running": "#\nsysname HUAWEI-LAB-PE-1\n#\ninterface GigabitEthernet1/0/0\n ip address 10.0.0.1 255.255.255.252\n#\nreturn\n",
+  "candidate": "",
+  "startup": "#\nsysname HUAWEI-LAB-PE-1\n#\nreturn\n"
+}

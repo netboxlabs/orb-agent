@@ -1,0 +1,9 @@
+Port      Flags               Link      ELSM Link Num Num  Num   Jumbo QOS     Load
+                              State     /OAM UPS  STP VLAN Proto Size  profile Master
+=====================================================================================
+1         Dmjla---e--fMB---x- ready     - / -  0    1 3288   1   9216  none    1 a
+2         Dmjla---e--fMB---x- ready     - / -  1    1 3288   1   9216  none    1 a
+3         Emj-----e--fMB---x- active    - / -  2    0   74   0   9216  none
+4         Emj-----e--fMB---x- active    - / -  2    0   74   0   9216  none
+5         Emj-----e--fMB----- active    - / -  1    0  388   0   9216  none
+=====================================================================================

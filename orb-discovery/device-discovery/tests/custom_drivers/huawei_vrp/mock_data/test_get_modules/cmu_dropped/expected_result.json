@@ -1,0 +1,11 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1", "position": "1", "module": {"model": "CE-MPUA", "serial": "CE12800SN0001", "description": "", "type": "supervisor", "sub_bays": []}},
+        {"name": "3", "position": "3", "module": {"model": "CE-L36CQ-FD", "serial": "CE12800SN0003", "description": "", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

@@ -1,0 +1,4 @@
+GigabitEthernet1/0/0 current state : UP
+IPv6 protocol current state : UP
+  Global unicast address(es):
+    2001:db8::1, subnet is 2001:db8::/64

@@ -1,0 +1,29 @@
+{
+  "GigabitEthernet1/0/0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Trunk uplink",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "0C:45:BA:7D:83:E0"
+  },
+  "GigabitEthernet1/0/0.100": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "DMZ sub-interface",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "0C:45:BA:7D:83:E0"
+  },
+  "GigabitEthernet1/0/0.200": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Voice sub-interface",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "0C:45:BA:7D:83:E0"
+  }
+}

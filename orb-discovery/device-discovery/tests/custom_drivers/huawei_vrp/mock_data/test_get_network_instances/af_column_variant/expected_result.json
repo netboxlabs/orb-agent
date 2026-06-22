@@ -1,0 +1,36 @@
+{
+  "blue": {
+    "interfaces": {
+      "interface": {
+        "Vlanif200": {}
+      }
+    },
+    "name": "blue",
+    "state": {
+      "route_distinguisher": "65000:99"
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "red": {
+    "interfaces": {
+      "interface": {
+        "40GE0/0/3": {}
+      }
+    },
+    "name": "red",
+    "state": {
+      "route_distinguisher": "1:2"
+    },
+    "type": "L3VRF"
+  }
+}

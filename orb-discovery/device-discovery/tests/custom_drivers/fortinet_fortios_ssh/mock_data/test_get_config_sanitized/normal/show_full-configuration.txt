@@ -1,0 +1,22 @@
+config vpn ipsec phase1-interface
+    edit "to-branch"
+        set psksecret MyBranchSecret123
+        set psk myipsecpsk
+    next
+end
+config system admin
+    edit "admin"
+        set password ENC SH2/kZN9UjH3Kz8abc==
+    next
+end
+config user radius
+    edit "radius-server"
+        set secret RadiusSharedSecret
+    next
+end
+config system interface
+    edit "port1"
+        set ip 192.168.1.1 255.255.255.0
+        set description "WAN interface"
+    next
+end

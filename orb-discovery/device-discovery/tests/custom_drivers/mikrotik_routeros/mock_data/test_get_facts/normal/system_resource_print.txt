@@ -1,0 +1,18 @@
+uptime: 15w6d6h24m50s
+                  version: 7.15.1 (stable)
+               build-time: 2024-06-07 12:49:11
+         factory-software: 6.44.6
+              free-memory: 925.9MiB
+             total-memory: 1024.0MiB
+                      cpu: ARM
+                cpu-count: 4
+            cpu-frequency: 533MHz
+                 cpu-load: 0%
+           free-hdd-space: 421.3MiB
+          total-hdd-space: 512.0MiB
+  write-sect-since-reboot: 146641
+         write-sect-total: 410170
+               bad-blocks: 0%
+        architecture-name: arm
+               board-name: RB4011iGS+
+                 platform: MikroTik

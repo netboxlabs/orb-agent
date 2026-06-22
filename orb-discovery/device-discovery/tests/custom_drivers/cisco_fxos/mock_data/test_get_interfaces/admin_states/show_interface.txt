@@ -1,0 +1,47 @@
+Ethernet1/1 is up
+  Hardware: Ethernet, address: 70ea.1a7b.e000 (bia 70ea.1a7b.e000)
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  full-duplex, 10 Gb/s
+  Beacon is turned off
+
+Ethernet1/2 is up, line protocol is down
+  Hardware: Ethernet, address: 70ea.1a7b.e001 (bia 70ea.1a7b.e001)
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  full-duplex, 10 Gb/s
+  Beacon is turned off
+
+Ethernet1/3 is down (admin down)
+  Hardware: Ethernet, address: 70ea.1a7b.e002 (bia 70ea.1a7b.e002)
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  full-duplex, 10 Gb/s
+  Beacon is turned off
+
+Ethernet1/4 is down (Link not connected)
+  Hardware: Ethernet, address: 70ea.1a7b.e003 (bia 70ea.1a7b.e003)
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  full-duplex, 10 Gb/s
+  Beacon is turned off
+
+Ethernet1/5 is administratively down
+  Hardware: Ethernet, address: 70ea.1a7b.e004 (bia 70ea.1a7b.e004)
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  full-duplex, 10 Gb/s
+  Beacon is turned off
+
+Ethernet1/6 is up, line protocol is down (suspended)
+  Hardware: Ethernet, address: 70ea.1a7b.e005 (bia 70ea.1a7b.e005)
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  full-duplex, 10 Gb/s
+  Beacon is turned off

@@ -1,0 +1,31 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "MSM-A",
+          "position": "MSM-A",
+          "module": {
+            "model": "BDX-MM1",
+            "serial": "12345N-B001",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "MSM-B",
+          "position": "MSM-B",
+          "module": {
+            "model": "BDX-MM1",
+            "serial": "12345N-B002",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

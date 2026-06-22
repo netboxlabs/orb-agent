@@ -1,0 +1,7 @@
+                                  Acceptable Ingress     Default
+Interface     Mode         PVID     Frame Types Filtering  Priority
+------------- ------------ -------- ----------- ---------- ----------
+0/1           Access       100      Admit All   Disabled   0
+0/2           Trunk        1        VLAN Only   Enabled    0
+0/3           General      100      Admit All   Disabled   0
+0/4           Routed       1        Admit All   Disabled   0

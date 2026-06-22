@@ -1,0 +1,6 @@
+Cisco Application Policy Infrastructure Controller
+Software Version: 6.0(3f)
+Model: APIC-M2
+Serial Number: FOX2516P100
+Hostname: apic1
+System uptime: 5 days, 3 hours, 12 minutes, 44 seconds

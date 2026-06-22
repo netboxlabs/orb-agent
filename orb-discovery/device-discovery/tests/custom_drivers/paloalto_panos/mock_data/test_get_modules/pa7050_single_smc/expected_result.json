@@ -1,0 +1,11 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1", "position": "1", "module": {"model": "PA-7000-100G-NPC-A", "serial": "007904111001", "description": "NPC", "type": "linecard", "sub_bays": []}},
+        {"name": "4", "position": "4", "module": {"model": "PA-7050-SMC", "serial": "007904333001", "description": "SMC", "type": "supervisor", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "1/1/1": {"name": "1/1/1", "routing": false, "vlan_mode": "access", "vlan_tag": "/rest/v10.04/system/vlans/10", "vlan_trunks": []},
+  "1/1/2": {"name": "1/1/2", "routing": false, "vlan_mode": "native-untagged", "vlan_tag": "/rest/v10.04/system/vlans/99", "vlan_trunks": ["/rest/v10.04/system/vlans/100"]},
+  "1/1/3": {"name": "1/1/3", "routing": true, "vlan_mode": null, "vlan_tag": null, "vlan_trunks": []}
+}

@@ -1,0 +1,33 @@
+{
+  "vlan 1": {
+    "ipv4": {
+      "10.1.1.1": {
+        "prefix_length": 24
+      }
+    },
+    "ipv6": {
+      "2001:db8::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "vlan 10": {
+    "ipv4": {
+      "192.168.10.1": {
+        "prefix_length": 24
+      }
+    },
+    "ipv6": {
+      "2001:db8:10::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "loopback 0": {
+    "ipv4": {
+      "127.0.0.1": {
+        "prefix_length": 8
+      }
+    }
+  }
+}

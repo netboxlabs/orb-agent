@@ -1,0 +1,9 @@
+Mod Ports             Module-Type                      Model           Status
+--- ----- ------------------------------------- ---------------------- ---------
+1   0     Supervisor Module-3                   N9K-SUP-A              ha-standby
+2   0     Supervisor Module-3                   N9K-SUP-A              active *
+
+Mod  MAC-Address(es)                         Serial-Num
+---  --------------------------------------  ----------
+1    00:11:22:33:00:01 to 00:11:22:33:00:0f  FOC1234SUP01
+2    00:11:22:33:00:10 to 00:11:22:33:00:1f  FOC1234SUP02

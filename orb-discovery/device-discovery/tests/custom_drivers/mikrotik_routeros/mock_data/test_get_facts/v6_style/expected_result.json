@@ -1,0 +1,14 @@
+{
+  "hostname": "MikroTik_PatchBox_Office",
+  "vendor": "MikroTik",
+  "model": "2011UiAS-2HnD",
+  "os_version": "6.49.15 (stable)",
+  "serial_number": "444A02C2FFD1",
+  "uptime": 12579822.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ether1",
+    "ether2",
+    "ether3"
+  ]
+}

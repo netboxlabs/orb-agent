@@ -1,0 +1,47 @@
+{
+  "lo": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 65536,
+    "speed": -1.0,
+    "mac_address": "00:00:00:00:00:00"
+  },
+  "eth0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "OOB mgmt",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3C"
+  },
+  "swp1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "trunk-uplink",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3D"
+  },
+  "swp1.100": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "dmz",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3D"
+  },
+  "swp1.200": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "voice",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3D"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "running": "\n! Avaya Ethernet Routing Switch\n! Software Version: 7.6.3.12\n!\nusername admin level rw\nusername admin password 0xABCDEF12345678\n!\nsnmp-server community public\nsnmp-server community private\n!\nvlan create 1 name Default type port\nvlan create 10 name Data-VLAN type port\n!\ninterface vlan 1\n  ip address 10.0.0.1 255.255.255.0\n  no shutdown\n  exit\n!\ninterface vlan 10\n  ip address 192.168.10.1 255.255.255.0\n  no shutdown\n  exit\n!\nend\n",
+  "candidate": "",
+  "startup": "\n! Avaya Ethernet Routing Switch\n! Software Version: 7.6.3.12\n!\nusername admin level rw\nusername admin password 0xABCDEF12345678\n!\nsnmp-server community public\nsnmp-server community private\n!\nvlan create 1 name Default type port\nvlan create 10 name Data-VLAN type port\n!\ninterface vlan 1\n  ip address 10.0.0.1 255.255.255.0\n  no shutdown\n  exit\n!\ninterface vlan 10\n  ip address 192.168.10.1 255.255.255.0\n  no shutdown\n  exit\n!\nend\n"
+}

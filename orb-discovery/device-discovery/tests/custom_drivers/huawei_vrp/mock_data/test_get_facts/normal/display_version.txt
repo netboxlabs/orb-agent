@@ -1,0 +1,5 @@
+Huawei Versatile Routing Platform Software
+VRP (R) software, Version 8.211 (NE40E V800R021C10SPC600)
+Copyright (C) 2012-2022 Huawei Technologies Co., Ltd.
+HUAWEI NE40E-X8A uptime is 405 days, 12 hours, 9 minutes
+Patch Version: V800R021SPH016

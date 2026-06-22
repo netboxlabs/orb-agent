@@ -1,0 +1,22 @@
+{
+  "1": {
+    "name": "Default",
+    "interfaces": []
+  },
+  "127": {
+    "name": "VLAN#127",
+    "interfaces": []
+  },
+  "666": {
+    "name": "Blackhole",
+    "interfaces": []
+  },
+  "800": {
+    "name": "Mgmt",
+    "interfaces": []
+  },
+  "1001": {
+    "name": "RVID_1001",
+    "interfaces": []
+  }
+}

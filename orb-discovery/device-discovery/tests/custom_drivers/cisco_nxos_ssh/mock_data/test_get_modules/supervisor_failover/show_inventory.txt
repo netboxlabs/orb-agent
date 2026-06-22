@@ -1,0 +1,8 @@
+NAME: Chassis, DESCR: Nexus 9504
+PID: N9K-C9504        , VID: V01, SN: FOC1234CHA
+
+NAME: Slot 1, DESCR: Supervisor Module
+PID: N9K-SUP-A        , VID: V01, SN: FOC1234SUP01
+
+NAME: Slot 2, DESCR: Supervisor Module
+PID: N9K-SUP-A        , VID: V01, SN: FOC1234SUP02

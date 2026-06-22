@@ -1,0 +1,21 @@
+{
+  "ge0/0": {
+    "ipv4": {
+      "10.0.0.1": {
+        "prefix_length": 30
+      }
+    },
+    "ipv6": {
+      "2001:db8::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "loopback0": {
+    "ipv4": {
+      "10.1.0.1": {
+        "prefix_length": 32
+      }
+    }
+  }
+}

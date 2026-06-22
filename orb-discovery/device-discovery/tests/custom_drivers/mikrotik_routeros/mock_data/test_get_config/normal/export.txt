@@ -1,0 +1,15 @@
+# RouterOS 7.15.1
+# software id = XXXX-XXXX
+#
+/interface bridge
+add name=bridge
+/ip address
+add address=192.168.3.1/24 interface=bridge network=192.168.3.0 comment=defconf
+add address=192.168.20.2/24 interface=ether1 network=192.168.20.0
+/user
+add group=full name=admin password=MyAdminPass123
+add group=read name=monitor password=ReadOnly456
+/radius
+add address=192.168.1.100 secret=RadiusSecret789 service=login
+/ip ipsec peer
+add address=10.0.0.1 passphrase=IpsecPassphrase111

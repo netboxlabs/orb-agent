@@ -1,0 +1,22 @@
+VRF BLUE; RD 65000:10; VPN ID not set
+VRF mode: Regular
+Description not set
+Interfaces:
+  GigabitEthernet0/0/0/3
+Address family IPV4 Unicast
+  Import VPN route-target communities:
+    RT:65000:10
+  Export VPN route-target communities:
+    RT:65000:10
+  Import route policy: RPL_BLUE_IN
+  Export route policy: RPL_BLUE_OUT
+
+VRF GREEN; RD 65000:20; VPN ID not set
+VRF mode: Regular
+Description not set
+Interfaces:
+  GigabitEthernet0/0/0/4
+  GigabitEthernet0/0/0/5.200
+Address family IPV4 Unicast
+  No import route policy
+  No export route policy

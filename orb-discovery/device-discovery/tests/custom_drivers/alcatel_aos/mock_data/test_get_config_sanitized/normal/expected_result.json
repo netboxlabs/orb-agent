@@ -1,0 +1,5 @@
+{
+  "running": "! Chassis:\nsystem name \"OS6860\"\n! VLANs:\nvlan 1 admin-state enable name \"VLAN 1\"\n! Users:\nuser admin password <redacted>\n! SNMP:\nsnmp security no-security\nsnmp community-map hash-key <redacted> user \"public\" enable\n! RADIUS:\naaa radius-server myserver key <redacted>\n",
+  "candidate": "",
+  "startup": ""
+}

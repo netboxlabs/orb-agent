@@ -1,0 +1,2 @@
+NAME: "Chassis", DESCR: "Firepower 1010 Security Appliance"
+PID: FPR-1010          , VID: V01, SN: JMX2410CHA0

@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "TW01ABC0001",
+      "model": null,
+      "role": "active",
+      "priority": null,
+      "mac": "94:f1:28:11:00:00",
+      "state": "Active"
+    },
+    {
+      "id": 2,
+      "serial": "TW01ABC0002",
+      "model": null,
+      "role": "standby",
+      "priority": null,
+      "mac": "94:f1:28:11:00:80",
+      "state": "Standby"
+    }
+  ],
+  "domain": null
+}

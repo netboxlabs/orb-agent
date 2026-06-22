@@ -1,0 +1,41 @@
+{
+  "1": {
+    "name": "1",
+    "interfaces": [
+      "fa1",
+      "fa2",
+      "fa4",
+      "fa5",
+      "fa6",
+      "fa7",
+      "fa8",
+      "fa10",
+      "fa11",
+      "fa12",
+      "fa13",
+      "fa14",
+      "fa17",
+      "fa18",
+      "fa20"
+    ]
+  },
+  "29": {
+    "name": "29",
+    "interfaces": [
+      "gi1"
+    ]
+  },
+  "402": {
+    "name": "Management",
+    "interfaces": [
+      "fa5",
+      "gi1"
+    ]
+  },
+  "500": {
+    "name": "gi2-uplink",
+    "interfaces": [
+      "fa3"
+    ]
+  }
+}

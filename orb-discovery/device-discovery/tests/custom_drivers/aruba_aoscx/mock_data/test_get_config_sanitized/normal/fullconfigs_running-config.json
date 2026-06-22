@@ -1,0 +1,27 @@
+{
+  "system": {
+    "hostname": "aruba-cx-6300",
+    "aaa": {
+      "authentication": {
+        "local_auth_users": {
+          "admin": {
+            "password": "PlainTextPassword1",
+            "role": "administrators"
+          }
+        }
+      }
+    },
+    "radius_servers": {
+      "10.0.0.1": {
+        "passkey": "RadiusSecret123",
+        "port": 1812
+      }
+    },
+    "tacacs_servers": {
+      "10.0.0.2": {
+        "passkey": "TacacsSecret456",
+        "port": 49
+      }
+    }
+  }
+}

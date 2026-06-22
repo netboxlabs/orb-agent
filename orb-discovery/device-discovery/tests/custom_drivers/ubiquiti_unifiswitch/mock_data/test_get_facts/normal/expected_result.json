@@ -1,0 +1,10 @@
+{
+  "hostname": "unifi-sw-24",
+  "vendor": "Ubiquiti",
+  "model": "US-24-250W",
+  "os_version": "4.0.66.10832",
+  "serial_number": "F09FC2CD9012",
+  "uptime": 0.0,
+  "fqdn": "Unknown",
+  "interface_list": ["0/1", "0/2", "0/3"]
+}

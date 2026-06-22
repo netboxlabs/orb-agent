@@ -1,0 +1,5 @@
+{
+  "running": "    interface ethernet-1/1 {\n        admin-state enable\n        subinterface 0 {\n            admin-state enable\n            ipv4 {\n                admin-state enable\n                address 192.168.0.0/31 {\n                    primary true\n                }\n            }\n        }\n    }\n    interface mgmt0 {\n        admin-state enable\n        subinterface 0 {\n            admin-state enable\n            ipv4 {\n                dhcp-client {\n                }\n            }\n        }\n    }\n    system {\n        name {\n            host-name srl-test\n        }\n    }",
+  "candidate": "",
+  "startup": ""
+}

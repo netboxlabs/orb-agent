@@ -1,0 +1,12 @@
+<response status="success">
+  <result>
+    <system>
+      <hostname>PA-VM-LAB</hostname>
+      <ip-address>unknown</ip-address>
+      <netmask>unknown</netmask>
+      <ipv6-address>2001:db8:abcd::5/64</ipv6-address>
+      <mac-address>00:50:56:aa:bb:cc</mac-address>
+      <model>PA-VM</model>
+    </system>
+  </result>
+</response>

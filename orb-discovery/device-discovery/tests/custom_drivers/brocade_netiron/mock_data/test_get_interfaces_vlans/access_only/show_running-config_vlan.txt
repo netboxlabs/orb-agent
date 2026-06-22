@@ -1,0 +1,5 @@
+no spanning-tree
+!
+vlan 1 name DEFAULT-VLAN
+ untagged ethe 1/1 to 1/4
+!

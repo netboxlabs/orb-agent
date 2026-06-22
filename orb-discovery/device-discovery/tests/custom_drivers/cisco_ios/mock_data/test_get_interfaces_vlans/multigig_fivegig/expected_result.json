@@ -1,0 +1,6 @@
+{
+  "FiveGigabitEthernet3/0/1": {"mode": "access", "tagged": [], "untagged": 148},
+  "FiveGigabitEthernet3/0/2": {"mode": "trunk", "tagged": [190, 191, 251, 261], "untagged": 999},
+  "TwoGigabitEthernet2/0/1": {"mode": "access", "tagged": [], "untagged": 20},
+  "GigabitEthernet1/0/1": {"mode": "access", "tagged": [], "untagged": 10}
+}

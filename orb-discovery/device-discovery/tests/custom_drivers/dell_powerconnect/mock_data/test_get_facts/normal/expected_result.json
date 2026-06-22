@@ -1,0 +1,16 @@
+{
+  "hostname": "switch01",
+  "vendor": "Dell",
+  "model": "N2048",
+  "os_version": "10.5.2.4",
+  "serial_number": "CN07Q7ABCE0123",
+  "uptime": 274935.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "g1",
+    "g2",
+    "g3",
+    "g4",
+    "g5"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "switchports": {
+    "Ethernet4": {
+      "enabled": false,
+      "switchportInfo": {}
+    }
+  }
+}

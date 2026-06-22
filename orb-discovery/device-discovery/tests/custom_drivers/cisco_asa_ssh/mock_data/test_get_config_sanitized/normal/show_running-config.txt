@@ -1,0 +1,29 @@
+: Saved
+!
+ASA Version 9.16.4
+!
+hostname asa-firewall
+enable password $sha512$5000$PlaceholderHashValue encrypted
+passwd $sha512$5000$AnotherHashValue encrypted
+!
+username admin password $sha512$5000$UserHashValue privilege 15
+username readonly password 8 $sha512$5000$TypedHashValue privilege 5
+!
+interface GigabitEthernet1/1
+ nameif inside
+ security-level 100
+ ip address 192.168.1.1 255.255.255.0
+!
+snmp-server community public RO
+!
+tacacs-server host 10.0.0.2 key TacacsSecret
+crypto isakmp key IsakmpKey address 10.0.0.3
+ ip ospf message-digest-key 1 md5 OspfMd5Key
+router bgp 65000
+ neighbor 10.0.0.4 password BgpNeighborPass
+aaa-server RADIUS protocol radius
+ key RadiusServerKey
+tunnel-group 10.0.0.1 ipsec-attributes
+ pre-shared-key MyIpsecPreSharedKey
+!
+end

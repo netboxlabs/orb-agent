@@ -1,0 +1,3 @@
+{
+  "GigabitEthernet 0/1": {"mode": "trunk-all", "tagged": [], "untagged": 1}
+}

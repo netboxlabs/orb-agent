@@ -1,0 +1,29 @@
+!
+! Startup-config last changed at 12:34:56 UTC Mon Apr 14 2026
+!
+hostname netiron-core-1
+!
+enable 0 $1$abcd$hashedpassword
+enable super-user-password $1$xyz$superuserhash
+!
+username admin password 7 encryptedpassword123
+username operator privilege 5 password 7 operatorhash456
+!
+snmp-server community public ro
+!
+interface ethernet 1/1
+ port-name uplink-core
+ dual-mode
+!
+interface ve 2
+ ip address 192.168.1.1/24
+!
+ip vrrp-extended auth-type simple-text-auth vrrppass123
+!
+vlan 1 name DEFAULT-VLAN
+!
+vlan 10 name MANAGEMENT
+ tagged e 1/1
+ router-interface ve 10
+!
+end

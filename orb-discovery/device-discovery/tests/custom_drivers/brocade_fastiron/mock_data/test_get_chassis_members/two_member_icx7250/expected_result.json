@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "ABC2456N1001",
+      "model": "ICX7250-24P",
+      "role": "active",
+      "priority": 128,
+      "mac": "CC:4E:24:6B:B8:00",
+      "state": "local"
+    },
+    {
+      "id": 2,
+      "serial": "ABC2456N1002",
+      "model": "ICX7250-24P",
+      "role": "standby",
+      "priority": 128,
+      "mac": "CC:4E:24:6B:C7:00",
+      "state": "remote"
+    }
+  ],
+  "domain": null
+}

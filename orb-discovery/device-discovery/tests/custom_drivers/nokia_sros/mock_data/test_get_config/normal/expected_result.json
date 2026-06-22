@@ -1,0 +1,5 @@
+{
+  "running": "<configure xmlns=\"urn:nokia.com:sros:ns:yang:sr:conf\">\n        <router>\n            <router-name>Base</router-name>\n            <interface>\n                <interface-name>system</interface-name>\n                <ipv4>\n                    <primary>\n                        <address>1.1.1.1</address>\n                        <prefix-length>32</prefix-length>\n                    </primary>\n                </ipv4>\n            </interface>\n        </router>\n    </configure>\n\n",
+  "candidate": "",
+  "startup": ""
+}

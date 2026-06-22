@@ -1,0 +1,3 @@
+set hostname gw-corp-01
+set interface Mgmt ipv4-address 2.2.2.2 mask-length 29
+set interface Mgmt ipv6-address 2001:db8::1 mask-length 64

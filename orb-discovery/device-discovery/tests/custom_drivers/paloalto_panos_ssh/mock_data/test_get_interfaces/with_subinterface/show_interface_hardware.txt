@@ -1,0 +1,4 @@
+name            id   speed/duplex/state   mac
+--------------------------------------------------------------------------------
+ethernet1/1     16   1000/full/up         00:0c:29:aa:bb:01
+ethernet1/2     17   1000/full/up         00:0c:29:aa:bb:02

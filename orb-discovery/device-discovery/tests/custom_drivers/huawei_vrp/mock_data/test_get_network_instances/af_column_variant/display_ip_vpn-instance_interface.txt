@@ -1,0 +1,8 @@
+ Total VPN-Instances configured      : 2
+
+ VPN-Instance Name and ID : red, 1
+  Interface Number : 1
+  Interface list : 40GE0/0/3
+ VPN-Instance Name and ID : blue, 2
+  Interface Number : 1
+  Interface list : Vlanif200

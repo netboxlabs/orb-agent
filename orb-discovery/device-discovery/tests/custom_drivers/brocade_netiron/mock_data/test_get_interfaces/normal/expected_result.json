@@ -1,0 +1,38 @@
+{
+  "GigabitEthernet1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "uplink-core",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 1000.0,
+    "mac_address": "00:24:38:A5:1C:00"
+  },
+  "GigabitEthernet1/2": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 0.0,
+    "mac_address": "00:24:38:A5:1C:01"
+  },
+  "Ve2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Main Ethernet VLAN",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 0.0,
+    "mac_address": "00:24:38:A5:1C:00"
+  },
+  "Loopback1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "MPLS Loopback",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 0.0,
+    "mac_address": ""
+  }
+}

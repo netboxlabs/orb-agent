@@ -1,0 +1,8 @@
+Interface              State    Speed
+Management 1           up       1G
+Ethernet 0/1           up       10G
+Ethernet 0/2           down     1G
+Ethernet 0/3           down     1G
+Port-channel 1         up       -
+Loopback 1             up       -
+Ve 10                  up       -

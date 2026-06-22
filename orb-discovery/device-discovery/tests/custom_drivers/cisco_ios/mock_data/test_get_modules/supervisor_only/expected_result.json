@@ -1,0 +1,22 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "3",
+          "position": "3",
+          "module": {
+            "model": "C9600-SUP-1",
+            "serial": "JAE2501SUP1",
+            "description": "Cisco Catalyst 9600 Series Supervisor 1 Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "3": []
+      }
+    }
+  }
+}

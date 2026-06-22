@@ -1,0 +1,9 @@
+System statuses
+Device Model               : vEdge-C8000V
+Chassis serial number/Token: VEDGE-SERIAL-0123456789AB
+System IP                  : 10.1.0.1
+Hostname                   : vedge-site1
+Site ID                    : 1
+Version                    : 20.12.1.300
+Last Updated (UTC)         : Mon Apr 13 17:00:00 2026
+Uptime                     : 5 days 3 hours 24 minutes 18 seconds

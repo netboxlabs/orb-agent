@@ -1,0 +1,18 @@
+version 8.8.0.2-8.8.0.2
+hostname "ARUBAOS-CTL01"
+
+aaa authentication-server radius "radius1"
+ host 10.0.0.5
+ key MySuperSecretKey123
+
+aaa authentication-server tacacs+ "tacacs1"
+ host 10.0.0.6
+ key AnotherSecret456
+
+mgmt-user admin root NetAdminPass789
+
+wlan ssid-profile "Corp"
+ wpa-passphrase WpaPassphrase000
+
+snmp-server community private
+

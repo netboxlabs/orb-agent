@@ -1,0 +1,11 @@
+{
+  "management": {
+    "is_up": true,
+    "is_enabled": true,
+    "speed": 0.0,
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "mac_address": "",
+    "description": ""
+  }
+}

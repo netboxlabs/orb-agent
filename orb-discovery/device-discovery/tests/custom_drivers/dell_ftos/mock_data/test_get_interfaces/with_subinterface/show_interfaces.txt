@@ -1,0 +1,23 @@
+TenGigabitEthernet 0/0 is up, line protocol is up
+ Description: trunk-uplink
+ Hardware is DellEth, address is aa:bb:cc:dd:ee:00
+   Current address is aa:bb:cc:dd:ee:00
+ MTU 12000 bytes, IP MTU 11982 bytes
+ LineSpeed 10000 Mbit
+ Flowcontrol rx off tx off
+
+TenGigabitEthernet 0/0.100 is up, line protocol is up
+ Description: dmz sub-interface
+ Hardware is DellEth, address is aa:bb:cc:dd:ee:00
+   Current address is aa:bb:cc:dd:ee:00
+ 802.1Q tag: 100
+ MTU 1500 bytes
+ IP address is 10.0.100.1/24
+
+TenGigabitEthernet 0/0.200 is up, line protocol is up
+ Description: voice sub-interface
+ Hardware is DellEth, address is aa:bb:cc:dd:ee:00
+   Current address is aa:bb:cc:dd:ee:00
+ 802.1Q tag: 200
+ MTU 1500 bytes
+ IP address is 10.0.200.1/24

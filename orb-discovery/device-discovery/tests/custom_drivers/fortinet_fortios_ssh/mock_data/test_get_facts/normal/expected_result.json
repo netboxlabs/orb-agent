@@ -1,0 +1,12 @@
+{
+  "hostname": "FGT-LAB",
+  "vendor": "Fortinet",
+  "model": "FortiGate-60F",
+  "os_version": "7.4.0",
+  "serial_number": "FGT60F0000000001",
+  "uptime": 95400.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "port1"
+  ]
+}

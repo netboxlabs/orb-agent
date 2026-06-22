@@ -1,0 +1,13 @@
+#
+sysname HUAWEI-TEST
+#
+snmp-agent community read mySNMPcommunity
+#
+ local-user admin password cipher %^%#secrethash%^%#
+#
+ psk cipher secretpskvalue
+#
+interface GigabitEthernet0/0/0
+ ip address 10.0.0.1 255.255.255.0
+#
+return

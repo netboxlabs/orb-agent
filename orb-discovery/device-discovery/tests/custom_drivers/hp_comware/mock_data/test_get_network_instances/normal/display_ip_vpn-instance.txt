@@ -1,0 +1,5 @@
+  Total VPN-Instances configured : 2
+
+  VPN-Instance Name               RD                     Create time
+  cust-a                          65000:200              2024/01/01 10:00:00
+  mgmt-vpn                                               2024/01/02 10:00:00

@@ -1,0 +1,15 @@
+context local
+  hostname ipos-router-1
+  subscriber default
+    exit
+  interface loopback lo0
+    ip address 10.255.255.1/32
+    exit
+  port 1/1
+    no shutdown
+    exit
+  port 1/2
+    no shutdown
+    exit
+  ip domain-name example.com
+  exit

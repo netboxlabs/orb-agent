@@ -1,0 +1,6 @@
+Port      Operational state    Admin state    Speed       Negotiation
+---------------------------------------------------------------------
+Eth1/1    Up                   Enabled        40 Gbps     Disabled
+Eth1/2    Up                   Enabled        40 Gbps     Disabled
+Eth1/3    Down                 Enabled        N/A         Disabled
+Eth1/4    Down                 Disabled       N/A         Disabled

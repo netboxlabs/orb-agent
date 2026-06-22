@@ -1,0 +1,4 @@
+Interface                  IP-Address      OK? Method Status                Protocol
+GigabitEthernet0/0         203.0.113.1     YES CONFIG up                    up
+GigabitEthernet0/1         192.168.1.1     YES CONFIG up                    up
+Management0/0              unassigned      YES unset  administratively down down

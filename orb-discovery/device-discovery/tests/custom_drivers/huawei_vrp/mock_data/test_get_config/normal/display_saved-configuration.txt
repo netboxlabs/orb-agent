@@ -1,0 +1,4 @@
+#
+sysname HUAWEI-LAB-PE-1
+#
+return

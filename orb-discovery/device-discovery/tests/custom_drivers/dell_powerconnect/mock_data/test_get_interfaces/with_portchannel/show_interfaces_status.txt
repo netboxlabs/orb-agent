@@ -1,0 +1,10 @@
+Flow Link          Back   Mdix
+Port     Type         Duplex  Speed Neg      ctrl State       Pressure Mode
+-------- ------------ ------  ----- -------- ---- ----------- -------- -------
+g1       1G-Copper    Full    1000  Enabled  Off  Up          Disabled On
+
+Flow    Link
+Ch       Type    Duplex  Speed  Neg      control  State
+-------- ------- ------  -----  -------- -------  -----------
+ch1      1000Base-T Full  1000   Enabled  Off  Up
+ch2         --     --      --      --       --    Not Present

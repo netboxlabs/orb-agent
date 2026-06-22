@@ -1,0 +1,17 @@
+build/
+__pycache__/
+.venv*/
+.vscode/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.coverage/
+.coverage
+
+.cursor/
+.cursor.md
+
+CLAUDE.md
+!/CLAUDE.md
+!device-discovery/custom_napalm/CLAUDE.md
+.DS_Store

@@ -1,0 +1,8 @@
+Switch/Stack Mac Address : 0011.2233.4455 - Local Mac Address
+Mac persistency wait time: Indefinite
+                                             H/W   Current
+Switch#   Role    Mac Address     Priority Version  State
+-------------------------------------------------------------------------------------
+*1       Active   0011.2233.4455     15     P2B     Ready
+ 2       Member   0011.2233.5566      5     P2B     Ready
+ 3       Member   0011.2233.6677      1     P2B     Ready

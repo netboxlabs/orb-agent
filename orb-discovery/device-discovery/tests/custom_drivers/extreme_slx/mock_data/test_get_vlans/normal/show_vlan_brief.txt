@@ -1,0 +1,5 @@
+VLAN  Name            State    Ports/Channel-groups
+1     Default         ACTIVE   Eth 0/1(u) Eth 0/2(u)
+10    Management      ACTIVE   Eth 0/3(u)
+20    Servers         ACTIVE   Po 1(t) Eth 0/4(u) Eth 0/5(u)
+                               Eth 0/6(u)

@@ -1,0 +1,14 @@
+{
+  "hostname": "fpr9300-dc",
+  "vendor": "Cisco",
+  "model": "Firepower 9300",
+  "os_version": "2.10(1.159)",
+  "serial_number": "JAD2135A01Z",
+  "uptime": 2592000.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "Ethernet1/1",
+    "Ethernet1/2",
+    "mgmt0"
+  ]
+}

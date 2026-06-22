@@ -1,0 +1,13 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1", "position": "1", "module": {"model": "PA-7500-100G-NPC-A", "serial": "007902111001", "description": "NPC", "type": "linecard", "sub_bays": []}},
+        {"name": "2", "position": "2", "module": {"model": "PA-7500-DPC-A", "serial": "007902222001", "description": "DPC", "type": "linecard", "sub_bays": []}},
+        {"name": "3", "position": "3", "module": {"model": "PA-7500-SFC-A", "serial": "007902333001", "description": "SFC", "type": "linecard", "sub_bays": []}},
+        {"name": "4", "position": "4", "module": {"model": "PA-7500-MPC-A", "serial": "007902444001", "description": "MPC", "type": "supervisor", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

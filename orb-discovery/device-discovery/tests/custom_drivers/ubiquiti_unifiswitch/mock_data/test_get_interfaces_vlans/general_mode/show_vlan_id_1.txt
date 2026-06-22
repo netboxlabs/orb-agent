@@ -1,0 +1,7 @@
+VLAN ID........................... 1
+VLAN Name......................... Default
+VLAN Type......................... Default
+
+   Interface  Current   Configured  Tagging
+   ---------  --------  ----------  --------
+   0/1        Exclude   Autodetect  Untagged

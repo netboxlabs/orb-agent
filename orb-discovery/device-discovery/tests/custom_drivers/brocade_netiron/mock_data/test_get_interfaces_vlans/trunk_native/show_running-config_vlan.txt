@@ -1,0 +1,11 @@
+no spanning-tree
+!
+vlan 10 name DATA
+ untagged ethe 1/1
+!
+vlan 20 name VOICE
+ tagged ethe 1/1
+!
+vlan 30 name MGMT
+ tagged ethe 1/1
+!

@@ -1,0 +1,30 @@
+  UNIT 1
+  (Primary) from secondary SPR08070.bin
+
+    SW: Version 08.0.70T213
+    HW: Stackable ICX7150-48
+
+  UNIT 2
+  (Primary) from secondary SPR08070.bin
+
+    SW: Version 08.0.70T213
+    HW: Stackable ICX7150-48
+
+  UNIT 3
+  (Primary) from secondary SPR08070.bin
+
+    SW: Version 08.0.70T213
+    HW: Stackable ICX7150-24
+
+=============================================================================
+UNIT 1: SL 1: ICX7150-48 48-port 100M/1GbE Module
+  Serial  #: ICX7150A0001
+
+UNIT 2: SL 1: ICX7150-48 48-port 100M/1GbE Module
+  Serial  #: ICX7150A0002
+
+UNIT 3: SL 1: ICX7150-24 24-port 100M/1GbE Module
+  Serial  #: ICX7150B0003
+
+The system uptime is 31 day(s) 5 hour(s) 0 minute(s) 0 second(s)
+  The system : started=warm start

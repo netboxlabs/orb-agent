@@ -1,0 +1,5 @@
+{
+  "running": "\n version 7.1.070, Release 3506P03\n sysname comware-sw01\n#\n snmp-agent community read <redacted>\n snmp-agent community write <redacted>\n snmp-agent community read cipher <redacted>\n#\ninterface GigabitEthernet1/0/1\n port link-type access\n port access vlan 1\n#\ninterface Vlan-interface10\n ip address 192.168.10.1 255.255.255.0\n#\nospf 1\n area 0.0.0.0\n  authentication-key cipher <redacted>\n#\n local-user admin class manage\n  password cipher <redacted>\n  service-type telnet ssh\n#\n ike keychain site-a\n  pre-shared-key cipher <redacted>\n#\n snmp-agent community read simple <redacted>\n#\nradius scheme radius1\n key cipher <redacted>\n#\nreturn\n",
+  "candidate": "",
+  "startup": "\n version 7.1.070, Release 3506P03\n sysname comware-sw01\n#\ninterface GigabitEthernet1/0/1\n port link-type access\n port access vlan 1\n#\n local-user admin class manage\n  password cipher <redacted>\n  service-type telnet ssh\n#\nreturn\n"
+}

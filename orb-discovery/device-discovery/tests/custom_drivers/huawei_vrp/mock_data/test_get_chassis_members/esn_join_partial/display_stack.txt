@@ -1,0 +1,8 @@
+Stack mode: Yes
+Stack topology type: Chain
+Stack system MAC: 00e0-fc99-aa01
+
+Slot   Role        Mac Address        Priority   Device Type
+-----------------------------------------------------------------
+ 1     Master      00e0-fc99-aa01     200        S5720-52X-EI-AC
+ 2     Slave       00e0-fc99-aa02     100        S5720-52X-EI-AC

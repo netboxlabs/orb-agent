@@ -1,0 +1,11 @@
+
+  VRF-Name                          VRF-ID Interfaces
+  default                           0      Gi 1/1,Gi 1/10,
+                                           Te 1/20
+  management                        511    Ma 1/1
+  blue                              1      Gi 1/2,Vl 100
+  red                               2      Gi 1/3-1/5,
+                                           Vl 200
+  RED                               3      Gi 1/7
+  green                             4      Te 0/14,16-17,Fo 0/48,52
+  orange                            5      Gi 2/3-2/5,7

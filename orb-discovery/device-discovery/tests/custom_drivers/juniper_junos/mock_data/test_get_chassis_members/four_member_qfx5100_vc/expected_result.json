@@ -1,0 +1,41 @@
+{
+  "members": [
+    {
+      "id": 0,
+      "serial": "TA3714AF0001",
+      "model": "QFX5100-48S-6Q",
+      "role": "active",
+      "priority": 129,
+      "mac": "54:e0:32:11:00:00",
+      "state": "Prsnt"
+    },
+    {
+      "id": 1,
+      "serial": "TA3714AF0002",
+      "model": "QFX5100-48S-6Q",
+      "role": "standby",
+      "priority": 128,
+      "mac": "54:e0:32:11:00:80",
+      "state": "Prsnt"
+    },
+    {
+      "id": 2,
+      "serial": "TA3714AF0003",
+      "model": "QFX5100-48S-6Q",
+      "role": "member",
+      "priority": 0,
+      "mac": "54:e0:32:11:01:00",
+      "state": "Prsnt"
+    },
+    {
+      "id": 3,
+      "serial": "TA3714AF0004",
+      "model": "QFX5100-48S-6Q",
+      "role": "member",
+      "priority": 0,
+      "mac": "54:e0:32:11:01:80",
+      "state": "Prsnt"
+    }
+  ],
+  "domain": null
+}

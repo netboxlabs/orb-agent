@@ -1,0 +1,5 @@
+{
+  "running": "username cisco privilege 15 password <redacted>\nusername guest password <redacted>\nenable password level 15 <redacted>\n!\ninterface vlan 1\n ip address 192.168.1.1 255.255.255.0\n!\ninterface vlan 355\n ip address 10.0.55.6 255.255.255.0\n!\nsnmp-server community <redacted> ro\nsnmp-server community <redacted> rw\n!\nip default-gateway 10.0.55.1\n",
+  "candidate": "",
+  "startup": "username cisco privilege 15 password <redacted>\nusername guest password <redacted>\nenable password level 15 <redacted>\n!\ninterface vlan 1\n ip address 192.168.1.1 255.255.255.0\n!\ninterface vlan 355\n ip address 10.0.55.6 255.255.255.0\n!\nsnmp-server community <redacted> ro\nsnmp-server community <redacted> rw\n!\nip default-gateway 10.0.55.1\n"
+}

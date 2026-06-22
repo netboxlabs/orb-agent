@@ -1,0 +1,16 @@
+{
+  "GigabitEthernet1/0/1.100": {
+    "ipv4": {
+      "10.0.100.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "GigabitEthernet1/0/1.200": {
+    "ipv4": {
+      "10.0.200.1": {
+        "prefix_length": 24
+      }
+    }
+  }
+}

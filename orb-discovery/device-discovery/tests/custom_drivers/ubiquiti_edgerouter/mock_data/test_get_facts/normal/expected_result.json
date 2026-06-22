@@ -1,0 +1,10 @@
+{
+  "hostname": "ubnt-er-lite",
+  "vendor": "Ubiquiti",
+  "model": "EdgeRouter Lite 3-Port",
+  "os_version": "v2.0.9",
+  "serial_number": "F09FC2AB1234",
+  "uptime": 452359.0,
+  "fqdn": "Unknown",
+  "interface_list": ["eth0", "eth1", "lo"]
+}

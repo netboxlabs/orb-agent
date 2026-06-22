@@ -1,0 +1,27 @@
+{
+  "0/1": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 1
+  },
+  "0/2": {
+    "mode": "trunk",
+    "tagged": [
+      20
+    ],
+    "untagged": 10
+  },
+  "0/5": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 10
+  },
+  "0/12": {
+    "mode": "trunk",
+    "tagged": [
+      100,
+      200
+    ],
+    "untagged": null
+  }
+}

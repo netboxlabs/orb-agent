@@ -1,0 +1,30 @@
+{
+  "Ethernet0": {
+    "ipv4": {
+      "10.0.0.1": {
+        "prefix_length": 30
+      }
+    }
+  },
+  "Ethernet0.100": {
+    "ipv4": {
+      "10.0.100.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Ethernet0.200": {
+    "ipv4": {
+      "10.0.200.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Management0": {
+    "ipv4": {
+      "192.168.1.10": {
+        "prefix_length": 24
+      }
+    }
+  }
+}

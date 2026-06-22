@@ -1,0 +1,25 @@
+Ethernet1/1 is up
+  admin state is up, Dedicated Interface
+  Hardware: 1000/10000 Ethernet, address: 7c69.f60f.aa60 (bia 7c69.f60f.aa60)
+  Description: Uplink to spine
+  MTU 9216 bytes
+  Speed: 10000 Mbps
+
+Ethernet1/2 is down
+  admin state is up, Dedicated Interface
+  Hardware: 1000/10000 Ethernet, address: 7c69.f60f.aa61 (bia 7c69.f60f.aa61)
+  MTU 9216 bytes
+  Speed: 10000 Mbps
+
+Ethernet1/3 is down
+  admin state is down, Dedicated Interface
+  Hardware: 1000/10000 Ethernet, address: 7c69.f60f.aa62 (bia 7c69.f60f.aa62)
+  MTU 9216 bytes
+  Speed: 10000 Mbps
+
+Ethernet1/4 is up
+  admin state is up, Dedicated Interface
+  Hardware: 40G Ethernet, address: 7c69.f60f.aa63 (bia 7c69.f60f.aa63)
+  Port description is uplink-40g
+  MTU 9216 bytes
+  full-duplex, 40 Gb/s, media type is 40G

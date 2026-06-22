@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "CN3CHASSELF001",
+      "model": "H3C S5560X-30C-EI",
+      "role": "active",
+      "priority": 32,
+      "mac": "00:23:AA:BB:CC:01",
+      "state": "Master"
+    },
+    {
+      "id": 2,
+      "serial": "CN3CHASSELF002",
+      "model": "H3C S5560X-30C-EI",
+      "role": "standby",
+      "priority": 16,
+      "mac": "00:23:AA:BB:CC:02",
+      "state": "Standby"
+    }
+  ],
+  "domain": "42"
+}

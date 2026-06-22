@@ -1,0 +1,5 @@
+devices:
+  # Raritan devices (enterprise 13742)
+  .1.3.6.1.4.1.13742: raritan
+  .1.3.6.1.4.1.13742.3.2.10: raritanDominionSXII
+  .1.3.6.1.4.1.13742.6: raritanPX2PDU

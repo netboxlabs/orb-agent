@@ -1,0 +1,12 @@
+{
+  "GlobalRouter": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "GlobalRouter",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "running": "!\n! Cisco APIC Running Configuration\n!\nhostname apic1\n!\nusername admin\n  password Adm1nP@ssword\n!\nsnmp-server community public ro\nsnmp-server community private rw\n!\nradius-server host 10.0.0.10 key R@d1usKey123\ntacacs-server host 10.0.0.20\n key T@c@csKey456\n!\ninterface eth2-1\n  ip address 10.0.1.1/24\n  description OOB Management\n!\ninterface eth2-2\n  ip address 10.0.2.1/24\n!\nend\n",
+  "candidate": "",
+  "startup": ""
+}

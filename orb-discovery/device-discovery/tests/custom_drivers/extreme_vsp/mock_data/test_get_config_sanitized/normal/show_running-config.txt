@@ -1,0 +1,19 @@
+! Version VOSS8K.6.0.1.2.GA
+!
+! Avaya Virtual Services Platform 8284XSQ
+!
+username admin level 15 password MyRawSecret123
+enable password level 2 EnAbleRawSecret
+!
+snmp-server community "MyReadCommunity" ro
+snmp-server community "MyWriteCommunity" rw
+snmp-server community UnquotedSecret ro
+!
+vlan create 1 name Default type port
+vlan create 10 name Management type port
+!
+interface vlan 1
+  ip address 10.0.0.1 255.255.255.0
+  exit
+!
+end

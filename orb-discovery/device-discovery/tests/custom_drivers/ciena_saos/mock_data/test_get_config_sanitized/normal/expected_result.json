@@ -1,0 +1,5 @@
+{
+  "running": "+------------------------------------------------------------------------------+\n| Ciena Corporation SAOS 6.18 Configuration                                    |\n+------------------------------------------------------------------------------+\n!\n! Last modified by admin on Mon Apr 14 12:00:00 2026\n!\nchassis set host-name saos-lab-7200\n!\nset user admin password <redacted>\nset user admin auth-key <redacted>\nset user admin access-level super-user\n!\nsnmp-server community <redacted> ro\nsnmp-server community <redacted> rw\n!\nvlan create vlan 100 name mgmt\nvlan create vlan 200 name data\n!\nport set port 1 mode trunk\nport set port 2 mode access\n!\n",
+  "candidate": "",
+  "startup": ""
+}

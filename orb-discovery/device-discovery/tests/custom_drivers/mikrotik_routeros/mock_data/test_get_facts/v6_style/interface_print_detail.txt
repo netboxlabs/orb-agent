@@ -1,0 +1,6 @@
+Flags: D - dynamic, X - disabled, R - running, S - slave
+ 0  RS name="ether1" default-name="ether1" type="ether" mtu=1500 actual-mtu=1500 l2mtu=1598 max-l2mtu=4074 mac-address=D4:CA:6D:AF:5B:E3 last-link-down-time=sep/14/2024 10:41:39 last-link-up-time=sep/14/2024 10:41:44 link-downs=20
+
+ 1  RS name="ether2" default-name="ether2" type="ether" mtu=1500 actual-mtu=1500 l2mtu=1598 max-l2mtu=4074 mac-address=D4:CA:6D:AF:5B:E4 last-link-down-time=sep/04/2024 03:04:05 last-link-up-time=sep/04/2024 03:04:36 link-downs=4
+
+ 2  RS name="ether3" default-name="ether3" type="ether" mtu=1500 actual-mtu=1500 l2mtu=1598 max-l2mtu=4074 mac-address=D4:CA:6D:AF:5B:E5 last-link-down-time=aug/21/2024 10:14:37 last-link-up-time=aug/21/2024 10:14:40 link-downs=1

@@ -1,0 +1,15 @@
+{
+  "hostname": "ftos-switch01",
+  "vendor": "Dell",
+  "model": "Dell S4820T",
+  "os_version": "9.9(0.0)",
+  "serial_number": "CN0AB1234567890",
+  "uptime": 810300.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "GigabitEthernet 0/48",
+    "ManagementEthernet 0/0",
+    "TenGigabitEthernet 0/0",
+    "TenGigabitEthernet 0/1"
+  ]
+}

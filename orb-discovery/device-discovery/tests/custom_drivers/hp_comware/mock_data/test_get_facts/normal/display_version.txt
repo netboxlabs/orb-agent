@@ -1,0 +1,11 @@
+H3C Comware Platform Software
+Comware Software, Version 7.1.070, Release 3506P03
+Copyright (c) 2004-2022 New H3C Technologies Co., Ltd. All rights reserved.
+H3C S5560X-30C-EI uptime is 2 weeks, 3 days, 4 hours, 15 minutes
+H3C S5560X-30C-EI with 1 Processor
+Board Type:LSQM1CGP24TXFA
+DRAM:          2048M bytes
+Flash:          512M bytes
+PCB 1 Version:  VER.A
+Bootrom Version: 118
+[Subslot 0]H3C S5560X-30C-EI Hardware Version is REV.A

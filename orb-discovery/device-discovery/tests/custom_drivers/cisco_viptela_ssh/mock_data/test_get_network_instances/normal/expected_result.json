@@ -1,0 +1,37 @@
+{
+  "0": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "0",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "1": {
+    "interfaces": {
+      "interface": {
+        "ge0/2": {},
+        "ge0/3": {}
+      }
+    },
+    "name": "1",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "512": {
+    "interfaces": {
+      "interface": {
+        "eth0": {}
+      }
+    },
+    "name": "512",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "BC", "position": "BC", "module": {"model": "PAN-PA-5400-BC-A", "serial": "007903555001", "description": "BC", "type": "linecard", "sub_bays": []}},
+        {"name": "1", "position": "1", "module": {"model": "PA-5400-NC-A", "serial": "007903111001", "description": "NC", "type": "linecard", "sub_bays": []}},
+        {"name": "2", "position": "2", "module": {"model": "PA-5400-NC-A", "serial": "007903111002", "description": "NC", "type": "linecard", "sub_bays": []}},
+        {"name": "3", "position": "3", "module": {"model": "PA-5400-DPC-A", "serial": "007903222001", "description": "DPC", "type": "linecard", "sub_bays": []}},
+        {"name": "4", "position": "4", "module": {"model": "PA-5400-MPC-A", "serial": "007903333001", "description": "MPC", "type": "supervisor", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

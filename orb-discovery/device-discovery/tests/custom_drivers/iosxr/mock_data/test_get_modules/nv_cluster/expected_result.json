@@ -1,0 +1,18 @@
+{
+  "members": {
+    "0": {
+      "bays": [
+        {"name": "0/RSP0/CPU0", "position": "0/RSP0/CPU0", "module": {"model": "A9K-RSP880-LT-SE", "serial": "FOX5678EFG0", "description": "ASR9K Route Switch Processor", "type": "supervisor", "sub_bays": []}},
+        {"name": "0/0/CPU0", "position": "0/0/CPU0", "module": {"model": "A9K-24X10GE-SE", "serial": "FOX9012R0LC", "description": "ASR 9000 24-Port 10GE Line Card", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    },
+    "1": {
+      "bays": [
+        {"name": "1/RSP0/CPU0", "position": "1/RSP0/CPU0", "module": {"model": "A9K-RSP880-LT-SE", "serial": "FOX5678EFG1", "description": "ASR9K Route Switch Processor", "type": "supervisor", "sub_bays": []}},
+        {"name": "1/0/CPU0", "position": "1/0/CPU0", "module": {"model": "A9K-24X10GE-SE", "serial": "FOX9012R1LC", "description": "ASR 9000 24-Port 10GE Line Card", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

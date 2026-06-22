@@ -1,0 +1,52 @@
+
+Port 1/1
+================================================================================
+Name:                   Uplink-to-Core
+Admin:                  Enabled
+Link:                   Up
+AutoNeg:                Enabled
+Speed:                  1000
+Duplex:                 Full
+MTU:                    1518
+MAC Address:            00-19-69-5B-20-A1
+Flow Control:           Disabled
+================================================================================
+
+Port 1/2
+================================================================================
+Name:                   Server-Port
+Admin:                  Enabled
+Link:                   Up
+AutoNeg:                Enabled
+Speed:                  1000
+Duplex:                 Full
+MTU:                    1518
+MAC Address:            00-19-69-5B-20-A2
+Flow Control:           Disabled
+================================================================================
+
+Port 1/3
+================================================================================
+Name:                   Desktop-1
+Admin:                  Enabled
+Link:                   Down
+AutoNeg:                Enabled
+Speed:                  10
+Duplex:                 Half
+MTU:                    1518
+MAC Address:            00-19-69-5B-20-A3
+Flow Control:           Disabled
+================================================================================
+
+Port 1/4
+================================================================================
+Name:                   Desktop-2
+Admin:                  Disabled
+Link:                   Down
+AutoNeg:                Enabled
+Speed:                  10
+Duplex:                 Half
+MTU:                    1518
+MAC Address:            00-19-69-5B-20-A4
+Flow Control:           Disabled
+================================================================================

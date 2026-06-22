@@ -1,0 +1,14 @@
+{
+  "1": {
+    "name": "VLAN0001",
+    "interfaces": []
+  },
+  "10": {
+    "name": "Mgmt",
+    "interfaces": []
+  },
+  "20": {
+    "name": "Users",
+    "interfaces": []
+  }
+}

@@ -1,0 +1,7 @@
+Version:      v2.0.9
+Build ID:     5402245
+Build on:     03/09/21 09:14
+Copyright:    2012-2021 Ubiquiti Networks, Inc.
+HW model:     EdgeRouter Lite 3-Port
+HW S/N:       F09FC2AB1234
+Uptime:       5 days, 5 hours, 39 minutes, 19 seconds

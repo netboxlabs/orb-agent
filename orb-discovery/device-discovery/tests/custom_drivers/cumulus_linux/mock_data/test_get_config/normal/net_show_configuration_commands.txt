@@ -1,0 +1,15 @@
+net add hostname leaf01
+net add interface swp1 alias to-spine01
+net add interface swp1 bgp
+net add interface swp2 alias to-spine02
+net add interface swp2 bgp
+net add bgp autonomous-system 65001
+net add bgp router-id 10.10.10.1
+net add bgp neighbor 10.0.1.0 remote-as 65000
+net add bgp ipv4 unicast network 10.10.10.1/32
+net add bridge bridge ports swp3
+net add bridge bridge vids 100,200
+net add vlan 100 ip address 10.100.0.1/24
+net add vlan 200 ip address 10.200.0.1/24
+net add snmp-server listening-address all
+net commit

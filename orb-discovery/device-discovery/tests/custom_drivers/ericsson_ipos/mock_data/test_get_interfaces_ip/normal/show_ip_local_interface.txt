@@ -1,0 +1,4 @@
+Interface     IP-Address/Mask           State
+1/1           192.168.1.1/24            up
+1/4           10.0.0.1/30               up
+lo0           127.0.0.1/8               up

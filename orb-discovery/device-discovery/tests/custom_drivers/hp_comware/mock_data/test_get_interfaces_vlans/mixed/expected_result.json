@@ -1,0 +1,4 @@
+{
+  "GigabitEthernet1/0/1": {"mode": "access", "tagged": [], "untagged": 10},
+  "GigabitEthernet1/0/2": {"mode": "trunk", "tagged": [100, 200], "untagged": 99}
+}

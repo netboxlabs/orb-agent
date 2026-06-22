@@ -1,0 +1,6 @@
+name                id   vsys    zone             forwarding   tag  address
+--------------------------------------------------------------------------------
+ethernet1/1         16   1       trust            vr:default   0    192.168.1.1/24
+ethernet1/1.100     16   1       dmz              vr:default   100  10.0.100.1/24
+ethernet1/1.200     16   1       voice            vr:default   200  10.0.200.1/24
+ethernet1/2         17   1       outside          vr:default   0    203.0.113.1/24

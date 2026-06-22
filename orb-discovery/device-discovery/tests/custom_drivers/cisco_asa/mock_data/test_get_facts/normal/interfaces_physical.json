@@ -1,0 +1,12 @@
+{
+  "kind": "collection#PhysicalInterface",
+  "rangeInfo": {"offset": 0, "limit": 100, "total": 2},
+  "items": [
+    {"hardwareID": "GigabitEthernet1/1", "shutdown": false, "interfaceDesc": "inside",
+     "ipAddress": {"ip": {"kind": "IPv4Address", "value": "192.168.1.1"}, "netMask": {"kind": "IPv4Address", "value": "255.255.255.0"}},
+     "ipv6Info": {"ipv6Addresses": []}},
+    {"hardwareID": "GigabitEthernet1/2", "shutdown": false, "interfaceDesc": "outside",
+     "ipAddress": {"ip": {"kind": "IPv4Address", "value": "203.0.113.1"}, "netMask": {"kind": "IPv4Address", "value": "255.255.255.0"}},
+     "ipv6Info": {"ipv6Addresses": []}}
+  ]
+}

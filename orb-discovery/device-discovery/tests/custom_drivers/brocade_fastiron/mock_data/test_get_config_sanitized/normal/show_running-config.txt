@@ -1,0 +1,23 @@
+!
+ver 08.0.50T7f2
+!
+hostname fastiron-sw01
+!
+enable super-user-password 8 $1$Rm1JiEuC$zVi3LXVbj5qr5WXOthOiD0
+!
+username admin privilege 0 password 8 $1$jBMdmgRe$tAB5CKqX2GBSm3C1BK8RH.
+!
+snmp-server community public ro
+snmp-server community 0 private rw
+snmp-server community 1 $eCr3t ro
+!
+vlan 1 name DEFAULT-VLAN by port
+ untagged ethe 1/1/2
+!
+interface ethernet 1/1/1
+ port-name uplink
+!
+interface management 1
+ ip address 10.0.0.1/24
+!
+end

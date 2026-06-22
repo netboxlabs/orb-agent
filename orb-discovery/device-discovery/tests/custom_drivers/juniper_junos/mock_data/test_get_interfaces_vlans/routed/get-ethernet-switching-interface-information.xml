@@ -1,0 +1,5 @@
+<ethernet-switching-interface-information>
+  <interface>
+    <interface-name>ge-0/0/4</interface-name>
+  </interface>
+</ethernet-switching-interface-information>

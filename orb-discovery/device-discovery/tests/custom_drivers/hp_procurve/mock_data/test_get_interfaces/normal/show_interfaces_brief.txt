@@ -1,0 +1,9 @@
+ Status and Counters - Port Status
+
+                    | Intrusion                           MDI   Flow  Bcast
+  Port    Type      | Alert     Enabled Status Mode       Mode  Ctrl  Limit
+  ------- --------- + --------- ------- ------ ---------- ----- ----- ------
+  1       100/1000T | No        Yes     Up     1000FDx    MDI   off   0
+  2       100/1000T | No        Yes     Down   1000FDx    MDIX  off   0
+  3       100/1000T | No        No      Down   Auto       MDIX  off   0
+  A1      1000T     | No        Yes     Up     1000FDx    MDI   off   0

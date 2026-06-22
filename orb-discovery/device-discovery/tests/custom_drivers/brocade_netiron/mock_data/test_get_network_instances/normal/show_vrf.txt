@@ -1,0 +1,9 @@
+Total number of VRFs configured: 3
+Status Codes - A:active, D:deleted, I:inactive
+Name                     Default RD          vrf|v4|v6   Routes   Interfaces
+green                    1:1                 A | A| A    12       ve2 e1/1
+blue                     (null)              A | A| A    5        e 1/2
+                                                                  loopback1
+mgmt                     65000:99            A | A| A    2        ve9
+Total number of IPv4 unicast route for all non-default VRF is 19
+Total number of IPv6 unicast route for all non-default VRF is 0

@@ -1,0 +1,6 @@
+Interface              IP-Address      OK? Method Status                Protocol
+Gi2/0/1                  unassigned      YES NVRAM  up                    up
+Gi2/0/2                  unassigned      YES NVRAM  up                    up
+Te2/0/1                  unassigned      YES NVRAM  up                    up
+Te2/0/2                  unassigned      YES NVRAM  up                    up
+Gi3/0/1                  unassigned      YES NVRAM  up                    up

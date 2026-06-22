@@ -1,0 +1,40 @@
+<response status="success">
+  <result>
+    <config version="10.1.0">
+      <devices>
+        <entry name="localhost.localdomain">
+          <network>
+            <interface>
+              <ethernet>
+                <entry name="ethernet1/1">
+                  <comment>Uplink to Router</comment>
+                  <layer3>
+                    <ip>
+                      <entry name="192.168.1.1/24"/>
+                    </ip>
+                    <units>
+                      <entry name="ethernet1/1.100">
+                        <comment>dmz subinterface</comment>
+                        <tag>100</tag>
+                        <ip>
+                          <entry name="10.0.100.1/24"/>
+                        </ip>
+                      </entry>
+                      <entry name="ethernet1/1.200">
+                        <comment>voice subinterface</comment>
+                        <tag>200</tag>
+                        <ip>
+                          <entry name="10.0.200.1/24"/>
+                        </ip>
+                      </entry>
+                    </units>
+                  </layer3>
+                </entry>
+              </ethernet>
+            </interface>
+          </network>
+        </entry>
+      </devices>
+    </config>
+  </result>
+</response>

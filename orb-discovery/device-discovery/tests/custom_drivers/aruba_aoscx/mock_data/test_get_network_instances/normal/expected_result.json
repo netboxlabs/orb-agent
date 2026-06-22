@@ -1,0 +1,37 @@
+{
+  "CUST-A": {
+    "interfaces": {
+      "interface": {
+        "1/1/1": {},
+        "vlan100": {}
+      }
+    },
+    "name": "CUST-A",
+    "state": {
+      "route_distinguisher": "65000:400"
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "mgmt": {
+    "interfaces": {
+      "interface": {
+        "mgmt": {}
+      }
+    },
+    "name": "mgmt",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

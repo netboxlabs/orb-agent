@@ -1,0 +1,11 @@
+Interface 1/1/1 is up
+ Admin state is up
+ Description: uplink-to-core
+ Hardware: ARUBA_AP, MAC Address: 70:4d:7b:11:22:33
+ MTU 1500
+ Type SYSTEM
+Interface 1/1/2 is down
+ Admin state is up
+ Hardware: ARUBA_AP, MAC Address: 70:4d:7b:11:22:34
+ MTU 1500
+ Type SYSTEM

@@ -1,0 +1,8 @@
+Switch: 1
+
+Machine Type............... Ubiquiti Networks, Inc. EdgeSwitch 24
+Machine Model.............. ES-24-500W
+Serial Number.............. F09FC2AB5678
+Burned In MAC Address...... F0:9F:C2:AB:56:78
+Software Version........... v1.9.3
+Hardware Revision.......... 15

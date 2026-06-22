@@ -1,0 +1,11 @@
+ Status and Counters - VLAN Information - VLAN 30
+
+  VLAN ID : 30
+  Name : MGMT
+  Status : Port-based
+  Voice : No
+  Jumbo : No
+
+  Port Information  Mode      Unknown VLAN  Status
+  ----------------- --------- ------------- ----------
+  1                 Tagged    Learn         Up

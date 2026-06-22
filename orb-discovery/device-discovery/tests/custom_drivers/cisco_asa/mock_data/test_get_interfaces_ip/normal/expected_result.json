@@ -1,0 +1,21 @@
+{
+  "GigabitEthernet1/1": {
+    "ipv4": {
+      "192.168.1.1": {
+        "prefix_length": 24
+      }
+    },
+    "ipv6": {
+      "2001:db8::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "GigabitEthernet1/2": {
+    "ipv4": {
+      "203.0.113.1": {
+        "prefix_length": 24
+      }
+    }
+  }
+}

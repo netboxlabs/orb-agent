@@ -1,0 +1,14 @@
+{
+  "TABLE_interface": {
+    "ROW_interface": {
+      "interface": "Ethernet1/1",
+      "switchport": "Enabled",
+      "admin_mode": "access",
+      "oper_mode": "access",
+      "access_vlan": "100",
+      "native_vlan": "1",
+      "voice_vlan": "none",
+      "trunk_vlans": "1-4094"
+    }
+  }
+}

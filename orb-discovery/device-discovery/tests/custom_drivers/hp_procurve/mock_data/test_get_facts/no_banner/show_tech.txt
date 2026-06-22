@@ -1,0 +1,13 @@
+CRASHLogfileshow
+
+
+Active Management Module 2 Crash Log
+
+...Crash Log File Header..........................
+Product:   HP J4899B
+Name:      HP ProCurve Switch 2650
+Date:      Jan 01 2020 00:00:00
+Build:     15
+Version:   R.11.72
+Directory: /ws/swbuildm/rel_eureka/code/build
+CPU:       P

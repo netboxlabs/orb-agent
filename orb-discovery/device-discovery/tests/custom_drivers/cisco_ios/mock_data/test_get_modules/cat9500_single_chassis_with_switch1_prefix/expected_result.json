@@ -1,0 +1,22 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9500-SUP-BUILTIN",
+            "serial": "JAE2501SUP1",
+            "description": "Cisco Catalyst 9500 Series Built-in Supervisor",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": []
+      }
+    }
+  }
+}

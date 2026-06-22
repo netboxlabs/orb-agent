@@ -1,0 +1,4 @@
+  Solt ID  Board Name  Serial Number
+  0        H901MPLA    210235594610A2000001
+  1        H901GPHF    210235594610A2000002
+  --

@@ -1,0 +1,3 @@
+devices:
+  # Nutanix HCI (enterprise 41263)
+  .1.3.6.1.4.1.41263: nutanix

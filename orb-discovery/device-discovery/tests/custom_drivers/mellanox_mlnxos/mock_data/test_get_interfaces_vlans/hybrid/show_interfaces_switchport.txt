@@ -1,0 +1,8 @@
+Eth1/1
+  Admin Mode             : hybrid
+  Operational Mode       : hybrid
+  Access VLAN            : 1
+  Native VLAN            : 50
+  Allowed VLANs          : 1
+  Hybrid Allowed VLANs   : 100,200,300
+  Voice VLAN             :

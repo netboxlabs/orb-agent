@@ -1,0 +1,13 @@
+System:
+  Description:  Alcatel-Lucent Enterprise OS6860E-24 8.5.152.R01,
+  Object ID:    1.3.6.1.4.1.6486.801.1.1.2.1.11.1.5,
+  Up Time:      0 days 1 hours 57 minutes and 25 seconds,
+  Contact:      Alcatel-Lucent, http://enterprise.alcatel-lucent.com,
+  Name:         OS6860,
+  Location:     Unknown,
+  Services:     78,
+  Date & Time:  MON APR 02 2018 16:01:32 (ZP7)
+Flash Space:
+    Primary CMM:
+      Available (bytes):  600760320,
+      Comments         :  None

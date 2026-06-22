@@ -1,0 +1,14 @@
+{
+  "1": {
+    "name": "Default",
+    "interfaces": []
+  },
+  "10": {
+    "name": "Management",
+    "interfaces": []
+  },
+  "20": {
+    "name": "Data",
+    "interfaces": []
+  }
+}

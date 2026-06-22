@@ -1,0 +1,35 @@
+Interface GigabitEthernet1/1 "outside", is up, line protocol is up
+  Hardware is EtherSVC, BW 1000 Mbps, DLY 10 usec
+    (Full-duplex), Auto-Speed(1000 Mbps)
+  MAC address aabb.cc00.0100, MTU 1500
+  IP address 203.0.113.1, subnet mask 255.255.255.0
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec
+
+Interface GigabitEthernet1/1.100 "dmz", is up, line protocol is up
+  Hardware is EtherSVC, BW 1000 Mbps, DLY 10 usec
+        Encapsulation: 802.1Q VLAN, Vlan ID 100
+  MAC address aabb.cc00.0100, MTU 1500
+  IP address 10.0.100.1, subnet mask 255.255.255.0
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec
+
+Interface GigabitEthernet1/1.200 "voice", is up, line protocol is up
+  Hardware is EtherSVC, BW 1000 Mbps, DLY 10 usec
+        Encapsulation: 802.1Q VLAN, Vlan ID 200
+  MAC address aabb.cc00.0100, MTU 1500
+  IP address 10.0.200.1, subnet mask 255.255.255.0
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec

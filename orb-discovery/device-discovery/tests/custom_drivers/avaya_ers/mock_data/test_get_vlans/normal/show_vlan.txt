@@ -1,0 +1,8 @@
+Id   Name                 Type     Protocol         PID     Active IVL/SVL Mgmt
+---- -------------------- -------- ---------------- ------- ------ ------- ----
+1    Default              Port     None             0x0000  Yes    IVL     No
+	Port Members: NONE
+10   Data-VLAN            Port     None             0x0000  Yes    IVL     No
+	Port Members: 1/1,1/2
+20   Mgmt-VLAN            Port     None             0x0000  Yes    IVL     Yes
+	Port Members: 1/1,1/3-4

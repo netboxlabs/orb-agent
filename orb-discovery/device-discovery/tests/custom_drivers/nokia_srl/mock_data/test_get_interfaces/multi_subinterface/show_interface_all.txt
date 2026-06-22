@@ -1,0 +1,24 @@
+===============================================================
+ethernet-1/1 is up, speed 25G, type None
+  ethernet-1/1.0 is up
+    Network-instances:
+      * Name: red (ip-vrf)
+    Encapsulation   : null
+    Type            : routed
+    IPv4 addr    : 10.0.0.1/30 (static, preferred, primary)
+    IPv6 addr    : 2001:db8:a::1/64 (static, preferred, primary)
+  ethernet-1/1.100 is up
+    Network-instances:
+      * Name: blue (ip-vrf)
+    Encapsulation   : dot1q
+    Type            : routed
+    IPv4 addr    : 10.0.100.1/30 (static, preferred, primary)
+    IPv6 addr    : 2001:db8:b::1/64 (static, preferred, primary)
+---------------------------------------------------------------
+===============================================================
+Summary
+  1 ethernet interfaces are up, 0 are down
+  2 subinterfaces are up, 0 are down
+===============================================================
+
+--{ running }--[  ]--

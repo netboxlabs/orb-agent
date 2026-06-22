@@ -1,0 +1,5 @@
+Interface              State    Speed
+Management 1           up       1G
+Ethernet 0/1           up       10G
+Ethernet 0/1.100       up       10G
+Ethernet 0/1.200       up       10G

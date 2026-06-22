@@ -1,0 +1,12 @@
+Port      Description
+-------   -----------
+g1        TO_SRV01_[DRAC]
+g2        TO_SRV02_[DRAC]
+g3        TO_SRV03_[DRAC]
+g4        TO_SRV04_[DRAC]
+g5        UPLINK_1Gbit
+
+Ch        Description
+-------   -----------
+ch1
+ch2

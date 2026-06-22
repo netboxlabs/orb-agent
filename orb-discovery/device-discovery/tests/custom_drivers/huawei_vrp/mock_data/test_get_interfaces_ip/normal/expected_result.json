@@ -1,0 +1,31 @@
+{
+  "GigabitEthernet1/0/0": {
+    "ipv4": {
+      "10.0.0.1": {
+        "prefix_length": 30
+      }
+    },
+    "ipv6": {
+      "2001:db8::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "Vlanif100": {
+    "ipv4": {
+      "192.168.100.1": {
+        "prefix_length": 24
+      },
+      "192.168.100.2": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "LoopBack0": {
+    "ipv4": {
+      "192.168.0.1": {
+        "prefix_length": 32
+      }
+    }
+  }
+}

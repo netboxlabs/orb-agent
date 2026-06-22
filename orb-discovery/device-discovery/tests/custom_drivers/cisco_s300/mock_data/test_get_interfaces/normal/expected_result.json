@@ -1,0 +1,56 @@
+{
+  "gi1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Uplink",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 100.0,
+    "mac_address": ""
+  },
+  "gi2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Server",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 100.0,
+    "mac_address": ""
+  },
+  "gi3": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "AP",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 100.0,
+    "mac_address": ""
+  },
+  "gi4": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  },
+  "gi27": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Fiber-Trunk",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "Po1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "LAG-Uplink",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  }
+}

@@ -1,0 +1,16 @@
+GigabitEthernet1/1 is up, line protocol is up
+  Hardware is GigabitEthernet, address is 0024.38a5.1c00 (bia 0024.38a5.1c00)
+  Configured speed 1Gbit, actual 1Gbit, configured duplex fdx, actual fdx
+  MTU 1500 bytes, encapsulation ethernet
+GigabitEthernet1/2 is up, line protocol is up
+  Hardware is GigabitEthernet, address is 0024.38a5.1c01 (bia 0024.38a5.1c01)
+  Configured speed 1Gbit, actual 1Gbit, configured duplex fdx, actual fdx
+  MTU 1500 bytes, encapsulation ethernet
+10GigabitEthernet3/4 is up, line protocol is up
+  Hardware is 10GigabitEthernet, address is 0024.38a5.1c02 (bia 0024.38a5.1c02)
+  Configured speed 10Gbit, actual 10Gbit, configured duplex fdx, actual fdx
+  MTU 1500 bytes, encapsulation ethernet
+Lag5 is up, line protocol is up
+  Hardware is Lag, address is 0024.38a5.1c03 (bia 0024.38a5.1c03)
+Ve10 is up, line protocol is up
+  Hardware is Virtual, address is 0024.38a5.1c04 (bia 0024.38a5.1c04)

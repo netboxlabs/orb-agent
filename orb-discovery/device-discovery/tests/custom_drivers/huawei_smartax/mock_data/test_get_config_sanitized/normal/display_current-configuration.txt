@@ -1,0 +1,8 @@
+sysname CE-OLT-01
+vlan 100 smart
+snmp-agent community read MyRawSecret
+snmp-agent community read cipher MyRawSecret
+ password cipher MyRawSecret
+ key cipher MyRawSecret
+ secret 0 MyRawSecret
+ psk cipher MyRawSecret

@@ -1,0 +1,15 @@
+    interface ethernet-1/1 {
+        ethernet {
+            hw-mac-address 1A:CD:EE:FF:00:01
+        }
+    }
+    interface ethernet-1/2 {
+        ethernet {
+            hw-mac-address 1A:CD:EE:FF:00:02
+        }
+    }
+    interface mgmt0 {
+        ethernet {
+            hw-mac-address 02:42:AC:12:00:06
+        }
+    }

@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "FOC9301L0AB",
+      "model": "C9300-24P",
+      "role": "active",
+      "priority": 15,
+      "mac": "aabb.cc00.0001",
+      "state": "Ready"
+    },
+    {
+      "id": 2,
+      "serial": "FOC9301L0CD",
+      "model": "C9300-24P",
+      "role": "standby",
+      "priority": 14,
+      "mac": "aabb.cc00.0002",
+      "state": "Ready"
+    }
+  ],
+  "domain": null
+}

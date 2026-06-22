@@ -1,0 +1,53 @@
+Port  : gi1/0/1
+Port Mode: Access
+Gvrp Status: disabled
+Ingress Filtering: true
+Acceptable Frame Type: All
+Default VLAN: enabled
+Protected: Disabled
+
+Port gi1/0/1 is member in:
+Vlan       Name             Egress rule    Type
+----     -------------    -----------    ----
+100      USERS            Untagged       Static
+
+Port  : gi1/0/3
+Port Mode: General
+Gvrp Status: disabled
+Ingress Filtering: true
+Acceptable Frame Type: All
+
+Port gi1/0/3 is member in:
+Vlan       Name             Egress rule    Type
+----     -------------    -----------    ----
+10       MGMT             Untagged       Static
+20       VOICE            Tagged         Static
+30       DATA             Tagged         Static
+
+Port  : gi1/0/5
+Port Mode: Trunk
+Gvrp Status: disabled
+Ingress Filtering: true
+Acceptable Frame Type: Tagged
+Default VLAN: enabled
+
+Port gi1/0/5 is member in:
+Vlan       Name             Egress rule    Type
+----     -------------    -----------    ----
+1        default          Untagged       Default
+100      DATA             Tagged         Static
+200      VOICE            Tagged         Static
+
+Port  : gi1/0/6
+Port Mode: Trunk
+Gvrp Status: disabled
+Ingress Filtering: true
+Acceptable Frame Type: Tagged
+Default VLAN: disabled
+
+Port gi1/0/6 is member in:
+Vlan       Name             Egress rule    Type
+----     -------------    -----------    ----
+300      LAB              Tagged         Static
+400      MGMT             Tagged         Static
+

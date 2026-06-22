@@ -1,0 +1,29 @@
+{
+  "ge0/0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": "00:50:56:bf:01:01"
+  },
+  "ge0/1": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": "00:50:56:bf:01:02"
+  },
+  "loopback0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  }
+}

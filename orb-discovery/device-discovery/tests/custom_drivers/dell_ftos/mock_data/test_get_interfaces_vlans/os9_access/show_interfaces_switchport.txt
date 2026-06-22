@@ -1,0 +1,8 @@
+
+Name: GigabitEthernet 0/1
+802.1QTagged: False
+Vlan membership:
+Q Vlans
+U  10
+
+Native VlanId: 1.

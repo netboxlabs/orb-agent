@@ -1,0 +1,8 @@
+: Saved
+
+ASA Version 9.16(1)
+!
+hostname ftd-firewall
+enable password 8Ry2YjIyt7RRXU24 encrypted
+!
+end

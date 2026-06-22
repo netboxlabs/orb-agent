@@ -1,0 +1,19 @@
+{
+  "1": {
+    "name": "Default",
+    "interfaces": [
+      "1",
+      "2"
+    ]
+  },
+  "4095": {
+    "name": "Mgmt",
+    "interfaces": []
+  },
+  "2222": {
+    "name": "VLAN2222",
+    "interfaces": [
+      "1"
+    ]
+  }
+}

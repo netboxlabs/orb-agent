@@ -1,0 +1,65 @@
+{
+  "lo": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 65536,
+    "speed": -1.0,
+    "mac_address": "00:00:00:00:00:00"
+  },
+  "eth0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "OOB mgmt",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3C"
+  },
+  "swp1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "to-spine01",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3D"
+  },
+  "swp2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "to-spine02",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3E"
+  },
+  "swp3": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:3F"
+  },
+  "bridge": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:40"
+  },
+  "vlan100": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": -1.0,
+    "mac_address": "B8:CE:F6:1A:2B:41"
+  }
+}

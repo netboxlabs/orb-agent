@@ -1,0 +1,5 @@
+{
+  "running": "# Configuration of gw-corp-01\nset hostname gw-corp-01\nset user admin password-hash <redacted>\nset snmp community <redacted> read-only\nset aaa tacacs-servers server 10.0.0.5 key <redacted> timeout 3\nset vpn IKE p1 pre-shared-secret <redacted>\nset interface Mgmt ipv4-address 2.2.2.2 mask-length 29\n",
+  "candidate": "",
+  "startup": ""
+}

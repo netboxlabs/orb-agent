@@ -1,0 +1,37 @@
+{
+  "1/1/1": {
+    "name": "1/1/1",
+    "type": "system",
+    "admin_state": "up",
+    "link_state": "up",
+    "description": "uplink-to-core",
+    "mtu": 1500,
+    "hw_intf_info": {
+      "mac_addr": "70:4d:7b:11:22:33",
+      "max_speed": 10000
+    }
+  },
+  "1/1/2": {
+    "name": "1/1/2",
+    "type": "system",
+    "admin_state": "up",
+    "link_state": "down",
+    "description": "",
+    "mtu": 1500,
+    "hw_intf_info": {
+      "mac_addr": "70:4d:7b:11:22:34",
+      "max_speed": 10000
+    }
+  },
+  "mgmt": {
+    "name": "mgmt",
+    "type": "oobm",
+    "admin_state": "up",
+    "link_state": "up",
+    "description": "management",
+    "mtu": 1500,
+    "hw_intf_info": {
+      "mac_addr": "70:4d:7b:11:22:35"
+    }
+  }
+}

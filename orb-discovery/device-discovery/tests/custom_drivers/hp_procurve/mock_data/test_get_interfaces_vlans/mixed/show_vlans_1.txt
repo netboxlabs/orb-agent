@@ -1,0 +1,12 @@
+ Status and Counters - VLAN Information - VLAN 1
+
+  VLAN ID : 1
+  Name : DEFAULT_VLAN
+  Status : Port-based
+  Voice : No
+  Jumbo : No
+
+  Port Information  Mode      Unknown VLAN  Status
+  ----------------- --------- ------------- ----------
+  1                 Untagged  Learn         Up
+  3                 Forbid    Learn         Down

@@ -1,0 +1,9 @@
+ VLAN ID: 1
+ VLAN Type: Static
+ Route Interface: Configured
+ Description: VLAN 0001
+ Name: VLAN0001
+ Tagged Ports:
+   None
+ Untagged Ports:
+   None

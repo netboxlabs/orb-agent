@@ -1,0 +1,19 @@
+{
+  "gi1/0/1": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 10
+  },
+  "gi1/0/2": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 20
+  },
+  "Po1": {
+    "mode": "trunk",
+    "tagged": [
+      100
+    ],
+    "untagged": 1
+  }
+}

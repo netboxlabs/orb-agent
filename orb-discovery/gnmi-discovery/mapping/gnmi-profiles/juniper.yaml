@@ -1,0 +1,13 @@
+# Juniper Junos (EX/QFX/MX) — the strongest standard-OpenConfig fit. _base covers
+# system, interfaces, subinterface IPs, platform, LAGs, VRFs/RDs, and EX/QFX VLAN
+# membership. Per-vendor leaf-path overrides are DEFERRED until a capture exists.
+# Known divergences to revisit with a capture:
+#   - MX is routed / bridge-domain oriented: ethernet/switched-vlan is weak there
+#     (strongest on EX/QFX).
+#   - These are OpenConfig gNMI paths — do NOT prepend the Junos native
+#     "/configuration" container (that confusion is native/NETCONF tooling).
+# Interface name typing (ge-/xe-/ae) is handled by the global
+# defaultInterfacePatterns, not here.
+extends: _base
+match:
+  vendor: Juniper

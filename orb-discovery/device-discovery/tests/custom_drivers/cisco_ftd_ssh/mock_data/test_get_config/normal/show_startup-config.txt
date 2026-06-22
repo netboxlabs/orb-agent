@@ -1,0 +1,7 @@
+: Saved
+
+ASA Version 9.16(1)
+!
+hostname ftd-firewall
+!
+end

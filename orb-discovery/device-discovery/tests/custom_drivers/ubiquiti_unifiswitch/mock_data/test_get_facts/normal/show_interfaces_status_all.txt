@@ -1,0 +1,6 @@
+                                         Link    Physical    Physical    Media
+Ch       Type    Neg         State       State   Mode        Status      Type
+-------- ------- ----------- ----------- ------- ----------- ----------- -----
+   0/1   Copper  Enabled     Forwarding  Up      Full-1000M  Full-1000M  Copper
+   0/2   Copper  Enabled     Forwarding  Up      Full-100M   Full-100M   Copper
+   0/3   Copper  Enabled     Disabled    Down    Auto        None        Copper

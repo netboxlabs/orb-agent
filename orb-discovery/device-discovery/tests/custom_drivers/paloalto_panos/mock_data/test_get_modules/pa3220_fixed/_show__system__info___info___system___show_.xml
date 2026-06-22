@@ -1,0 +1,11 @@
+<response status="success">
+  <result>
+    <system>
+      <hostname>pa3220-lab</hostname>
+      <model>PA-3220</model>
+      <serial>007905000001</serial>
+      <sw-version>11.1.4</sw-version>
+      <family>3200</family>
+    </system>
+  </result>
+</response>

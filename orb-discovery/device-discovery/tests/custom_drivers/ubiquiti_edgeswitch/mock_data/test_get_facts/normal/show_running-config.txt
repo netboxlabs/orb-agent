@@ -1,0 +1,4 @@
+!Current Configuration:
+!
+hostname edgeswitch-24
+!

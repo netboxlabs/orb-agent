@@ -1,0 +1,5 @@
+ Total VPN-Instances configured      : 2
+
+ VPN-Instance Name               RD                    Address-family
+   vpna                          65000:100             ipv4-family
+   vpnb                                                ipv4-family

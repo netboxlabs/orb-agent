@@ -1,0 +1,38 @@
+{
+  "1": {
+    "id": 1,
+    "role": "conductor",
+    "serial_number": "TW02AAA0001",
+    "product_name": "6300M-24SR4",
+    "mac_address": "94:f1:28:22:00:00",
+    "priority": 200,
+    "status": "up"
+  },
+  "2": {
+    "id": 2,
+    "role": "standby",
+    "serial_number": "TW02AAA0002",
+    "product_name": "6300M-24SR4",
+    "mac_address": "94:f1:28:22:00:80",
+    "priority": 128,
+    "status": "up"
+  },
+  "3": {
+    "id": 3,
+    "role": "member",
+    "serial_number": "TW02AAA0003",
+    "product_name": "6300M-48G-PoE+-4SFP56",
+    "mac_address": "94:f1:28:22:01:00",
+    "priority": 64,
+    "status": "up"
+  },
+  "4": {
+    "id": 4,
+    "role": "member",
+    "serial_number": "TW02AAA0004",
+    "product_name": "6300M-48G-PoE+-4SFP56",
+    "mac_address": "94:f1:28:22:01:80",
+    "priority": 64,
+    "status": "up"
+  }
+}

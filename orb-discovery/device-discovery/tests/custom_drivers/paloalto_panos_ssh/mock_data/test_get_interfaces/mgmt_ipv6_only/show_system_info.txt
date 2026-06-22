@@ -1,0 +1,10 @@
+hostname: PA-VM-LAB
+ip-address: unknown
+netmask: unknown
+ip-address-v6: 2001:db8:abcd::5/64
+mac-address: 0e:0c:29:aa:bb:00
+uptime: 0 days, 0:10:00
+model: PA-VM
+serial: 007056000123456
+sw-version: 10.1.6
+operational-mode: normal

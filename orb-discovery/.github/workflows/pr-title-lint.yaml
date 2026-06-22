@@ -1,0 +1,46 @@
+name: PR title lint
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+    branches: [develop]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate conventional PR title
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            chore
+            docs
+            test
+            build
+            ci
+            revert
+          scopes: |
+            device-discovery
+            gnmi-discovery
+            network-discovery
+            snmp-discovery
+            worker
+            ci
+            docs
+            deps
+            deps-dev
+            repo
+          requireScope: true
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: |
+            The subject "{subject}" must not start with an uppercase letter and must not be empty.

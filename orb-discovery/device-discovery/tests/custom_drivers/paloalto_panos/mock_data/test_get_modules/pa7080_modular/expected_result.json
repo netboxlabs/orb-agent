@@ -1,0 +1,14 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1", "position": "1", "module": {"model": "PA-7000-100G-NPC-A", "serial": "007901111001", "description": "NPC", "type": "linecard", "sub_bays": []}},
+        {"name": "2", "position": "2", "module": {"model": "PA-7000-100G-NPC-A", "serial": "007901111002", "description": "NPC", "type": "linecard", "sub_bays": []}},
+        {"name": "3", "position": "3", "module": {"model": "PA-7000-LFC-A", "serial": "007901222001", "description": "LFC", "type": "linecard", "sub_bays": []}},
+        {"name": "5", "position": "5", "module": {"model": "PA-7080-SMC", "serial": "007901333001", "description": "SMC", "type": "supervisor", "sub_bays": []}},
+        {"name": "6", "position": "6", "module": {"model": "PA-7080-SMC", "serial": "007901333002", "description": "SMC", "type": "supervisor", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

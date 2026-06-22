@@ -1,0 +1,7 @@
+{
+  "Ethernet1/3": {
+    "mode": "trunk",
+    "tagged": [10, 20, 30],
+    "untagged": 99
+  }
+}

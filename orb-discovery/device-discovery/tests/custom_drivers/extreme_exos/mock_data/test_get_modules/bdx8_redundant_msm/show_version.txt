@@ -1,0 +1,8 @@
+Switch      : 800533-00-01 Rev 1.0 BootROM: 1.0.5.7   IMG: 30.7.1.4
+System Type : BlackDiamond X8
+SysName     : bdx8-min
+SysSerial   : 1234N-99999
+MSM/MM      : MSM-A (Master) - Up 0 day 1 hour ago
+PowerSupply : Internal-PS
+
+Image   : Version 30.7.1.4 build by release-manager

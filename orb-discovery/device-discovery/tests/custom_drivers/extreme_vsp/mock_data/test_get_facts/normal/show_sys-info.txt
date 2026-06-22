@@ -1,0 +1,15 @@
+System Full Duplex Capable:     true
+System Name:                    vspsw01
+System Location:                Data Center
+System Contact:                 NOC
+Chassis Serial Number:          1DB4924B6FE6
+System Up Time:                 1 day(s), 2 hour(s), 3 minute(s), 4 second(s)
+System MTBF:
+System Object ID:               1.3.6.1.4.1.562.73.1
+SysLog Server:                  0.0.0.0
+SysLog Host Secondary IP:       0.0.0.0
+SysLog Severity Level:          Warning (4)
+SysLog Facility Level:          7
+Web Server:                     Enabled
+Web Server Port:                80
+SysLog Host Protocol:           UDP

@@ -1,0 +1,5 @@
+hostname: pa7050-lab
+serial: 007904000001
+sw-version: 11.1.4
+model: PA-7050
+family: 7000

@@ -1,0 +1,13 @@
+<ethernet-switching-interface-information>
+  <interface>
+    <interface-name>ge-0/0/1</interface-name>
+    <interface-port-mode>Access</interface-port-mode>
+    <interface-vlan-member-list>
+      <interface-vlan-member>
+        <interface-vlan-name>vlan100</interface-vlan-name>
+        <interface-vlan-member-tagid>100</interface-vlan-member-tagid>
+        <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+      </interface-vlan-member>
+    </interface-vlan-member-list>
+  </interface>
+</ethernet-switching-interface-information>

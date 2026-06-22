@@ -1,0 +1,25 @@
+# Ericsson — sysObjectID -> device model lookups for SNMP discovery.
+# Manufacturer is canonicalized in _manufacturers_ndx.yaml (PEN 193 Ericsson, and
+# PEN 2352 'Ericsson formerly RedBack' for SmartEdge/SSR). Model names are the
+# clean product names from BMC Configipedia's supported-SNMP-devices list and
+# line up with NDX device-type model: strings. The shared MINI-LINK radio OID
+# .1.3.6.1.4.1.193.223.2.1 (7 models) is collapsed to a family label.
+devices:
+  .1.3.6.1.4.1.193.72.1400.20: ECN330
+  .1.3.6.1.4.1.193.72.1400.40: ECN430
+  .1.3.6.1.4.1.193.81.1.1.1: MINI-LINK 6600
+  .1.3.6.1.4.1.193.81.1.1.3: MINI-LINK TN
+  .1.3.6.1.4.1.193.81.5: MINI-LINK SAU
+  .1.3.6.1.4.1.193.167.1.1.1.1: MINI-LINK SP
+  .1.3.6.1.4.1.193.218.1.18: SSR 8010
+  .1.3.6.1.4.1.193.218.1.19: SSR 8004
+  .1.3.6.1.4.1.193.218.1.30: Router 8801
+  .1.3.6.1.4.1.193.218.1.40: Router 6672
+  .1.3.6.1.4.1.193.218.1.41: Router 6274
+  .1.3.6.1.4.1.193.218.1.42: Router 6675
+  .1.3.6.1.4.1.193.223.2.1: MINI-LINK 6300 series
+  .1.3.6.1.4.1.2352.1.10: SmartEdge 800
+  .1.3.6.1.4.1.2352.1.13: SmartEdge 1200
+  .1.3.6.1.4.1.2352.1.15: SmartEdge 600
+  .1.3.6.1.4.1.2352.1.17: SSR 8020
+  .1.3.6.1.4.1.2352.1.18: SSR 8010

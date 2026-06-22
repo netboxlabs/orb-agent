@@ -1,0 +1,4 @@
+VLAN  Name                    State    Ports/Channel-groups
+1     Default                 ACTIVE   Eth 0/1(u)
+10    User active zone        ACTIVE   Eth 0/2(u)
+20    inactive devices        INACTIVE Eth 0/3(u)

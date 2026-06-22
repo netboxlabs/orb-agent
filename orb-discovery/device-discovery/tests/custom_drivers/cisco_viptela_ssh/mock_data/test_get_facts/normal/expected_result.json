@@ -1,0 +1,14 @@
+{
+  "hostname": "vedge-site1",
+  "vendor": "Cisco",
+  "model": "vEdge-C8000V",
+  "os_version": "20.12.1.300",
+  "serial_number": "VEDGE-SERIAL-0123456789AB",
+  "uptime": 444258.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ge0/0",
+    "ge0/1",
+    "loopback0"
+  ]
+}

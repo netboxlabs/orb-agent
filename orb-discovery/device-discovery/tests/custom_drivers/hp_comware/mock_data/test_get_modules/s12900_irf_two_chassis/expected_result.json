@@ -1,0 +1,102 @@
+{
+  "members": {
+    "1": {
+      "bays": [
+        {
+          "name": "0",
+          "position": "0",
+          "module": {
+            "model": "LSXM1MPUD0",
+            "serial": "210231A1AAH00001",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "LSXM1MPUD0",
+            "serial": "210231A1AAH00002",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "2",
+          "position": "2",
+          "module": {
+            "model": "LSXS1FAB320A",
+            "serial": "210231A1AAH00003",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "3",
+          "position": "3",
+          "module": {
+            "model": "LSXM1QGS48FH1",
+            "serial": "210231A1AAH00004",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    },
+    "2": {
+      "bays": [
+        {
+          "name": "0",
+          "position": "0",
+          "module": {
+            "model": "LSXM1MPUD0",
+            "serial": "210231A1AAH00010",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "LSXM1MPUD0",
+            "serial": "210231A1AAH00011",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "2",
+          "position": "2",
+          "module": {
+            "model": "LSXS1FAB320A",
+            "serial": "210231A1AAH00012",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "3",
+          "position": "3",
+          "module": {
+            "model": "LSXM1QGS48FH1",
+            "serial": "210231A1AAH00013",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "1": {
+    "id": 1,
+    "role": "conductor",
+    "serial_number": "TW04AAA0001",
+    "product_name": "6300M-48G",
+    "mac_address": "94:f1:28:44:00:00",
+    "priority": 200,
+    "status": "up"
+  },
+  "2": {
+    "id": 2,
+    "role": "member",
+    "serial_number": "",
+    "product_name": "",
+    "mac_address": "",
+    "priority": 0,
+    "status": "Not Present"
+  },
+  "3": {
+    "id": 3,
+    "role": "standby",
+    "serial_number": "TW04AAA0003",
+    "product_name": "6300M-48G",
+    "mac_address": "94:f1:28:44:01:00",
+    "priority": 128,
+    "status": "up"
+  }
+}

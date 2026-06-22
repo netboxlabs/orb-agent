@@ -1,0 +1,5 @@
+{
+  "running": "set interfaces ethernet eth0 address '192.168.1.1/24'\nset system host-name 'ubnt-er-lite'\nset system login user admin authentication encrypted-password <redacted>\nset system login user admin authentication plaintext-password <redacted>\nset vpn ipsec site-to-site peer 203.0.113.1 authentication pre-shared-secret <redacted>\nset service snmp community <redacted> authorization ro\n",
+  "candidate": "",
+  "startup": ""
+}

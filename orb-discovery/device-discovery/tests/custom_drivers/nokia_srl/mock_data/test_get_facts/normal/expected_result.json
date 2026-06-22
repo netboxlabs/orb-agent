@@ -1,0 +1,16 @@
+{
+  "hostname": "srl-test",
+  "vendor": "Nokia",
+  "model": "7250 IXR-6e",
+  "os_version": "v23.10.1",
+  "serial_number": "SRL0123456789",
+  "uptime": 184530.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ethernet-1/1",
+    "ethernet-1/1.0",
+    "ethernet-1/2",
+    "mgmt0",
+    "mgmt0.0"
+  ]
+}

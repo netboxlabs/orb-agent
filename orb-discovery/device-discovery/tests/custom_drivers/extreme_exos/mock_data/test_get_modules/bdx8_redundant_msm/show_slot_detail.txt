@@ -1,0 +1,11 @@
+MSM-A information:
+                State:                 Operational
+                Hw Module Type:        BDX-MM1
+                Serial number:         12345N-B001
+                Hardware revision:     1.0
+
+MSM-B information:
+                State:                 Operational
+                Hw Module Type:        BDX-MM1
+                Serial number:         12345N-B002
+                Hardware revision:     1.0

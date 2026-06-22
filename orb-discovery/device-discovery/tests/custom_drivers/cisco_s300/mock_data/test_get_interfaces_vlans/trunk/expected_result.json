@@ -1,0 +1,4 @@
+{
+  "gi1": {"mode": "trunk", "tagged": [10, 20, 30], "untagged": 1},
+  "gi2": {"mode": "access", "tagged": [], "untagged": 100}
+}
