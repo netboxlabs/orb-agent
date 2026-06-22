@@ -59,6 +59,14 @@ Interface types are determined using the following priority order (first match w
 
 ## Interface Name Selection
 
+The source for `Interface.Name` is controlled by the
+`interface_name_source` policy option, which is one of `auto` (default),
+`ifname`, or `ifdescr`. In every mode, the chosen source falls back to
+the other field when its primary value is empty for an interface, so an
+interface is never left without a name from an available source.
+
+### `auto` (default)
+
 snmp-discovery reads ifDescr (`.1.3.6.1.2.1.2.2.1.2`) as the primary
 source for `Interface.Name` and falls back to ifName
 (`.1.3.6.1.2.1.31.1.1.1.1`) when ifDescr is unavailable. Additionally,
@@ -70,6 +78,21 @@ that do **not** contain `": "` (e.g. Dell FTOS
 `TenGigabitEthernet 0/0`, Extreme SLX `Port-channel 1`) are kept
 as-is. The detection rule is generic — no per-vendor configuration
 is required.
+
+### `ifname` / `ifdescr`
+
+When set to `ifname`, `Interface.Name` is taken from ifName
+(`.1.3.6.1.2.1.31.1.1.1.1`), falling back to ifDescr when ifName is
+empty. When set to `ifdescr`, the name is taken from ifDescr — even when
+it looks like a hardware description — falling back to ifName when
+ifDescr is empty. `ifAlias` continues to populate the interface
+**description** in all modes; it is never used as the name.
+
+> ⚠️ **Changing `interface_name_source` on an existing deployment renames
+> interfaces.** The interface name is NetBox's interface match key, so a
+> later discovery run will create new interfaces under the new names
+> alongside the existing ones until the old entries are reconciled or
+> removed. Choose the source before first discovery where practical.
 
 ## Subinterface Detection and Parent Tracking
 

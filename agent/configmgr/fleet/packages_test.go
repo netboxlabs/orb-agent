@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -15,7 +14,9 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 )
 
-// mockFilesManager implements filesmgr.Manager for testing
+// mockFilesManager implements filesmgr.Manager but NOT bundleInstaller — it
+// stands in for a non-fleet (dummy) files manager, where packages delivery is a
+// no-op.
 type mockFilesManager struct {
 	mock.Mock
 }
@@ -55,6 +56,16 @@ func (m *mockFilesManager) Subscribe(fn func(filesmgr.FileEvent)) func() {
 	return args.Get(0).(func())
 }
 
+// mockBundleInstaller additionally implements bundleInstaller — it stands in for
+// the fleet files-manager type.
+type mockBundleInstaller struct {
+	mockFilesManager
+}
+
+func (m *mockBundleInstaller) HandlePackages(ctx context.Context, payload messages.PackagesCredentialsRPCPayload) {
+	m.Called(ctx, payload)
+}
+
 func newTestMessagingWithFiles(fm filesmgr.Manager) *Messaging {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	resetChan := make(chan struct{}, 1)
@@ -62,108 +73,49 @@ func newTestMessagingWithFiles(fm filesmgr.Manager) *Messaging {
 	return NewMessaging(logger, nil, resetChan, &groupManager, fm)
 }
 
-func TestHandlePackages_HappyPath(t *testing.T) {
-	fm := &mockFilesManager{}
-	fm.On("Ensure", mock.Anything, filesmgr.FileSpec{
-		Name:    "nbl_cisco_meraki",
-		Version: "0.2.0",
-		URL:     "https://example.com/bundle.tar.gz",
-		SHA256:  "abc123",
-		Extract: true,
-	}).Return("/opt/orb/files/nbl_cisco_meraki/0.2.0", nil)
-
-	messaging := newTestMessagingWithFiles(fm)
-	payload := messages.PackagesCredentialsRPCPayload{
-		Bundles: []messages.BundleSpec{
-			{
-				Name:      "nbl_cisco_meraki",
-				Version:   "0.2.0",
-				URL:       "https://example.com/bundle.tar.gz",
-				SHA256:    "abc123",
-				Extract:   true,
-				ExpiresAt: time.Now().Add(15 * time.Minute).Unix(),
-			},
-		},
-	}
-	messaging.handlePackages(context.Background(), payload)
-	fm.AssertExpectations(t)
-}
-
-func TestHandlePackages_EmptyBundles(t *testing.T) {
-	fm := &mockFilesManager{}
-	// Ensure should never be called for empty payload
-	messaging := newTestMessagingWithFiles(fm)
-	messaging.handlePackages(context.Background(), messages.PackagesCredentialsRPCPayload{})
-	fm.AssertNotCalled(t, "Ensure")
-}
-
-func TestHandlePackages_PartialFailure(t *testing.T) {
-	fm := &mockFilesManager{}
-	fm.On("Ensure", mock.Anything, filesmgr.FileSpec{
-		Name:    "nbl_cisco_meraki",
-		Version: "0.2.0",
-		URL:     "https://example.com/meraki.tar.gz",
-		SHA256:  "aaa111",
-		Extract: true,
-	}).Return("", assert.AnError)
-	fm.On("Ensure", mock.Anything, filesmgr.FileSpec{
-		Name:    "nbl_cisco_catalyst_center",
-		Version: "0.1.0",
-		URL:     "https://example.com/catalyst.tar.gz",
-		SHA256:  "bbb222",
-		Extract: true,
-	}).Return("/opt/orb/files/nbl_cisco_catalyst_center/0.1.0", nil)
-
-	messaging := newTestMessagingWithFiles(fm)
-	payload := messages.PackagesCredentialsRPCPayload{
-		Bundles: []messages.BundleSpec{
-			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/meraki.tar.gz", SHA256: "aaa111", Extract: true},
-			{Name: "nbl_cisco_catalyst_center", Version: "0.1.0", URL: "https://example.com/catalyst.tar.gz", SHA256: "bbb222", Extract: true},
-		},
-	}
-	// Should not panic — failure is non-fatal
-	messaging.handlePackages(context.Background(), payload)
-	fm.AssertExpectations(t)
-}
-
-func TestDispatchToHandlers_PackagesCredentials(t *testing.T) {
-	fm := &mockFilesManager{}
-	fm.On("Ensure", mock.Anything, mock.AnythingOfType("filesmgr.FileSpec")).
-		Return("/opt/orb/files/nbl_cisco_meraki/0.2.0", nil)
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	resetChan := make(chan struct{}, 1)
-	groupManager := newGroupManager()
-	handlers := NewMessaging(logger, nil, resetChan, &groupManager, fm)
-
-	rpc := messages.PackagesCredentialsRPC{
+func marshalPackagesRPC(t *testing.T, bundles ...messages.BundleSpec) []byte {
+	t.Helper()
+	body, err := json.Marshal(messages.PackagesCredentialsRPC{
 		SchemaVersion: "2",
 		Func:          messages.PackagesCredentialsRPCFunc,
-		Payload: messages.PackagesCredentialsRPCPayload{
-			Bundles: []messages.BundleSpec{
-				{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123", Extract: true},
-			},
-		},
-	}
-	payload, err := json.Marshal(rpc)
-	assert.NoError(t, err)
-
-	err = handlers.DispatchToHandlers(context.Background(), payload, "org1", "agent1", TopicActions{
-		Subscribe:   func(string) error { return nil },
-		Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
-		Unsubscribe: func(string) error { return nil },
+		Payload:       messages.PackagesCredentialsRPCPayload{Bundles: bundles},
 	})
 	assert.NoError(t, err)
-	fm.AssertExpectations(t)
+	return body
 }
 
-func TestHandlePackages_NilFilesManager(_ *testing.T) {
-	messaging := newTestMessagingWithFiles(nil)
-	payload := messages.PackagesCredentialsRPCPayload{
-		Bundles: []messages.BundleSpec{
-			{Name: "nbl_cisco_meraki", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123", Extract: true},
-		},
-	}
-	// Should not panic when filesManager is nil
-	messaging.handlePackages(context.Background(), payload)
+var noopTopicActions = TopicActions{
+	Subscribe:   func(string) error { return nil },
+	Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+	Unsubscribe: func(string) error { return nil },
+}
+
+// When the files manager is the fleet type (implements bundleInstaller),
+// packages_credentials is routed to HandlePackages.
+func TestDispatchToHandlers_PackagesCredentials_RoutesToInstaller(t *testing.T) {
+	fm := &mockBundleInstaller{}
+	fm.On("HandlePackages", mock.Anything, mock.AnythingOfType("messages.PackagesCredentialsRPCPayload")).Return()
+
+	messaging := newTestMessagingWithFiles(fm)
+	payload := marshalPackagesRPC(t,
+		messages.BundleSpec{Name: "nbl_custom_worker", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+	)
+
+	err := messaging.DispatchToHandlers(context.Background(), payload, "org1", "agent1", noopTopicActions)
+	assert.NoError(t, err)
+	fm.AssertCalled(t, "HandlePackages", mock.Anything, mock.AnythingOfType("messages.PackagesCredentialsRPCPayload"))
+}
+
+// When the files manager is not the fleet type (no bundleInstaller), packages
+// delivery is skipped quietly — no install attempt, no error.
+func TestDispatchToHandlers_PackagesCredentials_NonFleetSkips(t *testing.T) {
+	fm := &mockFilesManager{}
+	messaging := newTestMessagingWithFiles(fm)
+	payload := marshalPackagesRPC(t,
+		messages.BundleSpec{Name: "nbl_custom_worker", Version: "0.2.0", URL: "https://example.com/bundle.tar.gz", SHA256: "abc123"},
+	)
+
+	err := messaging.DispatchToHandlers(context.Background(), payload, "org1", "agent1", noopTopicActions)
+	assert.NoError(t, err)
+	fm.AssertNotCalled(t, "Ensure")
 }

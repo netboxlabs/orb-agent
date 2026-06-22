@@ -43,11 +43,17 @@ RUN python -m pip install --upgrade --no-cache-dir pip==26.1 && \
 RUN pip3 install --no-cache-dir netboxlabs-device-discovery netboxlabs-orb-worker
 
 ########################################################################
-FROM python:3.14-alpine
+# Stage name is referenced by no-cache-filters in the build workflows so
+# the apk upgrade layer below is never served from a stale build cache.
+FROM python:3.14-alpine AS final
 
 ENV TZ=UTC
 
-RUN apk add --no-cache \
+# apk upgrade pulls the latest patched versions of base/transitive packages
+# (e.g. libssh2, brought in by nmap) so image scans stay clean without
+# per-package version pins.
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
         bash \
         ca-certificates \
         git \

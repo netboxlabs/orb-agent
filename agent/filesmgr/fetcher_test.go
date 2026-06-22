@@ -244,3 +244,75 @@ func TestFetcher_ReEnsureExtractedReplacesExistingDst(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dst, "v1.txt"), "v1.txt must be gone after replacement")
 	assert.NoFileExists(t, markerPath, "marker must be gone after dst replacement")
 }
+
+// TestFetcher_FollowsRedirectAndExtracts verifies that when the bundle URL is
+// an extension-less control-plane path that 302-redirects to the actual archive
+// (e.g. a presigned storage URL), the fetcher still extracts the archive and
+// verifies its checksum. go-getter selects its decompressor from the SOURCE URL
+// path (or an explicit ?archive= hint) BEFORE the request, so it never sees the
+// redirect target's .tar.gz suffix — the fetcher must supply the archive hint
+// from FileSpec.Extract.
+func TestFetcher_FollowsRedirectAndExtracts(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"hello.txt": "hi"})
+	sum := sha256Hex(archive)
+
+	mux := http.NewServeMux()
+	// Extension-less path, like the control-plane bundle endpoint.
+	mux.HandleFunc("/bundles/test-bundle/1.0.0", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/blob.tar.gz", http.StatusFound)
+	})
+	mux.HandleFunc("/blob.tar.gz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(archive)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "v1")
+	f := newFetcher(nil)
+	err := f.fetch(context.Background(), FileSpec{
+		Name:    "test-bundle",
+		URL:     srv.URL + "/bundles/test-bundle/1.0.0",
+		SHA256:  sum,
+		Extract: true,
+	}, dst)
+	require.NoError(t, err)
+
+	got, err := os.ReadFile(filepath.Join(dst, "hello.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "hi", string(got))
+}
+
+func TestHasKnownArchiveSuffix(t *testing.T) {
+	cases := map[string]bool{
+		"/path/to/bundle.tar.gz":     true,
+		"/path/to/bundle.tgz":        true,
+		"/path/to/bundle.zip":        true,
+		"/path/to/bundle.tar.xz":     true,
+		"/path/to/bundle.tar":        true,
+		"/path/to/bundle.gz":         false,
+		"/BUNDLE.TAR.GZ":             true,  // case-insensitive
+		"/bundles/test-bundle/1.0.0": false, // extension-less control-plane path
+		"/bundles/name/2.12.0":       false,
+		"/download":                  false,
+		"":                           false,
+	}
+	for path, want := range cases {
+		if got := hasKnownArchiveSuffix(path); got != want {
+			t.Errorf("hasKnownArchiveSuffix(%q) = %v, want %v", path, got, want)
+		}
+	}
+}
+
+// TestFetcher_ZipURLNotForcedToTarGz guards against forcing tar.gz when the URL
+// already names a non-tar.gz archive. We assert the guard
+// logic (hasKnownArchiveSuffix) recognizes .zip so fetch() will NOT inject
+// ?archive=tar.gz over it; go-getter's own .zip decompressor then handles it.
+func TestFetcher_ZipURLNotForcedToTarGz(t *testing.T) {
+	if !hasKnownArchiveSuffix("/some/object.zip") {
+		t.Fatal(".zip must be recognized so the tar.gz default is not forced over it")
+	}
+	if hasKnownArchiveSuffix("/bundles/x/1.0.0") {
+		t.Fatal("extension-less path must NOT be treated as a known archive (default applies)")
+	}
+}

@@ -1254,18 +1254,11 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 
 	// Assert
 	// Even though MQTT connection fails, we should verify that:
-	// 1. OTLP bridge was started (it should exist)
-	// 2. Connect() was called (indicating we got past bridge startup)
+	// 1. Connect() was called (indicating we got past OTLP bridge startup)
+	// 2. The bridge is torn down when startup is cancelled by context timeout
 	require.Error(t, err, "Start() should fail due to MQTT connection error")
 	assert.True(t, mockConn.ConnectCalled(), "MQTT Connect() should have been called")
-	// The bridge should have been created and started before Connect() was called
-	// Since Connect() was called, the bridge must have started successfully
-	assert.NotNil(t, fleetManager.otlpBridge, "OTLP bridge should be initialized before MQTT connection")
-
-	// Cleanup
-	if fleetManager.otlpBridge != nil {
-		_ = fleetManager.otlpBridge.Stop(context.Background())
-	}
+	assert.Nil(t, fleetManager.otlpBridge, "OTLP bridge should be stopped when startup is cancelled")
 }
 
 // controlledTokenServer is a test HTTP server whose response can switch from failure to success

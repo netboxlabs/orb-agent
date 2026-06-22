@@ -39,7 +39,7 @@ Config defines data for the whole scope and is optional overall.
 |:---------:|:----:|:--------:|:-----------:|
 | schedule | cron format | no  |  If defined, it will execute scope following cron schedule time. If not defined, it will execute scope only once  |
 | defaults | map | no  |  key value pair that defines default values  |
-| timeout | int | no | Timeout in minutes for the nmap scan operation. The default value is 2 minutes.
+| timeout | int | no | Timeout in minutes for the nmap scan operation. The default value is 5 minutes.
 
 #### Defaults
 Current supported defaults:
@@ -47,6 +47,7 @@ Current supported defaults:
 |  Key  | Type | Description  |
 |:-----:|:----:|:-------------:|
 | vrf | str | VRF name to assign to discovered IP addresses |
+| rd | str | Route Distinguisher (RD) for the VRF (only used when `vrf` is set). Optional — when omitted the VRF is emitted without an RD so NetBox can match an existing VRF whose `rd` is null. |
 | tenant | str | Tenant name to assign to discovered IP addresses |
 | role | str | Role to assign to discovered IP addresses |
 | comments | str | NetBox Comments information to be added to discovered IP |

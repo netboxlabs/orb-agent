@@ -6,9 +6,35 @@ import (
 	"os"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
 	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
 )
+
+func TestFleetConfigManager_StartOTLPBridge_Idempotent(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	mgr := newFleetConfigManager(logger, mockPMgr, nil, nil)
+
+	port := findAvailablePort(t)
+	cfg := config.Config{}
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &port
+
+	ctx := context.Background()
+	require.NoError(t, mgr.StartOTLPBridge(ctx, cfg))
+	bridge := mgr.otlpBridge
+	require.NotNil(t, bridge)
+
+	require.NoError(t, mgr.StartOTLPBridge(ctx, cfg))
+	assert.Same(t, bridge, mgr.otlpBridge, "second StartOTLPBridge should reuse existing bridge")
+
+	require.NoError(t, mgr.StopOTLPBridge(ctx))
+	assert.Nil(t, mgr.otlpBridge)
+}
 
 func TestFleetConfigManager_Stop_ShutsDownBridge(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))

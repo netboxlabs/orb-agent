@@ -42,6 +42,28 @@ var httpGetters = map[string]getter.Getter{
 	"https": new(getter.HttpGetter),
 }
 
+// knownArchiveSuffixes lists the archive extensions go-getter recognizes from a
+// URL path, longest-first so multi-part suffixes (e.g. "tar.gz") are matched
+// before their single-part tails (e.g. "gz"). Keep this in sync with the
+// github.com/hashicorp/go-getter version in go.mod.
+var knownArchiveSuffixes = []string{
+	"tar.bz2", "tar.gz", "tar.xz",
+	"tbz2", "tgz", "txz",
+	"tar", "zip",
+}
+
+// hasKnownArchiveSuffix reports whether urlPath ends in an archive extension
+// go-getter can detect on its own (so we should not override its choice).
+func hasKnownArchiveSuffix(urlPath string) bool {
+	lower := strings.ToLower(urlPath)
+	for _, s := range knownArchiveSuffixes {
+		if strings.HasSuffix(lower, "."+s) {
+			return true
+		}
+	}
+	return false
+}
+
 // filenameFromURL extracts the last non-empty path segment from rawURL,
 // stripping any query string. Returns an error if no usable filename can
 // be derived.
@@ -169,6 +191,26 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 	// Build the go-getter URL with the checksum query so go-getter verifies it.
 	q := u.Query()
 	q.Set("checksum", "sha256:"+spec.SHA256)
+	// When extracting, ensure go-getter knows the archive format. It infers the
+	// decompressor from the source URL's path suffix (or an explicit ?archive=),
+	// decided BEFORE following any redirect. A control-plane URL (e.g.
+	// /bundles/<name>/<version>) is extension-less and 302-redirects to the real
+	// object, so go-getter never sees the archive suffix; without a hint it
+	// treats the request as a plain directory download and rejects the checksum
+	// ("checksum cannot be specified for directory download").
+	//
+	// Only supply a default when the format is otherwise undetermined: if the
+	// caller already passed ?archive= or the URL path carries a recognized
+	// archive suffix (.zip, .tar.xz, ...), respect that so non-tar.gz archives
+	// keep working. The default (tar.gz) covers the extension-less bundle case.
+
+	urlPathForSuffixCheck := u.Path
+	if idx := strings.Index(urlPathForSuffixCheck, "//"); idx >= 0 {
+		urlPathForSuffixCheck = urlPathForSuffixCheck[:idx]
+	}
+	if spec.Extract && q.Get("archive") == "" && !hasKnownArchiveSuffix(urlPathForSuffixCheck) {
+		q.Set("archive", "tar.gz")
+	}
 	u.RawQuery = q.Encode()
 
 	var stagePath string

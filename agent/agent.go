@@ -24,10 +24,9 @@ import (
 )
 
 const (
-	routineKey              config.ContextKey = "routine"
-	otlpShutdownTimeout     time.Duration     = 5 * time.Second
-	restartBackendChanSize  int               = 5
-	defaultFilesManagerRoot string            = "/opt/orb/files"
+	routineKey             config.ContextKey = "routine"
+	otlpShutdownTimeout    time.Duration     = 5 * time.Second
+	restartBackendChanSize int               = 5
 )
 
 // Agent is the interface that all agents must implement
@@ -100,11 +99,7 @@ var _ Agent = (*orbAgent)(nil)
 // New creates a new agent
 func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
-	fmRoot := c.OrbAgent.FilesManager.Root
-	if fmRoot == "" {
-		fmRoot = defaultFilesManagerRoot
-	}
-	fm := filesmgr.NewManager(logger, fmRoot)
+	fm := filesmgr.New(logger, c.OrbAgent.FilesManager)
 	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {
 		logger.Error("error during create policy manager, exiting", "error", err)
@@ -434,6 +429,18 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		}
 	}
 
+	// Bind the fleet files manager so it sends the bundle_list_req catch-up on
+	// connect. Gated on the config manager being fleet; BindFilesManager handles
+	// the non-fleet files-manager case itself (warns and does nothing).
+	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
+		if fleetCM, ok := a.configManager.(*configmgr.FleetConfigManager); ok {
+			if err := fleetCM.BindFilesManager(a.filesManager); err != nil {
+				a.logger.Error("error binding fleet files manager", "error", err)
+				return err
+			}
+		}
+	}
+
 	var err error
 	if a.config.OrbAgent.Backends,
 		a.config.OrbAgent.ConfigManager,
@@ -480,6 +487,22 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	if a.filesManager != nil {
 		if err := a.filesManager.Start(ctx); err != nil {
 			return fmt.Errorf("filesmgr start: %w", err)
+		}
+	}
+
+	var fleetCM *configmgr.FleetConfigManager
+	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
+		var ok bool
+		fleetCM, ok = a.configManager.(*configmgr.FleetConfigManager)
+		if ok {
+			if err = fleetCM.StartOTLPBridge(ctx, a.config); err != nil {
+				return err
+			}
+			defer func() {
+				if err != nil {
+					_ = fleetCM.StopOTLPBridge(context.Background())
+				}
+			}()
 		}
 	}
 

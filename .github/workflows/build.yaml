@@ -50,7 +50,7 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha,scope=linux/amd64
           cache-to: type=gha,scope=linux/amd64,mode=max
-          no-cache-filters: python-builder
+          no-cache-filters: python-builder,final
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
           tags: orb-agent:scan

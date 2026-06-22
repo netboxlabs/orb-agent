@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
 func serveTarGz(_ *testing.T, archive []byte) *httptest.Server {
@@ -1113,6 +1115,37 @@ func TestManager_StartPreservesNonTrackedVersionDirs(t *testing.T) {
 
 	// The tracked version directory must also still exist.
 	assert.DirExists(t, trackedVersionDir, "tracked version dir must not be removed on Start")
+}
+
+func TestNew_DummyWhenInactive(t *testing.T) {
+	for _, active := range []string{"", "local", "unknown"} {
+		m := New(slog.Default(), config.FilesManagerConfig{Active: active})
+		require.NotNil(t, m)
+		_, ok := m.(*dummyFilesManager)
+		assert.True(t, ok, "active=%q should yield the dummy files manager", active)
+		// Dummy Get always reports not-installed so consumers fall back to baked binaries.
+		_, found := m.Get("anything")
+		assert.False(t, found)
+	}
+}
+
+func TestNew_FleetWhenActive(t *testing.T) {
+	m := New(slog.Default(), config.FilesManagerConfig{Active: "fleet"})
+	ff, ok := m.(*FleetFilesManager)
+	require.True(t, ok)
+	// Default root applied to the embedded engine.
+	eng, ok := ff.Manager.(*filesmgr)
+	require.True(t, ok)
+	assert.Equal(t, defaultRoot, eng.root)
+}
+
+func TestNew_FleetUsesConfiguredRoot(t *testing.T) {
+	m := New(slog.Default(), config.FilesManagerConfig{Active: "fleet", Root: "/custom/files"})
+	ff, ok := m.(*FleetFilesManager)
+	require.True(t, ok)
+	eng, ok := ff.Manager.(*filesmgr)
+	require.True(t, ok)
+	assert.Equal(t, "/custom/files", eng.root)
 }
 
 // TestManager_StartCleansUpStaleBackupDirs verifies that .filesmgr-backup-*

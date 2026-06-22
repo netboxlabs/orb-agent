@@ -170,3 +170,8 @@ func (m *MockMQTTConnection) TriggerOnReadyHook(cm *autopaho.ConnectionManager, 
 		hook(cm, topics)
 	}
 }
+
+// HookCount returns the number of registered onReady hooks (for testing).
+func (m *MockMQTTConnection) HookCount() int {
+	return len(m.hooks)
+}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/paho"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -84,6 +85,52 @@ func newFleetConfigManagerWithConnection(logger *slog.Logger, pMgr policymgr.Pol
 	}
 }
 
+func fleetOTLPGRPCPort(cfg config.Config) int {
+	grpcPort := 4317
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
+		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+	}
+	return grpcPort
+}
+
+// StartOTLPBridge starts the local OTLP gRPC bridge so backends can export
+// telemetry before the MQTT connection is established. Safe to call once;
+// subsequent calls are no-ops when the bridge is already running.
+func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg config.Config) error {
+	if fleetManager.otlpBridge != nil {
+		return nil
+	}
+
+	grpcPort := fleetOTLPGRPCPort(cfg)
+	bridgeConfig := otlpbridge.BridgeConfig{
+		ListenAddr: fmt.Sprintf(":%d", grpcPort),
+		Encoding:   "json",
+	}
+
+	var err error
+	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
+	if err != nil {
+		return fmt.Errorf("failed to create OTLP bridge: %w", err)
+	}
+	if err := fleetManager.otlpBridge.Start(ctx); err != nil {
+		_ = fleetManager.otlpBridge.Stop(ctx)
+		fleetManager.otlpBridge = nil
+		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
+	}
+	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
+	return nil
+}
+
+// StopOTLPBridge shuts down the OTLP bridge if it was started.
+func (fleetManager *FleetConfigManager) StopOTLPBridge(ctx context.Context) error {
+	if fleetManager.otlpBridge == nil {
+		return nil
+	}
+	err := fleetManager.otlpBridge.Stop(ctx)
+	fleetManager.otlpBridge = nil
+	return err
+}
+
 // Start initializes and starts the Fleet configuration manager
 func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
@@ -111,22 +158,11 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 
 	// Start OTLP bridge server early, before MQTT connection.
 	// Port binding errors are local/permanent so we fail immediately.
-	grpcPort := 4317
-	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
-		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+	// The bridge may already be running when Agent.Start() called StartOTLPBridge
+	// before backends were started.
+	if err := fleetManager.StartOTLPBridge(ctx, cfg); err != nil {
+		return err
 	}
-	bridgeConfig := otlpbridge.BridgeConfig{
-		ListenAddr: fmt.Sprintf(":%d", grpcPort),
-		Encoding:   "json",
-	}
-	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
-	if err != nil {
-		return fmt.Errorf("failed to create OTLP bridge: %w", err)
-	}
-	if err := fleetManager.otlpBridge.Start(context.Background()); err != nil {
-		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
-	}
-	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
 
 	// Create a shared cancellable context for the reconnect worker, token expiry
 	// monitor, and reset handler so that Stop() can terminate all goroutines with
@@ -173,12 +209,12 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 		// Non-retriable: bad credentials
 		var authErr *fleet.AuthError
 		if errors.As(startupErr, &authErr) {
-			_ = fleetManager.otlpBridge.Stop(context.Background())
+			_ = fleetManager.StopOTLPBridge(context.Background())
 			return fmt.Errorf("startup aborted, credentials rejected: %w", startupErr)
 		}
 
 		if maxStartupRetries > 0 && attempt >= maxStartupRetries {
-			_ = fleetManager.otlpBridge.Stop(context.Background())
+			_ = fleetManager.StopOTLPBridge(context.Background())
 			return fmt.Errorf("startup failed after %d attempts: %w", attempt, startupErr)
 		}
 
@@ -197,7 +233,7 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 
 		select {
 		case <-ctx.Done():
-			_ = fleetManager.otlpBridge.Stop(context.Background())
+			_ = fleetManager.StopOTLPBridge(context.Background())
 			return fmt.Errorf("startup cancelled: %w", ctx.Err())
 		case <-time.After(startupBackoff):
 		}
@@ -446,6 +482,53 @@ func (fleetManager *FleetConfigManager) BindSecretsManager(sm secretsmgr.Manager
 	return nil
 }
 
+// bundleListReqPublishTimeout caps a single bundle_list_req catch-up publish so a
+// non-acking broker cannot block the OnReadyHook goroutine indefinitely.
+const bundleListReqPublishTimeout = 30 * time.Second
+
+// BindFilesManager wires a fleet files manager to the MQTT connection: on every
+// (re)connect it sends the bundle_list_req catch-up so the control plane
+// re-delivers the agent's current bundle set. If the files manager is not the
+// fleet type (files delivery disabled), it warns that fleet-delivered bundles
+// will not be installed and otherwise does nothing — incoming packages_credentials
+// are routed to the fleet type separately, by Messaging.DispatchToHandlers.
+func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) error {
+	fleetFM, ok := fm.(*filesmgr.FleetFilesManager)
+	if !ok {
+		fleetManager.logger.Warn("files_manager.active != fleet while config_manager.active == fleet; fleet-delivered bundles will not be installed")
+		return nil
+	}
+
+	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
+		outbox := topics.Outbox
+		// Bound the catch-up publish: QoS-1 Publish blocks until the broker acks
+		// or the context is cancelled. Derive from the connection lifetime ctx so
+		// Stop cancels it, and cap it with a timeout so a broker that stops acking
+		// cannot hang the hook goroutine or accumulate stuck publishes across
+		// reconnects.
+		base := fleetManager.connCtx
+		if base == nil {
+			base = context.Background()
+		}
+		pubCtx, cancel := context.WithTimeout(base, bundleListReqPublishTimeout)
+		defer cancel()
+		// SendBundleListRequest logs publish failures; the closure only publishes
+		// and returns the error so the failure is logged once.
+		fleetFM.SendBundleListRequest(pubCtx, func(ctx context.Context, payload []byte) error {
+			_, err := cm.Publish(ctx, &paho.Publish{
+				Topic:   outbox,
+				Payload: payload,
+				QoS:     1,
+				Retain:  false,
+			})
+			return err
+		})
+	})
+
+	fleetManager.logger.Info("Fleet files manager bound to MQTT")
+	return nil
+}
+
 // refreshAndReconnect refreshes the JWT token and reconnects to MQTT
 func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context, timeout time.Duration) error {
 	// Refresh JWT token
@@ -616,11 +699,9 @@ func (fleetManager *FleetConfigManager) Stop(ctx context.Context) error {
 		fleetManager.connCancel()
 	}
 
-	if fleetManager.otlpBridge != nil {
-		if err := fleetManager.otlpBridge.Stop(ctx); err != nil {
-			fleetManager.logger.Error("error while stopping OTLP bridge", slog.Any("error", err))
-			return err
-		}
+	if err := fleetManager.StopOTLPBridge(ctx); err != nil {
+		fleetManager.logger.Error("error while stopping OTLP bridge", slog.Any("error", err))
+		return err
 	}
 	return nil
 }

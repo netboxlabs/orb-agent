@@ -12,6 +12,10 @@ orb:
     sources:
       fleet:
         timeout: 30
+  files_manager:
+    active: fleet
+    sources:
+      fleet: {}
   backends:
     network_discovery:
     device_discovery:
