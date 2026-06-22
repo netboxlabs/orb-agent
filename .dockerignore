@@ -1,0 +1,5 @@
+# The agent image builds the agent as a single Go module. A local go.work
+# (git-ignored, see .gitignore) would otherwise be copied by `COPY . .` and
+# force workspace mode, breaking `make agent_bin` (-mod=mod). Keep it out.
+go.work
+go.work.sum
