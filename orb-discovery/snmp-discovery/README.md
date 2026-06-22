@@ -433,7 +433,7 @@ The repository includes several pre-built device lookup files for popular vendor
 - **Lenovo devices**: `lenovo.yaml` - Contains mappings for Lenovo networking equipment
 - **Ruckus devices**: `ruckus.yaml` - Contains mappings for Ruckus wireless equipment
 
-The full list of vendor device files is available [here](https://github.com/netboxlabs/orb-agent/orb-discovery/tree/release/snmp-discovery/lookup_extension).
+The full list of vendor device files is available [here](https://github.com/netboxlabs/orb-agent/tree/release/orb-discovery/snmp-discovery/lookup_extension).
 
 #### Creating Custom Device Lookup Files
 You can create custom device lookup files for your specific hardware or to override the name of a device model by:

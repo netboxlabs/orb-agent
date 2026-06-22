@@ -23,8 +23,8 @@ COPY --from=builder /build/network-discovery /usr/local/bin/network-discovery
 
 LABEL maintainer="techops@netboxlabs.com"
 LABEL org.opencontainers.image.title="Orb Network Discovery"
-LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-agent/orb-discovery/tree/develop/network-discovery"
-LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-agent/orb-discovery/tree/develop/network-discovery"
+LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-agent/tree/develop/orb-discovery/network-discovery"
+LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-agent/tree/develop/orb-discovery/network-discovery"
 LABEL org.opencontainers.image.description="NetBox Labs network-discovery image"
 LABEL org.opencontainers.image.vendor="NetBox Labs, Inc"
 LABEL org.opencontainers.image.authors="techops@netboxlabs.com"

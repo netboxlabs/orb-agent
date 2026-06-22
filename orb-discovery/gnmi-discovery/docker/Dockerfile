@@ -23,8 +23,8 @@ COPY mapping/gnmi-profiles /usr/local/share/gnmi-profiles
 
 LABEL maintainer="techops@netboxlabs.com"
 LABEL org.opencontainers.image.title="Orb gNMI Discovery"
-LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-agent/orb-discovery/tree/release/gnmi-discovery"
-LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-agent/orb-discovery/tree/release/gnmi-discovery"
+LABEL org.opencontainers.image.url="https://github.com/netboxlabs/orb-agent/tree/release/orb-discovery/gnmi-discovery"
+LABEL org.opencontainers.image.documentation="https://github.com/netboxlabs/orb-agent/tree/release/orb-discovery/gnmi-discovery"
 LABEL org.opencontainers.image.description="NetBox Labs gnmi-discovery image"
 LABEL org.opencontainers.image.vendor="NetBox Labs, Inc"
 LABEL org.opencontainers.image.authors="techops@netboxlabs.com"
