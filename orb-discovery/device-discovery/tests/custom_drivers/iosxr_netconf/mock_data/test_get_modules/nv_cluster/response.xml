@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <data>
+    <inventory xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-invmgr-oper">
+      <entities>
+        <entity>
+          <name>Rack 0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9006 4 Line Card Slot Chassis with V2 AC PEM</description>
+              <model-name>ASR-9006-AC-V2</model-name>
+              <serial-number>FOX1234ABCD</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>Rack 1</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9006 4 Line Card Slot Chassis with V2 AC PEM</description>
+              <model-name>ASR-9006-AC-V2</model-name>
+              <serial-number>FOX1234ABCE</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/RSP0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR9K Route Switch Processor</description>
+              <model-name>A9K-RSP880-LT-SE</model-name>
+              <serial-number>FOX5678EFG0</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9000 24-Port 10GE Line Card</description>
+              <model-name>A9K-24X10GE-SE</model-name>
+              <serial-number>FOX9012R0LC</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>1/RSP0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR9K Route Switch Processor</description>
+              <model-name>A9K-RSP880-LT-SE</model-name>
+              <serial-number>FOX5678EFG1</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>1/0/CPU0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>ASR 9000 24-Port 10GE Line Card</description>
+              <model-name>A9K-24X10GE-SE</model-name>
+              <serial-number>FOX9012R1LC</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+      </entities>
+    </inventory>
+  </data>
+</rpc-reply>

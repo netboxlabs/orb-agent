@@ -1,0 +1,17 @@
+{
+  "1": {
+    "id": 1,
+    "name": "DEFAULT_VLAN_1",
+    "admin": "up",
+    "interfaces": {
+      "/rest/v10.04/system/interfaces/1%2F1%2F1": "/rest/v10.04/system/interfaces/1%2F1%2F1",
+      "/rest/v10.04/system/interfaces/1%2F1%2F2": "/rest/v10.04/system/interfaces/1%2F1%2F2"
+    }
+  },
+  "10": {
+    "id": 10,
+    "name": "MGMT",
+    "admin": "up",
+    "interfaces": {}
+  }
+}

@@ -43,6 +43,15 @@ install-dev-tools:
 deps:
 	@go mod tidy
 
+# Generate a local go.work spanning the agent and the Go discovery backends.
+# Git-ignored — purely a local multi-module editing convenience; the agent
+# image and CI build the agent as a single module.
+.PHONY: work
+work:
+	@rm -f go.work go.work.sum
+	@go work init . ./orb-discovery/network-discovery ./orb-discovery/snmp-discovery ./orb-discovery/gnmi-discovery
+	@echo "go.work created (git-ignored). Use 'GOWORK=off' for single-module commands."
+
 agent_bin:
 	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" -o ${BUILD_DIR}/orb-agent cmd/main.go

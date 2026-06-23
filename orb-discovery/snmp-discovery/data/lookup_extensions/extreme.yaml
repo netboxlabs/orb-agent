@@ -1,0 +1,5 @@
+devices:
+  # Extreme Networks switches (enterprise 1916)
+  .1.3.6.1.4.1.1916.2: extremeSwitch
+  .1.3.6.1.4.1.1916.2.89: extremeSummitX250e
+  .1.3.6.1.4.1.1916.2.343: extremeSwitchingX435

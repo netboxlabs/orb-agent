@@ -1,0 +1,4 @@
+{
+  "1/1/1": {"name": "1/1/1", "routing": false, "vlan_mode": null, "vlan_tag": null, "vlan_trunks": []},
+  "lag1": {"name": "lag1", "routing": false, "vlan_mode": "trunk", "vlan_tag": null, "vlan_trunks": ["/rest/v10.04/system/vlans/100"]}
+}

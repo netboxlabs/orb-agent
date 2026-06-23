@@ -1,0 +1,5 @@
+{
+  "running": "config vpn ipsec phase1-interface\n    edit \"to-branch\"\n        set psksecret <redacted>\n        set psk <redacted>\n    next\nend\nconfig system admin\n    edit \"admin\"\n        set password <redacted>\n    next\nend\nconfig user radius\n    edit \"radius-server\"\n        set secret <redacted>\n    next\nend\nconfig system interface\n    edit \"port1\"\n        set ip 192.168.1.1 255.255.255.0\n        set description \"WAN interface\"\n    next\nend\n",
+  "candidate": "",
+  "startup": ""
+}

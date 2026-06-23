@@ -1,0 +1,29 @@
+{
+  "ethernet-1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 25000.0,
+    "mac_address": ""
+  },
+  "ethernet-1/1.0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  },
+  "ethernet-1/1.100": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  }
+}

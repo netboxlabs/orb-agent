@@ -1,0 +1,5 @@
+{
+  "running": "<response status=\"success\">\n  <result>\n    <config version=\"10.1.0\">\n      <devices>\n        <entry name=\"localhost.localdomain\">\n          <network>\n            <interface>\n              <ethernet>\n                <entry name=\"ethernet1/1\">\n                  <comment>Uplink to Router</comment>\n                  <layer3>\n                    <ip>\n                      <entry name=\"192.168.1.1/24\"/>\n                    </ip>\n                  </layer3>\n                </entry>\n              </ethernet>\n            </interface>\n          </network>\n        </entry>\n      </devices>\n    </config>\n  </result>\n</response>\n",
+  "candidate": "<response status=\"success\">\n  <result>\n    <config version=\"10.1.0\">\n      <devices>\n        <entry name=\"localhost.localdomain\">\n        </entry>\n      </devices>\n    </config>\n  </result>\n</response>\n",
+  "startup": ""
+}

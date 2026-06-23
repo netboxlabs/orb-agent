@@ -1,0 +1,26 @@
+{
+  "system": {
+    "ipv4": {
+      "10.0.0.1": {
+        "prefix_length": 32
+      }
+    },
+    "ipv6": {
+      "2001:db8::1": {
+        "prefix_length": 128
+      }
+    }
+  },
+  "to-peer-1": {
+    "ipv4": {
+      "192.168.1.1": {
+        "prefix_length": 30
+      }
+    },
+    "ipv6": {
+      "fe80::1": {
+        "prefix_length": 64
+      }
+    }
+  }
+}

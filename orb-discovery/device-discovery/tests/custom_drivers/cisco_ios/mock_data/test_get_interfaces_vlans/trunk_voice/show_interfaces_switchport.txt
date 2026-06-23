@@ -1,0 +1,9 @@
+Name: Gi1/0/5
+Switchport: Enabled
+Administrative Mode: static access
+Operational Mode: static access
+Negotiation of Trunking: Off
+Access Mode VLAN: 10 (DATA)
+Trunking Native Mode VLAN: 1 (default)
+Voice VLAN: 100
+Trunking VLANs Enabled: ALL

@@ -1,0 +1,33 @@
+match: {}
+device:
+  hostname: /system/state/hostname
+  os_version: /system/state/software-version
+interfaces:
+  list_path: /interfaces/interface
+  keys:
+    name: name
+    description: config/description
+    admin_status: state/admin-status
+    mtu: state/mtu
+    # OpenConfig iana-if-type identityref (e.g. "iana-if-type:ieee8023adLag").
+    # Mapped to a NetBox interface type for lag/virtual/etc. in translate.go;
+    # ethernet media is not derivable from the type alone, so it falls through to
+    # a user interface_patterns rule or the interface.if_type default.
+    type: state/type
+    # Ethernet enrichment (openconfig-if-ethernet). port-speed is an identityref
+    # (SPEED_10GB...) mapped to Interface.Speed (kbps) and used for speed-based
+    # type inference; mac-address -> Interface.PrimaryMacAddress; aggregate-id ->
+    # Interface.Lag (member -> parent LAG). Mapped in translate.go / interface_type.go.
+    speed: ethernet/state/port-speed
+    mac_address: ethernet/state/mac-address
+    lag_member: ethernet/state/aggregate-id
+    duplex: ethernet/state/negotiated-duplex-mode
+components:
+  list_path: /components/component
+  keys:
+    name: name
+    type: state/type
+    serial: state/serial-no
+    part: state/part-no
+    mfg_name: state/mfg-name
+    parent: state/parent

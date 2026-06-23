@@ -1,0 +1,16 @@
+{
+  "hostname": "ZOO-SF300-POE-2",
+  "vendor": "Cisco",
+  "model": "24-Port 10/100 PoE Managed Switch",
+  "os_version": "4.1.7.17",
+  "serial_number": "IDN123456AA",
+  "uptime": 6059807.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "gi1",
+    "gi2",
+    "gi3",
+    "gi4",
+    "Po1"
+  ]
+}

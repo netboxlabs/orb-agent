@@ -1,0 +1,29 @@
+{
+  "1/1/1": {
+    "name": "1/1/1",
+    "vrf": {
+      "CUST-A": "/rest/v10.04/system/vrfs/CUST-A"
+    }
+  },
+  "1/1/2": {
+    "name": "1/1/2",
+    "vrf": {
+      "default": "/rest/v10.04/system/vrfs/default"
+    }
+  },
+  "vlan100": {
+    "name": "vlan100",
+    "vrf": {
+      "CUST-A": "/rest/v10.04/system/vrfs/CUST-A"
+    }
+  },
+  "mgmt": {
+    "name": "mgmt",
+    "vrf": {
+      "mgmt": "/rest/v10.04/system/vrfs/mgmt"
+    }
+  },
+  "1/1/3": {
+    "name": "1/1/3"
+  }
+}

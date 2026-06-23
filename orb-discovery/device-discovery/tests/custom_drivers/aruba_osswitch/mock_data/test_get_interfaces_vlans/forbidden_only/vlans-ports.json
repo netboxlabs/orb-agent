@@ -1,0 +1,4 @@
+{"vlans_port_element": [
+  {"vlan_id": 1, "port_id": "5", "port_mode": "POM_FORBIDDEN"},
+  {"vlan_id": 100, "port_id": "5", "port_mode": "POM_FORBIDDEN"}
+]}

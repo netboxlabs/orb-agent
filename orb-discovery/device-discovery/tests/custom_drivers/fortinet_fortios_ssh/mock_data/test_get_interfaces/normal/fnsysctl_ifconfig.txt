@@ -1,0 +1,13 @@
+port1   Link encap:Ethernet  HWaddr 00:09:0F:09:00:01
+        inet addr:192.168.1.1  Bcast:192.168.1.255  Mask:255.255.255.0
+        UP BROADCAST RUNNING ALLMULTI MULTICAST  MTU:1500  Metric:1
+        RX packets:1234 errors:0 dropped:0 overruns:0 frame:0
+        TX packets:5678 errors:0 dropped:0 overruns:0 carrier:0
+
+port2   Link encap:Ethernet  HWaddr 00:09:0F:09:00:02
+        BROADCAST MULTICAST  MTU:1500  Metric:1
+        RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+
+lo      Link encap:Local Loopback
+        inet addr:127.0.0.1  Mask:255.0.0.0
+        UP LOOPBACK RUNNING  MTU:65536  Metric:1

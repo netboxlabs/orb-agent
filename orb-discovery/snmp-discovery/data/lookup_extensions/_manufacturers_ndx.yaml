@@ -1,0 +1,117 @@
+# Canonical manufacturer overrides aligning SNMP-discovered vendors to the
+# NetBox DeviceType-Library (DTL) / NDX manufacturer names. Keys are IANA
+# Private Enterprise Numbers (the 7th element of sysObjectID); values are the
+# exact DTL `manufacturer:` strings, so discovered devices attach to the right
+# manufacturer and device-types. PENs absent here keep their raw IANA name.
+#
+# A vendor may own several PENs (acquisitions, sub-brands, legacy agents). Where
+# a vendor maps from more than one PEN, the PENs are grouped together below.
+manufacturers:
+  664: Adtran
+  6486: Alcatel-Lucent
+  207: Allied Telesis
+  30065: Arista
+  1588: Brocade
+  6321: Calix
+  2620: Check Point
+  1271: Ciena
+  5951: Citrix
+  20992: Cradlepoint
+  3808: CyberPower
+  171: D-Link
+  2254: Delta
+  332: Digi
+  534: Eaton
+  52587: Edgecore
+  193: Ericsson
+  1916: Extreme Networks
+  3375: F5
+  12356: Fortinet
+  52642: FS
+  553: GarrettCom
+  26866: Gigamon
+  248: Hirschmann
+  116: HITACHI
+  2011: Huawei
+  2: IBM
+  7779: Infoblox
+  1714: Infortrend
+  2356: LANCOM
+  19046: Lenovo
+  33049: Mellanox
+  14988: MikroTik
+  8691: Moxa
+  119: NEC
+  789: NetApp
+  4526: Netgear
+  6527: Nokia
+  25049: Opengear
+  23695: Peplink
+  4346: Phoenix Contact
+  7244: QCT
+  89: Radware
+  13742: Raritan
+  2606: Rittal
+  17163: Riverbed
+  25053: Ruckus
+  15004: RuggedCOM
+  1718: Server Technology
+  4329: Siemens
+  8741: SonicWall
+  2604: Sophos
+  11256: Stormshield
+  10876: Supermicro
+  6574: Synology
+  564: Telco Systems
+  48690: Teltonika
+  11863: TP-Link
+  28866: TrendNet
+  41112: Ubiquiti
+  3097: WatchGuard
+  2634: WTI
+  58132: Xfusion
+  1182: YAMAHA
+  3902: ZTE
+  890: Zyxel
+
+  # --- Vendors that map from multiple PENs ---
+  # A10 Networks
+  22610: A10
+  40842: A10
+  # APC + NetBotz (APC environmental-monitoring brand)
+  318: APC
+  5528: APC
+  # AudioCodes
+  4923: AudioCodes
+  5003: AudioCodes
+  # Barracuda + phion (Barracuda AG)
+  10704: Barracuda
+  20632: Barracuda
+  # Cisco — ciscoSystems + Meraki (NDX files Meraki device-types under Cisco)
+  9: Cisco
+  29671: Cisco
+  # Dell + Force10 + Dell EMC OS10 (SmartFabric)
+  674: Dell
+  6027: Dell
+  19746: Dell
+  # HPE — HP/HPE + Compaq + Aruba + Nimble + Aruba CX (all HPE-family)
+  11: HPE
+  232: HPE
+  14823: HPE
+  37447: HPE
+  47196: HPE
+  # Juniper + Unisphere/ERX (acquired by Juniper)
+  2636: Juniper
+  4874: Juniper
+  # Palo Alto — PAN-OS + CloudGenix (Prisma SD-WAN)
+  25461: Palo Alto
+  50114: Palo Alto
+  # Quantum Corporation (two enterprise numbers)
+  2036: Quantum
+  3697: Quantum
+  # Thales eSecurity + Thales DIS
+  4096: Thales
+  31746: Thales
+  # Vertiv — Emerson Computer Power (legacy agent) + Vertiv
+  476: Vertiv
+  21239: Vertiv

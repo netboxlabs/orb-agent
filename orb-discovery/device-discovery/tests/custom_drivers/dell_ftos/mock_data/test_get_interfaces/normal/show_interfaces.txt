@@ -1,0 +1,29 @@
+TenGigabitEthernet 0/0 is up, line protocol is up
+ Description: uplink-core
+ Hardware is DellEth, address is aa:bb:cc:dd:ee:00
+   Current address is aa:bb:cc:dd:ee:00
+ MTU 12000 bytes, IP MTU 11982 bytes
+ LineSpeed 10000 Mbit
+ Flowcontrol rx off tx off
+
+TenGigabitEthernet 0/1 is up, line protocol is up
+ Description: server01
+ Hardware is DellEth, address is aa:bb:cc:dd:ee:01
+   Current address is aa:bb:cc:dd:ee:01
+ MTU 12000 bytes, IP MTU 11982 bytes
+ LineSpeed 10000 Mbit
+ Flowcontrol rx off tx off
+
+GigabitEthernet 0/48 is administratively down, line protocol is down
+ Hardware is DellEth, address is aa:bb:cc:dd:ee:30
+   Current address is aa:bb:cc:dd:ee:30
+ MTU 1554 bytes, IP MTU 1500 bytes
+ LineSpeed Auto
+ Flowcontrol rx off tx off
+
+ManagementEthernet 0/0 is up, line protocol is up
+ Hardware is DellEth, address is aa:bb:cc:dd:ee:ff
+   Current address is aa:bb:cc:dd:ee:ff
+ MTU 1554 bytes, IP MTU 1500 bytes
+ LineSpeed 100 Mbit
+ Flowcontrol rx off tx off

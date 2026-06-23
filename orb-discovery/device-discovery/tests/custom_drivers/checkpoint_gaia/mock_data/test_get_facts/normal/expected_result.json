@@ -1,0 +1,13 @@
+{
+  "hostname": "gw-corp-01",
+  "vendor": "Check Point",
+  "model": "Check Point 15400",
+  "os_version": "R77.30",
+  "serial_number": "LR000000000000",
+  "uptime": -1.0,
+  "fqdn": "gw-corp-01.example.com",
+  "interface_list": [
+    "Mgmt",
+    "Sync"
+  ]
+}

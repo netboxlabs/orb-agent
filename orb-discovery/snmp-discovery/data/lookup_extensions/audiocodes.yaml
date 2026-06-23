@@ -1,0 +1,64 @@
+# AudioCodes — sysObjectID -> device model lookups for SNMP discovery.
+# Manufacturer (IANA PEN 5003, also 4923) is canonicalized in _manufacturers_ndx.yaml;
+# this file maps each model's sysObjectID to its model name. Entries are the acProduct*
+# device types under .1.3.6.1.4.1.5003.8.1.1 from AUDIOCODES-TYPES-MIB (Mediant /
+# MediaPack / TrunkPack / TPM gateways and SBCs), supplemented with current Mediant
+# E-SBC sysObjectIDs (.70/.72/.73/.78/.79) that postdate the bundled MIB snapshot,
+# sourced from BMC Discovery's tested AudioCodes sysObjectID table.
+devices:
+  .1.3.6.1.4.1.5003.8.1.1.1: acProductTrunkPack08
+  .1.3.6.1.4.1.5003.8.1.1.2: acProductMediaPack108
+  .1.3.6.1.4.1.5003.8.1.1.3: acProductMediaPack124
+  .1.3.6.1.4.1.5003.8.1.1.20: acProductTrunkPack1600
+  .1.3.6.1.4.1.5003.8.1.1.22: acProductTPM1100
+  .1.3.6.1.4.1.5003.8.1.1.23: acProductTrunkPack260IpMedia
+  .1.3.6.1.4.1.5003.8.1.1.24: acProductTrunkPack1610
+  .1.3.6.1.4.1.5003.8.1.1.25: acProductMediaPack104
+  .1.3.6.1.4.1.5003.8.1.1.26: acProductMediaPack102
+  .1.3.6.1.4.1.5003.8.1.1.29: acProductTrunkPack1610SB
+  .1.3.6.1.4.1.5003.8.1.1.30: acProductTrunkPack1610IpMedia
+  .1.3.6.1.4.1.5003.8.1.1.31: acProductTrunkPackMEDIANT2000
+  .1.3.6.1.4.1.5003.8.1.1.32: acProductTrunkPackSTRETTO2000
+  .1.3.6.1.4.1.5003.8.1.1.33: acProductTrunkPackIPMServer2000
+  .1.3.6.1.4.1.5003.8.1.1.34: acProductTrunkPack2810
+  .1.3.6.1.4.1.5003.8.1.1.35: acProductTrunkPack260UNIpMedia
+  .1.3.6.1.4.1.5003.8.1.1.36: acProductTrunkPack260IpMedia30Ch
+  .1.3.6.1.4.1.5003.8.1.1.37: acProductTrunkPack260IpMedia60Ch
+  .1.3.6.1.4.1.5003.8.1.1.38: acProductTrunkPack260IpMedia120Ch
+  .1.3.6.1.4.1.5003.8.1.1.39: acProductTrunkPack260RTIpMedia30Ch
+  .1.3.6.1.4.1.5003.8.1.1.40: acProductTrunkPack260RTIpMedia60Ch
+  .1.3.6.1.4.1.5003.8.1.1.41: acProductTrunkPack260RTIpMedia120Ch
+  .1.3.6.1.4.1.5003.8.1.1.42: acProductTrunkPack260
+  .1.3.6.1.4.1.5003.8.1.1.43: acProductTrunkPack260UN
+  .1.3.6.1.4.1.5003.8.1.1.44: acProductTPM1100PCM
+  .1.3.6.1.4.1.5003.8.1.1.45: acProductTrunkPack6310
+  .1.3.6.1.4.1.5003.8.1.1.46: acProductTPM6300
+  .1.3.6.1.4.1.5003.8.1.1.47: acProductMediant1000
+  .1.3.6.1.4.1.5003.8.1.1.48: acProductIPMedia3000
+  .1.3.6.1.4.1.5003.8.1.1.49: acProductMediant3000
+  .1.3.6.1.4.1.5003.8.1.1.50: acProductStretto3000
+  .1.3.6.1.4.1.5003.8.1.1.51: acProductTrunkPack6310IpMedia
+  .1.3.6.1.4.1.5003.8.1.1.52: acProductTrunkPack6310SB
+  .1.3.6.1.4.1.5003.8.1.1.53: acProductATP1610
+  .1.3.6.1.4.1.5003.8.1.1.54: acProductATP260
+  .1.3.6.1.4.1.5003.8.1.1.55: acProductATP260UN
+  .1.3.6.1.4.1.5003.8.1.1.56: acProductMediaPack118
+  .1.3.6.1.4.1.5003.8.1.1.57: acProductMediaPack114
+  .1.3.6.1.4.1.5003.8.1.1.58: acProductMediaPack112
+  .1.3.6.1.4.1.5003.8.1.1.59: acProductTrunkPack6310T3
+  .1.3.6.1.4.1.5003.8.1.1.60: acProductMediant3000T3
+  .1.3.6.1.4.1.5003.8.1.1.61: acProductIPmedia3000T3
+  .1.3.6.1.4.1.5003.8.1.1.62: acProductTrunkPack6310T3IpMedia
+  .1.3.6.1.4.1.5003.8.1.1.63: acProductTrunkPack8410
+  .1.3.6.1.4.1.5003.8.1.1.64: acProductTrunkPack8410IpMedia
+  .1.3.6.1.4.1.5003.8.1.1.65: acProductMediant600
+  .1.3.6.1.4.1.5003.8.1.1.66: acProductTrunkPack12610
+  .1.3.6.1.4.1.5003.8.1.1.67: acProductMediant1000MSBG
+  .1.3.6.1.4.1.5003.8.1.1.68: acProductMediant600MSBG
+  .1.3.6.1.4.1.5003.8.1.1.69: acProductMediaPack500MSBG
+  .1.3.6.1.4.1.5003.8.1.1.70: Mediant 4000 E-SBC
+  .1.3.6.1.4.1.5003.8.1.1.71: acProductMediant1000ESBC
+  .1.3.6.1.4.1.5003.8.1.1.72: Mediant 800 E-SBC
+  .1.3.6.1.4.1.5003.8.1.1.73: Mediant 2600 E-SBC
+  .1.3.6.1.4.1.5003.8.1.1.78: Mediant 2600 E-SBC
+  .1.3.6.1.4.1.5003.8.1.1.79: Mediant VE

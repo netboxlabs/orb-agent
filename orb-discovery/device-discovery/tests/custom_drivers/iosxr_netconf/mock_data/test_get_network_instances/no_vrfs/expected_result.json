@@ -1,0 +1,12 @@
+{
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  }
+}

@@ -1,0 +1,7 @@
+
+Name: GigabitEthernet 0/1
+Switchport: Enabled
+Administrative mode: access
+Access Mode VLAN: 10
+Trunking Native Mode VLAN: 1
+Trunking VLANs Enabled: NONE

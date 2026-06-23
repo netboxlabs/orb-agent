@@ -1,0 +1,12 @@
+Interface 1/1/1 is up
+ Admin state is up
+ IPv4 address 192.168.1.1/24
+ Type SYSTEM
+Interface 1/1/1.100 is up
+ Admin state is up
+ IPv4 address 10.0.100.1/24
+ Type VLAN_SUBINT
+Interface 1/1/1.200 is up
+ Admin state is up
+ IPv4 address 10.0.200.1/24
+ Type VLAN_SUBINT

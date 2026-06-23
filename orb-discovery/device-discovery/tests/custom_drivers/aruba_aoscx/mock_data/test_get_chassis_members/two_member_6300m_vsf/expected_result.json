@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "TW01ABC0001",
+      "model": "6300M-48G-PoE+-4SFP56",
+      "role": "active",
+      "priority": 128,
+      "mac": "94:f1:28:11:00:00",
+      "state": "up"
+    },
+    {
+      "id": 2,
+      "serial": "TW01ABC0002",
+      "model": "6300M-48G-PoE+-4SFP56",
+      "role": "standby",
+      "priority": 64,
+      "mac": "94:f1:28:11:00:80",
+      "state": "up"
+    }
+  ],
+  "domain": "1"
+}

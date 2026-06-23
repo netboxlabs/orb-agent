@@ -1,0 +1,11 @@
+ Total VPN-Instances configured      : 2
+ Total IPv4 VPN-Instances configured : 2
+ Total IPv6 VPN-Instances configured : 0
+
+ VPN-Instance Name and ID : vpna, 1
+  Interface Number : 2
+  Interface list : GigabitEthernet0/0/1,
+                   Vlanif100
+ VPN-Instance Name and ID : vpnb, 2
+  Interface Number : 1
+  Interface list : GigabitEthernet0/0/2

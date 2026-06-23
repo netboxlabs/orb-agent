@@ -1,0 +1,8 @@
+Port      Description
+-------   -----------
+g1        TO_SRV01
+
+Ch        Description
+-------   -----------
+ch1       UPLINK_LAG
+ch2

@@ -1,0 +1,9 @@
+<response status="success">
+  <result>
+    <ifnet>
+      <name>ethernet1/1.200</name>
+      <id>16</id>
+      <state>up</state>
+    </ifnet>
+  </result>
+</response>

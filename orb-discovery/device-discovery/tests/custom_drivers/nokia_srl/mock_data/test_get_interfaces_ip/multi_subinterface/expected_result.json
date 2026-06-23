@@ -1,0 +1,26 @@
+{
+  "ethernet-1/1.0": {
+    "ipv4": {
+      "10.0.0.1": {
+        "prefix_length": 30
+      }
+    },
+    "ipv6": {
+      "2001:db8:a::1": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "ethernet-1/1.100": {
+    "ipv4": {
+      "10.0.100.1": {
+        "prefix_length": 30
+      }
+    },
+    "ipv6": {
+      "2001:db8:b::1": {
+        "prefix_length": 64
+      }
+    }
+  }
+}

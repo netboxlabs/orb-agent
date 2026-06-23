@@ -1,0 +1,8 @@
+!Current Configuration:
+!
+hostname edgeswitch-24
+!
+interface 0/5
+ routing
+ ip address 10.0.0.1 255.255.255.0
+!

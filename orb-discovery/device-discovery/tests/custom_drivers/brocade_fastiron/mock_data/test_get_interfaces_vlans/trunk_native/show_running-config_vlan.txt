@@ -1,0 +1,9 @@
+vlan 10 name MGMT by port
+ untagged ethe 1/1/1
+!
+vlan 20 name DATA by port
+ tagged ethe 1/1/1
+!
+vlan 30 name VOICE by port
+ tagged ethe 1/1/1
+!

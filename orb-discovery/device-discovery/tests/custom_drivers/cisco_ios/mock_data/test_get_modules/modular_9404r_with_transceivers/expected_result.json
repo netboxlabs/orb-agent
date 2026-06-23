@@ -1,0 +1,86 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9400-SUP-1",
+            "serial": "JAE2401SUP1",
+            "description": "Cisco Catalyst 9400 Series Supervisor 1 Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "2",
+          "position": "2",
+          "module": {
+            "model": "C9400-LC-48U",
+            "serial": "JAE2401LC02",
+            "description": "Cisco Catalyst 9400 Series 48-Port UPOE+ 10/100/1000(RJ-45)",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "TenGigabitEthernet2/0/1",
+                "position": "TenGigabitEthernet2/0/1",
+                "module": {
+                  "model": "SFP-10G-LR",
+                  "serial": "FNS2401TR01",
+                  "description": "SFP-10GBase-LR",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              },
+              {
+                "name": "TenGigabitEthernet2/0/2",
+                "position": "TenGigabitEthernet2/0/2",
+                "module": {
+                  "model": "SFP-10G-SR",
+                  "serial": "FNS2401TR02",
+                  "description": "SFP-10GBase-SR",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "3",
+          "position": "3",
+          "module": {
+            "model": "C9400-LC-48P",
+            "serial": "JAE2401LC03",
+            "description": "Cisco Catalyst 9400 Series 48-Port 10/100/1000(RJ-45) PoE+",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": [
+          "TenGigabitEthernet1/1/1",
+          "TenGigabitEthernet1/1/2"
+        ],
+        "2": [
+          "GigabitEthernet2/0/1",
+          "GigabitEthernet2/0/2",
+          "TenGigabitEthernet2/0/1",
+          "TenGigabitEthernet2/0/2"
+        ],
+        "3": [
+          "GigabitEthernet3/0/1",
+          "GigabitEthernet3/0/2"
+        ],
+        "TenGigabitEthernet2/0/1": [
+          "TenGigabitEthernet2/0/1"
+        ],
+        "TenGigabitEthernet2/0/2": [
+          "TenGigabitEthernet2/0/2"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+VERSION : V100R019C10SPC300
+PATCH   : SPC300
+PRODUCT : MA5800-X17
+MPLA Mainboard Running Area Information:
+  Current Program Area     : Area A
+  Current Data Area        : Area A
+  Program Area A Version   : V100R019C10SPC300
+  Program Area B Version   : V100R018C10SPC100
+  Data Area A Version      : V100R019C10
+  Data Area B Version      : V100R018C10

@@ -1,0 +1,11 @@
+T=09:21:08 GMT+00:00, eta 0m 0s remaining
+alone: standalone, D: dynamic config, S: static config, A: active, B: backup, M: member, X: not joined
+ID    Type            Role     Mac Address     Pri State   Comment
+1   S ICX7150-48     active   609c.9f00.0001 128  local   Ready
+2   S ICX7150-48     standby  609c.9f00.0002 128  remote  Ready
+3   D ICX7150-24     member   609c.9f00.0003   0  remote  Ready
+
+     active        standby        member
+     +---+         +---+          +---+
+     | 1 |---------| 2 |----------| 3 |
+     +---+         +---+          +---+

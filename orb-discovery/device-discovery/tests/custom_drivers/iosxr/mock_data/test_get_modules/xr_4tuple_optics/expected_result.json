@@ -1,0 +1,14 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "0/RP0/CPU0", "position": "0/RP0/CPU0", "module": {"model": "A9K-RSP880-LT-SE", "serial": "FOX5678EFGH", "description": "ASR9K Route Switch Processor", "type": "supervisor", "sub_bays": []}},
+        {"name": "0/0/CPU0", "position": "0/0/CPU0", "module": {"model": "A9K-24X10GE-SE", "serial": "FOX9012JKLM", "description": "ASR 9000 24-Port 10GE Line Card", "type": "linecard", "sub_bays": [
+          {"name": "0/0/CPU0/2", "position": "0/0/CPU0/2", "module": {"model": "SFP-10G-LR", "serial": "OPTIC00000002", "description": "Cisco SFP+ 10G LR Optics", "type": "transceiver", "sub_bays": []}},
+          {"name": "0/0/CPU0/3", "position": "0/0/CPU0/3", "module": {"model": "QSFP-100G-LR4", "serial": "OPTIC00000003", "description": "Cisco QSFP-28 100G Optics", "type": "transceiver", "sub_bays": []}}
+        ]}}
+      ],
+      "interfaces_by_bay": {"0/0/CPU0": ["0/0/CPU0/2", "0/0/CPU0/3"], "0/0/CPU0/2": ["0/0/CPU0/2"], "0/0/CPU0/3": ["0/0/CPU0/3"]}
+    }
+  }
+}

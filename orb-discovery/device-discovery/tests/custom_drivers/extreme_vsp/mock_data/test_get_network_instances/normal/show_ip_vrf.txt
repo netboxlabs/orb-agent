@@ -1,0 +1,10 @@
+==========================================================================================
+                                   Vrf Information
+==========================================================================================
+VRF NAME                VRF ID   CONTEXT NAME            CONTEXT ID    ARP/IP/UDPFWD/RSMLT
+------------------------------------------------------------------------------------------
+GlobalRouter            0        default                 1             T/T/F/F
+MgmtRouter              512      mgmt                    2             T/T/F/F
+vrf-red                 2        red-ctx                 3             T/T/F/F
+
+3 out of 3 Total Num of VRF Entries displayed.

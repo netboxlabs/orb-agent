@@ -1,0 +1,5 @@
+VLAN  Name                 Ports                   Type
+----  -------------------  ----------------------  ---------------
+1     default              Gi1/0/1-4,Gi1/0/6       Default
+10    MGMT                 Te1/0/1                 Static
+200   ISOLATED                                     Static

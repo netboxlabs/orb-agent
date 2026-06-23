@@ -1,0 +1,35 @@
+{
+  "1": {
+    "name": "1",
+    "interfaces": [
+      "bridge"
+    ]
+  },
+  "100": {
+    "name": "100",
+    "interfaces": [
+      "bridge",
+      "swp3",
+      "swp4"
+    ]
+  },
+  "200": {
+    "name": "200",
+    "interfaces": [
+      "bridge",
+      "swp3"
+    ]
+  },
+  "101": {
+    "name": "101",
+    "interfaces": [
+      "swp4"
+    ]
+  },
+  "102": {
+    "name": "102",
+    "interfaces": [
+      "swp4"
+    ]
+  }
+}

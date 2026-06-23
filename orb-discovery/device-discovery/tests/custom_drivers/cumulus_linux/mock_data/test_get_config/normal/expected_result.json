@@ -1,0 +1,5 @@
+{
+  "running": "net add hostname leaf01\nnet add interface swp1 alias to-spine01\nnet add interface swp1 bgp\nnet add interface swp2 alias to-spine02\nnet add interface swp2 bgp\nnet add bgp autonomous-system 65001\nnet add bgp router-id 10.10.10.1\nnet add bgp neighbor 10.0.1.0 remote-as 65000\nnet add bgp ipv4 unicast network 10.10.10.1/32\nnet add bridge bridge ports swp3\nnet add bridge bridge vids 100,200\nnet add vlan 100 ip address 10.100.0.1/24\nnet add vlan 200 ip address 10.200.0.1/24\nnet add snmp-server listening-address all\nnet commit",
+  "candidate": "",
+  "startup": ""
+}

@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "210231A2FOO1111111",
+      "model": "H3C S12500X-AF",
+      "role": "active",
+      "priority": 32,
+      "mac": "00:23:33:33:AA:AA",
+      "state": "Master"
+    },
+    {
+      "id": 2,
+      "serial": "210231A2FOO2222222",
+      "model": "H3C S12500X-AF",
+      "role": "standby",
+      "priority": 16,
+      "mac": "00:23:44:44:BB:BB",
+      "state": "Slave"
+    }
+  ],
+  "domain": "7"
+}

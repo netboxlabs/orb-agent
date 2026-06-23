@@ -1,0 +1,14 @@
+{
+  "TABLE_modinfo": {
+    "ROW_modinfo": [
+      {"modinf": "\"1\"", "modules": "\"1\"", "ports": "0", "type": "\"Supervisor\"", "model": "\"N9K-SUP-A\"", "status": "ha-standby"},
+      {"modinf": "\"2\"", "modules": "\"2\"", "ports": "0", "type": "\"Supervisor\"", "model": "\"N9K-SUP-A\"", "status": "active *"}
+    ]
+  },
+  "TABLE_modwwninfo": {
+    "ROW_modwwninfo": [
+      {"modwwn": "1", "sn": "FOC1234SUP01"},
+      {"modwwn": "2", "sn": "FOC1234SUP02"}
+    ]
+  }
+}

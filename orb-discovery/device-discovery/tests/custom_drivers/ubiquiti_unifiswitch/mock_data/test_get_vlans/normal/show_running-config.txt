@@ -1,0 +1,11 @@
+!Current Configuration:
+!
+hostname unifi-sw-24
+!
+interface 0/1
+ vlan participation include 1,50
+ vlan tagging 50
+!
+interface 0/2
+ vlan participation include 1
+!

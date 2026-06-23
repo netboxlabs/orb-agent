@@ -1,0 +1,8 @@
+Name: Ethernet1/7
+  Switchport: Enabled
+  Switchport Monitor: Not enabled
+  Operational Mode: down
+  Access Mode VLAN: 100 (users)
+  Trunking Native Mode VLAN: 1 (default)
+  Voice VLAN: none
+  Trunking VLANs Allowed: 1-4094

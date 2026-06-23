@@ -1,0 +1,12 @@
+  UNIT 1
+  (Primary) from secondary SPR08070.bin
+
+    SW: Version 08.0.70T213
+    HW: ICX7150-48
+
+=============================================================================
+UNIT 1: SL 1: ICX7150-48 48-port 100M/1GbE Module
+  Serial  #: ICX7150A9999
+
+Switch uptime is 1 day(s) 0 hour(s) 0 minute(s) 0 second(s)
+  The system : started=cold start

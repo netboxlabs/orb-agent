@@ -1,0 +1,79 @@
+{
+  "ABC-PUBLIC-LEGACY": {
+    "interfaces": {
+      "interface": {
+        "Ve 734": {}
+      }
+    },
+    "name": "ABC-PUBLIC-LEGACY",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "DEMO-VLT-LAB-01": {
+    "interfaces": {
+      "interface": {
+        "Ve 535": {},
+        "Ve 543": {},
+        "Ve 548": {}
+      }
+    },
+    "name": "DEMO-VLT-LAB-01",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "DEMO-VLT-LAB-02": {
+    "interfaces": {
+      "interface": {
+        "Ve 544": {},
+        "Ve 545": {},
+        "Ve 546": {},
+        "Ve 547": {}
+      }
+    },
+    "name": "DEMO-VLT-LAB-02",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "MGMT": {
+    "interfaces": {
+      "interface": {
+        "Ve 10": {},
+        "Ve 11": {},
+        "Ve 4": {}
+      }
+    },
+    "name": "MGMT",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "default-vrf": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default-vrf",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "mgmt-vrf": {
+    "interfaces": {
+      "interface": {
+        "Management 0": {}
+      }
+    },
+    "name": "mgmt-vrf",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

@@ -1,0 +1,15 @@
+Current Configuration ...
+! Version 9.14.2.21
+!
+hostname ftos-switch01
+!
+username admin password 7 3b290ab1c3a8f snmp-server community public ro
+enable password 7 5e3f9d2c1b7a
+enable secret SecretHash99
+snmp-server community public ro
+!
+interface TenGigabitEthernet 0/0
+ no shutdown
+ ip address 10.0.0.1/24
+!
+end

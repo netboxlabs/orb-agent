@@ -1,0 +1,7 @@
+devices:
+  # CyberPower UPS (enterprise 3808.1.1.1)
+  .1.3.6.1.4.1.3808.1.1.1: cyberpowerUPS
+
+  # CyberPower PDU (enterprise 3808.1.1.3 and 3808.1.1.6)
+  .1.3.6.1.4.1.3808.1.1.3: cyberpowerEPDU
+  .1.3.6.1.4.1.3808.1.1.6: cyberpowerEPDU2

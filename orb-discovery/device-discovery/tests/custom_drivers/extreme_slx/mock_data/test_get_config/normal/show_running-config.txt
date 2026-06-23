@@ -1,0 +1,31 @@
+!
+! Extreme Networks Configuration
+!
+hostname slx9640
+!
+username admin privilege 0 password encrypted $1$abc123xyz
+!
+enable secret sha256 $5$abc123xyz
+!
+interface Ethernet 0/1
+ no shutdown
+ description uplink-to-core
+!
+interface Loopback 1
+ ip address 10.1.1.1/32
+!
+interface Ve 10
+ ip address 10.0.10.1/24
+!
+vlan 1
+ name Default
+!
+vlan 10
+ name Management
+!
+snmp-server community public ro
+snmp-server community private rw
+!
+ip route 0.0.0.0/0 192.168.100.254
+!
+end

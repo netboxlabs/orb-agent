@@ -1,0 +1,86 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "MSM-A",
+          "position": "MSM-A",
+          "module": {
+            "model": "BDX-MM1",
+            "serial": "12345N-A001",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "MSM-B",
+          "position": "MSM-B",
+          "module": {
+            "model": "BDX-MM1",
+            "serial": "12345N-A002",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "Slot-1",
+          "position": "Slot-1",
+          "module": {
+            "model": "BDXA-10G48X",
+            "serial": "12345N-S101",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "Slot-2",
+          "position": "Slot-2",
+          "module": {
+            "model": "BDXA-40G24X",
+            "serial": "12345N-S102",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "Slot-3",
+          "position": "Slot-3",
+          "module": {
+            "model": "BDXB-100G12X",
+            "serial": "12345N-S103",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "FM-1",
+          "position": "FM-1",
+          "module": {
+            "model": "BDXA-FM-160T",
+            "serial": "12345N-F001",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "FM-2",
+          "position": "FM-2",
+          "module": {
+            "model": "BDXA-FM-160T",
+            "serial": "12345N-F002",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

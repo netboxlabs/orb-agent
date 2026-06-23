@@ -1,0 +1,1 @@
+ethernet1/1     16   1000/full/up   00:0c:29:aa:bb:01

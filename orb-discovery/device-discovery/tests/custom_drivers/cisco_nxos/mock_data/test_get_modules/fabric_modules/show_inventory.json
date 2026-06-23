@@ -1,0 +1,16 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 9508 8-slot chassis\"", "productid": "\"N9K-C9508\"", "vendorid": "V01", "serialnum": "\"FOC12340CHA\""},
+      {"name": "\"Slot 1\"", "desc": "\"Supervisor Module\"", "productid": "\"N9K-SUP-A\"", "vendorid": "V01", "serialnum": "\"FOC12340SUP1\""},
+      {"name": "\"Slot 2\"", "desc": "\"Supervisor Module\"", "productid": "\"N9K-SUP-A\"", "vendorid": "V01", "serialnum": "\"FOC12340SUP2\""},
+      {"name": "\"Slot 3\"", "desc": "\"36-port 100G linecard\"", "productid": "\"N9K-X9736C-FX\"", "vendorid": "V01", "serialnum": "\"FOC12340LC03\""},
+      {"name": "\"Slot 21\"", "desc": "\"Fabric Module\"", "productid": "\"N9K-C9508-FM-E\"", "vendorid": "V01", "serialnum": "\"FOC12340FM21\""},
+      {"name": "\"Slot 22\"", "desc": "\"Fabric Module\"", "productid": "\"N9K-C9508-FM-E\"", "vendorid": "V01", "serialnum": "\"FOC12340FM22\""},
+      {"name": "\"Slot 35\"", "desc": "\"Fan Module\"", "productid": "\"N9K-C9508-FAN\"", "vendorid": "V01", "serialnum": "\"FOC12340FAN1\""},
+      {"name": "\"Power Supply 1\"", "desc": "\"Power Supply\"", "productid": "\"N9K-PAC-3000W-B\"", "vendorid": "V01", "serialnum": "\"FOC12340PSU1\""},
+      {"name": "\"Ethernet3/1\"", "desc": "\"QSFP-100G-LR4\"", "productid": "\"QSFP-100G-LR4\"", "vendorid": "V01", "serialnum": "\"OPT12340001\""},
+      {"name": "\"Ethernet3/2\"", "desc": "\"QSFP-100G-SR4\"", "productid": "\"QSFP-100G-SR4\"", "vendorid": "V01", "serialnum": "\"OPT12340002\""}
+    ]
+  }
+}

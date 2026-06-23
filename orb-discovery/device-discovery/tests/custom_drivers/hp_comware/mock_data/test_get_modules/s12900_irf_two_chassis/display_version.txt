@@ -1,0 +1,9 @@
+H3C Comware Software, Version 7.1.070, Release 7536P09
+Copyright (c) 2004-2024 New H3C Technologies Co., Ltd. All rights reserved.
+H3C S12916-AF uptime is 4 weeks, 2 days, 1 hour, 7 minutes
+Last reboot reason: User reboot
+
+System image file is flash:/s12900-cmw710-system-r7536p09.bin
+Slot 0 (M):
+   Uptime is 4 weeks, 2 days, 1 hour, 7 minutes
+   LSXM1MPUD0 uptime is 4 weeks, 2 days, 1 hour, 7 minutes

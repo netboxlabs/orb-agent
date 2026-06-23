@@ -1,0 +1,13 @@
+no spanning-tree
+!
+vlan 10 name DATA
+ untagged ethe 1/1
+ tagged ethe 1/2 lag 5
+ router-interface ve 10
+!
+vlan 20 name VOICE
+ tagged ethe 1/2
+!
+vlan 100 name UPLINK
+ tagged ethe 3/4
+!

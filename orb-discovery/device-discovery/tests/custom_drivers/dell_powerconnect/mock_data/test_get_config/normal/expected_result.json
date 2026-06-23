@@ -1,0 +1,5 @@
+{
+  "running": "\nusername admin privilege 15 password 7 abc123def456\nenable password 7 xyz789uvw012\n!\nsnmp-server community public ro\nsnmp-server community private rw\n!\nradius-server host 10.1.1.100 key radius_secret_key\ntacacs-server host 10.1.1.200 key tacacs_secret_key\n!\nvlan database\n vlan 10,100\n exit\n!\ninterface vlan 1\n ip address 192.168.1.1 255.255.255.0\n!\ninterface vlan 10\n ip address 10.0.10.1 255.255.255.0\n!\n",
+  "candidate": "",
+  "startup": ""
+}

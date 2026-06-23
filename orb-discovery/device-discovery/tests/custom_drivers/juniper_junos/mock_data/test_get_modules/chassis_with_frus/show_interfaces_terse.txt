@@ -1,0 +1,2 @@
+Interface               Admin Link Proto    Local                 Remote
+xe-0/0/0                up    up

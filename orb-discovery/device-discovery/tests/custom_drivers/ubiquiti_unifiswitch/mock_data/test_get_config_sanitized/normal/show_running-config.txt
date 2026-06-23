@@ -1,0 +1,11 @@
+!Current Configuration:
+!
+hostname unifi-sw-24
+!
+username admin password 7 080F70681D1C
+enable secret 5 $1$aBcD$secrethashXXXXXXXXXX
+snmp-server community public ro
+!
+interface vlan 1
+ ip address 192.168.0.1 255.255.255.0
+!

@@ -1,0 +1,47 @@
+{
+  "ether1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "2C:C8:1B:63:4A:23"
+  },
+  "ether2": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "2C:C8:1B:63:4A:24"
+  },
+  "ether3": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "2C:C8:1B:63:4A:25"
+  },
+  "ether4": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "2C:C8:1B:63:4A:26"
+  },
+  "bridge": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": "2C:C8:1B:63:4A:24"
+  }
+}

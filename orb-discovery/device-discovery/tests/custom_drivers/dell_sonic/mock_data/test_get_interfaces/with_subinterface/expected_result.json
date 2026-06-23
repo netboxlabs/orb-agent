@@ -1,0 +1,38 @@
+{
+  "Ethernet0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Trunk-uplink",
+    "last_flapped": -1.0,
+    "mtu": 9100,
+    "speed": 100000.0,
+    "mac_address": ""
+  },
+  "Management0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "OOB-Management",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "Ethernet0.100": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "DMZ subinterface",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 100000.0,
+    "mac_address": ""
+  },
+  "Ethernet0.200": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Voice subinterface",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 100000.0,
+    "mac_address": ""
+  }
+}

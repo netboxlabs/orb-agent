@@ -1,0 +1,9 @@
+  VPN-Instance Name and Index : wrap-vpn, 3
+  Route Distinguisher : 65000:300
+  Interfaces : Vlan-interface20, FortyGigE1/0/53,
+               FortyGigE1/0/54, GigabitEthernet1/0/7
+  Address-family IPv4:
+   Export VPN Targets : 65000:300
+   Import VPN Targets : 65000:300
+  Create time : 2024/03/01 10:00:00
+  Up time : 10 days, 0 hours, 0 minutes and 0 seconds

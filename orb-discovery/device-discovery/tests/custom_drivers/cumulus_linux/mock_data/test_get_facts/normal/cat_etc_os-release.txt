@@ -1,0 +1,10 @@
+NAME="Cumulus Linux"
+VERSION_ID=5.7.0
+VERSION="Cumulus Linux 5.7.0"
+PRETTY_NAME="Cumulus Linux 5.7.0"
+ID=cumulus-linux
+ID_LIKE=debian
+CPE_NAME=cpe:/o:nvidia:cumulus_linux:5.7.0
+HOME_URL="https://www.nvidia.com/en-us/networking/"
+SUPPORT_URL="https://www.nvidia.com/en-us/support/"
+BUG_REPORT_URL="https://www.nvidia.com/en-us/networking/"

@@ -1,0 +1,11 @@
+  VPN-Instance Name and Index : cust-a, 1
+  Route Distinguisher : 65000:200
+  Description : Customer A L3VPN
+  Export VPN Targets : 65000:200
+  Import VPN Targets : 65000:200
+  Interfaces : Vlan-interface100,
+               GigabitEthernet1/0/5
+  Create time : 2024/01/01 10:00:00
+  Up time : 100 days, 01 hours, 02 minutes and 03 seconds
+  Route & Tunnel selection time : 10 sec
+  Maximum Routes Limit : 500000

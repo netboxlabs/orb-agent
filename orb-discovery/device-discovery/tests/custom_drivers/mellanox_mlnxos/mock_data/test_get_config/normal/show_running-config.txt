@@ -1,0 +1,44 @@
+##
+## Running database "initial"
+## Generated at 2026/04/28 12:00:00 +0000
+## Hostname: sw-mlnx-leaf01
+## Product release: 3.6.5004
+##
+
+##
+## Network interface configuration
+##
+   no interface mgmt0 dhcp
+   interface mgmt0 ip address 192.168.1.10 /24
+
+##
+## Other IP configuration
+##
+   hostname sw-mlnx-leaf01
+
+##
+## VLANs
+##
+   vlan 10
+   vlan 20
+   interface vlan 10
+   interface vlan 20
+
+##
+## AAA / users
+##
+   username admin password 7 3$tabasco$alphapeach
+   enable secret 7 3$tabasco$alphapeach
+
+##
+## SNMP / AAA shared keys
+##
+   snmp-server community CommunityRO ro
+   snmp-server community CommunityRW rw
+   radius-server host 10.0.0.250 key MyRadiusKey
+   tacacs-server host 10.0.0.251 key MyTacacsKey
+
+##
+## Logging
+##
+   logging 10.0.0.10

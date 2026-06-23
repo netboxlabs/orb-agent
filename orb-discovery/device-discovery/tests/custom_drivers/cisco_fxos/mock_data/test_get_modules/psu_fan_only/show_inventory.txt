@@ -1,0 +1,8 @@
+NAME: "Chassis", DESCR: "Firepower 9300 Security Appliance"
+PID: FPR-9300-SUP      , VID: V01, SN: JMX2402CHA0
+
+NAME: "Power Supply 1", DESCR: "Firepower 9300 AC Power Supply"
+PID: FPR9K-PS-AC       , VID: V01, SN: JMX2402PS01
+
+NAME: "Fan 1", DESCR: "Firepower 9300 Fan Module"
+PID: FPR9K-FAN         , VID: V01, SN: JMX2402FN01

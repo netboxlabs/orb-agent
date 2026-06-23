@@ -1,0 +1,15 @@
+{
+  "hostname": "sonic-switch01",
+  "vendor": "Dell",
+  "model": "DellEMC-Z9332f-O32",
+  "os_version": "SONiC.4.1.1-Enterprise_Advanced",
+  "serial_number": "CN0GTXXX1234AB0001",
+  "uptime": 1308310.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "Ethernet0",
+    "Ethernet4",
+    "Ethernet8",
+    "Management0"
+  ]
+}

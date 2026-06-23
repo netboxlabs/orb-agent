@@ -1,0 +1,4 @@
+Interface      IPv6 address/mask                  Admin/Oper    Protocol
+-------------  ---------------------------------  ------------  ----------
+Ethernet0      fc00::1/126                        up/up         BGP
+Loopback0      fc00:1::1/128                      up/up

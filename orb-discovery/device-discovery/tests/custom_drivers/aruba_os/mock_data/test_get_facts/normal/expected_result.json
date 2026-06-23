@@ -1,0 +1,14 @@
+{
+  "hostname": "ARUBAOS-CTL01",
+  "vendor": "HPE",
+  "model": "7005",
+  "os_version": "8.8.0.2-8.8.0.2",
+  "serial_number": "CNFE1234567",
+  "uptime": -1.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "vlan 1",
+    "vlan 10",
+    "loopback 0"
+  ]
+}

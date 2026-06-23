@@ -1,0 +1,32 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "FPC 0",
+          "position": "0",
+          "module": {
+            "model": "750-068369",
+            "serial": "FPC0SERIAL",
+            "description": "MPC7E 3D MRATE-12xQSFPP-XGE-XLGE-CGE",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "Xcvr 0",
+                "position": "0",
+                "module": {
+                  "model": "SFP-10G-LR",
+                  "serial": "OPTSERIAL01",
+                  "description": "SFP+-10G-LR",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

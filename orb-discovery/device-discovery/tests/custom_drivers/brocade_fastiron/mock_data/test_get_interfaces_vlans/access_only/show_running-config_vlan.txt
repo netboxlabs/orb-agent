@@ -1,0 +1,3 @@
+vlan 1 name DEFAULT-VLAN by port
+ untagged ethe 1/1/1 ethe 1/1/2 ethe 1/1/3
+!

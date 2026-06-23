@@ -1,0 +1,23 @@
+# TiMOS-B-21.10.R2 both/x86_64 Nokia 7750 SR-12
+# Generated 2021-10-15T12:34:56.0Z by admin from console
+
+configure system
+    name "PE-1"
+    snmp
+        community "public" hash2 "c2VjcmV0" r version both
+    exit
+exit
+
+configure router
+    interface "system"
+        address 10.0.0.1/32
+    exit
+exit
+
+configure system security
+    password "MyS3cr3tP4ssword"
+    authentication-key "MyAuthKey123"
+    hmac-md5-key "MyHmacKey456"
+    des-key "MyDesKey789"
+    aes-key "MyAesKey012"
+exit

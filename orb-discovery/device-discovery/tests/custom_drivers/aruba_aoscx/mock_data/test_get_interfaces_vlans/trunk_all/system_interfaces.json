@@ -1,0 +1,9 @@
+{
+  "1/1/1": {
+    "name": "1/1/1",
+    "routing": false,
+    "vlan_mode": "trunk",
+    "vlan_tag": null,
+    "vlan_trunks": []
+  }
+}

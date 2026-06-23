@@ -1,0 +1,20 @@
+{
+  "GigabitEthernet1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "inside",
+    "last_flapped": -1.0,
+    "speed": 0,
+    "mtu": 1500,
+    "mac_address": "aabb.cc00.0100"
+  },
+  "GigabitEthernet1/2": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "outside",
+    "last_flapped": -1.0,
+    "speed": 0,
+    "mtu": 1500,
+    "mac_address": "aabb.cc00.0200"
+  }
+}

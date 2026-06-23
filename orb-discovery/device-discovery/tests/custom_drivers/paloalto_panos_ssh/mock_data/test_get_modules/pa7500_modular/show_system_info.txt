@@ -1,0 +1,5 @@
+hostname: pa7500-lab
+serial: 007902000001
+sw-version: 11.2.0
+model: PA-7500
+family: 7500

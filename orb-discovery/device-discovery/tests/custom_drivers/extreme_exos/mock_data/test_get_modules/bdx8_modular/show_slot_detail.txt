@@ -1,0 +1,41 @@
+MSM-A information:
+                State:                 Operational
+                Hw Module Type:        BDX-MM1
+                Serial number:         12345N-A001
+                Hardware revision:     1.0
+
+MSM-B information:
+                State:                 Operational
+                Hw Module Type:        BDX-MM1
+                Serial number:         12345N-A002
+                Hardware revision:     1.0
+
+Slot-1 information:
+                State:                 Operational
+                Hw Module Type:        BDXA-10G48X
+                Serial number:         12345N-S101
+                Hardware revision:     1.0
+
+Slot-2 information:
+                State:                 Operational
+                Hw Module Type:        BDXA-40G24X
+                Serial number:         12345N-S102
+                Hardware revision:     1.0
+
+Slot-3 information:
+                State:                 Operational
+                Hw Module Type:        BDXB-100G12X
+                Serial number:         12345N-S103
+                Hardware revision:     2.0
+
+FM-1 information:
+                State:                 Operational
+                Hw Module Type:        BDXA-FM-160T
+                Serial number:         12345N-F001
+                Hardware revision:     1.0
+
+FM-2 information:
+                State:                 Operational
+                Hw Module Type:        BDXA-FM-160T
+                Serial number:         12345N-F002
+                Hardware revision:     1.0

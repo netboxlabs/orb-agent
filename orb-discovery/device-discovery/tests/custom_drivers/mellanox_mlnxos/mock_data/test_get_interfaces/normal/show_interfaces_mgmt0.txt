@@ -1,0 +1,8 @@
+mgmt0:
+  Admin up           :  yes
+  Link up            :  yes
+  Description        :  Out-of-band management
+  HW address         :  7c:fe:90:53:b9:00
+  MTU                :  1500 bytes
+  Speed              :  1000Mb/s (auto)
+  Duplex             :  full (auto)

@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "210235XXXXY1A2B3C4D5",
+      "model": "S5720-32X-EI-AC",
+      "role": "active",
+      "priority": 200,
+      "mac": "00:E0:FC:12:34:56",
+      "state": "Master"
+    },
+    {
+      "id": 2,
+      "serial": "210235XXXXY9F8E7D6C5",
+      "model": "S5720-32X-EI-AC",
+      "role": "standby",
+      "priority": 100,
+      "mac": "00:E0:FC:12:78:90",
+      "state": "Standby"
+    }
+  ],
+  "domain": null
+}

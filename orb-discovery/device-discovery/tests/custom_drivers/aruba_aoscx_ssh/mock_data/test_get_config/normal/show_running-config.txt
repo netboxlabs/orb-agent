@@ -1,0 +1,12 @@
+Current configuration:
+!
+hostname aruba-cx-6300
+!
+vlan 1
+vlan 10
+    name MGMT
+!
+interface 1/1/1
+    no shutdown
+    description uplink-to-core
+!

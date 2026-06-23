@@ -1,0 +1,6 @@
+Interface                     IP-Address      OK  Method Status                Protocol
+TenGigabitEthernet 0/0        unassigned      NO  None   up                    down
+TenGigabitEthernet 0/1        unassigned      NO  None   up                    down
+TenGigabitEthernet 0/2        10.0.0.1/24     YES Manual up                    up
+TenGigabitEthernet 0/3        192.168.1.1/30  YES Manual up                    up
+ManagementEthernet 0/0        172.16.0.1      YES Manual up                    up

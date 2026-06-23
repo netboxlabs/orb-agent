@@ -1,0 +1,10 @@
+===============================================================================
+Ports on Slot 1
+===============================================================================
+Port          Admin Link Port    Cfg  Oper LAG/ Port Port Port   C/QS/S/XFP/
+Id            State      State   MTU  MTU  Bndl Mode Encp Type   MDIMDX
+-------------------------------------------------------------------------------
+1/1/1         Up    Yes  Up      9212 9212    - netw null xcme   GIGE-SX
+1/1/2         Up    Yes  Up      1518 1518    - accs dotq xcme   MDI GIGE-T
+1/1/3         Up    No   Down    1518 1518    - accs dotq xcme   GIGE-T
+===============================================================================

@@ -1,0 +1,7 @@
+port              vlan-id
+bridge            1 PVID Egress Untagged
+                  100
+                  200
+swp3              100 PVID Egress Untagged
+                  200
+swp4              100-102

@@ -1,0 +1,4 @@
+VLAN  Name                Status  Reason              Type    Interfaces
+------  ------------------  ------  ------------------  ------  -------------------
+1     DEFAULT_VLAN_1      up      ok                  static  1/1/1,1/1/2
+10    MGMT                up      ok                  static

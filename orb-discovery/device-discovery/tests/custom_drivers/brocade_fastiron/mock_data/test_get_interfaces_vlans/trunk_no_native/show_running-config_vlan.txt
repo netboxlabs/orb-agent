@@ -1,0 +1,6 @@
+vlan 100 name DATA by port
+ tagged ethe 1/1/5
+!
+vlan 200 name VOICE by port
+ tagged ethe 1/1/5
+!

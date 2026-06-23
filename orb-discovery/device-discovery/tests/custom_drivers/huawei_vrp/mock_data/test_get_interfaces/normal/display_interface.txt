@@ -1,0 +1,29 @@
+GigabitEthernet1/0/0 current state : UP
+Line protocol current state : UP
+Description:Uplink to Core
+Route Port,The Maximum Transmit Unit is 1500
+Internet Address is 10.0.0.1/30
+IP Sending Frames' Format is PKTFMT_ETHNT_2, Hardware address is 0c45-ba7d-83e0
+Speed : 1000, Loopback: NONE
+Duplex: FULL, Negotiation: ENABLE
+
+GigabitEthernet1/0/1 current state : UP
+Line protocol current state : DOWN
+Description:
+Route Port,The Maximum Transmit Unit is 1500
+IP Sending Frames' Format is PKTFMT_ETHNT_2, Hardware address is 0c45-ba7d-83e1
+Speed : 1000, Loopback: NONE
+Duplex: FULL, Negotiation: ENABLE
+
+LoopBack0 current state : UP
+Line protocol current state : UP(spoofing)
+Description:Mgmt Loopback
+Route Port,The Maximum Transmit Unit is 1500
+Internet Address is 192.168.0.1/32
+
+Vlanif100 current state : UP
+Line protocol current state : UP
+Description:Servers VLAN
+Route Port,The Maximum Transmit Unit is 1500
+IP Sending Frames' Format is PKTFMT_ETHNT_2, Hardware address is 0c45-ba7d-83f0
+Internet Address is 192.168.100.1/24

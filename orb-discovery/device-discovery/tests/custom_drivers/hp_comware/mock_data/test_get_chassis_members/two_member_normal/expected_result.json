@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "CN3H2G7800X",
+      "model": "H3C S5560X-30C-EI",
+      "role": "active",
+      "priority": 32,
+      "mac": "00:23:AA:BB:CC:DD",
+      "state": "Master"
+    },
+    {
+      "id": 2,
+      "serial": "CN3H2G7811Y",
+      "model": "H3C S5560X-30C-EI",
+      "role": "standby",
+      "priority": 32,
+      "mac": "00:23:AA:BB:CC:EF",
+      "state": "Standby"
+    }
+  ],
+  "domain": "30"
+}

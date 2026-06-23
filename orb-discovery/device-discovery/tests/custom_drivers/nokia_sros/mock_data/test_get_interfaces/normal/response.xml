@@ -1,0 +1,54 @@
+<data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <configure xmlns="urn:nokia.com:sros:ns:yang:sr:conf">
+        <port>
+            <port-id>1/1/1</port-id>
+            <admin-state>enable</admin-state>
+            <description>Uplink to Core</description>
+            <ethernet>
+                <mtu>9208</mtu>
+            </ethernet>
+        </port>
+        <router>
+            <router-name>Base</router-name>
+            <interface>
+                <interface-name>system</interface-name>
+                <admin-state>enable</admin-state>
+            </interface>
+            <interface>
+                <interface-name>to_RTR-01</interface-name>
+                <admin-state>enable</admin-state>
+                <port>1/1/1:0</port>
+            </interface>
+        </router>
+    </configure>
+    <state xmlns="urn:nokia.com:sros:ns:yang:sr:state">
+        <chassis>
+            <hardware-data>
+                <base-mac-address>a4:92:cb:aa:0e:69</base-mac-address>
+            </hardware-data>
+        </chassis>
+        <port>
+            <port-id>1/1/1</port-id>
+            <hardware-mac-address>d0:99:d5:d8:50:43</hardware-mac-address>
+            <oper-state>up</oper-state>
+            <ethernet>
+                <oper-speed>10000</oper-speed>
+            </ethernet>
+        </port>
+        <router>
+            <router-name>Base</router-name>
+            <interface>
+                <interface-name>system</interface-name>
+                <oper-ip-mtu>1500</oper-ip-mtu>
+                <oper-state>up</oper-state>
+                <last-oper-change>2020-04-13T15:53:27.0Z</last-oper-change>
+            </interface>
+            <interface>
+                <interface-name>to_RTR-01</interface-name>
+                <oper-ip-mtu>1500</oper-ip-mtu>
+                <oper-state>up</oper-state>
+                <last-oper-change>2021-06-01T08:00:00.0Z</last-oper-change>
+            </interface>
+        </router>
+    </state>
+</data>

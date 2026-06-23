@@ -1,0 +1,6 @@
+Flags: I=Management, E=External, O=OSPF, B=BGP, R=RIP, L=ISIS
+Interface              IP-Address         Vrf             Status     Protocol
+================================================================================
+Ethernet 0/1.100       10.0.100.1/24      default-vrf     up         up
+Ethernet 0/1.200       10.0.200.1/24      default-vrf     up         up
+Management 0           192.0.2.10/24      mgmt-vrf        up         up

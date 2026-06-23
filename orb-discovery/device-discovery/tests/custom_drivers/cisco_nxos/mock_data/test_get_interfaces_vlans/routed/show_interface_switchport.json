@@ -1,0 +1,8 @@
+{
+  "TABLE_interface": {
+    "ROW_interface": {
+      "interface": "Ethernet1/6",
+      "switchport": "Disabled"
+    }
+  }
+}

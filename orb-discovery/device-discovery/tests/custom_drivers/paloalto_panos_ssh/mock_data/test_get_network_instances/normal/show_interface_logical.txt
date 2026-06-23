@@ -1,0 +1,8 @@
+total 5 logical interfaces
+name                id      vsys zone             forwarding               tag    address
+------------------- ------- ---- ---------------- ------------------------ ------ ------------------
+ethernet1/1         16      1    untrust          vr:default               0      10.0.0.1/24
+ethernet1/2         17      1    trust            vr:cust-vr               0      192.168.1.1/24
+ethernet1/2.100     256     1    trust            vr:cust-vr               100    192.168.100.1/24
+ethernet1/3         18      1    N/A              0      N/A
+ethernet1/4         19      1    lr-zone          logical-router:adv-lr    0      10.99.0.1/24

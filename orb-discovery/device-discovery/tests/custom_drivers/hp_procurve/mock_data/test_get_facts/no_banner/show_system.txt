@@ -1,0 +1,23 @@
+ Status and Counters - General System Information
+
+  System Name        : procurve-lab-sw1
+  System Contact     : netops@example.com
+  System Location    : Main DC Rack A
+
+  MAC Age Time (sec) : 300
+
+  Time Zone          : 0
+  Daylight Time Rule : None
+
+  Software revision  : R.11.72         Base MAC Addr      : 001738-c7b200
+  ROM Version        : R.10.06         Serial Number      : SG80HC0086
+
+  Allow V1 Modules   : No
+
+  Up Time            : 5 days          Memory   - Total   : 32,768 KB
+  CPU Util (%)       : 9                           Free    : 21,000 KB
+
+  IP Mgmt  - Pkts Rx : 12,345          Packet   - Total   : 1998
+             Pkts Tx : 12,346          Buffers    Free    : 312
+                                                   Lowest  : 285
+                                                  Missed   : 0

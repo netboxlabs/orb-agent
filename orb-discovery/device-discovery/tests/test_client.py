@@ -1,0 +1,302 @@
+#!/usr/bin/env python
+# Copyright 2024 NetBox Labs Inc
+"""NetBox Labs - Client Unit Tests."""
+
+from unittest.mock import patch
+
+import pytest
+
+from device_discovery.client import Client
+from device_discovery.policy.models import Defaults
+from device_discovery.translate import translate_data
+
+
+@pytest.fixture
+def sample_data():
+    """Sample data for testing ingestion."""
+    return {
+        "device": {
+            "hostname": "router1",
+            "model": "ISR4451",
+            "vendor": "Cisco",
+            "serial_number": "123456789",
+            "site": "New York",
+            "driver": "ios",
+        },
+        "interface": {
+            "GigabitEthernet0/0": {
+                "is_enabled": True,
+                "mtu": 1500,
+                "mac_address": "00:1C:58:29:4A:71",
+                "speed": 1000,
+                "description": "Uplink Interface",
+            }
+        },
+        "interface_ip": {
+            "GigabitEthernet0/0": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+        },
+        "vlan": {
+            1: {
+                "name": "default",
+                "interfaces": ["GigabitEthernet0/0/1", "GigabitEthernet0/0/2"],
+            },
+            2: {"name": "vlan2", "interfaces": []},
+        },
+        "driver": "ios",
+        "defaults": Defaults(
+            site="New York",
+            role=None,
+            tags=None,
+            if_type="other",
+            location="local",
+            tenant="test",
+            device=None,
+            interface=None,
+            ipaddress=None,
+            prefix=None,
+            vlan=None,
+        ),
+    }
+
+
+@pytest.fixture
+def sample_metadata():
+    """Sample metadata for testing ingestion."""
+    return {"policy_name": "test-policy", "hostname": "router1"}
+
+
+@pytest.fixture
+def mock_version_semver():
+    """Mock the version_semver function."""
+    with patch("device_discovery.client.version_semver", return_value="0.0.0") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_diode_client_class():
+    """Mock the DiodeClient class."""
+    with patch("device_discovery.client.DiodeClient") as mock:
+        yield mock
+
+
+@pytest.fixture
+def mock_diode_otlp_client_class():
+    """Mock the DiodeOTLPClient class."""
+    with patch("device_discovery.client.DiodeOTLPClient") as mock:
+        yield mock
+
+
+def test_init_client(mock_diode_client_class, mock_version_semver):
+    """Test the initialization of the Diode client."""
+    client = Client()
+    client.init_client(
+        prefix="prefix",
+        target="https://example.com",
+        client_id="abc",
+        client_secret="def",
+    )
+
+    mock_diode_client_class.assert_called_once_with(
+        target="https://example.com",
+        app_name="prefix/device-discovery",
+        app_version=mock_version_semver(),
+        client_id="abc",
+        client_secret="def",
+    )
+
+
+def test_ingest_success(mock_diode_client_class, sample_data, sample_metadata):
+    """Test successful data ingestion."""
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = []
+    metadata = sample_metadata
+    with patch(
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
+    ) as mock_translate_data:
+        client.ingest(metadata, sample_data)
+        mock_translate_data.assert_called_once_with(sample_data)
+        mock_diode_instance.ingest.assert_called_once_with(
+            entities=mock_translate_data.return_value,
+            metadata=metadata,
+        )
+
+
+def test_ingest_includes_run_id_in_request_and_entities(
+    mock_diode_client_class, sample_data, sample_metadata
+):
+    """run_id is added to ingest metadata and each entity's metadata Struct."""
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = []
+    with patch(
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
+    ):
+        client.ingest(sample_metadata, sample_data, run_id="run-xyz")
+    kwargs = mock_diode_instance.ingest.call_args[1]
+    assert kwargs["metadata"]["run_id"] == "run-xyz"
+    assert kwargs["entities"][0].device.metadata["run_id"] == "run-xyz"
+
+
+def test_ingest_failure(mock_diode_client_class, sample_data, sample_metadata):
+    """Test data ingestion with errors raises RuntimeError."""
+    client = Client()
+    client.init_client(
+        prefix="prefix",
+        target="https://example.com",
+        client_id="abc",
+        client_secret="def",
+    )
+
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = ["Error1", "Error2"]
+    metadata = sample_metadata
+
+    # Ingestion should raise RuntimeError on failure
+    with pytest.raises(RuntimeError, match="Ingestion failed for router1"):
+        with patch(
+            "device_discovery.client.translate_data",
+            return_value=translate_data(sample_data),
+        ):
+            client.ingest(metadata, sample_data)
+
+
+def test_ingest_without_initialization(sample_metadata):
+    """Test ingestion without client initialization raises ValueError."""
+    Client._instance = None  # Reset the Client singleton instance
+    client = Client()
+    with pytest.raises(ValueError, match="Diode client not initialized"):
+        client.ingest(sample_metadata, {})
+
+
+def test_client_dry_run(tmp_path, sample_data):
+    """Ensure dry-run initializes DiodeDryRunClient."""
+    client = Client()
+    client.init_client(
+        prefix="prefix",
+        dry_run=True,
+        dry_run_output_dir=tmp_path,
+    )
+    hostname = sample_data["device"]["hostname"]
+    metadata = {"policy_name": "dry-run-policy", "hostname": hostname}
+    client.ingest(metadata, sample_data)
+    files = list(tmp_path.glob("prefix_device-discovery*.json"))
+
+    assert len(files) == 1
+    for file in files:
+        with open(file) as f:
+            data = f.read()
+            assert sample_data["device"]["hostname"] in data
+            assert sample_data["interface"]["GigabitEthernet0/0"]["mac_address"] in data
+
+
+def test_client_dry_run_stdout(capsys, sample_data):
+    """Ensure dry-run initializes with None output dir when not provided."""
+    client = Client()
+    client.init_client(
+        prefix="prefix",
+        dry_run=True,
+    )
+
+    hostname = sample_data["device"]["hostname"]
+    metadata = {"policy_name": "dry-run-policy", "hostname": hostname}
+    client.ingest(metadata, sample_data)
+
+    captured = capsys.readouterr()
+    assert sample_data["device"]["hostname"] in captured.out
+    assert sample_data["interface"]["GigabitEthernet0/0"]["mac_address"] in captured.out
+
+
+def test_init_client_uses_otlp_when_credentials_missing(
+    mock_diode_client_class, mock_diode_otlp_client_class, mock_version_semver
+):
+    """Ensure init_client falls back to DiodeOTLPClient when credentials are not provided."""
+    client = Client()
+    client.init_client(prefix="prefix", target="https://example.com")
+
+    assert not mock_diode_client_class.called
+    mock_diode_otlp_client_class.assert_called_once_with(
+        target="https://example.com",
+        app_name="prefix/device-discovery",
+        app_version=mock_version_semver(),
+    )
+
+
+def test_ingest_returns_entity_count(mock_diode_client_class, sample_data, sample_metadata):
+    """ingest() returns the number of entities ingested."""
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = []
+
+    with patch(
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
+    ):
+        count = client.ingest(sample_metadata, sample_data)
+
+    expected = len(list(translate_data(sample_data)))
+    assert count == expected
+
+
+def test_ingest_prunes_nested_refs_after_run_id_annotation(
+    mock_diode_client_class, sample_data, sample_metadata
+):
+    """
+    Verify that after annotation + prune, the top-level Device keeps run_id metadata and full payload.
+
+    Nested Device refs on Interface entities must be matcher-only stubs with no rich fields
+    and no annotation metadata (run_id). The stub may still carry source_match (e.g.,
+    netbox_id) — that is a matcher field and is intentionally preserved.
+    """
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_instance = mock_diode_client_class.return_value
+    mock_diode_instance.ingest.return_value.errors = []
+
+    with patch(
+        "device_discovery.client.translate_data",
+        return_value=translate_data(sample_data),
+    ):
+        client.ingest(sample_metadata, sample_data, run_id="run-abc")
+
+    kwargs = mock_diode_instance.ingest.call_args[1]
+    entities = kwargs["entities"]
+    assert entities, "expected non-empty entities passed to diode_client.ingest"
+
+    # Find the top-level Device.
+    device_entities = [e for e in entities if e.HasField("device")]
+    assert len(device_entities) == 1
+    rich_device = device_entities[0].device
+    assert rich_device.name == "router1"
+    # Rich top-level keeps full payload — serial set in sample_data.
+    assert rich_device.serial == "123456789"
+    # run_id metadata applied to rich Device.
+    assert rich_device.metadata["run_id"] == "run-abc"
+
+    # Find an Interface entity (sample_data may or may not include one).
+    iface_entities = [e for e in entities if e.HasField("interface")]
+    if iface_entities:
+        iface = iface_entities[0].interface
+        # Nested Device on Interface is a stub: no serial, no metadata.
+        assert iface.HasField("device")
+        assert iface.device.name == "router1"
+        assert iface.device.serial == "", (
+            "nested Device must be stubbed — no rich fields"
+        )
+        assert "run_id" not in iface.device.metadata, (
+            "nested Device stub must not carry annotation metadata"
+        )

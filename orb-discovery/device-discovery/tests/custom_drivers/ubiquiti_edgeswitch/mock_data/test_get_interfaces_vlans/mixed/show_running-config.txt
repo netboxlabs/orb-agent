@@ -1,0 +1,21 @@
+!Current Configuration:
+!
+hostname edgeswitch-24
+!
+interface 0/1
+ vlan pvid 100
+ vlan participation include 100
+!
+interface 0/2
+ vlan participation include 1,10,20
+ vlan tagging 10,20
+!
+interface 0/3
+ vlan pvid 100
+ vlan participation include 100,200,300
+ vlan tagging 200,300
+!
+interface 0/4
+ routing
+ ip address 10.0.0.1 255.255.255.0
+!

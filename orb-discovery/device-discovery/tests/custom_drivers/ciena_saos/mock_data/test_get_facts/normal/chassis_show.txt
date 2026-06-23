@@ -1,0 +1,21 @@
++- CHASSIS DEVICE ID -----------------------------------------------+
+| Host Name            | saos-lab-7200                               |
+| Vendor Name          | Ciena Corporation                           |
+| Product ID           | 7200 28C+S+6T                               |
+| Serial Number        | VS7200P0052                                 |
+| Hardware Version     | 100-0234-900 Rev B                          |
+| Platform             | 7200                                        |
+| Management IP        | 0.0.0.0                                     |
++------------------------------------------------------------------+
+
++- TEMPERATURE THRESHOLD -+
+| Low        | High       |
++------------+------------+
+| -40 C      | 65  C      |
++------------+------------+
+
++--- TEMPERATURE STATUS --+
+| Current | Low   | High  |
++---------+-------+-------+
+| 19  C   | 17  C | 20  C |
++---------+-------+-------+

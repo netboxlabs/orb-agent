@@ -1,0 +1,10 @@
+{
+  "1": {
+    "name": "DEFAULT_VLAN",
+    "interfaces": []
+  },
+  "10": {
+    "name": "VLAN10",
+    "interfaces": []
+  }
+}

@@ -1,0 +1,2 @@
+Interface     Mode    Untagged    Tagged
+Ethernet0     trunk   10          100,200,300

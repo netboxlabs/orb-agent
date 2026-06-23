@@ -1,0 +1,2 @@
+T=08:00:00 GMT+00:00, eta 0m 0s remaining
+No stack

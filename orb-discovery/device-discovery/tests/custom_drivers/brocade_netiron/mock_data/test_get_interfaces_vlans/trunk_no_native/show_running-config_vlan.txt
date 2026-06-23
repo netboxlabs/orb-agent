@@ -1,0 +1,8 @@
+no spanning-tree
+!
+vlan 100 name UPLINK-A
+ tagged ethe 2/1
+!
+vlan 200 name UPLINK-B
+ tagged ethe 2/1
+!

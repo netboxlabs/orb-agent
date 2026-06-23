@@ -1,0 +1,9 @@
+H3C Comware Software, Version 7.1.075, Release 7178P05
+Copyright (c) 2004-2024 New H3C Technologies Co., Ltd. All rights reserved.
+H3C S12508X-AF uptime is 0 weeks, 1 day, 4 hours, 3 minutes
+Last reboot reason: User reboot
+
+System image file is flash:/s12500x-cmw710-system-r7178p05.bin
+Slot 0 (M):
+   Uptime is 0 weeks, 1 day, 4 hours, 3 minutes
+   LSXM2MPUD0 uptime is 0 weeks, 1 day, 4 hours, 3 minutes

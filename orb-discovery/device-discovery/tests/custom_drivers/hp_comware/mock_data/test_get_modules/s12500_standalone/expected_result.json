@@ -1,0 +1,86 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "0",
+          "position": "0",
+          "module": {
+            "model": "LSXM2MPUD0",
+            "serial": "210231A2B3C00001",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "LSXM2MPUD0",
+            "serial": "210231A2B3C00002",
+            "description": "",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "2",
+          "position": "2",
+          "module": {
+            "model": "LSXS1FAB180A",
+            "serial": "210231A2B3C00003",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "3",
+          "position": "3",
+          "module": {
+            "model": "LSXS1FAB180A",
+            "serial": "210231A2B3C00004",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "4",
+          "position": "4",
+          "module": {
+            "model": "LSXM2QGS56QHB1",
+            "serial": "210231A2B3C00005",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "5",
+          "position": "5",
+          "module": {
+            "model": "LSXM2QGS56QHB1",
+            "serial": "210231A2B3C00006",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "6",
+          "position": "6",
+          "module": {
+            "model": "LSXM2FX48LEB1",
+            "serial": "210231A2B3C00007",
+            "description": "",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

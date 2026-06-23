@@ -1,0 +1,17 @@
+Product Version......................  8.10.185.0
+Bootloader Version...................  1.0.20
+Field Recovery Image Version.........  8.1.133.0
+Firmware Version.....................  FPGA 1.3, Env 1.8, USB console 1.27
+Build Type...........................  DATA + WPS
+System Name..........................  WLC-TEST
+System Location......................  Server Room
+System Contact.......................  Network Admin
+IP Address...........................  192.168.1.10
+Last Reset...........................  Power On
+System Up Time.......................  0 days 2 hrs 30 mins 20 secs
+System Timezone Location.............  (UTC -5:00) US/Eastern
+Configured Country...................  US - United States
+Number of WLANs......................  2
+Number of Active Clients.............  0
+Burned-in MAC Address................  aa:bb:cc:dd:ee:ff
+Maximum number of APs supported......  75

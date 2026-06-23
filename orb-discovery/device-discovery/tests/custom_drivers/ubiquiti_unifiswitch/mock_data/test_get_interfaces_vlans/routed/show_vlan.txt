@@ -1,0 +1,3 @@
+VLAN ID  VLAN Name                    VLAN Type
+-------  ---------------------------  --------
+1        Default                      Default

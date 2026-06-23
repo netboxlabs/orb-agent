@@ -1,0 +1,32 @@
+Ethernet1/1 is up
+  Hardware: Ethernet, address: 70ea.1a7b.e000 (bia 70ea.1a7b.e000)
+  Description: FPR-outside
+  Internet address is 10.0.1.1/24
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  Port mode is routed
+  full-duplex, 10 Gb/s, media type is 10G SFP-SR
+  Beacon is turned off
+  Input flow-control is off, output flow-control is off
+  Last link flapped 5week(s) 5day(s)
+
+Ethernet1/2 is down (Link not connected)
+  Hardware: Ethernet, address: 70ea.1a7b.e001 (bia 70ea.1a7b.e001)
+  Internet address is 10.0.2.1/24
+  MTU 9216 bytes,  BW 10000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  Port mode is routed
+  Beacon is turned off
+  Input flow-control is off, output flow-control is off
+
+mgmt0 is up
+  Hardware: Ethernet, address: 70ea.1a7b.e002 (bia 70ea.1a7b.e002)
+  MTU 1500 bytes,  BW 1000000 Kbit, DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA
+  full-duplex, 1 Gb/s, media type is RJ45
+  Beacon is turned off
+  Input flow-control is off, output flow-control is off
+  Last link flapped 5week(s) 5day(s)

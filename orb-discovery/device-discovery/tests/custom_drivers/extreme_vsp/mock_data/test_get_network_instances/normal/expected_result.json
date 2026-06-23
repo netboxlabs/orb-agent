@@ -1,0 +1,37 @@
+{
+  "GlobalRouter": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "GlobalRouter",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "MgmtRouter": {
+    "interfaces": {
+      "interface": {
+        "Mgmt1": {}
+      }
+    },
+    "name": "MgmtRouter",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "vrf-red": {
+    "interfaces": {
+      "interface": {
+        "Vlan200": {},
+        "Vlan201": {}
+      }
+    },
+    "name": "vrf-red",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

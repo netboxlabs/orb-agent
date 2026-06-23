@@ -1,0 +1,194 @@
+#!/usr/bin/env python
+# Copyright 2024 NetBox Labs Inc
+"""Discover the correct NAPALM Driver."""
+
+import inspect
+import logging
+from importlib import import_module
+from importlib.metadata import packages_distributions
+from pkgutil import walk_packages
+from typing import Any
+
+from napalm import get_network_driver
+from napalm.base.base import NetworkDriver
+
+_DRIVER_MISMATCH_MARKERS = ["%", "Invalid input", "^"]
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def walk_napalm_packages(module: Any, prefix: str, packages: list[str]) -> list[str]:
+    """
+    Walks a directory tree looking for napalm network driver classes.
+
+    This function walks the directory tree rooted at the given module's path,
+    looking for submodules that contain napalm network driver classes.
+
+    Args:
+    ----
+        module (Any): The module to start walking from.
+        prefix (str): The prefix to prepend to package names.
+        packages (list[str]): A list to store the found package names.
+
+    Returns:
+    -------
+        list[str]: A list of package names that contain napalm network driver classes.
+
+    """
+    for package in walk_packages(module.__path__, module.__name__ + "."):
+        try:
+            submodule = import_module(package.name)
+            for _, obj in inspect.getmembers(submodule):
+                if (
+                    inspect.isclass(obj)
+                    and issubclass(obj, NetworkDriver)
+                    and obj is not NetworkDriver
+                ):
+                    packages.append(package.name[len(prefix) :])
+                    break
+        except Exception as e:
+            logger.error(f"Error importing module {package.name}: {str(e)}")
+    return packages
+
+
+def napalm_driver_list() -> list[str]:
+    """
+    List the available NAPALM drivers.
+
+    This function scans the installed Python modules to identify NAPALM drivers,
+    appending their names (with the 'napalm_' prefix removed) to a list of known drivers.
+
+    Returns
+    -------
+        List[str]: A list of strings representing the names of available NAPALM drivers.
+                   The list includes some predefined driver names and dynamically
+                   discovered driver names from the installed packages.
+
+    """
+    napalm_packages = ["eos", "ios", "iosxr", "iosxr_netconf", "junos", "nxos", "nxos_ssh"]
+    prefix = "napalm_"
+    for dist in packages_distributions():
+        if dist.startswith(prefix):
+            package_found = False
+            try:
+                module = import_module(dist)
+                for _, obj in inspect.getmembers(module):
+                    if inspect.isclass(obj) and issubclass(obj, NetworkDriver):
+                        napalm_packages.append(dist[len(prefix) :])
+                        package_found = True
+                        break
+                if package_found:
+                    continue
+                napalm_packages = walk_napalm_packages(module, prefix, napalm_packages)
+            except Exception as e:
+                logger.error(f"Error importing module {dist}: {str(e)}")
+    return napalm_packages
+
+
+def custom_napalm_driver_list() -> list[str]:
+    """
+    List the available custom NAPALM drivers from the custom_napalm package.
+
+    Returns
+    -------
+        List[str]: Driver short-names (e.g. 'panos', 'huawei_vrp') found in custom_napalm.
+
+    """
+    try:
+        module = import_module("custom_napalm")
+        return walk_napalm_packages(module, "custom_napalm.", [])
+    except Exception as e:
+        logger.error(f"Error loading custom_napalm drivers: {str(e)}")
+        return []
+
+
+_default_discovery_drivers = napalm_driver_list()
+# Dedup the union so native names that also have a custom_napalm override
+# (e.g. eos, ios, nxos) appear once. NAPALM's get_network_driver() looks
+# up custom_napalm.<name> before napalm.<name>, so the custom override is
+# always selected at runtime regardless of this list's order — the dedup
+# is cosmetic but keeps the /api/v1/drivers payload clean.
+supported_drivers = list(
+    dict.fromkeys(_default_discovery_drivers + custom_napalm_driver_list()),
+)
+
+
+def set_napalm_logs_level(level: int):
+    """
+    Set the logging level for NAPALM and related libraries.
+
+    Args:
+    ----
+        level (int): The logging level to set. Typically, this can be one of the
+                     standard logging levels (e.g., logging.DEBUG, logging.INFO,
+                     logging.WARNING, logging.ERROR, logging.CRITICAL).
+
+    This function adjusts the logging levels for the "napalm", "ncclient","paramiko"
+    and "pyeapi" loggers to the specified level, which is useful for controlling the
+    verbosity of log output from these libraries.
+
+    """
+    logging.getLogger("napalm").setLevel(level)
+    logging.getLogger("ncclient").setLevel(level)
+    logging.getLogger("paramiko").setLevel(level)
+    logging.getLogger("pyeapi").setLevel(level)
+
+
+def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str | None:
+    """
+    Discover the correct NAPALM driver for the given device information.
+
+    Args:
+    ----
+        info (dict): A dictionary containing device connection information.
+            Expected keys are 'hostname', 'username', 'password', 'timeout',
+            and 'optional_args'.
+        drivers (list[str] | None): An optional list of driver names to try.
+            When provided, only those drivers are attempted. When None,
+            only standard NAPALM drivers are tried (custom_napalm drivers
+            are excluded from auto-discovery unless explicitly specified).
+
+    Returns:
+    -------
+        str: The name of the driver that successfully connects and identifies
+             the device. Returns an empty string if no suitable driver is found.
+
+    """
+    set_napalm_logs_level(logging.CRITICAL)
+    driver_list = drivers if drivers is not None else _default_discovery_drivers
+    for driver in driver_list:
+        try:
+            logger.info(f"Hostname {info.hostname}: Trying '{driver}' driver")
+            np_driver = get_network_driver(driver)
+            with np_driver(
+                info.hostname,
+                info.username,
+                info.password,
+                info.timeout,
+                info.optional_args,
+            ) as device:
+                device_info = device.get_facts()
+                if device_info.get("serial_number", "Unknown").lower() == "unknown":
+                    logger.info(
+                        "Hostname %s: '%s' driver did not work", info.hostname, driver
+                    )
+                    continue
+                if any(
+                    marker in field
+                    for marker in _DRIVER_MISMATCH_MARKERS
+                    for field in (device_info.get("hostname", ""), device_info.get("fqdn", ""))
+                ):
+                    logger.info(
+                        "Hostname %s: '%s' driver did not work", info.hostname, driver
+                    )
+                    continue
+                set_napalm_logs_level(logging.INFO)
+                return driver
+        except Exception as e:
+            logger.info(
+                "Hostname %s: '%s' driver did not work. Exception: %s", info.hostname, driver, str(e)
+            )
+    set_napalm_logs_level(logging.INFO)
+    return None

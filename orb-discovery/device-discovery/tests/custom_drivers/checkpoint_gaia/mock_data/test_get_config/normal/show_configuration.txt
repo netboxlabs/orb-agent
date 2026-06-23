@@ -1,0 +1,5 @@
+# Configuration of gw-corp-01
+set hostname gw-corp-01
+set interface Mgmt ipv4-address 2.2.2.2 mask-length 29
+set interface Sync ipv4-address 192.168.0.1 mask-length 30
+set ntp server primary 10.0.0.1 version 4

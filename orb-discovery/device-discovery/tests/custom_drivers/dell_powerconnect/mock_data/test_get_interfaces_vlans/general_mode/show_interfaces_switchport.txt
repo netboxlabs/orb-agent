@@ -1,0 +1,13 @@
+Port  : gi1/0/3
+Port Mode: General
+Gvrp Status: disabled
+Ingress Filtering: true
+Acceptable Frame Type: All
+
+Port gi1/0/3 is member in:
+Vlan       Name             Egress rule    Type
+----     -------------    -----------    ----
+10       MGMT             Untagged       Static
+20       VOICE            Tagged         Static
+30       DATA             Tagged         Static
+

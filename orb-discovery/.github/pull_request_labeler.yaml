@@ -1,0 +1,22 @@
+github-actions:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/.github/workflows/*'
+          - '**/.github/workflows/**/*'
+          - '**/.github/dependabot.yaml'
+          - '**/.github/pull_request_labeler.yaml'
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '**/pyproject.toml'
+          - '**/poetry.lock'
+          - '**/requirements.txt'
+
+markdown:
+  - changed-files:
+      - any-glob-to-any-file: '**/*.md'
+
+python:
+  - changed-files:
+      - any-glob-to-any-file: '**/*.py'

@@ -1,0 +1,23 @@
+{
+  "Ethernet1/1": {
+    "ipv4": {
+      "10.0.1.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Ethernet1/2": {
+    "ipv4": {
+      "10.0.2.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "mgmt0": {
+    "ipv4": {
+      "10.10.10.100": {
+        "prefix_length": 24
+      }
+    }
+  }
+}

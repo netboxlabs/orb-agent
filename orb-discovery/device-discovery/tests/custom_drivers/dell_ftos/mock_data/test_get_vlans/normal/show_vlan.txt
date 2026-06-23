@@ -1,0 +1,10 @@
+Codes: * - Default VLAN, G - GVRP VLANs, P - Primary, C - Community, I - Isolated
+Q: U - Untagged, T - Tagged
+   x - Dot1x untagged, X - Dot1x tagged
+   G - GVRP tagged, M - Vlan-stack, H - Hyperpull tagged
+
+    NUM    Status    Description                     Q Ports
+*   1      Active                                    U Gi 0/48
+                                                     U Te 0/0-1
+  100      Active    mgmt                            T Te 0/2
+                                                     U Ma 0/0

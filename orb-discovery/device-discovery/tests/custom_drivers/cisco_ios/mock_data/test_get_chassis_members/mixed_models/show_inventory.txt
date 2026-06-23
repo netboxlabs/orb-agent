@@ -1,0 +1,5 @@
+NAME: "Switch 1", DESCR: "Cisco Catalyst 3850-12XS Switch"
+PID: WS-C3850-12XS    , VID: V03 , SN: FOC2401L0AB
+
+NAME: "Switch 2", DESCR: "Cisco Catalyst 3850-24XS Switch"
+PID: WS-C3850-24XS    , VID: V03 , SN: FOC2401L0CD

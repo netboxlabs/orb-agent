@@ -1,0 +1,7 @@
+sysname CE-OLT-01
+vlan 100 smart
+vlan 200 smart
+snmp-agent
+snmp-agent community read public
+interface vlanif100
+ ip address 192.168.1.100 255.255.255.0

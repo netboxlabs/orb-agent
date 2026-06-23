@@ -1,0 +1,7 @@
+{
+  "Ethernet1/7": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 100
+  }
+}

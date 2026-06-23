@@ -1,0 +1,13 @@
+vlan 1 name DEFAULT-VLAN by port
+ untagged ethe 1/1/3 ethe 1/1/4
+!
+vlan 10 name MGMT by port
+ untagged ethe 1/1/1
+!
+vlan 20 name DATA by port
+ tagged ethe 1/1/1 ethe 1/1/5
+ untagged ethe 1/1/2
+!
+vlan 30 name VOICE by port
+ tagged ethe 1/1/1 ethe 1/1/5
+!

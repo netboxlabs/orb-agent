@@ -1,0 +1,32 @@
+
+ version 7.1.070, Release 3506P03
+ sysname comware-sw01
+#
+ snmp-agent community read public
+ snmp-agent community write private
+ snmp-agent community read cipher $c$3$SnmpCipherSecret
+#
+interface GigabitEthernet1/0/1
+ port link-type access
+ port access vlan 1
+#
+interface Vlan-interface10
+ ip address 192.168.10.1 255.255.255.0
+#
+ospf 1
+ area 0.0.0.0
+  authentication-key cipher $c$3$AuthKeySecret
+#
+ local-user admin class manage
+  password cipher $c$3$VgT/PmMXFbvnG3VH
+  service-type telnet ssh
+#
+ ike keychain site-a
+  pre-shared-key cipher $c$3$AbCdEfGhIjKlMnOp
+#
+ snmp-agent community read simple ReadComm
+#
+radius scheme radius1
+ key cipher $c$3$RadiusKeySecret
+#
+return

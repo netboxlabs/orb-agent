@@ -1,0 +1,5 @@
+{
+  "1": {"name": "Default", "interfaces": ["0/1", "0/2", "0/3"]},
+  "100": {"name": "Management", "interfaces": ["0/1", "0/2"]},
+  "200": {"name": "Voice", "interfaces": ["0/2"]}
+}

@@ -1,0 +1,37 @@
+{
+  "cust-a": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet1/0/5": {},
+        "Vlan-interface100": {}
+      }
+    },
+    "name": "cust-a",
+    "state": {
+      "route_distinguisher": "65000:200"
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "mgmt-vpn": {
+    "interfaces": {
+      "interface": {
+        "M-GigabitEthernet0/0/0": {}
+      }
+    },
+    "name": "mgmt-vpn",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

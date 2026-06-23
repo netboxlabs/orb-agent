@@ -1,0 +1,21 @@
+Gathering information...
+
+Name: gi1
+Switchport: enable
+Administrative Mode: trunk
+Operational Mode: trunk
+Access Mode VLAN: 1
+Access Multicast TV VLAN: none
+Trunking Native Mode VLAN: 1
+Trunking VLANs Enabled: 10,20,30
+Protected: Disabled
+
+Name: gi2
+Switchport: enable
+Administrative Mode: access
+Operational Mode: access
+Access Mode VLAN: 100
+Access Multicast TV VLAN: none
+Trunking Native Mode VLAN: 1
+Trunking VLANs Enabled: 1
+Protected: Disabled

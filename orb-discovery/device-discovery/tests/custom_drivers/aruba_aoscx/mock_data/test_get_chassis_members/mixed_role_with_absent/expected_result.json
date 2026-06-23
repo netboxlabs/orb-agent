@@ -1,0 +1,32 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "TW03BBB0001",
+      "model": "6300M-48G",
+      "role": "active",
+      "priority": 200,
+      "mac": "94:f1:28:33:00:00",
+      "state": "up"
+    },
+    {
+      "id": 2,
+      "serial": "TW03BBB0002",
+      "model": "6300M-48G",
+      "role": "standby",
+      "priority": 128,
+      "mac": "94:f1:28:33:00:80",
+      "state": "up"
+    },
+    {
+      "id": 4,
+      "serial": "TW03BBB0004",
+      "model": "6300M-48G",
+      "role": "member",
+      "priority": 64,
+      "mac": "94:f1:28:33:01:80",
+      "state": "up"
+    }
+  ],
+  "domain": null
+}

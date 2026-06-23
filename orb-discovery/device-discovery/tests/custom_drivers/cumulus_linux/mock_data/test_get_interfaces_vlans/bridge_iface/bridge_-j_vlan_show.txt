@@ -1,0 +1,1 @@
+[{"ifname": "bridge", "vlans": [{"vlan": 1, "flags": ["PVID", "Egress Untagged"]}]}]

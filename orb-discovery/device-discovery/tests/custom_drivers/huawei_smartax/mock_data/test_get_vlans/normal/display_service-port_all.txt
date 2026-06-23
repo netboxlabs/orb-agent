@@ -1,0 +1,8 @@
+Switch-Oriented Flow List
+---
+INDEX  VLAN VLAN  PORT   F/ S/ P  VPI VCI  FLOW FLOW  RX        TX        STATE
+       ID   ATTR  TYPE             TYPE PARA
+---
+1 100 smart gpon 0/1/0 1 1 gem 100 up up up
+2 100 smart gpon 0/1/0 3 2 gem 100 up up up
+3 200 smart gpon 0/1/1 2 1 gem 200 up up up

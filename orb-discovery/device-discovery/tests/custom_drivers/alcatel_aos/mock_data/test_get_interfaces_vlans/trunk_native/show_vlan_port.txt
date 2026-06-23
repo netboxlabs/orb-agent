@@ -1,0 +1,5 @@
+ vlan   port    type    status
+-------+-------+-------+-------
+  10   1/1/1  untagged forward
+  20   1/1/1   qtagged forward
+  30   1/1/1   qtagged forward

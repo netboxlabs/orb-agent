@@ -1,0 +1,5 @@
+{
+  "running": "hostname \"ARUBAOSS-SW01\"\n\nsnmp-server community <redacted>\nradius-server host 10.0.0.5 key <redacted>\ntacacs-server host 10.0.0.6 key <redacted>\npassword manager <redacted>\npassword operator <redacted>",
+  "candidate": "",
+  "startup": "hostname \"ARUBAOSS-SW01\""
+}

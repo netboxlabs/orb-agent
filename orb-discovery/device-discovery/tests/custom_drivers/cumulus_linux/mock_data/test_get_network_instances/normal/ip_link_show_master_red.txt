@@ -1,0 +1,4 @@
+3: swp1: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9216 qdisc pfifo_fast master red state UP mode DEFAULT group default qlen 1000
+    link/ether 44:38:39:00:00:01 brd ff:ff:ff:ff:ff:ff
+4: swp2.100@swp2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 9216 qdisc noqueue master red state UP mode DEFAULT group default qlen 1000
+    link/ether 44:38:39:00:00:02 brd ff:ff:ff:ff:ff:ff

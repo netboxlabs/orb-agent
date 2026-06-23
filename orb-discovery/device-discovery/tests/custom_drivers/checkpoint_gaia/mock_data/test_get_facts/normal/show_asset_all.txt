@@ -1,0 +1,11 @@
+Platform: PH-20-00
+Model: Check Point 15400
+Serial Number: LR000000000000
+CPU Model: Intel(R) Xeon(R) CPU E5-2630 v3
+CPU Frequency: 2399.860 Mhz
+Number of Cores: 16
+CPU Hyperthreading: Enabled
+Number of disks: 2
+Total Memory: 24576 MB
+LOM Status: Installed
+LOM Firmware Revision: 3.43

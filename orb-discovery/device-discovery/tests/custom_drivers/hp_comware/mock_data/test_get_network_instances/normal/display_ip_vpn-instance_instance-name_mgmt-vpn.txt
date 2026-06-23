@@ -1,0 +1,4 @@
+  VPN-Instance Name and Index : mgmt-vpn, 2
+  Interfaces : M-GigabitEthernet0/0/0
+  Create time : 2024/01/02 10:00:00
+  Up time : 99 days, 0 hours, 0 minutes and 1 seconds

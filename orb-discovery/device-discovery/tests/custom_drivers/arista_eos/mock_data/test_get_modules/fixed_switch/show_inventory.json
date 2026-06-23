@@ -1,0 +1,14 @@
+{
+  "systemInformation": {"name": "DCS-7050X-32-F", "serialNum": "JPE12350001"},
+  "cardSlots": {},
+  "xcvrSlots": {
+    "Ethernet1": {
+      "modelName": "QSFP-40G-SR4",
+      "serialNum": "XCV12350001",
+      "name": "Ethernet1",
+      "description": "QSFP-40G-SR4"
+    }
+  },
+  "powerSupplySlots": {},
+  "fanTraySlots": {}
+}

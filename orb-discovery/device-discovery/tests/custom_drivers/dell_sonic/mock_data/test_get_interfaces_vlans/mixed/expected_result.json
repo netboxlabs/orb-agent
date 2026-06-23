@@ -1,0 +1,5 @@
+{
+  "Ethernet0": {"mode": "access", "tagged": [], "untagged": 10},
+  "Ethernet1": {"mode": "trunk", "tagged": [100, 200], "untagged": 99},
+  "Ethernet2": {"mode": "routed", "tagged": [], "untagged": null}
+}

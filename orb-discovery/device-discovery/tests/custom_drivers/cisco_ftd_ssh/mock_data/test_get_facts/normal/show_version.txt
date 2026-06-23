@@ -1,0 +1,6 @@
+-------------------[ ftd-firewall ]--------------------
+Model                     : Cisco Firepower Threat Defense for VMware (66) Version 7.2.0 (Build 82)
+UUID                      : b30eed8c-6a2e-11ee-a3a7-3a5e9c28c654
+Rules update version      : 2023-04-11-001-vrt
+VDB version               : 364
+----------------------------------------------------

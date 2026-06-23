@@ -1,0 +1,4 @@
+
+username admin password 7 abc123def456
+username readonly password abc123
+!

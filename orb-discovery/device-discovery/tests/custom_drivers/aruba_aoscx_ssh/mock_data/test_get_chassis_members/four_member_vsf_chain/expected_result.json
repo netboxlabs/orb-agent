@@ -1,0 +1,41 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "TW02AAA0001",
+      "model": null,
+      "role": "active",
+      "priority": null,
+      "mac": "94:f1:28:22:00:00",
+      "state": "Active"
+    },
+    {
+      "id": 2,
+      "serial": "TW02AAA0002",
+      "model": null,
+      "role": "standby",
+      "priority": null,
+      "mac": "94:f1:28:22:00:80",
+      "state": "Standby"
+    },
+    {
+      "id": 3,
+      "serial": "TW02AAA0003",
+      "model": null,
+      "role": "member",
+      "priority": null,
+      "mac": "94:f1:28:22:01:00",
+      "state": "Member"
+    },
+    {
+      "id": 4,
+      "serial": "TW02AAA0004",
+      "model": null,
+      "role": "member",
+      "priority": null,
+      "mac": "94:f1:28:22:01:80",
+      "state": "Member"
+    }
+  ],
+  "domain": null
+}

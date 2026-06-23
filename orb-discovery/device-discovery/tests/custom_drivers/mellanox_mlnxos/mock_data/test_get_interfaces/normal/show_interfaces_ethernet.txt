@@ -1,0 +1,31 @@
+Eth1/1:
+Admin state          : Enabled
+Operational state    : Up
+Description          : uplink-to-spine01
+Mac address          : 7c:fe:90:53:b9:80
+MTU                  : 9216 bytes
+Actual speed         : 200G
+
+Eth1/2:
+Admin state          : Enabled
+Operational state    : Up
+Description          : server-rack-1
+Mac address          : 7c:fe:90:53:b9:81
+MTU                  : 9216 bytes
+Actual speed         : 100Gx4
+
+Eth1/3:
+Admin state          : Enabled
+Operational state    : Down
+Description          :
+Mac address          : 7c:fe:90:53:b9:82
+MTU                  : 1500 bytes
+Actual speed         : N/A
+
+Eth1/4:
+Admin state          : Disabled
+Operational state    : Down
+Description          :
+Mac address          : 7c:fe:90:53:b9:83
+MTU                  : 1500 bytes
+Actual speed         : N/A

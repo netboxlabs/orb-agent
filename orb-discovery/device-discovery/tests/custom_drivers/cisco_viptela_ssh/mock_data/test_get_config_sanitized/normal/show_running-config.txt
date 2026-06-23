@@ -1,0 +1,50 @@
+system
+ host-name vedge-site1
+ system-ip 10.1.0.1
+ site-id 1
+ !
+ aaa
+  usergroup basic
+  !
+  user admin
+   password MyAdminPass1
+  !
+  user operator
+   password 6 MyEncryptedHash123XYZ
+  !
+  user readonly
+   secret 9 AnotherEncryptedSecret456
+  !
+ !
+!
+vpn 0
+ interface ge0/0
+  ip address 10.0.0.1/30
+  ipsec
+   ike
+    pre-shared-key ascii2 ThisIsMyPreSharedKeyWithType
+   !
+  !
+  no shutdown
+ !
+ ip route 0.0.0.0/0 10.0.0.2
+!
+vpn 512
+ interface eth0
+  ip address 192.168.1.1/24
+  no shutdown
+ !
+!
+policy
+ app-route
+  vpn-list all
+   sequence 1
+    action accept
+     count 0
+    !
+   !
+  !
+  auth-password MyRadiusAuthPass
+  community MySnmpCommunity
+ !
+!

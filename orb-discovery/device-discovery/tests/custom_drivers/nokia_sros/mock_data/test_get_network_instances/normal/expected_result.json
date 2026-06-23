@@ -1,0 +1,37 @@
+{
+  "Base": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "Base",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "CUST-BLUE": {
+    "interfaces": {
+      "interface": {
+        "CUST-BLUE/to-blue-ce1": {},
+        "CUST-BLUE/to-blue-ce2": {}
+      }
+    },
+    "name": "CUST-BLUE",
+    "state": {
+      "route_distinguisher": "65000:200"
+    },
+    "type": "L3VRF"
+  },
+  "MGMT-VPRN": {
+    "interfaces": {
+      "interface": {
+        "MGMT-VPRN/mgmt-if": {}
+      }
+    },
+    "name": "MGMT-VPRN",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

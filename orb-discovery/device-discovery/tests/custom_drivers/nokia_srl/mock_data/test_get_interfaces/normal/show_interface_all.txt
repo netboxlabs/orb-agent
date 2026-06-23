@@ -1,0 +1,31 @@
+===============================================================
+ethernet-1/1 is up, speed 25G, type None
+  ethernet-1/1.0 is up
+    Network-instances:
+      * Name: default (default)
+    Encapsulation   : null
+    Type            : routed
+    IPv4 addr    : 192.168.0.0/31 (static, preferred, primary)
+    IPv6 addr    : 2002::c0a8:0/127 (static, preferred, primary)
+    IPv6 addr    : fe80::1812:ff:feff:1/64 (link-layer, preferred)
+---------------------------------------------------------------
+ethernet-1/2 is down, reason port-admin-disabled
+---------------------------------------------------------------
+mgmt0 is up, speed 1G, type None
+  mgmt0.0 is up
+    Network-instances:
+      * Name: mgmt (ip-vrf)
+    Encapsulation   : null
+    Type            : None
+    IPv4 addr    : 172.18.0.6/16 (dhcp, preferred)
+    IPv6 addr    : fe80::42:acff:fe12:6/64 (link-layer, preferred)
+---------------------------------------------------------------
+===============================================================
+Summary
+  0 loopback interfaces configured
+  1 ethernet interfaces are up, 1 are down
+  1 management interfaces are up, 0 are down
+  2 subinterfaces are up, 0 are down
+===============================================================
+
+--{ running }--[  ]--

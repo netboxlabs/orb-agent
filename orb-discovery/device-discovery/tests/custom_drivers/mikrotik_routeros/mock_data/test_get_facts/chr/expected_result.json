@@ -1,0 +1,13 @@
+{
+  "hostname": "CHR-Router",
+  "vendor": "MikroTik",
+  "model": "CHR",
+  "os_version": "7.14.3 (stable)",
+  "serial_number": "Unknown",
+  "uptime": 302710.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ether1",
+    "ether2"
+  ]
+}

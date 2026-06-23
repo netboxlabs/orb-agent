@@ -1,0 +1,13 @@
+{
+  "1": {
+    "name": "DEFAULT_VLAN_1",
+    "interfaces": [
+      "1/1/1",
+      "1/1/2"
+    ]
+  },
+  "10": {
+    "name": "MGMT",
+    "interfaces": []
+  }
+}

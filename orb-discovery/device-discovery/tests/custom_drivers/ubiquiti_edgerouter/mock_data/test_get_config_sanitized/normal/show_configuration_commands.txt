@@ -1,0 +1,6 @@
+set interfaces ethernet eth0 address '192.168.1.1/24'
+set system host-name 'ubnt-er-lite'
+set system login user admin authentication encrypted-password '$6$rounds=656000$aBcDeFgH$secrethashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+set system login user admin authentication plaintext-password 'mysecretpass'
+set vpn ipsec site-to-site peer 203.0.113.1 authentication pre-shared-secret 'myIPsecKey'
+set service snmp community public authorization ro

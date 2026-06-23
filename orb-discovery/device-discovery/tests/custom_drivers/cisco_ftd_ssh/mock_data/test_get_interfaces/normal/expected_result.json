@@ -1,0 +1,29 @@
+{
+  "GigabitEthernet0/0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "DE:AD:BE:EF:00:01"
+  },
+  "GigabitEthernet0/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "DE:AD:BE:EF:00:02"
+  },
+  "Management0/0": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 0.0,
+    "mac_address": "DE:AD:BE:EF:00:03"
+  }
+}

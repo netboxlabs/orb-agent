@@ -1,0 +1,5 @@
+{
+  "running": "!\nhostname sonic-switch01\n!\nusername admin password <redacted>\nusername monitor password <redacted>\n!\nenable password <redacted>\n!\ntacacs-server host 10.10.10.1 key <redacted>\nradius-server host 10.10.10.2 key <redacted>\n!\nsnmp-server community <redacted> ro\n!\nrouter bgp 65001\n neighbor 10.0.0.0 remote-as 65000\n neighbor 10.0.0.0 password <redacted>\n!\n",
+  "candidate": "",
+  "startup": "!\nhostname sonic-switch01\n!\nusername admin password <redacted>\nusername monitor password <redacted>\n!\nenable password <redacted>\n!\ntacacs-server host 10.10.10.1 key <redacted>\nradius-server host 10.10.10.2 key <redacted>\n!\nsnmp-server community <redacted> ro\n!\nrouter bgp 65001\n neighbor 10.0.0.0 remote-as 65000\n neighbor 10.0.0.0 password <redacted>\n!\n"
+}

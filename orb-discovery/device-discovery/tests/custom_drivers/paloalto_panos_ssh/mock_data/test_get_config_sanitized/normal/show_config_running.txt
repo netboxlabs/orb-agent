@@ -1,0 +1,27 @@
+<config version="10.1.0">
+  <devices>
+    <entry name="localhost.localdomain">
+      <vsys>
+        <entry name="vsys1">
+          <radius>
+            <server>
+              <entry name="corp-radius">
+                <secret>RadiusSecret123</secret>
+              </entry>
+            </server>
+          </radius>
+          <authentication-profile>
+            <entry name="ldap-auth">
+              <bind-password>LdapBindSecret</bind-password>
+            </entry>
+          </authentication-profile>
+          <address>
+            <entry name="10.0.0.0_8">
+              <ip-netmask>10.0.0.0/8</ip-netmask>
+            </entry>
+          </address>
+        </entry>
+      </vsys>
+    </entry>
+  </devices>
+</config>

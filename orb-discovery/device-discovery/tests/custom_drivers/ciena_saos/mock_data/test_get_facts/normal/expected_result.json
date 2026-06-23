@@ -1,0 +1,16 @@
+{
+  "hostname": "saos-lab-7200",
+  "vendor": "Ciena",
+  "model": "7200 28C+S+6T",
+  "os_version": "saos-06-18-00-1848",
+  "serial_number": "VS7200P0052",
+  "uptime": -1.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1",
+    "2",
+    "3",
+    "4",
+    "LAG1"
+  ]
+}

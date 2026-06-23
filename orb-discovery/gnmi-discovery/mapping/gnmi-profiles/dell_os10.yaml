@@ -1,0 +1,11 @@
+# Dell OS10 (SmartFabric / OpenConfig gNMI agent). _base covers coarse
+# system/interface/platform/network-instance telemetry. Per-vendor leaf-path
+# overrides are DEFERRED until a capture exists. Known weak leaves to revisit:
+#   - ethernet/switched-vlan/* ; network-instances/.../vlans
+#   - VRF route-distinguisher / network-instance interface refs
+#   - direct subscribe may be constrained to documented sensor-groups.
+# Interface name typing (PortChannel) is handled by the global
+# defaultInterfacePatterns, not here.
+extends: _base
+match:
+  vendor: Dell

@@ -1,0 +1,4 @@
+{
+  "1": {"name": "Default", "interfaces": ["0/1", "0/2"]},
+  "50": {"name": "IoT", "interfaces": ["0/1"]}
+}

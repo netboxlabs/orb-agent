@@ -1,0 +1,5 @@
+{
+  "running": "Current Configuration ...\n! Version 9.14.2.21\n!\nhostname ftos-switch01\n!\nusername admin password 7 3b290ab1c3a8f snmp-server community public ro\nenable password 7 5e3f9d2c1b7a\nenable secret SecretHash99\nsnmp-server community public ro\n!\ninterface TenGigabitEthernet 0/0\n no shutdown\n ip address 10.0.0.1/24\n!\nend\n",
+  "candidate": "",
+  "startup": "Startup Configuration ...\n! Version 9.14.2.21\n!\nhostname ftos-switch01\n!\nend\n"
+}

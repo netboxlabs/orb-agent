@@ -1,0 +1,5 @@
+{
+  "1": {"mode": "access", "tagged": [], "untagged": 10},
+  "2": {"mode": "trunk", "tagged": [100], "untagged": 20},
+  "3": {"mode": "routed", "tagged": [], "untagged": null}
+}

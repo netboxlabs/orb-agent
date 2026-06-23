@@ -1,0 +1,12 @@
+
+Interface : Vlan 1
+    IP Address      : 10.0.0.1
+    Mask            : 255.255.255.0
+    Routing         : Enabled
+    Directed Bcast  : Disabled
+
+Interface : Vlan 10
+    IP Address      : 192.168.10.1
+    Mask            : 255.255.255.0
+    Routing         : Enabled
+    Directed Bcast  : Disabled

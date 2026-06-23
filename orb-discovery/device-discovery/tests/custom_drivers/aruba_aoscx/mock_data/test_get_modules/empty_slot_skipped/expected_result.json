@@ -1,0 +1,10 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1/3", "position": "1/3", "module": {"model": "JL363A", "serial": "SG10KEBLC3", "description": "8400X 32p", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

@@ -1,0 +1,38 @@
+GigabitEthernet1/0/1
+ GigabitEthernet1/0/1 current state: UP
+ Line protocol current state: UP
+ Description: Uplink-to-core
+ Maximum Transmit Unit: 1500
+ Internet Address is 10.0.0.1/30 Primary
+ IP Packet Frame Type: Ethernet II, Hardware Address: 58ef-68a4-2c01
+ 1000Mbps, full-duplex, link type is auto
+ Port link-type: access
+ PVID: 1
+
+GigabitEthernet1/0/2
+ GigabitEthernet1/0/2 current state: DOWN
+ Line protocol current state: DOWN
+ Maximum Transmit Unit: 1500
+ IP Packet Frame Type: Ethernet II, Hardware Address: 58ef-68a4-2c02
+ 1000Mbps, full-duplex, link type is auto
+ Port link-type: access
+ PVID: 1
+
+GigabitEthernet1/0/3
+ GigabitEthernet1/0/3 current state: Administratively DOWN
+ Line protocol current state: DOWN
+ Description: unused
+ Maximum Transmit Unit: 1500
+ IP Packet Frame Type: Ethernet II, Hardware Address: 58ef-68a4-2c03
+ 1000Mbps, full-duplex, link type is auto
+ Port link-type: access
+ PVID: 1
+
+Vlan-interface10
+ Vlan-interface10 current state: UP
+ Line protocol current state: UP
+ Description: Mgmt-VLAN
+ Maximum Transmit Unit: 1500
+ Internet Address is 192.168.10.1/24 Primary
+ IP Packet Frame Type: Ethernet II, Hardware Address: 58ef-68a4-2c00
+

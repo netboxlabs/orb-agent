@@ -1,0 +1,16 @@
+{
+  "uptime": 511515.139,
+  "vendor": "Mellanox",
+  "os_version": "3.6.5004",
+  "serial_number": "MT1721X12010",
+  "model": "x86onie",
+  "hostname": "sw-mlnx-leaf01",
+  "fqdn": "Unknown",
+  "interface_list": [
+    "Eth1/1",
+    "Eth1/2",
+    "Eth1/3",
+    "Eth1/4",
+    "mgmt0"
+  ]
+}

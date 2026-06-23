@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <data>
+    <inventory xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-invmgr-oper">
+      <entities>
+        <entity>
+          <name>0/PS0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>AC Power Supply Module</description>
+              <model-name>PWR-3KW-AC-V2</model-name>
+              <serial-number>PWR00000001</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+        <entity>
+          <name>0/FT0</name>
+          <attributes>
+            <inv-basic-bag>
+              <description>Fan Tray</description>
+              <model-name>FAN-ASR9006-V2</model-name>
+              <serial-number>FAN00000001</serial-number>
+            </inv-basic-bag>
+          </attributes>
+        </entity>
+      </entities>
+    </inventory>
+  </data>
+</rpc-reply>

@@ -1,0 +1,13 @@
+{
+  "hostname": "asa-firewall",
+  "vendor": "Cisco",
+  "model": "ASA5506-X",
+  "os_version": "9.16.4",
+  "serial_number": "JAD222605K8",
+  "uptime": 12240.0,
+  "fqdn": "asa-firewall.example.com",
+  "interface_list": [
+    "GigabitEthernet1/1",
+    "GigabitEthernet1/2"
+  ]
+}

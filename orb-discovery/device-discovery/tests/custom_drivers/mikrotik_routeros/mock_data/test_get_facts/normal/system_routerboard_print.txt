@@ -1,0 +1,8 @@
+routerboard: yes
+             model: RB4011iGS+
+          revision: r2
+     serial-number: F0260ECBE4AB
+     firmware-type: al2
+  factory-firmware: 6.47.9
+  current-firmware: 6.47.9
+  upgrade-firmware: 7.11.2

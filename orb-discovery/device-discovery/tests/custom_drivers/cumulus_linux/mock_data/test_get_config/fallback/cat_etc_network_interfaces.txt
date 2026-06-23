@@ -1,0 +1,23 @@
+# Managed by ifupdown2
+auto lo
+iface lo inet loopback
+    address 10.10.10.1/32
+
+auto eth0
+iface eth0 inet dhcp
+
+auto swp1
+iface swp1
+    mtu 9216
+    alias to-spine01
+
+auto swp2
+iface swp2
+    mtu 9216
+    alias to-spine02
+
+auto bridge
+iface bridge
+    bridge-ports swp3
+    bridge-vlan-aware yes
+    bridge-vids 100 200

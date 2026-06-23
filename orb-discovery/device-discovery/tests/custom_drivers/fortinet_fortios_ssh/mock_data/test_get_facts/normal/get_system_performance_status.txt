@@ -1,0 +1,5 @@
+CPU states: 2% user 1% system 0% nice 97% idle
+CPU usage per CPU average over last 1 minute: 3%
+Memory: total=1014940 free=403728 used=611212 (60%)
+Average network usage: 120 kbps in 1 minute
+Uptime: 1 days,  2 hours,  30 minutes

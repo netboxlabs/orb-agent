@@ -1,0 +1,3 @@
+ VLAN  Attribute  Tag     Name
+ 100   smart      tagged  management
+ 200   smart      tagged  data

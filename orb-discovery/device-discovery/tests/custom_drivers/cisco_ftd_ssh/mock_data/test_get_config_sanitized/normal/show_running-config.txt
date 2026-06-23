@@ -1,0 +1,26 @@
+: Saved
+
+ASA Version 9.16(1)
+!
+hostname ftd-firewall
+enable password 8Ry2YjIyt7RRXU24 encrypted
+passwd 2KFQnbNIdI.2KYOU encrypted
+!
+username admin password 5/iADpOm24GuvkOn encrypted privilege 15
+username svcaccount secret 9 $9$mR3Z5PJnxiKuvEb$TwoqEQ7LLkjj4Ev9WwM5w0
+!
+snmp-server community MyS3cr3tStr!ng
+snmp-server host inside 192.168.1.100 version 2c MyS3cr3tStr!ng
+!
+crypto isakmp key VpnPreShar3d address 0.0.0.0
+!
+tunnel-group 10.0.0.1 ipsec-attributes
+ pre-shared-key Wh4taSecret
+!
+key-string MyKeyStr1ng
+!
+interface GigabitEthernet0/0
+ nameif outside
+ ip address 203.0.113.1 255.255.255.252
+!
+end

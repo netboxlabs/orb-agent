@@ -1,0 +1,48 @@
+# Managed by ifupdown2
+auto lo
+iface lo inet loopback
+    address 10.10.10.1/32
+
+auto eth0
+iface eth0 inet dhcp
+
+auto wlan0
+iface wlan0 inet static
+    address 192.168.50.10/24
+    wpa-ssid corp-wifi
+    wpa-psk SuperSecretWirelessPass!
+
+auto wg0
+iface wg0 inet static
+    address 10.200.0.1/24
+    pre-up wg set wg0 private-key /etc/wireguard/wg0.key
+    pre-up wg set wg0 peer dGVzdHBlZXI= preshared-key /etc/wireguard/psk.key
+
+# NCLU-emitted FRR snippet embedded by some operators
+router bgp 65001
+ neighbor 10.0.1.0 remote-as 65000
+ neighbor 10.0.1.0 password EmbeddedBgpPassword
+
+key chain OSPF-KEYS
+ key 1
+  key-string SuperSecretOspfKeyChain
+
+enable password FrrEnableSecret
+password 8 $1$mERr$abc123XYZ456QWErtY
+
+line vty
+ password LegacyVtySecret
+
+snmp-server community legacy-comm ro
+
+tacacs-server host 10.99.0.5 key TacacsSharedKey1
+radius-server host 10.99.0.6 key RadiusSharedKey2
+
+# MACsec on swp10
+nv set interface swp10 link macsec pre-shared-key cak 0123456789abcdef0123456789abcdef
+nv set interface swp10 link macsec pre-shared-key ckn 0123456789abcdef0123456789abcdef
+
+# Native snmpd.conf syntax occasionally included
+rocommunity native-ro-legacy 192.0.2.0/24
+rwcommunity native-rw-legacy 192.0.2.0/24
+com2sec notConfigUser default native-com2sec-secret

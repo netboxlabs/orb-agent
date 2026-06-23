@@ -1,0 +1,5 @@
+Machine Type............... UniFi Switch 24
+Machine Model.............. US-24-250W
+Serial Number.............. F09FC2CD9012
+Burned In MAC Address...... F0:9F:C2:CD:90:12
+Software Version........... 4.0.66.10832

@@ -1,0 +1,4 @@
+Name         Admin    Oper    Speed    Description             MTU
+-----------  -------  ------  -------  ----------------------  -----
+Ethernet0    up       up      100G     Trunk-uplink            9100
+Management0  up       up      1G       OOB-Management          1500

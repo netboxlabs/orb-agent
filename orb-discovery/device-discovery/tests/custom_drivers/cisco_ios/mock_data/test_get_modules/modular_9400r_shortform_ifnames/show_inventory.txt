@@ -1,0 +1,20 @@
+NAME: "Chassis", DESCR: "Cisco Catalyst 9400 Series 4 Slot Chassis"
+PID: C9404R            , VID: V01 , SN: FXS2401L0A1
+
+NAME: "Slot 1 Supervisor", DESCR: "Cisco Catalyst 9400 Series Supervisor 1 Module"
+PID: C9400-SUP-1       , VID: V01 , SN: JAE2401SUP1
+
+NAME: "Slot 2 Linecard", DESCR: "Cisco Catalyst 9400 Series 48-Port UPOE+ 10/100/1000(RJ-45)"
+PID: C9400-LC-48U      , VID: V01 , SN: JAE2401LC02
+
+NAME: "Slot 3 Linecard", DESCR: "Cisco Catalyst 9400 Series 48-Port 10/100/1000(RJ-45) PoE+"
+PID: C9400-LC-48P      , VID: V01 , SN: JAE2401LC03
+
+NAME: "TenGigabitEthernet2/0/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02 , SN: FNS2401TR01
+
+NAME: "Te2/0/2", DESCR: "SFP-10GBase-SR"
+PID: SFP-10G-SR        , VID: V02 , SN: FNS2401TR02
+
+NAME: "Power Supply Module 1", DESCR: "Cisco Catalyst 9400 Series 3200W AC Power Supply"
+PID: C9400-PWR-3200AC  , VID: V01 , SN: ART2401PSU1

@@ -1,0 +1,17 @@
+!
+hostname sonic-switch01
+!
+username admin password 7 SuperSecretHash123
+username monitor password 0 PlainTextPass456
+!
+enable password 7 EnableHash789
+!
+tacacs-server host 10.10.10.1 key 7 TacacsTypedSecret
+radius-server host 10.10.10.2 key 0 RadiusPlainSecret
+!
+snmp-server community 7 TypedCommunityStr ro
+!
+router bgp 65001
+ neighbor 10.0.0.0 remote-as 65000
+ neighbor 10.0.0.0 password 7 BgpTypedSecret
+!

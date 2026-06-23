@@ -1,0 +1,12 @@
+{
+  "1/1/1": {
+    "name": "1/1/1",
+    "routing": false,
+    "vlan_mode": "native-untagged",
+    "vlan_tag": {"/rest/v10.04/system/vlans/99": "/rest/v10.04/system/vlans/99"},
+    "vlan_trunks": {
+      "/rest/v10.04/system/vlans/100": "/rest/v10.04/system/vlans/100",
+      "/rest/v10.04/system/vlans/200": "/rest/v10.04/system/vlans/200"
+    }
+  }
+}

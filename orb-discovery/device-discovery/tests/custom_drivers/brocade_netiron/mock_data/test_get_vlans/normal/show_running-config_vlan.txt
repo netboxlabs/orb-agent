@@ -1,0 +1,15 @@
+no spanning-tree
+!
+no dual-mode-default-vlan
+!
+vlan 1 name DEFAULT-VLAN
+ no untagged e 1/1 e 1/2
+!
+vlan 10 name MANAGEMENT
+ untagged e 1/3
+ tagged e 1/1 e 1/2
+ router-interface ve 10
+!
+vlan 20 name SERVERS
+ tagged e 1/1
+!

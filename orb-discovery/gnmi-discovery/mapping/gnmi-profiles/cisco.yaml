@@ -1,0 +1,16 @@
+# Cisco IOS-XR / NX-OS / IOS-XE. One overlay covers all three NOSes for the
+# standard-OpenConfig bet; _base populates device/interface/platform basics and
+# degrades gracefully on absent leaves. Per-NOS leaf-path overrides are DEFERRED
+# until a real capture exists (no speculative paths — they could suppress a
+# working _base path). Known weak leaves / gotchas to revisit with a capture:
+#   - NX-OS: Get is JSON-only, no operational Get, no root "/", cannot mix OC and
+#     device YANG in one request; SVI IPs are not on the subinterface path.
+#   - IOS-XR: routed box — ethernet/switched-vlan and network-instance vlans are
+#     typically absent; negotiated-duplex-mode meaningless on high-speed optics.
+#   - IOS-XE: PROTO only on 17.11.1+; network-instance vlans / SVI IPs less
+#     predictable than the OC model expects.
+# Interface name typing (Gi/Te/HundredGig/Bundle-Ether/Port-channel) is handled
+# by the global defaultInterfacePatterns, not here.
+extends: _base
+match:
+  vendor: Cisco

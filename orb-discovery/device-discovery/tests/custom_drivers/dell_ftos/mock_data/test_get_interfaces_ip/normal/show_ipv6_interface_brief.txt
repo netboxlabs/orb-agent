@@ -1,0 +1,6 @@
+TenGigabitEthernet 0/0 is up, line protocol is up
+  fe80::aabb:ccdd:ee00/64
+  2001:db8::1/64
+
+TenGigabitEthernet 0/1 is up, line protocol is up
+  fe80::aabb:ccdd:ee01/64

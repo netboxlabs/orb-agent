@@ -1,0 +1,5 @@
+Port                    Link Type  PVID  Trunk VLAN List
+-------------------------------------------------------------------------------
+GigabitEthernet0/0/1    access     10    -
+GigabitEthernet0/0/2    trunk      99    100  200
+GigabitEthernet0/0/3    desirable  1     -

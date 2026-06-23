@@ -1,0 +1,20 @@
+<response status="success">
+  <result>
+    <chassis>
+      <slots>
+        <entry>
+          <slot>1</slot>
+          <type>NPC</type>
+          <part-number>PA-7000-100G-NPC-A</part-number>
+          <serial>007904111001</serial>
+        </entry>
+        <entry>
+          <slot>4</slot>
+          <type>SMC</type>
+          <part-number>PA-7050-SMC</part-number>
+          <serial>007904333001</serial>
+        </entry>
+      </slots>
+    </chassis>
+  </result>
+</response>

@@ -1,0 +1,30 @@
+<l2ng-l2ald-iff-information>
+  <interface>
+    <interface-name>xe-0/0/0</interface-name>
+    <interface-mode>access</interface-mode>
+    <interface-vlan-member-list>
+      <interface-vlan-member>
+        <interface-vlan-name>vlan50</interface-vlan-name>
+        <interface-vlan-member-tagid>50</interface-vlan-member-tagid>
+        <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+      </interface-vlan-member>
+    </interface-vlan-member-list>
+  </interface>
+  <interface>
+    <interface-name>xe-0/0/1</interface-name>
+    <interface-mode>trunk</interface-mode>
+    <interface-native-vlan-id>1</interface-native-vlan-id>
+    <interface-vlan-member-list>
+      <interface-vlan-member>
+        <interface-vlan-name>vlan100</interface-vlan-name>
+        <interface-vlan-member-tagid>100</interface-vlan-member-tagid>
+        <interface-vlan-member-tagness>tagged</interface-vlan-member-tagness>
+      </interface-vlan-member>
+      <interface-vlan-member>
+        <interface-vlan-name>vlan200</interface-vlan-name>
+        <interface-vlan-member-tagid>200</interface-vlan-member-tagid>
+        <interface-vlan-member-tagness>tagged</interface-vlan-member-tagness>
+      </interface-vlan-member>
+    </interface-vlan-member-list>
+  </interface>
+</l2ng-l2ald-iff-information>

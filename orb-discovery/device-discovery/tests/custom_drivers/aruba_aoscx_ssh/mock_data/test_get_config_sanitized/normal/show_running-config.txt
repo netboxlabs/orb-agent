@@ -1,0 +1,13 @@
+Current configuration:
+!
+hostname aruba-cx-6300
+!
+user admin
+    password PlainTextPassword1
+!
+radius-server host 10.0.0.1 key RadiusSecret123
+tacacs-server host 10.0.0.2 key TacacsSecret456
+snmp-server community public
+!
+vlan 1
+!

@@ -1,0 +1,12 @@
+Port      Description
+-------   -----------
+gi1       Uplink
+gi2       Server
+gi3       AP
+gi4
+gi27      Fiber-Trunk
+
+Ch        Description
+-------   -----------
+Po1       LAG-Uplink
+Po2

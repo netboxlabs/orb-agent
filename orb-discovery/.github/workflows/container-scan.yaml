@@ -1,0 +1,201 @@
+name: Container Scan
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "network-discovery/**"
+      - "snmp-discovery/**"
+      - ".github/workflows/container-scan.yaml"
+      - "!network-discovery/docker/**"
+      - "!snmp-discovery/docker/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-scan:
+    name: ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: network-discovery
+            dockerfile: network-discovery/docker/Dockerfile
+            context: network-discovery
+          - service: snmp-discovery
+            dockerfile: snmp-discovery/docker/Dockerfile
+            context: snmp-discovery
+    env:
+      TRIVY_DISABLE_VEX_NOTICE: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Extract Go version from go.mod
+        run: echo "GO_VERSION=$(grep '^go ' ${{ matrix.context }}/go.mod | awk '{print $2}')" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          load: true
+          push: false
+          platforms: linux/amd64
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+          tags: ${{ matrix.service }}:scan
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: ${{ matrix.service }}:scan
+          format: json
+          output: trivy-output.json
+          vuln-type: os,library
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          ignore-unfixed: true
+          exit-code: "0"
+          list-all-pkgs: "true"
+
+      - name: Build scan summary
+        id: scan-summary
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          SERVICE: ${{ matrix.service }}
+        with:
+          script: |
+            const fs = require('fs');
+            const service = process.env.SERVICE;
+            const data = JSON.parse(fs.readFileSync('trivy-output.json', 'utf8'));
+            const vulns = (data.Results || []).flatMap(r =>
+              (r.Vulnerabilities || []).map(v => ({ ...v, target: r.Target }))
+            );
+
+            const blockingSeverities = new Set(['CRITICAL', 'HIGH']);
+
+            const SEVERITY_LABEL = {
+              CRITICAL: '🔴 **CRITICAL**',
+              HIGH: '🟠 **HIGH**',
+              MEDIUM: '🟡 MEDIUM',
+              LOW: '⚪ LOW'
+            };
+
+            const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+            for (const v of vulns) {
+              if (counts[v.Severity] !== undefined) counts[v.Severity]++;
+            }
+
+            const hasBlocking = vulns.some(v => blockingSeverities.has(v.Severity));
+            core.setOutput('has_blocking', hasBlocking.toString());
+
+            const buildTable = (vulns) => {
+              if (vulns.length === 0) return '_No vulnerabilities found._\n';
+              let t = '| Source | Library | CVE | Severity | Installed | Fixed | Title |\n';
+              t += '|---|---|---|---|---|---|---|\n';
+              for (const v of vulns) {
+                const title = (v.Title || '').replace(/\|/g, '\\|').substring(0, 80);
+                const cve = v.PrimaryURL ? `[${v.VulnerabilityID}](${v.PrimaryURL})` : v.VulnerabilityID;
+                const source = (v.target || '').replace(/\|/g, '\|');
+                t += `| ${source} | ${v.PkgName} | ${cve} | ${SEVERITY_LABEL[v.Severity] || v.Severity} | ${v.InstalledVersion} | ${v.FixedVersion || 'N/A'} | ${title} |\n`;
+              }
+              return t;
+            };
+
+            const table = buildTable(vulns);
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              `## Vulnerability Scan Results — ${service}\n\n` + table
+            );
+
+            const artifact = JSON.stringify({ table, hasBlocking, counts });
+            fs.writeFileSync('scan-result.json', artifact);
+
+      - name: Post scan results as PR comment
+        continue-on-error: true  # Fork PRs have read-only tokens and cannot post comments
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          SERVICE: ${{ matrix.service }}
+          COMMIT_SHA: ${{ github.sha }}
+        with:
+          script: |
+            const fs = require('fs');
+            const service = process.env.SERVICE;
+            const { table, hasBlocking } = JSON.parse(fs.readFileSync('scan-result.json', 'utf8'));
+
+            const heading = hasBlocking
+              ? `## Vulnerability Scan: Failed — ${service}`
+              : `## Vulnerability Scan: Passed — ${service}`;
+
+            const commitSha = process.env.COMMIT_SHA;
+            const marker = `<!-- trivy-scan-${service} -->`;
+            const body = `${marker}\n${heading}\n\n**Image:** \`${service}:scan\`\n\n${table}\n*Commit: ${commitSha}*`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail on blocking vulnerabilities
+        if: steps.scan-summary.outputs.has_blocking == 'true'
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          echo "Blocking vulnerabilities found for ${SERVICE}. Failing build."
+          exit 1
+
+      - name: Convert scan results to SBOM
+        if: "!cancelled()"
+        run: trivy convert --format cyclonedx --output sbom.cdx.json trivy-output.json
+
+      - name: Upload SBOM artifact
+        if: "!cancelled()"
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ matrix.service }}-${{ github.sha }}
+          path: sbom.cdx.json
+          retention-days: 90
+
+      - name: Convert scan results to SARIF
+        if: "!cancelled()"
+        run: trivy convert --format sarif --output trivy-results.sarif trivy-output.json
+
+      - name: Upload SARIF to GitHub Code Scanning
+        if: "!cancelled()"
+        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: ${{ matrix.service }}

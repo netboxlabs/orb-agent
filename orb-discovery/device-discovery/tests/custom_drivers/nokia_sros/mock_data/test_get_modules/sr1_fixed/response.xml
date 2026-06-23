@@ -1,0 +1,12 @@
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <data>
+    <state xmlns="urn:nokia.com:sros:ns:yang:sr:state">
+      <chassis>
+        <hardware-data>
+          <part-number>3HE-SR1-AA</part-number>
+          <serial-number>NS-SR1-001</serial-number>
+        </hardware-data>
+      </chassis>
+    </state>
+  </data>
+</rpc-reply>

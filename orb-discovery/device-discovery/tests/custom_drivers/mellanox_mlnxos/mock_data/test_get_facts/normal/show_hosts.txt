@@ -1,0 +1,8 @@
+Hostname: sw-mlnx-leaf01
+
+DNS configuration:
+  Server: 8.8.8.8
+  Domain list: example.com
+
+Static hosts configuration:
+  No static hosts configured.

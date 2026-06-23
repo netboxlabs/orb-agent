@@ -1,0 +1,35 @@
+Interface GigabitEthernet1/1 "inside", is up, line protocol is up
+  Hardware is EtherSVC, BW 1000 Mbps, DLY 10 usec
+    (Full-duplex), Auto-Speed(1000 Mbps)
+  MAC address aabb.cc00.0100, MTU 1500
+  IP address 192.168.1.1, subnet mask 255.255.255.0
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec
+
+Interface GigabitEthernet1/2 "outside", is up, line protocol is up
+  Hardware is EtherSVC, BW 1000 Mbps, DLY 10 usec
+    (Full-duplex), Auto-Speed(1000 Mbps)
+  MAC address aabb.cc00.0200, MTU 1500
+  IP address 203.0.113.1, subnet mask 255.255.255.0
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec
+
+Interface Management1/1 "mgmt", is up, line protocol is up
+  Hardware is EtherSVC, BW 100 Mbps, DLY 100 usec
+    (Full-duplex), Auto-Speed(100 Mbps)
+  MAC address aabb.cc00.0300, MTU 1500
+  IP address 10.0.0.1, subnet mask 255.255.255.0
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec

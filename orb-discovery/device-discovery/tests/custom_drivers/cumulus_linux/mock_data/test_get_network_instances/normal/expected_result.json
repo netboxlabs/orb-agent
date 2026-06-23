@@ -1,0 +1,37 @@
+{
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "mgmt": {
+    "interfaces": {
+      "interface": {
+        "eth0": {}
+      }
+    },
+    "name": "mgmt",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "red": {
+    "interfaces": {
+      "interface": {
+        "swp1": {},
+        "swp2.100": {}
+      }
+    },
+    "name": "red",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

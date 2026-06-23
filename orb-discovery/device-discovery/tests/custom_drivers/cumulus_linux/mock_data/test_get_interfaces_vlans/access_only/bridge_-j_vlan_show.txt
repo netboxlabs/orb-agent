@@ -1,0 +1,1 @@
+[{"ifname": "swp1", "vlans": [{"vlan": 10, "flags": ["PVID", "Egress Untagged"]}]}]

@@ -1,0 +1,7 @@
+VLAN ID  VLAN Name                    VLAN Type
+-------  ---------------------------  --------
+1        Default                      Default
+10       NATIVE                       Static
+20       USERS                        Static
+100      DATA                         Static
+200      VOICE                        Static

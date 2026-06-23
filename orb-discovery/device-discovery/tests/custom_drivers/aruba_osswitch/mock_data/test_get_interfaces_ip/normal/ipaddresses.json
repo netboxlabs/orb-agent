@@ -1,0 +1,1 @@
+{"ip_address_subnet_element": [{"vlan_id": "1", "ip_address": {"octets": "10.1.1.1"}, "ip_mask": {"octets": "255.255.255.0"}}, {"vlan_id": "10", "ip_address": {"octets": "192.168.10.1"}, "ip_mask": {"octets": "255.255.255.0"}}]}

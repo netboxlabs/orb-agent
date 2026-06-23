@@ -1,0 +1,7 @@
+ Node 101 (leaf-101)
+VLAN  Name                   Encap          Ports
+----  ----                   -----          -----
+ 10  TenantA:AppEPG          vlan-10        eth1/1, eth1/2
+ 20  TenantA:WebEPG          vlan-20        eth1/3
+ 30  TenantB:DbEPG           vlan-30        eth1/4, eth1/5
+ 40  TenantB:MgmtEPG         vlan-40        eth1/6

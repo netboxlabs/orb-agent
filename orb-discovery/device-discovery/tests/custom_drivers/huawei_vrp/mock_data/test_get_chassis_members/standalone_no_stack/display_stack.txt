@@ -1,0 +1,1 @@
+Error: This command is supported only when the device works in stack mode.

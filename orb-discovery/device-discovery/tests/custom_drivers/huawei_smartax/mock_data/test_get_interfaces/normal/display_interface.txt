@@ -1,0 +1,22 @@
+MEth0/0/1 current state : UP
+  Line protocol current state : UP
+  Description : Management
+  Hardware address : 0050-5600-0001
+  MTU 1500
+  Speed : 100Mbit/s, Duplex : FULL
+
+GE0/0/1 current state : UP
+  Line protocol current state : UP
+  Hardware address : 0050-5600-0002
+  MTU 1500
+  Speed : 1000Mbit/s, Duplex : FULL
+
+GE0/0/2 current state : DOWN
+  Line protocol current state : DOWN
+  Hardware address : 0050-5600-0003
+  MTU 1500
+  Speed : 1000Mbit/s, Duplex : FULL
+
+GPON0/1/0 current state : Administratively DOWN
+  Line protocol current state : DOWN
+  MTU 1500

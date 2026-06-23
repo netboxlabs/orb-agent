@@ -1,0 +1,35 @@
+ VLAN ID: 50
+ VLAN Type: Static
+ Description: VLAN 0050
+ Name: VLAN0050
+ Tagged Ports:
+   None
+ Untagged Ports:
+   GE1/0/1
+
+ VLAN ID: 100
+ VLAN Type: Static
+ Description: VLAN 0100
+ Name: VLAN0100
+ Tagged Ports:
+   GE1/0/1
+ Untagged Ports:
+   None
+
+ VLAN ID: 200
+ VLAN Type: Static
+ Description: VLAN 0200
+ Name: VLAN0200
+ Tagged Ports:
+   GE1/0/1
+ Untagged Ports:
+   None
+
+ VLAN ID: 300
+ VLAN Type: Static
+ Description: VLAN 0300
+ Name: VLAN0300
+ Tagged Ports:
+   GE1/0/1
+ Untagged Ports:
+   None

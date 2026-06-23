@@ -1,0 +1,7 @@
+VLAN ID........................... 100
+VLAN Name......................... DATA
+VLAN Type......................... Static
+
+   Interface  Current   Configured  Tagging
+   ---------  --------  ----------  --------
+   0/12       Include   Autodetect  Tagged

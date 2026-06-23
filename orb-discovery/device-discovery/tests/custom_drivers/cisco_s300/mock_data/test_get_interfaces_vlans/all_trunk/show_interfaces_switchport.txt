@@ -1,0 +1,9 @@
+Name: gi24
+Switchport: enable
+Administrative Mode: trunk
+Operational Mode: trunk
+Access Mode VLAN: 1
+Access Multicast TV VLAN: none
+Trunking Native Mode VLAN: 99
+Trunking VLANs Enabled: 1-4094
+Protected: Disabled

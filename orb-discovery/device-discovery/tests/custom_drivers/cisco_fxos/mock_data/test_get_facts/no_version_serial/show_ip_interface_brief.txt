@@ -1,0 +1,3 @@
+IP Interface Status for VRF "management"(2)
+Interface            IP Address      Interface Status
+mgmt0                192.168.1.10    protocol-up/link-up/admin-up

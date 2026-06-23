@@ -1,0 +1,8 @@
+VLAN ID........................... 10
+VLAN Name......................... NATIVE
+VLAN Type......................... Static
+
+   Interface  Current   Configured  Tagging
+   ---------  --------  ----------  --------
+   0/2        Include   Autodetect  Untagged
+   0/5        Include   Autodetect  Untagged

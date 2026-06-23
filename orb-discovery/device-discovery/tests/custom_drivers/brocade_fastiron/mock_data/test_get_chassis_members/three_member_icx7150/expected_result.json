@@ -1,0 +1,32 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "ICX7150A0001",
+      "model": "ICX7150-48",
+      "role": "active",
+      "priority": 128,
+      "mac": "60:9C:9F:00:00:01",
+      "state": "local"
+    },
+    {
+      "id": 2,
+      "serial": "ICX7150A0002",
+      "model": "ICX7150-48",
+      "role": "standby",
+      "priority": 128,
+      "mac": "60:9C:9F:00:00:02",
+      "state": "remote"
+    },
+    {
+      "id": 3,
+      "serial": "ICX7150B0003",
+      "model": "ICX7150-24",
+      "role": "member",
+      "priority": 0,
+      "mac": "60:9C:9F:00:00:03",
+      "state": "remote"
+    }
+  ],
+  "domain": null
+}

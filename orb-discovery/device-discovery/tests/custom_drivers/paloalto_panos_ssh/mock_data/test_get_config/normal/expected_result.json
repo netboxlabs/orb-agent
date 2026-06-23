@@ -1,0 +1,5 @@
+{
+  "running": "<config version=\"10.1.0\" urldb=\"paloaltonetworks\" t=\"2022-12-01T10:00:00.000+00:00\">\n  <devices>\n    <entry name=\"localhost.localdomain\">\n      <vsys>\n        <entry name=\"vsys1\">\n          <address>\n            <entry name=\"192.168.1.0_24\">\n              <ip-netmask>192.168.1.0/24</ip-netmask>\n            </entry>\n          </address>\n        </entry>\n      </vsys>\n    </entry>\n  </devices>\n</config>\n",
+  "candidate": "<config version=\"10.1.0\" urldb=\"paloaltonetworks\" t=\"2022-12-01T10:00:00.000+00:00\">\n  <devices>\n    <entry name=\"localhost.localdomain\">\n      <vsys>\n        <entry name=\"vsys1\">\n          <address>\n            <entry name=\"192.168.1.0_24\">\n              <ip-netmask>192.168.1.0/24</ip-netmask>\n            </entry>\n          </address>\n        </entry>\n      </vsys>\n    </entry>\n  </devices>\n</config>\n",
+  "startup": ""
+}

@@ -1,0 +1,7 @@
+Interface            PHY   Protocol    InUti OutUti   inErrors outErrors
+MEth0/0/1            up    up          0%    0%       0        0
+GE0/0/1              up    up          0%    0%       0        0
+GE0/0/2              down  down        0%    0%       0        0
+GPON0/1/0            up    up          0%    0%       0        0
+GPON0/1/1            up    up          0%    0%       0        0
+Vlanif100            up    up          0%    0%       0        0

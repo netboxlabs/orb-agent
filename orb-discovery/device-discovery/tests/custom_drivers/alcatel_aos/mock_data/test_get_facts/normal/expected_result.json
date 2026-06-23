@@ -1,0 +1,14 @@
+{
+  "hostname": "OS6860",
+  "vendor": "Alcatel-Lucent",
+  "model": "OS6860E-24",
+  "os_version": "8.5.152.R01",
+  "serial_number": "P468057P",
+  "uptime": 7045.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1/1/1",
+    "1/1/2",
+    "1/1/3"
+  ]
+}
