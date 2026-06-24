@@ -56,7 +56,7 @@ jobs:
           # Latest AGENT release only: list the agent's v* tags directly. Backend
           # releases are tagged <backend>/v* and are excluded by the refs/tags/v*
           # pattern; ls-remote avoids release-API pagination and works at any clone depth.
-          LATEST_RELEASE=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/##' | sort -V | tail -1)
+          LATEST_RELEASE=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
           echo "${LATEST_RELEASE:-develop}" > ./agent/version/BUILD_VERSION.txt
 
       - name: Build image and push by digest
