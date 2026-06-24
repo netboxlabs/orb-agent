@@ -37,10 +37,11 @@ jobs:
       - name: Set build info
         run: |
           echo ${GITHUB_SHA::7} > ./agent/version/BUILD_COMMIT.txt
-          # Latest AGENT release only: filter to v* tags so a backend release
-          # (tagged <backend>/v*) never stamps the agent image version.
-          LATEST_RELEASE=$(curl --silent "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" | jq -r '[.[] | select(.tag_name | test("^v[0-9]"))][0].tag_name // "develop"')
-          echo $LATEST_RELEASE > ./agent/version/BUILD_VERSION.txt
+          # Latest AGENT release only: list the agent's v* tags directly. Backend
+          # releases are tagged <backend>/v* and are excluded by the refs/tags/v*
+          # pattern; ls-remote avoids release-API pagination and works at any clone depth.
+          LATEST_RELEASE=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/##' | sort -V | tail -1)
+          echo "${LATEST_RELEASE:-develop}" > ./agent/version/BUILD_VERSION.txt
 
       - name: Build image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
