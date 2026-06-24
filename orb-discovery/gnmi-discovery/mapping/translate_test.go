@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 )
 
 func TestListKeyAndLeaf(t *testing.T) {

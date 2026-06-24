@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 )

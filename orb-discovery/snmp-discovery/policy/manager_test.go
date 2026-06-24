@@ -8,13 +8,14 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 )
 
 // MockRunner mocks the Runner

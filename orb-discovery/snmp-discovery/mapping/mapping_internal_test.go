@@ -6,9 +6,10 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
 
 // TestResolveMappingEntry_FallsBackThroughPDUs covers the Codex P1 from

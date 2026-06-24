@@ -6,9 +6,10 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
 
 // oidIdx encodes a VRF name into its length-prefixed OID index form.

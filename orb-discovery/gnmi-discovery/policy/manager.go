@@ -13,11 +13,12 @@ import (
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"gopkg.in/yaml.v3"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/env"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/mapping"
-	"gopkg.in/yaml.v3"
 )
 
 // maxIntervalMs is the largest interval (in ms) that can be multiplied by

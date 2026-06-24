@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 )
 
 func TestExtractParentInterfaceName(t *testing.T) {

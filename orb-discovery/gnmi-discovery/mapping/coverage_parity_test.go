@@ -4,9 +4,10 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 )
 
 // Device gains an unconditional "active" status. (asset_tag is resolved by the

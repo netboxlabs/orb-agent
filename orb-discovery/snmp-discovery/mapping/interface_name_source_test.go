@@ -3,8 +3,9 @@ package mapping
 import (
 	"testing"
 
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
 
 func TestResolveInterfaceName(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 )
 
