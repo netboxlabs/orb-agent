@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/policy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/policy"
 )
 
 func TestRunStore_CreateRun(t *testing.T) {

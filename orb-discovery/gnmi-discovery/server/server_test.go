@@ -16,10 +16,11 @@ import (
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"github.com/stretchr/testify/require"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/metrics"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/policy"
-	"github.com/stretchr/testify/require"
 )
 
 // initTestMetrics initialises the OTel meter to a live (but no-export) provider

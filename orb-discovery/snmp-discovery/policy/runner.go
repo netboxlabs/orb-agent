@@ -11,14 +11,15 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/google/uuid"
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/targets"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // Define a custom type for the context key

@@ -16,9 +16,10 @@ import (
 	"strings"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/metrics"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/metrics"
 )
 
 // assignMemberID stamps each ModuleEntry in inv with the logical member

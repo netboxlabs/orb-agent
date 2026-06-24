@@ -5,8 +5,9 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
 
 func TestNewPatternMatcher(t *testing.T) {

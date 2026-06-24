@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/metrics"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/policy"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // Response represents the server response

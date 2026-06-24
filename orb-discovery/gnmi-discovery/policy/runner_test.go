@@ -10,10 +10,11 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	diodepb "github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
+	"github.com/stretchr/testify/require"
+
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/mapping"
-	"github.com/stretchr/testify/require"
 )
 
 // recordingClient captures Ingest calls.
