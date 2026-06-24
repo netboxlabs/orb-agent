@@ -10,7 +10,7 @@ BUILD_DIR ?= build
 CGO_ENABLED ?= 0
 GOARCH ?= $(shell go env GOARCH)
 GOOS ?= $(shell go env GOOS)
-ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || git describe --tags --always 2>/dev/null || echo dev)}")
+ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || git describe --tags --match 'v[0-9]*' --always 2>/dev/null || echo dev)}")
 COMMIT_HASH = $(shell git rev-parse --short HEAD)
 COMMIT_BRANCH = $(shell branch=$$(git rev-parse --abbrev-ref HEAD); if [ "$$branch" = "HEAD" ]; then branch=$${GITHUB_HEAD_REF:-$$GITHUB_REF_NAME}; fi; echo "$${branch:-unknown}")
 VERSION_PKG = github.com/netboxlabs/orb-agent/agent/version
@@ -18,6 +18,11 @@ EXTRA_LDFLAGS ?=
 LDFLAGS ?= -X $(VERSION_PKG).buildVersion=$(ORB_VERSION) -X $(VERSION_PKG).buildBranch=$(COMMIT_BRANCH) $(EXTRA_LDFLAGS)
 OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
 OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
+
+# Make targets operate on the agent (a single module), so never use a local
+# go.work — workspace mode is incompatible with the -mod=mod build flow. The
+# `work` target below re-enables it explicitly for generating the file.
+export GOWORK = off
 
 .PHONY: agent agent_bin
 
@@ -48,7 +53,7 @@ deps:
 .PHONY: work
 work:
 	@rm -f go.work go.work.sum
-	@go work init . ./orb-discovery/network-discovery ./orb-discovery/snmp-discovery ./orb-discovery/gnmi-discovery
+	@GOWORK= go work init . ./orb-discovery/network-discovery ./orb-discovery/snmp-discovery ./orb-discovery/gnmi-discovery
 	@echo "go.work created (git-ignored). Use 'GOWORK=off' for single-module commands."
 
 agent_bin:
