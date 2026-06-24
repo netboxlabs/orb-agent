@@ -173,6 +173,17 @@ jobs:
         run: |
           echo $BUILD_COMMIT > ./agent/version/BUILD_COMMIT.txt
           echo $BUILD_VERSION > ./agent/version/BUILD_VERSION.txt
+          # Backend versions (latest <backend>/v* tag) — stamped into the from-source build.
+          nd=$(git ls-remote --tags --refs origin 'refs/tags/network-discovery/v*' | sed 's#.*/v##' | sort -V | tail -1)
+          sd=$(git ls-remote --tags --refs origin 'refs/tags/snmp-discovery/v*' | sed 's#.*/v##' | sort -V | tail -1)
+          dd=$(git ls-remote --tags --refs origin 'refs/tags/device-discovery/v*' | sed 's#.*/v##' | sort -V | tail -1)
+          wk=$(git ls-remote --tags --refs origin 'refs/tags/worker/v*' | sed 's#.*/v##' | sort -V | tail -1)
+          {
+            echo "ND_VERSION=${nd:-0.0.0}"
+            echo "SD_VERSION=${sd:-0.0.0}"
+            echo "DD_VERSION=${dd:-0.0.0}"
+            echo "WK_VERSION=${wk:-0.0.0}"
+          } >> "$GITHUB_ENV"
 
       - name: Build image and push by digest
         id: build
@@ -187,6 +198,12 @@ jobs:
           pull: true
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
+            BUILD_COMMIT=${{ env.BUILD_COMMIT }}
+            BUILD_TRACK=release
+            NETWORK_DISCOVERY_VERSION=${{ env.ND_VERSION }}
+            SNMP_DISCOVERY_VERSION=${{ env.SD_VERSION }}
+            DEVICE_DISCOVERY_VERSION=${{ env.DD_VERSION }}
+            WORKER_VERSION=${{ env.WK_VERSION }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest

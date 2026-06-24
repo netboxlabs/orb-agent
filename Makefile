@@ -18,6 +18,13 @@ EXTRA_LDFLAGS ?=
 LDFLAGS ?= -X $(VERSION_PKG).buildVersion=$(ORB_VERSION) -X $(VERSION_PKG).buildBranch=$(COMMIT_BRANCH) $(EXTRA_LDFLAGS)
 OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
 OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
+# Backend versions stamped into the from-source image (latest <backend>/v* tag);
+# without these the from-source backends report 0.0.0.
+ND_VERSION ?= $(shell v=$$(git describe --tags --match 'network-discovery/v[0-9]*' --abbrev=0 2>/dev/null | sed 's|.*/v||'); echo $${v:-0.0.0})
+SD_VERSION ?= $(shell v=$$(git describe --tags --match 'snmp-discovery/v[0-9]*' --abbrev=0 2>/dev/null | sed 's|.*/v||'); echo $${v:-0.0.0})
+DD_VERSION ?= $(shell v=$$(git describe --tags --match 'device-discovery/v[0-9]*' --abbrev=0 2>/dev/null | sed 's|.*/v||'); echo $${v:-0.0.0})
+WK_VERSION ?= $(shell v=$$(git describe --tags --match 'worker/v[0-9]*' --abbrev=0 2>/dev/null | sed 's|.*/v||'); echo $${v:-0.0.0})
+BACKEND_VERSION_ARGS = --build-arg NETWORK_DISCOVERY_VERSION=$(ND_VERSION) --build-arg SNMP_DISCOVERY_VERSION=$(SD_VERSION) --build-arg DEVICE_DISCOVERY_VERSION=$(DD_VERSION) --build-arg WORKER_VERSION=$(WK_VERSION) --build-arg BUILD_COMMIT=$(COMMIT_HASH) --build-arg BUILD_TRACK=$(COMMIT_BRANCH)
 
 # Make targets operate on the agent (a single module), so never use a local
 # go.work — workspace mode is incompatible with the -mod=mod build flow. The
@@ -99,6 +106,7 @@ agent:
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
+	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
 agent_fast:
@@ -108,6 +116,7 @@ agent_fast:
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
+	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
 agent_debug:
@@ -115,6 +124,7 @@ agent_debug:
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_DEBUG_TAG) \
 	  --tag=$(DOCKERHUB_REPO)/orb-agent:$(DEBUG_REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(DEBUG_REF_TAG) \
+	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
 agent_production:
@@ -123,12 +133,14 @@ agent_production:
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
+	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
 agent_debug_production:
 	docker build \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_DEBUG_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_DEBUG_REF_TAG) \
+	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
 pull-latest-otel-collector-contrib:

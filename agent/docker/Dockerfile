@@ -33,9 +33,14 @@ WORKDIR /src/network-discovery
 COPY orb-discovery/network-discovery/ .
 
 ARG TARGETOS TARGETARCH
+# Stamp the backend version: its version package go:embeds version/BUILD_*.txt.
+ARG NETWORK_DISCOVERY_VERSION=0.0.0
+ARG BUILD_COMMIT=unknown
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
+    echo "${NETWORK_DISCOVERY_VERSION}" > version/BUILD_VERSION.txt && \
+    echo "${BUILD_COMMIT}" > version/BUILD_COMMIT.txt && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w" -trimpath -o /usr/local/bin/network-discovery ./cmd/main.go
 
@@ -47,9 +52,14 @@ WORKDIR /src/snmp-discovery
 COPY orb-discovery/snmp-discovery/ .
 
 ARG TARGETOS TARGETARCH
+# Stamp the backend version: its version package go:embeds version/BUILD_*.txt.
+ARG SNMP_DISCOVERY_VERSION=0.0.0
+ARG BUILD_COMMIT=unknown
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
+    echo "${SNMP_DISCOVERY_VERSION}" > version/BUILD_VERSION.txt && \
+    echo "${BUILD_COMMIT}" > version/BUILD_COMMIT.txt && \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -ldflags="-s -w" -trimpath -o /usr/local/bin/snmp-discovery ./cmd/main.go
 
@@ -66,8 +76,20 @@ RUN python -m pip install --upgrade --no-cache-dir pip==26.1 && \
 # Install the Python backends from in-repo source (was: published PyPI packages
 # netboxlabs-device-discovery / netboxlabs-orb-worker). Console scripts
 # device-discovery and orb-worker land in /usr/local/bin.
+# Stamp backend versions into version.py (the release pipeline does this via sed;
+# mirror it so the from-source build reports real versions, not 0.0.0).
+ARG DEVICE_DISCOVERY_VERSION=0.0.0
+ARG WORKER_VERSION=0.0.0
+ARG BUILD_COMMIT=unknown
+ARG BUILD_TRACK=dev
+
 COPY orb-discovery/device-discovery/ /src/device-discovery/
 COPY orb-discovery/worker/ /src/worker/
+COPY agent/docker/stamp_version.py /tmp/stamp_version.py
+RUN BUILD_COMMIT="${BUILD_COMMIT}" BUILD_TRACK="${BUILD_TRACK}" \
+      python /tmp/stamp_version.py "${DEVICE_DISCOVERY_VERSION}" /src/device-discovery/device_discovery/version.py && \
+    BUILD_COMMIT="${BUILD_COMMIT}" BUILD_TRACK="${BUILD_TRACK}" \
+      python /tmp/stamp_version.py "${WORKER_VERSION}" /src/worker/worker/version.py
 RUN pip3 install --no-cache-dir /src/device-discovery /src/worker
 
 ########################################################################
