@@ -25,14 +25,15 @@ fields = {
 
 with open(path) as f:
     text = f.read()
-# Fail fast if an expected assignment isn't found: a silent no-op would let the
-# image ship with the 0.0.0/unknown defaults this script exists to replace.
+# Enforce exactly one matching assignment per field: a no-op (0) would let the
+# image ship with the 0.0.0/unknown defaults this script exists to replace, and
+# duplicates (2+) are ambiguous about which value wins — fail fast on either.
+# (No count limit, so duplicates are actually counted rather than capped at 1.)
 for name, value in fields.items():
     text, replaced = re.subn(
-        rf"(?m)^{name} = .*$",
+        rf"(?m)^{re.escape(name)} = .*$",
         lambda m, v=value, key=name: f"{key} = {v!r}",
         text,
-        count=1,
     )
     if replaced != 1:
         sys.exit(f"{path}: expected to stamp '{name}' exactly once, matched {replaced}")
