@@ -535,7 +535,7 @@ orb:
 - `priv_passphrase`
 
 ### Device Model Lookup
-The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIDs (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectID values. This only needs to be set if additional or modified files are being provided in addition to the ones that are included with orb-discovery and orb-agent.
+The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIDs (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectID values. This only needs to be set if additional or modified files are being provided beyond the ones bundled with orb-agent (under `orb-discovery/snmp-discovery/data/lookup_extensions`).
 
 More details about the file format and adding devices that aren't already covered are [available here](https://github.com/netboxlabs/orb-agent/blob/release/orb-discovery/snmp-discovery/README.md#device-model-lookup).
 
