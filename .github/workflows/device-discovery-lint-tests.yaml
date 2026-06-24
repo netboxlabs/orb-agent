@@ -5,8 +5,8 @@ on:
     paths:
       - "orb-discovery/device-discovery/**"
   push:
-    branches:
-      - "!release"
+    branches-ignore:
+      - release
     paths:
       - "orb-discovery/device-discovery/**"
 

@@ -1,8 +1,8 @@
 name: Network Discovery - test
 on:
   push:
-    branches:
-      - "!release"
+    branches-ignore:
+      - release
     paths:
       - "orb-discovery/network-discovery/**"
       - "!orb-discovery/network-discovery/docker/**"

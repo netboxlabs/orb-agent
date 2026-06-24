@@ -1,8 +1,8 @@
 name: SNMP Discovery - test
 on:
   push:
-    branches:
-      - "!release"
+    branches-ignore:
+      - release
     paths:
       - "orb-discovery/snmp-discovery/**"
       - "!orb-discovery/snmp-discovery/docker/**"

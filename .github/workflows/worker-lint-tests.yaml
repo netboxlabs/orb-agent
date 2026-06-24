@@ -5,8 +5,8 @@ on:
     paths:
       - "orb-discovery/worker/**"
   push:
-    branches:
-      - "!release"
+    branches-ignore:
+      - release
     paths:
       - "orb-discovery/worker/**"
 
