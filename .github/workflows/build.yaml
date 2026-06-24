@@ -37,7 +37,9 @@ jobs:
       - name: Set build info
         run: |
           echo ${GITHUB_SHA::7} > ./agent/version/BUILD_COMMIT.txt
-          LATEST_RELEASE=$(curl --silent "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.tag_name')
+          # Latest AGENT release only: filter to v* tags so a backend release
+          # (tagged <backend>/v*) never stamps the agent image version.
+          LATEST_RELEASE=$(curl --silent "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100" | jq -r '[.[] | select(.tag_name | test("^v[0-9]"))][0].tag_name // "develop"')
           echo $LATEST_RELEASE > ./agent/version/BUILD_VERSION.txt
 
       - name: Build image
