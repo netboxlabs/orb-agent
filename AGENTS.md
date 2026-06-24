@@ -46,7 +46,10 @@ make work                   # generate a git-ignored go.work for local dev
 
 The discovery backends live in their own modules under `orb-discovery/`. `go.work`
 is a local convenience only — it is git-ignored, and the agent image and CI build
-the agent as a single module.
+the agent as a single module. If your global `go env` sets `GOFLAGS=-mod=mod`, clear
+it (`go env -u GOFLAGS`): `-mod=mod` is invalid in workspace mode and breaks
+gopls/govulncheck while a `go.work` exists. `make` targets are unaffected — they run
+with `GOWORK=off`.
 
 After editing, always run `make fix-lint` — gci (import ordering) and gofumpt (formatting) are enforced in CI.
 
