@@ -43,7 +43,3 @@ test-coverage:
 .PHONY: test
 test:
 	@go test -race ./...
-
-.PHONY: docker-build
-docker-build: build
-	docker build -t netboxlabs/snmp-discovery:latest -t netboxlabs/snmp-discovery:${VERSION} -f docker/Dockerfile .

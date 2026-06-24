@@ -4,7 +4,6 @@ REF_TAG ?= develop
 DEBUG_REF_TAG ?= develop-debug
 PKTVISOR_TAG ?= develop-alpine
 PKTVISOR_DEBUG_TAG ?= develop-alpine-debug
-SNMP_DISCOVERY_TAG ?= latest
 DOCKERHUB_REPO = netboxlabs
 ORB_DOCKERHUB_REPO = netboxlabs
 BUILD_DIR ?= build
@@ -92,7 +91,6 @@ agent:
 	docker build --no-cache \
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
-	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
@@ -102,7 +100,6 @@ agent_fast:
 	docker build \
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
-	  --build-arg SNMP_DISCOVERY_TAG=$(SNMP_DISCOVERY_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \

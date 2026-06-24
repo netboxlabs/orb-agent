@@ -65,13 +65,11 @@ device-discovery -t 'grpc://192.168.0.10:8080/diode' -c '${DIODE_CLIENT_ID}' -k 
 ```
 
 ## Docker Image
-device-discovery can be build and run using docker:
-```sh
-cd device-discovery
-docker build --no-cache -t device-discovery:develop -f docker/Dockerfile .
-docker run  -e DIODE_CLIENT_ID=${YOUR_CLIENT} -e DIODE_CLIENT_SECRET=${YOUR_SECRET} -p 8072:8072 device-discovery:develop \
- device-discovery -t 'grpc://192.168.0.10:8080/diode' -c '${DIODE_CLIENT_ID}' -k '${DIODE_CLIENT_SECRET}'
-```
+
+`device-discovery` is built from source into the `netboxlabs/orb-agent` image
+(from `orb-discovery/device-discovery` in this repo); there is no standalone
+`device-discovery` image. Run it via the agent image, which launches the backend
+on demand, or use orb-test-lab for local testing.
 
 ### Routes (v1)
 
