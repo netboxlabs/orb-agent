@@ -220,7 +220,7 @@ A profile override file uses `extends: _base` to inherit bundled paths and overr
 ## Run gnmi-discovery
 
 ```sh
-git clone https://github.com/netboxlabs/orb-discovery.git
+git clone https://github.com/netboxlabs/orb-agent.git
 cd orb-discovery/gnmi-discovery/
 make build
 build/gnmi-discovery \

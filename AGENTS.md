@@ -4,9 +4,9 @@ This is the canonical guide for both humans and coding agents (Claude Code,
 Codex, etc.) working in this repository. `CLAUDE.md` points here.
 
 `orb-agent` runs network-discovery backends as managed subprocesses. The
-discovery backends (device, network, snmp, gnmi) and the worker are being
-merged into this repo under `orb-discovery/`; until that lands the agent talks
-to them only by exec'ing binaries on PATH.
+discovery backends (device, network, snmp, gnmi) and the worker live in this
+repo under `orb-discovery/`; the agent talks to them only by exec'ing binaries
+on PATH.
 
 ## Contributing & releases
 

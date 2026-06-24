@@ -375,7 +375,7 @@ To add your own OIDs or override a bundled file:
 
 ```sh
 # Seed a local override directory from the bundled files
-git clone https://github.com/netboxlabs/orb-discovery.git
+git clone https://github.com/netboxlabs/orb-agent.git
 cp orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb/snmp-extensions/
 ```
 

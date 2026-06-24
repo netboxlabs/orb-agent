@@ -66,7 +66,7 @@ policies:
 ## Run network-discovery
 network-discovery can be run by cloning it's git repo
 ```sh
-git clone https://github.com/netboxlabs/orb-discovery.git
+git clone https://github.com/netboxlabs/orb-agent.git
 cd network-discovery/
 make build
 build/network-discovery --diode-target grpc://192.168.31.114:8080/diode  --diode-client-id '${DIODE_CLIENT_ID}' --diode-client-secret '${DIODE_CLIENT_SECRET}'
