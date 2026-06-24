@@ -173,11 +173,20 @@ jobs:
         run: |
           echo $BUILD_COMMIT > ./agent/version/BUILD_COMMIT.txt
           echo $BUILD_VERSION > ./agent/version/BUILD_VERSION.txt
-          # Backend versions (latest <backend>/v* tag) — stamped into the from-source build.
-          nd=$(git ls-remote --tags --refs origin 'refs/tags/network-discovery/v*' | sed 's#.*/v##' | sort -V | tail -1)
-          sd=$(git ls-remote --tags --refs origin 'refs/tags/snmp-discovery/v*' | sed 's#.*/v##' | sort -V | tail -1)
-          dd=$(git ls-remote --tags --refs origin 'refs/tags/device-discovery/v*' | sed 's#.*/v##' | sort -V | tail -1)
-          wk=$(git ls-remote --tags --refs origin 'refs/tags/worker/v*' | sed 's#.*/v##' | sort -V | tail -1)
+          # Latest RELEASED version per backend (highest <backend>/vX.Y.Z tag;
+          # pre-releases excluded) — stamped into the from-source build. ls-remote
+          # runs on its own line so a transport failure aborts the step (errexit)
+          # instead of silently falling back to 0.0.0 and reintroducing the
+          # regression this fixes.
+          backend_version() {
+            local refs
+            refs=$(git ls-remote --tags --refs origin "refs/tags/$1/v*") || return 1
+            printf '%s\n' "$refs" | sed 's#.*/v##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+          }
+          nd=$(backend_version network-discovery)
+          sd=$(backend_version snmp-discovery)
+          dd=$(backend_version device-discovery)
+          wk=$(backend_version worker)
           {
             echo "ND_VERSION=${nd:-0.0.0}"
             echo "SD_VERSION=${sd:-0.0.0}"
