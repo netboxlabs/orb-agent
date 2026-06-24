@@ -64,7 +64,7 @@ policies:
         - google.com
 ```
 ## Run network-discovery
-network-discovery can be run by cloning it's git repo
+network-discovery can be run by cloning its git repo
 ```sh
 git clone https://github.com/netboxlabs/orb-agent.git
 cd orb-agent/orb-discovery/network-discovery/

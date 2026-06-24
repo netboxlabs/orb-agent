@@ -468,7 +468,7 @@ When an SNMP discovery scan completes, `snmp-discovery` populates the device's `
 Hostname targets are resolved via DNS once per scan (2s timeout); only IPv4 results are considered for matching. If the target cannot be resolved, is IPv6, or no discovered interface IP matches, the device is emitted with `primary_ip4` left unset. Only IPv4 is supported today.
 
 ## Run snmp-discovery
-snmp-discovery can be run by cloning it's git repo
+snmp-discovery can be run by cloning its git repo
 ```sh
 git clone https://github.com/netboxlabs/orb-agent.git
 cd orb-agent/orb-discovery/snmp-discovery/

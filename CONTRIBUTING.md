@@ -1,9 +1,9 @@
 # Contributing to orb-agent
 
-orb-agent is being prepared to host the discovery backends (device, network,
-snmp, gnmi) and the worker alongside the agent in a single repository. To keep
-versioning and release notes coherent across all of these, the release pipeline
-keys off **PR titles** — so titles must follow the convention below.
+orb-agent hosts the discovery backends (device, network, snmp, gnmi) and the
+worker alongside the agent in a single repository. To keep versioning and
+release notes coherent across all of these, the release pipeline keys off
+**PR titles** — so titles must follow the convention below.
 
 ## How releases work
 
@@ -52,11 +52,11 @@ Agent:
 
 - `agent` — the orb-agent itself. `feat`/`fix`/`perf` here cuts an agent release.
 
-Releasable backends (reserved for the monorepo merge — they cut that backend's
-release once the backends land, and contribute to the aggregated agent release):
+Releasable backends (each cuts its own release and contributes to the
+aggregated agent release):
 
 - `device-discovery`
-- `gnmi-discovery` *(reserved; backend and its release workflow land separately)*
+- `gnmi-discovery` *(experimental)*
 - `network-discovery`
 - `snmp-discovery`
 - `worker`
