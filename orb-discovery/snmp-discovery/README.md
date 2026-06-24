@@ -471,7 +471,7 @@ Hostname targets are resolved via DNS once per scan (2s timeout); only IPv4 resu
 snmp-discovery can be run by cloning it's git repo
 ```sh
 git clone https://github.com/netboxlabs/orb-agent.git
-cd snmp-discovery/
+cd orb-agent/orb-discovery/snmp-discovery/
 make bin
 build/snmp-discovery --diode-target grpc://192.168.31.114:8080/diode  --diode-client-id '${DIODE_CLIENT_ID}' --diode-client-secret '${DIODE_CLIENT_SECRET}'
 ```
