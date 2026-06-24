@@ -375,8 +375,8 @@ To add your own OIDs or override a bundled file:
 
 ```sh
 # Seed a local override directory from the bundled files
-git clone https://github.com/netboxlabs/orb-discovery.git
-cp orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb/snmp-extensions/
+git clone https://github.com/netboxlabs/orb-agent.git
+cp orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb/snmp-extensions/
 ```
 
 When snmp-discovery encounters a device, it reads the device's `sysObjectID`, searches the YAML files in `lookup_extensions_dir` for a match, and falls back to the raw OID when no match is found.

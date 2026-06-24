@@ -1,9 +1,9 @@
 # Contributing to orb-agent
 
-orb-agent is being prepared to host the discovery backends (device, network,
-snmp, gnmi) and the worker alongside the agent in a single repository. To keep
-versioning and release notes coherent across all of these, the release pipeline
-keys off **PR titles** — so titles must follow the convention below.
+orb-agent hosts the discovery backends (device, network, snmp, gnmi) and the
+worker alongside the agent in a single repository. To keep versioning and
+release notes coherent across all of these, the release pipeline keys off
+**PR titles** — so titles must follow the convention below.
 
 ## How releases work
 
@@ -16,6 +16,12 @@ keys off **PR titles** — so titles must follow the convention below.
 - When an agent release does fire, it **aggregates everything**: the release
   notes include every commit since the last `vX.Y.Z` tag — agent changes and any
   interim backend changes — grouped by type and scope.
+- **Per-backend releases** cut their own version from commits scoped to that
+  backend (filtered by `orb-discovery/<backend>/**`), tagged
+  `<backend>/v<version>` (e.g. `snmp-discovery/v1.2.3`). The
+  `semantic-release-monorepo` plugin renders the GitHub Release *title* with a
+  dash (`snmp-discovery-v1.2.3`); this is cosmetic — the git tag and ref keep the
+  slash form. `worker` and `device-discovery` also publish to PyPI.
 - Pushing to `develop` rebuilds and publishes the `orb-agent:develop` image.
   This fires on changes under `agent/`, `cmd/`, **or** `orb-discovery/` (the
   backends), so a backend-only change still refreshes the develop image
@@ -46,11 +52,11 @@ Agent:
 
 - `agent` — the orb-agent itself. `feat`/`fix`/`perf` here cuts an agent release.
 
-Releasable backends (reserved for the monorepo merge — they cut that backend's
-release once the backends land, and contribute to the aggregated agent release):
+Releasable backends (each cuts its own release and contributes to the
+aggregated agent release):
 
 - `device-discovery`
-- `gnmi-discovery` *(reserved; backend and its release workflow land separately)*
+- `gnmi-discovery` *(experimental)*
 - `network-discovery`
 - `snmp-discovery`
 - `worker`

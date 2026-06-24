@@ -72,7 +72,7 @@ These drivers are bundled with device-discovery. They are **not** tried during a
 | `ubiquiti_edgeswitch` | Ubiquiti | EdgeSwitch |
 | `ubiquiti_unifiswitch` | Ubiquiti | UniFi Switch |
 
-The source for the custom drivers is maintained at [orb-discovery/device-discovery/custom_napalm](https://github.com/netboxlabs/orb-discovery/tree/develop/device-discovery/custom_napalm).
+The source for the custom drivers is maintained at [orb-discovery/device-discovery/custom_napalm](https://github.com/netboxlabs/orb-agent/tree/develop/orb-discovery/device-discovery/custom_napalm).
 
 ## Interface ↔ VLAN associations
 
