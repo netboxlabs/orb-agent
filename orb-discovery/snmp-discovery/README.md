@@ -445,7 +445,7 @@ You can create custom device lookup files for your specific hardware or to overr
 ```bash
 # Clone the repository to get device lookup files
 git clone https://github.com/netboxlabs/orb-agent.git
-cd orb-discovery/snmp-discovery/data/lookup_extensions/
+cd orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/
 
 # Copy the files to your lookup extensions directory
 cp *.yaml /opt/orb/snmp-extensions/

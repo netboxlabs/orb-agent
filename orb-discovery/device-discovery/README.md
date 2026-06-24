@@ -59,7 +59,7 @@ policies:
 device-discovery can be run by installing it with pip
 ```sh
 git clone https://github.com/netboxlabs/orb-agent.git
-cd orb-discovery/
+cd orb-agent/orb-discovery/
 pip install --no-cache-dir ./device-discovery/
 device-discovery -t 'grpc://192.168.0.10:8080/diode' -c '${DIODE_CLIENT_ID}' -k '${DIODE_CLIENT_SECRET}'
 ```
