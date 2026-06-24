@@ -237,28 +237,16 @@ build/gnmi-discovery --dry-run --dry-run-output-dir /tmp/gnmi-dry --port 8075
 
 ## Docker Image
 
-```sh
-cd orb-discovery/gnmi-discovery/
-docker build --no-cache -t gnmi-discovery:develop -f docker/Dockerfile .
-docker run --net=host \
-  -e GNMI_USER=admin \
-  -e GNMI_PASS=secret \
-  -e DIODE_CLIENT_ID=${DIODE_CLIENT_ID} \
-  -e DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET} \
-  gnmi-discovery:develop \
-  gnmi-discovery \
-  --diode-target grpc://192.168.31.114:8080/diode \
-  --diode-client-id '${DIODE_CLIENT_ID}' \
-  --diode-client-secret '${DIODE_CLIENT_SECRET}'
-```
+`gnmi-discovery` is built from source into the `netboxlabs/orb-agent` image (from
+`orb-discovery/gnmi-discovery` in this repo); there is no standalone
+`gnmi-discovery` image. Run it via the agent image, which launches the backend on
+demand, or use orb-test-lab for local testing.
 
-To use profile overrides at runtime:
+Profile overrides work the same way under the agent image — point the backend at a
+profiles directory with `--profiles-dir`:
 
 ```sh
-docker run --net=host \
-  -v /etc/my-gnmi-profiles:/etc/gnmi-profiles:ro \
-  gnmi-discovery:develop \
-  gnmi-discovery \
+gnmi-discovery \
   --diode-target grpc://... \
   --profiles-dir /etc/gnmi-profiles \
   ...

@@ -51,13 +51,11 @@ orb-worker -t 'grpc://192.168.0.10:8080/diode' -c '${DIODE_CLIENT_ID}' -k '${DIO
 ```
 
 ## Docker Image
-worker can be build and run using docker:
-```sh
-cd worker
-docker build --no-cache -t worker:develop -f docker/Dockerfile .
-docker run  -e DIODE_CLIENT_ID=${YOUR_CLIENT} -e DIODE_CLIENT_SECRET=${YOUR_SECRET} -p 8071:8071 worker:develop \
- orb-worker -t 'grpc://192.168.0.10:8080/diode' -c '${DIODE_CLIENT_ID}' -k '${DIODE_CLIENT_SECRET}'
-```
+
+`worker` is built from source into the `netboxlabs/orb-agent` image (from
+`orb-discovery/worker` in this repo); there is no standalone `worker` image. Run
+it via the agent image, which launches the backend on demand, or use orb-test-lab
+for local testing.
 
 ### Routes (v1)
 

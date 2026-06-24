@@ -81,17 +81,11 @@ Be **AWARE** that executing a policy with only targets defined is equivalent to 
 - `-T4` → Uses the agressive timing template
 
 ### Docker Image
-device-discovery can be build and run using docker:
-```sh
-cd network-discovery/
-docker build --no-cache -t network-discovery:develop -f docker/Dockerfile .
-docker run --net=host -e DIODE_CLIENT_ID={YOUR_CLIENT} \
- -e DIODE_CLIENT_SECRET=${YOUR_SECRET} \
- network-discovery:develop network-discovery \
- --diode-target grpc://192.168.31.114:8080/diode \
- --diode-client-id '${DIODE_CLIENT_ID}' \
- --diode-client-secret '${DIODE_CLIENT_SECRET}'
-```
+
+`network-discovery` is built from source into the `netboxlabs/orb-agent` image
+(from `orb-discovery/network-discovery` in this repo); there is no standalone
+`network-discovery` image. Run it via the agent image, which launches the backend
+on demand, or use orb-test-lab for local testing.
 
 ### Routes (v1)
 
