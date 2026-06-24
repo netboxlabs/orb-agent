@@ -31,4 +31,4 @@ jobs:
         with:
           version: v2.11.3
           working-directory: orb-discovery/gnmi-discovery
-          args: --config ../.github/golangci.yaml
+          args: --config ../.golangci.yaml

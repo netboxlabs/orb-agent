@@ -1,11 +1,11 @@
-name: Device Discovery - release
+name: Network Discovery - release
 on:
   workflow_dispatch:
   push:
-    branches:
-        - "release"
+    branches: [ release ]
     paths:
-        - "device-discovery/**"
+      - "orb-discovery/network-discovery/**"
+      - "!orb-discovery/network-discovery/docker/**"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -14,9 +14,7 @@ concurrency:
 env:
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  PYTHON_RUNTIME_VERSION: "3.11"
-  APP_NAME: device-discovery
-  PYTHON_PACKAGE_NAME: netboxlabs_device_discovery
+  APP_NAME: network-discovery
 
 permissions:
   contents: write
@@ -24,32 +22,20 @@ permissions:
   pull-requests: write
 
 jobs:
-  get-python-package-name:
-    name: Get Python package name
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-      - name: Python package name
-        id: python-package-name
-        run: echo "python-package-name=${{ env.PYTHON_PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
-    outputs:
-        python-package-name: ${{ steps.python-package-name.outputs.python-package-name }}
-
   get-next-version:
     name: Semantic release get next version
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "lts/*"
       - name: Write package.json
         run: |
-          cat > "${{ env.APP_NAME }}/package.json" <<'EOF'
+          cat > "orb-discovery/${{ env.APP_NAME }}/package.json" <<'EOF'
           {
             "name": "${{ env.APP_NAME }}",
             "version": "1.0.0",
@@ -63,11 +49,11 @@ jobs:
           EOF
       - name: Write .releaserc.json
         run: |
-          cat > "${{ env.APP_NAME }}/.releaserc.json" <<'EOF'
+          cat > "orb-discovery/${{ env.APP_NAME }}/.releaserc.json" <<'EOF'
           {
             "extends": "semantic-release-monorepo",
             "branches": "release",
-            "repositoryUrl": "https://github.com/netboxlabs/orb-discovery",
+            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
             "debug": "true",
             "tagFormat": "${{ env.APP_NAME }}/v${version}",
             "plugins": [
@@ -103,10 +89,10 @@ jobs:
           }
           EOF
       - name: setup semantic-release
-        working-directory: ${{ env.APP_NAME }}
+        working-directory: orb-discovery/${{ env.APP_NAME }}
         run: npm install --legacy-peer-deps
       - name: release dry-run
-        working-directory: ${{ env.APP_NAME }}
+        working-directory: orb-discovery/${{ env.APP_NAME }}
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
         run: npx semantic-release --debug --dry-run
@@ -130,72 +116,25 @@ jobs:
     needs: get-next-version
     if: needs.get-next-version.outputs.new-release-published == 'true'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
-
-  build:
-    name: Build
-    needs: [ get-python-package-name, get-next-version ]
-    if: needs.get-next-version.outputs.new-release-published == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: ${{ env.APP_NAME  }}
-    permissions:
-      id-token: write
-      contents: read
-    env:
-      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
-      BUILD_TRACK: release
-      BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
-      OUTPUT_FILENAME: ${{ needs.get-python-package-name.outputs.python-package-name }}-${{ needs.get-next-version.outputs.new-release-version }}.tar.gz
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_RUNTIME_VERSION }}
-      - name: Insert version variables into Python
-        run: |
-          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" device_discovery/version.py
-          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" device_discovery/version.py
-          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" device_discovery/version.py
-      - name: Display contents of version.py
-        run: cat device_discovery/version.py
-      - name: Build sdist 
-        run: |
-          pip install toml-cli
-          toml set --toml-path pyproject.toml project.version ${{ env.BUILD_VERSION }}
-          cat pyproject.toml | grep version
-          python3 -m pip install --upgrade build
-          python3 -m build --sdist --outdir dist/
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: ${{env.APP_NAME}}/dist/${{ env.OUTPUT_FILENAME }}
-          retention-days: 30
-          if-no-files-found: error
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
-        with:
-          packages-dir: ${{env.APP_NAME}}/dist
 
   semantic-release:
     name: Semantic release
-    needs: [ build ]
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "lts/*"
       - name: Write package.json
         run: |
-          cat > "${{ env.APP_NAME }}/package.json" <<'EOF'
+          cat > "orb-discovery/${{ env.APP_NAME }}/package.json" <<'EOF'
           {
             "name": "${{ env.APP_NAME }}",
             "version": "1.0.0",
@@ -209,11 +148,11 @@ jobs:
           EOF
       - name: Write .releaserc.json
         run: |
-          cat > "${{ env.APP_NAME }}/.releaserc.json" <<'EOF'
+          cat > "orb-discovery/${{ env.APP_NAME }}/.releaserc.json" <<'EOF'
           {
             "extends": "semantic-release-monorepo",
             "branches": "release",
-            "repositoryUrl": "https://github.com/netboxlabs/orb-discovery",
+            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
             "debug": "true",
             "tagFormat": "${{ env.APP_NAME }}/v${version}",
             "plugins": [
@@ -249,10 +188,10 @@ jobs:
           }
           EOF
       - name: setup semantic-release
-        working-directory: ${{ env.APP_NAME }}
+        working-directory: orb-discovery/${{ env.APP_NAME }}
         run: npm install --legacy-peer-deps
       - name: Release
-        working-directory: ${{ env.APP_NAME }}
+        working-directory: orb-discovery/${{ env.APP_NAME }}
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
         run: npx semantic-release --debug

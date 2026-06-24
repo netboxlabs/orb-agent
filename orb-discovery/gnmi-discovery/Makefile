@@ -26,11 +26,11 @@ deps:
 
 .PHONY: lint
 lint:
-	@golangci-lint run ./... --config ../.github/golangci.yaml
+	@golangci-lint run ./... --config ../.golangci.yaml
 
 .PHONY: fix-lint
 fix-lint:
-	@golangci-lint run ./... --config ../.github/golangci.yaml --fix
+	@golangci-lint run ./... --config ../.golangci.yaml --fix
 
 .PHONY: test-coverage
 test-coverage:
