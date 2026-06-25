@@ -1,0 +1,145 @@
+name: Worker - release
+
+# Top-level (NOT reusable) so PyPI Trusted Publishing works (it cannot mint a
+# token from a reusable workflow, and matches on this filename). The agent
+# release (release.yaml) waits for this run before building.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ release ]
+    paths:
+      - "orb-discovery/worker/**"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
+  APP_NAME: worker
+  PYTHON_MODULE: worker
+  PYTHON_RUNTIME_VERSION: "3.11"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  get-next-version:
+    name: Semantic release get next version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+      - name: Setup semantic-release
+        uses: ./.github/actions/setup-semantic-release
+        with:
+          component: backend
+          app-name: ${{ env.APP_NAME }}
+          working-directory: orb-discovery/${{ env.APP_NAME }}
+      - name: Release dry-run
+        id: get-next-version
+        working-directory: orb-discovery/${{ env.APP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug --dry-run
+      - name: Set short sha output
+        id: short-sha
+        run: echo "short-sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Set release version
+        id: release-version
+        run: |
+          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed -E 's|^${{ env.APP_NAME }}[-/]||; s|^v||')" >> "$GITHUB_OUTPUT"
+    outputs:
+      new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
+      new-release-version: ${{ steps.release-version.outputs.release-version }}
+      short-sha: ${{ steps.short-sha.outputs.short-sha }}
+
+  confirm-version:
+    name: Next version ${{ needs.get-next-version.outputs.new-release-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    steps:
+      - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
+
+  build:
+    name: Build
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: orb-discovery/${{ env.APP_NAME }}
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
+      BUILD_TRACK: release
+      BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
+      OUTPUT_FILENAME: netboxlabs_orb_worker-${{ needs.get-next-version.outputs.new-release-version }}.tar.gz
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_RUNTIME_VERSION }}
+      - name: Insert version variables into Python
+        run: |
+          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" ${{ env.PYTHON_MODULE }}/version.py
+          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" ${{ env.PYTHON_MODULE }}/version.py
+          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" ${{ env.PYTHON_MODULE }}/version.py
+      - name: Display contents of version.py
+        run: cat ${{ env.PYTHON_MODULE }}/version.py
+      - name: Build sdist
+        run: |
+          pip install toml-cli
+          toml set --toml-path pyproject.toml project.version ${{ env.BUILD_VERSION }}
+          cat pyproject.toml | grep version
+          python3 -m pip install --upgrade build
+          python3 -m build --sdist --outdir dist/
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.OUTPUT_FILENAME }}
+          path: orb-discovery/${{ env.APP_NAME }}/dist/${{ env.OUTPUT_FILENAME }}
+          retention-days: 30
+          if-no-files-found: error
+      - name: Publish release distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: orb-discovery/${{ env.APP_NAME }}/dist
+
+  semantic-release:
+    name: Semantic release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+      - name: Setup semantic-release
+        uses: ./.github/actions/setup-semantic-release
+        with:
+          component: backend
+          app-name: ${{ env.APP_NAME }}
+          working-directory: orb-discovery/${{ env.APP_NAME }}
+      - name: Release
+        working-directory: orb-discovery/${{ env.APP_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug

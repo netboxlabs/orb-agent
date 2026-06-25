@@ -1,11 +1,12 @@
 name: Orb Agent - release
 
-# Orchestrated release. On a push to `release` it detects which components
-# changed, releases the changed backends first (each tags <backend>/vX.Y.Z), then
-# resolves the backend versions (preferring the just-released version, else the
-# latest tag) and releases orb-agent — so the agent image always bundles the
-# freshly-released backend versions. Backend-only changes do not cut an agent
-# release; they ship via the continuously-rebuilt develop image.
+# Orchestrated agent release. The per-backend releases are their own top-level
+# workflows (so PyPI trusted publishing keeps working — it cannot run from a
+# reusable workflow). On a push to `release` this detects which components
+# changed, WAITS for the changed backends' release runs to finish (so their new
+# <backend>/vX.Y.Z tags exist), resolves those versions, and releases orb-agent
+# with them — so the agent image bundles the freshly-released backend versions.
+# Backend-only changes do not cut an agent release.
 on:
   workflow_dispatch:
   push:
@@ -101,92 +102,87 @@ jobs:
             echo "agent=$(detect '^(agent/|cmd/|go\.mod$|go\.sum$)' '^agent/docker/')"
           } >> "$GITHUB_OUTPUT"
 
-  release-device:
-    name: Release device-discovery
+  wait-for-backend-releases:
+    name: Wait for backend releases
     needs: changes
-    if: ${{ needs.changes.outputs.device == 'true' }}
-    uses: ./.github/workflows/_backend-release-python.yaml
-    with:
-      app-name: device-discovery
-      python-package-name: netboxlabs_device_discovery
-      python-module: device_discovery
-    secrets: inherit
-
-  release-worker:
-    name: Release worker
-    needs: changes
-    if: ${{ needs.changes.outputs.worker == 'true' }}
-    uses: ./.github/workflows/_backend-release-python.yaml
-    with:
-      app-name: worker
-      python-package-name: netboxlabs_orb_worker
-      python-module: worker
-    secrets: inherit
-
-  release-network:
-    name: Release network-discovery
-    needs: changes
-    if: ${{ needs.changes.outputs.network == 'true' }}
-    uses: ./.github/workflows/_backend-release-go.yaml
-    with:
-      app-name: network-discovery
-    secrets: inherit
-
-  release-snmp:
-    name: Release snmp-discovery
-    needs: changes
-    if: ${{ needs.changes.outputs.snmp == 'true' }}
-    uses: ./.github/workflows/_backend-release-go.yaml
-    with:
-      app-name: snmp-discovery
-    secrets: inherit
-
-  release-gnmi:
-    name: Release gnmi-discovery
-    needs: changes
-    if: ${{ needs.changes.outputs.gnmi == 'true' }}
-    uses: ./.github/workflows/_backend-release-go.yaml
-    with:
-      app-name: gnmi-discovery
-    secrets: inherit
+    # The backend releases are standalone push-triggered workflows. On a push,
+    # wait for the changed ones to finish so their new tags exist before the
+    # agent build resolves versions. On workflow_dispatch they aren't push-
+    # triggered, so there is nothing to wait for (resolve-versions then just
+    # uses the latest tags).
+    if: >-
+      ${{ github.event_name == 'push' && needs.changes.outputs.agent == 'true' &&
+          (needs.changes.outputs.device == 'true' || needs.changes.outputs.worker == 'true' ||
+           needs.changes.outputs.network == 'true' || needs.changes.outputs.snmp == 'true' ||
+           needs.changes.outputs.gnmi == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SHA: ${{ github.sha }}
+      DEVICE: ${{ needs.changes.outputs.device }}
+      WORKER: ${{ needs.changes.outputs.worker }}
+      NETWORK: ${{ needs.changes.outputs.network }}
+      SNMP: ${{ needs.changes.outputs.snmp }}
+      GNMI: ${{ needs.changes.outputs.gnmi }}
+    steps:
+      - name: Wait for changed backend release runs
+        run: |
+          set -eu
+          wait_for() {
+            local wf="$1" appeared="" run status concl
+            for _ in $(seq 1 200); do   # up to ~33 min at 10s
+              run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" \
+                       --branch "$GITHUB_REF_NAME" --event push \
+                       --json databaseId,headSha,status,conclusion --limit 30 \
+                     | jq -c --arg sha "$SHA" 'map(select(.headSha==$sha)) | first // empty')"
+              if [ -n "$run" ]; then
+                appeared=1
+                status="$(printf '%s' "$run" | jq -r .status)"
+                if [ "$status" = "completed" ]; then
+                  concl="$(printf '%s' "$run" | jq -r .conclusion)"
+                  case "$concl" in
+                    success|skipped) echo "$wf: $concl"; return 0 ;;
+                    *) echo "::error::$wf release run concluded '$concl'"; return 1 ;;
+                  esac
+                fi
+              fi
+              sleep 10
+            done
+            if [ -n "$appeared" ]; then
+              echo "::error::timed out waiting for $wf"
+            else
+              echo "::error::no $wf run found for commit $SHA"
+            fi
+            return 1
+          }
+          if [ "$DEVICE" = "true" ];  then wait_for device-discovery-release.yaml;  fi
+          if [ "$WORKER" = "true" ];  then wait_for worker-release.yaml;            fi
+          if [ "$NETWORK" = "true" ]; then wait_for network-discovery-release.yaml; fi
+          if [ "$SNMP" = "true" ];    then wait_for snmp-discovery-release.yaml;     fi
+          if [ "$GNMI" = "true" ];    then wait_for gnmi-discovery-release.yaml;     fi
+          echo "all changed backend releases complete"
 
   resolve-versions:
     name: Resolve backend versions
-    needs: [changes, release-device, release-worker, release-network, release-snmp, release-gnmi]
+    needs: [changes, wait-for-backend-releases]
     if: ${{ !failure() && !cancelled() && needs.changes.outputs.agent == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      network: ${{ steps.combine.outputs.network }}
-      snmp: ${{ steps.combine.outputs.snmp }}
-      device: ${{ steps.combine.outputs.device }}
-      worker: ${{ steps.combine.outputs.worker }}
+      network: ${{ steps.versions.outputs.network }}
+      snmp: ${{ steps.versions.outputs.snmp }}
+      device: ${{ steps.versions.outputs.device }}
+      worker: ${{ steps.versions.outputs.worker }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      # Latest released tag per backend (includes any just-released this run,
-      # since this job runs after the backend releases).
-      - id: latest
+      # wait-for-backend-releases has ensured any changed backend already tagged
+      # its new version, so ls-remote returns the freshly-released versions.
+      - id: versions
         uses: ./.github/actions/resolve-backend-versions
-      - name: Combine released + latest
-        id: combine
-        env:
-          REL_NETWORK: ${{ needs.release-network.outputs.version }}
-          REL_SNMP: ${{ needs.release-snmp.outputs.version }}
-          REL_DEVICE: ${{ needs.release-device.outputs.version }}
-          REL_WORKER: ${{ needs.release-worker.outputs.version }}
-          LATEST_NETWORK: ${{ steps.latest.outputs.network }}
-          LATEST_SNMP: ${{ steps.latest.outputs.snmp }}
-          LATEST_DEVICE: ${{ steps.latest.outputs.device }}
-          LATEST_WORKER: ${{ steps.latest.outputs.worker }}
-        run: |
-          set -eu
-          # Prefer the version just released this run; otherwise the latest tag.
-          {
-            echo "network=${REL_NETWORK:-$LATEST_NETWORK}"
-            echo "snmp=${REL_SNMP:-$LATEST_SNMP}"
-            echo "device=${REL_DEVICE:-$LATEST_DEVICE}"
-            echo "worker=${REL_WORKER:-$LATEST_WORKER}"
-          } >> "$GITHUB_OUTPUT"
 
   agent-release:
     name: Release orb-agent

@@ -1,0 +1,23 @@
+name: Network Discovery - release
+
+# Thin top-level caller so this is a standalone run the agent release can wait
+# for; the Go backends have no PyPI publish, so the reusable is fine here.
+on:
+  workflow_dispatch:
+  push:
+    branches: [ release ]
+    paths:
+      - "orb-discovery/network-discovery/**"
+      - "!orb-discovery/network-discovery/docker/**"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/_backend-release-go.yaml
+    with:
+      app-name: network-discovery
+    secrets: inherit

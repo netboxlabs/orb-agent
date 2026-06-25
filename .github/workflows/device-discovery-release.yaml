@@ -1,36 +1,25 @@
-name: Backend release (Python)
+name: Device Discovery - release
 
-# Reusable release for the Python discovery backends (device-discovery, worker).
-# Computes the next <app>/vX.Y.Z version from the backend's own commits (scoped
-# via semantic-release-monorepo), builds the sdist with the version stamped in,
-# publishes to PyPI (trusted publisher / OIDC), and publishes the tag + release.
+# Top-level (NOT reusable) so PyPI Trusted Publishing works: trusted publishing
+# cannot mint a token from a reusable workflow, and matches on this filename.
+# The agent release (release.yaml) waits for this run before building so its
+# image bundles the freshly released version.
 on:
-  workflow_call:
-    inputs:
-      app-name:
-        description: 'Backend app name — the "<app>/v${version}" tag prefix and package name.'
-        required: true
-        type: string
-      python-package-name:
-        description: 'PyPI distribution name (e.g. netboxlabs_device_discovery).'
-        required: true
-        type: string
-      python-module:
-        description: 'Python package directory containing version.py (e.g. device_discovery).'
-        required: true
-        type: string
-      python-runtime-version:
-        description: 'Python version used to build the sdist.'
-        required: false
-        type: string
-        default: "3.11"
-    outputs:
-      released:
-        description: 'true if a new release was published this run.'
-        value: ${{ jobs.get-next-version.outputs.new-release-published }}
-      version:
-        description: 'The released version (bare X.Y.Z); empty when nothing was released.'
-        value: ${{ jobs.get-next-version.outputs.new-release-version }}
+  workflow_dispatch:
+  push:
+    branches: [ release ]
+    paths:
+      - "orb-discovery/device-discovery/**"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
+  APP_NAME: device-discovery
+  PYTHON_MODULE: device_discovery
+  PYTHON_RUNTIME_VERSION: "3.11"
 
 permissions:
   contents: write
@@ -53,11 +42,11 @@ jobs:
         uses: ./.github/actions/setup-semantic-release
         with:
           component: backend
-          app-name: ${{ inputs.app-name }}
-          working-directory: orb-discovery/${{ inputs.app-name }}
+          app-name: ${{ env.APP_NAME }}
+          working-directory: orb-discovery/${{ env.APP_NAME }}
       - name: Release dry-run
         id: get-next-version
-        working-directory: orb-discovery/${{ inputs.app-name }}
+        working-directory: orb-discovery/${{ env.APP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
@@ -68,7 +57,7 @@ jobs:
       - name: Set release version
         id: release-version
         run: |
-          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed -E 's|^${{ inputs.app-name }}[-/]||; s|^v||')" >> "$GITHUB_OUTPUT"
+          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed -E 's|^${{ env.APP_NAME }}[-/]||; s|^v||')" >> "$GITHUB_OUTPUT"
     outputs:
       new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
       new-release-version: ${{ steps.release-version.outputs.release-version }}
@@ -91,7 +80,7 @@ jobs:
     timeout-minutes: 5
     defaults:
       run:
-        working-directory: orb-discovery/${{ inputs.app-name }}
+        working-directory: orb-discovery/${{ env.APP_NAME }}
     permissions:
       id-token: write
       contents: read
@@ -99,19 +88,19 @@ jobs:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
       BUILD_TRACK: release
       BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
-      OUTPUT_FILENAME: ${{ inputs.python-package-name }}-${{ needs.get-next-version.outputs.new-release-version }}.tar.gz
+      OUTPUT_FILENAME: netboxlabs_device_discovery-${{ needs.get-next-version.outputs.new-release-version }}.tar.gz
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-python@v6
         with:
-          python-version: ${{ inputs.python-runtime-version }}
+          python-version: ${{ env.PYTHON_RUNTIME_VERSION }}
       - name: Insert version variables into Python
         run: |
-          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" ${{ inputs.python-module }}/version.py
-          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" ${{ inputs.python-module }}/version.py
-          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" ${{ inputs.python-module }}/version.py
+          sed -i "s/__commit_hash__ = .*/__commit_hash__ = \"${BUILD_COMMIT}\"/" ${{ env.PYTHON_MODULE }}/version.py
+          sed -i "s/__track__ = .*/__track__ = \"${BUILD_TRACK}\"/" ${{ env.PYTHON_MODULE }}/version.py
+          sed -i "s/__version__ = .*/__version__ = \"${BUILD_VERSION}\"/" ${{ env.PYTHON_MODULE }}/version.py
       - name: Display contents of version.py
-        run: cat ${{ inputs.python-module }}/version.py
+        run: cat ${{ env.PYTHON_MODULE }}/version.py
       - name: Build sdist
         run: |
           pip install toml-cli
@@ -123,13 +112,13 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ env.OUTPUT_FILENAME }}
-          path: orb-discovery/${{ inputs.app-name }}/dist/${{ env.OUTPUT_FILENAME }}
+          path: orb-discovery/${{ env.APP_NAME }}/dist/${{ env.OUTPUT_FILENAME }}
           retention-days: 30
           if-no-files-found: error
       - name: Publish release distributions to PyPI
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
         with:
-          packages-dir: orb-discovery/${{ inputs.app-name }}/dist
+          packages-dir: orb-discovery/${{ env.APP_NAME }}/dist
 
   semantic-release:
     name: Semantic release
@@ -147,10 +136,10 @@ jobs:
         uses: ./.github/actions/setup-semantic-release
         with:
           component: backend
-          app-name: ${{ inputs.app-name }}
-          working-directory: orb-discovery/${{ inputs.app-name }}
+          app-name: ${{ env.APP_NAME }}
+          working-directory: orb-discovery/${{ env.APP_NAME }}
       - name: Release
-        working-directory: orb-discovery/${{ inputs.app-name }}
+        working-directory: orb-discovery/${{ env.APP_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
