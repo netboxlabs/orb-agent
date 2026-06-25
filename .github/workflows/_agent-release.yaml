@@ -1,0 +1,198 @@
+name: Agent release
+
+# Reusable orb-agent release: computes the agent's own next vX.Y.Z, builds the
+# multi-arch from-source image stamped with the backend versions passed in by the
+# orchestrator (no ls-remote here — versions are explicit inputs), pushes
+# :latest + :X.Y.Z, and publishes the tag + GitHub release.
+on:
+  workflow_call:
+    inputs:
+      network-version:
+        description: 'network-discovery version to bundle (X.Y.Z).'
+        required: true
+        type: string
+      snmp-version:
+        description: 'snmp-discovery version to bundle (X.Y.Z).'
+        required: true
+        type: string
+      device-version:
+        description: 'device-discovery version to bundle (X.Y.Z).'
+        required: true
+        type: string
+      worker-version:
+        description: 'worker version to bundle (X.Y.Z).'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
+
+jobs:
+  get-next-version:
+    name: Semantic release get next version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+      - name: Setup semantic-release
+        uses: ./.github/actions/setup-semantic-release
+        with:
+          component: agent
+      - name: Release dry-run
+        id: get-next-version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug --dry-run
+      - name: Set short sha output
+        id: short-sha
+        run: echo "short-sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Set release version
+        id: release-version
+        run: |
+          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed 's/^v//')" >> "$GITHUB_OUTPUT"
+    outputs:
+      new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
+      new-release-version: ${{ steps.release-version.outputs.release-version }}
+      short-sha: ${{ steps.short-sha.outputs.short-sha }}
+
+  confirm-version:
+    name: Next version ${{ needs.get-next-version.outputs.new-release-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    steps:
+      - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: get-next-version
+    runs-on: ${{ matrix.runner }}
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    permissions:
+      contents: read
+      packages: write
+    env:
+      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
+      BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
+      REGISTRY: docker.io
+      IMAGE_NAME: netboxlabs/orb-agent
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: blacksmith-2vcpu-ubuntu-2404
+          - platform: linux/arm64
+            runner: blacksmith-2vcpu-ubuntu-2404-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Login to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Extract Go version from go.mod
+        run: echo "GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}' | cut -d. -f1,2)" >> "$GITHUB_ENV"
+      - name: Set build info
+        run: |
+          echo "$BUILD_COMMIT" > ./agent/version/BUILD_COMMIT.txt
+          echo "$BUILD_VERSION" > ./agent/version/BUILD_VERSION.txt
+      - name: Build image and push by digest
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: agent/docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,scope=${{ matrix.platform }},mode=max
+          no-cache-filters: python-builder,network-discovery,snmp-discovery,pktvisor,otlpinf,final
+          pull: true
+          build-args: |
+            GO_VERSION=${{ env.GO_VERSION }}
+            BUILD_COMMIT=${{ env.BUILD_COMMIT }}
+            BUILD_TRACK=release
+            NETWORK_DISCOVERY_VERSION=${{ inputs.network-version }}
+            SNMP_DISCOVERY_VERSION=${{ inputs.snmp-version }}
+            DEVICE_DISCOVERY_VERSION=${{ inputs.device-version }}
+            WORKER_VERSION=${{ inputs.worker-version }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digests-${{ matrix.runner }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    needs: [get-next-version, build]
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    permissions:
+      contents: read
+      packages: write
+    env:
+      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
+      REGISTRY: docker.io
+      IMAGE_NAME: netboxlabs/orb-agent
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      - name: Login to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BUILD_VERSION }} \
+            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+
+  semantic-release:
+    name: Semantic release
+    needs: merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+      - name: Setup semantic-release
+        uses: ./.github/actions/setup-semantic-release
+        with:
+          component: agent
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug
