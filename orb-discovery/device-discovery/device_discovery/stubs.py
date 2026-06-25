@@ -32,12 +32,23 @@ def _vrf_match_stub(vrf: pb.VRF) -> pb.VRF:
     return stub
 
 
-def _strip_prefix(address: str) -> str:
-    """Return the IP portion of a CIDR or plain IP string."""
-    # Defined locally rather than imported from translate.py: translate imports
-    # translate_chassis, which imports this module, so importing back from
-    # translate would close a translate→translate_chassis→stubs→translate cycle.
-    return address.split("/", 1)[0]
+def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
+    """
+    Return True when ``ip`` is the exact IP object the device's primary references.
+
+    Match on full identity — the address WITH its prefix length AND the VRF — not
+    just the host portion. Two IP entities can share a host address yet differ by
+    prefix length (e.g. a /32 loopback and a /24 SVI) or by VRF (the same address
+    in two routing tables). Only the IP object the device's primary actually points
+    at may keep primary_ip4/primary_ip6 on its nested device stub (the cycle-closer);
+    matching on the host alone would let a different IP object's change set try to
+    set device.primary_ip4 and re-open the circular reference this pruning avoids.
+    """
+    if primary.address != ip.address:
+        return False
+    primary_vrf = primary.vrf.name if primary.HasField("vrf") else ""
+    ip_vrf = ip.vrf.name if ip.HasField("vrf") else ""
+    return primary_vrf == ip_vrf
 
 
 def _ip_match_stub(ip: pb.IPAddress) -> pb.IPAddress:
@@ -305,8 +316,8 @@ def _prune_ip_address_against_index(
     # device stub's primary_ip4/6, validly sets device.primary_ip4/6 in one change
     # set. Only then does the nested device stub keep primary_ip4/6; otherwise it
     # uses the cached stripped stub (which never carries primary IPs).
-    keep4 = rich.HasField("primary_ip4") and _strip_prefix(rich.primary_ip4.address) == _strip_prefix(ip.address)
-    keep6 = rich.HasField("primary_ip6") and _strip_prefix(rich.primary_ip6.address) == _strip_prefix(ip.address)
+    keep4 = rich.HasField("primary_ip4") and _same_primary_ip(rich.primary_ip4, ip)
+    keep6 = rich.HasField("primary_ip6") and _same_primary_ip(rich.primary_ip6, ip)
     chosen_stub = keep_primary_stub_for(rich, keep4=keep4, keep6=keep6) if (keep4 or keep6) else stub_for(rich)
     ip.assigned_object_interface.CopyFrom(_interface_match_stub(nested_iface, chosen_stub))
 
