@@ -29,6 +29,10 @@ jobs:
     name: Semantic Release Dry Run
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Only same-repo PRs: fork PRs get a read-only token (the semantic-release
+    # verifyConditions would fail), and skipping them also keeps untrusted PR
+    # code from running with the write-capable token this job needs.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Checkout PR merge commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -86,10 +90,12 @@ jobs:
 
             const marker = '<!-- semantic-release-dry-run -->';
             const body = `${marker}\n${comment}`;
-            const { data: existing } = await github.rest.issues.listComments({
+            // Paginate so the marker is found even past the first 30 comments.
+            const existing = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
+              per_page: 100,
             });
             const prev = existing.find(c => c.body && c.body.includes(marker));
             if (prev) {

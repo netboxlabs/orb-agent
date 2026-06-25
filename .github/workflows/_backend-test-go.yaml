@@ -37,7 +37,7 @@ jobs:
           go install github.com/mfridman/tparse@v0.14.0
           # snmp/gnmi test-coverage targets call gcov2lcov (network's does not);
           # install it for all three (harmless where unused).
-          go install github.com/jandelgado/gcov2lcov@latest
+          go install github.com/jandelgado/gcov2lcov@v1.1.1
           sudo apt-get -y install nmap
           sudo setcap cap_net_raw,cap_net_admin=eip $(which nmap)
       - name: Run go test
