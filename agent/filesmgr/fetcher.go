@@ -95,10 +95,7 @@ func isControlPlaneURL(u *url.URL) bool {
 			return false
 		}
 	}
-	if hasKnownArchiveSuffix(u.Path) {
-		return false
-	}
-	return true
+	return !hasKnownArchiveSuffix(u.Path)
 }
 
 // filenameFromURL extracts the last non-empty path segment from rawURL,
