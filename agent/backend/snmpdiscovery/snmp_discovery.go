@@ -29,9 +29,10 @@ const (
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	statusTimeout       = 5
-	defaultExec         = "snmp-discovery"
-	defaultAPIHost      = "localhost"
-	defaultAPIPort      = "8070"
+	defaultExec              = "snmp-discovery"
+	defaultAPIHost           = "localhost"
+	defaultAPIPort           = "8070"
+	defaultIngestBufferSize  = 256
 )
 
 type snmpDiscoveryBackend struct {
@@ -52,6 +53,7 @@ type snmpDiscoveryBackend struct {
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 	diodeLogLevel        string
+	ingestBufferSize     int
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -89,6 +91,16 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.apiPort = fmt.Sprintf("%v", port)
 	} else {
 		d.apiPort = defaultAPIPort
+	}
+
+	d.ingestBufferSize = defaultIngestBufferSize
+	if v, prs := config["ingest_buffer_size"]; prs {
+		switch n := v.(type) {
+		case int:
+			d.ingestBufferSize = n
+		case float64:
+			d.ingestBufferSize = int(n)
+		}
 	}
 
 	d.diodeTarget = common.Diode.Target
@@ -157,6 +169,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		"--host", d.apiHost,
 		"--port", d.apiPort,
+		"--ingest-buffer-size", fmt.Sprintf("%d", d.ingestBufferSize),
 	}
 	if d.diodeDryRun {
 		dOptions = append([]string{
