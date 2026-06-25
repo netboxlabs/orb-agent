@@ -69,9 +69,11 @@ func TestFetcher_SendsBearerToControlPlane_NotToRedirectTarget(t *testing.T) {
 		}
 		// Redirect to a DIFFERENT host so the test exercises the same cross-host
 		// Authorization-stripping the Go stdlib applies in prod (control plane
-		// -> S3). httptest serves on 127.0.0.1; rewriting to "localhost" hits the
-		// same loopback target but makes the stdlib treat it as cross-host.
-		crossHostURL := strings.Replace(target.URL, "127.0.0.1", "localhost", 1)
+		// -> S3). Force the redirect hostname to "localhost" regardless of whether
+		// httptest bound on IPv4 (127.0.0.1) or IPv6 ([::1]); either way it hits the
+		// same loopback target but the stdlib treats it as cross-host.
+		crossHostURL := strings.ReplaceAll(target.URL, "127.0.0.1", "localhost")
+		crossHostURL = strings.ReplaceAll(crossHostURL, "[::1]", "localhost")
 		http.Redirect(w, r, crossHostURL, http.StatusFound)
 	}))
 	defer control.Close()
@@ -124,4 +126,38 @@ func TestFetcher_NoTokenSource_SendsNoAuth(t *testing.T) {
 	}
 	require.NoError(t, f.fetch(context.Background(), spec, dst))
 	require.False(t, sawAuth.Load(), "unexpected Authorization header on no-token path")
+}
+
+// TestFetcher_PresignedURL_NoBearerEvenWithTokenSource verifies the bearer is
+// NOT attached to a direct presigned/capability URL even when a token source is
+// configured — only the extension-less control-plane URL is authenticated. This
+// guards against leaking the agent token to object storage and against
+// invalidating SigV4-signed requests.
+func TestFetcher_PresignedURL_NoBearerEvenWithTokenSource(t *testing.T) {
+	archive, archiveSHA := buildAuthTarGz(t)
+
+	var sawAuth atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			sawAuth.Store(true)
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "v1")
+	f := newFetcher(slog.Default())
+	f.tokenSource = func(_ context.Context) (string, error) { return "test-token", nil }
+
+	// Presigned-style: path ends in .tar.gz and carries a SigV4 signature param.
+	spec := FileSpec{
+		Name:    "nbl_test",
+		Version: "1.0.0",
+		URL:     srv.URL + "/nbl_test/1.0.0/bundle.tar.gz?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef",
+		SHA256:  archiveSHA,
+		Extract: true,
+	}
+	require.NoError(t, f.fetch(context.Background(), spec, dst))
+	require.False(t, sawAuth.Load(), "bearer must not be sent to a presigned URL")
 }

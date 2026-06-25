@@ -72,6 +72,35 @@ func hasKnownArchiveSuffix(urlPath string) bool {
 	return false
 }
 
+// presignQueryParams are query keys that indicate a URL already carries its own
+// auth (a presigned/capability URL). The agent must NOT add an Authorization
+// header to these: object stores reject a request bearing both a query-string
+// signature and an Authorization header, and forwarding the agent token to
+// storage would leak it. Covers AWS SigV4 and GCS V4/V2 signing.
+var presignQueryParams = []string{
+	"X-Amz-Signature", "X-Amz-Algorithm", "X-Amz-Credential",
+	"X-Goog-Signature", "X-Goog-Algorithm", "X-Goog-Credential",
+	"Signature",
+}
+
+// isControlPlaneURL reports whether u is the authenticated filesmanager
+// control-plane endpoint (extension-less /bundles/{name}/{version}) rather than a
+// direct presigned object URL. Only control-plane URLs receive the agent bearer
+// token; presigned/capability URLs (which carry their own auth) must not, so the
+// token never leaks to object storage and signed requests stay valid.
+func isControlPlaneURL(u *url.URL) bool {
+	q := u.Query()
+	for _, k := range presignQueryParams {
+		if q.Get(k) != "" {
+			return false
+		}
+	}
+	if hasKnownArchiveSuffix(u.Path) {
+		return false
+	}
+	return true
+}
+
 // filenameFromURL extracts the last non-empty path segment from rawURL,
 // stripping any query string. Returns an error if no usable filename can
 // be derived.
@@ -238,7 +267,7 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 	}
 
 	getters := httpGetters
-	if f.tokenSource != nil {
+	if f.tokenSource != nil && isControlPlaneURL(u) {
 		tok, err := f.tokenSource(ctx)
 		if err != nil {
 			return fmt.Errorf("fetch %s: get auth token: %w", spec.Name, err)
