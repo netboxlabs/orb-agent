@@ -141,7 +141,7 @@ func TestNewDeviceStubKeepingPrimary_ReattachesV4AsMatcherOnlyStub(t *testing.T)
 		},
 	}
 
-	stub := newDeviceStubKeepingPrimary(owner)
+	stub := newDeviceStubKeepingPrimary(owner, false, owner.PrimaryIp4)
 
 	require.NotNil(t, stub)
 	// Inherits the default stub's matcher / required fields.
@@ -164,7 +164,7 @@ func TestNewDeviceStubKeepingPrimary_ReattachesV6Only(t *testing.T) {
 		Name:       strPtr("sw1"),
 		PrimaryIp6: &diode.IPAddress{Address: &v6, AssignedObject: &diode.Interface{Name: strPtr("Vlan1")}},
 	}
-	stub := newDeviceStubKeepingPrimary(owner)
+	stub := newDeviceStubKeepingPrimary(owner, true, owner.PrimaryIp6)
 	require.NotNil(t, stub)
 	assert.Nil(t, stub.PrimaryIp4)
 	require.NotNil(t, stub.PrimaryIp6)
@@ -173,7 +173,7 @@ func TestNewDeviceStubKeepingPrimary_ReattachesV6Only(t *testing.T) {
 }
 
 func TestNewDeviceStubKeepingPrimary_NilOwnerReturnsNil(t *testing.T) {
-	assert.Nil(t, newDeviceStubKeepingPrimary(nil))
+	assert.Nil(t, newDeviceStubKeepingPrimary(nil, false, nil))
 }
 
 func TestNewDeviceStub_PreservesSourceMatchDropsRunID(t *testing.T) {
@@ -449,6 +449,43 @@ func TestPruneNestedRefs_PrimaryHitsKeepsPrimaryOnlyOnCycleCloser(t *testing.T) 
 	// Top-level rich Device stays rich (its own primary_ip4 untouched).
 	require.NotNil(t, rich.PrimaryIp4)
 	assert.Equal(t, v4, *rich.PrimaryIp4.Address)
+}
+
+// TestPruneNestedRefs_DualStackKeepsOnlyMatchingFamilyPerCycleCloser confirms
+// that on a dual-stack device each cycle-closer keeps ONLY its own family's
+// primary. The v4 IPAddress entity's change set assigns only the v4 address, so
+// its nested device stub must carry primary_ip4 but NOT primary_ip6 (and vice
+// versa) — otherwise it would try to set the other family's primary before that
+// address is assigned to the device.
+func TestPruneNestedRefs_DualStackKeepsOnlyMatchingFamilyPerCycleCloser(t *testing.T) {
+	v4 := "10.0.0.1/24"
+	v6 := "2001:db8::1/64"
+	ifType := strPtr("1000base-t")
+	rich := &diode.Device{
+		Name:       strPtr("sw1"),
+		Serial:     strPtr("FCW123"),
+		Site:       &diode.Site{Name: strPtr("dc1")},
+		DeviceType: &diode.DeviceType{Model: strPtr("C9300")},
+		Role:       &diode.DeviceRole{Name: strPtr("access")},
+		PrimaryIp4: &diode.IPAddress{Address: &v4},
+		PrimaryIp6: &diode.IPAddress{Address: &v6},
+	}
+	// v4 and v6 primaries on DIFFERENT interfaces (separate change sets).
+	v4Iface := &diode.Interface{Name: strPtr("Vlan1"), Device: rich, Type: ifType}
+	v4IP := &diode.IPAddress{Address: &v4, AssignedObject: v4Iface}
+	v6Iface := &diode.Interface{Name: strPtr("Vlan2"), Device: rich, Type: ifType}
+	v6IP := &diode.IPAddress{Address: &v6, AssignedObject: v6Iface}
+
+	entities := []diode.Entity{rich, v4Iface, v6Iface, v4IP, v6IP}
+	PruneNestedRefs(entities, rich, map[*diode.IPAddress]bool{v4IP: true, v6IP: true})
+
+	v4Stub := v4IP.AssignedObject.(*diode.Interface)
+	require.NotNil(t, v4Stub.Device.PrimaryIp4, "v4 cycle-closer keeps primary_ip4")
+	assert.Nil(t, v4Stub.Device.PrimaryIp6, "v4 cycle-closer must NOT carry primary_ip6")
+
+	v6Stub := v6IP.AssignedObject.(*diode.Interface)
+	require.NotNil(t, v6Stub.Device.PrimaryIp6, "v6 cycle-closer keeps primary_ip6")
+	assert.Nil(t, v6Stub.Device.PrimaryIp4, "v6 cycle-closer must NOT carry primary_ip4")
 }
 
 // TestPruneNestedRefs_NilPrimaryHitsStripsEverything confirms that

@@ -5,7 +5,11 @@
 // entity.
 package mapping
 
-import "github.com/netboxlabs/diode-sdk-go/diode"
+import (
+	"strings"
+
+	"github.com/netboxlabs/diode-sdk-go/diode"
+)
 
 // newIPMatchStub returns an IPAddress carrying only the matcher fields
 // (Address, Vrf). AssignedObject is intentionally nil — that is what
@@ -126,24 +130,33 @@ func newDeviceStub(d *diode.Device) *diode.Device {
 // newDeviceStubKeepingPrimary returns a non-cached device stub for the
 // cycle-closer: the top-level ipam.ipaddress entity that sets the
 // device's primary IP within its own change set. It starts from the
-// default (primary-IP-stripped) newDeviceStub and re-attaches whichever
-// primary the owner carries as a matcher-only stub (AssignedObject
-// cleared, so the re-attached IP itself carries no cycle).
+// default (primary-IP-stripped) newDeviceStub and re-attaches ONLY the
+// primary that corresponds to the IPAddress entity being pruned, as a
+// matcher-only stub (AssignedObject cleared, so the re-attached IP itself
+// carries no cycle): isV6 selects PrimaryIp6 vs PrimaryIp4 and primary is
+// the device's primary for that family (nil leaves it stripped).
+//
+// Only the matching family is carried. On a dual-stack device the IPv4
+// cycle-closer's change set assigns only the IPv4 address to the interface,
+// so attaching primary_ip6 there would try to set the IPv6 primary before
+// its address is assigned to the device — re-creating the first-ingest
+// circular-primary failure (and vice versa for the IPv6 cycle-closer).
 //
 // This stub MUST NEVER be inserted into PruneNestedRefs' stubCache: the
 // cached stub is the primary-IP-free shape shared across every other
 // nested reference, and overwriting it would leak the primary onto
 // stubs that cannot validly set it.
-func newDeviceStubKeepingPrimary(owner *diode.Device) *diode.Device {
+func newDeviceStubKeepingPrimary(owner *diode.Device, isV6 bool, primary *diode.IPAddress) *diode.Device {
 	if owner == nil {
 		return nil
 	}
 	stub := newDeviceStub(owner)
-	if owner.PrimaryIp4 != nil {
-		stub.PrimaryIp4 = newIPMatchStub(owner.PrimaryIp4)
-	}
-	if owner.PrimaryIp6 != nil {
-		stub.PrimaryIp6 = newIPMatchStub(owner.PrimaryIp6)
+	if primary != nil {
+		if isV6 {
+			stub.PrimaryIp6 = newIPMatchStub(primary)
+		} else {
+			stub.PrimaryIp4 = newIPMatchStub(primary)
+		}
 	}
 	return stub
 }
@@ -388,39 +401,35 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 					// shared primary-IP-free cache stays untouched. The
 					// interface keeps its rich Type/MAC via newInterfaceStub.
 					//
-					// Stack edge: the resolved owner may be a stack member
-					// whose own PrimaryIp4/6 is nil while the master /
-					// currentDevice carries it. newDeviceStubKeepingPrimary
-					// copies whatever primary the device it is built from
-					// carries, so we build the identity stub from the owner
-					// (member) but source the primary from the device that
-					// actually carries it: prefer the owner, fall back to
-					// currentDevice when the owner has none. This
-					// member-vs-master case is handled by the fallback below
-					// and should be confirmed against a real stacked-switch
-					// capture.
+					// Only this IPAddress's OWN family may be set here: its
+					// change set assigns just this address to the interface, so
+					// attaching the other family's primary (dual-stack) would
+					// try to set a primary whose address is not yet assigned.
+					isV6 := e.Address != nil && strings.Contains(*e.Address, ":")
 					owner := resolveIfaceOwner(iface)
 					if owner == nil {
 						// Mirror the stripped path's currentDevice fallback
 						// when the ref names no resolvable top-level Device.
 						owner = currentDevice
 					}
-					primarySrc := owner
-					if primarySrc == nil ||
-						(primarySrc.PrimaryIp4 == nil && primarySrc.PrimaryIp6 == nil) {
-						if currentDevice != nil &&
-							(currentDevice.PrimaryIp4 != nil || currentDevice.PrimaryIp6 != nil) {
-							primarySrc = currentDevice
-						}
+					// Stack edge: the resolved owner may be a stack member
+					// whose own primary is nil while the master / currentDevice
+					// carries it. Source this family's primary from the device
+					// that actually carries it — prefer the owner, fall back to
+					// currentDevice. This member-vs-master case should be
+					// confirmed against a real stacked-switch capture.
+					var primary *diode.IPAddress
+					switch {
+					case isV6 && owner != nil && owner.PrimaryIp6 != nil:
+						primary = owner.PrimaryIp6
+					case !isV6 && owner != nil && owner.PrimaryIp4 != nil:
+						primary = owner.PrimaryIp4
+					case isV6 && currentDevice != nil && currentDevice.PrimaryIp6 != nil:
+						primary = currentDevice.PrimaryIp6
+					case !isV6 && currentDevice != nil && currentDevice.PrimaryIp4 != nil:
+						primary = currentDevice.PrimaryIp4
 					}
-					devStub := newDeviceStubKeepingPrimary(owner)
-					// When the owner carried no primary, copy it from the
-					// fallback source (the master) onto the owner's stub.
-					if devStub != nil && primarySrc != owner && primarySrc != nil {
-						devStub.PrimaryIp4 = newIPMatchStub(primarySrc.PrimaryIp4)
-						devStub.PrimaryIp6 = newIPMatchStub(primarySrc.PrimaryIp6)
-					}
-					e.AssignedObject = newInterfaceStub(iface, devStub)
+					e.AssignedObject = newInterfaceStub(iface, newDeviceStubKeepingPrimary(owner, isV6, primary))
 				} else {
 					e.AssignedObject = stubForIface(iface)
 				}
