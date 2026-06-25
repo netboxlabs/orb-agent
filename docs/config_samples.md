@@ -469,6 +469,9 @@ orb:
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     snmp_discovery:
+      # Serializes Diode ingest through a buffered queue (default 256).
+      # Increase for large subnet bursts; decrease if memory is a concern.
+      ingest_buffer_size: 512
   policies:
     snmp_discovery:
       snmp_network_1:
