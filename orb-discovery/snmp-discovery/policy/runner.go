@@ -360,7 +360,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	entities, err := r.queryTarget(ctx, target)
+	entities, primaryHits, err := r.queryTarget(ctx, target)
 	if err != nil {
 		r.logger.Error("error querying target", "host", target.Host, "error", err, "policy", policyName)
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, 0)
@@ -385,7 +385,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	// the wire payload. Runs after annotation so the annotators can walk
 	// the rich shared graph with their unsafe.Pointer dedup intact —
 	// otherwise every stub would need its own metadata pass.
-	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities))
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
 
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
@@ -449,9 +449,15 @@ func (r *Runner) assetTagClaimer(targetID string) func(string) bool {
 	}
 }
 
-func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode.Entity, error) {
+// queryTarget walks the target, maps the result to entities, and returns
+// the entity slice along with the per-target set of cycle-closer primary
+// IP entities (the top-level ipam.ipaddress entities that set a device's
+// primary IP). The hits are returned by value — never stashed on the
+// shared Runner, which serves targets concurrently — so the caller can
+// thread them into PruneNestedRefs for this target only.
+func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	targetDefaults := r.resolveTargetDefaults(target)
@@ -459,7 +465,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, targetDefaults, r.config.Options)
 	if err != nil {
 		r.logger.Error("error creating mapping config", "error", err)
-		return nil, err
+		return nil, nil, err
 	}
 	targetHost := strings.TrimSpace(target.Host)
 
@@ -509,7 +515,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 					attribute.String("error", ctx.Err().Error()),
 				))
 		}
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	case res := <-resultCh:
 		if res.err != nil {
 			r.logger.Warn("error crawling host", "host", targetHost, "error", res.err)
@@ -520,7 +526,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 						attribute.String("error", res.err.Error()),
 					))
 			}
-			return nil, res.err
+			return nil, nil, res.err
 		}
 		oids = res.oids
 	}
@@ -553,7 +559,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 							attribute.String("error", ctx.Err().Error()),
 						))
 				}
-				return nil, ctx.Err()
+				return nil, nil, ctx.Err()
 			case res := <-vendorCh:
 				if res.err != nil {
 					r.logger.Warn("phase 2 walk failed; continuing with generic only",
@@ -679,7 +685,10 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				attribute.String("policy", policyName)))
 	}
 
-	return entities, nil
+	// Capture the per-target cycle-closer primary IP hits and return them
+	// by value so the caller can thread them into PruneNestedRefs without
+	// any shared Runner state (concurrency-safe).
+	return entities, mapper.PrimaryIPHits(), nil
 }
 
 func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expandedTargetGroup {

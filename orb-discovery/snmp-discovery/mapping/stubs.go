@@ -37,9 +37,22 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 // plus the validation-required fields the diode-netbox-plugin checks
 // when CREATING a dcim.device row from a nested reference. Site,
 // Tenant, DeviceType, and Role are pointer-shared from the source —
-// already minimal in snmp-discovery, no transitive bloat. PrimaryIp4
-// and PrimaryIp6 go through newIPMatchStub so AssignedObject is
-// cleared, breaking any cycle into the rich top-level Device.
+// already minimal in snmp-discovery, no transitive bloat.
+//
+// PrimaryIp4/PrimaryIp6 are deliberately NOT carried here. The
+// dcim.device.primary_ip4 reference is circular (the IP points at an
+// interface that points at the device, while the device points back at
+// the IP), and the diode reconciler can only resolve that cycle within
+// a SINGLE change set. Each emitted entity becomes its own change set,
+// so a nested device stub that tries to SET primary_ip4 fails on first
+// ingest ("IP not assigned to this device") and rolls back the
+// interfaces / modules emitted alongside it. The only entity that can
+// validly close the cycle is the top-level ipam.ipaddress entity for
+// the primary IP itself, which performs the IP->interface assignment
+// and sets primary_ip4 in the same change set; PruneNestedRefs
+// re-attaches a matcher-only primary onto that one stub via
+// newDeviceStubKeepingPrimary. Every other nested device stub stays
+// primary-IP-free.
 //
 // Why DeviceType and Role: when the reconciler processes an Interface
 // (or other entity) whose nested Device reference does not yet match
@@ -62,14 +75,23 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 //     MUST carry it so rich and stub resolve via the same matcher
 //     precedence path.
 //
+//   - PrimaryIp4 and PrimaryIp6 are NOT carried (see the function-doc
+//     paragraph above). Stripping them off the default stub means the
+//     stub resolves via a lower-precedence matcher than the rich
+//     Device's primary_ip* path — that is acceptable because every stub
+//     also carries asset_tag (when populated) and name+site+tenant, and
+//     because setting primary_ip4 from a nested stub fails ingest
+//     outright. Only the cycle-closer stub built by
+//     newDeviceStubKeepingPrimary re-attaches a matcher-only primary.
+//
 //   - VcPosition and VirtualChassis ARE populated on non-master
 //     member Devices when emitting a stack, but are intentionally
 //     NOT carried on stubs. Matcher #8 (virtual_chassis plus
 //     vc_position) sits behind higher-precedence matchers — asset_tag,
-//     primary_ip*, name+site+tenant, name+site, rack+position+face —
-//     that every member Device already carries via the fields above.
-//     Copying the rich VirtualChassis subtree onto every nested stub
-//     would just bloat the wire payload.
+//     name+site+tenant, name+site, rack+position+face — that every
+//     member Device already carries via the fields above. Copying the
+//     rich VirtualChassis subtree onto every nested stub would just
+//     bloat the wire payload.
 //
 //   - OobIp, Rack, Position, and Face remain not-populated.
 //
@@ -94,11 +116,34 @@ func newDeviceStub(d *diode.Device) *diode.Device {
 		DeviceType: d.DeviceType,
 		Role:       d.Role,
 		AssetTag:   d.AssetTag,
-		PrimaryIp4: newIPMatchStub(d.PrimaryIp4),
-		PrimaryIp6: newIPMatchStub(d.PrimaryIp6),
 	}
 	if sm, ok := d.Metadata["source_match"]; ok {
 		stub.Metadata = diode.Metadata{"source_match": sm}
+	}
+	return stub
+}
+
+// newDeviceStubKeepingPrimary returns a non-cached device stub for the
+// cycle-closer: the top-level ipam.ipaddress entity that sets the
+// device's primary IP within its own change set. It starts from the
+// default (primary-IP-stripped) newDeviceStub and re-attaches whichever
+// primary the owner carries as a matcher-only stub (AssignedObject
+// cleared, so the re-attached IP itself carries no cycle).
+//
+// This stub MUST NEVER be inserted into PruneNestedRefs' stubCache: the
+// cached stub is the primary-IP-free shape shared across every other
+// nested reference, and overwriting it would leak the primary onto
+// stubs that cannot validly set it.
+func newDeviceStubKeepingPrimary(owner *diode.Device) *diode.Device {
+	if owner == nil {
+		return nil
+	}
+	stub := newDeviceStub(owner)
+	if owner.PrimaryIp4 != nil {
+		stub.PrimaryIp4 = newIPMatchStub(owner.PrimaryIp4)
+	}
+	if owner.PrimaryIp6 != nil {
+		stub.PrimaryIp6 = newIPMatchStub(owner.PrimaryIp6)
 	}
 	return stub
 }
@@ -160,8 +205,18 @@ func CurrentDeviceFrom(entities []diode.Entity) *diode.Device {
 // would only see stubs, or (b) bloat every stub with run_id metadata,
 // defeating the savings.
 //
+// primaryHits identifies the cycle-closer IPAddress entities (the
+// top-level ipam.ipaddress entities that set a device's primary IP).
+// For those entities only, the rebuilt nested device stub retains a
+// matcher-only primary IP via newDeviceStubKeepingPrimary, because the
+// reconciler can resolve the circular primary-IP reference only within
+// that single change set. Every other nested device stub — on other
+// interfaces, modules, module bays, MAC addresses, and non-primary IPs
+// — is the default primary-IP-free stub. Pass nil to strip primary IPs
+// everywhere.
+//
 // No-op if entities is empty.
-func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device) {
+func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, primaryHits map[*diode.IPAddress]bool) {
 	if len(entities) == 0 {
 		return
 	}
@@ -228,28 +283,34 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device) {
 		return s
 	}
 
-	// stubForIface re-resolves a nested Interface ref by NAME against
-	// the top-level Interface index (when one exists) before stubbing,
-	// so a stale Parent.Device (set by ResolveSubinterfaceParents
-	// before TranslateAsStack) is corrected to the current owner.
-	stubForIface := func(ref *diode.Interface) *diode.Interface {
-		if ref == nil {
-			return nil
-		}
+	// resolveIfaceOwner returns the owner Device for a nested Interface
+	// ref, re-resolving by NAME against the top-level Interface index
+	// (when one exists) so a stale Parent.Device (set by
+	// ResolveSubinterfaceParents before TranslateAsStack) is corrected
+	// to the current owner. Only rewrites the owner when the top-level
+	// lookup is unambiguous: if multiple top-level interfaces share the
+	// same name (cross-member duplicates like `me0`/`mgmt0` on Junos VC
+	// / Cisco StackWise), the lookup cannot tell which member owns this
+	// particular ref — keeping ref.Device preserves whatever upstream
+	// routing produced (correct in the common case). Shared by
+	// stubForIface and the cycle-closer rebuild so the two paths cannot
+	// drift in how they resolve the owner.
+	resolveIfaceOwner := func(ref *diode.Interface) *diode.Device {
 		owner := ref.Device
-		// Only rewrite owner when the top-level lookup is unambiguous.
-		// If multiple top-level interfaces share the same name (cross-
-		// member duplicates like `me0`/`mgmt0` on Junos VC / Cisco
-		// StackWise), the lookup cannot tell which member owns this
-		// particular ref — leaving owner as-is preserves whatever
-		// upstream routing produced (which is correct in the common
-		// case where ref.Device already points at the right member).
 		if ref.Name != nil {
 			if tops, ok := ifaceByName[*ref.Name]; ok && len(tops) == 1 && tops[0].Device != nil {
 				owner = tops[0].Device
 			}
 		}
-		return newInterfaceStub(ref, stubFor(owner))
+		return owner
+	}
+
+	// stubForIface re-resolves a nested Interface ref before stubbing.
+	stubForIface := func(ref *diode.Interface) *diode.Interface {
+		if ref == nil {
+			return nil
+		}
+		return newInterfaceStub(ref, stubFor(resolveIfaceOwner(ref)))
 	}
 
 	for _, entity := range entities {
@@ -317,7 +378,52 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device) {
 			}
 		case *diode.IPAddress:
 			if iface, ok := e.AssignedObject.(*diode.Interface); ok && iface != nil {
-				e.AssignedObject = stubForIface(iface)
+				if primaryHits != nil && primaryHits[e] {
+					// Cycle-closer: this IPAddress entity sets a device's
+					// primary IP within its own change set, so its nested
+					// device stub MUST retain a matcher-only primary IP.
+					// Resolve the owner exactly as the stripped path does
+					// (resolveIfaceOwner respects the duplicate-name guard),
+					// then build a NON-cached keeping-primary stub so the
+					// shared primary-IP-free cache stays untouched. The
+					// interface keeps its rich Type/MAC via newInterfaceStub.
+					//
+					// Stack edge: the resolved owner may be a stack member
+					// whose own PrimaryIp4/6 is nil while the master /
+					// currentDevice carries it. newDeviceStubKeepingPrimary
+					// copies whatever primary the device it is built from
+					// carries, so we build the identity stub from the owner
+					// (member) but source the primary from the device that
+					// actually carries it: prefer the owner, fall back to
+					// currentDevice when the owner has none. This
+					// member-vs-master case is handled by the fallback below
+					// and should be confirmed against a real stacked-switch
+					// capture.
+					owner := resolveIfaceOwner(iface)
+					if owner == nil {
+						// Mirror the stripped path's currentDevice fallback
+						// when the ref names no resolvable top-level Device.
+						owner = currentDevice
+					}
+					primarySrc := owner
+					if primarySrc == nil ||
+						(primarySrc.PrimaryIp4 == nil && primarySrc.PrimaryIp6 == nil) {
+						if currentDevice != nil &&
+							(currentDevice.PrimaryIp4 != nil || currentDevice.PrimaryIp6 != nil) {
+							primarySrc = currentDevice
+						}
+					}
+					devStub := newDeviceStubKeepingPrimary(owner)
+					// When the owner carried no primary, copy it from the
+					// fallback source (the master) onto the owner's stub.
+					if devStub != nil && primarySrc != owner && primarySrc != nil {
+						devStub.PrimaryIp4 = newIPMatchStub(primarySrc.PrimaryIp4)
+						devStub.PrimaryIp6 = newIPMatchStub(primarySrc.PrimaryIp6)
+					}
+					e.AssignedObject = newInterfaceStub(iface, devStub)
+				} else {
+					e.AssignedObject = stubForIface(iface)
+				}
 			}
 		case *diode.MACAddress:
 			if iface, ok := e.AssignedObject.(*diode.Interface); ok && iface != nil {
