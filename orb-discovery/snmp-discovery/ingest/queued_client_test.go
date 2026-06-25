@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -322,4 +323,48 @@ func TestCloseDoesNotExecuteBufferedIngests(t *testing.T) {
 	inner.release()
 	<-closeDone
 	assert.Equal(t, int32(1), atomic.LoadInt32(&inner.maxInFlight))
+}
+
+func TestCloseDoesNotHangEnqueueDuringShutdownRace(t *testing.T) {
+	inner := newCountingClient()
+	client, err := NewQueuedClient(inner, 8, testLogger())
+	require.NoError(t, err)
+
+	var closeWg sync.WaitGroup
+	closeWg.Add(1)
+	go func() {
+		defer closeWg.Done()
+		require.NoError(t, client.Close())
+	}()
+
+	const workers = 20
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := client.Ingest(ctx, nil)
+			if err != nil {
+				assert.True(t,
+					errors.Is(err, ErrIngestQueueClosed) || errors.Is(err, context.DeadlineExceeded),
+					"unexpected error: %v", err,
+				)
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		closeWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ingest workers hung during concurrent Close")
+	}
 }
