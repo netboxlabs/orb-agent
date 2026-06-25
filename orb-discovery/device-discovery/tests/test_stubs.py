@@ -97,12 +97,13 @@ def test_device_match_stub_keeps_required_fields_drops_rest():
     assert stub.HasField("device_type") and stub.device_type.model == "Catalyst 9300"
     assert stub.asset_tag == "ASSET-001"
 
-    # PrimaryIp4/6 stubbed (no assigned_object_interface) — cycle break.
-    assert stub.HasField("primary_ip4")
-    assert stub.primary_ip4.address == "192.0.2.10/24"
-    assert not stub.primary_ip4.HasField("assigned_object_interface")
-    assert stub.HasField("primary_ip6")
-    assert stub.primary_ip6.address == "2001:db8::1/64"
+    # primary_ip4/6 are STRIPPED by default — only the cycle-closer IP entity
+    # (the top-level ipam.ipaddress for the primary IP) may set device.primary_ip4
+    # in a single change set. Every other nested device stub resolves via
+    # name+site+tenant / asset_tag, so carrying primary_ip4 here would make the
+    # plugin try (and fail) to SET it on first ingest.
+    assert not stub.HasField("primary_ip4")
+    assert not stub.HasField("primary_ip6")
 
     # Non-matcher / non-required fields cleared.
     assert not stub.HasField("platform")
@@ -110,6 +111,41 @@ def test_device_match_stub_keeps_required_fields_drops_rest():
     assert stub.status == ""
     assert stub.description == ""
     assert stub.comments == ""
+
+
+def test_device_match_stub_keep_primary_ip4_keeps_address_only_stub():
+    """With keep_primary_ip4=True the stub carries primary_ip4 as an address-only stub."""
+    rich = pb.Device(name="sw1")
+    rich.site.CopyFrom(pb.Site(name="dc1"))
+    rich.primary_ip4.CopyFrom(pb.IPAddress(address="192.0.2.10/24"))
+    rich.primary_ip4.assigned_object_interface.CopyFrom(pb.Interface(name="eth0"))
+    rich.primary_ip6.CopyFrom(pb.IPAddress(address="2001:db8::1/64"))
+
+    stub = _device_match_stub(rich, keep_primary_ip4=True)
+
+    # primary_ip4 kept, address-only (no back-pointer interface — cycle break).
+    assert stub.HasField("primary_ip4")
+    assert stub.primary_ip4.address == "192.0.2.10/24"
+    assert not stub.primary_ip4.HasField("assigned_object_interface")
+    # primary_ip6 still stripped (keep flag defaults False).
+    assert not stub.HasField("primary_ip6")
+
+
+def test_device_match_stub_keep_primary_ip6_keeps_address_only_stub():
+    """With keep_primary_ip6=True the stub carries primary_ip6 as an address-only stub."""
+    rich = pb.Device(name="sw1")
+    rich.site.CopyFrom(pb.Site(name="dc1"))
+    rich.primary_ip4.CopyFrom(pb.IPAddress(address="192.0.2.10/24"))
+    rich.primary_ip6.CopyFrom(pb.IPAddress(address="2001:db8::1/64"))
+    rich.primary_ip6.assigned_object_interface.CopyFrom(pb.Interface(name="eth0"))
+
+    stub = _device_match_stub(rich, keep_primary_ip6=True)
+
+    assert stub.HasField("primary_ip6")
+    assert stub.primary_ip6.address == "2001:db8::1/64"
+    assert not stub.primary_ip6.HasField("assigned_object_interface")
+    # primary_ip4 still stripped (keep flag defaults False).
+    assert not stub.HasField("primary_ip4")
 
 
 def test_device_match_stub_minimal_rich():
@@ -403,6 +439,102 @@ def test_prune_nested_refs_no_top_device_is_noop():
     prune_nested_refs(entities)
     # No rich Device → no-op; rich nested device preserved.
     assert entities[0].interface.device.serial == "XYZ"
+
+
+def test_prune_nested_refs_keeps_primary_ip_only_on_cycle_closer():
+    """
+    Only the primary IP's own ipam.ipaddress entity keeps primary_ip4 on its nested device stub.
+
+    The cycle-closer (the top-level ipam.ipaddress for the primary IP, whose
+    assigned_object_interface points back at the device) is the one entity that
+    can validly SET device.primary_ip4 in a single change set: it does the
+    IP→interface assignment AND closes the cycle via its nested device stub's
+    primary_ip4. Every OTHER nested device stub (non-primary IP entity, plain
+    interface entity) must strip primary_ip4 so the plugin doesn't try to SET it
+    and fail on first ingest.
+    """
+    rich_dev = pb.Device(name="sw1", serial="FCW123", status="active")
+    rich_dev.site.CopyFrom(pb.Site(name="lab"))
+    rich_dev.device_type.CopyFrom(pb.DeviceType(model="ISR4451"))
+    rich_dev.primary_ip4.CopyFrom(pb.IPAddress(address="10.0.0.1/24"))
+    back_iface = pb.Interface(name="Gi1/0/1", type="1000base-t")
+    back_iface.device.CopyFrom(rich_dev)
+    rich_dev.primary_ip4.assigned_object_interface.CopyFrom(back_iface)
+
+    # Cycle-closer: the top-level IP entity for the primary IP.
+    closer_iface = pb.Interface(name="Gi1/0/1", type="1000base-t")
+    closer_iface.device.CopyFrom(rich_dev)
+    closer_ip = pb.IPAddress(address="10.0.0.1/24")
+    closer_ip.assigned_object_interface.CopyFrom(closer_iface)
+
+    # A non-primary IP entity on the same device.
+    other_iface = pb.Interface(name="Gi1/0/2", type="1000base-t")
+    other_iface.device.CopyFrom(rich_dev)
+    other_ip = pb.IPAddress(address="10.0.0.99/24")
+    other_ip.assigned_object_interface.CopyFrom(other_iface)
+
+    # A plain interface entity on the same device.
+    plain_iface = pb.Interface(name="Gi1/0/3", type="1000base-t")
+    plain_iface.device.CopyFrom(rich_dev)
+
+    entities = [
+        Entity(device=rich_dev),
+        Entity(ip_address=closer_ip),
+        Entity(ip_address=other_ip),
+        Entity(interface=plain_iface),
+    ]
+    prune_nested_refs(entities)
+
+    # Cycle-closer IP keeps primary_ip4 (address-only) on its nested device stub.
+    closer_dev = entities[1].ip_address.assigned_object_interface.device
+    assert closer_dev.HasField("primary_ip4")
+    assert closer_dev.primary_ip4.address == "10.0.0.1/24"
+    assert not closer_dev.primary_ip4.HasField("assigned_object_interface")
+
+    # Non-primary IP's nested device stub strips primary_ip4.
+    other_dev = entities[2].ip_address.assigned_object_interface.device
+    assert not other_dev.HasField("primary_ip4")
+
+    # Plain interface's nested device stub strips primary_ip4.
+    plain_dev = entities[3].interface.device
+    assert not plain_dev.HasField("primary_ip4")
+
+
+def test_prune_nested_refs_cycle_closer_stub_is_distinct_from_cached_stripped_stub():
+    """
+    The cycle-closer's nested device is a DISTINCT instance from the cached stripped stub.
+
+    The keep-primary stub must never be written into the shared stub_cache, so the
+    device's cached stripped stub (used by every other nested ref) still lacks
+    primary_ip4 even after the keep stub is built.
+    """
+    rich_dev = pb.Device(name="sw1", serial="FCW123")
+    rich_dev.site.CopyFrom(pb.Site(name="lab"))
+    rich_dev.device_type.CopyFrom(pb.DeviceType(model="ISR4451"))
+    rich_dev.primary_ip4.CopyFrom(pb.IPAddress(address="10.0.0.1/24"))
+    rich_dev.primary_ip4.assigned_object_interface.CopyFrom(pb.Interface(name="Gi1/0/1", type="1000base-t"))
+
+    closer_iface = pb.Interface(name="Gi1/0/1", type="1000base-t")
+    closer_iface.device.CopyFrom(rich_dev)
+    closer_ip = pb.IPAddress(address="10.0.0.1/24")
+    closer_ip.assigned_object_interface.CopyFrom(closer_iface)
+
+    plain_iface = pb.Interface(name="Gi1/0/3", type="1000base-t")
+    plain_iface.device.CopyFrom(rich_dev)
+
+    entities = [
+        Entity(device=rich_dev),
+        Entity(ip_address=closer_ip),
+        Entity(interface=plain_iface),
+    ]
+    prune_nested_refs(entities)
+
+    closer_dev = entities[1].ip_address.assigned_object_interface.device
+    plain_dev = entities[2].interface.device
+    # Distinct instances — the keep stub bypasses the cache.
+    assert closer_dev is not plain_dev
+    # Cached stripped stub still lacks primary_ip4.
+    assert not plain_dev.HasField("primary_ip4")
 
 
 def test_prune_nested_refs_vc_member_modules_each_get_own_device_stub():
