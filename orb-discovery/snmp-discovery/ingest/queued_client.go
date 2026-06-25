@@ -59,14 +59,15 @@ func (c *QueuedClient) consumer() {
 
 	for {
 		select {
+		case <-c.shutdownCh:
+			c.drainPendingFailures()
+			return
+		default:
+		}
+
+		select {
 		case req := <-c.requests:
 			c.execute(req)
-			select {
-			case <-c.shutdownCh:
-				c.drainPendingFailures()
-				return
-			default:
-			}
 		case <-c.shutdownCh:
 			c.drainPendingFailures()
 			return
@@ -156,8 +157,9 @@ func (c *QueuedClient) IngestProto(
 	})
 }
 
-// Close stops accepting new work, fails pending queued requests, waits for the
-// consumer to exit, then closes the inner client. Close is idempotent.
+// Close stops accepting new work, fails buffered requests that have not started,
+// waits for any in-flight ingest and the consumer to exit, then closes the inner
+// client. Close is idempotent.
 func (c *QueuedClient) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
