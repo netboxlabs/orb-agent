@@ -10,6 +10,10 @@ on:
       - "orb-discovery/gnmi-discovery/**"
       - "!orb-discovery/gnmi-discovery/docker/**"
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   issues: write
