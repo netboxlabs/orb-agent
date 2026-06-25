@@ -1,4 +1,4 @@
-name: usnmp udiscovery - test
+name: SNMP Discovery - test
 on:
   workflow_dispatch:
   push:

@@ -1,4 +1,4 @@
-name: unetwork udiscovery - test
+name: Network Discovery - test
 on:
   workflow_dispatch:
   push:
