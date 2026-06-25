@@ -1,4 +1,14 @@
 name: Orb Agent - PR Semantic Release Check
+
+# Previews what merging this PR into `release` would publish for orb-agent.
+#
+# semantic-release refuses to run on pull_request events (it returns before
+# analyzing commits), so a plain dry-run on a PR always reports "no release".
+# Instead we check out the PR's merge commit (head merged into base — the exact
+# post-merge state), label it as the `release` branch, and run with --no-ci so
+# semantic-release actually analyzes the merged history and reports the real
+# next version. It uses the same shared config as the release workflow, so the
+# preview cannot drift from the actual release.
 on:
   pull_request:
     branches: [ release ]
@@ -7,107 +17,47 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref }}
   cancel-in-progress: true
 
-env:
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  APP_NAME: orb-agent
-
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  semantic-release-dry-run:
+  preview:
     name: Semantic Release Dry Run
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout
+      - name: Checkout PR merge commit
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      - name: Label merge commit as the release branch
+        # The default pull_request ref is refs/pull/<n>/merge (head merged into
+        # base); naming it `release` makes semantic-release's branch check pass
+        # under --no-ci.
+        run: git checkout -B release
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "lts/*"
-
-      - name: Write package.json
-        run: |
-          cat > ./package.json <<'EOF'
-          {
-            "name": "${{ env.APP_NAME }}",
-            "version": "1.0.0",
-            "devDependencies": {
-              "semantic-release-export-data": "^1.0.1",
-              "semantic-release": "25.0.0-beta.6",
-              "@semantic-release/changelog": "^6.0.3",
-              "conventional-changelog-conventionalcommits": "^9.0.0"
-            }
-          }
-          EOF
-
-      - name: Write .releaserc.json
-        run: |
-          cat > ./.releaserc.json <<'EOF'
-          {
-            "branches": "release",
-            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
-            "debug": "true",
-            "tagFormat": "v${version}",
-            "plugins": [
-              ["semantic-release-export-data"],
-              ["@semantic-release/commit-analyzer", {
-                "preset": "conventionalcommits",
-                "releaseRules": [
-                  { "breaking": true, "release": "major" },
-                  { "type": "fix", "release": "patch" },
-                  { "type": "feat", "release": "minor" },
-                  { "type": "perf", "release": "patch" },
-                  { "type": "chore", "scope": "deps", "release": "patch" },
-                  { "scope": "device-discovery", "release": false },
-                  { "scope": "network-discovery", "release": false },
-                  { "scope": "snmp-discovery", "release": false },
-                  { "scope": "gnmi-discovery", "release": false },
-                  { "scope": "worker", "release": false },
-                  { "scope": "repo", "release": false },
-                  { "scope": "ci", "release": false },
-                  { "scope": "docs", "release": false },
-                  { "scope": "deps-dev", "release": false }
-                ]
-              }],
-              ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
-              [
-                "@semantic-release/changelog",
-                {
-                  "changelogFile": "CHANGELOG.md",
-                  "changelogTitle": "# Semantic Versioning Changelog"
-                }
-              ],
-              [
-                "@semantic-release/github",
-                {
-                  "assets": [
-                    {
-                      "path": "release/**"
-                    }
-                  ]
-                }
-              ]
-            ]
-          }
-          EOF
-
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
-
-      - name: Run semantic-release dry-run
+      - name: Setup semantic-release
+        uses: ./.github/actions/setup-semantic-release
+        with:
+          component: agent
+      - name: Semantic-release preview
         id: semantic-release
-        run: npx semantic-release --debug --dry-run
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # --no-ci bypasses the pull_request short-circuit; --dry-run prevents any
+        # tag/release/comment side effects.
+        run: npx semantic-release --debug --dry-run --no-ci
 
       - name: Comment PR with results
         continue-on-error: true  # Fork PRs have read-only tokens and cannot post comments
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          NEW_RELEASE_PUBLISHED: ${{ steps.semantic-release.outputs.new-release-published }}
+          NEW_RELEASE_VERSION: ${{ steps.semantic-release.outputs.new-release-version }}
+          NEW_RELEASE_TYPE: ${{ steps.semantic-release.outputs.new-release-type }}
         with:
           script: |
             const { data: commits } = await github.rest.pulls.listCommits({
@@ -115,29 +65,42 @@ jobs:
               repo: context.repo.repo,
               pull_number: context.issue.number
             });
-            
+
             const commitMessages = commits.map(commit => commit.commit.message).join('\n');
-            
+
             let comment = `## Semantic Release Dry Run Results 🔍\n\n`;
-            
+
             if (process.env.NEW_RELEASE_PUBLISHED === 'true') {
-              comment += `✅ **A new release would be published!**\n\n`;
+              comment += `✅ **Merging this PR would publish a new release.**\n\n`;
               comment += `**Version:** ${process.env.NEW_RELEASE_VERSION}\n\n`;
-              comment += `**Commit Messages:**\n\`\`\`\n${commitMessages}\n\`\`\`\n\n`;
-              comment += `This PR would trigger a ${process.env.NEW_RELEASE_TYPE || 'patch'} release.`;
+              comment += `This PR would trigger a ${process.env.NEW_RELEASE_TYPE || 'patch'} release.\n\n`;
+              comment += `**Commit Messages:**\n\`\`\`\n${commitMessages}\n\`\`\`\n`;
             } else {
-              comment += `ℹ️ **No new release would be published**\n\n`;
-              comment += `**Commit Messages:**\n\`\`\`\n${commitMessages}\n\`\`\`\n\n`;
-              comment += `No semantic changes detected that would trigger a release.`;
+              comment += `ℹ️ **Merging this PR would not publish a new orb-agent release.**\n\n`;
+              comment += `No releasable orb-agent changes since the last version (backend-only changes do not cut an agent release).\n\n`;
+              comment += `**Commit Messages:**\n\`\`\`\n${commitMessages}\n\`\`\`\n`;
             }
-            
-            await github.rest.issues.createComment({
+
+            const marker = '<!-- semantic-release-dry-run -->';
+            const body = `${marker}\n${comment}`;
+            const { data: existing } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: comment
             });
-        env:
-          NEW_RELEASE_PUBLISHED: ${{ steps.semantic-release.outputs.new-release-published }}
-          NEW_RELEASE_VERSION: ${{ steps.semantic-release.outputs.new-release-version }}
-          NEW_RELEASE_TYPE: ${{ steps.semantic-release.outputs.new-release-type }} 
+            const prev = existing.find(c => c.body && c.body.includes(marker));
+            if (prev) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: prev.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
