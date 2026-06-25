@@ -33,7 +33,7 @@ const (
 	defaultExec             = "snmp-discovery"
 	defaultAPIHost          = "localhost"
 	defaultAPIPort          = "8070"
-	defaultIngestBufferSize = 256
+	defaultIngestBufferSize = 512
 )
 
 type snmpDiscoveryBackend struct {

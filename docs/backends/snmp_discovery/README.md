@@ -51,7 +51,7 @@ Backend-level settings apply to the `snmp_discovery` process as a whole (distinc
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| ingest_buffer_size | integer | no | Capacity of the buffered queue that serializes Diode ingest calls. Defaults to `256`. |
+| ingest_buffer_size | integer | no | Capacity of the buffered queue that serializes Diode ingest calls. Defaults to `512`. |
 
 Diode ingest runs through a single-consumer queue so concurrent crawl jobs finishing at once do not trigger concurrent OAuth token refresh storms. Increase `ingest_buffer_size` when large subnet bursts may enqueue many payloads before the consumer drains them; decrease it if memory is a concern — each queued request retains its entity payload until processed.
 

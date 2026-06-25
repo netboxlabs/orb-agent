@@ -43,7 +43,7 @@ func main() {
 	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
 	otelExportPeriod := flag.Int("otel-export-period", 10, "Period in seconds between OpenTelemetry exports")
-	ingestBufferSize := flag.Int("ingest-buffer-size", 256, "buffer size for the ingest queue")
+	ingestBufferSize := flag.Int("ingest-buffer-size", 512, "buffer size for the ingest queue")
 
 	flag.Parse()
 
