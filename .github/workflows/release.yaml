@@ -54,10 +54,26 @@ jobs:
           IS_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           set -eu
+          # Manual dispatch: treat every component as releasable and let each
+          # component's semantic-release decide what (if anything) to publish.
+          # This matches the pre-orchestrator behavior where a manual run released
+          # regardless of which paths changed, and avoids a HEAD~1 diff wrongly
+          # skipping a manual retry or a tip commit that is backend/CI-only.
+          if [ "$IS_DISPATCH" = "true" ]; then
+            {
+              echo "device=true"
+              echo "worker=true"
+              echo "network=true"
+              echo "snmp=true"
+              echo "gnmi=true"
+              echo "agent=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           base="${BEFORE:-}"
-          # On workflow_dispatch (or a missing/zero/unknown before) compare against
-          # the previous commit; on a normal push compare the pushed range.
-          if [ "$IS_DISPATCH" = "true" ] || [ -z "$base" ] \
+          # Missing/zero/unknown before -> compare against the previous commit;
+          # on a normal push compare the pushed range.
+          if [ -z "$base" ] \
              || [ "$base" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             base="$(git rev-parse HEAD~1)"

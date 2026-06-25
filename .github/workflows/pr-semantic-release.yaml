@@ -18,7 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  # write (not read) because `--no-ci` runs semantic-release's normal
+  # verifyConditions, which checks push/token permission even in --dry-run;
+  # read-only would fail with EGITNOPERMISSION before producing the preview.
+  contents: write
   pull-requests: write
 
 jobs:
