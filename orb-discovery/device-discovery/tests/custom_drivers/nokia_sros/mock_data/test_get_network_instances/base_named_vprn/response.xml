@@ -1,0 +1,25 @@
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="urn:uuid:6">
+  <data>
+    <configure xmlns="urn:nokia.com:sros:ns:yang:sr:conf">
+      <service>
+        <vprn>
+          <service-name>Base</service-name>
+          <interface>
+            <interface-name>rogue-if</interface-name>
+          </interface>
+        </vprn>
+        <vprn>
+          <service-name>CUST-RED</service-name>
+          <bgp-ipvpn>
+            <mpls>
+              <route-distinguisher>65000:300</route-distinguisher>
+            </mpls>
+          </bgp-ipvpn>
+          <interface>
+            <interface-name>to-red-ce1</interface-name>
+          </interface>
+        </vprn>
+      </service>
+    </configure>
+  </data>
+</rpc-reply>

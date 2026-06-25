@@ -1,0 +1,15 @@
+{
+  "100": {
+    "name": "Server Network",
+    "interfaces": [
+      "Ethernet0",
+      "Ethernet4"
+    ]
+  },
+  "200": {
+    "name": "OOB Management",
+    "interfaces": [
+      "Management0"
+    ]
+  }
+}

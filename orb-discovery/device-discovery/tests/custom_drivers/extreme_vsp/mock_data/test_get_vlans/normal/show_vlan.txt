@@ -1,0 +1,8 @@
+================================================================================
+                              Vlan
+================================================================================
+
+VLAN_ID  VLAN_NAME                STATUS  TYPE    MSTP_INSTANCE
+1        Default                  Active  Port    0
+10       Management               Active  Port    0
+20       Data                     Active  Port    0

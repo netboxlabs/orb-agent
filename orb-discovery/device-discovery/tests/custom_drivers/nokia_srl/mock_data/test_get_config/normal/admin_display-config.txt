@@ -1,0 +1,29 @@
+    interface ethernet-1/1 {
+        admin-state enable
+        subinterface 0 {
+            admin-state enable
+            ipv4 {
+                admin-state enable
+                address 192.168.0.0/31 {
+                    primary true
+                }
+            }
+        }
+    }
+    interface mgmt0 {
+        admin-state enable
+        subinterface 0 {
+            admin-state enable
+            ipv4 {
+                dhcp-client {
+                }
+            }
+        }
+    }
+    system {
+        name {
+            host-name srl-test
+        }
+    }
+
+--{ running }--[  ]--

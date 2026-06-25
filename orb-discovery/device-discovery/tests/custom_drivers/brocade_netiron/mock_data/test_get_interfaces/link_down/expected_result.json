@@ -1,0 +1,11 @@
+{
+  "GigabitEthernet1/1": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "fiber-uplink",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 0.0,
+    "mac_address": "00:24:38:A5:1C:00"
+  }
+}

@@ -1,0 +1,9 @@
+                Filter Filter
+                Untagged   Unregistered                                       PVID
+Port   Frames     Frames     STG  PVID  Tagging       Name           Pri
+----   ----       ----       ---  ----  -------       ----           ---
+1/1    No         Yes        1    10    UntagAll      USER-1         0
+1/2    No         Yes        1    10    UntagAll      USER-2         0
+1/5    No         Yes        1    20    UntagPvidOnly NATIVE-TRUNK   0
+1/6    No         Yes        1    1     TagAll        FULL-TRUNK     0
+1/9    No         Yes        1    1     Disable                      0

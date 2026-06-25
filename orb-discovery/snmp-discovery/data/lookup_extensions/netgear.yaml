@@ -1,0 +1,16 @@
+devices:
+  # Netgear (enterprise 4526)
+  .1.3.6.1.4.1.4526: netgear
+
+  # Managed switches
+  .1.3.6.1.4.1.4526.100.1.28: netgearM430012X12F
+  .1.3.6.1.4.1.4526.100.1.31: netgearM430052G
+
+  # Access points
+  .1.3.6.1.4.1.4526.100.7: netgearAccessPoint
+
+  # ReadyNAS storage
+  .1.3.6.1.4.1.4526.100.12: netgearReadyNAS
+  .1.3.6.1.4.1.4526.100.15: netgearReadyNAS
+  .1.3.6.1.4.1.4526.100.16: netgearReadyNAS
+  .1.3.6.1.4.1.4526.22: netgearReadyNAS

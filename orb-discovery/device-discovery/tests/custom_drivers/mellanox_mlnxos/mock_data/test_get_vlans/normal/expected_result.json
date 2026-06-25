@@ -1,0 +1,23 @@
+{
+  "1": {
+    "name": "default",
+    "interfaces": [
+      "Eth1/3",
+      "Eth1/4"
+    ]
+  },
+  "10": {
+    "name": "mgmt vlan",
+    "interfaces": [
+      "Eth1/1"
+    ]
+  },
+  "20": {
+    "name": "data-vlan",
+    "interfaces": [
+      "Eth1/1",
+      "Eth1/2",
+      "Eth1/5"
+    ]
+  }
+}

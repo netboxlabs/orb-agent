@@ -1,0 +1,5 @@
+{
+  "running": "\nusername admin password 7 <redacted>\nradius-server host 10.1.1.100 key <redacted>\ntacacs-server host 10.1.1.200 key <redacted>\n!\n",
+  "candidate": "",
+  "startup": ""
+}

@@ -1,0 +1,24 @@
+{
+  "Base": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "Base",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "CUST-RED": {
+    "interfaces": {
+      "interface": {
+        "CUST-RED/to-red-ce1": {}
+      }
+    },
+    "name": "CUST-RED",
+    "state": {
+      "route_distinguisher": "65000:300"
+    },
+    "type": "L3VRF"
+  }
+}

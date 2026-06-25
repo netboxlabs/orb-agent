@@ -1,0 +1,9 @@
+{
+  "1/1/1": {
+    "name": "1/1/1",
+    "routing": false,
+    "vlan_mode": "access",
+    "vlan_tag": "/rest/v10.04/system/vlans/10",
+    "vlan_trunks": []
+  }
+}

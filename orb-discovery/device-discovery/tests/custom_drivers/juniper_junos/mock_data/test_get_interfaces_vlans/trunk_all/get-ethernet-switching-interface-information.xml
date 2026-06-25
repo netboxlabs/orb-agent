@@ -1,0 +1,11 @@
+<ethernet-switching-interface-information>
+  <interface>
+    <interface-name>ge-0/0/3</interface-name>
+    <interface-port-mode>Trunk</interface-port-mode>
+    <interface-vlan-member-list>
+      <interface-vlan-member>
+        <interface-vlan-name>all</interface-vlan-name>
+      </interface-vlan-member>
+    </interface-vlan-member-list>
+  </interface>
+</ethernet-switching-interface-information>

@@ -1,0 +1,36 @@
+{
+  "RED": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet0/0/0/1": {}
+      }
+    },
+    "name": "RED",
+    "state": {
+      "route_distinguisher": "65000:100"
+    },
+    "type": "L3VRF"
+  },
+  "STAGING": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet0/0/0/5": {}
+      }
+    },
+    "name": "STAGING",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  }
+}

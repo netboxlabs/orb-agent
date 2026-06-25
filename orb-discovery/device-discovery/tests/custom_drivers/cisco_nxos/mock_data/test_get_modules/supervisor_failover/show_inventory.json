@@ -1,0 +1,9 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 9504\"", "productid": "\"N9K-C9504\"", "vendorid": "V01", "serialnum": "\"FOC1234CHA\""},
+      {"name": "\"Slot 1\"", "desc": "\"Supervisor Module\"", "productid": "\"N9K-SUP-A\"", "vendorid": "V01", "serialnum": "\"FOC1234SUP01\""},
+      {"name": "\"Slot 2\"", "desc": "\"Supervisor Module\"", "productid": "\"N9K-SUP-A\"", "vendorid": "V01", "serialnum": "\"FOC1234SUP02\""}
+    ]
+  }
+}

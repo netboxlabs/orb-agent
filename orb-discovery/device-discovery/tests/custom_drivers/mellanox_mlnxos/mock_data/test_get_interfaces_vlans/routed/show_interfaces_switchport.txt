@@ -1,0 +1,8 @@
+Eth1/1
+  Admin Mode             : disabled
+  Operational Mode       : routed
+  Access VLAN            :
+  Native VLAN            :
+  Allowed VLANs          :
+  Hybrid Allowed VLANs   :
+  Voice VLAN             :

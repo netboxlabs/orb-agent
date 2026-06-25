@@ -1,0 +1,14 @@
+Port  : gi1/0/2
+Port Mode: Trunk
+Gvrp Status: disabled
+Ingress Filtering: true
+Acceptable Frame Type: Tagged
+Default VLAN: enabled
+
+Port gi1/0/2 is member in:
+Vlan       Name             Egress rule    Type
+----     -------------    -----------    ----
+1        default          Untagged       Default
+100      DATA             Tagged         Static
+200      VOICE            Tagged         Static
+

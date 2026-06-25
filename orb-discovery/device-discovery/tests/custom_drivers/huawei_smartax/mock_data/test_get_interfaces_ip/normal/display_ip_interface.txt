@@ -1,0 +1,4 @@
+Vlanif100 current state : UP
+Line protocol current state : UP
+Internet Address is 192.168.1.100/24
+

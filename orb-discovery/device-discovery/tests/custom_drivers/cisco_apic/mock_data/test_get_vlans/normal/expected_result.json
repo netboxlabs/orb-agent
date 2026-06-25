@@ -1,0 +1,28 @@
+{
+  "10": {
+    "name": "TenantA:AppEPG",
+    "interfaces": [
+      "eth1/1",
+      "eth1/2"
+    ]
+  },
+  "20": {
+    "name": "TenantA:WebEPG",
+    "interfaces": [
+      "eth1/3"
+    ]
+  },
+  "30": {
+    "name": "TenantB:DbEPG",
+    "interfaces": [
+      "eth1/4",
+      "eth1/5"
+    ]
+  },
+  "40": {
+    "name": "TenantB:MgmtEPG",
+    "interfaces": [
+      "eth1/6"
+    ]
+  }
+}

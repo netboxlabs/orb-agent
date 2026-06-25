@@ -1,0 +1,15 @@
+{
+  "hostname": "netiron-core-1",
+  "vendor": "Brocade",
+  "model": "NetIron MLX-4",
+  "os_version": "05.4.00a",
+  "serial_number": "CWY0621M00Q",
+  "uptime": 310925.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "GigabitEthernet1/1",
+    "GigabitEthernet1/2",
+    "Ve2",
+    "Loopback1"
+  ]
+}

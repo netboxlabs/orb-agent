@@ -1,0 +1,20 @@
+{
+  "1": {
+    "id": 1,
+    "role": "conductor",
+    "serial_number": "TW01ABC0001",
+    "product_name": "6300M-48G-PoE+-4SFP56",
+    "mac_address": "94:f1:28:11:00:00",
+    "priority": 128,
+    "status": "up"
+  },
+  "2": {
+    "id": 2,
+    "role": "standby",
+    "serial_number": "TW01ABC0002",
+    "product_name": "6300M-48G-PoE+-4SFP56",
+    "mac_address": "94:f1:28:11:00:80",
+    "priority": 64,
+    "status": "up"
+  }
+}

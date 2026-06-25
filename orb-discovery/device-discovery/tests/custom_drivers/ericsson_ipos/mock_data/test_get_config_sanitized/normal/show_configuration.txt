@@ -1,0 +1,22 @@
+context local
+  hostname ipos-router-1
+  subscriber default
+    exit
+  aaa
+    local-user admin
+      password MySecretPassword123
+      exit
+    exit
+  snmp-server community public ro
+  snmp-server community private rw
+  radius-server primary
+    key MyRadiusKey
+    exit
+  interface loopback lo0
+    ip address 10.255.255.1/32
+    encrypted-key 3DES0102030405
+    exit
+  port 1/1
+    no shutdown
+    exit
+  exit

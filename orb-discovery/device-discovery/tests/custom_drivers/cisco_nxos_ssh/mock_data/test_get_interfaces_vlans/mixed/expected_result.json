@@ -1,0 +1,21 @@
+{
+  "Ethernet1/1": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 100
+  },
+  "Ethernet1/2": {
+    "mode": "trunk",
+    "tagged": [
+      10,
+      20,
+      30
+    ],
+    "untagged": 1
+  },
+  "Ethernet1/3": {
+    "mode": "routed",
+    "tagged": [],
+    "untagged": null
+  }
+}

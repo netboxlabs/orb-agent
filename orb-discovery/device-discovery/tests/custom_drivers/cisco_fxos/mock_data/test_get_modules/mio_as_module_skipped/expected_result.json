@@ -1,0 +1,10 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "2", "position": "2", "module": {"model": "FPR9K-SM-36", "serial": "JMX2401SM02", "description": "Firepower 9300 Security Module", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

@@ -1,0 +1,11 @@
+<response status="success">
+  <result>
+    <system>
+      <hostname>pa7500-lab</hostname>
+      <model>PA-7500</model>
+      <serial>007902000001</serial>
+      <sw-version>11.2.0</sw-version>
+      <family>7500</family>
+    </system>
+  </result>
+</response>

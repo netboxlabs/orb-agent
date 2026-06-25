@@ -1,0 +1,13 @@
+
+ version 7.1.070, Release 3506P03
+ sysname comware-sw01
+#
+interface GigabitEthernet1/0/1
+ port link-type access
+ port access vlan 1
+#
+ local-user admin class manage
+  password cipher $c$3$VgT/PmMXFbvnG3VH
+  service-type telnet ssh
+#
+return

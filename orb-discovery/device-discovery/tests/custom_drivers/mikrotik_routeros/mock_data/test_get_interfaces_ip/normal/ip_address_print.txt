@@ -1,0 +1,5 @@
+Columns: ADDRESS, NETWORK, INTERFACE
+# ADDRESS          NETWORK       INTERFACE
+;;; defconf
+0 192.168.3.1/24   192.168.3.0   bridge
+1 192.168.20.2/24  192.168.20.0  ether1

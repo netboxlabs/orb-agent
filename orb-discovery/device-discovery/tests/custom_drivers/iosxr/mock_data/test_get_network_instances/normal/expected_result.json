@@ -1,0 +1,37 @@
+{
+  "MGMT": {
+    "interfaces": {
+      "interface": {
+        "MgmtEth0/RP0/CPU0/0": {}
+      }
+    },
+    "name": "MGMT",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "RED": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet0/0/0/1": {},
+        "GigabitEthernet0/0/0/2.100": {}
+      }
+    },
+    "name": "RED",
+    "state": {
+      "route_distinguisher": "65000:100"
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  }
+}

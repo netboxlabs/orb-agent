@@ -1,0 +1,7 @@
+{
+  "Ethernet1/6": {
+    "mode": "routed",
+    "tagged": [],
+    "untagged": null
+  }
+}

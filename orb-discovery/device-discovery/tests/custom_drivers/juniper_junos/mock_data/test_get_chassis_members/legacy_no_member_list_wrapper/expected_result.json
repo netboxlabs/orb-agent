@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 0,
+      "serial": "BP0212345001",
+      "model": "EX4200-48T",
+      "role": "active",
+      "priority": 129,
+      "mac": "00:23:9c:11:22:00",
+      "state": "Prsnt"
+    },
+    {
+      "id": 1,
+      "serial": "BP0212345002",
+      "model": "EX4200-48T",
+      "role": "standby",
+      "priority": 128,
+      "mac": "00:23:9c:11:22:80",
+      "state": "Prsnt"
+    }
+  ],
+  "domain": null
+}

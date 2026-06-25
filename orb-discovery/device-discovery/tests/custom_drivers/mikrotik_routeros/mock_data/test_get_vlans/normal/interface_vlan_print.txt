@@ -1,0 +1,6 @@
+Flags: R - RUNNING
+Columns: NAME, MTU, ARP, VLAN-ID, INTERFACE
+#   NAME      MTU  ARP      VLAN-ID  INTERFACE
+0 R Huis     1500  enabled       10  bridge
+1 R Kantoor  1500  enabled       11  Huis
+2 R Schuur   1500  enabled       12  bridge

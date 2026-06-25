@@ -1,0 +1,3 @@
+Role         Pod   Node   Name    Version
+-----------  ---   ----   ------  --------
+controller   1     1      apic1   6.0(3f)

@@ -1,0 +1,6 @@
+Interface      IPv4 address/mask    Admin/Oper    Protocol
+-------------  -------------------  ------------  ----------
+Ethernet0      10.0.0.1/31          up/up         BGP
+Ethernet4      10.0.0.3/31          up/down
+Loopback0      10.1.0.1/32          up/up
+Management0    192.168.1.10/24      up/up

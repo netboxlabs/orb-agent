@@ -1,0 +1,17 @@
+uptime: 20w5d14h23m42s
+                  version: 6.49.15 (stable)
+               build-time: Apr/24/2024 13:04:23
+              free-memory: 98.1MiB
+             total-memory: 128.0MiB
+                      cpu: MIPS 74Kc V4.12
+                cpu-count: 1
+            cpu-frequency: 600MHz
+                 cpu-load: 9%
+           free-hdd-space: 100.0MiB
+          total-hdd-space: 128.0MiB
+  write-sect-since-reboot: 95308
+         write-sect-total: 5410986
+               bad-blocks: 0%
+        architecture-name: mipsbe
+               board-name: RB2011UiAS-2HnD
+                 platform: MikroTik

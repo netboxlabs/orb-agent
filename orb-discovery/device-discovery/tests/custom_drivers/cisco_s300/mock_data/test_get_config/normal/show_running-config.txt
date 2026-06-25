@@ -1,0 +1,14 @@
+username cisco privilege 15 password 8 $2y$10$abc123hashvalue
+username guest password 8 $2y$10$guesthashabcdef
+enable password level 15 $2y$10$abc123hashvalue
+!
+interface vlan 1
+ ip address 192.168.1.1 255.255.255.0
+!
+interface vlan 355
+ ip address 10.0.55.6 255.255.255.0
+!
+snmp-server community public ro
+snmp-server community private rw
+!
+ip default-gateway 10.0.55.1

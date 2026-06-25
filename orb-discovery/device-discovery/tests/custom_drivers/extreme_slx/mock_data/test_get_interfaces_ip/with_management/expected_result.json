@@ -1,0 +1,30 @@
+{
+  "Ethernet 0/1": {
+    "ipv4": {
+      "192.168.100.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Loopback 1": {
+    "ipv4": {
+      "10.1.1.1": {
+        "prefix_length": 32
+      }
+    }
+  },
+  "Ve 10": {
+    "ipv4": {
+      "10.0.10.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Management 0": {
+    "ipv4": {
+      "10.255.255.1": {
+        "prefix_length": 24
+      }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+total 1 logical interfaces
+name                id      vsys zone             forwarding               tag    address
+------------------- ------- ---- ---------------- ------------------------ ------ ------------------
+ethernet1/1         16      1    N/A              0      N/A

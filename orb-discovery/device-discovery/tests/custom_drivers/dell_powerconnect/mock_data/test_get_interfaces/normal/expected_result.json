@@ -1,0 +1,47 @@
+{
+  "g1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "TO_SRV01_[DRAC]",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "g2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "TO_SRV02_[DRAC]",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "g3": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "TO_SRV03_[DRAC]",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 100.0,
+    "mac_address": ""
+  },
+  "g4": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "TO_SRV04_[DRAC]",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": -1.0,
+    "mac_address": ""
+  },
+  "g5": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "UPLINK_1Gbit",
+    "last_flapped": -1.0,
+    "mtu": -1,
+    "speed": 1000.0,
+    "mac_address": ""
+  }
+}

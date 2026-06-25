@@ -1,0 +1,15 @@
+{
+  "hostname": "MikroTik",
+  "vendor": "MikroTik",
+  "model": "RB4011iGS+",
+  "os_version": "7.15.1 (stable)",
+  "serial_number": "F0260ECBE4AB",
+  "uptime": 9613490.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "bridge",
+    "ether1",
+    "ether2",
+    "ether3"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "Ethernet1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Uplink to spine",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 10000.0,
+    "mac_address": "7c69.f60f.aa60"
+  },
+  "Ethernet1/2": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 10000.0,
+    "mac_address": "7c69.f60f.aa61"
+  },
+  "Ethernet1/3": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 10000.0,
+    "mac_address": "7c69.f60f.aa62"
+  },
+  "Ethernet1/4": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "uplink-40g",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 40000.0,
+    "mac_address": "7c69.f60f.aa63"
+  }
+}

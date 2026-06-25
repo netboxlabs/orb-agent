@@ -1,0 +1,5 @@
+{
+  "running": "# RouterOS 7.15.1\n# software id = XXXX-XXXX\n#\n/interface bridge\nadd name=bridge\n/ip address\nadd address=192.168.3.1/24 interface=bridge network=192.168.3.0 comment=defconf\nadd address=192.168.20.2/24 interface=ether1 network=192.168.20.0\n/user\nadd group=full name=admin password=MyAdminPass123\nadd group=read name=monitor password=ReadOnly456\n/radius\nadd address=192.168.1.100 secret=RadiusSecret789 service=login\n/ip ipsec peer\nadd address=10.0.0.1 passphrase=IpsecPassphrase111\n",
+  "candidate": "",
+  "startup": ""
+}

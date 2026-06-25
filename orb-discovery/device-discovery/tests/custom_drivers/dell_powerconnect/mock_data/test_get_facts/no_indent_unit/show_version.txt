@@ -1,0 +1,9 @@
+System Description:        Dell Networking N2048, 1.0, Linux 3.6.5-1
+System Up Time (days,hour:min:sec):  0,00:30:00
+System Contact:
+System Name:               switch03
+System Location:
+
+Unit ID  HW Version  SW Version     Serial Number
+--------  ----------  -------------  ------------
+1         A00         10.5.2.4       NOINDENT001234

@@ -1,0 +1,5 @@
+{
+  "running": "!Current Configuration:\n!\nhostname unifi-sw-24\n!\ninterface vlan 1\n ip address 192.168.0.1 255.255.255.0\n!\ninterface 0/1\n vlan participation include 1,50\n vlan tagging 50\n!\ninterface 0/2\n vlan participation include 1\n!\n",
+  "candidate": "",
+  "startup": ""
+}

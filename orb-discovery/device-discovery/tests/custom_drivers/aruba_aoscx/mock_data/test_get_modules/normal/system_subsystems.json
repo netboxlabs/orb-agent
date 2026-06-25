@@ -1,0 +1,6 @@
+{
+  "chassis,1": {"product_info": {"part_number": "JL375A", "serial_number": "SG10KCHA01", "product_name": "8400 Chassis"}},
+  "management_module,1/1": {"product_info": {"part_number": "JL376A", "serial_number": "SG10KMM001", "product_name": "8400X Management Module"}},
+  "line_card,1/3": {"product_info": {"part_number": "JL363A", "serial_number": "SG10KLC003", "product_name": "8400X 32p 10G/25G SFP28"}},
+  "line_card,1/4": {"product_info": {"part_number": "JL363A", "serial_number": "SG10KLC004", "product_name": "8400X 32p 10G/25G SFP28"}}
+}

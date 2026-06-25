@@ -1,0 +1,10 @@
+{
+  "gi1/0/3": {
+    "mode": "trunk",
+    "tagged": [
+      20,
+      30
+    ],
+    "untagged": 10
+  }
+}

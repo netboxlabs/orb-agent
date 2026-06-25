@@ -1,0 +1,221 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/metrics"
+	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/policy"
+)
+
+// Response represents the server response
+type Response struct {
+	Detail string `json:"detail"`
+}
+
+// Capabilities represents the response for server capabilities
+type Capabilities struct {
+	Capabilities []string `json:"capabilities"`
+}
+
+// StatusResponse represents the status response including policies
+type StatusResponse struct {
+	config.Status
+	Policies []policy.Status `json:"policies"`
+}
+
+// Server represents the network-discovery server
+type Server struct {
+	router     *gin.Engine
+	manager    *policy.Manager
+	stat       config.Status
+	logger     *slog.Logger
+	host       string
+	port       int
+	httpServer *http.Server
+}
+
+func init() {
+	gin.SetMode(gin.ReleaseMode)
+}
+
+// NewServer returns a new network-discovery server
+func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manager, version string) *Server {
+	server := &Server{
+		router:  gin.New(),
+		manager: manager,
+		stat: config.Status{
+			Version:   version,
+			StartTime: time.Now(),
+		},
+		logger: logger,
+		host:   host,
+		port:   port,
+	}
+	server.httpServer = &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", host, port),
+		Handler: server.router,
+	}
+	// Custom middleware to count API calls and measure latency
+	server.router.Use(func(c *gin.Context) {
+		// Start timer for latency
+		startTime := time.Now()
+
+		// Process request
+		c.Next()
+
+		if apiMetric := metrics.GetAPIRequests(); apiMetric != nil {
+			apiMetric.Add(c.Request.Context(), 1,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
+
+		if apiMetric := metrics.GetAPIResponseLatency(); apiMetric != nil {
+			// Calculate duration in milliseconds
+			duration := float64(time.Since(startTime).Milliseconds())
+			apiMetric.Record(c.Request.Context(), duration,
+				metric.WithAttributes(
+					attribute.String("endpoint", c.Request.URL.Path),
+					attribute.String("method", c.Request.Method),
+					attribute.Int("status", c.Writer.Status()),
+				),
+			)
+		}
+	})
+
+	v1 := server.router.Group("/api/v1")
+	{
+		v1.GET("/status", server.getStatus)
+		v1.GET("/capabilities", server.getCapabilities)
+		v1.POST("/policies", server.createPolicy)
+		v1.DELETE("/policies/:policy", server.deletePolicy)
+	}
+
+	return server
+}
+
+// Router returns the router
+func (s *Server) Router() *gin.Engine {
+	return s.router
+}
+
+// Start starts the network-discovery server
+func (s *Server) Start() <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		s.logger.Info("starting network-discovery server", "address", s.httpServer.Addr)
+		if err := s.httpServer.ListenAndServe(); err != nil {
+			if errors.Is(err, http.ErrServerClosed) {
+				close(errCh)
+				return
+			}
+			errCh <- err
+		}
+		close(errCh)
+	}()
+	return errCh
+}
+
+func (s *Server) getStatus(c *gin.Context) {
+	s.stat.UpTimeSeconds = int64(math.Round(time.Since(s.stat.StartTime).Seconds()))
+
+	response := StatusResponse{
+		Status:   s.stat,
+		Policies: s.manager.GetPolicyStatuses(),
+	}
+
+	c.IndentedJSON(http.StatusOK, response)
+}
+
+func (s *Server) getCapabilities(c *gin.Context) {
+	c.IndentedJSON(http.StatusOK, Capabilities{Capabilities: s.manager.GetCapabilities()})
+}
+
+func (s *Server) createPolicy(c *gin.Context) {
+	if t := c.Request.Header.Get("Content-type"); t != "application/x-yaml" {
+		c.IndentedJSON(http.StatusBadRequest, Response{"invalid Content-Type. Only 'application/x-yaml' is supported"})
+		return
+	}
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.IndentedJSON(http.StatusBadRequest, Response{err.Error()})
+		return
+	}
+
+	policies, err := s.manager.ParsePolicies(body)
+	if err != nil {
+		c.IndentedJSON(http.StatusBadRequest, Response{err.Error()})
+		return
+	}
+
+	rPolicies := []string{}
+	for name, policy := range policies {
+		if s.manager.HasPolicy(name) {
+			for _, p := range rPolicies {
+				if err = s.manager.StopPolicy(p); err != nil {
+					c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
+					return
+				}
+			}
+			c.IndentedJSON(http.StatusConflict, Response{"policy '" + name + "' already exists"})
+			return
+		}
+
+		if err := s.manager.StartPolicy(name, policy); err != nil {
+			for _, p := range rPolicies {
+				if sErr := s.manager.StopPolicy(p); sErr != nil {
+					err = fmt.Errorf("%v: %v", err, sErr)
+				}
+			}
+			c.IndentedJSON(http.StatusBadRequest, Response{err.Error()})
+			return
+		}
+		rPolicies = append(rPolicies, name)
+	}
+	s.logger.Info("policies started", "policies", rPolicies)
+	c.IndentedJSON(http.StatusCreated, Response{fmt.Sprintf("policies [%s] were started", strings.Join(rPolicies, ","))})
+}
+
+func (s *Server) deletePolicy(c *gin.Context) {
+	policy := c.Param("policy")
+	if !s.manager.HasPolicy(policy) {
+		c.IndentedJSON(http.StatusNotFound, Response{"policy not found"})
+		return
+	}
+	s.logger.Info("policy stopped", "policy", policy)
+	if err := s.manager.StopPolicy(policy); err != nil {
+		c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
+	} else {
+		c.IndentedJSON(http.StatusOK, Response{"policy '" + policy + "' was deleted"})
+	}
+}
+
+// Stop stops the network-discovery server
+func (s *Server) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.httpServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		s.logger.Error("shutting down HTTP server", "error", err)
+	}
+
+	if err := s.manager.Stop(); err != nil {
+		s.logger.Error("stopping policy manager", "error", err)
+	}
+}

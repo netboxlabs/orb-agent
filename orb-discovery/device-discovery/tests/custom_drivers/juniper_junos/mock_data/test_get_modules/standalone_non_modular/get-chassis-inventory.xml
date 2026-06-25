@@ -1,0 +1,7 @@
+<chassis-inventory xmlns:junos="http://xml.juniper.net/junos/*/junos">
+<chassis junos:style="inventory">
+<name>Chassis</name>
+<serial-number>EX12345</serial-number>
+<description>EX3400-48T</description>
+</chassis>
+</chassis-inventory>

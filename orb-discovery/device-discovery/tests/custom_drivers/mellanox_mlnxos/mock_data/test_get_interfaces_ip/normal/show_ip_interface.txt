@@ -1,0 +1,13 @@
+Interface vlan10
+Internet address: 10.10.10.1/24
+Broadcast address: 10.10.10.255
+Interface status: UP
+
+Vlan 20:
+  IP address: 192.168.20.1/24
+  Interface status: UP
+
+Interface mgmt0 status:
+  IP address : 10.12.67.33
+  Netmask    : 255.255.255.128
+  Interface status: UP

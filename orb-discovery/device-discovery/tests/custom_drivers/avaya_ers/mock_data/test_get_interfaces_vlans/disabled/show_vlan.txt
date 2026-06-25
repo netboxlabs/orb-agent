@@ -1,0 +1,4 @@
+Id   Name                 Type     Protocol         PID     Active IVL/SVL Mgmt
+---- -------------------- -------- ---------------- ------- ------ ------- ----
+1    Default              Port     None             0x0000  Yes    IVL     No
+	Port Members: NONE

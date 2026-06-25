@@ -1,0 +1,8 @@
+NAME: "Chassis", DESCR: "Firepower 9300 Security Appliance"
+PID: FPR-9300-SUP      , VID: V01, SN: JMX2401CHA0
+
+NAME: "Module 1", DESCR: "Firepower 9300 Supervisor"
+PID: FPR9K-SUP         , VID: V01, SN: JMX2401MIO0
+
+NAME: "Module 2", DESCR: "Firepower 9300 Security Module"
+PID: FPR9K-SM-36       , VID: V02, SN: JMX2401SM02

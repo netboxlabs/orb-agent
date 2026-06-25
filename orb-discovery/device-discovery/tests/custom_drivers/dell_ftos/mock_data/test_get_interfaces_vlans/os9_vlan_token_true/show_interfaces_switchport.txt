@@ -1,0 +1,5 @@
+
+Name: GigabitEthernet 0/4
+802.1QTagged: True
+Vlan membership:
+Vlan 100, Vlan 200, Vlan 300

@@ -1,0 +1,50 @@
+{
+  "blue": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet1/2": {},
+        "Loopback1": {}
+      }
+    },
+    "name": "blue",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "default-vrf": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default-vrf",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "green": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet1/1": {},
+        "Ve2": {}
+      }
+    },
+    "name": "green",
+    "state": {
+      "route_distinguisher": "1:1"
+    },
+    "type": "L3VRF"
+  },
+  "mgmt": {
+    "interfaces": {
+      "interface": {
+        "Ve9": {}
+      }
+    },
+    "name": "mgmt",
+    "state": {
+      "route_distinguisher": "65000:99"
+    },
+    "type": "L3VRF"
+  }
+}

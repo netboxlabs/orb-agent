@@ -1,0 +1,21 @@
+net add hostname leaf01
+net add interface swp1 alias to-spine01
+net add interface swp1 bgp
+net add interface swp2 alias to-spine02
+net add interface swp2 bgp
+net add bgp autonomous-system 65001
+net add bgp router-id 10.10.10.1
+net add bgp neighbor 10.0.1.0 remote-as 65000
+net add bgp neighbor 10.0.1.0 password MySecretBgpPwd123
+net add bgp neighbor 10.0.2.0 remote-as 65000
+net add bgp neighbor 10.0.2.0 password AnotherSecret456
+net add bgp ipv4 unicast network 10.10.10.1/32
+net add interface swp1 ip ospf authentication-key OspfPlainKey789
+net add interface swp2 ip ospf message-digest-key 1 md5 OspfMd5Digest321
+net add snmp-server readonly-community public-ro-community access any
+net add snmp-server readwrite-community private-rw-community access any
+net add snmp-server trap-destination-community trap-comm-secret
+net add snmp-server community public-legacy
+net add dot1x radius shared-secret Dot1xSharedSecretXYZ
+net add dot1x radius das-client-secret DasClientSecretABC
+net commit

@@ -1,0 +1,27 @@
+<chassis-inventory xmlns:junos="http://xml.juniper.net/junos/*/junos">
+<chassis junos:style="inventory">
+<name>Chassis</name>
+<serial-number>JN5555555555</serial-number>
+<description>MX480</description>
+<chassis-module>
+<name>FPC 0</name>
+<version>REV 01</version>
+<part-number>750-068369</part-number>
+<serial-number>FPC0SERIAL</serial-number>
+<description>MPC7E 3D MRATE-12xQSFPP-XGE-XLGE-CGE</description>
+<chassis-sub-module>
+<name>PIC 0</name>
+<part-number>BUILTIN</part-number>
+<serial-number></serial-number>
+<description>12x10GE OTN+12x10GE-SFPP</description>
+<chassis-sub-sub-module>
+<name>Xcvr 0</name>
+<version>REV 01</version>
+<part-number>SFP-10G-LR</part-number>
+<serial-number>OPTSERIAL01</serial-number>
+<description>SFP+-10G-LR</description>
+</chassis-sub-sub-module>
+</chassis-sub-module>
+</chassis-module>
+</chassis>
+</chassis-inventory>

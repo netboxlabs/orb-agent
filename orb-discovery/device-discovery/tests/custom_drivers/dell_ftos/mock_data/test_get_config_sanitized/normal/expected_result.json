@@ -1,0 +1,5 @@
+{
+  "running": "Current Configuration ...\n! Version 9.14.2.21\n!\nhostname ftos-switch01\n!\nusername admin password 7 <redacted>\nusername guest password <redacted>\nenable password 7 <redacted>\nenable secret <redacted>\nenable secret <redacted>\nsnmp-server community <redacted> ro\n!\ninterface TenGigabitEthernet 0/0\n no shutdown\n ip address 10.0.0.1/24\n!\nend\n",
+  "candidate": "",
+  "startup": "Startup Configuration ...\n! Version 9.14.2.21\n!\nhostname ftos-switch01\n!\nend\n"
+}

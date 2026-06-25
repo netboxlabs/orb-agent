@@ -1,0 +1,21 @@
+{
+  "100": {
+    "name": "Servers",
+    "interfaces": [
+      "Ethernet0",
+      "Ethernet4"
+    ]
+  },
+  "200": {
+    "name": "Management",
+    "interfaces": [
+      "Management0"
+    ]
+  },
+  "300": {
+    "name": "Storage",
+    "interfaces": [
+      "Ethernet8"
+    ]
+  }
+}

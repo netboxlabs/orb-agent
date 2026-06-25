@@ -1,0 +1,12 @@
+{
+  "Port-channel 1": {
+    "mode": "trunk",
+    "tagged": [20, 30],
+    "untagged": 10
+  },
+  "Port-channel 2": {
+    "mode": "trunk",
+    "tagged": [20, 30],
+    "untagged": null
+  }
+}

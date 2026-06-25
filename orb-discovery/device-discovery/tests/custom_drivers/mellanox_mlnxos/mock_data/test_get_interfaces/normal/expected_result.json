@@ -1,0 +1,47 @@
+{
+  "Eth1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "uplink-to-spine01",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 200000.0,
+    "mac_address": "7C:FE:90:53:B9:80"
+  },
+  "Eth1/2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "server-rack-1",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 100000.0,
+    "mac_address": "7C:FE:90:53:B9:81"
+  },
+  "Eth1/3": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 0.0,
+    "mac_address": "7C:FE:90:53:B9:82"
+  },
+  "Eth1/4": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 0.0,
+    "mac_address": "7C:FE:90:53:B9:83"
+  },
+  "mgmt0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Out-of-band management",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "7C:FE:90:53:B9:00"
+  }
+}

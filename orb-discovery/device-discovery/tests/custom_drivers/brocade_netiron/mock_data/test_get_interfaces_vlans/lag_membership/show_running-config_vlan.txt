@@ -1,0 +1,15 @@
+no spanning-tree
+!
+vlan 1 name DEFAULT-VLAN
+ untagged ethe 1/24
+!
+vlan 100 name DATA
+ tagged lag 1 ethe 1/2
+ untagged ethe 1/3
+!
+vlan 200 name VOICE
+ tagged lag 1 lag 2
+!
+vlan 300 name NATIVE-LAG
+ untagged lag 5
+!

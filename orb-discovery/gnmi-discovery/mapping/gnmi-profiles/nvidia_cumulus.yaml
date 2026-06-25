@@ -1,0 +1,6 @@
+# Alias matches for NVIDIA Cumulus Linux, which may report its Organization as
+# any of these strings depending on release. Uses _base paths until validated
+# against a real device (same placeholder status as arista_eos / nokia_sros).
+extends: _base
+match:
+  vendor: nvidia,cumulus,mellanox

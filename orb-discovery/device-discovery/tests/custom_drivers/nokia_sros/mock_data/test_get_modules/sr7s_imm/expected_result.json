@@ -1,0 +1,18 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "A", "position": "A", "module": {"model": "3HE15016AA", "serial": "NS-7S-CPMA-001", "description": "cpm-7s", "type": "supervisor", "sub_bays": []}},
+        {"name": "1", "position": "1", "module": {"model": "3HE15576AA", "serial": "NS-7S-IMM1-001", "description": "imm36-100g-qsfp28", "type": "linecard", "sub_bays": [
+          {"name": "1/1", "position": "1/1", "module": {"model": "3HE15576AA", "serial": "NS-7S-IMM1-MDA-001", "description": "imm36-100g-qsfp28", "type": "linecard", "sub_bays": [
+            {"name": "1/1/1", "position": "1/1/1", "module": {"model": "QSFP-100G-SR4", "serial": "OPTIC-7S-001", "description": "", "type": "transceiver", "sub_bays": []}}
+          ]}}
+        ]}},
+        {"name": "2", "position": "2", "module": {"model": "3HE15576AA", "serial": "NS-7S-IMM2-001", "description": "imm36-100g-qsfp28", "type": "linecard", "sub_bays": [
+          {"name": "2/1", "position": "2/1", "module": {"model": "3HE15576AA", "serial": "NS-7S-IMM2-MDA-001", "description": "imm36-100g-qsfp28", "type": "linecard", "sub_bays": []}}
+        ]}}
+      ],
+      "interfaces_by_bay": {"1": ["1/1/1"], "1/1": ["1/1/1"], "1/1/1": ["1/1/1"], "2": ["2/1/1"], "2/1": ["2/1/1"]}
+    }
+  }
+}

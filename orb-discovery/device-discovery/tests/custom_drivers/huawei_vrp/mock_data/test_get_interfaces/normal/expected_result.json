@@ -1,0 +1,38 @@
+{
+  "GigabitEthernet1/0/0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Uplink to Core",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "0C:45:BA:7D:83:E0"
+  },
+  "GigabitEthernet1/0/1": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": "0C:45:BA:7D:83:E1"
+  },
+  "LoopBack0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Mgmt Loopback",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": ""
+  },
+  "Vlanif100": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Servers VLAN",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "0C:45:BA:7D:83:F0"
+  }
+}

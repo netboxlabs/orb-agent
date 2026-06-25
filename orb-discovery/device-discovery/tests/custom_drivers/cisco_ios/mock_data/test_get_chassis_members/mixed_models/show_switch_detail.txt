@@ -1,0 +1,7 @@
+Switch/Stack Mac Address : aabb.cc00.0001 - Local Mac Address
+Mac persistency wait time: Indefinite
+                                             H/W   Current
+Switch#   Role    Mac Address     Priority Version  State
+-------------------------------------------------------------------------------------
+*1       Active   aabb.cc00.0001     15     V03     Ready
+ 2       Standby  aabb.cc00.0002     14     V03     Ready

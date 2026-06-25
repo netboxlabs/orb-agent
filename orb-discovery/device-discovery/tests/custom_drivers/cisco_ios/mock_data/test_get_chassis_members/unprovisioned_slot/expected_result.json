@@ -1,0 +1,32 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "FOC2401L0AB",
+      "model": "WS-C3850-12XS",
+      "role": "active",
+      "priority": 15,
+      "mac": "aabb.cc00.0001",
+      "state": "Ready"
+    },
+    {
+      "id": 2,
+      "serial": "FOC2401L0CD",
+      "model": "WS-C3850-12XS",
+      "role": "standby",
+      "priority": 14,
+      "mac": "aabb.cc00.0002",
+      "state": "Ready"
+    },
+    {
+      "id": 4,
+      "serial": "FOC2401L0EF",
+      "model": "WS-C3850-12XS",
+      "role": "member",
+      "priority": 1,
+      "mac": "aabb.cc00.0004",
+      "state": "Ready"
+    }
+  ],
+  "domain": null
+}

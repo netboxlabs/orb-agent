@@ -1,0 +1,14 @@
+{
+  "hostname": "test-host",
+  "vendor": "Cisco",
+  "model": "Unknown",
+  "os_version": "Unknown",
+  "serial_number": "Unknown",
+  "uptime": 0.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "ge0/0",
+    "ge0/1",
+    "loopback0"
+  ]
+}

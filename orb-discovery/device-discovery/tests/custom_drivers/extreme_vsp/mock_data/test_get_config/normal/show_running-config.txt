@@ -1,0 +1,34 @@
+! Version VOSS8K.6.0.1.2.GA
+!
+! Avaya Virtual Services Platform 8284XSQ
+!
+username admin level 15 password notsecrethere
+!
+snmp-server community "public" ro
+snmp-server community "private" rw
+!
+vlan create 1 name Default type port
+vlan create 10 name Management type port
+vlan create 20 name Data type port
+!
+interface GigabitEthernet 1/1
+  description Uplink-to-Core
+  no shutdown
+  exit
+!
+interface GigabitEthernet 1/2
+  description Server-Port
+  no shutdown
+  exit
+!
+interface vlan 1
+  ip address 10.0.0.1 255.255.255.0
+  ip routing
+  exit
+!
+interface vlan 10
+  ip address 192.168.10.1 255.255.255.0
+  ip routing
+  exit
+!
+end

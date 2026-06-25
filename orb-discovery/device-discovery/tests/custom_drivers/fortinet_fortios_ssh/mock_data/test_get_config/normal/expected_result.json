@@ -1,0 +1,5 @@
+{
+  "running": "config system global\n    set hostname FGT-LAB\n    set timezone 04\nend\nconfig system interface\n    edit \"port1\"\n        set ip 192.168.1.1 255.255.255.0\n        set allowaccess ping https ssh\n        set type physical\n    next\nend\n",
+  "candidate": "",
+  "startup": ""
+}

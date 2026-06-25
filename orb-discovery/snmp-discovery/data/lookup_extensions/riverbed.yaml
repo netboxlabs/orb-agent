@@ -1,0 +1,4 @@
+devices:
+  # Riverbed WAN optimization (enterprise 17163)
+  .1.3.6.1.4.1.17163.1.1: riverbedSteelhead
+  .1.3.6.1.4.1.17163.1.3: riverbedInterceptor

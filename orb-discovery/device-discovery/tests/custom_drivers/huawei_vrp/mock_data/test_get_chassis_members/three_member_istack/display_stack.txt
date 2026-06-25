@@ -1,0 +1,11 @@
+Stack mode: Yes
+Stack topology type: Ring
+Stack system MAC: 00e0-fc12-0001
+MAC switch delay time: 10 min
+Stack reserved VLAN: 4093
+
+Slot   Role        Mac Address        Priority   Device Type
+-----------------------------------------------------------------
+ 1     Master      00e0-fc12-0001     200        S5720-52X-EI-AC
+ 2     Standby     00e0-fc12-0002     150        S5720-52X-EI-AC
+ 3     Slave       00e0-fc12-0003     100        S5720-52X-EI-AC

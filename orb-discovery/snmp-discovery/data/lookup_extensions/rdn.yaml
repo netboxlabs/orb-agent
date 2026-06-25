@@ -1,0 +1,7 @@
+devices:
+  .1.3.6.1.4.1.4981.4.1.0: rdnProductsUnknown
+  .1.3.6.1.4.1.4981.4.1.3: rdnProductsBSR1000R
+  .1.3.6.1.4.1.4981.4.1.2: rdnProductsBSR1000B
+  .1.3.6.1.4.1.4981.4.1: rdnProducts
+  .1.3.6.1.4.1.4981.4.1.1: rdnProductsBSR64000
+  .1.3.6.1.4.1.4981.4.1.4: rdnProductsOSR2000

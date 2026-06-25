@@ -1,0 +1,18 @@
+# TiMOS-B-21.10.R2 both/x86_64 Nokia 7750 SR-12
+# Generated 2021-10-15T12:34:56.0Z by admin from console
+
+configure system
+    name "PE-1"
+    contact ""
+    location "Lab"
+exit
+
+configure router
+    interface "system"
+        address 10.0.0.1/32
+    exit
+    interface "to-peer-1"
+        address 192.168.1.1/30
+        port 1/1/1
+    exit
+exit

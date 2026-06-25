@@ -6,7 +6,7 @@ The backend works with **any SNMPv1, SNMPv2c, or SNMPv3 capable device**. Entity
 
 What differs by vendor is the **device model name** populated in NetBox. snmp-discovery resolves a device's `sysObjectID` OID against a library of bundled YAML lookup extensions, turning the raw OID into a recognizable model name (for example `catalyst2955C12` instead of `.1.3.6.1.4.1.9.1.489`). When no match is found, the raw OID is kept.
 
-> Compatibility note: coverage of a vendor file does not guarantee that every product line or firmware variant has a model entry. Report gaps via a GitHub issue against [orb-discovery](https://github.com/netboxlabs/orb-discovery/issues).
+> Compatibility note: coverage of a vendor file does not guarantee that every product line or firmware variant has a model entry. Report gaps via a GitHub issue against [orb-agent](https://github.com/netboxlabs/orb-agent/issues).
 
 ## Bundled device model lookup extensions
 
@@ -78,9 +78,9 @@ The following vendor files ship with orb-agent and orb-discovery, providing devi
 | Waystream | `waystream.yaml` |
 | World Wide Packets (Ciena) | `wwp.yaml` |
 
-The authoritative list and the contents of each file live at [orb-discovery/snmp-discovery/data/lookup_extensions](https://github.com/netboxlabs/orb-discovery/tree/develop/snmp-discovery/data/lookup_extensions).
+The authoritative list and the contents of each file live at [orb-discovery/snmp-discovery/data/lookup_extensions](https://github.com/netboxlabs/orb-agent/tree/develop/orb-discovery/snmp-discovery/data/lookup_extensions).
 
-Manufacturer-level resolution (SNMP enterprise number → vendor name) is handled by [`manufacturers.yaml`](https://github.com/netboxlabs/orb-discovery/blob/develop/snmp-discovery/data/manufacturers.yaml), which covers the full IANA Private Enterprise Number registry.
+Manufacturer-level resolution (SNMP enterprise number → vendor name) is handled by [`manufacturers.yaml`](https://github.com/netboxlabs/orb-agent/blob/develop/orb-discovery/snmp-discovery/data/manufacturers.yaml), which covers the full IANA Private Enterprise Number registry.
 
 ## Extending device coverage
 
@@ -127,7 +127,7 @@ Module / module-bay discovery is **vendor-neutral**: it works on any device that
 | Aruba CX (8400 chassis, including empty-bay surfacing) | Vendor-neutral via ENTITY-MIB — tested |
 | Nokia SROS (7750 SR / 7250 IXR) | Vendor-neutral via ENTITY-MIB — tested |
 
-Any other vendor that populates `entPhysicalTable` per RFC 6933 will be discovered with no code change; report gaps as a GitHub issue against [orb-discovery](https://github.com/netboxlabs/orb-discovery/issues).
+Any other vendor that populates `entPhysicalTable` per RFC 6933 will be discovered with no code change; report gaps as a GitHub issue against [orb-agent](https://github.com/netboxlabs/orb-agent/issues).
 
 **PID classifier.** Module rows (`entPhysicalClass = module(9)`) are split into `supervisor` / `linecard` / `transceiver` / `psu` / `fan` types by matching `entPhysicalModelName` (the vendor product ID) against a small set of prefix rules: `SUP*` / `SUPV*` / `SUP\d` → `supervisor`; optic prefixes `SFP-` / `QSFP-` / `X2-` / `GLC-` / `CFP-` / `XENPAK-` / `XFP-` → `transceiver`; `PSU-` / `PWR-` or `-PWR-` infixes → `psu`; `FAN` / `-FAN-` → `fan`; everything else inside a chassis slot defaults to `linecard`. The classifier is shared across all vendors — no Cisco-only / Arista-only branch. PSU and fan modules are recognised so they label correctly in OTLP metrics, but **never** emitted as `Module` entities (counted in `modules_dropped` instead) — the inventory surface in NetBox stays scoped to line cards, supervisors, and transceivers.
 

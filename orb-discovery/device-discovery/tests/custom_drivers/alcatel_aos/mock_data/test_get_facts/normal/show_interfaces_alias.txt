@@ -1,0 +1,7 @@
+ Chas/
+ Slot/  Admin  Link   WTR   WTS  Alias
+ Port   Status Status (sec) (msec)
+--------+------+------+------+------+-------
+ 1/1/1    en     up     0     0  ""
+ 1/1/2    en    down    0     0  "management"
+ 1/1/3   dis    down    0     0  ""

@@ -1,0 +1,6 @@
+Burned-in MAC Address............................ aa:bb:cc:dd:ee:ff
+Maximum number of APs supported.................. 75
+
+NAME: "Cisco 3504 Wireless LAN Controller" , DESCR: "Cisco 3504 WLC"
+PID: AIR-CT3504-K9, VID: V01, SN: FCW2042B00R
+

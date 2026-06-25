@@ -1,0 +1,12 @@
+{
+  "1/7": {
+    "mode": "trunk-all",
+    "tagged": [],
+    "untagged": 10
+  },
+  "1/8": {
+    "mode": "trunk-all",
+    "tagged": [],
+    "untagged": null
+  }
+}

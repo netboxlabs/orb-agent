@@ -1,0 +1,6 @@
+ vlan   port    type    status
+-------+-------+-------+-------
+  10   1/1/1  untagged forward
+  20   1/1/1   qtagged forward
+ 999   1/1/1   qtagged forbidden
+ 100   1/1/2   qtagged forbidden

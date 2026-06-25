@@ -1,0 +1,4 @@
+                                  Acceptable Ingress     Default
+Interface     Mode         PVID     Frame Types Filtering  Priority
+------------- ------------ -------- ----------- ---------- ----------
+0/3           General      100      Admit All   Disabled   0

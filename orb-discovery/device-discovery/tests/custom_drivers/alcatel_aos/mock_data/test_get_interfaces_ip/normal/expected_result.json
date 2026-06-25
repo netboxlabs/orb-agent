@@ -1,0 +1,28 @@
+{
+  "loopback": {
+    "ipv4": {
+      "127.0.0.1": {
+        "prefix_length": 32
+      }
+    },
+    "ipv6": {
+      "::1": {
+        "prefix_length": 128
+      }
+    }
+  },
+  "vlan1002": {
+    "ipv4": {
+      "10.1.2.93": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "emp-cmma-chas1": {
+    "ipv6": {
+      "fe80::eae7:32ff:feab:1f32": {
+        "prefix_length": 64
+      }
+    }
+  }
+}

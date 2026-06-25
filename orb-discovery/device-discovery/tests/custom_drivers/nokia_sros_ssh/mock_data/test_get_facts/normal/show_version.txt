@@ -1,0 +1,10 @@
+TiMOS-B-21.10.R2 both/x86_64 Nokia 7750 SR-12 Copyright (c) 2000-2021 Nokia.
+All rights reserved. All use subject to applicable license agreements.
+Built on Tue Oct  5 07:13:18 PDT 2021 by builder in /builds/c/2110B/R2/panos/main
+
+System Version        : TiMOS-B-21.10.R2
+System Type           : 7750 SR-12
+System Active Slot    : A
+System Backup Slot    : B
+Boot ROM Version      :
+Built                 : Tue Oct  5 07:13:18 PDT 2021

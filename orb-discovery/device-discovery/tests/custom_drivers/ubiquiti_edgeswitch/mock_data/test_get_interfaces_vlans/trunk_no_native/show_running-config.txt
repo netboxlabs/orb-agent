@@ -1,0 +1,8 @@
+!Current Configuration:
+!
+hostname edgeswitch-24
+!
+interface 0/4
+ vlan participation include 10,20
+ vlan tagging 10,20
+!

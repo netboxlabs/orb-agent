@@ -1,0 +1,5 @@
+{
+  "running": "hostname \"procurve-lab-sw1\"\nmodule 1 type j4899b\nconsole baud-rate 9600\nip default-gateway 10.0.0.1\npassword manager <redacted>\npassword operator <redacted>\nsnmp-server community <redacted> unrestricted\nsnmp-server community <redacted> unrestricted\nradius-server key <redacted>\ntacacs-server key <redacted>\nvlan 1\n   name \"DEFAULT_VLAN\"\n   untagged 1-24\n   ip address 10.0.0.1 255.255.255.0\n   exit",
+  "candidate": "",
+  "startup": "hostname \"procurve-lab-sw1\"\nmodule 1 type j4899b\npassword manager <redacted>\nsnmp-server community <redacted> unrestricted"
+}

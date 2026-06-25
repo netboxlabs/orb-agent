@@ -1,0 +1,7 @@
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="urn:uuid:2">
+  <data>
+    <l3vpn xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-mpls-vpn-oper">
+      <vrfs/>
+    </l3vpn>
+  </data>
+</rpc-reply>

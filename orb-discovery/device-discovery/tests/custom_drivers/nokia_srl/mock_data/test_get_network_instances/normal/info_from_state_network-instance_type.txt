@@ -1,0 +1,12 @@
+    network-instance default {
+        type default
+    }
+    network-instance mgmt {
+        type ip-vrf
+    }
+    network-instance vrf-red {
+        type ip-vrf
+    }
+    network-instance macvrf-10 {
+        type mac-vrf
+    }

@@ -1,0 +1,5 @@
+Name: "Chassis", DESCR: "Cisco Firepower Threat Defense for VMware"
+PID: FTDv              , VID: V01     , SN: 9AH9UCQP3AE
+
+Name: "Storage Device 1", DESCR: "FTDv SSD"
+PID: FTDv-SSD          , VID: N/A     , SN: MSA1917883N

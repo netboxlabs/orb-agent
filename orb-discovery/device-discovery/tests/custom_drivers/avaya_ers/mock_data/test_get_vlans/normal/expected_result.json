@@ -1,0 +1,21 @@
+{
+  "1": {
+    "name": "Default",
+    "interfaces": []
+  },
+  "10": {
+    "name": "Data-VLAN",
+    "interfaces": [
+      "1/1",
+      "1/2"
+    ]
+  },
+  "20": {
+    "name": "Mgmt-VLAN",
+    "interfaces": [
+      "1/1",
+      "1/3",
+      "1/4"
+    ]
+  }
+}

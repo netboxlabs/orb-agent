@@ -1,0 +1,88 @@
+{
+  "members": {
+    "1": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9400-SUP-1",
+            "serial": "JAE2501SUP1",
+            "description": "Cisco Catalyst 9400 Series Supervisor 1 Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "2",
+          "position": "2",
+          "module": {
+            "model": "C9400-LC-48U",
+            "serial": "JAE2501LC12",
+            "description": "Cisco Catalyst 9400 Series 48-Port UPOE+ 10/100/1000(RJ-45)",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "HundredGigabitEthernet1/2/0/1",
+                "position": "HundredGigabitEthernet1/2/0/1",
+                "module": {
+                  "model": "QSFP-100G-SR4",
+                  "serial": "FNS2501Q001",
+                  "description": "QSFP-100G-SR4",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": [
+          "HundredGigabitEthernet1/1/0/1"
+        ],
+        "2": [
+          "HundredGigabitEthernet1/2/0/1",
+          "HundredGigabitEthernet1/2/0/2"
+        ],
+        "HundredGigabitEthernet1/2/0/1": [
+          "HundredGigabitEthernet1/2/0/1"
+        ]
+      }
+    },
+    "2": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9400-SUP-1",
+            "serial": "JAE2501SUP2",
+            "description": "Cisco Catalyst 9400 Series Supervisor 1 Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "2",
+          "position": "2",
+          "module": {
+            "model": "C9400-LC-48P",
+            "serial": "JAE2501LC22",
+            "description": "Cisco Catalyst 9400 Series 48-Port 10/100/1000(RJ-45) PoE+",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": [
+          "HundredGigabitEthernet2/1/0/1"
+        ],
+        "2": [
+          "HundredGigabitEthernet2/2/0/1"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# Configuration of gw-corp-01
+set hostname gw-corp-01
+set user admin password-hash $1$abc123$xxxxxhashvalue
+set snmp community public read-only
+set aaa tacacs-servers server 10.0.0.5 key TacacsKey! timeout 3
+set vpn IKE p1 pre-shared-secret MySuperSecret
+set interface Mgmt ipv4-address 2.2.2.2 mask-length 29

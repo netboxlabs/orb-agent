@@ -1,0 +1,32 @@
+{
+  "members": [
+    {
+      "id": 0,
+      "serial": "PE3714410001",
+      "model": "EX4300-48T",
+      "role": "active",
+      "priority": 129,
+      "mac": "2c:6b:f5:a8:00:00",
+      "state": "Prsnt"
+    },
+    {
+      "id": 1,
+      "serial": "PE3714410002",
+      "model": "EX4300-48T",
+      "role": "standby",
+      "priority": 128,
+      "mac": "2c:6b:f5:a8:00:80",
+      "state": "Prsnt"
+    },
+    {
+      "id": 2,
+      "serial": "PE3714410003",
+      "model": "EX4300-24T",
+      "role": "member",
+      "priority": 0,
+      "mac": "2c:6b:f5:a8:01:00",
+      "state": "Prsnt"
+    }
+  ],
+  "domain": null
+}

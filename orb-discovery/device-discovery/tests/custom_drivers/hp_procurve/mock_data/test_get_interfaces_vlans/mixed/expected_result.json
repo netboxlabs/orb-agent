@@ -1,0 +1,22 @@
+{
+  "1": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 1
+  },
+  "2": {
+    "mode": "trunk",
+    "tagged": [20],
+    "untagged": 10
+  },
+  "5": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 10
+  },
+  "Trk1": {
+    "mode": "trunk",
+    "tagged": [100, 200],
+    "untagged": null
+  }
+}

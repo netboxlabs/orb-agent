@@ -1,0 +1,5 @@
+
+username admin password 7 plaintextpwd
+radius-server host 10.1.1.100 key 7 enc_radius_key
+tacacs-server host 10.1.1.200 key 7 enc_tacacs_key
+!

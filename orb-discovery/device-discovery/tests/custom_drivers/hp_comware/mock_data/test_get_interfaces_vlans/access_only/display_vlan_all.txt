@@ -1,0 +1,9 @@
+ VLAN ID: 10
+ VLAN Type: Static
+ Route Interface: Not configured
+ Description: VLAN 0010
+ Name: VLAN0010
+ Tagged Ports:
+   None
+ Untagged Ports:
+   GE1/0/1

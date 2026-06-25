@@ -1,0 +1,14 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "CN3H2G7800X",
+      "model": "H3C S5560X-30C-EI",
+      "role": "active",
+      "priority": 1,
+      "mac": "58:EF:68:A4:2C:00",
+      "state": "Master"
+    }
+  ],
+  "domain": "0"
+}

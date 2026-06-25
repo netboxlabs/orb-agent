@@ -1,0 +1,12 @@
+{
+  "ge-0/0/10": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 300
+  },
+  "ge-0/0/11": {
+    "mode": "trunk",
+    "tagged": [30],
+    "untagged": null
+  }
+}

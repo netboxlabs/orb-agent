@@ -1,0 +1,27 @@
+{
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "wrap-vpn": {
+    "interfaces": {
+      "interface": {
+        "FortyGigE1/0/53": {},
+        "FortyGigE1/0/54": {},
+        "GigabitEthernet1/0/7": {},
+        "Vlan-interface20": {}
+      }
+    },
+    "name": "wrap-vpn",
+    "state": {
+      "route_distinguisher": "65000:300"
+    },
+    "type": "L3VRF"
+  }
+}

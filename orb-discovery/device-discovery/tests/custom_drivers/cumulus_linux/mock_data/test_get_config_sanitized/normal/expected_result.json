@@ -1,0 +1,5 @@
+{
+  "running": "net add hostname leaf01\nnet add interface swp1 alias to-spine01\nnet add interface swp1 bgp\nnet add interface swp2 alias to-spine02\nnet add interface swp2 bgp\nnet add bgp autonomous-system 65001\nnet add bgp router-id 10.10.10.1\nnet add bgp neighbor 10.0.1.0 remote-as 65000\nnet add bgp neighbor 10.0.1.0 password <redacted>\nnet add bgp neighbor 10.0.2.0 remote-as 65000\nnet add bgp neighbor 10.0.2.0 password <redacted>\nnet add bgp ipv4 unicast network 10.10.10.1/32\nnet add interface swp1 ip ospf authentication-key <redacted>\nnet add interface swp2 ip ospf message-digest-key 1 md5 <redacted>\nnet add snmp-server readonly-community <redacted> access any\nnet add snmp-server readwrite-community <redacted> access any\nnet add snmp-server trap-destination-community <redacted>\nnet add snmp-server community <redacted>\nnet add dot1x radius shared-secret <redacted>\nnet add dot1x radius das-client-secret <redacted>\nnet commit",
+  "candidate": "",
+  "startup": ""
+}

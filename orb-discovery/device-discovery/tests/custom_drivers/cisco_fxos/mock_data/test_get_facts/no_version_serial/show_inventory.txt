@@ -1,0 +1,5 @@
+NAME: "Chassis",  DESCR: "Cisco Firepower 9300 Chassis"
+PID: FPR9K-CHASS         ,  VID: V02 ,  SN: JAD2135A01Z
+
+NAME: "Security Module 1",  DESCR: "Cisco Firepower 9300 Security Module"
+PID: FPR9K-SM-44         ,  VID: V01 ,  SN: JAD201700FG

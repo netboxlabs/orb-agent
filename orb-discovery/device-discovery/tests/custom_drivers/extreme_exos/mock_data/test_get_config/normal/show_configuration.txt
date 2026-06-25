@@ -1,0 +1,26 @@
+#
+# Module devmgr configuration.
+#
+configure snmp sysName "exos-core-01"
+configure snmp sysLocation "Server Room"
+configure snmp sysContact "admin@example.com"
+
+#
+# Module vlan configuration.
+#
+configure vlan Default add port 1,2 untagged
+configure vlan VLAN2222 tag 2222
+configure vlan VLAN2222 add port 1,2 tagged
+
+#
+# Module ipconfig configuration.
+#
+configure vlan VLAN2222 ipaddress 10.1.222.1 255.255.255.0
+
+#
+# Module aaa configuration.
+#
+create account admin encrypted-secret "$1$abcdefgh$xxxxxxxxxxxxxxxxxxx"
+configure radius shared-secret encrypted "zzzzzzzzzzzzzzzz"
+configure snmp add community readonly "public"
+configure snmp add community readwrite "private"

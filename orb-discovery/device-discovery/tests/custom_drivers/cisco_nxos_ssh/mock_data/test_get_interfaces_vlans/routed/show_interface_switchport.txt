@@ -1,0 +1,2 @@
+Name: Ethernet1/6
+  Switchport: Disabled

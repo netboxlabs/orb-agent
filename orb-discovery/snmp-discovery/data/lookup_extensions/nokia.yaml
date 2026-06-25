@@ -1,0 +1,65 @@
+# Nokia — sysObjectID -> device model lookups for SNMP discovery.
+# Manufacturer is canonicalized in _manufacturers_ndx.yaml (PEN 6527 SR OS, and
+# PEN 7483 for the 1830 PSS optical line). Nokia device sysObjectIDs live in two
+# registries, so this file scopes to the device-model nodes (not the surrounding
+# MIB-object registrations):
+#   - SR OS chassis: tmnxModel*Reg under .1.3.6.1.4.1.6527.1 (TIMETRA-GLOBAL-MIB)
+#   - 1830 PSS optical: node types under .1.3.6.1.4.1.7483.1.3.1 (TROPIC-GLOBAL-REG)
+devices:
+  .1.3.6.1.4.1.6527.1.3.1: tmnxModelSR1Reg
+  .1.3.6.1.4.1.6527.1.3.2: tmnxModelSR4Reg
+  .1.3.6.1.4.1.6527.1.3.3: tmnxModelSR12Reg
+  .1.3.6.1.4.1.6527.1.3.4: tmnxModelSR7Reg
+  .1.3.6.1.4.1.6527.1.3.5: tmnxModelSR6Reg
+  .1.3.6.1.4.1.6527.1.3.6: tmnxModelSRc12Reg
+  .1.3.6.1.4.1.6527.1.3.7: tmnxModelSRc4Reg
+  .1.3.6.1.4.1.6527.1.3.8: tmnxModelSR12EReg
+  .1.3.6.1.4.1.6527.1.3.9: tmnxModelSRa4Reg
+  .1.3.6.1.4.1.6527.1.3.10: tmnxModelSRa8Reg
+  .1.3.6.1.4.1.6527.1.3.11: tmnxModelSR1eReg
+  .1.3.6.1.4.1.6527.1.3.12: tmnxModelSR2eReg
+  .1.3.6.1.4.1.6527.1.3.13: tmnxModelSR3eReg
+  .1.3.6.1.4.1.6527.1.3.14: tmnxModelSARHmReg
+  .1.3.6.1.4.1.6527.1.3.15: tmnxModelSR1v2Reg
+  .1.3.6.1.4.1.6527.1.3.16: tmnxModelSR14sReg
+  .1.3.6.1.4.1.6527.1.3.17: tmnxModelSR7sReg
+  .1.3.6.1.4.1.6527.1.3.18: tmnxModelSR1sReg
+  .1.3.6.1.4.1.6527.1.3.19: tmnxModelSR2sReg
+  .1.3.6.1.4.1.6527.1.3.20: tmnxModelIXRr6Reg
+  .1.3.6.1.4.1.6527.1.3.21: tmnxModelIXR6Reg
+  .1.3.6.1.4.1.6527.1.3.22: tmnxModelIXR10Reg
+  .1.3.6.1.4.1.6527.1.3.23: tmnxModelIXRsReg
+  .1.3.6.1.4.1.6527.1.3.24: tmnxModelSARHmcReg
+  .1.3.6.1.4.1.6527.1.3.25: tmnxModelIXReReg
+  .1.3.6.1.4.1.6527.1.3.26: tmnxModelIXRr4Reg
+  .1.3.6.1.4.1.6527.1.3.27: tmnxModelIXRx1Reg
+  .1.3.6.1.4.1.6527.1.6.1: tmnxModelESS1Reg
+  .1.3.6.1.4.1.6527.1.6.2: tmnxModelESS4Reg
+  .1.3.6.1.4.1.6527.1.6.3: tmnxModelESS7Reg
+  .1.3.6.1.4.1.6527.1.6.4: tmnxModelESS12Reg
+  .1.3.6.1.4.1.6527.1.6.5: tmnxModelESS6Reg
+  .1.3.6.1.4.1.6527.1.6.6: tmnxModelESS6vReg
+  .1.3.6.1.4.1.6527.1.9.1: tmnxModel7710SRc12Reg
+  .1.3.6.1.4.1.6527.1.9.2: tmnxModel7710SRc4Reg
+  .1.3.6.1.4.1.6527.1.12.1: tmnxModel7750MGSR7Reg
+  .1.3.6.1.4.1.6527.1.12.2: tmnxModel7750MGSR12Reg
+  .1.3.6.1.4.1.6527.1.14.1: tmnxModelNrdReg
+  .1.3.6.1.4.1.6527.1.15.1: tmnxModel7950XRS20Reg
+  .1.3.6.1.4.1.6527.1.15.2: tmnxModel7950XRS16Reg
+  .1.3.6.1.4.1.6527.1.15.3: tmnxModel7950XRS20EReg
+  .1.3.6.1.4.1.6527.1.19.1: tmnxModelVSRReg
+  .1.3.6.1.4.1.6527.1.19.2: tmnxModelVSRcReg
+  .1.3.6.1.4.1.7483.1.3.1.1: tropicTRX24000
+  .1.3.6.1.4.1.7483.1.3.1.2: aluWdm1830PSS32
+  .1.3.6.1.4.1.7483.1.3.1.3: aluWdm1830PSS1
+  .1.3.6.1.4.1.7483.1.3.1.4: aluWdm1830PSS1MD4H
+  .1.3.6.1.4.1.7483.1.3.1.5: aluWdm1830PSS1GBEH
+  .1.3.6.1.4.1.7483.1.3.1.6: aluWdm1830PSS
+  .1.3.6.1.4.1.7483.1.3.1.8: aluWdm1830PSS4
+  .1.3.6.1.4.1.7483.1.3.1.9: aluWdm1830PSS1MSAH
+  .1.3.6.1.4.1.7483.1.3.1.11: nokia1830VwmMs
+  .1.3.6.1.4.1.7483.1.3.1.12: nokia1830Psd
+  .1.3.6.1.4.1.7483.1.3.1.13: aluWdm1830PSI
+  .1.3.6.1.4.1.7483.1.3.1.14: aluWdm1830PSIM
+  .1.3.6.1.4.1.7483.1.3.1.15: aluWdm1830OLS
+  .1.3.6.1.4.1.7483.1.3.1.16: nokia1830TPS

@@ -1,0 +1,29 @@
+{
+  "GigabitEthernet1/1": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 10
+  },
+  "GigabitEthernet1/2": {
+    "mode": "trunk",
+    "tagged": [
+      10,
+      20
+    ],
+    "untagged": null
+  },
+  "Lag5": {
+    "mode": "trunk",
+    "tagged": [
+      10
+    ],
+    "untagged": null
+  },
+  "10GigabitEthernet3/4": {
+    "mode": "trunk",
+    "tagged": [
+      100
+    ],
+    "untagged": null
+  }
+}

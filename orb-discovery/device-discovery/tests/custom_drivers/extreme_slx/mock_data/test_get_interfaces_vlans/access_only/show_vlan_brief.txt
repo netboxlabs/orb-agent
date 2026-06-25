@@ -1,0 +1,5 @@
+VLAN  Name                Type     State    Ports
+                                            (u)-Untagged
+                                            (t)-Tagged
+====  ==================  =======  =======  ===========================
+1     DEFAULT             STATIC   ACTIVE   Eth 0/1(u) Eth 0/2(u) Eth 0/3(u)

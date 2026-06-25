@@ -1,0 +1,15 @@
+------------------------------------------------------------------
+Hostname             : srl-test
+Chassis Type         : 7250 IXR-6e
+Part Number          : Sim Part No.
+Serial Number        : Sim Serial No.
+System HW MAC Address: 1A:12:00:FF:FF:FF
+Software Version     : v23.10.1
+Build Number         : 318-ga836b7af7e
+Architecture         : x86_64
+Last Booted          : 2024-01-15T08:30:00.000Z
+Total Memory         : 8088516 kB
+Free Memory          : 5688048 kB
+------------------------------------------------------------------
+
+--{ running }--[  ]--

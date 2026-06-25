@@ -1,0 +1,34 @@
+!
+hostname sonic-switch01
+!
+interface Ethernet0
+ description Uplink-to-spine1
+ mtu 9100
+ speed 100000
+ no shutdown
+!
+interface Ethernet4
+ description Uplink-to-spine2
+ mtu 9100
+ speed 100000
+ no shutdown
+!
+interface Management0
+ description OOB-Management
+ ip address 192.168.1.10/24
+!
+username admin password $6$rounds=656000$MySalt$HashedPasswordHere
+username monitor password $6$rounds=656000$Other$AnotherHashHere
+!
+tacacs-server host 10.10.10.1 key MyTacacsSecret123
+radius-server host 10.10.10.2 key MyRadiusSecret456
+!
+snmp-server community MyPublicComm ro
+snmp-server community MyPrivateComm rw
+!
+enable password $6$rounds=656000$Salt$EnableHash
+!
+router bgp 65001
+ neighbor 10.0.0.0 remote-as 65000
+ neighbor 10.0.0.0 password BGPSecret789
+!

@@ -1,0 +1,3 @@
+{
+  "Ethernet0": {"mode": "trunk-all", "tagged": [], "untagged": null}
+}

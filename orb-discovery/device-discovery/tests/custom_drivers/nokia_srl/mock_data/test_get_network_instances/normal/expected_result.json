@@ -1,0 +1,48 @@
+{
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "macvrf-10": {
+    "interfaces": {
+      "interface": {
+        "ethernet-1/4.10": {}
+      }
+    },
+    "name": "macvrf-10",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L2VSI"
+  },
+  "mgmt": {
+    "interfaces": {
+      "interface": {
+        "mgmt0.0": {}
+      }
+    },
+    "name": "mgmt",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "vrf-red": {
+    "interfaces": {
+      "interface": {
+        "ethernet-1/3.100": {}
+      }
+    },
+    "name": "vrf-red",
+    "state": {
+      "route_distinguisher": "65000:300"
+    },
+    "type": "L3VRF"
+  }
+}

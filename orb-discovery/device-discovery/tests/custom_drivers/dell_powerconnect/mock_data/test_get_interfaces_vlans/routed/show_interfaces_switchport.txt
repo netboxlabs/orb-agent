@@ -1,0 +1,6 @@
+Port  : gi1/0/9
+Port Mode: Layer3
+Gvrp Status: disabled
+Ingress Filtering: true
+Acceptable Frame Type: All
+

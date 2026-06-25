@@ -1,0 +1,5 @@
+{
+  "running": ": Saved\n\nASA Version 9.16(1)\n!\nhostname ftd-firewall\nenable password <redacted> encrypted\npasswd <redacted> encrypted\n!\nusername admin password <redacted> encrypted privilege 15\nusername svcaccount secret <redacted>\n!\nsnmp-server community <redacted>\nsnmp-server host inside 192.168.1.100 version 2c <redacted>\n!\ncrypto isakmp key <redacted> address 0.0.0.0\n!\ntunnel-group 10.0.0.1 ipsec-attributes\n pre-shared-key <redacted>\n!\nkey-string <redacted>\n!\ninterface GigabitEthernet0/0\n nameif outside\n ip address 203.0.113.1 255.255.255.252\n!\nend\n",
+  "candidate": "",
+  "startup": ": Saved\n\nASA Version 9.16(1)\n!\nhostname ftd-firewall\nenable password <redacted> encrypted\n!\nend\n"
+}

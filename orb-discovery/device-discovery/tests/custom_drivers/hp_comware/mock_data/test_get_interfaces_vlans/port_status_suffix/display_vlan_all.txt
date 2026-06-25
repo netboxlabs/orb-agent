@@ -1,0 +1,20 @@
+ VLAN ID: 99
+ VLAN Type: Static
+ Tagged Ports:
+   None
+ Untagged Ports:
+   GE1/0/1(U)
+
+ VLAN ID: 100
+ VLAN Type: Static
+ Tagged Ports:
+   GE1/0/1(U)
+ Untagged Ports:
+   None
+
+ VLAN ID: 200
+ VLAN Type: Static
+ Tagged Ports:
+   GE1/0/1(U)
+ Untagged Ports:
+   None

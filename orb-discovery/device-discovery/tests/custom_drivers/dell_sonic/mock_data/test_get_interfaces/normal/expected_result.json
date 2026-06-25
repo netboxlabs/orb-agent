@@ -1,0 +1,38 @@
+{
+  "Ethernet0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Uplink-to-spine1",
+    "last_flapped": -1.0,
+    "mtu": 9100,
+    "speed": 100000.0,
+    "mac_address": ""
+  },
+  "Ethernet4": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "Uplink-to-spine2",
+    "last_flapped": -1.0,
+    "mtu": 9100,
+    "speed": 100000.0,
+    "mac_address": ""
+  },
+  "Ethernet8": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9100,
+    "speed": 100000.0,
+    "mac_address": ""
+  },
+  "Management0": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "OOB-Management",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 1000.0,
+    "mac_address": ""
+  }
+}

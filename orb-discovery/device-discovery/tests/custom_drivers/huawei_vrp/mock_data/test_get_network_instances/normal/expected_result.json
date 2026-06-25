@@ -1,0 +1,37 @@
+{
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "vpna": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet0/0/1": {},
+        "Vlanif100": {}
+      }
+    },
+    "name": "vpna",
+    "state": {
+      "route_distinguisher": "65000:100"
+    },
+    "type": "L3VRF"
+  },
+  "vpnb": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet0/0/2": {}
+      }
+    },
+    "name": "vpnb",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

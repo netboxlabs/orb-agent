@@ -1,0 +1,4 @@
+Interface        IP Address      / Netmask           Admin  Protocol
+vlan 1           10.1.1.1        / 255.255.255.0   up     up
+vlan 10          192.168.10.1    / 255.255.255.0   up     up
+loopback 0       127.0.0.1       / 255.0.0.0       up     up

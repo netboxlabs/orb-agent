@@ -1,0 +1,10 @@
+Name: gi3
+Switchport: enable
+Administrative Mode: trunk
+Operational Mode: trunk
+Access Mode VLAN: 1
+Access Multicast TV VLAN: none
+Trunking Native Mode VLAN: 1
+Trunking VLANs Enabled: 10,20,30,
+                        40,50,60
+Protected: Disabled

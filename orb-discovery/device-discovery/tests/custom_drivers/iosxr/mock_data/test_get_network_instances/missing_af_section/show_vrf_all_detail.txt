@@ -1,0 +1,14 @@
+VRF STAGING; RD not set; VPN ID not set
+VRF mode: Regular
+Description not set
+Interfaces:
+  GigabitEthernet0/0/0/5
+
+VRF RED; RD 65000:100; VPN ID not set
+VRF mode: Regular
+Description Customer RED L3VPN
+Interfaces:
+  GigabitEthernet0/0/0/1
+Address family IPV4 Unicast
+  No import route policy
+  No export route policy

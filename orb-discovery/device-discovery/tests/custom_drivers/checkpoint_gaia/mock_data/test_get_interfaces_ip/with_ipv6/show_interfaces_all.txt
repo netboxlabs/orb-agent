@@ -1,0 +1,17 @@
+Interface Mgmt
+    state on
+    mac-addr 00:1c:7f:43:08:28
+    type ethernet
+    link-state link up
+    instance 0
+    mtu 1500
+    auto-negotiation on
+    speed 1000M
+    comments
+    ipv4-address 2.2.2.2/29
+    ipv6-address 2001:db8::1
+    ipv6-local-link-address fe80::1c:7fff:fe43:0828/64
+
+Statistics:
+    TX bytes:65587685757 packets:135150363 errors:0 dropped:0 overruns:0 carrier:0
+    RX bytes:8575369842 packets:80348499 errors:0 dropped:0 overruns:0 frame:0

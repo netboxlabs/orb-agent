@@ -1,0 +1,7 @@
+Port:	1
+	VLAN cfg:
+		 Name: native, Internal Tag = 99, MAC-limit = No-limit, Virtual router:   VR-Default
+		 Name: vlan100, 802.1Q Tag = 100, MAC-limit = No-limit, Virtual router:   VR-Default
+		 Name: vlan200, 802.1Q Tag = 200, MAC-limit = No-limit, Virtual router:   VR-Default
+		 Name: vlan300, 802.1Q Tag = 300, MAC-limit = No-limit, Virtual router:   VR-Default
+

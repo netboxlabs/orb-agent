@@ -1,0 +1,22 @@
+{
+  "1/1/1": {
+    "name": "1/1/1",
+    "ip4_address": "192.168.1.1/24",
+    "ip4_address_secondary": {},
+    "ip6_addresses": {}
+  },
+  "mgmt": {
+    "name": "mgmt",
+    "ip4_address": "10.0.0.1/24",
+    "ip4_address_secondary": {},
+    "ip6_addresses": {
+      "2001:db8::1/64": {}
+    }
+  },
+  "1/1/2": {
+    "name": "1/1/2",
+    "ip4_address": "",
+    "ip4_address_secondary": {},
+    "ip6_addresses": {}
+  }
+}

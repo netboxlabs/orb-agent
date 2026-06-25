@@ -1,0 +1,20 @@
+<virtual-chassis-information>
+  <member>
+    <member-id>0</member-id>
+    <member-status>Prsnt</member-status>
+    <member-model>EX4200-48T</member-model>
+    <member-serial-number>BP0212345001</member-serial-number>
+    <member-mac-address>00:23:9c:11:22:00</member-mac-address>
+    <member-priority>129</member-priority>
+    <member-role>Master*</member-role>
+  </member>
+  <member>
+    <member-id>1</member-id>
+    <member-status>Prsnt</member-status>
+    <member-model>EX4200-48T</member-model>
+    <member-serial-number>BP0212345002</member-serial-number>
+    <member-mac-address>00:23:9c:11:22:80</member-mac-address>
+    <member-priority>128</member-priority>
+    <member-role>Backup</member-role>
+  </member>
+</virtual-chassis-information>

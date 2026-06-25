@@ -1,0 +1,7 @@
+{
+  "response": [
+    "Interface GigabitEthernet1/1 \"outside\", is up, line protocol is up\r\n  Hardware is EtherSVC, BW 1000 Mbps\r\n  MAC address aabb.cc00.0100, MTU 1500\r\n",
+    "Interface GigabitEthernet1/1.100 \"dmz\", is up, line protocol is up\r\n  Hardware is EtherSVC, BW 1000 Mbps\r\n  Encapsulation: 802.1Q VLAN, Vlan ID 100\r\n  MAC address aabb.cc00.0100, MTU 1500\r\n",
+    "Interface GigabitEthernet1/1.200 \"voice\", is up, line protocol is up\r\n  Hardware is EtherSVC, BW 1000 Mbps\r\n  Encapsulation: 802.1Q VLAN, Vlan ID 200\r\n  MAC address aabb.cc00.0100, MTU 1500\r\n"
+  ]
+}

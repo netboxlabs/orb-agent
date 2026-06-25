@@ -1,0 +1,53 @@
+<chassis-inventory xmlns:junos="http://xml.juniper.net/junos/*/junos">
+<chassis junos:style="inventory">
+<name>Chassis</name>
+<serial-number>JN1234567890</serial-number>
+<description>MX480</description>
+<chassis-module>
+<name>FPC 0</name>
+<version>REV 01</version>
+<part-number>750-068369</part-number>
+<serial-number>ABCD1234</serial-number>
+<description>MPC7E 3D MRATE-12xQSFPP-XGE-XLGE-CGE</description>
+<chassis-sub-module>
+<name>PIC 0</name>
+<part-number>BUILTIN</part-number>
+<serial-number>BUILTIN</serial-number>
+<description>12x10GE OTN+12x10GE-SFPP</description>
+<chassis-sub-sub-module>
+<name>Xcvr 0</name>
+<version>REV 01</version>
+<part-number>SFP-10G-LR</part-number>
+<serial-number>OPT12340001</serial-number>
+<description>SFP+-10G-LR</description>
+</chassis-sub-sub-module>
+<chassis-sub-sub-module>
+<name>Xcvr 1</name>
+<version>REV 01</version>
+<part-number>SFP-10G-SR</part-number>
+<serial-number>OPT12340002</serial-number>
+<description>SFP+-10G-SR</description>
+</chassis-sub-sub-module>
+</chassis-sub-module>
+</chassis-module>
+<chassis-module>
+<name>FPC 1</name>
+<version>REV 02</version>
+<part-number>750-068369</part-number>
+<serial-number>ABCD5678</serial-number>
+<description>MPC7E 3D MRATE-12xQSFPP-XGE-XLGE-CGE</description>
+<chassis-sub-module>
+<name>PIC 0</name>
+<part-number>BUILTIN</part-number>
+<serial-number>BUILTIN</serial-number>
+<description>12x10GE OTN+12x10GE-SFPP</description>
+</chassis-sub-module>
+</chassis-module>
+<chassis-module>
+<name>Routing Engine 0</name>
+<part-number>740-031116</part-number>
+<serial-number>RE12340001</serial-number>
+<description>RE-S-1800x4</description>
+</chassis-module>
+</chassis>
+</chassis-inventory>

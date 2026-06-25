@@ -1,0 +1,5 @@
+{
+  "running": "config sys name WLC-TEST\nconfig sys location \"Server Room\"\nconfig sys contact \"Network Admin\"\nconfig ap mgmt-vlan 0\nconfig radius auth add 1 192.168.1.2 1812 ascii RadiusSecret123\nconfig radius acct add 1 192.168.1.2 1813 ascii RadiusSecret123\nconfig tacacs add 1 192.168.1.3 49 TacacsSecret456\nconfig wlan create 1 CORP-SSID CORP-SSID\nconfig wlan security wpa akm psk set-key ascii 1 MyPSKSecret789\nconfig mgmtuser add admin AdminPass000 read-write\nconfig snmp v3user add v3admin AuthPriv hmac-sha aes128 v3AuthPass111 v3PrivPass222\n",
+  "candidate": "",
+  "startup": ""
+}

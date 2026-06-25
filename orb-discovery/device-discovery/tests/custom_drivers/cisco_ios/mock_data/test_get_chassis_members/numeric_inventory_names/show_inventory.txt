@@ -1,0 +1,5 @@
+NAME: "1", DESCR: "Cisco Catalyst 9300-24P Switch"
+PID: C9300-24P         , VID: V01 , SN: FOC9301L0AB
+
+NAME: "2", DESCR: "Cisco Catalyst 9300-24P Switch"
+PID: C9300-24P         , VID: V01 , SN: FOC9301L0CD

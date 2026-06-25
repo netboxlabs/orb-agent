@@ -1,0 +1,11 @@
+Interface 1/1/1 is up
+ Admin state is up
+ IPv4 address 192.168.1.1/24
+ Type SYSTEM
+Interface mgmt is up
+ Admin state is up
+ IPv4 address 10.0.0.1/24
+ Type OOBM
+Interface 1/1/2 is down
+ Admin state is up
+ Type SYSTEM

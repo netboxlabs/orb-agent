@@ -1,0 +1,95 @@
+{
+  "RED": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet 1/7": {}
+      }
+    },
+    "name": "RED",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "blue": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet 1/2": {},
+        "Vlan 100": {}
+      }
+    },
+    "name": "blue",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "default": {
+    "interfaces": {
+      "interface": {}
+    },
+    "name": "default",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "DEFAULT_INSTANCE"
+  },
+  "green": {
+    "interfaces": {
+      "interface": {
+        "TenGigabitEthernet 0/14": {},
+        "TenGigabitEthernet 0/16": {},
+        "TenGigabitEthernet 0/17": {},
+        "fortyGigE 0/48": {},
+        "fortyGigE 0/52": {}
+      }
+    },
+    "name": "green",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "management": {
+    "interfaces": {
+      "interface": {
+        "ManagementEthernet 1/1": {}
+      }
+    },
+    "name": "management",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "orange": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet 2/3": {},
+        "GigabitEthernet 2/4": {},
+        "GigabitEthernet 2/5": {},
+        "GigabitEthernet 2/7": {}
+      }
+    },
+    "name": "orange",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  },
+  "red": {
+    "interfaces": {
+      "interface": {
+        "GigabitEthernet 1/3": {},
+        "GigabitEthernet 1/4": {},
+        "GigabitEthernet 1/5": {},
+        "Vlan 200": {}
+      }
+    },
+    "name": "red",
+    "state": {
+      "route_distinguisher": ""
+    },
+    "type": "L3VRF"
+  }
+}

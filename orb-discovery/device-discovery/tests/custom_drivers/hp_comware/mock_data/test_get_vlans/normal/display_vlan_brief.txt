@@ -1,0 +1,4 @@
+VLAN ID  VLAN Name
+1        VLAN0001
+10       Mgmt
+20       Users

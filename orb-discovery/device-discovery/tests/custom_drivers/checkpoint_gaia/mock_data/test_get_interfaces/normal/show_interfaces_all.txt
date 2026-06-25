@@ -1,0 +1,36 @@
+Interface Mgmt
+    state on
+    mac-addr 00:1c:7f:43:08:28
+    type ethernet
+    link-state link up
+    instance 0
+    mtu 1500
+    auto-negotiation on
+    speed 1000M
+    comments
+    ipv4-address 2.2.2.2/29
+    ipv6-address Not Configured
+    ipv6-local-link-address Not Configured
+
+Statistics:
+    TX bytes:65587685757 packets:135150363 errors:0 dropped:0 overruns:0 carrier:0
+    RX bytes:8575369842 packets:80348499 errors:0 dropped:0 overruns:0 frame:0
+
+
+Interface Sync
+    state on
+    mac-addr 00:1c:7f:43:08:29
+    type ethernet
+    link-state link up
+    instance 0
+    mtu 1500
+    auto-negotiation Not configured
+    speed 1000M
+    comments
+    ipv4-address 192.168.0.1/30
+    ipv6-address Not Configured
+    ipv6-local-link-address Not Configured
+
+Statistics:
+    TX bytes:259664923573 packets:2251872598 errors:0 dropped:0 overruns:0 carrier:0
+    RX bytes:259266301613 packets:2251102479 errors:0 dropped:0 overruns:0 frame:0

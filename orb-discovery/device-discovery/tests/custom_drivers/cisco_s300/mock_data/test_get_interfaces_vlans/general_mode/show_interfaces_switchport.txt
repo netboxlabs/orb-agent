@@ -1,0 +1,9 @@
+Name: gi9
+Switchport: enable
+Administrative Mode: general
+Operational Mode: general
+Access Mode VLAN: 1
+Access Multicast TV VLAN: none
+Trunking Native Mode VLAN: 50
+Trunking VLANs Enabled: 50,60-62
+Protected: Disabled

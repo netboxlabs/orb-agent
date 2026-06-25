@@ -1,0 +1,15 @@
+===============================================================
+ethernet-1/1 is up, speed 25G, type None
+  ethernet-1/1.0 is up
+    Network-instances:
+      * Name: default (default)
+    Encapsulation   : null
+    Type            : bridged
+---------------------------------------------------------------
+===============================================================
+Summary
+  1 ethernet interfaces are up, 0 are down
+  1 subinterfaces are up, 0 are down
+===============================================================
+
+--{ running }--[  ]--

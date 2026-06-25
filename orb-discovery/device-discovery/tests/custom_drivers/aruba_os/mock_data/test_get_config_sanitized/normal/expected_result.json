@@ -1,0 +1,5 @@
+{
+  "running": "version 8.8.0.2-8.8.0.2\nhostname \"ARUBAOS-CTL01\"\n\naaa authentication-server radius \"radius1\"\n host 10.0.0.5\n key <redacted>\n\naaa authentication-server tacacs+ \"tacacs1\"\n host 10.0.0.6\n key <redacted>\n\nmgmt-user admin root <redacted>\n\nwlan ssid-profile \"Corp\"\n wpa-passphrase <redacted>\n\nsnmp-server community <redacted>\n\n",
+  "candidate": "",
+  "startup": ""
+}

@@ -1,0 +1,10 @@
+-------------------------------------------------------------------------------
+Name            VID  Description
+-------------------------------------------------------------------------------
+Default         1
+Mgmt            4095 Management VLAN
+VLAN2222        2222 Core uplink
+
+> Indicates description string truncated past 57 characters
+
+Total number of VLAN(s) : 3

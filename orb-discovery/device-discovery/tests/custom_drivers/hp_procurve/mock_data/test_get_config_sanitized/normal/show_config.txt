@@ -1,0 +1,9 @@
+Startup configuration:
+
+; J4899B Configuration Editor; Created on release #R.11.72
+; Ver #02:01.00.00.00.00.00.00.00.05.ff:ff
+
+hostname "procurve-lab-sw1"
+module 1 type j4899b
+password manager sha1 "SuperSecret123"
+snmp-server community "public" unrestricted

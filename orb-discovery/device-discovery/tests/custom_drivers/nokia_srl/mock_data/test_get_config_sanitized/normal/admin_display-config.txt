@@ -1,0 +1,17 @@
+    system {
+        aaa {
+            authentication {
+                admin-user {
+                    password $6$8eqDzvnq78atu1aV$pNW47HSjSHStQe8d5UQkxsPjM9Dpn8ivu8Cy605mRaPuOO420o2mKmCm2s.T3/nqaMntGtyNDh4WvwAdjKF.
+                }
+            }
+        }
+        snmp {
+            community $aes1$AWAbcoswQzBUxW8=$EYL/sgxcLNV+XwyJIhTgmQ==
+        }
+        name {
+            host-name srl-test
+        }
+    }
+
+--{ running }--[  ]--

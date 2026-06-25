@@ -1,0 +1,5 @@
+Interface Ethernet 1/1/1 is up, line protocol is up
+  ip address: 192.168.1.1 subnet mask: 255.255.255.0
+Interface mgmt1
+  ip address: 10.0.0.1/24
+  ip address: 10.0.0.2/24

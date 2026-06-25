@@ -1,0 +1,4 @@
+Startup configuration:
+!
+hostname aruba-cx-6300
+!

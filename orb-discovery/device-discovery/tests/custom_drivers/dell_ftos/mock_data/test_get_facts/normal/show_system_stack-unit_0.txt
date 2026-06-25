@@ -1,0 +1,24 @@
+-- Unit 0 --
+Unit Type                      : Management Unit
+Status                         : online
+Next Boot                      : online
+Required Type                  : S4820T - 48-port GE/TE (SFP+)
+Current Type                   : S4820T - 48-port GE/TE (SFP+)
+Master priority                 : 0
+Hardware Rev                   : A02
+Num Ports                      : 52
+Up Time                        : 33 wk, 4 day, 12 hr, 4 min
+Dell Networking OS Version : 9.14.2.21
+Jumbo Capable                  : yes
+POE Capable                    : no
+FIPS Mode                      : disabled
+Boot Flash                       : A: 4.0.1.3 [booted]    B: 4.0.1.2
+Memory Size                    : 2147483648 bytes
+Temperature                    : 42C
+Voltage                        : ok
+Product Name               : Dell S4820T
+Mfg By                     : Dell
+Mfg Date                   : 2018-03-12
+Serial Number              : CN0AB1234567890
+Part Number                : 0PM3DLA02
+Service Tag                : ABC1234

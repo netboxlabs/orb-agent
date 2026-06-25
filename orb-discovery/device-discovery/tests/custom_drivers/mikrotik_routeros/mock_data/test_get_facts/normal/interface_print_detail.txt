@@ -1,0 +1,9 @@
+Flags: D - dynamic; X - disabled; I - inactive, R - running; S - slave; P - passthrough
+ 0   R   name="ether1" default-name="ether1" type="ether" mtu=1500 actual-mtu=1500 l2mtu=1592 max-l2mtu=9578 mac-address=2C:C8:1B:63:4A:23 last-link-down-time=2024-08-21 18:50:41 last-link-up-time=2024-08-21 18:50:46 link-downs=14
+
+ 1    S  name="ether2" default-name="ether2" type="ether" mtu=1500 actual-mtu=1500 l2mtu=1592 max-l2mtu=9578 mac-address=2C:C8:1B:63:4A:24 link-downs=0
+
+ 2   RS  name="ether3" default-name="ether3" type="ether" mtu=1500 actual-mtu=1500 l2mtu=1592 max-l2mtu=9578 mac-address=2C:C8:1B:63:4A:25 link-downs=0
+
+ 3   R   ;;; defconf
+         name="bridge" type="bridge" mtu=auto actual-mtu=1500 l2mtu=1592 mac-address=2C:C8:1B:63:4A:24 last-link-up-time=2024-06-21 15:01:50 link-downs=0

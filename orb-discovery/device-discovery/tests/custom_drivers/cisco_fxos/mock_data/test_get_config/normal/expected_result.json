@@ -1,0 +1,5 @@
+{
+  "running": "!Command: show running-config\n!Running configuration last done at: Tue Apr 15 10:15:22 2025\n!Time: Tue Apr 15 10:15:22 2025\n\nversion 2.12\nhostname fpr4110-lab\nip domain-name example.com\n\ninterface Ethernet1/1\n  description FPR-outside\n  no shutdown\n\ninterface Ethernet1/2\n  description FPR-inside\n  no shutdown\n\ninterface mgmt0\n  vrf member management\n  ip address 10.10.10.100/24\n  no shutdown\n\naaa authentication login default local\nntp server 10.0.0.1 use-vrf management\n",
+  "candidate": "",
+  "startup": ""
+}

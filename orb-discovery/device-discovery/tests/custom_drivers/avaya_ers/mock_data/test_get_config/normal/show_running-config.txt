@@ -1,0 +1,24 @@
+
+! Avaya Ethernet Routing Switch
+! Software Version: 7.6.3.12
+!
+username admin level rw
+username admin password 0xABCDEF12345678
+!
+snmp-server community public
+snmp-server community private
+!
+vlan create 1 name Default type port
+vlan create 10 name Data-VLAN type port
+!
+interface vlan 1
+  ip address 10.0.0.1 255.255.255.0
+  no shutdown
+  exit
+!
+interface vlan 10
+  ip address 192.168.10.1 255.255.255.0
+  no shutdown
+  exit
+!
+end

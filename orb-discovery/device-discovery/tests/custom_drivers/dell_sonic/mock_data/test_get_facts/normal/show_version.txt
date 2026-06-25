@@ -1,0 +1,13 @@
+SONiC Software Version: SONiC.4.1.1-Enterprise_Advanced
+Distribution: Debian 11.7
+Kernel: 5.10.0-18-2-amd64
+Build commit: abc123def
+Build date: Thu Jun 15 10:00:00 UTC 2024
+Built by: johndoe@buildserver
+Platform: x86_64-dell_z9332f_d1508-r0
+HwSKU: DellEMC-Z9332f-O32
+Hardware Version: A00
+Serial Number: CN0GTXXX1234AB0001
+Hostname: sonic-switch01
+Uptime: 15 days, 03:25:10
+Date: Wed Apr 16 12:00:00 UTC 2026

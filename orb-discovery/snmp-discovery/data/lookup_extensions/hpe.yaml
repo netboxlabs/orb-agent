@@ -1,0 +1,12 @@
+devices:
+  # HPE BladeSystem (enterprise 11 — HP)
+  .1.3.6.1.4.1.11.5.7.1.2: hpeOnboardAdministrator
+
+  # HPE MSA storage arrays (enterprise 11)
+  .1.3.6.1.4.1.11.2.51: hpeMSA
+
+  # HPE Cambium / wireless (enterprise 232 — HP)
+  .1.3.6.1.4.1.232.165: hpeCambium
+
+  # HPE Nimble Storage (enterprise 37447)
+  .1.3.6.1.4.1.37447.3.1: hpeNimbleAF40

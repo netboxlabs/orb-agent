@@ -1,0 +1,12 @@
+MemberID    Role        Priority  CPU-Mac           Description
+*+1         Master      32        0023-1111-aaaa    chassis-A
+  2         Standby     16        0023-2222-bbbb    chassis-B
+
+* indicates the device is the master.
++ indicates the device through which the user logs in.
+
+The Bridge MAC of the IRF is: 0023-1111-aaab
+Auto upgrade                : no
+Mac persistent              : always
+Domain ID                   : 100
+Auto merge                  : yes

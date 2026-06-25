@@ -1,0 +1,197 @@
+name: Network Discovery - release
+on:
+  workflow_dispatch:
+  push:
+    branches: [ release ]
+    paths:
+      - "orb-discovery/network-discovery/**"
+      - "!orb-discovery/network-discovery/docker/**"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
+  APP_NAME: network-discovery
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  get-next-version:
+    name: Semantic release get next version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+      - name: Write package.json
+        run: |
+          cat > "orb-discovery/${{ env.APP_NAME }}/package.json" <<'EOF'
+          {
+            "name": "${{ env.APP_NAME }}",
+            "version": "1.0.0",
+            "devDependencies": {
+              "semantic-release": "^25.0.0-beta.6",
+              "semantic-release-export-data": "^1.0.1",
+              "semantic-release-monorepo": "^8.0.0",
+              "@semantic-release/changelog": "^6.0.3"
+            }
+          }
+          EOF
+      - name: Write .releaserc.json
+        run: |
+          cat > "orb-discovery/${{ env.APP_NAME }}/.releaserc.json" <<'EOF'
+          {
+            "extends": "semantic-release-monorepo",
+            "branches": "release",
+            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
+            "debug": "true",
+            "tagFormat": "${{ env.APP_NAME }}/v${version}",
+            "plugins": [
+              ["semantic-release-export-data"],
+              ["@semantic-release/commit-analyzer", {
+                "releaseRules": [
+                  { "breaking": true, "release": "major" },
+                  { "type": "fix", "release": "patch" },
+                  { "type": "feat", "release": "minor" },
+                  { "type": "perf", "release": "patch" },
+                  { "type": "chore", "scope": "deps", "release": "patch" }
+                ]
+              }],
+              "@semantic-release/release-notes-generator",
+              [
+                "@semantic-release/changelog",
+                {
+                  "changelogFile": "CHANGELOG.md",
+                  "changelogTitle": "# Semantic Versioning Changelog"
+                }
+              ],
+              [
+                "@semantic-release/github",
+                {
+                  "assets": [
+                    {
+                      "path": "release/**"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+          EOF
+      - name: setup semantic-release
+        working-directory: orb-discovery/${{ env.APP_NAME }}
+        run: npm install --legacy-peer-deps
+      - name: release dry-run
+        working-directory: orb-discovery/${{ env.APP_NAME }}
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug --dry-run
+        id: get-next-version
+      - name: Set short sha output
+        id: short-sha
+        run: echo "short-sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Set release version
+        id: release-version
+        run: |
+          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed -E 's|^${{ env.APP_NAME }}[-/]||; s|^v||')" >> "$GITHUB_OUTPUT"
+    outputs:
+      new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
+      new-release-version: ${{ steps.release-version.outputs.release-version }}
+      short-sha: ${{ steps.short-sha.outputs.short-sha }}
+
+  confirm-version:
+    name: Next version ${{ needs.get-next-version.outputs.new-release-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
+
+  semantic-release:
+    name: Semantic release
+    needs: get-next-version
+    if: needs.get-next-version.outputs.new-release-published == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+      - name: Write package.json
+        run: |
+          cat > "orb-discovery/${{ env.APP_NAME }}/package.json" <<'EOF'
+          {
+            "name": "${{ env.APP_NAME }}",
+            "version": "1.0.0",
+            "devDependencies": {
+              "semantic-release": "^25.0.0-beta.6",
+              "semantic-release-export-data": "^1.0.1",
+              "semantic-release-monorepo": "^8.0.0",
+              "@semantic-release/changelog": "^6.0.3"
+            }
+          }
+          EOF
+      - name: Write .releaserc.json
+        run: |
+          cat > "orb-discovery/${{ env.APP_NAME }}/.releaserc.json" <<'EOF'
+          {
+            "extends": "semantic-release-monorepo",
+            "branches": "release",
+            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
+            "debug": "true",
+            "tagFormat": "${{ env.APP_NAME }}/v${version}",
+            "plugins": [
+              ["semantic-release-export-data"],
+              ["@semantic-release/commit-analyzer", {
+                "releaseRules": [
+                  { "breaking": true, "release": "major" },
+                  { "type": "fix", "release": "patch" },
+                  { "type": "feat", "release": "minor" },
+                  { "type": "perf", "release": "patch" },
+                  { "type": "chore", "scope": "deps", "release": "patch" }
+                ]
+              }],
+              "@semantic-release/release-notes-generator",
+              [
+                "@semantic-release/changelog",
+                {
+                  "changelogFile": "CHANGELOG.md",
+                  "changelogTitle": "# Semantic Versioning Changelog"
+                }
+              ],
+              [
+                "@semantic-release/github",
+                {
+                  "assets": [
+                    {
+                      "path": "release/**"
+                    }
+                  ]
+                }
+              ]
+            ]
+          }
+          EOF
+      - name: setup semantic-release
+        working-directory: orb-discovery/${{ env.APP_NAME }}
+        run: npm install --legacy-peer-deps
+      - name: Release
+        working-directory: orb-discovery/${{ env.APP_NAME }}
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
+        run: npx semantic-release --debug

@@ -1,0 +1,9 @@
+Created by: D-Default, S-Static, G-GVRP, R-Radius Assigned VLAN
+
+Vlan       Name                   Ports               Created by
+---- ----------------- --------------------------- ----------------
+ 1           1         fa1-2,fa4-8,fa10-14,               D
+                       fa17-18,fa20
+ 29         29                     gi1                    S
+402  Management        fa5,gi1                            S
+500  gi2-uplink                   fa3                    S

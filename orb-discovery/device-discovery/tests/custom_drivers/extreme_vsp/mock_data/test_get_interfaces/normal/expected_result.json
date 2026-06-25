@@ -1,0 +1,47 @@
+{
+  "1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Uplink-to-Core",
+    "last_flapped": -1.0,
+    "mtu": 9600,
+    "speed": 1000.0,
+    "mac_address": "00:11:22:33:44:55"
+  },
+  "1/2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Server-Port",
+    "last_flapped": -1.0,
+    "mtu": 9600,
+    "speed": 1000.0,
+    "mac_address": "00:11:22:33:44:56"
+  },
+  "1/3": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "Desktop-1",
+    "last_flapped": -1.0,
+    "mtu": 9600,
+    "speed": 100.0,
+    "mac_address": "00:11:22:33:44:57"
+  },
+  "1/4": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "Desktop-2",
+    "last_flapped": -1.0,
+    "mtu": 9600,
+    "speed": 100.0,
+    "mac_address": "00:11:22:33:44:58"
+  },
+  "1/49": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Uplink-10G",
+    "last_flapped": -1.0,
+    "mtu": 9600,
+    "speed": 10000.0,
+    "mac_address": "AC:16:2D:00:FF:01"
+  }
+}

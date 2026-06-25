@@ -1,0 +1,5 @@
+{
+  "running": "!\nver 08.0.50T7f2\n!\nhostname fastiron-sw01\n!\nenable super-user-password 8 $1$Rm1JiEuC$zVi3LXVbj5qr5WXOthOiD0\n!\nusername admin privilege 0 password 8 $1$jBMdmgRe$tAB5CKqX2GBSm3C1BK8RH.\n!\nsnmp-server community public ro\nsnmp-server community private rw\n!\nvlan 1 name DEFAULT-VLAN by port\n untagged ethe 1/1/2\n!\nvlan 10 name MANAGEMENT\n tagged ethe 1/1/1\n untagged ethe 1/1/2\n!\ninterface ethernet 1/1/1\n port-name uplink\n!\ninterface ethernet 1/1/2\n!\ninterface management 1\n ip address 10.0.0.1/24\n!\nend\n",
+  "candidate": "",
+  "startup": ""
+}

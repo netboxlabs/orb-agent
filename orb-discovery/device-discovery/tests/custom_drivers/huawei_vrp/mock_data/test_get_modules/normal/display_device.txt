@@ -1,0 +1,9 @@
+Device status:
+-------------------------------------------------------------------------------
+Slot  Card  Type            Online    Power     Register     Status      Role
+-------------------------------------------------------------------------------
+1     -     CE-MPUA         Present   PowerOn   Registered   Normal      Master
+2     -     CE-L36CQ-FD     Present   PowerOn   Registered   Normal      NA
+3     -     CE-L36CQ-FD     Present   PowerOn   Registered   Normal      NA
+4     -     CE-SFU08D       Present   PowerOn   Registered   Normal      NA
+-------------------------------------------------------------------------------

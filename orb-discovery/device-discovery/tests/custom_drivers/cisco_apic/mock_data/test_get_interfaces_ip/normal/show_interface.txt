@@ -1,0 +1,22 @@
+Interface eth2-1 is up, line protocol is up
+  Hardware is Ethernet, address is 00:11:22:aa:bb:cc (bia 00:11:22:aa:bb:cc)
+  hardware is up
+  Internet address is 10.0.1.1/24
+  IPv6 address: 2001:db8::1/64
+  MTU 1500 bytes
+  Speed: 1000 Mbps
+  Description: OOB Management
+
+Interface eth2-2 is up, line protocol is up
+  Hardware is Ethernet, address is 00:11:22:aa:bb:dd (bia 00:11:22:aa:bb:dd)
+  hardware is up
+  Internet address is 10.0.2.1/24
+  MTU 1500 bytes
+  Speed: 1000 Mbps
+
+Interface lo0 is up, line protocol is up
+  Hardware is Loopback, address is 00:00:00:00:00:00 (bia 00:00:00:00:00:00)
+  hardware is up
+  Internet address is 127.0.0.1/8
+  MTU 65536 bytes
+  Speed: 0 Mbps

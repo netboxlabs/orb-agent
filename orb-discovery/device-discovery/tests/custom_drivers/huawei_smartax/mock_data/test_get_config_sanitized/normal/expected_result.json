@@ -1,0 +1,5 @@
+{
+  "running": "sysname CE-OLT-01\nvlan 100 smart\nsnmp-agent community read <redacted>\nsnmp-agent community read <redacted>\n password cipher <redacted>\n key cipher <redacted>\n secret 0 <redacted>\n psk cipher <redacted>\n",
+  "candidate": "",
+  "startup": ""
+}

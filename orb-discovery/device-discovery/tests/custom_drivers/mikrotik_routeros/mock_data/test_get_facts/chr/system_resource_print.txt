@@ -1,0 +1,18 @@
+uptime: 3d12h05m10s
+                  version: 7.14.3 (stable)
+               build-time: 2024-03-15 11:22:33
+         factory-software: 6.44.6
+              free-memory: 512.0MiB
+             total-memory: 1024.0MiB
+                      cpu: Intel(R) Xeon(R)
+                cpu-count: 2
+            cpu-frequency: 2600MHz
+                 cpu-load: 1%
+           free-hdd-space: 2.3GiB
+          total-hdd-space: 10.0GiB
+  write-sect-since-reboot: 1234
+         write-sect-total: 56789
+               bad-blocks: 0%
+        architecture-name: x86_64
+               board-name: CHR
+                 platform: MikroTik

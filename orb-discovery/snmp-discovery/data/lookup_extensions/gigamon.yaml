@@ -1,0 +1,9 @@
+# Gigamon — sysObjectID -> device model lookups for SNMP discovery.
+# Manufacturer (IANA PEN 26866) is canonicalized in _manufacturers_ndx.yaml; this file
+# maps each model's sysObjectID to its model name. Entries are the GigaVUE device
+# models under .1.3.6.1.4.1.26866.3 from GIGAMON-SNMP-MIB.
+devices:
+  .1.3.6.1.4.1.26866.3.1: gigamonGV2404
+  .1.3.6.1.4.1.26866.3.2: gigamonGV420
+  .1.3.6.1.4.1.26866.3.3: gigamonGV212
+  .1.3.6.1.4.1.26866.3.4: gigamonGV216

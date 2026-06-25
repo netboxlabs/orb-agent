@@ -1,0 +1,20 @@
+{
+  "port1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": "00:09:0F:09:00:01"
+  },
+  "port2": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": "00:09:0F:09:00:02"
+  }
+}

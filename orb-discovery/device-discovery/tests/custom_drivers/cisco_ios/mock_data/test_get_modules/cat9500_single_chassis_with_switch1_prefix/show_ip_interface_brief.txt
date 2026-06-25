@@ -1,0 +1,4 @@
+Interface              IP-Address      OK? Method Status                Protocol
+GigabitEthernet0/0       192.0.2.10      YES NVRAM  up                    up
+TwentyFiveGigE1/0/1      unassigned      YES NVRAM  up                    up
+HundredGigE1/0/49        unassigned      YES NVRAM  up                    up

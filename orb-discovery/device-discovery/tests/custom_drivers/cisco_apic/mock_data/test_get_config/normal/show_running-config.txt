@@ -1,0 +1,23 @@
+!
+! Cisco APIC Running Configuration
+!
+hostname apic1
+!
+username admin
+  password Adm1nP@ssword
+!
+snmp-server community public ro
+snmp-server community private rw
+!
+radius-server host 10.0.0.10 key R@d1usKey123
+tacacs-server host 10.0.0.20
+ key T@c@csKey456
+!
+interface eth2-1
+  ip address 10.0.1.1/24
+  description OOB Management
+!
+interface eth2-2
+  ip address 10.0.2.1/24
+!
+end

@@ -1,0 +1,11 @@
+ Status and Counters - VLAN Information - VLAN 20
+
+  VLAN ID : 20
+  Name : VOICE
+  Status : Port-based
+  Voice : No
+  Jumbo : No
+
+  Port Information  Mode      Unknown VLAN  Status
+  ----------------- --------- ------------- ----------
+  1                 Tagged    Learn         Up
