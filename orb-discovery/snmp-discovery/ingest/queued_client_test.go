@@ -45,11 +45,11 @@ func (c *countingClient) release() {
 func (c *countingClient) trackInFlight() func() {
 	current := atomic.AddInt32(&c.inFlight, 1)
 	for {
-		max := atomic.LoadInt32(&c.maxInFlight)
-		if current <= max {
+		prevMax := atomic.LoadInt32(&c.maxInFlight)
+		if current <= prevMax {
 			break
 		}
-		if atomic.CompareAndSwapInt32(&c.maxInFlight, max, current) {
+		if atomic.CompareAndSwapInt32(&c.maxInFlight, prevMax, current) {
 			break
 		}
 	}
