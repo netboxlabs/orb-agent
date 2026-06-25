@@ -127,9 +127,12 @@ func TestAssignPrimaryIP(t *testing.T) {
 
 	// v4 match -> PrimaryIp4 retains the assigned interface (NetBox requires the
 	// IP to be assigned to the device), with the cycle broken via a device copy
-	// that has its primary IPs cleared.
+	// that has its primary IPs cleared. The return is the LIVE matched IPAddress
+	// (the cycle-closer), still present in the entities slice.
 	e := mk()
-	AssignPrimaryIP(e, "10.0.0.1")
+	got := AssignPrimaryIP(e, "10.0.0.1")
+	require.NotNil(t, got, "must return the matched live IPAddress")
+	require.Same(t, e[1], got, "must return the LIVE matched IPAddress (pointer identity), not a snapshot")
 	p4 := e[0].(*diode.Device).PrimaryIp4
 	require.NotNil(t, p4)
 	require.Equal(t, "10.0.0.1/31", *p4.Address)
@@ -143,7 +146,9 @@ func TestAssignPrimaryIP(t *testing.T) {
 
 	// v6 match -> PrimaryIp6
 	e = mk()
-	AssignPrimaryIP(e, "2001:db8::1")
+	got = AssignPrimaryIP(e, "2001:db8::1")
+	require.NotNil(t, got)
+	require.Same(t, e[2], got, "must return the LIVE matched v6 IPAddress")
 	p6 := e[0].(*diode.Device).PrimaryIp6
 	require.NotNil(t, p6)
 	p6ifc, ok := p6.AssignedObject.(*diode.Interface)
@@ -151,15 +156,15 @@ func TestAssignPrimaryIP(t *testing.T) {
 	require.Nil(t, p6ifc.Device.PrimaryIp6, "cycle break")
 	require.Nil(t, e[0].(*diode.Device).PrimaryIp4)
 
-	// no match -> unset
+	// no match -> unset, nil return
 	e = mk()
-	AssignPrimaryIP(e, "8.8.8.8")
+	require.Nil(t, AssignPrimaryIP(e, "8.8.8.8"))
 	require.Nil(t, e[0].(*diode.Device).PrimaryIp4)
 	require.Nil(t, e[0].(*diode.Device).PrimaryIp6)
 
-	// empty host -> no-op
+	// empty host -> no-op, nil return
 	e = mk()
-	AssignPrimaryIP(e, "")
+	require.Nil(t, AssignPrimaryIP(e, ""))
 	require.Nil(t, e[0].(*diode.Device).PrimaryIp4)
 }
 
