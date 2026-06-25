@@ -23,16 +23,16 @@ import (
 var _ backend.Backend = (*snmpDiscoveryBackend)(nil)
 
 const (
-	versionTimeout      = 2
-	capabilitiesTimeout = 5
-	readinessBackoff    = 10
-	applyPolicyTimeout  = 10
-	removePolicyTimeout = 20
-	statusTimeout       = 5
-	defaultExec              = "snmp-discovery"
-	defaultAPIHost           = "localhost"
-	defaultAPIPort           = "8070"
-	defaultIngestBufferSize  = 256
+	versionTimeout          = 2
+	capabilitiesTimeout     = 5
+	readinessBackoff        = 10
+	applyPolicyTimeout      = 10
+	removePolicyTimeout     = 20
+	statusTimeout           = 5
+	defaultExec             = "snmp-discovery"
+	defaultAPIHost          = "localhost"
+	defaultAPIPort          = "8070"
+	defaultIngestBufferSize = 256
 )
 
 type snmpDiscoveryBackend struct {
