@@ -33,7 +33,6 @@ type QueuedClient struct {
 	logger     *slog.Logger
 	requests   chan *ingestRequest
 	shutdownCh chan struct{}
-	gate       sync.RWMutex
 	closeOnce  sync.Once
 	done       chan struct{}
 }
@@ -59,20 +58,32 @@ func (c *QueuedClient) consumer() {
 	defer close(c.done)
 
 	for {
-		select {
-		case <-c.shutdownCh:
+		if c.shutdownSignaled() {
 			c.drainPendingFailures()
 			return
-		default:
 		}
 
 		select {
 		case req := <-c.requests:
+			if c.shutdownSignaled() {
+				c.deliverFailure(req)
+				c.drainPendingFailures()
+				return
+			}
 			c.execute(req)
 		case <-c.shutdownCh:
 			c.drainPendingFailures()
 			return
 		}
+	}
+}
+
+func (c *QueuedClient) shutdownSignaled() bool {
+	select {
+	case <-c.shutdownCh:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -95,25 +106,15 @@ func (c *QueuedClient) enqueue(
 		result: make(chan ingestResult, 1),
 	}
 
-	// gate serializes enqueue with Close: Close holds the write lock while
-	// signaling shutdown and waiting for the consumer, so a closed shutdownCh
-	// cannot race with a buffered-channel send that would orphan the request.
-	c.gate.RLock()
-	select {
-	case <-c.shutdownCh:
-		c.gate.RUnlock()
+	if c.shutdownSignaled() {
 		return nil, ErrIngestQueueClosed
-	default:
 	}
 
 	select {
 	case c.requests <- req:
-		c.gate.RUnlock()
 	case <-ctx.Done():
-		c.gate.RUnlock()
 		return nil, ctx.Err()
 	case <-c.shutdownCh:
-		c.gate.RUnlock()
 		return nil, ErrIngestQueueClosed
 	}
 
@@ -179,11 +180,9 @@ func (c *QueuedClient) IngestProto(
 func (c *QueuedClient) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
-		c.gate.Lock()
 		close(c.shutdownCh)
 		<-c.done
 		err = c.inner.Close()
-		c.gate.Unlock()
 	})
 	return err
 }

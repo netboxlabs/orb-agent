@@ -368,3 +368,47 @@ func TestCloseDoesNotHangEnqueueDuringShutdownRace(t *testing.T) {
 		t.Fatal("ingest workers hung during concurrent Close")
 	}
 }
+
+func TestCloseUnblocksBlockedEnqueueWhenBufferFull(t *testing.T) {
+	inner := newCountingClient()
+	inner.enableBlocking()
+	inner.startBlocking()
+
+	client, err := NewQueuedClient(inner, 1, testLogger())
+	require.NoError(t, err)
+
+	go func() {
+		_, _ = client.Ingest(context.Background(), nil)
+	}()
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&inner.inFlight) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	go func() {
+		_, _ = client.Ingest(context.Background(), nil)
+	}()
+
+	require.Eventually(t, func() bool {
+		return len(client.(*QueuedClient).requests) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	enqueueDone := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(context.Background(), nil)
+		enqueueDone <- err
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+
+	go func() {
+		require.NoError(t, client.Close())
+	}()
+
+	select {
+	case err := <-enqueueDone:
+		assert.ErrorIs(t, err, ErrIngestQueueClosed)
+	case <-time.After(time.Second):
+		t.Fatal("blocked enqueue did not return after shutdown started")
+	}
+}
