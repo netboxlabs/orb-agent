@@ -212,6 +212,91 @@ def test_primary_ip4_back_pointer_pruned_per_device():
     assert a_back.device is not b_back.device
 
 
+def test_stack_keeps_primary_ip_only_on_master_cycle_closer():
+    """
+    In a stack only the master has primary_ip4; only the master's cycle-closer IP keeps it.
+
+    Members have no primary IP, so their IP entities have nothing to keep. The
+    master's primary IP entity is the only cycle-closer that may SET
+    device.primary_ip4 — and it keeps it address-only on its nested device stub.
+    """
+    master = _make_device("core-sw-1", "FOC1")
+    master.primary_ip4.address = "10.0.0.1/32"
+    master.primary_ip4.assigned_object_interface.CopyFrom(
+        _make_interface("Loopback0", "core-sw-1", "FOC1")
+    )
+    member = _make_device("core-sw-2", "FOC2")
+
+    # Master's cycle-closer IP entity.
+    master_ip = pb.IPAddress(address="10.0.0.1/32")
+    master_ip.assigned_object_interface.CopyFrom(
+        _make_interface("Loopback0", "core-sw-1", "FOC1")
+    )
+    # A member IP entity (member has no primary).
+    member_ip = pb.IPAddress(address="10.0.0.50/24")
+    member_ip.assigned_object_interface.CopyFrom(
+        _make_interface("GigabitEthernet2/0/1", "core-sw-2", "FOC2")
+    )
+
+    entities = [
+        Entity(device=master),
+        Entity(device=member),
+        Entity(ip_address=master_ip),
+        Entity(ip_address=member_ip),
+    ]
+    prune_nested_refs(entities)
+
+    master_ip_dev = entities[2].ip_address.assigned_object_interface.device
+    member_ip_dev = entities[3].ip_address.assigned_object_interface.device
+    # Only the master's cycle-closer keeps primary_ip4.
+    assert master_ip_dev.HasField("primary_ip4")
+    assert master_ip_dev.primary_ip4.address == "10.0.0.1/32"
+    assert not master_ip_dev.primary_ip4.HasField("assigned_object_interface")
+    # Member IP strips.
+    assert not member_ip_dev.HasField("primary_ip4")
+
+
+def test_repeated_address_across_devices_keeps_only_the_primary_owner():
+    """
+    Same address on interfaces of DIFFERENT devices: only the entity whose owning device's primary matches keeps it.
+
+    dev_a has 10.0.0.1/24 as its primary; dev_b merely has an interface with the
+    same address (not its primary). Only the IP entity resolving to dev_a's
+    interface keeps primary_ip4; the one resolving to dev_b strips.
+    """
+    dev_a = _make_device("core-sw-1", "FOC1")
+    dev_a.primary_ip4.address = "10.0.0.1/24"
+    dev_a.primary_ip4.assigned_object_interface.CopyFrom(
+        _make_interface("Vlan10", "core-sw-1", "FOC1")
+    )
+    dev_b = _make_device("core-sw-2", "FOC2")  # no primary_ip4
+
+    ip_on_a = pb.IPAddress(address="10.0.0.1/24")
+    ip_on_a.assigned_object_interface.CopyFrom(
+        _make_interface("Vlan10", "core-sw-1", "FOC1")
+    )
+    ip_on_b = pb.IPAddress(address="10.0.0.1/24")
+    ip_on_b.assigned_object_interface.CopyFrom(
+        _make_interface("Vlan10", "core-sw-2", "FOC2")
+    )
+
+    entities = [
+        Entity(device=dev_a),
+        Entity(device=dev_b),
+        Entity(ip_address=ip_on_a),
+        Entity(ip_address=ip_on_b),
+    ]
+    prune_nested_refs(entities)
+
+    dev_for_a = entities[2].ip_address.assigned_object_interface.device
+    dev_for_b = entities[3].ip_address.assigned_object_interface.device
+    # The same address resolves to different owning devices; only dev_a's keeps it.
+    assert dev_for_a.name == "core-sw-1"
+    assert dev_for_a.HasField("primary_ip4")
+    assert dev_for_b.name == "core-sw-2"
+    assert not dev_for_b.HasField("primary_ip4")
+
+
 def test_member_device_stub_drops_virtual_chassis_and_vc_position():
     """
     Member Device stubs intentionally drop virtual_chassis + vc_position.

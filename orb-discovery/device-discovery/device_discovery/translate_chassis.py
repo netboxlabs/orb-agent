@@ -30,7 +30,6 @@ from netboxlabs.diode.sdk.ingester import Entity
 
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import Defaults, Options
-from device_discovery.stubs import _ip_match_stub
 from device_discovery.translate_modules import emit_modules_if_requested
 
 logger = logging.getLogger(__name__)
@@ -103,14 +102,16 @@ def _master_device_ref(master_dev: pb.Device) -> pb.Device:
 
     Used for both the top-level VirtualChassis.master field and each non-master
     member Device's virtual_chassis.master field. The plugin resolves the existing
-    VC via unique_master, so this MUST carry the same matcher fields the emitted
-    master Device carries — name, serial, site, tenant, role, device_type,
-    primary_ip4, primary_ip6, asset_tag, and metadata.source_match — otherwise
-    the VC ref resolves through a different matcher path than the top-level
-    master.
+    VC via unique_master, so this carries the matcher fields the emitted master
+    Device carries — name, serial, site, tenant, role, device_type, asset_tag,
+    and metadata.source_match — so the VC ref resolves through the same matcher
+    path as the top-level master.
 
     Strips ``virtual_chassis``, ``config``, and annotation-only metadata so the
     inline ref does not nest another VC (circular reference) or carry config.
+    Also strips ``primary_ip4``/``primary_ip6``: this ref is not a cycle-closer,
+    and device.primary_ip4 is a circular reference the plugin can only resolve in
+    the single change set that also assigns the IP to its interface.
     """
     stub = pb.Device(name=master_dev.name, serial=master_dev.serial)
     _copy_master_ref_fields(stub, master_dev)
@@ -122,7 +123,7 @@ def _master_device_ref(master_dev: pb.Device) -> pb.Device:
 
 
 def _copy_master_ref_fields(stub: pb.Device, master_dev: pb.Device) -> None:
-    """Copy site/tenant/role/device_type/primary_ip4/primary_ip6 onto a master matcher stub."""
+    """Copy site/tenant/role/device_type onto a master matcher stub."""
     if master_dev.HasField("site"):
         stub.site.CopyFrom(pb.Site(name=master_dev.site.name))
     if master_dev.HasField("tenant"):
@@ -139,14 +140,13 @@ def _copy_master_ref_fields(stub: pb.Device, master_dev: pb.Device) -> None:
         if dt.HasField("manufacturer"):
             stub_dt.manufacturer.CopyFrom(pb.Manufacturer(name=dt.manufacturer.name))
         stub.device_type.CopyFrom(stub_dt)
-    # Copy primary IPs as MATCHER-ONLY stubs (address-only, no
-    # assigned_object_interface back-pointer). The Diode plugin's matcher #2
-    # (unique_primary_ip4) only needs the address; copying the full rich IP
-    # would re-introduce the IP→Interface→Device cycle and bloat the payload.
-    if master_dev.HasField("primary_ip4"):
-        stub.primary_ip4.CopyFrom(_ip_match_stub(master_dev.primary_ip4))
-    if master_dev.HasField("primary_ip6"):
-        stub.primary_ip6.CopyFrom(_ip_match_stub(master_dev.primary_ip6))
+    # primary_ip4/6 are intentionally NOT copied onto the VC-master ref: it is not
+    # a cycle-closer. device.primary_ip4 is a circular reference the plugin can only
+    # resolve inside a single change set, and this ref does not perform the
+    # IP→interface assignment. The VC resolves via name+serial+site+tenant+role+
+    # device_type. Only the top-level master Device entity (set by assign_primary_ip)
+    # keeps its rich primary_ip4; the master's own ipam.ipaddress entity is the single
+    # cycle-closer that validly sets it.
 
 
 def _route_interfaces_by_member(

@@ -32,6 +32,32 @@ def _vrf_match_stub(vrf: pb.VRF) -> pb.VRF:
     return stub
 
 
+def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
+    """
+    Return True when ``ip`` is the exact IP object the device's primary references.
+
+    Match on full identity — address WITH prefix, VRF (name + rd, matching how
+    _vrf_match_stub keys VRF identity), and the assigned interface — not just the
+    host portion. Two IP entities can share a host address yet be different objects:
+    a differing prefix length (a /32 loopback vs a /24 SVI), a differing VRF (the
+    same address in two routing tables, or the same VRF name under a different rd),
+    or the same CIDR reported on more than one interface (where assign_primary_ip
+    deterministically selects one). Only the IP the device's primary actually points
+    at may keep primary_ip4/primary_ip6 on its nested device stub (the cycle-closer);
+    a looser match would let a different IP object's change set set device.primary_ip4
+    and re-open the circular reference this pruning avoids.
+    """
+    if primary.address != ip.address:
+        return False
+    primary_vrf = (primary.vrf.name, primary.vrf.rd) if primary.HasField("vrf") else None
+    ip_vrf = (ip.vrf.name, ip.vrf.rd) if ip.HasField("vrf") else None
+    if primary_vrf != ip_vrf:
+        return False
+    primary_iface = primary.assigned_object_interface.name if primary.HasField("assigned_object_interface") else ""
+    ip_iface = ip.assigned_object_interface.name if ip.HasField("assigned_object_interface") else ""
+    return primary_iface == ip_iface
+
+
 def _ip_match_stub(ip: pb.IPAddress) -> pb.IPAddress:
     """
     Return an IPAddress carrying only matcher fields.
@@ -91,8 +117,21 @@ def _resolve_device(
     return None
 
 
-def _copy_device_relations(stub: pb.Device, d: pb.Device) -> None:
-    """Copy site/tenant/device_type/role/primary_ip4/primary_ip6 onto ``stub``."""
+def _copy_device_relations(
+    stub: pb.Device,
+    d: pb.Device,
+    *,
+    keep_primary_ip4: bool = False,
+    keep_primary_ip6: bool = False,
+) -> None:
+    """
+    Copy site/tenant/device_type/role onto ``stub``; primary IPs only when explicitly kept.
+
+    Site/tenant/device_type/role are copied unconditionally. primary_ip4 / primary_ip6
+    are copied only when the matching keep flag is set — by default every nested stub
+    strips them so the plugin never tries to SET device.primary_ip4 from a change set
+    that cannot resolve the circular reference.
+    """
     if d.HasField("site"):
         stub.site.CopyFrom(pb.Site(name=d.site.name))
     if d.HasField("tenant"):
@@ -101,34 +140,49 @@ def _copy_device_relations(stub: pb.Device, d: pb.Device) -> None:
         stub.device_type.CopyFrom(_device_type_match_stub(d.device_type))
     if d.HasField("role"):
         stub.role.CopyFrom(pb.DeviceRole(name=d.role.name))
-    if d.HasField("primary_ip4"):
+    if keep_primary_ip4 and d.HasField("primary_ip4"):
         stub.primary_ip4.CopyFrom(_ip_match_stub(d.primary_ip4))
-    if d.HasField("primary_ip6"):
+    if keep_primary_ip6 and d.HasField("primary_ip6"):
         stub.primary_ip6.CopyFrom(_ip_match_stub(d.primary_ip6))
 
 
-def _device_match_stub(d: pb.Device) -> pb.Device:
+def _device_match_stub(
+    d: pb.Device,
+    *,
+    keep_primary_ip4: bool = False,
+    keep_primary_ip6: bool = False,
+) -> pb.Device:
     """
     Return a Device carrying matcher-only fields plus NetBox-required-for-create fields.
 
-    INVARIANT: this set must be a superset of every dcim.device matcher field that the
-    Diode plugin would actually use to resolve this stub. The plugin's matcher precedence
-    (highest first) is: asset_tag → primary_ip4 → primary_ip6 → oob_ip → name+site+tenant
-    → name+site → rack+position+face → virtual_chassis+vc_position. Resolution stops at
-    the first matcher that produces a hit; in practice device-discovery populates
-    asset_tag (when defaults.device.asset_tag is set), primary_ip4 (master only), and
-    name+site+tenant for every device — so resolution always succeeds at one of those
-    higher-precedence matchers. virtual_chassis + vc_position are intentionally NOT
-    copied here: they would only be consulted by matcher #8, which is never reached, and
-    including them would copy a rich virtual_chassis subtree (with a nested master Device
-    ref) into every member interface's nested device-stub, bloating the wire payload.
+    INVARIANT: this set must be a superset of every dcim.device matcher field the Diode
+    plugin would actually consult to resolve this stub. In practice resolution succeeds
+    at name+site+tenant (or asset_tag, when defaults.device.asset_tag is set) for every
+    device, so those fields are always carried.
+
+    primary_ip4 is the plugin's matcher #2, but device.primary_ip4 is a circular
+    reference the plugin can only resolve inside a single change set — and each emitted
+    entity is its own change set. The only entity that can validly set device.primary_ip4
+    is the top-level ipam.ipaddress for the primary IP: it performs the IP→interface
+    assignment AND, through its nested device stub, sets primary_ip4 in the same change
+    set (the "cycle-closer"). So primary_ip4 / primary_ip6 are kept on a stub ONLY when
+    that stub is the cycle-closer (``keep_primary_ip4`` / ``keep_primary_ip6`` set by the
+    caller); every other nested stub strips them and resolves via name+site+tenant /
+    asset_tag.
+
+    virtual_chassis + vc_position are intentionally NOT copied here: they would only be
+    consulted by a lower-precedence matcher that is never reached, and including them
+    would copy a rich virtual_chassis subtree (with a nested master Device ref) into every
+    member interface's nested device-stub, bloating the wire payload.
 
     `asset_tag` is the highest-precedence matcher and is populated when the policy sets
     defaults.device.asset_tag — kept on the stub so the rich entity and stub never resolve
     via different matchers.
     """
     stub = pb.Device(name=d.name)
-    _copy_device_relations(stub, d)
+    _copy_device_relations(
+        stub, d, keep_primary_ip4=keep_primary_ip4, keep_primary_ip6=keep_primary_ip6
+    )
     if d.asset_tag:
         stub.asset_tag = d.asset_tag
     # Carry source_match (e.g., netbox_id) — that is the plugin's PK-based
@@ -250,6 +304,7 @@ def _prune_ip_address_against_index(
     ip: pb.IPAddress,
     index: dict[str, pb.Device],
     stub_for,
+    keep_primary_stub_for,
 ) -> None:
     """Resolve ip.assigned_object_interface.device, then replace the back-pointer with a stub."""
     if not ip.HasField("assigned_object_interface"):
@@ -263,9 +318,15 @@ def _prune_ip_address_against_index(
             ip.address,
         )
         return
-    ip.assigned_object_interface.CopyFrom(
-        _interface_match_stub(nested_iface, stub_for(rich))
-    )
+    # This IP entity is the "cycle-closer" only when it is the resolved device's
+    # OWN primary IP: it does the IP→interface assignment AND, via its nested
+    # device stub's primary_ip4/6, validly sets device.primary_ip4/6 in one change
+    # set. Only then does the nested device stub keep primary_ip4/6; otherwise it
+    # uses the cached stripped stub (which never carries primary IPs).
+    keep4 = rich.HasField("primary_ip4") and _same_primary_ip(rich.primary_ip4, ip)
+    keep6 = rich.HasField("primary_ip6") and _same_primary_ip(rich.primary_ip6, ip)
+    chosen_stub = keep_primary_stub_for(rich, keep4=keep4, keep6=keep6) if (keep4 or keep6) else stub_for(rich)
+    ip.assigned_object_interface.CopyFrom(_interface_match_stub(nested_iface, chosen_stub))
 
 
 # Hard cap on nested device-stub recursion through Module / ModuleBay protos.
@@ -383,11 +444,17 @@ def prune_nested_refs(entities: list[Entity]) -> None:
             stub_cache[rich.name] = _device_match_stub(rich)
         return stub_cache[rich.name]
 
+    def _keep_primary_stub_for(rich: pb.Device, *, keep4: bool, keep6: bool) -> pb.Device:
+        # Non-caching: the cycle-closer stub carries primary_ip4/6 and must NEVER
+        # be written into (or read from) stub_cache — that cache holds the stripped
+        # stub shared by every other nested ref. Build a fresh keep stub each call.
+        return _device_match_stub(rich, keep_primary_ip4=keep4, keep_primary_ip6=keep6)
+
     for e in entities:
-        _prune_entity(e, index, _stub_for)
+        _prune_entity(e, index, _stub_for, _keep_primary_stub_for)
 
 
-def _prune_entity(e: Entity, index: dict[str, pb.Device], stub_for) -> None:
+def _prune_entity(e: Entity, index: dict[str, pb.Device], stub_for, keep_primary_stub_for) -> None:
     """Dispatch one entity to the right per-type pruner (or fix up its own back-refs)."""
     if e.HasField("device"):
         # Per-Device: the stub used here MUST be derived from THIS device, not
@@ -400,7 +467,7 @@ def _prune_entity(e: Entity, index: dict[str, pb.Device], stub_for) -> None:
     elif e.HasField("interface"):
         _prune_interface_against_index(e.interface, index, stub_for)
     elif e.HasField("ip_address"):
-        _prune_ip_address_against_index(e.ip_address, index, stub_for)
+        _prune_ip_address_against_index(e.ip_address, index, stub_for, keep_primary_stub_for)
     elif e.HasField("module"):
         _prune_module_against_index(e.module, index, stub_for)
     elif e.HasField("module_bay"):
