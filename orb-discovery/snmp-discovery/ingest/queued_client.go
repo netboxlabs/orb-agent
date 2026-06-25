@@ -57,12 +57,28 @@ func NewQueuedClient(inner diode.Client, bufferSize int, logger *slog.Logger) (d
 func (c *QueuedClient) consumer() {
 	defer close(c.done)
 
-	for req := range c.requests {
-		resp, err := req.run(req.ctx)
+	for {
 		select {
-		case req.result <- ingestResult{resp: resp, err: err}:
-		default:
+		case req := <-c.requests:
+			c.execute(req)
+			select {
+			case <-c.shutdownCh:
+				c.drainPendingFailures()
+				return
+			default:
+			}
+		case <-c.shutdownCh:
+			c.drainPendingFailures()
+			return
 		}
+	}
+}
+
+func (c *QueuedClient) execute(req *ingestRequest) {
+	resp, err := req.run(req.ctx)
+	select {
+	case req.result <- ingestResult{resp: resp, err: err}:
+	default:
 	}
 }
 
@@ -105,6 +121,17 @@ func (c *QueuedClient) deliverFailure(req *ingestRequest) {
 	}
 }
 
+func (c *QueuedClient) drainPendingFailures() {
+	for {
+		select {
+		case req := <-c.requests:
+			c.deliverFailure(req)
+		default:
+			return
+		}
+	}
+}
+
 // Ingest enqueues an ingest request and blocks until it completes or ctx is cancelled.
 func (c *QueuedClient) Ingest(
 	ctx context.Context,
@@ -133,18 +160,8 @@ func (c *QueuedClient) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
 		close(c.shutdownCh)
-
-		for {
-			select {
-			case req := <-c.requests:
-				c.deliverFailure(req)
-			default:
-				close(c.requests)
-				<-c.done
-				err = c.inner.Close()
-				return
-			}
-		}
+		<-c.done
+		err = c.inner.Close()
 	})
 	return err
 }

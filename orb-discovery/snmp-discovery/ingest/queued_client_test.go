@@ -205,3 +205,30 @@ func TestCloseRejectsNewIngests(t *testing.T) {
 
 	require.NoError(t, client.Close(), "Close should be idempotent")
 }
+
+func TestCloseConcurrentWithIngest(t *testing.T) {
+	inner := newCountingClient()
+	client, err := NewQueuedClient(inner, 4, testLogger())
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	const workers = 50
+	wg.Add(workers + 1)
+
+	for range workers {
+		go func() {
+			defer wg.Done()
+			_, _ = client.Ingest(context.Background(), nil)
+		}()
+	}
+
+	go func() {
+		defer wg.Done()
+		time.Sleep(time.Millisecond)
+		require.NoError(t, client.Close())
+	}()
+
+	assert.NotPanics(t, func() {
+		wg.Wait()
+	})
+}
