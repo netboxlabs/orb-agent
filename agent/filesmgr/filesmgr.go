@@ -437,6 +437,13 @@ func (m *filesmgr) Subscribe(handler func(FileEvent)) (unsubscribe func()) {
 	return m.bus.subscribe(handler)
 }
 
+// SetTokenSource configures an optional bearer-token source the fetcher uses
+// when downloading from authenticated control-plane URLs. Call once at bind
+// time before any Ensure.
+func (m *filesmgr) SetTokenSource(ts TokenSource) {
+	m.fetcher.tokenSource = ts
+}
+
 // Ensure makes sure the file described by spec is present on disk and matches
 // the declared SHA256. Correct operation order (atomicity guarantee):
 //  1. Fetch into fresh version directory.

@@ -499,6 +499,12 @@ func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) er
 		return nil
 	}
 
+	// Give the fetcher the agent's bearer token so authenticated control-plane
+	// bundle URLs can be fetched. GetFreshToken returns the current token,
+	// refreshing if expired; the Go stdlib strips Authorization on the cross-host
+	// 302 to S3, so the token never leaks to the bucket.
+	fleetFM.SetTokenSource(fleetManager.authTokenManager.GetFreshToken)
+
 	fleetManager.connection.AddOnReadyHook(func(cm *autopaho.ConnectionManager, topics fleet.TokenResponseTopics) {
 		outbox := topics.Outbox
 		// Bound the catch-up publish: QoS-1 Publish blocks until the broker acks

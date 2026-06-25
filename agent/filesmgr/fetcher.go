@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -13,10 +14,17 @@ import (
 	"github.com/hashicorp/go-getter"
 )
 
+// TokenSource returns a bearer token to attach to authenticated control-plane
+// bundle fetches. It is invoked once per fetch so the current (refreshed) token
+// is used. A nil TokenSource means no Authorization header is added (e.g.
+// presigned URLs that already carry their own auth).
+type TokenSource func(ctx context.Context) (string, error)
+
 // fetcher downloads, verifies, and atomically places a file (or extracted
 // directory) at a destination path.
 type fetcher struct {
-	logger *slog.Logger
+	logger      *slog.Logger
+	tokenSource TokenSource // optional; when set, sends Authorization: Bearer
 }
 
 func newFetcher(logger *slog.Logger) *fetcher {
@@ -229,12 +237,35 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 		stagePath = filepath.Join(tmp, filename)
 	}
 
+	getters := httpGetters
+	if f.tokenSource != nil {
+		tok, err := f.tokenSource(ctx)
+		if err != nil {
+			return fmt.Errorf("fetch %s: get auth token: %w", spec.Name, err)
+		}
+		if tok != "" {
+			hdr := make(http.Header)
+			hdr.Set("Authorization", "Bearer "+tok)
+			// Per-fetch getter so the header carries the current token and never
+			// bleeds across concurrent installs. DoNotCheckHeadFirst skips a HEAD
+			// probe that would 403 against a GET-presigned S3 URL after the 302.
+			authGetter := &getter.HttpGetter{
+				Header:              hdr,
+				DoNotCheckHeadFirst: true,
+			}
+			getters = map[string]getter.Getter{
+				"http":  authGetter,
+				"https": authGetter,
+			}
+		}
+	}
+
 	client := &getter.Client{
 		Ctx:     ctx,
 		Src:     u.String(),
 		Dst:     stagePath,
 		Mode:    mode,
-		Getters: httpGetters,
+		Getters: getters,
 		// DisableSymlinks blocks tar entries that are symbolic links from being
 		// honored during extraction. Without this a crafted archive can include
 		// a symlink entry pointing outside the extraction target (e.g. "/etc")

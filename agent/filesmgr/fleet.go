@@ -53,6 +53,14 @@ func (f *FleetFilesManager) Stop(ctx context.Context) error {
 	return f.Manager.Stop(ctx)
 }
 
+// SetTokenSource forwards a bearer-token source to the embedded disk engine so
+// authenticated control-plane bundle fetches send Authorization: Bearer.
+func (f *FleetFilesManager) SetTokenSource(ts TokenSource) {
+	if s, ok := f.Manager.(interface{ SetTokenSource(TokenSource) }); ok {
+		s.SetTokenSource(ts)
+	}
+}
+
 // HandlePackages installs each bundle from a packages_credentials delivery.
 // Failures are non-fatal: a failed bundle is logged and skipped so the rest of
 // the delivery still installs. A bundle with no explicit "extract" defaults to
