@@ -58,7 +58,10 @@ func (f *FleetFilesManager) Stop(ctx context.Context) error {
 func (f *FleetFilesManager) SetTokenSource(ts TokenSource) {
 	if s, ok := f.Manager.(interface{ SetTokenSource(TokenSource) }); ok {
 		s.SetTokenSource(ts)
+		return
 	}
+	f.logger.Warn("embedded files engine does not support SetTokenSource; " +
+		"authenticated bundle fetches may fail")
 }
 
 // HandlePackages installs each bundle from a packages_credentials delivery.

@@ -7,12 +7,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -47,16 +48,23 @@ func TestFetcher_SendsBearerToControlPlane_NotToRedirectTarget(t *testing.T) {
 	archive, archiveSHA := buildAuthTarGz(t)
 
 	// "S3" origin: serves the bytes, and records whether it ever saw an
-	// Authorization header (it must not).
+	// Authorization header (it must not). Bind explicitly on tcp4 127.0.0.1 so
+	// the cross-host redirect below is deterministic regardless of the host's
+	// IPv4/IPv6 preference.
 	var sawAuthAtTarget atomic.Bool
-	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	target := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "" {
 			sawAuthAtTarget.Store(true)
 		}
 		w.Header().Set("Content-Type", "application/gzip")
 		_, _ = w.Write(archive)
 	}))
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	target.Listener = ln
+	target.Start()
 	defer target.Close()
+	targetPort := target.Listener.Addr().(*net.TCPAddr).Port
 
 	// "Control plane": requires the bearer, then 302-redirects to target.
 	var sawAuthAtControlPlane atomic.Bool
@@ -68,12 +76,10 @@ func TestFetcher_SendsBearerToControlPlane_NotToRedirectTarget(t *testing.T) {
 			return
 		}
 		// Redirect to a DIFFERENT host so the test exercises the same cross-host
-		// Authorization-stripping the Go stdlib applies in prod (control plane
-		// -> S3). Force the redirect hostname to "localhost" regardless of whether
-		// httptest bound on IPv4 (127.0.0.1) or IPv6 ([::1]); either way it hits the
-		// same loopback target but the stdlib treats it as cross-host.
-		crossHostURL := strings.ReplaceAll(target.URL, "127.0.0.1", "localhost")
-		crossHostURL = strings.ReplaceAll(crossHostURL, "[::1]", "localhost")
+		// Authorization-stripping the Go stdlib applies in prod. The target binds
+		// tcp4 127.0.0.1; redirecting to localhost:<port> reaches the same listener
+		// but the stdlib treats the differing host as cross-host and strips the header.
+		crossHostURL := fmt.Sprintf("http://localhost:%d", targetPort)
 		http.Redirect(w, r, crossHostURL, http.StatusFound)
 	}))
 	defer control.Close()
@@ -95,8 +101,8 @@ func TestFetcher_SendsBearerToControlPlane_NotToRedirectTarget(t *testing.T) {
 	require.False(t, sawAuthAtTarget.Load(), "bearer token leaked to the redirect (S3) target")
 
 	// Sanity: the extracted file landed.
-	_, err := os.Stat(filepath.Join(dst, "plugin.txt"))
-	require.NoError(t, err)
+	_, statErr := os.Stat(filepath.Join(dst, "plugin.txt"))
+	require.NoError(t, statErr)
 }
 
 // TestFetcher_NoTokenSource_SendsNoAuth verifies the default path is unchanged:
