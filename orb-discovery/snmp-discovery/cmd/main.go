@@ -13,6 +13,7 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/env"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/ingest"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/policy"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/server"
@@ -42,6 +43,7 @@ func main() {
 	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
 	otelExportPeriod := flag.Int("otel-export-period", 10, "Period in seconds between OpenTelemetry exports")
+	ingestBufferSize := flag.Int("ingest-buffer-size", 256, "buffer size for the ingest queue")
 
 	flag.Parse()
 
@@ -92,6 +94,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	client, err = ingest.NewQueuedClient(client, *ingestBufferSize, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating ingest queue client: %v\n", err)
+		os.Exit(1)
+	}
+	logger.Info("ingest queue configured", "buffer_size", *ingestBufferSize)
+
 	ctx := context.Background()
 
 	if otelEndpoint != nil && *otelEndpoint != "" {
@@ -131,6 +140,9 @@ func main() {
 				if err := metrics.Shutdown(ctx); err != nil {
 					logger.Error("failed to shutdown metrics", "error", err)
 				}
+				if err := client.Close(); err != nil {
+					logger.Error("failed to close ingest client", "error", err)
+				}
 				cancelFunc()
 			case <-rootCtx.Done():
 				logger.Warn("main context cancelled")
@@ -148,6 +160,9 @@ func main() {
 			server.Stop()
 			if shutdownErr := metrics.Shutdown(ctx); shutdownErr != nil {
 				logger.Error("failed to shutdown metrics", "error", shutdownErr)
+			}
+			if closeErr := client.Close(); closeErr != nil {
+				logger.Error("failed to close ingest client", "error", closeErr)
 			}
 			cancelFunc()
 		}
