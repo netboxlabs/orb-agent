@@ -173,6 +173,26 @@ jobs:
         run: |
           echo $BUILD_COMMIT > ./agent/version/BUILD_COMMIT.txt
           echo $BUILD_VERSION > ./agent/version/BUILD_VERSION.txt
+          # Latest RELEASED version per backend (highest <backend>/vX.Y.Z tag;
+          # pre-releases excluded) — stamped into the from-source build. ls-remote
+          # runs on its own line so a transport failure aborts the step (errexit)
+          # instead of silently falling back to 0.0.0 and reintroducing the
+          # regression this fixes.
+          backend_version() {
+            local refs
+            refs=$(git ls-remote --tags --refs origin "refs/tags/$1/v*") || return 1
+            printf '%s\n' "$refs" | sed 's#.*/v##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
+          }
+          nd=$(backend_version network-discovery)
+          sd=$(backend_version snmp-discovery)
+          dd=$(backend_version device-discovery)
+          wk=$(backend_version worker)
+          {
+            echo "ND_VERSION=${nd:-0.0.0}"
+            echo "SD_VERSION=${sd:-0.0.0}"
+            echo "DD_VERSION=${dd:-0.0.0}"
+            echo "WK_VERSION=${wk:-0.0.0}"
+          } >> "$GITHUB_ENV"
 
       - name: Build image and push by digest
         id: build
@@ -187,6 +207,12 @@ jobs:
           pull: true
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
+            BUILD_COMMIT=${{ env.BUILD_COMMIT }}
+            BUILD_TRACK=release
+            NETWORK_DISCOVERY_VERSION=${{ env.ND_VERSION }}
+            SNMP_DISCOVERY_VERSION=${{ env.SD_VERSION }}
+            DEVICE_DISCOVERY_VERSION=${{ env.DD_VERSION }}
+            WORKER_VERSION=${{ env.WK_VERSION }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
