@@ -1,0 +1,48 @@
+name: Resolve backend versions
+description: >-
+  Resolve the latest released version of each discovery backend (the highest
+  <backend>/vX.Y.Z tag, pre-releases excluded) via git ls-remote against origin
+  — reachability-independent and depth-independent. A backend with no released
+  tag resolves to 0.0.0; a transport/auth failure fails the step rather than
+  silently producing 0.0.0.
+
+outputs:
+  network:
+    description: 'Latest released network-discovery version (X.Y.Z, or 0.0.0).'
+    value: ${{ steps.resolve.outputs.network }}
+  snmp:
+    description: 'Latest released snmp-discovery version (X.Y.Z, or 0.0.0).'
+    value: ${{ steps.resolve.outputs.snmp }}
+  device:
+    description: 'Latest released device-discovery version (X.Y.Z, or 0.0.0).'
+    value: ${{ steps.resolve.outputs.device }}
+  worker:
+    description: 'Latest released worker version (X.Y.Z, or 0.0.0).'
+    value: ${{ steps.resolve.outputs.worker }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      run: |
+        set -eu
+        # ls-remote on its own line so a transport failure aborts the step;
+        # the grep is guarded so "no released tag yet" stays graceful (-> 0.0.0)
+        # regardless of pipefail.
+        backend_version() {
+          local refs
+          refs=$(git ls-remote --tags --refs origin "refs/tags/$1/v*") || return 1
+          printf '%s\n' "$refs" | sed 's#.*/v##' \
+            | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -1
+        }
+        nd=$(backend_version network-discovery)
+        sd=$(backend_version snmp-discovery)
+        dd=$(backend_version device-discovery)
+        wk=$(backend_version worker)
+        {
+          echo "network=${nd:-0.0.0}"
+          echo "snmp=${sd:-0.0.0}"
+          echo "device=${dd:-0.0.0}"
+          echo "worker=${wk:-0.0.0}"
+        } >> "$GITHUB_OUTPUT"
