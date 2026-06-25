@@ -232,3 +232,53 @@ func TestCloseConcurrentWithIngest(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+func TestCloseDrainsBufferedPendingRequests(t *testing.T) {
+	inner := newCountingClient()
+	inner.enableBlocking()
+	inner.startBlocking()
+
+	client, err := NewQueuedClient(inner, 4, testLogger())
+	require.NoError(t, err)
+
+	go func() {
+		_, _ = client.Ingest(context.Background(), nil)
+	}()
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&inner.inFlight) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	const pendingCount = 4
+	results := make(chan error, pendingCount)
+	for range pendingCount {
+		go func() {
+			_, err := client.Ingest(context.Background(), nil)
+			results <- err
+		}()
+	}
+
+	require.Eventually(t, func() bool {
+		return len(client.(*QueuedClient).requests) == pendingCount
+	}, time.Second, 10*time.Millisecond)
+
+	closeDone := make(chan struct{})
+	go func() {
+		require.NoError(t, client.Close())
+		close(closeDone)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	inner.release()
+
+	for range pendingCount {
+		select {
+		case err := <-results:
+			assert.ErrorIs(t, err, ErrIngestQueueClosed)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for buffered ingest results after Close")
+		}
+	}
+
+	<-closeDone
+}
