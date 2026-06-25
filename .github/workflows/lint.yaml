@@ -1,26 +1,86 @@
-name: Orb Agent - lint
+name: Lint
+
+# Whole-repo lint. Linting is fast, so a change to any Go or Python source (or
+# their config) lints the agent and every backend, rather than path-scoping per
+# component. Heavier per-backend tests stay in their own path-scoped workflows.
 on:
   push:
-    branches:
-      - "!release"
+    branches-ignore:
+      - release
+    paths: &lint-paths
+      - "**/*.go"
+      - "**/*.py"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/pyproject.toml"
+      - "**/.golangci.yaml"
+      - ".github/golangci.yaml"
+      - ".github/workflows/lint.yaml"
   pull_request:
+    paths: *lint-paths
 
 permissions:
   contents: read
 
 jobs:
-  golangci:
+  go-lint:
+    name: go-lint (${{ matrix.dir }})
     runs-on: ubuntu-latest
+    env:
+      GOWORK: "off"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: .
+            version: v2.11.4
+            config: .github/golangci.yaml
+          - dir: orb-discovery/network-discovery
+            version: v2.11.3
+            config: ../.golangci.yaml
+          - dir: orb-discovery/snmp-discovery
+            version: v2.11.3
+            config: ../.golangci.yaml
+          - dir: orb-discovery/gnmi-discovery
+            version: v2.11.3
+            config: ../.golangci.yaml
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version-file: 'go.mod'
+          go-version-file: '${{ matrix.dir }}/go.mod'
       - name: Lint
         uses: golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c # v9.2.1
         with:
-          version: v2.11.4
-          working-directory: .
-          args: --config .github/golangci.yaml
+          version: ${{ matrix.version }}
+          working-directory: ${{ matrix.dir }}
+          args: --config ${{ matrix.config }}
+
+  py-lint:
+    name: py-lint (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: orb-discovery/device-discovery
+            module: device_discovery
+          - dir: orb-discovery/worker
+            module: worker
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install Ruff
+        run: pip install ruff
+      - name: Lint with Ruff
+        run: ruff check --output-format=github ${{ matrix.module }}/ tests/
+        continue-on-error: true
