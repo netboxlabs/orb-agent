@@ -3,6 +3,7 @@ package snmpdiscovery_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -305,6 +306,45 @@ func TestSnmpDiscoveryBackendStartWithIngestBufferSize(t *testing.T) {
 	require.NoError(t, be.Stop(ctx))
 
 	mockCmd.AssertExpectations(t)
+}
+
+func TestSnmpDiscoveryBackendConfigureIngestBufferSize(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	assert.True(t, snmpdiscovery.Register())
+	be := backend.GetBackend("snmp_discovery")
+
+	tests := []struct {
+		name    string
+		value   any
+		wantErr string
+	}{
+		{name: "int", value: 128},
+		{name: "int64", value: int64(128)},
+		{name: "float64", value: float64(128)},
+		{name: "string", value: "128"},
+		{name: "zero", value: 0, wantErr: "must be >= 1"},
+		{name: "negative", value: -1, wantErr: "must be >= 1"},
+		{name: "non-integer float", value: 128.5, wantErr: "whole number"},
+		{name: "invalid string", value: "abc", wantErr: "invalid integer"},
+		{name: "unsupported type", value: true, wantErr: "must be an integer"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := be.Configure(logger, repo, map[string]any{
+				"ingest_buffer_size": tt.value,
+			}, config.BackendCommons{}, nil)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestSnmpDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {

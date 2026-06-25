@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +77,36 @@ func Register() bool {
 	return true
 }
 
+func parseIngestBufferSize(v any) (int, error) {
+	var n int
+
+	switch val := v.(type) {
+	case int:
+		n = val
+	case int64:
+		n = int(val)
+	case float64:
+		if val != float64(int64(val)) {
+			return 0, fmt.Errorf("ingest_buffer_size must be a whole number, got %v", val)
+		}
+		n = int(val)
+	case string:
+		parsed, err := strconv.Atoi(val)
+		if err != nil {
+			return 0, fmt.Errorf("ingest_buffer_size: invalid integer %q: %w", val, err)
+		}
+		n = parsed
+	default:
+		return 0, fmt.Errorf("ingest_buffer_size must be an integer, got %T", v)
+	}
+
+	if n < 1 {
+		return 0, fmt.Errorf("ingest_buffer_size must be >= 1, got %d", n)
+	}
+
+	return n, nil
+}
+
 func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
@@ -95,12 +126,11 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 
 	d.ingestBufferSize = defaultIngestBufferSize
 	if v, prs := config["ingest_buffer_size"]; prs {
-		switch n := v.(type) {
-		case int:
-			d.ingestBufferSize = n
-		case float64:
-			d.ingestBufferSize = int(n)
+		size, err := parseIngestBufferSize(v)
+		if err != nil {
+			return fmt.Errorf("snmp_discovery: %w", err)
 		}
+		d.ingestBufferSize = size
 	}
 
 	d.diodeTarget = common.Diode.Target
