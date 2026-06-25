@@ -79,6 +79,7 @@ func (c *QueuedClient) execute(req *ingestRequest) {
 	select {
 	case req.result <- ingestResult{resp: resp, err: err}:
 	default:
+		c.logger.Warn("ingest result not delivered: caller no longer waiting")
 	}
 }
 
@@ -118,6 +119,7 @@ func (c *QueuedClient) deliverFailure(req *ingestRequest) {
 	select {
 	case req.result <- ingestResult{err: ErrIngestQueueClosed}:
 	default:
+		c.logger.Warn("ingest queue closed result not delivered: caller no longer waiting")
 	}
 }
 
