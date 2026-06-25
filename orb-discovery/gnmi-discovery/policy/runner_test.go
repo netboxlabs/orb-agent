@@ -441,6 +441,9 @@ func TestRunnerSetsPrimaryIPFromHost(t *testing.T) {
 			{Updates: []gnmi.Update{
 				{Path: "/system/state/hostname", Value: "r1"},
 				{Path: "/interfaces/interface[name=Loopback0]/subinterfaces/subinterface[index=0]/ipv4/addresses/address[ip=10.7.7.7]/state/prefix-length", Value: 32},
+				// A second, non-primary address: its nested device stub must NOT
+				// carry primary_ip4 after the flush (cycle-closer is Loopback0 only).
+				{Path: "/interfaces/interface[name=Ethernet2]/subinterfaces/subinterface[index=0]/ipv4/addresses/address[ip=10.9.9.9]/state/prefix-length", Value: 31},
 			}},
 			{SyncDone: true},
 		},
@@ -461,8 +464,37 @@ func TestRunnerSetsPrimaryIPFromHost(t *testing.T) {
 	require.Eventually(t, func() bool { return client.count() >= 1 }, 2*time.Second, 20*time.Millisecond)
 	last := client.lastIngested()
 	dev := last[0].(*diode.Device)
+	// The top-level rich Device keeps its primary_ip4 (set by detachForPrimaryIP).
 	require.NotNil(t, dev.PrimaryIp4)
 	require.Equal(t, "10.7.7.7/32", *dev.PrimaryIp4.Address)
+
+	// Surgical fix (#545): after PruneNestedRefs, ONLY the cycle-closer
+	// ipam.ipaddress (the primary 10.7.7.7/32) carries primary_ip4 on its nested
+	// device stub; every other IP entity has it stripped.
+	var primaryHasNested, nonPrimaryHasNested bool
+	var sawNonPrimary bool
+	for _, e := range last {
+		ip, ok := e.(*diode.IPAddress)
+		if !ok || ip.Address == nil {
+			continue
+		}
+		iface, _ := ip.AssignedObject.(*diode.Interface)
+		if iface == nil || iface.Device == nil {
+			continue
+		}
+		hasPrimary := iface.Device.PrimaryIp4 != nil
+		if *ip.Address == "10.7.7.7/32" {
+			primaryHasNested = hasPrimary
+		} else {
+			sawNonPrimary = true
+			if hasPrimary {
+				nonPrimaryHasNested = true
+			}
+		}
+	}
+	require.True(t, primaryHasNested, "cycle-closer IP's nested device must carry primary_ip4 after flush")
+	require.True(t, sawNonPrimary, "test must observe a non-primary IP entity")
+	require.False(t, nonPrimaryHasNested, "non-primary IP's nested device must NOT carry primary_ip4")
 }
 
 func TestTargetHostIP(t *testing.T) {

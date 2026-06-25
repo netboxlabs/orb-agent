@@ -272,7 +272,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		snap := model.Snapshot()
 		resolveAssetTag(snap)
 		entities := mapping.Translate(profile, snap, defaults, discoveredVendor)
-		mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
+		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
 		dev, _ := entities[0].(*diode.Device) // Translate always emits the Device first
 		// Attach the captured CONFIG datastore (already redacted) to the Device,
 		// when capture_config is on and the fetch succeeded. Same post-Translate
@@ -319,7 +319,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// only on the single top-level Device instead of being duplicated onto
 		// every interface/IP/module reference. Mirrors snmp-discovery (#392) and
 		// device-discovery (#394).
-		mapping.PruneNestedRefs(entities, dev)
+		mapping.PruneNestedRefs(entities, dev, primaryIP)
 		resp, ierr := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 			"policy_name": r.name, "run_id": run.ID, // keys match snmp/network backends
 		}))
