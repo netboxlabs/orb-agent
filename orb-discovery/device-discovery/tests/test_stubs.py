@@ -575,6 +575,81 @@ def test_prune_nested_refs_cycle_closer_disambiguates_by_vrf():
     assert not entities[2].ip_address.assigned_object_interface.device.HasField("primary_ip4")
 
 
+def test_prune_nested_refs_cycle_closer_disambiguates_by_interface():
+    """
+    Same CIDR + VRF on two interfaces: only the device's chosen primary interface keeps it.
+
+    assign_primary_ip deterministically selects one interface when a device reports
+    the same address on several. Identity must include the assigned interface so the
+    duplicate IP entity (a different object on another interface) does not also keep
+    primary_ip4 and set the device primary to the wrong/last-processed interface.
+    """
+    rich_dev = pb.Device(name="sw1", serial="FCW123")
+    rich_dev.site.CopyFrom(pb.Site(name="lab"))
+    rich_dev.primary_ip4.CopyFrom(pb.IPAddress(address="10.0.0.1/24"))
+    back_iface = pb.Interface(name="Gi1/0/1", type="1000base-t")
+    back_iface.device.CopyFrom(rich_dev)
+    rich_dev.primary_ip4.assigned_object_interface.CopyFrom(back_iface)
+
+    # Cycle-closer: same address + the chosen interface.
+    closer_iface = pb.Interface(name="Gi1/0/1", type="1000base-t")
+    closer_iface.device.CopyFrom(rich_dev)
+    closer_ip = pb.IPAddress(address="10.0.0.1/24")
+    closer_ip.assigned_object_interface.CopyFrom(closer_iface)
+
+    # Same address + VRF but a DIFFERENT interface — must NOT keep primary_ip4.
+    dup_iface = pb.Interface(name="Gi1/0/2", type="1000base-t")
+    dup_iface.device.CopyFrom(rich_dev)
+    dup_ip = pb.IPAddress(address="10.0.0.1/24")
+    dup_ip.assigned_object_interface.CopyFrom(dup_iface)
+
+    entities = [
+        Entity(device=rich_dev),
+        Entity(ip_address=closer_ip),
+        Entity(ip_address=dup_ip),
+    ]
+    prune_nested_refs(entities)
+
+    assert entities[1].ip_address.assigned_object_interface.device.HasField("primary_ip4")
+    assert not entities[2].ip_address.assigned_object_interface.device.HasField("primary_ip4")
+
+
+def test_prune_nested_refs_cycle_closer_disambiguates_by_vrf_rd():
+    """Same address and VRF name but a different rd is a different VRF — not the cycle-closer."""
+    rich_dev = pb.Device(name="sw1", serial="FCW123")
+    rich_dev.site.CopyFrom(pb.Site(name="lab"))
+    prim = pb.IPAddress(address="10.0.0.1/24")
+    prim.vrf.CopyFrom(pb.VRF(name="shared", rd="65000:1"))
+    rich_dev.primary_ip4.CopyFrom(prim)
+    back_iface = pb.Interface(name="Gi1/0/1", type="1000base-t")
+    back_iface.device.CopyFrom(rich_dev)
+    rich_dev.primary_ip4.assigned_object_interface.CopyFrom(back_iface)
+
+    # Cycle-closer: same address, same VRF name AND rd.
+    closer_iface = pb.Interface(name="Gi1/0/1", type="1000base-t")
+    closer_iface.device.CopyFrom(rich_dev)
+    closer_ip = pb.IPAddress(address="10.0.0.1/24")
+    closer_ip.vrf.CopyFrom(pb.VRF(name="shared", rd="65000:1"))
+    closer_ip.assigned_object_interface.CopyFrom(closer_iface)
+
+    # Same address, same VRF name, DIFFERENT rd — a different VRF, must NOT keep primary_ip4.
+    other_rd_iface = pb.Interface(name="Gi1/0/2", type="1000base-t")
+    other_rd_iface.device.CopyFrom(rich_dev)
+    other_rd_ip = pb.IPAddress(address="10.0.0.1/24")
+    other_rd_ip.vrf.CopyFrom(pb.VRF(name="shared", rd="65000:2"))
+    other_rd_ip.assigned_object_interface.CopyFrom(other_rd_iface)
+
+    entities = [
+        Entity(device=rich_dev),
+        Entity(ip_address=closer_ip),
+        Entity(ip_address=other_rd_ip),
+    ]
+    prune_nested_refs(entities)
+
+    assert entities[1].ip_address.assigned_object_interface.device.HasField("primary_ip4")
+    assert not entities[2].ip_address.assigned_object_interface.device.HasField("primary_ip4")
+
+
 def test_prune_nested_refs_cycle_closer_stub_is_distinct_from_cached_stripped_stub():
     """
     The cycle-closer's nested device is a DISTINCT instance from the cached stripped stub.

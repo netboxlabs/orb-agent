@@ -36,19 +36,26 @@ def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
     """
     Return True when ``ip`` is the exact IP object the device's primary references.
 
-    Match on full identity — the address WITH its prefix length AND the VRF — not
-    just the host portion. Two IP entities can share a host address yet differ by
-    prefix length (e.g. a /32 loopback and a /24 SVI) or by VRF (the same address
-    in two routing tables). Only the IP object the device's primary actually points
+    Match on full identity — address WITH prefix, VRF (name + rd, matching how
+    _vrf_match_stub keys VRF identity), and the assigned interface — not just the
+    host portion. Two IP entities can share a host address yet be different objects:
+    a differing prefix length (a /32 loopback vs a /24 SVI), a differing VRF (the
+    same address in two routing tables, or the same VRF name under a different rd),
+    or the same CIDR reported on more than one interface (where assign_primary_ip
+    deterministically selects one). Only the IP the device's primary actually points
     at may keep primary_ip4/primary_ip6 on its nested device stub (the cycle-closer);
-    matching on the host alone would let a different IP object's change set try to
-    set device.primary_ip4 and re-open the circular reference this pruning avoids.
+    a looser match would let a different IP object's change set set device.primary_ip4
+    and re-open the circular reference this pruning avoids.
     """
     if primary.address != ip.address:
         return False
-    primary_vrf = primary.vrf.name if primary.HasField("vrf") else ""
-    ip_vrf = ip.vrf.name if ip.HasField("vrf") else ""
-    return primary_vrf == ip_vrf
+    primary_vrf = (primary.vrf.name, primary.vrf.rd) if primary.HasField("vrf") else None
+    ip_vrf = (ip.vrf.name, ip.vrf.rd) if ip.HasField("vrf") else None
+    if primary_vrf != ip_vrf:
+        return False
+    primary_iface = primary.assigned_object_interface.name if primary.HasField("assigned_object_interface") else ""
+    ip_iface = ip.assigned_object_interface.name if ip.HasField("assigned_object_interface") else ""
+    return primary_iface == ip_iface
 
 
 def _ip_match_stub(ip: pb.IPAddress) -> pb.IPAddress:
