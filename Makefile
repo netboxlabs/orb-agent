@@ -112,8 +112,7 @@ lint-all: lint
 	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b lint || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
-		m=$$(echo $$b | tr '-' '_'); \
-		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check $$m/ tests/ ) || exit 1; \
+		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check . ) || exit 1; \
 	done
 
 .PHONY: fix-lint-all
@@ -121,8 +120,7 @@ fix-lint-all: fix-lint
 	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b fix-lint || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
-		m=$$(echo $$b | tr '-' '_'); \
-		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check --fix $$m/ tests/ ) || exit 1; \
+		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check --fix . ) || exit 1; \
 	done
 
 .PHONY: test-all

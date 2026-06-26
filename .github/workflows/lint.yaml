@@ -66,9 +66,7 @@ jobs:
       matrix:
         include:
           - dir: orb-discovery/device-discovery
-            module: device_discovery
           - dir: orb-discovery/worker
-            module: worker
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -82,5 +80,7 @@ jobs:
       - name: Install Ruff
         run: pip install ruff
       - name: Lint with Ruff
-        run: ruff check --output-format=github ${{ matrix.module }}/ tests/
+        # Lint the whole backend (ruff default-excludes .venv/build/etc.) so
+        # extra packages like device-discovery's custom_napalm/ are covered too.
+        run: ruff check --output-format=github .
         continue-on-error: true
