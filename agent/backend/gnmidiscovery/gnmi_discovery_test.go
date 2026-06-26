@@ -42,7 +42,14 @@ func TestGnmiDiscoveryBackendStart(t *testing.T) {
 			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 				"version": "1.3.4",
 				"policies": []map[string]any{
-					{"name": "gnmi-policy-1", "status": "running"},
+					{
+						"name":   "gnmi-policy-1",
+						"status": "running",
+						"runs": []map[string]any{
+							// gnmi emits a singular `target` per run, not a `targets` array.
+							{"id": "run-1", "target": "10.0.0.11:6030", "status": "completed"},
+						},
+					},
 				},
 			}))
 		case r.URL.Path == "/api/v1/capabilities":
@@ -167,6 +174,9 @@ func TestGnmiDiscoveryBackendStart(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, policyStatus, 1, "Expected one policy status from /api/v1/status")
 	assert.Equal(t, "gnmi-policy-1", policyStatus[0].Name, "Expected policy status name to match response")
+	require.Len(t, policyStatus[0].Runs, 1, "Expected one run in the policy status")
+	assert.Equal(t, []string{"10.0.0.11:6030"}, policyStatus[0].Runs[0].Targets,
+		"gnmi's singular run target must be normalized into Targets")
 
 	data := policies.PolicyData{
 		ID:   "dummy-policy-id",

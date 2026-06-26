@@ -443,15 +443,61 @@ func (d *gnmiDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	return nil
 }
 
+// gnmiStatusResponse mirrors gnmi-discovery's /api/v1/status. Each run carries a
+// single `target` (string), unlike the shared backend.PolicyStatusRun which
+// expects a `targets` array — so decoding straight into backend.StatusResponse
+// would drop the per-run target. We decode into this shape and normalize
+// `target` into Targets below.
+type gnmiStatusResponse struct {
+	Policies []struct {
+		Name   string `json:"name"`
+		Status string `json:"status"`
+		Runs   []struct {
+			ID          string `json:"id"`
+			Target      string `json:"target"`
+			Status      string `json:"status"`
+			Reason      string `json:"reason"`
+			EntityCount int64  `json:"entity_count"`
+			CreatedAt   int64  `json:"created_at"`
+			UpdatedAt   int64  `json:"updated_at"`
+		} `json:"runs"`
+	} `json:"policies"`
+}
+
 func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
-	var resp backend.StatusResponse
+	var resp gnmiStatusResponse
 	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
 	err := backend.CommonRequest("gnmi-discovery", d.proc, d.logger, url, &resp, http.MethodGet,
 		http.NoBody, "application/json", statusTimeout, "detail")
 	if err != nil {
 		return nil, err
 	}
-	return resp.Policies, nil
+
+	policies := make([]backend.PolicyStatus, 0, len(resp.Policies))
+	for _, p := range resp.Policies {
+		runs := make([]backend.PolicyStatusRun, 0, len(p.Runs))
+		for _, r := range p.Runs {
+			var targets []string
+			if r.Target != "" {
+				targets = []string{r.Target}
+			}
+			runs = append(runs, backend.PolicyStatusRun{
+				ID:          r.ID,
+				Status:      r.Status,
+				Reason:      r.Reason,
+				EntityCount: r.EntityCount,
+				CreatedAt:   r.CreatedAt,
+				UpdatedAt:   r.UpdatedAt,
+				Targets:     targets,
+			})
+		}
+		policies = append(policies, backend.PolicyStatus{
+			Name:   p.Name,
+			Status: p.Status,
+			Runs:   runs,
+		})
+	}
+	return policies, nil
 }
 
 func normalizeGnmiDiscoveryLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {

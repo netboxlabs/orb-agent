@@ -20,4 +20,5 @@ orb:
     network_discovery:
     device_discovery:
     snmp_discovery:
+    gnmi_discovery:
     worker:
