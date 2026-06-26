@@ -10,7 +10,10 @@ BUILD_DIR ?= build
 CGO_ENABLED ?= 0
 GOARCH ?= $(shell go env GOARCH)
 GOOS ?= $(shell go env GOOS)
-ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || git describe --tags --match 'v[0-9]*' --always 2>/dev/null || echo dev)}")
+# CI sets BUILD_VERSION (release) or writes agent/version/BUILD_VERSION.txt
+# (develop/PR). A bare local build has neither, so it is stamped local-<sha> to
+# make clear it was built locally — distinct from a develop or release image.
+ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || echo local-$$(git rev-parse --short HEAD 2>/dev/null || echo unknown))}")
 COMMIT_HASH = $(shell git rev-parse --short HEAD)
 COMMIT_BRANCH = $(shell branch=$$(git rev-parse --abbrev-ref HEAD); if [ "$$branch" = "HEAD" ]; then branch=$${GITHUB_HEAD_REF:-$$GITHUB_REF_NAME}; fi; echo "$${branch:-unknown}")
 VERSION_PKG = github.com/netboxlabs/orb-agent/agent/version
