@@ -49,13 +49,32 @@ runs:
         fi
         echo "Marked '$BACKEND_TAG' as not latest (make_latest=false)."
 
-        # 2) Positively re-assert the highest orb-agent vX.Y.Z release as Latest,
-        #    so the agent owns the badge regardless of version ordering. Agent
-        #    releases are tagged vX.Y.Z (no slash, no pre-release suffix).
-        agent_tag=$(gh release list --repo "$REPO" --limit 200 --json tagName --jq '.[].tagName' \
-          | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+        # 2) Positively re-assert the highest PUBLISHED orb-agent vX.Y.Z release
+        #    as Latest, so the agent owns the badge regardless of version
+        #    ordering. Draft and pre-release agent releases are excluded (a
+        #    release-prep draft/prerelease must not win Latest, and GitHub
+        #    rejects --latest on them). The `gh release list` call is retried and
+        #    fails loudly — its failure is never swallowed into an empty result;
+        #    only a grep no-match (no agent release yet) is tolerated.
+        releases=""
+        listed=""
+        for attempt in 1 2 3 4 5; do
+          if releases=$(gh release list --repo "$REPO" --limit 1000 \
+              --json tagName,isDraft,isPrerelease \
+              --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName'); then
+            listed=1
+            break
+          fi
+          echo "gh release list failed (attempt $attempt/5); retrying in 3s..."
+          sleep 3
+        done
+        if [ -z "$listed" ]; then
+          echo "::error::gh release list failed after 5 attempts; cannot re-assert orb-agent as Latest."
+          exit 1
+        fi
+        agent_tag=$(printf '%s\n' "$releases" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
         if [ -z "$agent_tag" ]; then
-          echo "::warning::No orb-agent vX.Y.Z release found to mark as Latest; backend demotion still applied."
+          echo "::warning::No published orb-agent vX.Y.Z release found to mark as Latest; backend demotion still applied."
           exit 0
         fi
         if ! edit_with_retry "$agent_tag" --latest; then
