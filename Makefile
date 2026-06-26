@@ -47,15 +47,21 @@ clean:
 	rm -rf ${BUILD_DIR}
 
 .PHONY: install-dev-tools
+# Tool versions are pinned to match CI (.github/workflows) so local
+# lint-all/test-all reproduce the blocking CI jobs: golangci-lint v2.11.4 +
+# ruff 0.15.10 (lint.yaml), tparse v0.14.0 (tests.yaml) + gcov2lcov v1.1.1
+# (_backend-test-go.yaml). Keep these in sync when CI bumps them.
 install-dev-tools:
-	@go install github.com/mfridman/tparse@latest
-	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-	@go install github.com/jandelgado/gcov2lcov@latest
+	@go install github.com/mfridman/tparse@v0.14.0
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+	@go install github.com/jandelgado/gcov2lcov@v1.1.1
 	@for b in $(PY_BACKENDS); do \
 		echo ">> orb-discovery/$$b: venv + dev/test deps"; \
 		( cd orb-discovery/$$b && \
 		  { test -d .venv || python3 -m venv .venv; } && \
-		  . .venv/bin/activate && pip install -q -e '.[dev,test]' ) || exit 1; \
+		  . .venv/bin/activate && \
+		  pip install -q -e '.[dev,test]' && \
+		  pip install -q ruff==0.15.10 ) || exit 1; \
 	done
 
 .PHONY: deps
