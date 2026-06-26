@@ -43,3 +43,22 @@ test-coverage:
 .PHONY: test
 test:
 	@go test -race ./...
+
+# Integration tests against orb-test-lab SNMP simulators (172.28.0.20–22, .24).
+# Requires: `make up` in eng-observability-skunkworks/orb-test-lab.
+# Runs inside Docker on the orb-test-lab network so simulators are reachable.
+INTEGRATION_GO_IMAGE ?= golang:1.26.4
+.PHONY: test-integration test-integration-local
+test-integration:
+	@if ! docker network inspect orb-test-lab >/dev/null 2>&1; then \
+		echo "orb-test-lab network not found; start the lab: cd ../../../eng-observability-skunkworks/orb-test-lab && make up"; \
+		exit 1; \
+	fi
+	docker run --rm --network orb-test-lab \
+		-v "$(CURDIR):/work" -w /work \
+		-e CGO_ENABLED=0 \
+		$(INTEGRATION_GO_IMAGE) \
+		go test -tags=integration -timeout=8m -count=1 -v ./e2e/...
+
+test-integration-local:
+	go test -tags=integration -timeout=8m -count=1 -v ./e2e/...
