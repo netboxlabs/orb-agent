@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
@@ -126,6 +127,21 @@ func main() {
 	}
 	server := server.NewServer(*host, *port, logger, policyManager, version.GetBuildVersion())
 
+	shutdown := func() {
+		// Cancel policy/runner context before stopping jobs so in-flight Diode
+		// ingests abort promptly instead of waiting for scheduler stop timeouts.
+		cancelFunc()
+		server.Stop()
+		metricsCtx, metricsCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer metricsCancel()
+		if err := metrics.Shutdown(metricsCtx); err != nil {
+			logger.Error("failed to shutdown metrics", "error", err)
+		}
+		if err := client.Close(); err != nil {
+			logger.Error("failed to close ingest client", "error", err)
+		}
+	}
+
 	// handle signals
 	done := make(chan bool, 1)
 
@@ -136,16 +152,7 @@ func main() {
 			select {
 			case <-sigs:
 				logger.Warn("stop signal received, stopping snmp-discovery")
-				server.Stop()
-				// Cancel policy/runner context before closing the ingest queue so
-				// in-flight Diode calls can abort instead of blocking shutdown.
-				cancelFunc()
-				if err := metrics.Shutdown(rootCtx); err != nil {
-					logger.Error("failed to shutdown metrics", "error", err)
-				}
-				if err := client.Close(); err != nil {
-					logger.Error("failed to close ingest client", "error", err)
-				}
+				shutdown()
 			case <-rootCtx.Done():
 				logger.Warn("main context cancelled")
 				done <- true
@@ -159,14 +166,7 @@ func main() {
 	go func() {
 		if err, ok := <-serverErrCh; ok && err != nil {
 			logger.Error("snmp-discovery server encountered an error", "error", err)
-			server.Stop()
-			cancelFunc()
-			if shutdownErr := metrics.Shutdown(rootCtx); shutdownErr != nil {
-				logger.Error("failed to shutdown metrics", "error", shutdownErr)
-			}
-			if closeErr := client.Close(); closeErr != nil {
-				logger.Error("failed to close ingest client", "error", closeErr)
-			}
+			shutdown()
 		}
 	}()
 
