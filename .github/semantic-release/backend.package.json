@@ -1,0 +1,10 @@
+{
+  "name": "<app-name>",
+  "version": "1.0.0",
+  "devDependencies": {
+    "semantic-release": "^25.0.0-beta.6",
+    "semantic-release-export-data": "^1.0.1",
+    "semantic-release-monorepo": "^8.0.0",
+    "@semantic-release/changelog": "^6.0.3"
+  }
+}

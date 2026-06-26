@@ -33,7 +33,7 @@ func TestPruneNestedRefs_MultiDevice_InterfaceRoutesToOwningMember(t *testing.T)
 	}
 
 	entities := []diode.Entity{master, member, ifaceOnMaster, ifaceOnMember}
-	PruneNestedRefs(entities, master)
+	PruneNestedRefs(entities, master, nil)
 
 	// Top-level Devices stay rich — pruning must not touch their own DeviceType.
 	assert.NotNil(t, master.DeviceType, "rich master must remain rich (no top-level pruning)")
@@ -69,7 +69,7 @@ func TestPruneNestedRefs_MultiDevice_ParentBridgeLagRefsResolveToOwningMember(t 
 	}
 
 	entities := []diode.Entity{master, member, parent, sub}
-	PruneNestedRefs(entities, master)
+	PruneNestedRefs(entities, master, nil)
 
 	assert.Equal(t, "master-1-stack-2", *sub.Parent.Device.Name,
 		"subinterface's Parent.Device must resolve to the member, not stale master")
@@ -84,7 +84,7 @@ func TestPruneNestedRefs_MultiDevice_IPAddressRoutesViaInterface(t *testing.T) {
 		AssignedObject: memberIface,
 	}
 	entities := []diode.Entity{master, member, memberIface, ip}
-	PruneNestedRefs(entities, master)
+	PruneNestedRefs(entities, master, nil)
 
 	stub, ok := ip.AssignedObject.(*diode.Interface)
 	assert.True(t, ok)
@@ -96,7 +96,7 @@ func TestPruneNestedRefs_SingleDevice_BehaviorUnchanged(t *testing.T) {
 	iface := &diode.Interface{Name: strPtr("Gi0/0/0"), Device: dev}
 	ip := &diode.IPAddress{Address: strPtr("10.0.0.1/24"), AssignedObject: iface}
 	entities := []diode.Entity{dev, iface, ip}
-	PruneNestedRefs(entities, dev)
+	PruneNestedRefs(entities, dev, nil)
 
 	stub, _ := ip.AssignedObject.(*diode.Interface)
 	assert.Equal(t, "only", *stub.Device.Name)
@@ -136,7 +136,7 @@ func TestPruneNestedRefs_DuplicateIfaceNamesAcrossMembersPreserveExistingOwner(t
 	}
 
 	entities := []diode.Entity{master, member, masterMe0, memberMe0, masterMe0Sub, memberMe0Sub}
-	PruneNestedRefs(entities, master)
+	PruneNestedRefs(entities, master, nil)
 
 	// Each subinterface's Parent.Device stub must resolve to the
 	// member it was originally pointing at, not be rebound across
@@ -173,7 +173,7 @@ func TestPruneNestedRefs_UniqueIfaceNameStillCorrectsStaleParent(t *testing.T) {
 	}
 
 	entities := []diode.Entity{master, member, memberPort, sub}
-	PruneNestedRefs(entities, master)
+	PruneNestedRefs(entities, master, nil)
 
 	assert.Equal(t, "sw1-2", *sub.Parent.Device.Name,
 		"unique-name lookup must still rewrite stale Parent.Device to the correct member")

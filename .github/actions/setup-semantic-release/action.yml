@@ -1,0 +1,59 @@
+name: Setup semantic-release
+description: >-
+  Render package.json and .releaserc.json for a component from the shared config
+  in .github/semantic-release/, then install semantic-release. Eliminates the
+  per-workflow inline config duplication.
+
+inputs:
+  component:
+    description: 'Which config to render: "agent" or "backend".'
+    required: true
+  app-name:
+    description: >-
+      Backend app name — used as the package name and the "<app>/v${version}"
+      tag prefix. Required when component=backend; ignored for agent.
+    required: false
+    default: ''
+  working-directory:
+    description: 'Directory to write package.json/.releaserc.json into and run npm install.'
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - name: Render semantic-release config
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COMPONENT: ${{ inputs.component }}
+        APP_NAME: ${{ inputs.app-name }}
+        CONFIG_DIR: ${{ github.workspace }}/.github/semantic-release
+      run: |
+        set -euo pipefail
+        case "$COMPONENT" in
+          agent)
+            cp "$CONFIG_DIR/agent.package.json" package.json
+            cp "$CONFIG_DIR/agent.releaserc.json" .releaserc.json
+            ;;
+          backend)
+            if [ -z "$APP_NAME" ]; then
+              echo "::error::app-name is required when component=backend" >&2
+              exit 1
+            fi
+            jq --arg app "$APP_NAME" '.name = $app' \
+              "$CONFIG_DIR/backend.package.json" > package.json
+            jq --arg app "$APP_NAME" '.tagFormat = $app + "/v${version}"' \
+              "$CONFIG_DIR/backend.releaserc.json" > .releaserc.json
+            ;;
+          *)
+            echo "::error::unknown component '$COMPONENT' (expected agent|backend)" >&2
+            exit 1
+            ;;
+        esac
+        echo "Rendered .releaserc.json:"
+        cat .releaserc.json
+    - name: Install semantic-release
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npm install --legacy-peer-deps

@@ -183,6 +183,13 @@ func translateIPs(profile *Profile, snap map[string]any, dev *diode.Device, defa
 // primary management IP (mirrors device-discovery). Exact match only; never
 // guesses. hostIP must already be stripped of any :port (the runner does this).
 //
+// It returns the LIVE matched *diode.IPAddress (still present in the entities
+// slice — NOT the detached snapshot attached to the Device), so the caller can
+// pass it to PruneNestedRefs as the cycle-closer identified by pointer identity:
+// that single top-level ipam.ipaddress is the only entity allowed to set
+// device.primary_ip4 on its nested device stub (diode reconciler bug #545).
+// Returns nil on the empty / no-device / no-match paths.
+//
 // The primary IP RETAINS its assigned interface (via detachForPrimaryIP) because
 // NetBox rejects a device primary IP that is not assigned to an interface on the
 // device ("The specified IP address … is not assigned to this device"). The
@@ -191,9 +198,9 @@ func translateIPs(profile *Profile, snap map[string]any, dev *diode.Device, defa
 // PrimaryIp4/6 cleared and its relationship pointers stripped — matching
 // snmp-discovery's detachForPrimaryIP. The rich IPAddress and Interface still
 // ride as top-level entities; only this embedded snapshot is pruned.
-func AssignPrimaryIP(entities []diode.Entity, hostIP string) {
+func AssignPrimaryIP(entities []diode.Entity, hostIP string) *diode.IPAddress {
 	if hostIP == "" || len(entities) == 0 {
-		return
+		return nil
 	}
 	// Canonicalize the target so differing IPv6 spellings still match (e.g. a
 	// policy host 2001:0db8::1 vs a discovered 2001:db8::1). targetIP is nil when
@@ -201,7 +208,7 @@ func AssignPrimaryIP(entities []diode.Entity, hostIP string) {
 	targetIP := net.ParseIP(hostIP)
 	dev, _ := entities[0].(*diode.Device)
 	if dev == nil {
-		return
+		return nil
 	}
 	for _, e := range entities {
 		ip, ok := e.(*diode.IPAddress)
@@ -224,8 +231,9 @@ func AssignPrimaryIP(entities []diode.Entity, hostIP string) {
 		} else {
 			dev.PrimaryIp4 = detachForPrimaryIP(ip, dev)
 		}
-		return
+		return ip // the LIVE matched IPAddress (cycle-closer for PruneNestedRefs)
 	}
+	return nil
 }
 
 // detachForPrimaryIP returns a copy of the matched IPAddress suitable to attach

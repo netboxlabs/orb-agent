@@ -419,10 +419,14 @@ func TestBuildMasterRef_CarriesAllMatcherFields(t *testing.T) {
 	assert.Equal(t, "acme", *ref.Tenant.Name)
 	assert.Equal(t, "access", *ref.Role.Name)
 	assert.Equal(t, "WS-C3850-48P", *ref.DeviceType.Model)
-	assert.NotNil(t, ref.PrimaryIp4)
-	assert.Equal(t, "10.0.0.1/24", *ref.PrimaryIp4.Address)
-	assert.Nil(t, ref.PrimaryIp4.AssignedObject,
-		"primary_ip4.AssignedObject must be nil — breaks IP->Iface->Device cycle")
+	// The master ref carries no primary IP. The reconciler resolves the
+	// circular primary-IP reference only within a single change set, and
+	// the master ref is never the entity that closes that cycle (only the
+	// top-level cycle-closer IPAddress entity is). Carrying a matcher-only
+	// primary IP here would make the master ref try to SET
+	// device.primary_ip4 and fail on first ingest.
+	assert.Nil(t, ref.PrimaryIp4, "master ref must not carry primary_ip4 — it never closes the cycle")
+	assert.Nil(t, ref.PrimaryIp6)
 	assert.Nil(t, ref.VirtualChassis, "non-recursion")
 	assert.Nil(t, ref.VcPosition, "VcPosition would only feed unreachable matcher #8")
 	assert.Equal(t, diode.Metadata{"netbox_id": 42}, ref.Metadata["source_match"])

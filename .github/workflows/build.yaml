@@ -41,28 +41,17 @@ jobs:
           # releases are tagged <backend>/v* and are excluded by the refs/tags/v*
           # pattern; ls-remote avoids release-API pagination and works at any clone depth.
           LATEST_RELEASE=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
-          echo "${LATEST_RELEASE:-develop}" > ./agent/version/BUILD_VERSION.txt
-          # Latest RELEASED version per backend (highest <backend>/vX.Y.Z tag;
-          # pre-releases excluded, mirroring the agent's own version filter above)
-          # — stamped into the from-source build. ls-remote runs on its own line
-          # so a transport failure aborts the step (errexit) instead of silently
-          # falling back to 0.0.0 and reintroducing the regression this fixes.
-          backend_version() {
-            local refs
-            refs=$(git ls-remote --tags --refs origin "refs/tags/$1/v*") || return 1
-            printf '%s\n' "$refs" | sed 's#.*/v##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
-          }
-          nd=$(backend_version network-discovery)
-          sd=$(backend_version snmp-discovery)
-          dd=$(backend_version device-discovery)
-          wk=$(backend_version worker)
-          {
-            echo "BUILD_COMMIT_SHORT=${GITHUB_SHA::7}"
-            echo "ND_VERSION=${nd:-0.0.0}"
-            echo "SD_VERSION=${sd:-0.0.0}"
-            echo "DD_VERSION=${dd:-0.0.0}"
-            echo "WK_VERSION=${wk:-0.0.0}"
-          } >> "$GITHUB_ENV"
+          # Non-release builds carry the short commit SHA so a develop/PR image
+          # (e.g. 2.11.0-a1b2c3d) is distinguishable from the clean release (2.11.0).
+          # Strip the leading v (LATEST_RELEASE is a v-prefixed tag) to match the
+          # release workflow, which stamps the unprefixed version.
+          base="${LATEST_RELEASE:-develop}"
+          echo "${base#v}-${GITHUB_SHA::7}" > ./agent/version/BUILD_VERSION.txt
+          echo "BUILD_COMMIT_SHORT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Resolve backend versions
+        id: backend-versions
+        uses: ./.github/actions/resolve-backend-versions
 
       - name: Build image
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -79,10 +68,10 @@ jobs:
             GO_VERSION=${{ env.GO_VERSION }}
             BUILD_COMMIT=${{ env.BUILD_COMMIT_SHORT }}
             BUILD_TRACK=develop
-            NETWORK_DISCOVERY_VERSION=${{ env.ND_VERSION }}
-            SNMP_DISCOVERY_VERSION=${{ env.SD_VERSION }}
-            DEVICE_DISCOVERY_VERSION=${{ env.DD_VERSION }}
-            WORKER_VERSION=${{ env.WK_VERSION }}
+            NETWORK_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.network }}
+            SNMP_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.snmp }}
+            DEVICE_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.device }}
+            WORKER_VERSION=${{ steps.backend-versions.outputs.worker }}
           tags: orb-agent:scan
 
       - name: Scan image for vulnerabilities

@@ -1,0 +1,46 @@
+{
+  "branches": "release",
+  "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
+  "debug": "true",
+  "tagFormat": "v${version}",
+  "plugins": [
+    ["semantic-release-export-data"],
+    ["@semantic-release/commit-analyzer", {
+      "preset": "conventionalcommits",
+      "releaseRules": [
+        { "breaking": true, "release": "major" },
+        { "type": "fix", "release": "patch" },
+        { "type": "feat", "release": "minor" },
+        { "type": "perf", "release": "patch" },
+        { "type": "chore", "scope": "deps", "release": "patch" },
+        { "scope": "device-discovery", "release": false },
+        { "scope": "network-discovery", "release": false },
+        { "scope": "snmp-discovery", "release": false },
+        { "scope": "gnmi-discovery", "release": false },
+        { "scope": "worker", "release": false },
+        { "scope": "repo", "release": false },
+        { "scope": "ci", "release": false },
+        { "scope": "docs", "release": false },
+        { "scope": "deps-dev", "release": false }
+      ]
+    }],
+    ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md",
+        "changelogTitle": "# Semantic Versioning Changelog"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          {
+            "path": "release/**"
+          }
+        ]
+      }
+    ]
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "extends": "semantic-release-monorepo",
+  "branches": "release",
+  "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
+  "debug": "true",
+  "tagFormat": "<app-name>/v${version}",
+  "plugins": [
+    ["semantic-release-export-data"],
+    ["@semantic-release/commit-analyzer", {
+      "releaseRules": [
+        { "breaking": true, "release": "major" },
+        { "type": "fix", "release": "patch" },
+        { "type": "feat", "release": "minor" },
+        { "type": "perf", "release": "patch" },
+        { "type": "chore", "scope": "deps", "release": "patch" }
+      ]
+    }],
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md",
+        "changelogTitle": "# Semantic Versioning Changelog"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          {
+            "path": "release/**"
+          }
+        ]
+      }
+    ]
+  ]
+}

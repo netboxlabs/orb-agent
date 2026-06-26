@@ -373,18 +373,20 @@ def test_validation_drops_duplicate_ids_and_serials(caplog):
     assert "duplicate serial" in msgs
 
 
-def test_vc_master_ref_carries_master_primary_ip_as_matcher_only_stub():
+def test_vc_master_ref_strips_primary_ip_but_top_level_master_keeps_it():
     """
-    primary_ip4 must propagate to the VC master ref as a MATCHER-ONLY stub.
+    The VC master inline ref STRIPS primary_ip4 — only the top-level master keeps it.
 
-    Diode plugin matcher #2 (unique_primary_ip4) resolves on address alone, so the VC
-    master inline ref needs only the address. Copying the rich primary_ip4 (with its
-    assigned_object_interface back-pointer) would re-introduce the IP→Interface→Device
-    cycle that _ip_match_stub exists to break, and bloat the wire payload.
+    The VC-master ref is NOT a cycle-closer: it resolves via
+    name+serial+site+tenant+role+device_type, never via primary_ip4. Carrying
+    primary_ip4 on it would make the plugin try (and fail) to SET device.primary_ip4
+    in a change set that does not also do the IP→interface assignment. Only the
+    top-level master Device entity (set by assign_primary_ip) keeps its rich
+    primary_ip4; the single cycle-closer that validly sets it is the master's own
+    ipam.ipaddress entity.
 
-    Also a regression guard against the ordering bug — vc_master_ref must be derived
-    AFTER assign_primary_ip mutates master_dev, otherwise primary_ip4 is unset on the
-    VC ref while the rich master has it.
+    Also a regression guard against the ordering bug — assign_primary_ip must run
+    BEFORE the master Entity is built, so the top-level master retains primary_ip4.
     """
     data = _base_data(_two_member_payload())
     data["interface_ip"]["GigabitEthernet1/0/1"] = {
@@ -399,21 +401,15 @@ def test_vc_master_ref_carries_master_primary_ip_as_matcher_only_stub():
     member = next(e.device for e in entities
                   if e.HasField("device") and e.device.HasField("virtual_chassis"))
 
-    # Rich master keeps the full primary_ip4 (including back-pointer interface).
+    # Rich top-level master keeps the full primary_ip4 (including back-pointer interface).
     assert master.HasField("primary_ip4")
     assert master.primary_ip4.address == "10.0.0.1/24"
 
-    # VC master inline ref carries the address but NOT the back-pointer interface.
-    assert vc.master.HasField("primary_ip4")
-    assert vc.master.primary_ip4.address == "10.0.0.1/24"
-    assert not vc.master.primary_ip4.HasField("assigned_object_interface"), (
-        "VC master primary_ip4 must be matcher-only (no IP→Interface→Device cycle)"
-    )
+    # VC master inline ref STRIPS primary_ip4 — it is not a cycle-closer.
+    assert not vc.master.HasField("primary_ip4"), "VC master ref must not carry primary_ip4 — it is not a cycle-closer"
 
-    # Same shape on each member's nested virtual_chassis.master.
-    assert member.virtual_chassis.master.HasField("primary_ip4")
-    assert member.virtual_chassis.master.primary_ip4.address == "10.0.0.1/24"
-    assert not member.virtual_chassis.master.primary_ip4.HasField("assigned_object_interface")
+    # Same on each member's nested virtual_chassis.master.
+    assert not member.virtual_chassis.master.HasField("primary_ip4")
 
 
 def test_master_primary_ip_propagates_to_emitted_entity():

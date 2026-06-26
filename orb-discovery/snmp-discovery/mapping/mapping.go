@@ -324,6 +324,11 @@ type ObjectIDMapper struct {
 	resolver        hostResolver
 	ctx             context.Context
 	postPassMappers []postPassMapper
+	// primaryHits records the LIVE (emitted) IPAddress entities chosen
+	// as the device's primary IP. PruneNestedRefs consults this set so
+	// that only the cycle-closer IPAddress entity's nested device stub
+	// retains a primary IP; every other nested device stub is stripped.
+	primaryHits map[*diode.IPAddress]bool
 }
 
 // SetContext stores the scan's context on the mapper. If set, the primary-IP
@@ -811,6 +816,11 @@ func (m *ObjectIDMapper) assignPrimaryIP(device *diode.Device, entities map[diod
 
 	if len(v4Cands) > 0 {
 		if hit := pickPrimaryIPHit(m.logger, m.registry, m.targetHost, entities, v4Cands, false); hit != nil {
+			// Record the LIVE (emitted) IPAddress entity as the
+			// cycle-closer — NOT the detached snapshot below — so
+			// PruneNestedRefs can recognise it by pointer identity and
+			// keep a matcher-only primary on its nested device stub.
+			m.recordPrimaryHit(hit)
 			// Break the reference cycle before attaching. See
 			// detachForPrimaryIP doc.
 			device.PrimaryIp4 = detachForPrimaryIP(hit, device)
@@ -821,11 +831,32 @@ func (m *ObjectIDMapper) assignPrimaryIP(device *diode.Device, entities map[diod
 
 	if len(v6Cands) > 0 {
 		if hit := pickPrimaryIPHit(m.logger, m.registry, m.targetHost, entities, v6Cands, true); hit != nil {
+			m.recordPrimaryHit(hit)
 			device.PrimaryIp6 = detachForPrimaryIP6(hit, device)
 		}
 	} else {
 		m.logger.Debug("no IPv6 candidates for primary IP assignment", "target", m.targetHost)
 	}
+}
+
+// recordPrimaryHit lazily records a live IPAddress entity chosen as a
+// device primary IP. See ObjectIDMapper.primaryHits.
+func (m *ObjectIDMapper) recordPrimaryHit(hit *diode.IPAddress) {
+	if hit == nil {
+		return
+	}
+	if m.primaryHits == nil {
+		m.primaryHits = make(map[*diode.IPAddress]bool)
+	}
+	m.primaryHits[hit] = true
+}
+
+// PrimaryIPHits returns the set of LIVE IPAddress entities the mapper
+// chose as device primary IPs (the cycle-closers). PruneNestedRefs uses
+// it to keep a matcher-only primary IP on only those entities' nested
+// device stubs. Nil-safe: returns nil when no primary IP was assigned.
+func (m *ObjectIDMapper) PrimaryIPHits() map[*diode.IPAddress]bool {
+	return m.primaryHits
 }
 
 // pickPrimaryIPHit filters `entities` to IP addresses of the requested

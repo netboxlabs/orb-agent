@@ -1,0 +1,18 @@
+# Policy exercised by e2e/orb_test_lab_test.go against orb-test-lab SNMP simulators.
+policies:
+  orb-test-lab-snmp:
+    config:
+      timeout: 300
+      snmp_timeout: 120
+      defaults:
+        site: orb-test-lab
+        role: switch
+    scope:
+      targets:
+        - host: "172.28.0.20"
+        - host: "172.28.0.21"
+        - host: "172.28.0.22"
+        - host: "172.28.0.24"
+      authentication:
+        protocol_version: "SNMPv2c"
+        community: "public"

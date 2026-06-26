@@ -3,6 +3,7 @@ package snmpdiscovery_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -253,6 +254,97 @@ func TestSnmpDiscoveryBackendCompleted(t *testing.T) {
 	assert.Error(t, err)
 
 	mockCmd.AssertExpectations(t)
+}
+
+func TestSnmpDiscoveryBackendStartWithIngestBufferSize(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(StatusResponse{Version: "1.0.0"}))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "snmp-discovery")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12348)
+
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, name string, args []string) {
+		assert.Equal(t, "snmp-discovery", name)
+		assert.Contains(t, args, "--ingest-buffer-size")
+		assert.Contains(t, args, "512")
+	})
+
+	assert.True(t, snmpdiscovery.Register())
+	assert.True(t, backend.HaveBackend("snmp_discovery"))
+
+	be := backend.GetBackend("snmp_discovery")
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host":               serverURL.Hostname(),
+		"port":               serverURL.Port(),
+		"ingest_buffer_size": 512,
+	}, config.BackendCommons{}, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, be.Start(ctx, cancel))
+	require.NoError(t, be.Stop(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
+func TestSnmpDiscoveryBackendConfigureIngestBufferSize(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	assert.True(t, snmpdiscovery.Register())
+	be := backend.GetBackend("snmp_discovery")
+
+	tests := []struct {
+		name    string
+		value   any
+		wantErr string
+	}{
+		{name: "int", value: 128},
+		{name: "int64", value: int64(128)},
+		{name: "float64", value: float64(128)},
+		{name: "string", value: "128"},
+		{name: "zero", value: 0, wantErr: "must be >= 1"},
+		{name: "negative", value: -1, wantErr: "must be >= 1"},
+		{name: "non-integer float", value: 128.5, wantErr: "whole number"},
+		{name: "invalid string", value: "abc", wantErr: "invalid integer"},
+		{name: "unsupported type", value: true, wantErr: "must be an integer"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := be.Configure(logger, repo, map[string]any{
+				"ingest_buffer_size": tt.value,
+			}, config.BackendCommons{}, nil)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestSnmpDiscoveryBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {
