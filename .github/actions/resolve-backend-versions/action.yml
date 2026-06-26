@@ -13,6 +13,9 @@ outputs:
   snmp:
     description: 'Latest released snmp-discovery version (X.Y.Z, or 0.0.0).'
     value: ${{ steps.resolve.outputs.snmp }}
+  gnmi:
+    description: 'Latest released gnmi-discovery version (X.Y.Z, or 0.0.0).'
+    value: ${{ steps.resolve.outputs.gnmi }}
   device:
     description: 'Latest released device-discovery version (X.Y.Z, or 0.0.0).'
     value: ${{ steps.resolve.outputs.device }}
@@ -38,11 +41,13 @@ runs:
         }
         nd=$(backend_version network-discovery)
         sd=$(backend_version snmp-discovery)
+        gd=$(backend_version gnmi-discovery)
         dd=$(backend_version device-discovery)
         wk=$(backend_version worker)
         {
           echo "network=${nd:-0.0.0}"
           echo "snmp=${sd:-0.0.0}"
+          echo "gnmi=${gd:-0.0.0}"
           echo "device=${dd:-0.0.0}"
           echo "worker=${wk:-0.0.0}"
         } >> "$GITHUB_OUTPUT"

@@ -25,7 +25,7 @@ orb:
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     gnmi_discovery:
-      host: 192.168.5.11 # default 0.0.0.0
+      host: 192.168.5.11 # default localhost
       port: 8076 # default 8075
       log_level: ERROR # default INFO
       log_format: JSON # default TEXT
@@ -35,7 +35,7 @@ orb:
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| host | str | no | REST API host (default `0.0.0.0`) |
+| host | str | no | REST API host (default `localhost`) |
 | port | int | no | REST API port (default `8075`) |
 | log_level | str | no | Log level: `DEBUG`/`INFO`/`WARN`/`ERROR` (default `INFO`) |
 | log_format | str | no | Log format: `TEXT` or `JSON` (default `TEXT`) |

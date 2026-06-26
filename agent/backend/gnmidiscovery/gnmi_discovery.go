@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
 	"sort"
 	"strings"
 	"time"
@@ -289,7 +290,7 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		}
 		backoffDuration := time.Duration(backoff) * time.Second
 		d.logger.Info("gnmi-discovery is not ready, trying again with backoff",
-			"backoff backoffDuration", backoffDuration.String())
+			"backoff_duration", backoffDuration.String())
 		time.Sleep(backoffDuration)
 	}
 
@@ -331,7 +332,9 @@ func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(line string, fallback slog
 
 func (d *gnmiDiscoveryBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop gnmi-discovery", "routine", ctx.Value(config.ContextKey("routine")))
-	defer d.cancelFunc()
+	if d.cancelFunc != nil {
+		defer d.cancelFunc()
+	}
 	backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "gnmi_discovery")
 	return nil
 }
@@ -431,7 +434,7 @@ func (d *gnmiDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, name)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, neturl.PathEscape(name))
 	err := backend.CommonRequest("gnmi-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {

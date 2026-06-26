@@ -70,6 +70,7 @@ jobs:
             BUILD_TRACK=develop
             NETWORK_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.network }}
             SNMP_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.snmp }}
+            GNMI_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.gnmi }}
             DEVICE_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.device }}
             WORKER_VERSION=${{ steps.backend-versions.outputs.worker }}
           tags: orb-agent:scan

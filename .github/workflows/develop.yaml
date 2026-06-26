@@ -86,6 +86,7 @@ jobs:
             BUILD_TRACK=develop
             NETWORK_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.network }}
             SNMP_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.snmp }}
+            GNMI_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.gnmi }}
             DEVICE_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.device }}
             WORKER_VERSION=${{ steps.backend-versions.outputs.worker }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
