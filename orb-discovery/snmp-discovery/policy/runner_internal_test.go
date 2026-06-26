@@ -281,8 +281,9 @@ func TestQueryTargetContextAlreadyCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	entities, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
+	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -297,8 +298,9 @@ func TestQueryTargetContextTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	entities, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
+	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
@@ -318,8 +320,9 @@ func TestQueryTargetWalkError(t *testing.T) {
 		return &testWalker{walkErr: walkErr}, nil
 	}, entries)
 
-	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
+	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, walkErr)
 }
 
@@ -336,7 +339,7 @@ func TestQueryTargetSuccess(t *testing.T) {
 	}
 	runner := queryTargetRunner(snmp.NewFakeSNMPWalker, entries)
 
-	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	require.NoError(t, err)
 	assert.NotEmpty(t, entities)
 }
@@ -416,7 +419,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -450,6 +453,29 @@ func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
 		"PrimaryIp4 snapshot's interface must carry a Device (Diode validation)")
 	assert.Nil(t, snapshotIface.Device.PrimaryIp4,
 		"nested Device must have PrimaryIp4 cleared to break the cycle")
+
+	// The cycle-closer is the IPAddress entity for the primary IP itself.
+	// queryTarget reports it via primaryHits keyed by the live entity.
+	require.NotNil(t, primaryHits, "queryTarget must report the primary-IP cycle-closer hits")
+	assert.True(t, primaryHits[primaryIP],
+		"the primary IPAddress entity must be flagged as a cycle-closer")
+
+	// Post-prune: the cycle-closer IP entity's nested device keeps a
+	// matcher-only primary_ip4 (it can validly close the circular
+	// reference within its own change set), while a non-primary nested
+	// device stub is stripped. Mirror the production sequence.
+	annotateEntitiesWithRunID(entities, "run-primary")
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
+
+	closerIface, ok := primaryIP.AssignedObject.(*diode.Interface)
+	require.True(t, ok, "cycle-closer IP must still carry an interface stub after prune")
+	require.NotNil(t, closerIface.Type, "cycle-closer interface keeps its Type after prune")
+	require.NotNil(t, closerIface.Device, "cycle-closer interface keeps a device stub")
+	require.NotNil(t, closerIface.Device.PrimaryIp4,
+		"cycle-closer nested device keeps a matcher-only primary_ip4")
+	assert.Equal(t, "10.0.0.1/32", *closerIface.Device.PrimaryIp4.Address)
+	assert.Nil(t, closerIface.Device.PrimaryIp4.AssignedObject,
+		"cycle-closer's primary_ip4 is matcher-only (no AssignedObject)")
 }
 
 // TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable is the
@@ -557,7 +583,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 	// between scans.
 	t.Run("IPv4 target -> PrimaryIp4", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -578,7 +604,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 
 	t.Run("IPv6 target -> PrimaryIp6", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
+		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -765,7 +791,7 @@ func TestRunnerAnnotateThenPrune(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -773,7 +799,7 @@ func TestRunnerAnnotateThenPrune(t *testing.T) {
 	netboxID := 42
 	annotateDeviceWithSourceMatch(entities, netboxID)
 	annotateEntitiesWithRunID(entities, "run-abc")
-	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities))
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
 
 	// Find the rich top-level Device.
 	var richDevice *diode.Device
@@ -909,7 +935,7 @@ func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, chassisEntries())
-	entities, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -984,7 +1010,7 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	// Use NetboxID=42 on the target so we can verify source_match on master.
 	netboxID := 42
 	target := config.Target{Host: "192.0.2.1", Port: 161, NetboxID: &netboxID}
-	entities, err := runner.queryTarget(context.Background(), target)
+	entities, primaryHits, err := runner.queryTarget(context.Background(), target)
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -993,7 +1019,7 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
 	}
 	annotateEntitiesWithRunID(entities, "run-stack-123")
-	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities))
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
 
 	// Collect typed results.
 	var masterDev, memberDev *diode.Device

@@ -237,19 +237,24 @@ func ChassisInventoryFromOIDs(oids ObjectIDValueMap, logger *slog.Logger) *Chass
 // as VirtualChassis.Master on the top-level VC entity AND on each
 // non-master member Device's VirtualChassis.Master.
 //
-// MUST carry every matcher field the rich master Device carries —
-// divergence breaks the Diode plugin's matcher precedence cascade
-// (asset_tag -> primary_ip4 -> primary_ip6 -> oob_ip -> name+site+tenant
-// -> name+site -> rack+position+face -> virtual_chassis+vc_position)
-// and creates ghost VCs.
+// Carries the matcher fields the rich master Device carries below the
+// primary-IP rungs — divergence breaks the Diode plugin's matcher
+// precedence cascade (asset_tag -> primary_ip4 -> primary_ip6 -> oob_ip
+// -> name+site+tenant -> name+site -> rack+position+face ->
+// virtual_chassis+vc_position) and creates ghost VCs.
 //
 // MUST NOT carry VirtualChassis (non-recursion — dodges the plugin's
 // "Unable to resolve circular reference in entities" error) or
 // VcPosition (would only feed matcher #8 which is unreachable behind
 // the higher-precedence matchers above).
 //
-// primary_ip4/6 go through newIPMatchStub so AssignedObject is cleared,
-// breaking the IP -> Interface -> Device cycle.
+// MUST NOT carry primary_ip4/6 either. dcim.device.primary_ip is a
+// circular reference the reconciler resolves only within a SINGLE
+// change set, and the master ref is never the entity that closes that
+// cycle — only the top-level ipam.ipaddress entity for the primary IP
+// does, in its own change set. A primary IP on the master ref would
+// just make it try to SET primary_ip and fail on first ingest. So this
+// ref relies on asset_tag and name+site+tenant matchers instead.
 func buildMasterRef(master *diode.Device) *diode.Device {
 	if master == nil {
 		return nil
@@ -262,8 +267,6 @@ func buildMasterRef(master *diode.Device) *diode.Device {
 		Tenant:     master.Tenant,
 		Role:       master.Role,
 		DeviceType: master.DeviceType,
-		PrimaryIp4: newIPMatchStub(master.PrimaryIp4),
-		PrimaryIp6: newIPMatchStub(master.PrimaryIp6),
 	}
 	if sm, ok := master.Metadata["source_match"]; ok {
 		ref.Metadata = diode.Metadata{"source_match": sm}
