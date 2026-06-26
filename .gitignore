@@ -1,10 +1,30 @@
-diode/
-orb-configs/
+# Build / coverage artifacts
 build/
 .coverage/
-.vscode/
+.coverage
+*.egg-info/
 
+# Python caches / virtualenvs
+__pycache__/
+.venv*/
+.pytest_cache/
+.ruff_cache/
+
+# Editor / OS
+.vscode/
+.cursor/
+.cursor.md
 docs/.cursor
+.DS_Store
+
+# Orb runtime
+diode/
+orb-configs/
+
+# Agent-local CLAUDE.md notes are not committed; the tracked ones are kept.
+CLAUDE.md
+!/CLAUDE.md
+!/orb-discovery/device-discovery/custom_napalm/CLAUDE.md
 
 # Local multi-module dev workspace (regenerate with `make work`); not committed —
 # the agent image and CI build the agent as a single module. See AGENTS.md.

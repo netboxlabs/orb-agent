@@ -1,348 +1,197 @@
 name: Orb Agent - release
+
+# Orchestrated agent release. The per-backend releases are their own top-level
+# workflows (so PyPI trusted publishing keeps working — it cannot run from a
+# reusable workflow). On a push to `release` this detects which components
+# changed, WAITS for the changed backends' release runs to finish (so their new
+# <backend>/vX.Y.Z tags exist), resolves those versions, and releases orb-agent
+# with them — so the agent image bundles the freshly-released backend versions.
+# Backend-only changes do not cut an agent release.
 on:
   workflow_dispatch:
   push:
     branches: [ release ]
+    # Union of every component's release-relevant paths; the changes job below
+    # decides per-component what actually releases.
     paths:
-      # Agent releases fire only on agent-scoped changes (or the manual
-      # workflow_dispatch above). Backend-only changes under orb-discovery/**
-      # deliberately do NOT cut a new agent version — they ship via the
-      # continuously-rebuilt develop image and are folded into the next agent
-      # release notes (which aggregate every commit since the last vX.Y.Z tag).
+      - "orb-discovery/**"
+      - "!orb-discovery/**/docker/**"
       - "agent/**"
+      - "!agent/docker/**"
       - "cmd/**"
       - "go.mod"
       - "go.sum"
-      - "!agent/docker/**"
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-env:
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  SEMANTIC_RELEASE_PACKAGE: ${{ github.repository }}
-  APP_NAME: orb-agent
-
 permissions:
   contents: write
   issues: write
   pull-requests: write
+  packages: write
+  id-token: write
 
 jobs:
-  get-next-version:
-    name: Semantic release get next version
+  changes:
+    name: Detect changed components
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "lts/*"
-      - name: Write package.json
-        run: |
-          cat > ./package.json <<'EOF'
-          {
-            "name": "${{ env.APP_NAME }}",
-            "version": "1.0.0",
-            "devDependencies": {
-              "semantic-release-export-data": "^1.0.1",
-              "semantic-release": "25.0.0-beta.6",
-              "@semantic-release/changelog": "^6.0.3",
-              "conventional-changelog-conventionalcommits": "^9.0.0"
-            }
-          }
-          EOF
-      - name: Write .releaserc.json
-        run: |
-          cat > ./.releaserc.json <<'EOF'
-          {
-            "branches": "release",
-            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
-            "debug": "true",
-            "tagFormat": "v${version}",
-            "plugins": [
-              ["semantic-release-export-data"],
-              ["@semantic-release/commit-analyzer", {
-                "preset": "conventionalcommits",
-                "releaseRules": [
-                  { "breaking": true, "release": "major" },
-                  { "type": "fix", "release": "patch" },
-                  { "type": "feat", "release": "minor" },
-                  { "type": "perf", "release": "patch" },
-                  { "type": "chore", "scope": "deps", "release": "patch" },
-                  { "scope": "device-discovery", "release": false },
-                  { "scope": "network-discovery", "release": false },
-                  { "scope": "snmp-discovery", "release": false },
-                  { "scope": "gnmi-discovery", "release": false },
-                  { "scope": "worker", "release": false },
-                  { "scope": "repo", "release": false },
-                  { "scope": "ci", "release": false },
-                  { "scope": "docs", "release": false },
-                  { "scope": "deps-dev", "release": false }
-                ]
-              }],
-              ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
-              [
-                "@semantic-release/changelog",
-                {
-                  "changelogFile": "CHANGELOG.md",
-                  "changelogTitle": "# Semantic Versioning Changelog"
-                }
-              ],
-              [
-                "@semantic-release/github",
-                {
-                  "assets": [
-                    {
-                      "path": "release/**"
-                    }
-                  ]
-                }
-              ]
-            ]
-          }
-          EOF
-      - name: setup semantic-release
-        run: npm install --legacy-peer-deps
-      - name: release dry-run
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
-        run: npx semantic-release --debug --dry-run
-        id: get-next-version
-      - name: Set short sha output
-        id: short-sha
-        run: echo "short-sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-      - name: Set release version
-        id: release-version
-        run: |
-          echo "release-version=$(echo '${{ steps.get-next-version.outputs.new-release-version }}' | sed 's/^v//')" >> "$GITHUB_OUTPUT"
     outputs:
-      new-release-published: ${{ steps.get-next-version.outputs.new-release-published }}
-      new-release-version: ${{ steps.release-version.outputs.release-version }}
-      short-sha: ${{ steps.short-sha.outputs.short-sha }}
-
-  confirm-version:
-    name: Next version ${{ needs.get-next-version.outputs.new-release-version }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: get-next-version
-    if: needs.get-next-version.outputs.new-release-published == 'true'
+      device: ${{ steps.detect.outputs.device }}
+      worker: ${{ steps.detect.outputs.worker }}
+      network: ${{ steps.detect.outputs.network }}
+      snmp: ${{ steps.detect.outputs.snmp }}
+      gnmi: ${{ steps.detect.outputs.gnmi }}
+      agent: ${{ steps.detect.outputs.agent }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - run: echo "The new release version is ${{ needs.get-next-version.outputs.new-release-version }} commit ${{ needs.get-next-version.outputs.short-sha }}"
-
-  build:
-    name: Build (${{ matrix.platform }})
-    needs: get-next-version
-    runs-on: ${{ matrix.runner }}
-    if: needs.get-next-version.outputs.new-release-published == 'true'
-    permissions:
-      contents: read
-      packages: write
-    env:
-      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
-      BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
-      REGISTRY: docker.io
-      IMAGE_NAME: netboxlabs/orb-agent
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: blacksmith-2vcpu-ubuntu-2404
-          - platform: linux/arm64
-            runner: blacksmith-2vcpu-ubuntu-2404-arm
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract Go version from go.mod
-        run: echo "GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}' | cut -d. -f1,2)" >> $GITHUB_ENV
-
-      - name: Set build info
-        run: |
-          echo $BUILD_COMMIT > ./agent/version/BUILD_COMMIT.txt
-          echo $BUILD_VERSION > ./agent/version/BUILD_VERSION.txt
-          # Latest RELEASED version per backend (highest <backend>/vX.Y.Z tag;
-          # pre-releases excluded) — stamped into the from-source build. ls-remote
-          # runs on its own line so a transport failure aborts the step (errexit)
-          # instead of silently falling back to 0.0.0 and reintroducing the
-          # regression this fixes.
-          backend_version() {
-            local refs
-            refs=$(git ls-remote --tags --refs origin "refs/tags/$1/v*") || return 1
-            printf '%s\n' "$refs" | sed 's#.*/v##' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1
-          }
-          nd=$(backend_version network-discovery)
-          sd=$(backend_version snmp-discovery)
-          dd=$(backend_version device-discovery)
-          wk=$(backend_version worker)
-          {
-            echo "ND_VERSION=${nd:-0.0.0}"
-            echo "SD_VERSION=${sd:-0.0.0}"
-            echo "DD_VERSION=${dd:-0.0.0}"
-            echo "WK_VERSION=${wk:-0.0.0}"
-          } >> "$GITHUB_ENV"
-
-      - name: Build image and push by digest
-        id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          file: agent/docker/Dockerfile
-          platforms: ${{ matrix.platform }}
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,scope=${{ matrix.platform }},mode=max
-          no-cache-filters: python-builder,network-discovery,snmp-discovery,pktvisor,otlpinf,final
-          pull: true
-          build-args: |
-            GO_VERSION=${{ env.GO_VERSION }}
-            BUILD_COMMIT=${{ env.BUILD_COMMIT }}
-            BUILD_TRACK=release
-            NETWORK_DISCOVERY_VERSION=${{ env.ND_VERSION }}
-            SNMP_DISCOVERY_VERSION=${{ env.SD_VERSION }}
-            DEVICE_DISCOVERY_VERSION=${{ env.DD_VERSION }}
-            WORKER_VERSION=${{ env.WK_VERSION }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-
-      - name: Export digest
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload digest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: digests-${{ matrix.runner }}
-          path: /tmp/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  merge:
-    name: Merge multi-arch manifest
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    needs: [get-next-version, build]
-    if: needs.get-next-version.outputs.new-release-published == 'true'
-    permissions:
-      contents: read
-      packages: write
-    env:
-      BUILD_VERSION: ${{ needs.get-next-version.outputs.new-release-version }}
-      REGISTRY: docker.io
-      IMAGE_NAME: netboxlabs/orb-agent
-    steps:
-      - name: Download digests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: /tmp/digests
-          pattern: digests-*
-          merge-multiple: true
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Create manifest list and push
-        working-directory: /tmp/digests
-        run: |
-          docker buildx imagetools create \
-            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.BUILD_VERSION }} \
-            $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
-
-  semantic-release:
-    name: Semantic release
-    needs: merge
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: "lts/*"
-      - name: Write package.json
-        run: |
-          cat > ./package.json <<'EOF'
-          {
-            "name": "${{ env.APP_NAME }}",
-            "version": "1.0.0",
-            "devDependencies": {
-              "semantic-release-export-data": "^1.0.1",
-              "semantic-release": "25.0.0-beta.6",
-              "@semantic-release/changelog": "^6.0.3",
-              "conventional-changelog-conventionalcommits": "^9.0.0"
-            }
-          }
-          EOF
-      - name: Write .releaserc.json
-        run: |
-          cat > ./.releaserc.json <<'EOF'
-          {
-            "branches": "release",
-            "repositoryUrl": "https://github.com/netboxlabs/orb-agent",
-            "debug": "true",
-            "tagFormat": "v${version}",
-            "plugins": [
-              ["semantic-release-export-data"],
-              ["@semantic-release/commit-analyzer", {
-                "preset": "conventionalcommits",
-                "releaseRules": [
-                  { "breaking": true, "release": "major" },
-                  { "type": "fix", "release": "patch" },
-                  { "type": "feat", "release": "minor" },
-                  { "type": "perf", "release": "patch" },
-                  { "type": "chore", "scope": "deps", "release": "patch" },
-                  { "scope": "device-discovery", "release": false },
-                  { "scope": "network-discovery", "release": false },
-                  { "scope": "snmp-discovery", "release": false },
-                  { "scope": "gnmi-discovery", "release": false },
-                  { "scope": "worker", "release": false },
-                  { "scope": "repo", "release": false },
-                  { "scope": "ci", "release": false },
-                  { "scope": "docs", "release": false },
-                  { "scope": "deps-dev", "release": false }
-                ]
-              }],
-              ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
-              [
-                "@semantic-release/changelog",
-                {
-                  "changelogFile": "CHANGELOG.md",
-                  "changelogTitle": "# Semantic Versioning Changelog"
-                }
-              ],
-              [
-                "@semantic-release/github",
-                {
-                  "assets": [
-                    {
-                      "path": "release/**"
-                    }
-                  ]
-                }
-              ]
-            ]
-          }
-          EOF
-      - name: setup semantic-release
-        run: npm install --legacy-peer-deps
-      - name: Release
+          fetch-depth: 0
+      - name: Detect changed paths
+        id: detect
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
-        run: npx semantic-release --debug
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          IS_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -eu
+          # Manual dispatch: treat every component as releasable and let each
+          # component's semantic-release decide what (if anything) to publish.
+          # This matches the pre-orchestrator behavior where a manual run released
+          # regardless of which paths changed, and avoids a HEAD~1 diff wrongly
+          # skipping a manual retry or a tip commit that is backend/CI-only.
+          if [ "$IS_DISPATCH" = "true" ]; then
+            {
+              echo "device=true"
+              echo "worker=true"
+              echo "network=true"
+              echo "snmp=true"
+              echo "gnmi=true"
+              echo "agent=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="${BEFORE:-}"
+          # Missing/zero/unknown before -> compare against the previous commit;
+          # on a normal push compare the pushed range.
+          if [ -z "$base" ] \
+             || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$(git rev-parse HEAD~1)"
+          fi
+          changed="$(git diff --name-only "$base" "$SHA")"
+          echo "Changed files ($base..$SHA):"
+          echo "$changed"
+          detect() {
+            # $1 = include ERE, $2 = optional exclude ERE
+            local m
+            m="$(printf '%s\n' "$changed" | { grep -E "$1" || true; })"
+            if [ -n "${2:-}" ]; then
+              m="$(printf '%s\n' "$m" | { grep -vE "$2" || true; })"
+            fi
+            [ -n "$m" ] && echo true || echo false
+          }
+          {
+            echo "device=$(detect '^orb-discovery/device-discovery/')"
+            echo "worker=$(detect '^orb-discovery/worker/')"
+            echo "network=$(detect '^orb-discovery/network-discovery/' '^orb-discovery/network-discovery/docker/')"
+            echo "snmp=$(detect '^orb-discovery/snmp-discovery/' '^orb-discovery/snmp-discovery/docker/')"
+            echo "gnmi=$(detect '^orb-discovery/gnmi-discovery/' '^orb-discovery/gnmi-discovery/docker/')"
+            echo "agent=$(detect '^(agent/|cmd/|go\.mod$|go\.sum$)' '^agent/docker/')"
+          } >> "$GITHUB_OUTPUT"
+
+  wait-for-backend-releases:
+    name: Wait for backend releases
+    needs: changes
+    # The backend releases are standalone push-triggered workflows. On a push,
+    # wait for the changed ones to finish so their new tags exist before the
+    # agent build resolves versions. On workflow_dispatch they aren't push-
+    # triggered, so there is nothing to wait for (resolve-versions then just
+    # uses the latest tags).
+    if: >-
+      ${{ github.event_name == 'push' && needs.changes.outputs.agent == 'true' &&
+          (needs.changes.outputs.device == 'true' || needs.changes.outputs.worker == 'true' ||
+           needs.changes.outputs.network == 'true' || needs.changes.outputs.snmp == 'true' ||
+           needs.changes.outputs.gnmi == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SHA: ${{ github.sha }}
+      DEVICE: ${{ needs.changes.outputs.device }}
+      WORKER: ${{ needs.changes.outputs.worker }}
+      NETWORK: ${{ needs.changes.outputs.network }}
+      SNMP: ${{ needs.changes.outputs.snmp }}
+      GNMI: ${{ needs.changes.outputs.gnmi }}
+    steps:
+      - name: Wait for changed backend release runs
+        run: |
+          set -eu
+          wait_for() {
+            local wf="$1" appeared="" run status concl
+            for _ in $(seq 1 200); do   # up to ~33 min at 10s
+              run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" \
+                       --branch "$GITHUB_REF_NAME" --event push \
+                       --json databaseId,headSha,status,conclusion --limit 30 \
+                     | jq -c --arg sha "$SHA" 'map(select(.headSha==$sha)) | first // empty')"
+              if [ -n "$run" ]; then
+                appeared=1
+                status="$(printf '%s' "$run" | jq -r .status)"
+                if [ "$status" = "completed" ]; then
+                  concl="$(printf '%s' "$run" | jq -r .conclusion)"
+                  case "$concl" in
+                    success|skipped) echo "$wf: $concl"; return 0 ;;
+                    *) echo "::error::$wf release run concluded '$concl'"; return 1 ;;
+                  esac
+                fi
+              fi
+              sleep 10
+            done
+            if [ -n "$appeared" ]; then
+              echo "::error::timed out waiting for $wf"
+            else
+              echo "::error::no $wf run found for commit $SHA"
+            fi
+            return 1
+          }
+          if [ "$DEVICE" = "true" ];  then wait_for device-discovery-release.yaml;  fi
+          if [ "$WORKER" = "true" ];  then wait_for worker-release.yaml;            fi
+          if [ "$NETWORK" = "true" ]; then wait_for network-discovery-release.yaml; fi
+          if [ "$SNMP" = "true" ];    then wait_for snmp-discovery-release.yaml;     fi
+          if [ "$GNMI" = "true" ];    then wait_for gnmi-discovery-release.yaml;     fi
+          echo "all changed backend releases complete"
+
+  resolve-versions:
+    name: Resolve backend versions
+    needs: [changes, wait-for-backend-releases]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.agent == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      network: ${{ steps.versions.outputs.network }}
+      snmp: ${{ steps.versions.outputs.snmp }}
+      device: ${{ steps.versions.outputs.device }}
+      worker: ${{ steps.versions.outputs.worker }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # wait-for-backend-releases has ensured any changed backend already tagged
+      # its new version, so ls-remote returns the freshly-released versions.
+      - id: versions
+        uses: ./.github/actions/resolve-backend-versions
+
+  agent-release:
+    name: Release orb-agent
+    needs: [changes, resolve-versions]
+    if: ${{ !failure() && !cancelled() && needs.changes.outputs.agent == 'true' }}
+    uses: ./.github/workflows/_agent-release.yaml
+    with:
+      network-version: ${{ needs.resolve-versions.outputs.network }}
+      snmp-version: ${{ needs.resolve-versions.outputs.snmp }}
+      device-version: ${{ needs.resolve-versions.outputs.device }}
+      worker-version: ${{ needs.resolve-versions.outputs.worker }}
+    secrets: inherit
