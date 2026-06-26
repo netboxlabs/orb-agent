@@ -34,11 +34,6 @@ BACKEND_VERSION_ARGS = --build-arg NETWORK_DISCOVERY_VERSION=$(ND_VERSION) --bui
 # `work` target below re-enables it explicitly for generating the file.
 export GOWORK = off
 
-# Make targets operate on the agent (a single module), so never use a local
-# go.work — workspace mode is incompatible with the -mod=mod build flow. The
-# `work` target below re-enables it explicitly for generating the file.
-export GOWORK = off
-
 # Discovery backends, grouped by toolchain — used by the *-all aggregate targets.
 GO_BACKENDS = network-discovery snmp-discovery gnmi-discovery
 PY_BACKENDS = device-discovery worker
@@ -57,7 +52,7 @@ install-dev-tools:
 		echo ">> orb-discovery/$$b: venv + dev/test deps"; \
 		( cd orb-discovery/$$b && \
 		  { test -d .venv || python3 -m venv .venv; } && \
-		  . .venv/bin/activate && pip install -q -e '.[dev,test]' ); \
+		  . .venv/bin/activate && pip install -q -e '.[dev,test]' ) || exit 1; \
 	done
 
 .PHONY: deps
@@ -111,28 +106,28 @@ fix-lint:
 
 .PHONY: lint-all
 lint-all: lint
-	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b lint; done
+	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b lint || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
 		m=$$(echo $$b | tr '-' '_'); \
-		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check $$m/ tests/ ); \
+		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check $$m/ tests/ ) || exit 1; \
 	done
 
 .PHONY: fix-lint-all
 fix-lint-all: fix-lint
-	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b fix-lint; done
+	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b fix-lint || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
 		m=$$(echo $$b | tr '-' '_'); \
-		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check --fix $$m/ tests/ ); \
+		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check --fix $$m/ tests/ ) || exit 1; \
 	done
 
 .PHONY: test-all
 test-all: test
-	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b test; done
+	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b test || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
-		( cd orb-discovery/$$b && . .venv/bin/activate && pytest ); \
+		( cd orb-discovery/$$b && . .venv/bin/activate && pytest ) || exit 1; \
 	done
 
 agent:
