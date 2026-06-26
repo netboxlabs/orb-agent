@@ -16,8 +16,6 @@ COMMIT_BRANCH = $(shell branch=$$(git rev-parse --abbrev-ref HEAD); if [ "$$bran
 VERSION_PKG = github.com/netboxlabs/orb-agent/agent/version
 EXTRA_LDFLAGS ?=
 LDFLAGS ?= -X $(VERSION_PKG).buildVersion=$(ORB_VERSION) -X $(VERSION_PKG).buildBranch=$(COMMIT_BRANCH) $(EXTRA_LDFLAGS)
-OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
-OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
 # Backend versions stamped into the from-source image (latest <backend>/v* tag);
 # without these the from-source backends report 0.0.0. List the tags rather than
 # `git describe` so the result does not depend on the tag being reachable from
@@ -45,16 +43,6 @@ export GOWORK = off
 
 clean:
 	rm -rf ${BUILD_DIR}
-
-cleandocker:
-	# Stops containers and removes containers, networks, volumes, and images created by up
-#	docker-compose -f docker/docker-compose.yml down --rmi all -v --remove-orphans
-	docker-compose -f docker/docker-compose.yml down -v --remove-orphans
-
-ifdef pv
-	# Remove unused volumes
-	docker volume ls -f name=orb -f dangling=true -q | xargs -r docker volume rm
-endif
 
 .PHONY: install-dev-tools
 install-dev-tools:
@@ -152,11 +140,3 @@ agent_debug_production:
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_DEBUG_REF_TAG) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
-
-pull-latest-otel-collector-contrib:
-	wget -O ./agent/backend/otel/otelcol_contrib.tar.gz $(OTEL_CONTRIB_URL)
-	tar -xvf ./agent/backend/otel/otelcol_contrib.tar.gz -C ./agent/backend/otel/
-	cp ./agent/backend/otel/otelcol-contrib .
-	rm ./agent/backend/otel/otelcol_contrib.tar.gz
-	rm ./agent/backend/otel/LICENSE
-	rm ./agent/backend/otel/README.md
