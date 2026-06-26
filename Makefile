@@ -72,7 +72,7 @@ work:
 	@echo "go.work created (git-ignored). Use 'GOWORK=off' for single-module commands."
 
 agent_bin:
-	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
+	echo "ORB_VERSION: $(ORB_VERSION)"
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" -o ${BUILD_DIR}/orb-agent cmd/main.go
 
 .PHONY: test
@@ -137,7 +137,6 @@ agent:
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
@@ -147,7 +146,6 @@ agent_fast:
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
@@ -164,7 +162,6 @@ agent_production:
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 

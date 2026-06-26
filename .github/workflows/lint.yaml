@@ -78,9 +78,10 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install Ruff
-        run: pip install ruff
+        # Pinned so blocking lint is deterministic (matches the pinned go-lint).
+        run: pip install ruff==0.15.10
       - name: Lint with Ruff
         # Lint the whole backend (ruff default-excludes .venv/build/etc.) so
         # extra packages like device-discovery's custom_napalm/ are covered too.
+        # Blocking (no continue-on-error) so Python lint actually gates, like go-lint.
         run: ruff check --output-format=github .
-        continue-on-error: true
