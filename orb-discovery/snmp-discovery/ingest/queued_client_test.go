@@ -123,7 +123,7 @@ func (h *hangUntilContextClient) Ingest(ctx context.Context, _ []diode.Entity, _
 	return nil, ctx.Err()
 }
 
-func (h *hangUntilContextClient) IngestProto(ctx context.Context, entities []*diodepb.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+func (h *hangUntilContextClient) IngestProto(ctx context.Context, _ []*diodepb.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
 	return h.Ingest(ctx, nil, opts...)
 }
 
