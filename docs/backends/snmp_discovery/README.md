@@ -31,19 +31,29 @@ When a device exposes the relevant MIBs, interfaces also carry their switching c
 Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately. The same caveat applies on device-discovery.
 
 ## Configuration
-The `snmp_discovery` backend does not require any special configuration in the backends section. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
+The `snmp_discovery` backend uses the `diode` settings specified in the `common` subsection to forward discovery results. Optional backend-level settings tune ingest throughput and memory use (see [Backend](#backend) below). Per-policy behavior is configured separately under [Policy](#policy).
 
 ```yaml
 orb:
   backends:
+    snmp_discovery:
+      ingest_buffer_size: 512
     common:
       diode:
         target: grpc://127.0.0.1:8080/diode
         client_id: ${DIODE_CLIENT_ID}
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
-    snmp_discovery:
 ```
+
+### Backend
+Backend-level settings apply to the `snmp_discovery` process as a whole (distinct from per-policy `config`).
+
+| Parameter | Type | Required | Description |
+|:---------:|:----:|:--------:|:-----------:|
+| ingest_buffer_size | integer | no | Capacity of the buffered queue that serializes Diode ingest calls. Defaults to `512`. |
+
+Diode ingest runs through a single-consumer queue so concurrent crawl jobs finishing at once do not trigger concurrent OAuth token refresh storms. Increase `ingest_buffer_size` when large subnet bursts may enqueue many payloads before the consumer drains them; decrease it if memory is a concern — each queued request retains its entity payload until processed.
 
 ## Policy
 SNMP discovery policies are broken down into two subsections: `config` and `scope`.

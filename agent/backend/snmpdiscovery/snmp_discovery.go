@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,15 +24,16 @@ import (
 var _ backend.Backend = (*snmpDiscoveryBackend)(nil)
 
 const (
-	versionTimeout      = 2
-	capabilitiesTimeout = 5
-	readinessBackoff    = 10
-	applyPolicyTimeout  = 10
-	removePolicyTimeout = 20
-	statusTimeout       = 5
-	defaultExec         = "snmp-discovery"
-	defaultAPIHost      = "localhost"
-	defaultAPIPort      = "8070"
+	versionTimeout          = 2
+	capabilitiesTimeout     = 5
+	readinessBackoff        = 10
+	applyPolicyTimeout      = 10
+	removePolicyTimeout     = 20
+	statusTimeout           = 5
+	defaultExec             = "snmp-discovery"
+	defaultAPIHost          = "localhost"
+	defaultAPIPort          = "8070"
+	defaultIngestBufferSize = 512
 )
 
 type snmpDiscoveryBackend struct {
@@ -52,6 +54,7 @@ type snmpDiscoveryBackend struct {
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
 	diodeLogLevel        string
+	ingestBufferSize     int
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -74,6 +77,36 @@ func Register() bool {
 	return true
 }
 
+func parseIngestBufferSize(v any) (int, error) {
+	var n int
+
+	switch val := v.(type) {
+	case int:
+		n = val
+	case int64:
+		n = int(val)
+	case float64:
+		if val != float64(int64(val)) {
+			return 0, fmt.Errorf("ingest_buffer_size must be a whole number, got %v", val)
+		}
+		n = int(val)
+	case string:
+		parsed, err := strconv.Atoi(val)
+		if err != nil {
+			return 0, fmt.Errorf("ingest_buffer_size: invalid integer %q: %w", val, err)
+		}
+		n = parsed
+	default:
+		return 0, fmt.Errorf("ingest_buffer_size must be an integer, got %T", v)
+	}
+
+	if n < 1 {
+		return 0, fmt.Errorf("ingest_buffer_size must be >= 1, got %d", n)
+	}
+
+	return n, nil
+}
+
 func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
@@ -89,6 +122,15 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.apiPort = fmt.Sprintf("%v", port)
 	} else {
 		d.apiPort = defaultAPIPort
+	}
+
+	d.ingestBufferSize = defaultIngestBufferSize
+	if v, prs := config["ingest_buffer_size"]; prs {
+		size, err := parseIngestBufferSize(v)
+		if err != nil {
+			return fmt.Errorf("snmp_discovery: %w", err)
+		}
+		d.ingestBufferSize = size
 	}
 
 	d.diodeTarget = common.Diode.Target
@@ -157,6 +199,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		"--host", d.apiHost,
 		"--port", d.apiPort,
+		"--ingest-buffer-size", fmt.Sprintf("%d", d.ingestBufferSize),
 	}
 	if d.diodeDryRun {
 		dOptions = append([]string{
