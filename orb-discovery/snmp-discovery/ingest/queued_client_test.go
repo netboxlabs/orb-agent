@@ -103,6 +103,61 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func newTestQueuedClient(inner diode.Client, bufferSize int, callTimeout time.Duration) *QueuedClient {
+	c := &QueuedClient{
+		inner:       inner,
+		logger:      testLogger(),
+		requests:    make(chan *ingestRequest, bufferSize),
+		callTimeout: callTimeout,
+		shutdownCh:  make(chan struct{}),
+		done:        make(chan struct{}),
+	}
+	go c.consumer()
+	return c
+}
+
+type hangUntilContextClient struct{}
+
+func (h *hangUntilContextClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (h *hangUntilContextClient) IngestProto(ctx context.Context, entities []*diodepb.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	return h.Ingest(ctx, nil, opts...)
+}
+
+func (h *hangUntilContextClient) Close() error {
+	return nil
+}
+
+func TestExecuteAppliesDefaultCallTimeout(t *testing.T) {
+	inner := &hangUntilContextClient{}
+	client := newTestQueuedClient(inner, 1, 50*time.Millisecond)
+	t.Cleanup(func() {
+		require.NoError(t, client.Close())
+	})
+
+	_, err := client.Ingest(context.Background(), nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestExecuteRespectsCallerDeadline(t *testing.T) {
+	inner := &hangUntilContextClient{}
+	client := newTestQueuedClient(inner, 1, time.Minute)
+	t.Cleanup(func() {
+		require.NoError(t, client.Close())
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := client.Ingest(ctx, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestNewQueuedClientInvalidBufferSize(t *testing.T) {
 	inner := newCountingClient()
 

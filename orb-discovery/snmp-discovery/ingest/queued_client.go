@@ -6,10 +6,18 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 )
+
+// defaultIngestCallTimeout is applied when callers pass a context with no deadline.
+// Derived from Grafana production diode-ingester Ingest latency
+// (rpc_server_duration_milliseconds, 7d): p50 ~5ms, mean ~190ms, p99 ~938ms,
+// max histogram bucket 10s. Set to 3× the max bucket so hung calls fail instead
+// of blocking the single consumer indefinitely.
+const defaultIngestCallTimeout = 30 * time.Second
 
 // ErrIngestQueueClosed is returned when an ingest request cannot be enqueued
 // because the queued client is shutting down or has been closed.
@@ -29,9 +37,10 @@ type ingestRequest struct {
 // QueuedClient serializes ingest calls to an inner diode.Client through a
 // buffered channel consumed by a single goroutine.
 type QueuedClient struct {
-	inner    diode.Client
-	logger   *slog.Logger
-	requests chan *ingestRequest
+	inner       diode.Client
+	logger      *slog.Logger
+	requests    chan *ingestRequest
+	callTimeout time.Duration
 	// shutdownCh is closed (never written to) to broadcast shutdown to all waiters.
 	shutdownCh chan struct{}
 	closeOnce  sync.Once
@@ -46,11 +55,12 @@ func NewQueuedClient(inner diode.Client, bufferSize int, logger *slog.Logger) (d
 	}
 
 	c := &QueuedClient{
-		inner:      inner,
-		logger:     logger,
-		requests:   make(chan *ingestRequest, bufferSize),
-		shutdownCh: make(chan struct{}),
-		done:       make(chan struct{}),
+		inner:       inner,
+		logger:      logger,
+		requests:    make(chan *ingestRequest, bufferSize),
+		callTimeout: defaultIngestCallTimeout,
+		shutdownCh:  make(chan struct{}),
+		done:        make(chan struct{}),
 	}
 	go c.consumer()
 	return c, nil
@@ -97,7 +107,14 @@ func (c *QueuedClient) shutdownSignaled() bool {
 }
 
 func (c *QueuedClient) execute(req *ingestRequest) {
-	resp, err := req.run(req.ctx)
+	ctx := req.ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.callTimeout)
+		defer cancel()
+	}
+
+	resp, err := req.run(ctx)
 	select {
 	case req.result <- ingestResult{resp: resp, err: err}:
 	default:
