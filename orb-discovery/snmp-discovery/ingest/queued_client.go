@@ -29,12 +29,14 @@ type ingestRequest struct {
 // QueuedClient serializes ingest calls to an inner diode.Client through a
 // buffered channel consumed by a single goroutine.
 type QueuedClient struct {
-	inner      diode.Client
-	logger     *slog.Logger
-	requests   chan *ingestRequest
+	inner    diode.Client
+	logger   *slog.Logger
+	requests chan *ingestRequest
+	// shutdownCh is closed (never written to) to broadcast shutdown to all waiters.
 	shutdownCh chan struct{}
 	closeOnce  sync.Once
-	done       chan struct{}
+	// done is closed by the consumer goroutine when it exits; Close waits on it.
+	done chan struct{}
 }
 
 // NewQueuedClient wraps inner with a buffered queue and single consumer goroutine.
@@ -58,6 +60,8 @@ func (c *QueuedClient) consumer() {
 	defer close(c.done)
 
 	for {
+		// Non-blocking check: Close may have run during execute() on the prior
+		// iteration. The select below handles shutdown while blocked for work.
 		if c.shutdownSignaled() {
 			c.drainPendingFailures()
 			return
@@ -65,6 +69,8 @@ func (c *QueuedClient) consumer() {
 
 		select {
 		case req := <-c.requests:
+			// Re-check after dequeue: shutdown may have started while the request
+			// sat in the buffer; fail it instead of executing after Close.
 			if c.shutdownSignaled() {
 				c.deliverFailure(req)
 				c.drainPendingFailures()
@@ -78,6 +84,9 @@ func (c *QueuedClient) consumer() {
 	}
 }
 
+// shutdownSignaled reports whether Close has started without blocking. Enqueue
+// and the consumer use this for fast-path checks; blocking waits still select
+// on shutdownCh directly so they wake as soon as Close closes the channel.
 func (c *QueuedClient) shutdownSignaled() bool {
 	select {
 	case <-c.shutdownCh:
@@ -106,6 +115,8 @@ func (c *QueuedClient) enqueue(
 		result: make(chan ingestResult, 1),
 	}
 
+	// Fast-path reject when shutdown already started; the select below handles
+	// the race where Close runs while we wait for queue space.
 	if c.shutdownSignaled() {
 		return nil, ErrIngestQueueClosed
 	}

@@ -94,6 +94,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Wrap the real diode client so concurrent crawl jobs serialize ingest through
+	// a single consumer, avoiding OAuth re-auth storms.
 	client, err = ingest.NewQueuedClient(client, *ingestBufferSize, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error creating ingest queue client: %v\n", err)
@@ -101,10 +103,10 @@ func main() {
 	}
 	logger.Info("ingest queue configured", "buffer_size", *ingestBufferSize)
 
-	ctx := context.Background()
+	rootCtx, cancelFunc := context.WithCancel(context.Background())
 
 	if otelEndpoint != nil && *otelEndpoint != "" {
-		if err := metrics.SetupMetricsExport(ctx, logger, *otelEndpoint, *otelExportPeriod); err != nil {
+		if err := metrics.SetupMetricsExport(rootCtx, logger, *otelEndpoint, *otelExportPeriod); err != nil {
 			logger.Error("failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
@@ -117,7 +119,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	policyManager, err := policy.NewManager(ctx, logger, client, manufacturers)
+	policyManager, err := policy.NewManager(rootCtx, logger, client, manufacturers)
 	if err != nil {
 		logger.Error("failed to create policy manager", "error", err)
 		os.Exit(1)
@@ -126,7 +128,6 @@ func main() {
 
 	// handle signals
 	done := make(chan bool, 1)
-	rootCtx, cancelFunc := context.WithCancel(context.Background())
 
 	go func() {
 		sigs := make(chan os.Signal, 1)
@@ -136,14 +137,15 @@ func main() {
 			case <-sigs:
 				logger.Warn("stop signal received, stopping snmp-discovery")
 				server.Stop()
-				// Shutdown metrics
-				if err := metrics.Shutdown(ctx); err != nil {
+				// Cancel policy/runner context before closing the ingest queue so
+				// in-flight Diode calls can abort instead of blocking shutdown.
+				cancelFunc()
+				if err := metrics.Shutdown(rootCtx); err != nil {
 					logger.Error("failed to shutdown metrics", "error", err)
 				}
 				if err := client.Close(); err != nil {
 					logger.Error("failed to close ingest client", "error", err)
 				}
-				cancelFunc()
 			case <-rootCtx.Done():
 				logger.Warn("main context cancelled")
 				done <- true
@@ -158,13 +160,13 @@ func main() {
 		if err, ok := <-serverErrCh; ok && err != nil {
 			logger.Error("snmp-discovery server encountered an error", "error", err)
 			server.Stop()
-			if shutdownErr := metrics.Shutdown(ctx); shutdownErr != nil {
+			cancelFunc()
+			if shutdownErr := metrics.Shutdown(rootCtx); shutdownErr != nil {
 				logger.Error("failed to shutdown metrics", "error", shutdownErr)
 			}
 			if closeErr := client.Close(); closeErr != nil {
 				logger.Error("failed to close ingest client", "error", closeErr)
 			}
-			cancelFunc()
 		}
 	}()
 
