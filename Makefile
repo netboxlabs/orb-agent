@@ -10,14 +10,15 @@ BUILD_DIR ?= build
 CGO_ENABLED ?= 0
 GOARCH ?= $(shell go env GOARCH)
 GOOS ?= $(shell go env GOOS)
-ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || git describe --tags --match 'v[0-9]*' --always 2>/dev/null || echo dev)}")
+# CI sets BUILD_VERSION (release) or writes agent/version/BUILD_VERSION.txt
+# (develop/PR). A bare local build has neither, so it is stamped local-<sha> to
+# make clear it was built locally — distinct from a develop or release image.
+ORB_VERSION ?= $(shell echo "$${BUILD_VERSION:-$$(cat agent/version/BUILD_VERSION.txt 2>/dev/null || echo local-$$(git rev-parse --short HEAD 2>/dev/null || echo unknown))}")
 COMMIT_HASH = $(shell git rev-parse --short HEAD)
 COMMIT_BRANCH = $(shell branch=$$(git rev-parse --abbrev-ref HEAD); if [ "$$branch" = "HEAD" ]; then branch=$${GITHUB_HEAD_REF:-$$GITHUB_REF_NAME}; fi; echo "$${branch:-unknown}")
 VERSION_PKG = github.com/netboxlabs/orb-agent/agent/version
 EXTRA_LDFLAGS ?=
 LDFLAGS ?= -X $(VERSION_PKG).buildVersion=$(ORB_VERSION) -X $(VERSION_PKG).buildBranch=$(COMMIT_BRANCH) $(EXTRA_LDFLAGS)
-OTEL_COLLECTOR_CONTRIB_VERSION ?= 0.91.0
-OTEL_CONTRIB_URL ?= "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v$(OTEL_COLLECTOR_CONTRIB_VERSION)/otelcol-contrib_$(OTEL_COLLECTOR_CONTRIB_VERSION)_$(GOOS)_$(GOARCH).tar.gz"
 # Backend versions stamped into the from-source image (latest <backend>/v* tag);
 # without these the from-source backends report 0.0.0. List the tags rather than
 # `git describe` so the result does not depend on the tag being reachable from
@@ -36,29 +37,32 @@ BACKEND_VERSION_ARGS = --build-arg NETWORK_DISCOVERY_VERSION=$(ND_VERSION) --bui
 # `work` target below re-enables it explicitly for generating the file.
 export GOWORK = off
 
-# Make targets operate on the agent (a single module), so never use a local
-# go.work — workspace mode is incompatible with the -mod=mod build flow. The
-# `work` target below re-enables it explicitly for generating the file.
-export GOWORK = off
+# Discovery backends, grouped by toolchain — used by the *-all aggregate targets.
+GO_BACKENDS = network-discovery snmp-discovery gnmi-discovery
+PY_BACKENDS = device-discovery worker
 
 .PHONY: agent agent_bin
 
 clean:
 	rm -rf ${BUILD_DIR}
 
-cleandocker:
-	# Stops containers and removes containers, networks, volumes, and images created by up
-#	docker-compose -f docker/docker-compose.yml down --rmi all -v --remove-orphans
-	docker-compose -f docker/docker-compose.yml down -v --remove-orphans
-
-ifdef pv
-	# Remove unused volumes
-	docker volume ls -f name=orb -f dangling=true -q | xargs -r docker volume rm
-endif
-
 .PHONY: install-dev-tools
+# Tool versions are pinned to match CI (.github/workflows) so local
+# lint-all/test-all reproduce the blocking CI jobs: golangci-lint v2.11.4 +
+# ruff 0.15.10 (lint.yaml), tparse v0.14.0 (tests.yaml) + gcov2lcov v1.1.1
+# (_backend-test-go.yaml). Keep these in sync when CI bumps them.
 install-dev-tools:
-	@go install github.com/mfridman/tparse@latest
+	@go install github.com/mfridman/tparse@v0.14.0
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.4
+	@go install github.com/jandelgado/gcov2lcov@v1.1.1
+	@for b in $(PY_BACKENDS); do \
+		echo ">> orb-discovery/$$b: venv + dev/test deps"; \
+		( cd orb-discovery/$$b && \
+		  { test -d .venv || python3 -m venv .venv; } && \
+		  . .venv/bin/activate && \
+		  pip install -q -e '.[dev,test]' && \
+		  pip install -q ruff==0.15.10 ) || exit 1; \
+	done
 
 .PHONY: deps
 deps:
@@ -74,7 +78,7 @@ work:
 	@echo "go.work created (git-ignored). Use 'GOWORK=off' for single-module commands."
 
 agent_bin:
-	echo "ORB_VERSION: $(ORB_VERSION)-$(COMMIT_HASH)"
+	echo "ORB_VERSION: $(ORB_VERSION)"
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOARM=$(GOARM) go build -mod=mod -ldflags="$(LDFLAGS)" -o ${BUILD_DIR}/orb-agent cmd/main.go
 
 .PHONY: test
@@ -109,13 +113,36 @@ lint:
 fix-lint:
 	@golangci-lint run ./... --config .github/golangci.yaml --fix
 
+.PHONY: lint-all
+lint-all: lint
+	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b lint || exit 1; done
+	@for b in $(PY_BACKENDS); do \
+		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
+		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check . ) || exit 1; \
+	done
+
+.PHONY: fix-lint-all
+fix-lint-all: fix-lint
+	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b fix-lint || exit 1; done
+	@for b in $(PY_BACKENDS); do \
+		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
+		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check --fix . ) || exit 1; \
+	done
+
+.PHONY: test-all
+test-all: test
+	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b test || exit 1; done
+	@for b in $(PY_BACKENDS); do \
+		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
+		( cd orb-discovery/$$b && . .venv/bin/activate && pytest ) || exit 1; \
+	done
+
 agent:
 	docker build --no-cache \
 	  --build-arg GOARCH=$(GOARCH) \
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
@@ -125,7 +152,6 @@ agent_fast:
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
@@ -142,7 +168,6 @@ agent_production:
 	  --build-arg PKTVISOR_TAG=$(PKTVISOR_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_REF_TAG) \
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION) \
-	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(ORB_VERSION)-$(COMMIT_HASH) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
 
@@ -152,11 +177,3 @@ agent_debug_production:
 	  --tag=$(ORB_DOCKERHUB_REPO)/orb-agent:$(PRODUCTION_AGENT_DEBUG_REF_TAG) \
 	  $(BACKEND_VERSION_ARGS) \
 	  -f agent/docker/Dockerfile .
-
-pull-latest-otel-collector-contrib:
-	wget -O ./agent/backend/otel/otelcol_contrib.tar.gz $(OTEL_CONTRIB_URL)
-	tar -xvf ./agent/backend/otel/otelcol_contrib.tar.gz -C ./agent/backend/otel/
-	cp ./agent/backend/otel/otelcol-contrib .
-	rm ./agent/backend/otel/otelcol_contrib.tar.gz
-	rm ./agent/backend/otel/LICENSE
-	rm ./agent/backend/otel/README.md
