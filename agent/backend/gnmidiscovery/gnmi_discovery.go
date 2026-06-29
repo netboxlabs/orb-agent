@@ -71,7 +71,8 @@ type info struct {
 	UpTimeMin float64 `json:"up_time_seconds"`
 }
 
-// Register registers the gNMI discovery backend
+// Register registers the gNMI discovery backend with the agent's backend
+// registry under the name "gnmi_discovery".
 func Register() bool {
 	backend.Register("gnmi_discovery", &gnmiDiscoveryBackend{
 		apiProtocol: "http",
@@ -80,6 +81,17 @@ func Register() bool {
 	return true
 }
 
+// configStringOrDefault returns the stringified value of config[name], or
+// fallback when the key is absent.
+func configStringOrDefault(config map[string]any, name, fallback string) string {
+	if value, ok := config[name]; ok {
+		return fmt.Sprintf("%v", value)
+	}
+	return fallback
+}
+
+// Configure stores the backend configuration, merging the per-backend config
+// map with the shared Diode/OTLP commons (per-backend keys take precedence).
 func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	config map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
@@ -87,15 +99,8 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.policyRepo = repo
 	d.diodeTargetFromOtel = false
 
-	var prs bool
-	if d.apiHost, prs = config["host"].(string); !prs {
-		d.apiHost = defaultAPIHost
-	}
-	if port, prs := config["port"]; prs {
-		d.apiPort = fmt.Sprintf("%v", port)
-	} else {
-		d.apiPort = defaultAPIPort
-	}
+	d.apiHost = configStringOrDefault(config, "host", defaultAPIHost)
+	d.apiPort = configStringOrDefault(config, "port", defaultAPIPort)
 
 	d.diodeTarget = common.Diode.Target
 	d.diodeClientID = common.Diode.ClientID
@@ -154,6 +159,7 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	return nil
 }
 
+// Version returns the running gnmi-discovery version from its REST status endpoint.
 func (d *gnmiDiscoveryBackend) Version() (string, error) {
 	var info info
 	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
@@ -165,58 +171,60 @@ func (d *gnmiDiscoveryBackend) Version() (string, error) {
 	return info.Version, nil
 }
 
+// buildArgs assembles the gnmi-discovery process arguments from the configured
+// options. Flags are order-independent, so they are appended in a single pass.
+func (d *gnmiDiscoveryBackend) buildArgs() []string {
+	args := []string{
+		"--diode-app-name-prefix", d.diodeAppNamePrefix,
+		"--host", d.apiHost,
+		"--port", d.apiPort,
+	}
+
+	if d.diodeDryRun {
+		args = append(args, "--dry-run", "--dry-run-output-dir", d.diodeDryRunOutputDir)
+	} else {
+		args = append(args, "--diode-target", d.diodeTarget)
+		if !d.diodeTargetFromOtel {
+			args = append(args,
+				"--diode-client-id", d.diodeClientID,
+				"--diode-client-secret", d.diodeClientSecret,
+			)
+		}
+	}
+
+	if d.diodeLogLevel != "" {
+		args = append(args, "--log-level", d.diodeLogLevel)
+		d.logger.Info("gnmi-discovery using log level", "log_level", d.diodeLogLevel)
+	}
+	if d.diodeOtelEndpoint != "" {
+		args = append(args, "--otel-endpoint", d.diodeOtelEndpoint)
+		d.logger.Info("gnmi-discovery using OTLP metrics endpoint", "endpoint", d.diodeOtelEndpoint)
+	}
+
+	// gNMI-specific options
+	if d.profilesDir != "" {
+		args = append(args, "--profiles-dir", d.profilesDir)
+		d.logger.Info("gnmi-discovery using profiles dir", "profiles_dir", d.profilesDir)
+	}
+	if d.otelExportPeriod != "" {
+		args = append(args, "--otel-export-period", d.otelExportPeriod)
+	}
+	if d.logFormat != "" {
+		args = append(args, "--log-format", d.logFormat)
+	}
+
+	return args
+}
+
+// Start launches the gnmi-discovery process, streams its logs to the agent
+// logger, and blocks until the process's REST API is ready — returning an error
+// if it exits early or never becomes ready.
 func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
 	d.startTime = time.Now()
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
-	dOptions := []string{
-		"--diode-app-name-prefix", d.diodeAppNamePrefix,
-		"--host", d.apiHost,
-		"--port", d.apiPort,
-	}
-	if d.diodeDryRun {
-		dOptions = append([]string{
-			"--dry-run",
-			"--dry-run-output-dir", d.diodeDryRunOutputDir,
-		}, dOptions...)
-	} else {
-		opts := []string{
-			"--diode-target", d.diodeTarget,
-		}
-		if !d.diodeTargetFromOtel {
-			opts = append(opts,
-				"--diode-client-id", d.diodeClientID,
-				"--diode-client-secret", d.diodeClientSecret,
-			)
-		}
-		dOptions = append(opts, dOptions...)
-	}
-
-	if d.diodeLogLevel != "" {
-		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
-		d.logger.Info("gnmi-discovery using log level",
-			"log_level", d.diodeLogLevel)
-	}
-
-	if d.diodeOtelEndpoint != "" {
-		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
-		d.logger.Info("gnmi-discovery using OTLP metrics endpoint",
-			"endpoint", d.diodeOtelEndpoint)
-	}
-
-	// gNMI-specific options
-	if d.profilesDir != "" {
-		dOptions = append(dOptions, "--profiles-dir", d.profilesDir)
-		d.logger.Info("gnmi-discovery using profiles dir", "profiles_dir", d.profilesDir)
-	}
-	if d.otelExportPeriod != "" {
-		dOptions = append(dOptions, "--otel-export-period", d.otelExportPeriod)
-	}
-	if d.logFormat != "" {
-		dOptions = append(dOptions, "--log-format", d.logFormat)
-	}
-
+	dOptions := d.buildArgs()
 	d.logger.Info("gnmi-discovery startup", "arguments", redact.Args(dOptions))
 
 	d.proc = backend.NewCmdOptions(backend.CmdOptions{
@@ -225,14 +233,10 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	}, d.exec, dOptions...)
 	d.statusChan = d.proc.Start()
 
-	// log STDOUT and STDERR lines streaming from Cmd
-	doneChan := make(chan struct{})
+	// Stream the process's stdout/stderr to the agent logger. A closed stream
+	// reads as (_, false); we nil it so the select then blocks only on the
+	// still-open stream, and the loop exits once both are closed (process gone).
 	go func() {
-		defer func() {
-			if doneChan != nil {
-				close(doneChan)
-			}
-		}()
 		stdout := d.proc.GetStdout()
 		stderr := d.proc.GetStderr()
 		for stdout != nil || stderr != nil {
@@ -306,6 +310,8 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	return nil
 }
 
+// logGnmiDiscoveryOutput logs one line of process output, parsing it as logfmt
+// (structured attrs + level) when possible and falling back to the raw line.
 func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(line string, fallback slog.Level) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
@@ -330,6 +336,7 @@ func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(line string, fallback slog
 	d.logger.LogAttrs(ctx, level, msg, attrs...)
 }
 
+// Stop gracefully stops the gnmi-discovery process and cancels the backend context.
 func (d *gnmiDiscoveryBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop gnmi-discovery", "routine", ctx.Value(config.ContextKey("routine")))
 	if d.cancelFunc != nil {
@@ -339,6 +346,7 @@ func (d *gnmiDiscoveryBackend) Stop(ctx context.Context) error {
 	return nil
 }
 
+// FullReset stops the gnmi-discovery process (if running) and starts it again.
 func (d *gnmiDiscoveryBackend) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
@@ -357,10 +365,12 @@ func (d *gnmiDiscoveryBackend) FullReset(ctx context.Context) error {
 	return nil
 }
 
+// GetStartTime returns the time the gnmi-discovery process was last started.
 func (d *gnmiDiscoveryBackend) GetStartTime() time.Time {
 	return d.startTime
 }
 
+// GetCapabilities returns the backend's capabilities from its REST endpoint.
 func (d *gnmiDiscoveryBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
 	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort)
@@ -372,6 +382,8 @@ func (d *gnmiDiscoveryBackend) GetCapabilities() (map[string]any, error) {
 	return caps, nil
 }
 
+// GetRunningStatus reports the process state, also verifying the REST API is
+// reachable when the process is running.
 func (d *gnmiDiscoveryBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
 	runningStatus, errMsg, err := backend.GetRunningStatus(d.proc)
@@ -387,10 +399,13 @@ func (d *gnmiDiscoveryBackend) GetRunningStatus() (backend.RunningStatus, string
 	return runningStatus, "", nil
 }
 
+// GetInitialState returns the backend's initial running state (Unknown).
 func (d *gnmiDiscoveryBackend) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
+// ApplyPolicy applies a policy via the REST API, removing the prior version
+// first when this is an update.
 func (d *gnmiDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
@@ -426,6 +441,8 @@ func (d *gnmiDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	return nil
 }
 
+// RemovePolicy deletes a policy by name via the REST API (using the previous
+// name when a policy was renamed).
 func (d *gnmiDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	d.logger.Debug("gnmi-discovery policy remove", "policy_id", data.ID)
 	var resp any
@@ -464,6 +481,8 @@ type gnmiStatusResponse struct {
 	} `json:"policies"`
 }
 
+// GetPolicyStatus returns per-policy run status from the REST status endpoint,
+// normalizing each run's singular target into the shared Targets slice.
 func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	var resp gnmiStatusResponse
 	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
@@ -500,6 +519,8 @@ func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error)
 	return policies, nil
 }
 
+// normalizeGnmiDiscoveryLine parses a logfmt line into (message, attrs, level),
+// returning ok=false when the line is not logfmt or has no message.
 func normalizeGnmiDiscoveryLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
 	fields, ok := parseGnmiDiscoveryLogfmt(line)
 	if !ok {
@@ -548,6 +569,8 @@ func normalizeGnmiDiscoveryLine(line string, fallback slog.Level) (string, []slo
 	return msg, attrs, level, true
 }
 
+// parseGnmiDiscoveryLevel maps a logfmt level string to an slog.Level,
+// returning ok=false for unknown levels.
 func parseGnmiDiscoveryLevel(value string) (slog.Level, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "debug":
@@ -563,6 +586,8 @@ func parseGnmiDiscoveryLevel(value string) (slog.Level, bool) {
 	}
 }
 
+// parseGnmiDiscoveryLogfmt parses a logfmt line into a key/value map,
+// returning ok=false if the line is empty or not valid logfmt.
 func parseGnmiDiscoveryLogfmt(line string) (map[string]string, bool) {
 	result := make(map[string]string)
 	runes := []rune(line)
@@ -604,6 +629,8 @@ func parseGnmiDiscoveryLogfmt(line string) (map[string]string, bool) {
 	return result, true
 }
 
+// readLogfmtValue reads a logfmt value (quoted or bare) starting at index
+// start, returning the value, the index after it, and ok.
 func readLogfmtValue(runes []rune, start int) (string, int, bool) {
 	length := len(runes)
 	if start >= length {
@@ -618,6 +645,8 @@ func readLogfmtValue(runes []rune, start int) (string, int, bool) {
 	}
 }
 
+// readQuotedValue reads a quoted logfmt value (handling backslash escapes)
+// starting at the opening quote, returning ok=false if it is unterminated.
 func readQuotedValue(runes []rune, start int) (string, int, bool) {
 	length := len(runes)
 	quote := runes[start]
@@ -645,6 +674,8 @@ func readQuotedValue(runes []rune, start int) (string, int, bool) {
 	return "", length, false
 }
 
+// readUnquotedValue reads a bare (space-delimited) logfmt value starting at
+// index start, returning the value and the index after the trailing spaces.
 func readUnquotedValue(runes []rune, start int) (string, int, bool) {
 	length := len(runes)
 	index := start
