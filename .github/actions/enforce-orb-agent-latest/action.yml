@@ -1,0 +1,84 @@
+name: Enforce orb-agent as "Latest"
+description: >-
+  Ensure only the orb-agent release holds the repository's "Latest" badge.
+  Demotes the backend release just published (make_latest=false) and positively
+  re-asserts the highest orb-agent vX.Y.Z release as Latest. GitHub otherwise
+  awards "Latest" to the highest-semver release, which a backend (tagged
+  <app>/v*) can eventually outrank or transiently steal on publish.
+
+inputs:
+  backend-tag:
+    description: 'Tag of the backend release just published, to demote (e.g. device-discovery/v1.2.3).'
+    required: true
+  token:
+    description: 'Token with contents: write on the repo (typically secrets.GITHUB_TOKEN).'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Demote backend, re-assert orb-agent as Latest
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        BACKEND_TAG: ${{ inputs.backend-tag }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        # gh release edit retries: semantic-release has just created the release,
+        # which may not be editable for a moment. It resolves the slashed backend
+        # tag (e.g. device-discovery/v1.2.3) itself.
+        edit_with_retry() {
+          local tag="$1"; shift
+          local attempt
+          for attempt in 1 2 3 4 5; do
+            if gh release edit "$tag" --repo "$REPO" "$@"; then
+              return 0
+            fi
+            echo "Release '$tag' not editable yet (attempt $attempt/5); retrying in 3s..."
+            sleep 3
+          done
+          return 1
+        }
+
+        # 1) The backend release must never hold "Latest".
+        if ! edit_with_retry "$BACKEND_TAG" --latest=false; then
+          echo "::error::Failed to set make_latest=false on '$BACKEND_TAG' after 5 attempts."
+          exit 1
+        fi
+        echo "Marked '$BACKEND_TAG' as not latest (make_latest=false)."
+
+        # 2) Positively re-assert the highest PUBLISHED orb-agent vX.Y.Z release
+        #    as Latest, so the agent owns the badge regardless of version
+        #    ordering. Draft and pre-release agent releases are excluded (a
+        #    release-prep draft/prerelease must not win Latest, and GitHub
+        #    rejects --latest on them). The `gh release list` call is retried and
+        #    fails loudly — its failure is never swallowed into an empty result;
+        #    only a grep no-match (no agent release yet) is tolerated.
+        releases=""
+        listed=""
+        for attempt in 1 2 3 4 5; do
+          if releases=$(gh release list --repo "$REPO" --limit 1000 \
+              --json tagName,isDraft,isPrerelease \
+              --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName'); then
+            listed=1
+            break
+          fi
+          echo "gh release list failed (attempt $attempt/5); retrying in 3s..."
+          sleep 3
+        done
+        if [ -z "$listed" ]; then
+          echo "::error::gh release list failed after 5 attempts; cannot re-assert orb-agent as Latest."
+          exit 1
+        fi
+        agent_tag=$(printf '%s\n' "$releases" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+        if [ -z "$agent_tag" ]; then
+          echo "::warning::No published orb-agent vX.Y.Z release found to mark as Latest; backend demotion still applied."
+          exit 0
+        fi
+        if ! edit_with_retry "$agent_tag" --latest; then
+          echo "::error::Failed to mark '$agent_tag' as Latest after 5 attempts."
+          exit 1
+        fi
+        echo "Re-asserted '$agent_tag' as Latest."

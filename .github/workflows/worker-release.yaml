@@ -121,7 +121,8 @@ jobs:
 
   semantic-release:
     name: Semantic release
-    needs: build
+    needs: [build, get-next-version]
+    if: needs.get-next-version.outputs.new-release-published == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -143,3 +144,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
         run: npx semantic-release --debug
+      - name: Ensure only orb-agent holds the "Latest" badge
+        uses: ./.github/actions/enforce-orb-agent-latest
+        with:
+          backend-tag: ${{ env.APP_NAME }}/v${{ needs.get-next-version.outputs.new-release-version }}
+          token: ${{ secrets.GITHUB_TOKEN }}
