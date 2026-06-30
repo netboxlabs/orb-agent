@@ -421,4 +421,3 @@ func (d *networkDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, err
 	}
 	return resp.Policies, nil
 }
-

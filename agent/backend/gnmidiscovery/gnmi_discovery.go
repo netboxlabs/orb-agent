@@ -497,4 +497,3 @@ func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error)
 	}
 	return policies, nil
 }
-
