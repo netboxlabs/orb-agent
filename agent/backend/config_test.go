@@ -52,6 +52,56 @@ func TestConfigStringOrDefault(t *testing.T) {
 	}
 }
 
+func TestConfigValueOrDefault(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		config   map[string]any
+		key      string
+		fallback string
+		want     string
+	}{
+		{
+			name:     "int present (YAML-parsed port)",
+			config:   map[string]any{"port": 8073},
+			key:      "port",
+			fallback: "8080",
+			want:     "8073",
+		},
+		{
+			name:     "string present",
+			config:   map[string]any{"port": "9090"},
+			key:      "port",
+			fallback: "8080",
+			want:     "9090",
+		},
+		{
+			name:     "key absent",
+			config:   map[string]any{},
+			key:      "port",
+			fallback: "8080",
+			want:     "8080",
+		},
+		{
+			name:     "null value present stringifies (matches the old fmt.Sprintf reads)",
+			config:   map[string]any{"port": nil},
+			key:      "port",
+			fallback: "8080",
+			want:     "<nil>",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := ConfigValueOrDefault(tc.config, tc.key, tc.fallback)
+			if got != tc.want {
+				t.Errorf("ConfigValueOrDefault(%v, %q, %q) = %q; want %q",
+					tc.config, tc.key, tc.fallback, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConfigBoolOrDefault(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

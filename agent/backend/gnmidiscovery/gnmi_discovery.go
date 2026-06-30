@@ -63,9 +63,7 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 func (d *gnmiDiscoveryBackend) configureExtra(config map[string]any) error {
 	d.profilesDir = backend.ConfigStringOrDefault(config, "profiles_dir", "")
 	d.logFormat = backend.ConfigStringOrDefault(config, "log_format", "")
-	if period, prs := config["otel_export_period"]; prs {
-		d.otelExportPeriod = fmt.Sprintf("%v", period)
-	}
+	d.otelExportPeriod = backend.ConfigValueOrDefault(config, "otel_export_period", "")
 	return nil
 }
 

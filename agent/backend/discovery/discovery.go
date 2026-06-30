@@ -100,11 +100,9 @@ func (d *Base) Configure(config map[string]any, common config.BackendCommons) er
 	d.APIHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
 	// The default port differs per backend (network 8073 / snmp 8070 / device
 	// 8072 / gnmi 8075), so the embedder pre-seeds APIPort with its default in
-	// Register(); the base only overrides it when an explicit port is configured.
-	// A configured port may be a YAML number, so stringify whatever is present.
-	if port, prs := config["port"]; prs {
-		d.APIPort = fmt.Sprintf("%v", port)
-	}
+	// Register(); passing that seeded value as the fallback keeps it when no port
+	// is configured, and stringifies whatever (number or string) is configured.
+	d.APIPort = backend.ConfigValueOrDefault(config, "port", d.APIPort)
 
 	if d.ConfigureExtra != nil {
 		if err := d.ConfigureExtra(config); err != nil {

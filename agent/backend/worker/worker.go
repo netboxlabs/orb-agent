@@ -112,11 +112,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	d.debug = common.Debug
 
 	d.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
-	if port, prs := config["port"]; prs {
-		d.apiPort = fmt.Sprintf("%v", port)
-	} else {
-		d.apiPort = defaultAPIPort
-	}
+	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
 	d.diodeTarget = common.Diode.Target
 	d.diodeClientID = common.Diode.ClientID
