@@ -81,11 +81,12 @@ func Register() bool {
 	return true
 }
 
-// configStringOrDefault returns the stringified value of config[name], or
-// fallback when the key is absent.
+// configStringOrDefault returns config[name] when it is a string, otherwise
+// fallback. A missing key, a YAML null, or a non-string value (number/bool)
+// falls back rather than being coerced to a literal like "<nil>" or "true".
 func configStringOrDefault(config map[string]any, name, fallback string) string {
-	if value, ok := config[name]; ok {
-		return fmt.Sprintf("%v", value)
+	if value, ok := config[name].(string); ok {
+		return value
 	}
 	return fallback
 }
@@ -100,33 +101,25 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.diodeTargetFromOtel = false
 
 	d.apiHost = configStringOrDefault(config, "host", defaultAPIHost)
-	d.apiPort = configStringOrDefault(config, "port", defaultAPIPort)
+	// port may be given as a YAML number, so stringify whatever is present.
+	if port, ok := config["port"]; ok {
+		d.apiPort = fmt.Sprintf("%v", port)
+	} else {
+		d.apiPort = defaultAPIPort
+	}
 
-	d.diodeTarget = common.Diode.Target
-	d.diodeClientID = common.Diode.ClientID
-	d.diodeClientSecret = common.Diode.ClientSecret
-	d.diodeAppNamePrefix = common.Diode.AgentName
+	// String options fall back to the shared Diode commons when unset.
+	d.diodeTarget = configStringOrDefault(config, "target", common.Diode.Target)
+	d.diodeClientID = configStringOrDefault(config, "client_id", common.Diode.ClientID)
+	d.diodeClientSecret = configStringOrDefault(config, "client_secret", common.Diode.ClientSecret)
+	d.diodeAppNamePrefix = configStringOrDefault(config, "agent_name", common.Diode.AgentName)
+	d.diodeDryRunOutputDir = configStringOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
+
 	d.diodeDryRun = common.Diode.DryRun
-	d.diodeDryRunOutputDir = common.Diode.DryRunOutputDir
-
-	if target, prs := config["target"].(string); prs {
-		d.diodeTarget = target
-	}
-	if clientID, prs := config["client_id"].(string); prs {
-		d.diodeClientID = clientID
-	}
-	if clientSecret, prs := config["client_secret"].(string); prs {
-		d.diodeClientSecret = clientSecret
-	}
-	if agentName, prs := config["agent_name"].(string); prs {
-		d.diodeAppNamePrefix = agentName
-	}
 	if dryRun, prs := config["dry_run"].(bool); prs {
 		d.diodeDryRun = dryRun
 	}
-	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
-		d.diodeDryRunOutputDir = dryRunOutputDir
-	}
+
 	if logLevel, prs := config["log_level"].(string); prs {
 		d.diodeLogLevel = logLevel
 	} else if debug, prs := config["debug"].(bool); prs && debug {
@@ -136,14 +129,10 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	}
 
 	// gNMI-specific options
-	if profilesDir, prs := config["profiles_dir"].(string); prs {
-		d.profilesDir = profilesDir
-	}
+	d.profilesDir = configStringOrDefault(config, "profiles_dir", "")
+	d.logFormat = configStringOrDefault(config, "log_format", "")
 	if period, prs := config["otel_export_period"]; prs {
 		d.otelExportPeriod = fmt.Sprintf("%v", period)
-	}
-	if logFormat, prs := config["log_format"].(string); prs {
-		d.logFormat = logFormat
 	}
 
 	if common.Otlp.Grpc != "" {
