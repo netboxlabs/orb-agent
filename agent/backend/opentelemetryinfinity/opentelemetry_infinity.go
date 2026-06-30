@@ -73,10 +73,7 @@ func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	o.logger = logger.With("backend", "opentelemetry_infinity")
 	o.policyRepo = repo
 
-	var prs bool
-	if o.apiHost, prs = config["host"].(string); !prs {
-		o.apiHost = defaultAPIHost
-	}
+	o.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
 	if port, prs := config["port"]; prs {
 		o.apiPort = fmt.Sprintf("%v", port)
 	} else {
