@@ -72,11 +72,7 @@ func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	o.policyRepo = repo
 
 	o.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
-	if port, prs := config["port"]; prs {
-		o.apiPort = fmt.Sprintf("%v", port)
-	} else {
-		o.apiPort = defaultAPIPort
-	}
+	o.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 	o.agentLabels = common.Otlp.AgentLabels
 
 	return nil
