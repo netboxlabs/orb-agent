@@ -50,6 +50,9 @@ func (f *fakeCommander) Stop() error {
 		if !f.finalSent {
 			f.finalSent = true
 			f.statusCh <- CmdStatus{PID: f.pid, Complete: true, Exit: 0}
+			close(f.statusCh)
+			close(f.stdoutCh)
+			close(f.stderrCh)
 		}
 		f.mu.Unlock()
 	}
