@@ -158,7 +158,13 @@ def translate_device(
         "site": defaults.site,
         "tags": tags,
         "location": location,
-        "rack": Rack(name=defaults.rack, site=defaults.site) if defaults.rack else None,
+        # Attach the location to the rack too: without it NetBox has no
+        # site+location+name key to match on and duplicates the rack.
+        # `location` is None when no location default is set, leaving the rack's
+        # location unset (site+name only) as before.
+        "rack": Rack(name=defaults.rack, site=defaults.site, location=location)
+        if defaults.rack
+        else None,
         "tenant": translate_tenant(defaults.tenant),
         "description": description,
         "comments": comments,

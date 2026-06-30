@@ -179,11 +179,25 @@ def test_translate_device_asset_tag_none_by_default(sample_device_info, sample_d
 
 
 def test_translate_device_with_rack(sample_device_info, sample_defaults):
-    """Ensure device is associated with rack, reusing defaults.site."""
+    """Ensure device is associated with rack, reusing defaults.site and location."""
     sample_defaults.rack = "Rack-01"
     device = translate_device(sample_device_info, sample_defaults)
     assert device.rack.name == "Rack-01"
     assert device.rack.site.name == "New York"
+    # The location default must be attached to the rack too, with its site
+    # embedded so NetBox can match on site+location+name.
+    assert device.rack.location.name == "local"
+    assert device.rack.location.site.name == "New York"
+
+
+def test_translate_device_rack_without_location(sample_device_info, sample_defaults):
+    """Rack carries no location when no location default is set (site+name only)."""
+    sample_defaults.rack = "Rack-01"
+    sample_defaults.location = None
+    device = translate_device(sample_device_info, sample_defaults)
+    assert device.rack.name == "Rack-01"
+    assert device.rack.site.name == "New York"
+    assert not device.rack.HasField("location")
 
 
 def test_translate_device_rack_none_by_default(sample_device_info, sample_defaults):
