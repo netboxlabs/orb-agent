@@ -22,7 +22,7 @@ const (
 )
 
 type gnmiDiscoveryBackend struct {
-	discovery.DiscoveryBase
+	discovery.Base
 
 	// gNMI-specific options
 	profilesDir      string
@@ -34,10 +34,10 @@ type gnmiDiscoveryBackend struct {
 // registry under the name "gnmi_discovery".
 func Register() bool {
 	b := &gnmiDiscoveryBackend{
-		DiscoveryBase: discovery.DiscoveryBase{
+		Base: discovery.Base{
 			Exec:           defaultExec,
-			ApiProtocol:    "http",
-			ApiPort:        defaultAPIPort,
+			APIProtocol:    "http",
+			APIPort:        defaultAPIPort,
 			NameHyphen:     "gnmi-discovery",
 			NameUnderscore: "gnmi_discovery",
 		},
@@ -54,7 +54,7 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 ) error {
 	d.Logger = logger.With("backend", "gnmi_discovery")
 	d.PolicyRepo = repo
-	return d.DiscoveryBase.Configure(config, common)
+	return d.Base.Configure(config, common)
 }
 
 // configureExtra parses the gnmi-specific profiles_dir, log_format, and
@@ -74,8 +74,8 @@ func (d *gnmiDiscoveryBackend) configureExtra(config map[string]any) error {
 func (d *gnmiDiscoveryBackend) buildArgs() []string {
 	args := []string{
 		"--diode-app-name-prefix", d.DiodeAppNamePrefix,
-		"--host", d.ApiHost,
-		"--port", d.ApiPort,
+		"--host", d.APIHost,
+		"--port", d.APIPort,
 	}
 
 	if d.DiodeDryRun {
@@ -173,7 +173,7 @@ type gnmiStatusResponse struct {
 // normalizing each run's singular target into the shared Targets slice.
 func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	var resp gnmiStatusResponse
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.ApiProtocol, d.ApiHost, d.ApiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.APIProtocol, d.APIHost, d.APIPort)
 	err := backend.CommonRequest("gnmi-discovery", d.Proc, d.Logger, url, &resp, http.MethodGet,
 		http.NoBody, "application/json", discovery.StatusTimeout, "detail")
 	if err != nil {

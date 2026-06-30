@@ -30,7 +30,7 @@ var errConfigureExtra = errors.New("configure-extra boom")
 // testBackend is a synthetic embedder mirroring how the real diode backends will
 // embed DiscoveryBase: it wires the three func-field hooks to its own methods.
 type testBackend struct {
-	discovery.DiscoveryBase
+	discovery.Base
 	configureExtraErr   error
 	configureExtraCalls int
 	logLines            []string
@@ -39,11 +39,11 @@ type testBackend struct {
 func newTestBackend(logger *slog.Logger) *testBackend {
 	b := &testBackend{}
 	b.Logger = logger
-	b.ApiProtocol = "http"
+	b.APIProtocol = "http"
 	b.Exec = "discovery-test-exec"
 	b.NameHyphen = "discovery-test"
 	b.NameUnderscore = "discovery_test"
-	b.ApiPort = "9999" // embedder default, overridden only when config["port"] is present
+	b.APIPort = "9999" // embedder default, overridden only when config["port"] is present
 
 	b.BuildArgs = b.buildArgs
 	b.LogLine = b.logLineAdapter
@@ -54,8 +54,8 @@ func newTestBackend(logger *slog.Logger) *testBackend {
 func (b *testBackend) buildArgs() []string {
 	args := []string{
 		"--diode-app-name-prefix", b.DiodeAppNamePrefix,
-		"--host", b.ApiHost,
-		"--port", b.ApiPort,
+		"--host", b.APIHost,
+		"--port", b.APIPort,
 	}
 	if b.DiodeDryRun {
 		args = append([]string{"--dry-run", "--dry-run-output-dir", b.DiodeDryRunOutputDir}, args...)
@@ -166,8 +166,8 @@ func runningBackend(t *testing.T, logger *slog.Logger, server *httptest.Server) 
 	require.NoError(t, err)
 
 	b := newTestBackend(logger)
-	b.ApiHost = serverURL.Hostname()
-	b.ApiPort = serverURL.Port()
+	b.APIHost = serverURL.Hostname()
+	b.APIPort = serverURL.Port()
 
 	// A running mock so CommonRequest's GetRunningStatus reports Running.
 	mockCmd := &mocks.MockCmd{}
@@ -198,8 +198,8 @@ func TestDiscoveryBaseConfigure(t *testing.T) {
 		"log_level":     "debug",
 	}, commons))
 
-	assert.Equal(t, "example.com", b.ApiHost)
-	assert.Equal(t, "8080", b.ApiPort, "numeric port must be stringified")
+	assert.Equal(t, "example.com", b.APIHost)
+	assert.Equal(t, "8080", b.APIPort, "numeric port must be stringified")
 	assert.Equal(t, "cfg-target", b.DiodeTarget)
 	assert.Equal(t, "cfg-client", b.DiodeClientID)
 	assert.Equal(t, "cfg-secret", b.DiodeClientSecret)
@@ -228,8 +228,8 @@ func TestDiscoveryBaseConfigureFallsBackToCommons(t *testing.T) {
 
 	require.NoError(t, b.Configure(map[string]any{}, commons))
 
-	assert.Equal(t, "localhost", b.ApiHost, "missing host falls back to default")
-	assert.Equal(t, "9999", b.ApiPort, "missing port keeps the embedder default")
+	assert.Equal(t, "localhost", b.APIHost, "missing host falls back to default")
+	assert.Equal(t, "9999", b.APIPort, "missing port keeps the embedder default")
 	assert.Equal(t, "commons-target", b.DiodeTarget)
 	assert.Equal(t, "commons-client", b.DiodeClientID)
 	assert.True(t, b.DiodeDryRun)
@@ -251,8 +251,8 @@ func TestDiscoveryBaseConfigureOtelTargetFromOtel(t *testing.T) {
 }
 
 func TestDiscoveryBaseConfigureExtraErrorAbortsBeforeOtelLog(t *testing.T) {
-	cap := &captureHandler{}
-	logger := slog.New(cap)
+	capture := &captureHandler{}
+	logger := slog.New(capture)
 	b := newTestBackend(logger)
 	b.configureExtraErr = errConfigureExtra
 
@@ -262,7 +262,7 @@ func TestDiscoveryBaseConfigureExtraErrorAbortsBeforeOtelLog(t *testing.T) {
 	err := b.Configure(map[string]any{}, commons)
 	require.ErrorIs(t, err, errConfigureExtra)
 	assert.Equal(t, 1, b.configureExtraCalls)
-	assert.False(t, cap.hasAttr("endpoint", "otel:4317"),
+	assert.False(t, capture.hasAttr("endpoint", "otel:4317"),
 		"ConfigureExtra error must abort before the OTLP-endpoint log")
 }
 
@@ -325,13 +325,13 @@ func TestDiscoveryBaseRemovePolicyUsesPreviousName(t *testing.T) {
 // backend id: with no running process, CommonRequest emits its skip-warn carrying
 // the hyphen name as the "backend" attr.
 func TestDiscoveryBaseNameFormHyphen(t *testing.T) {
-	cap := &captureHandler{}
-	logger := slog.New(cap)
+	capture := &captureHandler{}
+	logger := slog.New(capture)
 	b := newTestBackend(logger)
 	b.Proc = nil // not running => CommonRequest logs the skip-warn
 
 	_, _ = b.Version()
-	assert.True(t, cap.hasAttr("backend", "discovery-test"),
+	assert.True(t, capture.hasAttr("backend", "discovery-test"),
 		"CommonRequest must receive the hyphen name form as its backend id")
 }
 
@@ -346,11 +346,11 @@ func TestDiscoveryBaseNameFormUnderscore(t *testing.T) {
 
 	createExecutable(t, "discovery-test-exec")
 
-	cap := &captureHandler{}
-	logger := slog.New(cap)
+	capture := &captureHandler{}
+	logger := slog.New(capture)
 	b := newTestBackend(logger)
-	b.ApiHost = serverURL.Hostname()
-	b.ApiPort = serverURL.Port()
+	b.APIHost = serverURL.Hostname()
+	b.APIPort = serverURL.Port()
 
 	mockCmd := &mocks.MockCmd{}
 	mocks.SetupSuccessfulProcess(mockCmd, 12345)
@@ -361,7 +361,7 @@ func TestDiscoveryBaseNameFormUnderscore(t *testing.T) {
 
 	require.NoError(t, b.Start(ctx, cancel))
 	require.NoError(t, b.Stop(ctx))
-	assert.True(t, cap.hasAttr("backend", "discovery_test"),
+	assert.True(t, capture.hasAttr("backend", "discovery_test"),
 		"StopProcess must receive the underscore name form as its backend tag")
 }
 
@@ -374,8 +374,8 @@ func TestDiscoveryBaseStart(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	b := newTestBackend(logger)
-	b.ApiHost = serverURL.Hostname()
-	b.ApiPort = serverURL.Port()
+	b.APIHost = serverURL.Hostname()
+	b.APIPort = serverURL.Port()
 	b.DiodeTarget = "t"
 	b.DiodeClientID = "c"
 	b.DiodeClientSecret = "s"

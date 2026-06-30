@@ -27,7 +27,7 @@ type StartSpec struct {
 	NameUnderscore string // underscore form passed only to StopProcess (e.g. "network_discovery")
 	Exec           string
 	Args           []string
-	LogLine        func(line string, isStderr bool) // per-backend normalizer adapter
+	LogLine        func(line string, isStderr bool)  // per-backend normalizer adapter
 	SetProc        func(Commander, <-chan CmdStatus) // publishes proc+statusChan to the backend BEFORE the readiness loop (see CRITICAL below)
 	ReadinessCheck func() (string, error)            // returns the version string + err; d.Version fits directly; pktvisor wraps an inline /metrics/app probe returning appMetrics.App.Version
 }

@@ -1,11 +1,11 @@
-// Package discovery provides DiscoveryBase, the shared state and lifecycle/REST
+// Package discovery provides Base, the shared state and lifecycle/REST
 // machinery embedded by the diode discovery backends (network/snmp/device/gnmi).
 //
-// DiscoveryBase owns the behavior that is identical across those backends —
+// Base owns the behavior that is identical across those backends —
 // Configure, Start, Stop, FullReset, the REST helpers (Version, GetCapabilities,
 // GetRunningStatus, ApplyPolicy, RemovePolicy, GetPolicyStatus) and lifecycle
 // bookkeeping — while three exported func-field hooks (BuildArgs, LogLine,
-// ConfigureExtra) absorb the per-backend divergences. Because DiscoveryBase lives
+// ConfigureExtra) absorb the per-backend divergences. Because Base lives
 // in its own package and the hook bodies stay in the embedder packages, every
 // field or hook those packages read or write is exported (Go does not promote
 // unexported fields across packages).
@@ -40,11 +40,11 @@ const (
 	defaultAPIHost = "localhost"
 )
 
-// DiscoveryBase holds the shared state and lifecycle/REST methods embedded by the
+// Base holds the shared state and lifecycle/REST methods embedded by the
 // diode discovery backends. Fields and hooks the embedder packages touch are
 // exported; statusChan/cancelFunc/startTime stay unexported (only base methods
 // use them).
-type DiscoveryBase struct {
+type Base struct {
 	Logger *slog.Logger
 	// PolicyRepo is set by each embedder's Configure (mirroring the canonical
 	// backends). It is exported so the embedder packages can write it; no base
@@ -52,9 +52,9 @@ type DiscoveryBase struct {
 	PolicyRepo policies.PolicyRepo
 	Exec       string
 
-	ApiHost     string
-	ApiPort     string
-	ApiProtocol string
+	APIHost     string
+	APIPort     string
+	APIProtocol string
 
 	DiodeTarget          string
 	DiodeClientID        string
@@ -94,16 +94,16 @@ type DiscoveryBase struct {
 // with the shared Diode/OTLP commons (per-backend keys take precedence). The
 // ConfigureExtra hook runs early so per-backend validation aborts before the OTLP
 // log; the OTLP-endpoint/target-from-otel block is shared base logic.
-func (d *DiscoveryBase) Configure(config map[string]any, common config.BackendCommons) error {
+func (d *Base) Configure(config map[string]any, common config.BackendCommons) error {
 	d.DiodeTargetFromOtel = false
 
-	d.ApiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
+	d.APIHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
 	// The default port differs per backend (network 8073 / snmp 8070 / device
-	// 8072 / gnmi 8075), so the embedder pre-seeds ApiPort with its default in
+	// 8072 / gnmi 8075), so the embedder pre-seeds APIPort with its default in
 	// Register(); the base only overrides it when an explicit port is configured.
 	// A configured port may be a YAML number, so stringify whatever is present.
 	if port, prs := config["port"]; prs {
-		d.ApiPort = fmt.Sprintf("%v", port)
+		d.APIPort = fmt.Sprintf("%v", port)
 	}
 
 	if d.ConfigureExtra != nil {
@@ -141,9 +141,9 @@ func (d *DiscoveryBase) Configure(config map[string]any, common config.BackendCo
 }
 
 // Version returns the running backend version from its REST status endpoint.
-func (d *DiscoveryBase) Version() (string, error) {
+func (d *Base) Version() (string, error) {
 	var info info
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.ApiProtocol, d.ApiHost, d.ApiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.APIProtocol, d.APIHost, d.APIPort)
 	err := backend.CommonRequest(d.NameHyphen, d.Proc, d.Logger, url, &info, http.MethodGet,
 		http.NoBody, "application/json", versionTimeout, "detail")
 	if err != nil {
@@ -154,7 +154,7 @@ func (d *DiscoveryBase) Version() (string, error) {
 
 // Start launches the backend process via backend.StartProcess, streaming its logs
 // through the LogLine hook and blocking until its REST API is ready.
-func (d *DiscoveryBase) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
+func (d *Base) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
 	d.startTime = time.Now()
 	d.cancelFunc = cancelFunc
 	d.Ctx = ctx
@@ -178,7 +178,7 @@ func (d *DiscoveryBase) Start(ctx context.Context, cancelFunc context.CancelFunc
 }
 
 // Stop gracefully stops the backend process and cancels the backend context.
-func (d *DiscoveryBase) Stop(ctx context.Context) error {
+func (d *Base) Stop(ctx context.Context) error {
 	d.Logger.Info("routine call to stop "+d.NameHyphen, "routine", ctx.Value(config.ContextKey("routine")))
 	if d.cancelFunc != nil {
 		defer d.cancelFunc()
@@ -188,7 +188,7 @@ func (d *DiscoveryBase) Stop(ctx context.Context) error {
 }
 
 // FullReset stops the backend process (if running) and starts it again.
-func (d *DiscoveryBase) FullReset(ctx context.Context) error {
+func (d *Base) FullReset(ctx context.Context) error {
 	// force a stop, which stops scrape as well. if proc is dead, it no ops.
 	if state, _, _ := backend.GetRunningStatus(d.Proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
@@ -207,14 +207,14 @@ func (d *DiscoveryBase) FullReset(ctx context.Context) error {
 }
 
 // GetStartTime returns the time the backend process was last started.
-func (d *DiscoveryBase) GetStartTime() time.Time {
+func (d *Base) GetStartTime() time.Time {
 	return d.startTime
 }
 
 // GetCapabilities returns the backend's capabilities from its REST endpoint.
-func (d *DiscoveryBase) GetCapabilities() (map[string]any, error) {
+func (d *Base) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
-	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.ApiProtocol, d.ApiHost, d.ApiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.APIProtocol, d.APIHost, d.APIPort)
 	err := backend.CommonRequest(d.NameHyphen, d.Proc, d.Logger, url, &caps, http.MethodGet,
 		http.NoBody, "application/json", capabilitiesTimeout, "detail")
 	if err != nil {
@@ -225,7 +225,7 @@ func (d *DiscoveryBase) GetCapabilities() (map[string]any, error) {
 
 // GetRunningStatus reports the process state, also verifying the REST API is
 // reachable when the process is running.
-func (d *DiscoveryBase) GetRunningStatus() (backend.RunningStatus, string, error) {
+func (d *Base) GetRunningStatus() (backend.RunningStatus, string, error) {
 	// first check process status
 	runningStatus, errMsg, err := backend.GetRunningStatus(d.Proc)
 	// if it's not running, we're done
@@ -241,13 +241,13 @@ func (d *DiscoveryBase) GetRunningStatus() (backend.RunningStatus, string, error
 }
 
 // GetInitialState returns the backend's initial running state (Unknown).
-func (d *DiscoveryBase) GetInitialState() backend.RunningStatus {
+func (d *Base) GetInitialState() backend.RunningStatus {
 	return backend.Unknown
 }
 
 // ApplyPolicy applies a policy via the REST API, removing the prior version first
 // when this is an update.
-func (d *DiscoveryBase) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
+func (d *Base) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := d.RemovePolicy(data); err != nil {
@@ -271,7 +271,7 @@ func (d *DiscoveryBase) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 	}
 
 	var resp map[string]any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/%s", d.ApiProtocol, d.ApiHost, d.ApiPort, "policies")
+	url := fmt.Sprintf("%s://%s:%s/api/v1/%s", d.APIProtocol, d.APIHost, d.APIPort, "policies")
 	err = backend.CommonRequest(d.NameHyphen, d.Proc, d.Logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
@@ -285,7 +285,7 @@ func (d *DiscoveryBase) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 // RemovePolicy deletes a policy by name via the REST API (using the previous name
 // when a policy was renamed). The name is path-escaped before being placed in the
 // request URL.
-func (d *DiscoveryBase) RemovePolicy(data policies.PolicyData) error {
+func (d *Base) RemovePolicy(data policies.PolicyData) error {
 	d.Logger.Debug(d.NameHyphen+" policy remove", "policy_id", data.ID)
 	var resp any
 	name := data.Name
@@ -293,7 +293,7 @@ func (d *DiscoveryBase) RemovePolicy(data policies.PolicyData) error {
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.ApiProtocol, d.ApiHost, d.ApiPort, neturl.PathEscape(name))
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.APIProtocol, d.APIHost, d.APIPort, neturl.PathEscape(name))
 	err := backend.CommonRequest(d.NameHyphen, d.Proc, d.Logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
@@ -303,9 +303,9 @@ func (d *DiscoveryBase) RemovePolicy(data policies.PolicyData) error {
 }
 
 // GetPolicyStatus returns per-policy run status from the REST status endpoint.
-func (d *DiscoveryBase) GetPolicyStatus() ([]backend.PolicyStatus, error) {
+func (d *Base) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	var resp backend.StatusResponse
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.ApiProtocol, d.ApiHost, d.ApiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.APIProtocol, d.APIHost, d.APIPort)
 	err := backend.CommonRequest(d.NameHyphen, d.Proc, d.Logger, url, &resp, http.MethodGet,
 		http.NoBody, "application/json", StatusTimeout, "detail")
 	if err != nil {

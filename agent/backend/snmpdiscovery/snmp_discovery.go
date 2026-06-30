@@ -23,17 +23,17 @@ const (
 )
 
 type snmpDiscoveryBackend struct {
-	discovery.DiscoveryBase
+	discovery.Base
 	ingestBufferSize int
 }
 
 // Register registers the snmp discovery backend
 func Register() bool {
 	b := &snmpDiscoveryBackend{
-		DiscoveryBase: discovery.DiscoveryBase{
+		Base: discovery.Base{
 			Exec:           defaultExec,
-			ApiProtocol:    "http",
-			ApiPort:        defaultAPIPort,
+			APIProtocol:    "http",
+			APIPort:        defaultAPIPort,
 			NameHyphen:     "snmp-discovery",
 			NameUnderscore: "snmp_discovery",
 		},
@@ -50,7 +50,7 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 ) error {
 	d.Logger = logger.With("backend", "snmp_discovery")
 	d.PolicyRepo = repo
-	return d.DiscoveryBase.Configure(config, common)
+	return d.Base.Configure(config, common)
 }
 
 // configureExtra parses and validates the snmp-specific ingest_buffer_size key.
@@ -102,8 +102,8 @@ func parseIngestBufferSize(v any) (int, error) {
 func (d *snmpDiscoveryBackend) buildArgs() []string {
 	dOptions := []string{
 		"--diode-app-name-prefix", d.DiodeAppNamePrefix,
-		"--host", d.ApiHost,
-		"--port", d.ApiPort,
+		"--host", d.APIHost,
+		"--port", d.APIPort,
 		"--ingest-buffer-size", fmt.Sprintf("%d", d.ingestBufferSize),
 	}
 	if d.DiodeDryRun {

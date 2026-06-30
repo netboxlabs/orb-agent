@@ -20,16 +20,16 @@ const (
 )
 
 type networkDiscoveryBackend struct {
-	discovery.DiscoveryBase
+	discovery.Base
 }
 
 // Register registers the network discovery backend
 func Register() bool {
 	b := &networkDiscoveryBackend{
-		DiscoveryBase: discovery.DiscoveryBase{
+		Base: discovery.Base{
 			Exec:           defaultExec,
-			ApiProtocol:    "http",
-			ApiPort:        defaultAPIPort,
+			APIProtocol:    "http",
+			APIPort:        defaultAPIPort,
 			NameHyphen:     "network-discovery",
 			NameUnderscore: "network_discovery",
 		},
@@ -45,14 +45,14 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 ) error {
 	d.Logger = logger.With("backend", "network_discovery")
 	d.PolicyRepo = repo
-	return d.DiscoveryBase.Configure(config, common)
+	return d.Base.Configure(config, common)
 }
 
 func (d *networkDiscoveryBackend) buildArgs() []string {
 	dOptions := []string{
 		"--diode-app-name-prefix", d.DiodeAppNamePrefix,
-		"--host", d.ApiHost,
-		"--port", d.ApiPort,
+		"--host", d.APIHost,
+		"--port", d.APIPort,
 	}
 	if d.DiodeDryRun {
 		dOptions = append([]string{

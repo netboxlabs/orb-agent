@@ -20,16 +20,16 @@ const (
 )
 
 type deviceDiscoveryBackend struct {
-	discovery.DiscoveryBase
+	discovery.Base
 }
 
 // Register registers the device discovery backend.
 func Register() bool {
 	b := &deviceDiscoveryBackend{
-		DiscoveryBase: discovery.DiscoveryBase{
+		Base: discovery.Base{
 			Exec:           defaultExec,
-			ApiProtocol:    "http",
-			ApiPort:        defaultAPIPort,
+			APIProtocol:    "http",
+			APIPort:        defaultAPIPort,
 			NameHyphen:     "device-discovery",
 			NameUnderscore: "device_discovery",
 		},
@@ -46,14 +46,14 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 ) error {
 	d.Logger = logger.With("backend", "device_discovery")
 	d.PolicyRepo = repo
-	return d.DiscoveryBase.Configure(config, common)
+	return d.Base.Configure(config, common)
 }
 
 func (d *deviceDiscoveryBackend) buildArgs() []string {
 	dOptions := []string{
 		"--diode-app-name-prefix", d.DiodeAppNamePrefix,
-		"--host", d.ApiHost,
-		"--port", d.ApiPort,
+		"--host", d.APIHost,
+		"--port", d.APIPort,
 	}
 	if d.DiodeDryRun {
 		dOptions = append([]string{
