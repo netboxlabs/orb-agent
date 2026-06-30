@@ -107,7 +107,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	o.logger.Info("opentelemetry infinity startup", "arguments", pvOptions)
 
-	return backend.StartProcess(ctx, backend.StartSpec{
+	return backend.StartProcess(backend.StartSpec{
 		Logger:         o.logger,
 		NameDisplay:    "opentelemetry infinity",
 		NameUnderscore: "opentelemetry_infinity",

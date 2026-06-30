@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -101,6 +100,31 @@ func testProcessLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
+func TestStartProcess_RequiredFieldsValidated(t *testing.T) {
+	noop := func(string, bool) {}
+	setProc := func(Commander, <-chan CmdStatus) {}
+	ready := func() (string, error) { return "", nil }
+	full := StartSpec{Logger: testProcessLogger(), SetProc: setProc, LogLine: noop, ReadinessCheck: ready}
+
+	tests := []struct {
+		name string
+		spec StartSpec
+	}{
+		{"missing logger", func() StartSpec { s := full; s.Logger = nil; return s }()},
+		{"missing setProc", func() StartSpec { s := full; s.SetProc = nil; return s }()},
+		{"missing logLine", func() StartSpec { s := full; s.LogLine = nil; return s }()},
+		{"missing readinessCheck", func() StartSpec { s := full; s.ReadinessCheck = nil; return s }()},
+		{"zero spec", StartSpec{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := StartProcess(tc.spec)
+			require.Error(t, err, "a missing required callback must error, not panic or spawn")
+			assert.Contains(t, err.Error(), "required")
+		})
+	}
+}
+
 func TestStartProcess_Success(t *testing.T) {
 	stubProcessTimers(t)
 
@@ -124,7 +148,7 @@ func TestStartProcess_Success(t *testing.T) {
 		stderrLines []string
 	)
 
-	err := StartProcess(context.Background(), StartSpec{
+	err := StartProcess(StartSpec{
 		Logger:         testProcessLogger(),
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
@@ -182,7 +206,7 @@ func TestStartProcess_SetProcBeforeReadiness(t *testing.T) {
 		readinessCalls atomic.Int32
 	)
 
-	err := StartProcess(context.Background(), StartSpec{
+	err := StartProcess(StartSpec{
 		Logger:         testProcessLogger(),
 		NameDisplay:    "guard",
 		NameUnderscore: "guard",
@@ -219,7 +243,7 @@ func TestStartProcess_StartupCompleteError(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- StartProcess(context.Background(), StartSpec{
+		done <- StartProcess(StartSpec{
 			Logger:         testProcessLogger(),
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
@@ -253,7 +277,7 @@ func TestStartProcess_StartupError(t *testing.T) {
 	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 5, Error: startupErr} }
 	stubNewCmdOptions(t, fake)
 
-	err := StartProcess(context.Background(), StartSpec{
+	err := StartProcess(StartSpec{
 		Logger:         testProcessLogger(),
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
@@ -292,7 +316,7 @@ func TestStartProcess_ProcessEndedDuringReadiness(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- StartProcess(context.Background(), StartSpec{
+		done <- StartProcess(StartSpec{
 			Logger:         testProcessLogger(),
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
@@ -330,7 +354,7 @@ func TestStartProcess_ReadinessTimeout(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- StartProcess(context.Background(), StartSpec{
+		done <- StartProcess(StartSpec{
 			Logger:         testProcessLogger(),
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
@@ -363,7 +387,7 @@ func TestStartProcess_PassesExecAndArgs(t *testing.T) {
 	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 1} }
 	captured := stubNewCmdOptions(t, fake)
 
-	err := StartProcess(context.Background(), StartSpec{
+	err := StartProcess(StartSpec{
 		Logger:         testProcessLogger(),
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",

@@ -206,7 +206,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 
 	d.logger.Info("worker startup", "arguments", redact.Args(dOptions))
 
-	return backend.StartProcess(ctx, backend.StartSpec{
+	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
 		NameDisplay:    "worker",
 		NameUnderscore: "worker",

@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"time"
@@ -63,8 +62,14 @@ type StartSpec struct {
 // "<name> startup / arguments" line — each backend keeps its own (it owns the
 // per-backend redaction). Returns only error — proc/statusChan are published via
 // SetProc, not the return (one source of truth). It owns ONLY the Start path;
-// callers keep their own Stop.
-func StartProcess(_ context.Context, spec StartSpec) error {
+// callers keep their own Stop. The startup wait and readiness backoff are not
+// cancellable (preserving the pre-refactor per-backend behavior), so it takes no
+// context.
+func StartProcess(spec StartSpec) error {
+	if spec.Logger == nil || spec.SetProc == nil || spec.LogLine == nil || spec.ReadinessCheck == nil {
+		return errors.New("StartProcess: Logger, SetProc, LogLine, and ReadinessCheck are required")
+	}
+
 	proc := NewCmdOptions(CmdOptions{
 		Buffered:  false,
 		Streaming: true,

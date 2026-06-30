@@ -125,7 +125,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	p.logger.Info("pktvisor startup", "arguments", pvOptions)
 
-	return backend.StartProcess(ctx, backend.StartSpec{
+	return backend.StartProcess(backend.StartSpec{
 		Logger:         p.logger,
 		NameDisplay:    "pktvisor",
 		NameUnderscore: "pktvisor",
