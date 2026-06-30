@@ -113,10 +113,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	d.diodeTargetFromOtel = false
 	d.debug = common.Debug
 
-	var prs bool
-	if d.apiHost, prs = config["host"].(string); !prs {
-		d.apiHost = defaultAPIHost
-	}
+	d.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
 	if port, prs := config["port"]; prs {
 		d.apiPort = fmt.Sprintf("%v", port)
 	} else {
