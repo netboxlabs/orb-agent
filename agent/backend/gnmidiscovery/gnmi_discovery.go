@@ -63,7 +63,6 @@ type gnmiDiscoveryBackend struct {
 	proc       backend.Commander
 	statusChan <-chan backend.CmdStatus
 	cancelFunc context.CancelFunc
-	ctx        context.Context
 }
 
 type info struct {
@@ -170,7 +169,10 @@ func (d *gnmiDiscoveryBackend) buildArgs() []string {
 	}
 
 	if d.diodeDryRun {
-		args = append(args, "--dry-run", "--dry-run-output-dir", d.diodeDryRunOutputDir)
+		args = append(args, "--dry-run")
+		if d.diodeDryRunOutputDir != "" {
+			args = append(args, "--dry-run-output-dir", d.diodeDryRunOutputDir)
+		}
 	} else {
 		args = append(args, "--diode-target", d.diodeTarget)
 		if !d.diodeTargetFromOtel {
@@ -211,7 +213,6 @@ func (d *gnmiDiscoveryBackend) buildArgs() []string {
 func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
 	d.startTime = time.Now()
 	d.cancelFunc = cancelFunc
-	d.ctx = ctx
 
 	dOptions := d.buildArgs()
 	d.logger.Info("gnmi-discovery startup", "arguments", redact.Args(dOptions))
@@ -235,13 +236,13 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 					stdout = nil
 					continue
 				}
-				d.logGnmiDiscoveryOutput(line, slog.LevelInfo)
+				d.logGnmiDiscoveryOutput(ctx, line, slog.LevelInfo)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				d.logGnmiDiscoveryOutput(line, slog.LevelError)
+				d.logGnmiDiscoveryOutput(ctx, line, slog.LevelError)
 			}
 		}
 	}()
@@ -301,7 +302,7 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 // logGnmiDiscoveryOutput logs one line of process output, parsing it as logfmt
 // (structured attrs + level) when possible and falling back to the raw line.
-func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(line string, fallback slog.Level) {
+func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(ctx context.Context, line string, fallback slog.Level) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return
@@ -317,7 +318,6 @@ func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(line string, fallback slog
 		level = parsedLevel
 	}
 
-	ctx := d.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
