@@ -258,10 +258,7 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	}
 
 	if status.Complete {
-		err := d.proc.Stop()
-		if err != nil {
-			d.logger.Error("proc.Stop error", "error", err)
-		}
+		backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "gnmi_discovery")
 		return errors.New("gnmi-discovery startup error, check log")
 	}
 
@@ -271,10 +268,7 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	var readinessErr error
 	for backoff := range readinessBackoff {
 		if status := d.proc.Status(); status.Complete {
-			err := d.proc.Stop()
-			if err != nil {
-				d.logger.Error("proc.Stop error", "error", err)
-			}
+			backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "gnmi_discovery")
 			return errors.New("gnmi-discovery process ended unexpectedly, check log")
 		}
 		version, readinessErr = d.Version()
@@ -290,10 +284,7 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	if readinessErr != nil {
 		d.logger.Error("gnmi-discovery error on readiness", "error", readinessErr)
-		err := d.proc.Stop()
-		if err != nil {
-			d.logger.Error("proc.Stop error", "error", err)
-		}
+		backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "gnmi_discovery")
 		return readinessErr
 	}
 
