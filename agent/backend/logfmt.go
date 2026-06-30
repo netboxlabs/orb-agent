@@ -10,10 +10,9 @@ import (
 // ok=false when the line is not logfmt or has no non-empty msg key; callers then
 // keep their fallback level and log the raw trimmed line as msg.
 // Contract: msg/level/time keys are removed from attrs; blank keys are skipped;
-// remaining attr keys are sorted alphabetically; level map is
-// debug→Debug, info→Info, warn|warning→Warn, error|err→Error, else not ok;
-// quoted values accept ' and " with backslash escapes; duplicate keys
-// last-writer-wins.
+// remaining attr keys are sorted alphabetically; level is parsed via ParseLogfmtLevel
+// (unknown levels keep the fallback); quoted values accept ' and " with backslash
+// escapes; duplicate keys last-writer-wins.
 func NormalizeLogfmtLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
 	fields, ok := parseLogfmt(line)
 	if !ok {
