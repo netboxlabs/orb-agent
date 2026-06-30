@@ -15,6 +15,10 @@ on:
         description: 'snmp-discovery version to bundle (X.Y.Z).'
         required: true
         type: string
+      gnmi-version:
+        description: 'gnmi-discovery version to bundle (X.Y.Z).'
+        required: true
+        type: string
       device-version:
         description: 'device-discovery version to bundle (X.Y.Z).'
         required: true
@@ -129,6 +133,7 @@ jobs:
             BUILD_TRACK=release
             NETWORK_DISCOVERY_VERSION=${{ inputs.network-version }}
             SNMP_DISCOVERY_VERSION=${{ inputs.snmp-version }}
+            GNMI_DISCOVERY_VERSION=${{ inputs.gnmi-version }}
             DEVICE_DISCOVERY_VERSION=${{ inputs.device-version }}
             WORKER_VERSION=${{ inputs.worker-version }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
