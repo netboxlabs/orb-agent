@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -209,6 +210,73 @@ func TestPktvisorGetRunningStatusAPIFailure(t *testing.T) {
 	assert.Equal(t, backend.BackendError, status, "Expected backend to report API failure")
 	assert.Equal(t, "process running, REST API unavailable", message)
 	assert.Error(t, err)
+	require.NoError(t, be.Stop(ctx))
+
+	mockCmd.AssertExpectations(t)
+}
+
+// TestPktvisorReadinessUsesReadinessTimeout proves the readiness probe uses the
+// 10s readinessTimeout, not the 2s versionTimeout. The first /api/v1/metrics/app
+// response is delayed 3s — longer than versionTimeout (2s), shorter than
+// readinessTimeout (10s). If the readiness path used the 2s version timeout the
+// HTTP client would abort the request and Start would fail; success proves the
+// probe is using the 10s timeout.
+func TestPktvisorReadinessUsesReadinessTimeout(t *testing.T) {
+	var metricsCalls atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/metrics/app" {
+			// Delay the very first readiness probe past versionTimeout (2s) but
+			// within readinessTimeout (10s).
+			if metricsCalls.Add(1) == 1 {
+				time.Sleep(3 * time.Second)
+			}
+			var response pktvisor.AppInfo
+			response.App.Version = "1.2.3"
+			w.WriteHeader(http.StatusOK)
+			require.NoError(t, json.NewEncoder(w).Encode(response))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte(`{}`))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	createExecutable(t, "pktvisord")
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12345)
+
+	overrideNewCmdOptions(t, mockCmd, nil)
+
+	assert.True(t, pktvisor.Register(), "Failed to register Pktvisor backend")
+
+	be := backend.GetBackend("pktvisor")
+
+	err = be.Configure(logger, repo, map[string]any{
+		"host": serverURL.Hostname(),
+		"port": serverURL.Port(),
+	}, config.BackendCommons{}, nil)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// With the 10s readiness timeout the 3s-delayed probe completes and Start
+	// succeeds on the first readiness attempt.
+	require.NoError(t, be.Start(ctx, cancel))
+	require.Equal(t, int32(1), metricsCalls.Load(),
+		"readiness must succeed on the first probe (proving the 10s timeout outlasts the 3s delay)")
 	require.NoError(t, be.Stop(ctx))
 
 	mockCmd.AssertExpectations(t)
