@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -28,7 +27,6 @@ const (
 	defaultAPIPort      = "10222"
 	versionTimeout      = 5
 	capabilitiesTimeout = 5
-	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	statusTimeout       = 5
@@ -99,7 +97,7 @@ func (o *openTelemetryBackend) Version() (string, error) {
 	return info.Version, nil
 }
 
-func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) (err error) {
+func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
 	o.startTime = time.Now()
 	o.cancelFunc = cancelFunc
 	o.ctx = ctx
@@ -113,91 +111,29 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	o.logger.Info("opentelemetry infinity startup", "arguments", pvOptions)
 
-	o.proc = backend.NewCmdOptions(backend.CmdOptions{
-		Buffered:  false,
-		Streaming: true,
-	}, o.exec, pvOptions...)
-	o.statusChan = o.proc.Start()
+	return backend.StartProcess(ctx, backend.StartSpec{
+		Logger:         o.logger,
+		NameDisplay:    "opentelemetry infinity",
+		NameUnderscore: "opentelemetry_infinity",
+		Exec:           o.exec,
+		Args:           pvOptions,
+		LogLine:        o.logLineAdapter,
+		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
+			o.proc = p
+			o.statusChan = ch
+		},
+		ReadinessCheck: o.Version,
+	})
+}
 
-	// log STDOUT and STDERR lines streaming from Cmd
-	doneChan := make(chan struct{})
-	go func() {
-		defer func() {
-			if doneChan != nil {
-				close(doneChan)
-			}
-		}()
-		stdout := o.proc.GetStdout()
-		stderr := o.proc.GetStderr()
-		for stdout != nil || stderr != nil {
-			select {
-			case line, open := <-stdout:
-				if !open {
-					stdout = nil
-					continue
-				}
-				o.logOpenTelemetryInfinityOutput(line, slog.LevelInfo)
-			case line, open := <-stderr:
-				if !open {
-					stderr = nil
-					continue
-				}
-				o.logOpenTelemetryInfinityOutput(line, slog.LevelError)
-			}
-		}
-	}()
-
-	// wait for simple startup errors
-	time.Sleep(time.Second)
-
-	status := o.proc.Status()
-
-	if status.Error != nil {
-		o.logger.Error("opentelemetry infinity startup error", "error", status.Error)
-		return status.Error
+// logLineAdapter routes a streamed stdout/stderr line to the otel output
+// normalizer with the level matching the source stream.
+func (o *openTelemetryBackend) logLineAdapter(line string, isStderr bool) {
+	level := slog.LevelInfo
+	if isStderr {
+		level = slog.LevelError
 	}
-
-	if status.Complete {
-		err := o.proc.Stop()
-		if err != nil {
-			o.logger.Error("proc.Stop error", "error", err)
-		}
-		return errors.New("opentelemetry infinity startup error, check log")
-	}
-
-	o.logger.Info("opentelemetry infinity process started", "pid", status.PID)
-
-	var version string
-	var readinessErr error
-	for backoff := range readinessBackoff {
-		if status := o.proc.Status(); status.Complete {
-			err := o.proc.Stop()
-			if err != nil {
-				o.logger.Error("proc.Stop error", "error", err)
-			}
-			return errors.New("opentelemetry infinity process ended unexpectedly, check log")
-		}
-		version, readinessErr = o.Version()
-		if readinessErr == nil {
-			o.logger.Info("opentelemetry infinity readiness ok, got version", "version", version)
-			break
-		}
-		backoffDuration := time.Duration(backoff) * time.Second
-		o.logger.Info("opentelemetry infinity is not ready, trying again with backoff",
-			"backoff backoffDuration", backoffDuration.String())
-		time.Sleep(backoffDuration)
-	}
-
-	if readinessErr != nil {
-		o.logger.Error("opentelemetry infinity error on readiness", "error", readinessErr)
-		err := o.proc.Stop()
-		if err != nil {
-			o.logger.Error("proc.Stop error", "error", err)
-		}
-		return readinessErr
-	}
-
-	return nil
+	o.logOpenTelemetryInfinityOutput(line, level)
 }
 
 func (o *openTelemetryBackend) Stop(ctx context.Context) error {
