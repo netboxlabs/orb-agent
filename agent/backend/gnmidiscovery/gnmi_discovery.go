@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	neturl "net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -303,7 +302,7 @@ func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(ctx context.Context, line 
 	attrs := []slog.Attr(nil)
 	level := fallback
 
-	if parsedMsg, parsedAttrs, parsedLevel, ok := normalizeGnmiDiscoveryLine(trimmed, fallback); ok {
+	if parsedMsg, parsedAttrs, parsedLevel, ok := backend.NormalizeLogfmtLine(trimmed, fallback); ok {
 		msg = parsedMsg
 		attrs = parsedAttrs
 		level = parsedLevel
@@ -499,172 +498,3 @@ func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error)
 	return policies, nil
 }
 
-// normalizeGnmiDiscoveryLine parses a logfmt line into (message, attrs, level),
-// returning ok=false when the line is not logfmt or has no message.
-func normalizeGnmiDiscoveryLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
-	fields, ok := parseGnmiDiscoveryLogfmt(line)
-	if !ok {
-		return "", nil, fallback, false
-	}
-
-	msg, ok := fields["msg"]
-	if !ok || strings.TrimSpace(msg) == "" {
-		return "", nil, fallback, false
-	}
-
-	level := fallback
-	if lvlValue, exists := fields["level"]; exists {
-		if parsedLevel, levelOK := parseGnmiDiscoveryLevel(lvlValue); levelOK {
-			level = parsedLevel
-		}
-	}
-
-	delete(fields, "msg")
-	delete(fields, "level")
-	delete(fields, "time")
-
-	if len(fields) == 0 {
-		return msg, nil, level, true
-	}
-
-	keys := make([]string, 0, len(fields))
-	for key := range fields {
-		if strings.TrimSpace(key) == "" {
-			continue
-		}
-		keys = append(keys, key)
-	}
-
-	if len(keys) == 0 {
-		return msg, nil, level, true
-	}
-
-	sort.Strings(keys)
-
-	attrs := make([]slog.Attr, 0, len(keys))
-	for _, key := range keys {
-		attrs = append(attrs, slog.String(key, fields[key]))
-	}
-
-	return msg, attrs, level, true
-}
-
-// parseGnmiDiscoveryLevel maps a logfmt level string to an slog.Level,
-// returning ok=false for unknown levels.
-func parseGnmiDiscoveryLevel(value string) (slog.Level, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "debug":
-		return slog.LevelDebug, true
-	case "info":
-		return slog.LevelInfo, true
-	case "warn", "warning":
-		return slog.LevelWarn, true
-	case "error", "err":
-		return slog.LevelError, true
-	default:
-		return 0, false
-	}
-}
-
-// parseGnmiDiscoveryLogfmt parses a logfmt line into a key/value map,
-// returning ok=false if the line is empty or not valid logfmt.
-func parseGnmiDiscoveryLogfmt(line string) (map[string]string, bool) {
-	result := make(map[string]string)
-	runes := []rune(line)
-	length := len(runes)
-	index := 0
-
-	for index < length {
-		for index < length && runes[index] == ' ' {
-			index++
-		}
-		if index >= length {
-			break
-		}
-
-		keyStart := index
-		for index < length && runes[index] != '=' && runes[index] != ' ' {
-			index++
-		}
-		if index >= length || runes[index] != '=' {
-			return nil, false
-		}
-
-		key := strings.TrimSpace(string(runes[keyStart:index]))
-		index++ // skip '='
-
-		value, nextIndex, ok := readLogfmtValue(runes, index)
-		if !ok {
-			return nil, false
-		}
-
-		result[key] = value
-		index = nextIndex
-	}
-
-	if len(result) == 0 {
-		return nil, false
-	}
-
-	return result, true
-}
-
-// readLogfmtValue reads a logfmt value (quoted or bare) starting at index
-// start, returning the value, the index after it, and ok.
-func readLogfmtValue(runes []rune, start int) (string, int, bool) {
-	length := len(runes)
-	if start >= length {
-		return "", start, true
-	}
-
-	switch runes[start] {
-	case '"', '\'':
-		return readQuotedValue(runes, start)
-	default:
-		return readUnquotedValue(runes, start)
-	}
-}
-
-// readQuotedValue reads a quoted logfmt value (handling backslash escapes)
-// starting at the opening quote, returning ok=false if it is unterminated.
-func readQuotedValue(runes []rune, start int) (string, int, bool) {
-	length := len(runes)
-	quote := runes[start]
-	index := start + 1
-	var builder strings.Builder
-
-	for index < length {
-		char := runes[index]
-		if char == '\\' && index+1 < length {
-			builder.WriteRune(runes[index+1])
-			index += 2
-			continue
-		}
-		if char == quote {
-			index++
-			for index < length && runes[index] == ' ' {
-				index++
-			}
-			return builder.String(), index, true
-		}
-		builder.WriteRune(char)
-		index++
-	}
-
-	return "", length, false
-}
-
-// readUnquotedValue reads a bare (space-delimited) logfmt value starting at
-// index start, returning the value and the index after the trailing spaces.
-func readUnquotedValue(runes []rune, start int) (string, int, bool) {
-	length := len(runes)
-	index := start
-	for index < length && runes[index] != ' ' {
-		index++
-	}
-	value := string(runes[start:index])
-	for index < length && runes[index] == ' ' {
-		index++
-	}
-	return value, index, true
-}
