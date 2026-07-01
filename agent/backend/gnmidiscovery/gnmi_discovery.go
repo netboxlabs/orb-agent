@@ -87,17 +87,17 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.policyRepo = repo
 	d.diodeTargetFromOtel = false
 
-	d.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
+	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
 	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
 	// String options fall back to the shared Diode commons when unset.
-	d.diodeTarget = backend.ConfigStringOrDefault(config, "target", common.Diode.Target)
-	d.diodeClientID = backend.ConfigStringOrDefault(config, "client_id", common.Diode.ClientID)
-	d.diodeClientSecret = backend.ConfigStringOrDefault(config, "client_secret", common.Diode.ClientSecret)
-	d.diodeAppNamePrefix = backend.ConfigStringOrDefault(config, "agent_name", common.Diode.AgentName)
-	d.diodeDryRunOutputDir = backend.ConfigStringOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
+	d.diodeTarget = backend.ConfigValueOrDefault(config, "target", common.Diode.Target)
+	d.diodeClientID = backend.ConfigValueOrDefault(config, "client_id", common.Diode.ClientID)
+	d.diodeClientSecret = backend.ConfigValueOrDefault(config, "client_secret", common.Diode.ClientSecret)
+	d.diodeAppNamePrefix = backend.ConfigValueOrDefault(config, "agent_name", common.Diode.AgentName)
+	d.diodeDryRunOutputDir = backend.ConfigValueOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
 
-	d.diodeDryRun = backend.ConfigBoolOrDefault(config, "dry_run", common.Diode.DryRun)
+	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", common.Diode.DryRun)
 
 	if logLevel, prs := config["log_level"].(string); prs {
 		d.diodeLogLevel = logLevel
@@ -108,8 +108,8 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	}
 
 	// gNMI-specific options
-	d.profilesDir = backend.ConfigStringOrDefault(config, "profiles_dir", "")
-	d.logFormat = backend.ConfigStringOrDefault(config, "log_format", "")
+	d.profilesDir = backend.ConfigValueOrDefault(config, "profiles_dir", "")
+	d.logFormat = backend.ConfigValueOrDefault(config, "log_format", "")
 	d.otelExportPeriod = backend.ConfigValueOrDefault(config, "otel_export_period", "")
 
 	if common.Otlp.Grpc != "" {

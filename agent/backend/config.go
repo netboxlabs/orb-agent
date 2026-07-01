@@ -2,32 +2,27 @@ package backend
 
 import "fmt"
 
-// ConfigStringOrDefault returns config[name] when it is a non-nil string,
-// otherwise it returns fallback.
-func ConfigStringOrDefault(config map[string]any, name, fallback string) string {
-	if v, ok := config[name].(string); ok {
-		return v
+// ConfigValueOrDefault returns config[name] as type T when the key is present
+// and holds a value of type T, otherwise it returns fallback.
+//
+// As a special case, when T is string and the present value is NOT already a
+// string (for example a YAML-numeric "port"), it is formatted with
+// fmt.Sprintf("%v", …) rather than dropped. bool and other typed reads stay
+// strict: a present value of the wrong type yields fallback.
+func ConfigValueOrDefault[T any](config map[string]any, name string, fallback T) T {
+	value, present := config[name]
+	if !present {
+		return fallback
 	}
-	return fallback
-}
-
-// ConfigValueOrDefault returns config[name] stringified via fmt.Sprintf("%v", …)
-// when the key is present, otherwise it returns fallback. Unlike
-// ConfigStringOrDefault it does not type-assert: it accepts any value type, which
-// matches reads of numeric-or-string keys such as "port" that YAML may decode as
-// an int or a string.
-func ConfigValueOrDefault(config map[string]any, name, fallback string) string {
-	if v, prs := config[name]; prs {
-		return fmt.Sprintf("%v", v)
+	if typed, ok := value.(T); ok {
+		return typed
 	}
-	return fallback
-}
-
-// ConfigBoolOrDefault returns config[name] when it is a bool,
-// otherwise it returns fallback.
-func ConfigBoolOrDefault(config map[string]any, name string, fallback bool) bool {
-	if v, ok := config[name].(bool); ok {
-		return v
+	// Present but not of type T. If a string was requested, coerce via %v so
+	// numeric-or-string keys (e.g. "port") read consistently as a string.
+	if _, wantString := any(fallback).(string); wantString {
+		if coerced, ok := any(fmt.Sprintf("%v", value)).(T); ok {
+			return coerced
+		}
 	}
 	return fallback
 }

@@ -111,7 +111,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	d.diodeTargetFromOtel = false
 	d.debug = common.Debug
 
-	d.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
+	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
 	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
 	d.diodeTarget = common.Diode.Target

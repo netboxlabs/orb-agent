@@ -78,7 +78,7 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	d.policyRepo = repo
 	d.diodeTargetFromOtel = false
 
-	d.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
+	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
 	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
 	d.diodeTarget = common.Diode.Target
@@ -100,7 +100,7 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	if agentName, prs := config["agent_name"].(string); prs {
 		d.diodeAppNamePrefix = agentName
 	}
-	d.diodeDryRun = backend.ConfigBoolOrDefault(config, "dry_run", d.diodeDryRun)
+	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", d.diodeDryRun)
 	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
 		d.diodeDryRunOutputDir = dryRunOutputDir
 	}

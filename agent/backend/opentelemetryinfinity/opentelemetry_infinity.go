@@ -71,7 +71,7 @@ func (o *openTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	o.logger = logger.With("backend", "opentelemetry_infinity")
 	o.policyRepo = repo
 
-	o.apiHost = backend.ConfigStringOrDefault(config, "host", defaultAPIHost)
+	o.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
 	o.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 	o.agentLabels = common.Otlp.AgentLabels
 

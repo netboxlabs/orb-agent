@@ -2,7 +2,7 @@ package backend
 
 import "testing"
 
-func TestConfigStringOrDefault(t *testing.T) {
+func TestConfigValueOrDefault_String(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
@@ -11,90 +11,17 @@ func TestConfigStringOrDefault(t *testing.T) {
 		fallback string
 		want     string
 	}{
-		{
-			name:     "string present",
-			config:   map[string]any{"host": "myhost"},
-			key:      "host",
-			fallback: "localhost",
-			want:     "myhost",
-		},
-		{
-			name:     "key absent",
-			config:   map[string]any{},
-			key:      "host",
-			fallback: "localhost",
-			want:     "localhost",
-		},
-		{
-			name:     "null value",
-			config:   map[string]any{"host": nil},
-			key:      "host",
-			fallback: "localhost",
-			want:     "localhost",
-		},
-		{
-			name:     "wrong type (int)",
-			config:   map[string]any{"host": 42},
-			key:      "host",
-			fallback: "localhost",
-			want:     "localhost",
-		},
+		{"string present", map[string]any{"host": "myhost"}, "host", "localhost", "myhost"},
+		{"key absent", map[string]any{}, "host", "localhost", "localhost"},
+		// Present-but-not-string values coerce via %v when a string is requested
+		// (this is what lets a YAML-numeric "port" read as a string).
+		{"int present coerces", map[string]any{"port": 8073}, "port", "8080", "8073"},
+		{"null present coerces to <nil>", map[string]any{"host": nil}, "host", "localhost", "<nil>"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := ConfigStringOrDefault(tc.config, tc.key, tc.fallback)
-			if got != tc.want {
-				t.Errorf("ConfigStringOrDefault(%v, %q, %q) = %q; want %q",
-					tc.config, tc.key, tc.fallback, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestConfigValueOrDefault(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name     string
-		config   map[string]any
-		key      string
-		fallback string
-		want     string
-	}{
-		{
-			name:     "int present (YAML-parsed port)",
-			config:   map[string]any{"port": 8073},
-			key:      "port",
-			fallback: "8080",
-			want:     "8073",
-		},
-		{
-			name:     "string present",
-			config:   map[string]any{"port": "9090"},
-			key:      "port",
-			fallback: "8080",
-			want:     "9090",
-		},
-		{
-			name:     "key absent",
-			config:   map[string]any{},
-			key:      "port",
-			fallback: "8080",
-			want:     "8080",
-		},
-		{
-			name:     "null value present stringifies (matches the old fmt.Sprintf reads)",
-			config:   map[string]any{"port": nil},
-			key:      "port",
-			fallback: "8080",
-			want:     "<nil>",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := ConfigValueOrDefault(tc.config, tc.key, tc.fallback)
-			if got != tc.want {
+			if got := ConfigValueOrDefault(tc.config, tc.key, tc.fallback); got != tc.want {
 				t.Errorf("ConfigValueOrDefault(%v, %q, %q) = %q; want %q",
 					tc.config, tc.key, tc.fallback, got, tc.want)
 			}
@@ -102,7 +29,7 @@ func TestConfigValueOrDefault(t *testing.T) {
 	}
 }
 
-func TestConfigBoolOrDefault(t *testing.T) {
+func TestConfigValueOrDefault_Bool(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
@@ -111,43 +38,35 @@ func TestConfigBoolOrDefault(t *testing.T) {
 		fallback bool
 		want     bool
 	}{
-		{
-			name:     "bool true present",
-			config:   map[string]any{"dry_run": true},
-			key:      "dry_run",
-			fallback: false,
-			want:     true,
-		},
-		{
-			name:     "bool false present",
-			config:   map[string]any{"dry_run": false},
-			key:      "dry_run",
-			fallback: true,
-			want:     false,
-		},
-		{
-			name:     "key absent",
-			config:   map[string]any{},
-			key:      "dry_run",
-			fallback: false,
-			want:     false,
-		},
-		{
-			name:     "wrong type (string)",
-			config:   map[string]any{"dry_run": "true"},
-			key:      "dry_run",
-			fallback: false,
-			want:     false,
-		},
+		{"bool true present", map[string]any{"dry_run": true}, "dry_run", false, true},
+		{"bool false present", map[string]any{"dry_run": false}, "dry_run", true, false},
+		{"key absent", map[string]any{}, "dry_run", false, false},
+		// A non-bool present value is NOT coerced for a bool read: strict, fallback.
+		{"wrong type falls back", map[string]any{"dry_run": "true"}, "dry_run", false, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := ConfigBoolOrDefault(tc.config, tc.key, tc.fallback)
-			if got != tc.want {
-				t.Errorf("ConfigBoolOrDefault(%v, %q, %v) = %v; want %v",
+			if got := ConfigValueOrDefault(tc.config, tc.key, tc.fallback); got != tc.want {
+				t.Errorf("ConfigValueOrDefault(%v, %q, %v) = %v; want %v",
 					tc.config, tc.key, tc.fallback, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestConfigValueOrDefault_PortIntOrString locks the behavior David asked about:
+// a single generic helper reads "port" whether YAML decoded it as an int
+// (unquoted) or a string (quoted), always yielding a string.
+func TestConfigValueOrDefault_PortIntOrString(t *testing.T) {
+	t.Parallel()
+	if got := ConfigValueOrDefault(map[string]any{"port": 8073}, "port", "8080"); got != "8073" {
+		t.Errorf("int port = %q; want %q", got, "8073")
+	}
+	if got := ConfigValueOrDefault(map[string]any{"port": "9090"}, "port", "8080"); got != "9090" {
+		t.Errorf("string port = %q; want %q", got, "9090")
+	}
+	if got := ConfigValueOrDefault(map[string]any{}, "port", "8080"); got != "8080" {
+		t.Errorf("absent port = %q; want %q", got, "8080")
 	}
 }
