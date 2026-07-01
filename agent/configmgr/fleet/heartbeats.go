@@ -9,6 +9,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
@@ -20,23 +21,31 @@ const (
 // heartbeatTickInterval is the delay between periodic heartbeats. Tests shorten it.
 var heartbeatTickInterval = heartbeatFreq
 
+// BundleStateRetriever provides read-only access to installed bundle state for
+// heartbeats. Satisfied by filesmgr.Manager.
+type BundleStateRetriever interface {
+	List() []filesmgr.FileEntry
+}
+
 type heartbeater struct {
-	logger         *slog.Logger
-	backendState   backend.StateRetriever
-	policyManager  policymgr.PolicyManager
-	groupRetriever GroupRetriever
+	logger          *slog.Logger
+	backendState    backend.StateRetriever
+	policyManager   policymgr.PolicyManager
+	groupRetriever  GroupRetriever
+	bundleRetriever BundleStateRetriever
 
 	mu            sync.Mutex
 	sessionCancel context.CancelFunc
 	wg            sync.WaitGroup
 }
 
-func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager, groupRetriever GroupRetriever) *heartbeater {
+func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, policyManager policymgr.PolicyManager, groupRetriever GroupRetriever, bundleRetriever BundleStateRetriever) *heartbeater {
 	return &heartbeater{
-		logger:         logger,
-		backendState:   backendState,
-		policyManager:  policyManager,
-		groupRetriever: groupRetriever,
+		logger:          logger,
+		backendState:    backendState,
+		policyManager:   policyManager,
+		groupRetriever:  groupRetriever,
+		bundleRetriever: bundleRetriever,
 	}
 }
 
@@ -107,6 +116,7 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 		BackendState:  hb.getBackendState(),
 		PolicyState:   hb.getPolicyState(),
 		GroupState:    hb.getGroupState(),
+		BundleState:   hb.getBundleState(),
 	}
 
 	body, err := json.Marshal(hbData)
@@ -196,4 +206,20 @@ func (hb *heartbeater) getGroupState() map[string]messages.GroupStateInfo {
 		}
 	}
 	return gs
+}
+
+func (hb *heartbeater) getBundleState() map[string]messages.BundleStateInfo {
+	bs := make(map[string]messages.BundleStateInfo)
+	if hb.bundleRetriever == nil {
+		return bs
+	}
+	for _, entry := range hb.bundleRetriever.List() {
+		bs[entry.Name] = messages.BundleStateInfo{
+			State:       messages.BundleStateInstalled,
+			Version:     entry.Version,
+			SHA256:      entry.SHA256,
+			InstalledAt: entry.InstalledAt,
+		}
+	}
+	return bs
 }

@@ -433,6 +433,15 @@ func (m *filesmgr) Get(name string) (FileEntry, bool) {
 	return m.store.get(name)
 }
 
+func (m *filesmgr) List() []FileEntry {
+	entries := m.store.all()
+	out := make([]FileEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry)
+	}
+	return out
+}
+
 func (m *filesmgr) Subscribe(handler func(FileEvent)) (unsubscribe func()) {
 	return m.bus.subscribe(handler)
 }

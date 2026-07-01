@@ -18,9 +18,14 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
+	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
+
+type stubBundleRetriever struct{ entries []filesmgr.FileEntry }
+
+func (s stubBundleRetriever) List() []filesmgr.FileEntry { return s.entries }
 
 func init() {
 	heartbeatTickInterval = 50 * time.Millisecond
@@ -1120,7 +1125,7 @@ func TestNewHeartbeater_WithPolicyManager(t *testing.T) {
 	groupManager := newGroupManager()
 
 	// Act
-	hb := newHeartbeater(logger, backendState, mockPMgr, &groupManager)
+	hb := newHeartbeater(logger, backendState, mockPMgr, &groupManager, stubBundleRetriever{})
 
 	// Assert
 	assert.NotNil(t, hb)
@@ -1480,7 +1485,7 @@ func TestNewHeartbeater_WithGroupManager(t *testing.T) {
 	})
 
 	// Act
-	hb := newHeartbeater(logger, backendState, mockPMgr, &gm)
+	hb := newHeartbeater(logger, backendState, mockPMgr, &gm, stubBundleRetriever{})
 
 	// Assert
 	assert.NotNil(t, hb)
@@ -1873,7 +1878,7 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
 	var hb2 messages.Heartbeat
 	require.NoError(t, json.Unmarshal(capturedPayload, &hb2))
 
-	assert.Equal(t, "1.1", hb2.SchemaVersion)
+	assert.Equal(t, "1.2", hb2.SchemaVersion)
 	require.Len(t, hb2.PolicyState["policy-1"].Runs, 1)
 	assert.Equal(t, []string{"10.0.0.1"}, hb2.PolicyState["policy-1"].Runs[0].Targets)
 	assert.Equal(t, "ios", hb2.PolicyState["policy-1"].Runs[0].Driver)
