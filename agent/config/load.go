@@ -49,7 +49,7 @@ func loadWithEnv(logger *slog.Logger, files []string, environ func() []string) (
 			TagName:          "yaml",
 			WeaklyTypedInput: true, // string env values -> int/bool/etc.
 			Metadata:         &md,
-			DecodeHook:       decimalIntHook(),
+			DecodeHook:       mapstructure.ComposeDecodeHookFunc(decimalIntHook(), stringToBoolInterfaceHook()),
 		})
 		if err != nil {
 			return Config{}, fmt.Errorf("building config decoder: %w", err)
@@ -96,6 +96,33 @@ func decimalIntHook() mapstructure.DecodeHookFunc {
 		default:
 			return data, nil
 		}
+	}
+}
+
+// stringToBoolInterfaceHook converts the string leaves "true"/"false" to a
+// bool when the destination is an untyped (any/map[string]any) slot, such as
+// VaultManager.AuthArgs. Env overlay values start life as strings, and
+// WeaklyTypedInput only coerces string->bool when the destination field is
+// itself typed bool; an untyped map[string]any slot has destination kind
+// Interface, so mapstructure leaves the value as the string "true" instead of
+// the bool true. That breaks a subsequent yaml.Marshal/Unmarshal round-trip
+// (e.g. into AuthAppRole.WrappingToken bool) in agent/secretsmgr/vault_auth.go,
+// which is strict-typed and rejects the quoted string. This hook fires only
+// for the String->Interface pair, converts exactly "true"/"false", and
+// otherwise returns the data unchanged — a numeric-looking auth_args string
+// (e.g. role_id "0123") must stay a string, so we deliberately do not infer
+// ints/floats here.
+func stringToBoolInterfaceHook() mapstructure.DecodeHookFunc {
+	return func(from, to reflect.Type, data any) (any, error) {
+		if from.Kind() == reflect.String && to.Kind() == reflect.Interface {
+			switch data.(string) {
+			case "true":
+				return true, nil
+			case "false":
+				return false, nil
+			}
+		}
+		return data, nil
 	}
 }
 

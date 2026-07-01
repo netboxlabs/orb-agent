@@ -118,7 +118,8 @@ orb:
 
 // The corruption guard: string fields whose YAML looks octal/hex/bool must NOT
 // be coerced, and YAML 1.1 bool words must still parse (all preserved because
-// files never pass through koanf).
+// files are decoded straight into the struct by yaml.v3, not through the env
+// overlay).
 func TestLoad_FileOnly_StringFieldsNotCoerced(t *testing.T) {
 	t.Parallel()
 	const body = `
@@ -258,6 +259,43 @@ func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
 				t.Errorf("vault.timeout for env %q = %v; want %d (decimal, not octal)", tc.env, to, tc.want)
 			}
 		})
+	}
+}
+
+// An env override landing in an untyped map[string]any slot (auth_args) must
+// type "true"/"false" as bool, not leave them as strings — vault_auth.go
+// yaml-marshals auth_args and unmarshals into AuthAppRole.WrappingToken bool,
+// which rejects a quoted "true". A numeric-looking sibling (role_id) must
+// stay a string: we don't want to silently coerce credential-shaped values.
+func TestLoad_GenericOverlay_AuthArgsBoolTyped(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{
+		"ORB_SECRETS_MANAGER__ACTIVE":                                    "vault",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__WRAPPING_TOKEN": "true",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__ROLE_ID":        "0123",
+	})
+
+	got, err := loadWithEnv(nil, []string{p}, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	authArgs := got.OrbAgent.SecretsManager.Sources.Vault.AuthArgs
+
+	wt, ok := authArgs["wrapping_token"].(bool)
+	if !ok {
+		t.Fatalf("wrapping_token = %#v (%T); want bool", authArgs["wrapping_token"], authArgs["wrapping_token"])
+	}
+	if !wt {
+		t.Errorf("wrapping_token = %v; want true", wt)
+	}
+
+	roleID, ok := authArgs["role_id"].(string)
+	if !ok {
+		t.Fatalf("role_id = %#v (%T); want string", authArgs["role_id"], authArgs["role_id"])
+	}
+	if roleID != "0123" {
+		t.Errorf("role_id = %q; want \"0123\" (preserved as string, not coerced)", roleID)
 	}
 }
 

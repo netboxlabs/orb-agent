@@ -26,6 +26,13 @@ func envKeyToConfigPath(name string) (string, bool) {
 	}
 	segments := strings.Split(rest, envPathDelim)
 	for i, s := range segments {
+		if s == "" {
+			// A trailing "__" or a doubled "__" produces an empty path
+			// segment, which would otherwise nest a map under a scalar (or
+			// vice versa) and surface as a confusing decode error. Skip it,
+			// same as a bare name with no delimiter at all.
+			return "", false
+		}
 		segments[i] = strings.ToLower(s)
 	}
 	return "orb." + strings.Join(segments, "."), true

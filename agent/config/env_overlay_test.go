@@ -17,6 +17,9 @@ func TestEnvKeyToConfigPath(t *testing.T) {
 		{"bare ORB_ alias skipped (no __)", "ORB_SECRETS_MANAGER", "", false},
 		{"non-ORB skipped", "VAULT_ADDR", "", false},
 		{"non-ORB path skipped", "PATH", "", false},
+		{"trailing delimiter skipped (empty segment)", "ORB_FOO__", "", false},
+		{"doubled delimiter skipped (empty segment)", "ORB_A____B", "", false},
+		{"trailing delimiter on real path skipped", "ORB_SECRETS_MANAGER__ACTIVE__", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
