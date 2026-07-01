@@ -226,6 +226,41 @@ func TestLoad_GenericOverlay_Coercion(t *testing.T) {
 	}
 }
 
+// Generic overlay parses string->*int as base-10 decimal, not base-0
+// auto-detect: a leading zero must NOT be misread as octal (e.g. "08"
+// failing to parse, or "010" silently becoming 8).
+func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{"leading-zero decimal ten", "010", 10},
+		{"leading-zero eight", "08", 8},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := writeTempConfig(t, sampleYAML)
+			environ := envFromMap(map[string]string{
+				"ORB_SECRETS_MANAGER__ACTIVE":                  "vault",
+				"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": tc.env,
+			})
+
+			got, err := loadWithEnv(nil, []string{p}, environ)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			to := got.OrbAgent.SecretsManager.Sources.Vault.Timeout
+			if to == nil || *to != tc.want {
+				t.Errorf("vault.timeout for env %q = %v; want %d (decimal, not octal)", tc.env, to, tc.want)
+			}
+		})
+	}
+}
+
 // Unknown/mistyped ORB_* keys are ignored and surfaced at debug.
 func TestLoad_UnknownGenericKey_IgnoredAndLogged(t *testing.T) {
 	t.Parallel()

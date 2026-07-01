@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
+	"strconv"
 
 	"github.com/go-viper/mapstructure/v2"
 	"gopkg.in/yaml.v3"
@@ -47,6 +49,7 @@ func loadWithEnv(logger *slog.Logger, files []string, environ func() []string) (
 			TagName:          "yaml",
 			WeaklyTypedInput: true, // string env values -> int/bool/etc.
 			Metadata:         &md,
+			DecodeHook:       decimalIntHook(),
 		})
 		if err != nil {
 			return Config{}, fmt.Errorf("building config decoder: %w", err)
@@ -63,6 +66,37 @@ func loadWithEnv(logger *slog.Logger, files []string, environ func() []string) (
 		cfg.OrbAgent.ConfigFile = files[0]
 	}
 	return cfg, nil
+}
+
+// decimalIntHook forces base-10 parsing for string -> (signed) integer
+// mapstructure conversions. Without it, WeaklyTypedInput's default
+// strconv.ParseInt(s, 0, ...) auto-detects base from a leading "0"/"0x",
+// so an ORB_* override like TIMEOUT=08 fails (invalid octal digit) and
+// TIMEOUT=010 silently becomes decimal 8 instead of 10. Operators write
+// env var numbers in decimal, so we intercept the string->int conversion
+// (fired for both the pointer kind and, after mapstructure dereferences it,
+// the element kind — see decodePtr in the mapstructure source) and parse
+// it ourselves with base 10. Bool/float conversions are untouched.
+func decimalIntHook() mapstructure.DecodeHookFunc {
+	return func(from, to reflect.Kind, data any) (any, error) {
+		if from != reflect.String {
+			return data, nil
+		}
+		switch to {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			s := data.(string)
+			if s == "" {
+				return data, nil
+			}
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %q as a base-10 integer: %w", s, err)
+			}
+			return n, nil
+		default:
+			return data, nil
+		}
+	}
 }
 
 // decodeFile decodes one YAML config file into cfg using the same yaml.v3 path
