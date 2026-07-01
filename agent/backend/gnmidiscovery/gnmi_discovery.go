@@ -3,7 +3,6 @@ package gnmidiscovery
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,7 +24,6 @@ var _ backend.Backend = (*gnmiDiscoveryBackend)(nil)
 const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
-	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	statusTimeout       = 5
@@ -62,6 +60,7 @@ type gnmiDiscoveryBackend struct {
 	proc       backend.Commander
 	statusChan <-chan backend.CmdStatus
 	cancelFunc context.CancelFunc
+	ctx        context.Context
 }
 
 type info struct {
@@ -79,16 +78,6 @@ func Register() bool {
 	return true
 }
 
-// configStringOrDefault returns config[name] when it is a string, otherwise
-// fallback. A missing key, a YAML null, or a non-string value (number/bool)
-// falls back rather than being coerced to a literal like "<nil>" or "true".
-func configStringOrDefault(config map[string]any, name, fallback string) string {
-	if value, ok := config[name].(string); ok {
-		return value
-	}
-	return fallback
-}
-
 // Configure stores the backend configuration, merging the per-backend config
 // map with the shared Diode/OTLP commons (per-backend keys take precedence).
 func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
@@ -98,25 +87,17 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.policyRepo = repo
 	d.diodeTargetFromOtel = false
 
-	d.apiHost = configStringOrDefault(config, "host", defaultAPIHost)
-	// port may be given as a YAML number, so stringify whatever is present.
-	if port, ok := config["port"]; ok {
-		d.apiPort = fmt.Sprintf("%v", port)
-	} else {
-		d.apiPort = defaultAPIPort
-	}
+	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
+	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
 	// String options fall back to the shared Diode commons when unset.
-	d.diodeTarget = configStringOrDefault(config, "target", common.Diode.Target)
-	d.diodeClientID = configStringOrDefault(config, "client_id", common.Diode.ClientID)
-	d.diodeClientSecret = configStringOrDefault(config, "client_secret", common.Diode.ClientSecret)
-	d.diodeAppNamePrefix = configStringOrDefault(config, "agent_name", common.Diode.AgentName)
-	d.diodeDryRunOutputDir = configStringOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
+	d.diodeTarget = backend.ConfigValueOrDefault(config, "target", common.Diode.Target)
+	d.diodeClientID = backend.ConfigValueOrDefault(config, "client_id", common.Diode.ClientID)
+	d.diodeClientSecret = backend.ConfigValueOrDefault(config, "client_secret", common.Diode.ClientSecret)
+	d.diodeAppNamePrefix = backend.ConfigValueOrDefault(config, "agent_name", common.Diode.AgentName)
+	d.diodeDryRunOutputDir = backend.ConfigValueOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
 
-	d.diodeDryRun = common.Diode.DryRun
-	if dryRun, prs := config["dry_run"].(bool); prs {
-		d.diodeDryRun = dryRun
-	}
+	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", common.Diode.DryRun)
 
 	if logLevel, prs := config["log_level"].(string); prs {
 		d.diodeLogLevel = logLevel
@@ -127,11 +108,9 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	}
 
 	// gNMI-specific options
-	d.profilesDir = configStringOrDefault(config, "profiles_dir", "")
-	d.logFormat = configStringOrDefault(config, "log_format", "")
-	if period, prs := config["otel_export_period"]; prs {
-		d.otelExportPeriod = fmt.Sprintf("%v", period)
-	}
+	d.profilesDir = backend.ConfigValueOrDefault(config, "profiles_dir", "")
+	d.logFormat = backend.ConfigValueOrDefault(config, "log_format", "")
+	d.otelExportPeriod = backend.ConfigValueOrDefault(config, "otel_export_period", "")
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
@@ -212,87 +191,35 @@ func (d *gnmiDiscoveryBackend) buildArgs() []string {
 func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
 	d.startTime = time.Now()
 	d.cancelFunc = cancelFunc
+	d.ctx = ctx
 
-	dOptions := d.buildArgs()
-	d.logger.Info("gnmi-discovery startup", "arguments", redact.Args(dOptions))
+	args := d.buildArgs()
 
-	d.proc = backend.NewCmdOptions(backend.CmdOptions{
-		Buffered:  false,
-		Streaming: true,
-	}, d.exec, dOptions...)
-	d.statusChan = d.proc.Start()
+	d.logger.Info("gnmi-discovery startup", "arguments", redact.Args(args))
 
-	// Stream the process's stdout/stderr to the agent logger. A closed stream
-	// reads as (_, false); we nil it so the select then blocks only on the
-	// still-open stream, and the loop exits once both are closed (process gone).
-	go func() {
-		stdout := d.proc.GetStdout()
-		stderr := d.proc.GetStderr()
-		for stdout != nil || stderr != nil {
-			select {
-			case line, open := <-stdout:
-				if !open {
-					stdout = nil
-					continue
-				}
-				d.logGnmiDiscoveryOutput(ctx, line, slog.LevelInfo)
-			case line, open := <-stderr:
-				if !open {
-					stderr = nil
-					continue
-				}
-				d.logGnmiDiscoveryOutput(ctx, line, slog.LevelError)
-			}
-		}
-	}()
-
-	// wait for simple startup errors
-	time.Sleep(time.Second)
-
-	status := d.proc.Status()
-
-	if status.Error != nil {
-		d.logger.Error("gnmi-discovery startup error", "error", status.Error)
-		return status.Error
-	}
-
-	if status.Complete {
-		backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "gnmi_discovery")
-		return errors.New("gnmi-discovery startup error, check log")
-	}
-
-	d.logger.Info("gnmi-discovery process started", "pid", status.PID)
-
-	var version string
-	var readinessErr error
-	for backoff := range readinessBackoff {
-		if status := d.proc.Status(); status.Complete {
-			backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "gnmi_discovery")
-			return errors.New("gnmi-discovery process ended unexpectedly, check log")
-		}
-		version, readinessErr = d.Version()
-		if readinessErr == nil {
-			d.logger.Info("gnmi-discovery readiness ok, got version", "version", version)
-			break
-		}
-		backoffDuration := time.Duration(backoff) * time.Second
-		d.logger.Info("gnmi-discovery is not ready, trying again with backoff",
-			"backoff_duration", backoffDuration.String())
-		time.Sleep(backoffDuration)
-	}
-
-	if readinessErr != nil {
-		d.logger.Error("gnmi-discovery error on readiness", "error", readinessErr)
-		backend.StopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "gnmi_discovery")
-		return readinessErr
-	}
-
-	return nil
+	return backend.StartProcess(backend.StartSpec{
+		Logger:         d.logger,
+		NameDisplay:    "gnmi-discovery",
+		NameUnderscore: "gnmi_discovery",
+		Exec:           d.exec,
+		Args:           args,
+		LogLine:        d.logLineAdapter,
+		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
+			d.proc = p
+			d.statusChan = ch
+		},
+		ReadinessCheck: d.Version,
+	})
 }
 
-// logGnmiDiscoveryOutput logs one line of process output, parsing it as logfmt
-// (structured attrs + level) when possible and falling back to the raw line.
-func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(ctx context.Context, line string, fallback slog.Level) {
+// logLineAdapter routes a streamed stdout/stderr line to the gnmi-discovery
+// output normalizer with the level matching the source stream.
+func (d *gnmiDiscoveryBackend) logLineAdapter(line string, isStderr bool) {
+	fallback := slog.LevelInfo
+	if isStderr {
+		fallback = slog.LevelError
+	}
+
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return
@@ -308,6 +235,7 @@ func (d *gnmiDiscoveryBackend) logGnmiDiscoveryOutput(ctx context.Context, line 
 		level = parsedLevel
 	}
 
+	ctx := d.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
