@@ -81,29 +81,12 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
 	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
-	d.diodeTarget = common.Diode.Target
-	d.diodeClientID = common.Diode.ClientID
-	d.diodeClientSecret = common.Diode.ClientSecret
-	d.diodeAppNamePrefix = common.Diode.AgentName
-	d.diodeDryRun = common.Diode.DryRun
-	d.diodeDryRunOutputDir = common.Diode.DryRunOutputDir
-
-	if target, prs := config["target"].(string); prs {
-		d.diodeTarget = target
-	}
-	if clientID, prs := config["client_id"].(string); prs {
-		d.diodeClientID = clientID
-	}
-	if clientSecret, prs := config["client_secret"].(string); prs {
-		d.diodeClientSecret = clientSecret
-	}
-	if agentName, prs := config["agent_name"].(string); prs {
-		d.diodeAppNamePrefix = agentName
-	}
-	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", d.diodeDryRun)
-	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
-		d.diodeDryRunOutputDir = dryRunOutputDir
-	}
+	d.diodeTarget = backend.ConfigValueOrDefault(config, "target", common.Diode.Target)
+	d.diodeClientID = backend.ConfigValueOrDefault(config, "client_id", common.Diode.ClientID)
+	d.diodeClientSecret = backend.ConfigValueOrDefault(config, "client_secret", common.Diode.ClientSecret)
+	d.diodeAppNamePrefix = backend.ConfigValueOrDefault(config, "agent_name", common.Diode.AgentName)
+	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", common.Diode.DryRun)
+	d.diodeDryRunOutputDir = backend.ConfigValueOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
