@@ -263,39 +263,57 @@ func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
 }
 
 // An env override landing in an untyped map[string]any slot (auth_args) must
-// type "true"/"false" as bool, not leave them as strings — vault_auth.go
-// yaml-marshals auth_args and unmarshals into AuthAppRole.WrappingToken bool,
-// which rejects a quoted "true". A numeric-looking sibling (role_id) must
-// stay a string: we don't want to silently coerce credential-shaped values.
+// type "true"/"false"/"1"/"0" as bool, not leave them as strings —
+// vault_auth.go yaml-marshals auth_args and unmarshals into
+// AuthAppRole.WrappingToken bool, which rejects a quoted "true" or "1". A
+// numeric-looking sibling (role_id) must stay a string: we don't want to
+// silently coerce credential-shaped values.
 func TestLoad_GenericOverlay_AuthArgsBoolTyped(t *testing.T) {
 	t.Parallel()
-	p := writeTempConfig(t, sampleYAML)
-	environ := envFromMap(map[string]string{
-		"ORB_SECRETS_MANAGER__ACTIVE":                                    "vault",
-		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__WRAPPING_TOKEN": "true",
-		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__ROLE_ID":        "0123",
-	})
 
-	got, err := loadWithEnv(nil, []string{p}, environ)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	authArgs := got.OrbAgent.SecretsManager.Sources.Vault.AuthArgs
-
-	wt, ok := authArgs["wrapping_token"].(bool)
-	if !ok {
-		t.Fatalf("wrapping_token = %#v (%T); want bool", authArgs["wrapping_token"], authArgs["wrapping_token"])
-	}
-	if !wt {
-		t.Errorf("wrapping_token = %v; want true", wt)
+	tests := []struct {
+		name string
+		env  string
+		want bool
+	}{
+		{name: "true", env: "true", want: true},
+		{name: "1", env: "1", want: true},
+		{name: "false", env: "false", want: false},
+		{name: "0", env: "0", want: false},
 	}
 
-	roleID, ok := authArgs["role_id"].(string)
-	if !ok {
-		t.Fatalf("role_id = %#v (%T); want string", authArgs["role_id"], authArgs["role_id"])
-	}
-	if roleID != "0123" {
-		t.Errorf("role_id = %q; want \"0123\" (preserved as string, not coerced)", roleID)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := writeTempConfig(t, sampleYAML)
+			environ := envFromMap(map[string]string{
+				"ORB_SECRETS_MANAGER__ACTIVE":                                    "vault",
+				"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__WRAPPING_TOKEN": tc.env,
+				"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__ROLE_ID":        "0123",
+			})
+
+			got, err := loadWithEnv(nil, []string{p}, environ)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			authArgs := got.OrbAgent.SecretsManager.Sources.Vault.AuthArgs
+
+			wt, ok := authArgs["wrapping_token"].(bool)
+			if !ok {
+				t.Fatalf("wrapping_token = %#v (%T); want bool", authArgs["wrapping_token"], authArgs["wrapping_token"])
+			}
+			if wt != tc.want {
+				t.Errorf("wrapping_token = %v; want %v", wt, tc.want)
+			}
+
+			roleID, ok := authArgs["role_id"].(string)
+			if !ok {
+				t.Fatalf("role_id = %#v (%T); want string", authArgs["role_id"], authArgs["role_id"])
+			}
+			if roleID != "0123" {
+				t.Errorf("role_id = %q; want \"0123\" (preserved as string, not coerced)", roleID)
+			}
+		})
 	}
 }
 
