@@ -15,16 +15,14 @@ import (
 const sampleYAML = `
 orb:
   config_manager:
-    active: fleet
+    active: local
     sources:
-      fleet:
-        token_url: ${FLEET_AUTH_URL}
-        client_id: ${FLEET_CLIENT_ID}
-        client_secret: ${FLEET_CLIENT_SECRET}
+      local:
+        config: /etc/orb/agent.yaml
   secrets_manager:
-    active: fleet
+    active: doppler
     sources:
-      fleet:
+      doppler:
         timeout: 30
   backends:
     network_discovery:
@@ -189,12 +187,12 @@ func TestLoad_Overlay_PreservesFileSiblings(t *testing.T) {
 		t.Errorf("active = %q; want vault", got.OrbAgent.SecretsManager.Active)
 	}
 	// Config manager (file-set) must survive the overlay.
-	if got.OrbAgent.ConfigManager.Active != "fleet" {
+	if got.OrbAgent.ConfigManager.Active != "local" {
 		t.Errorf("config manager clobbered: %q", got.OrbAgent.ConfigManager.Active)
 	}
 	// Sibling secrets source (file-set) must survive.
-	if ft := got.OrbAgent.SecretsManager.Sources.Fleet.Timeout; ft == nil || *ft != 30 {
-		t.Errorf("file's secrets fleet.timeout not preserved: %v", ft)
+	if dt := got.OrbAgent.SecretsManager.Sources.Doppler.Timeout; dt == nil || *dt != 30 {
+		t.Errorf("file's secrets doppler.timeout not preserved: %v", dt)
 	}
 	v := got.OrbAgent.SecretsManager.Sources.Vault
 	if v.Address != "http://127.0.0.1:8200" || v.Auth != "token" || v.AuthArgs["token"] != "root" {
@@ -236,7 +234,7 @@ func TestLoad_UnknownGenericKey_IgnoredAndLogged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got.OrbAgent.SecretsManager.Active != "fleet" {
+	if got.OrbAgent.SecretsManager.Active != "doppler" {
 		t.Errorf("bogus key altered config: active = %q", got.OrbAgent.SecretsManager.Active)
 	}
 	if !strings.Contains(buf.String(), "boguskey") {

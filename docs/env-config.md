@@ -1,6 +1,6 @@
-# Environment-Driven Configuration and Secrets Manager Selection
+# Environment-Driven Configuration
 
-Orb Agent's configuration always starts from the YAML file(s) passed with `-c`. On top of that file, the agent layers a generic environment-variable overlay so an operator can select and configure the **secrets manager** independently of the **config manager** — without editing or templating the YAML — which is especially useful for injecting secrets via Kubernetes/Docker at deploy time.
+Orb Agent's configuration always starts from the YAML file(s) passed with `-c`. On top of that file, the agent layers a generic environment-variable overlay so an operator can set or override **any** `orb.*` config value with `ORB_*` environment variables — without editing or templating the YAML. The primary use case is selecting and configuring the **secrets manager** independently of the **config manager**, especially useful for injecting secrets via Kubernetes/Docker at deploy time — but the mechanism works for any config key, not just secrets-manager selection.
 
 This page covers the layering model, the generic `ORB_*` override scheme, and two worked examples (Docker and Kubernetes).
 
@@ -31,11 +31,13 @@ ORB_SECRETS_MANAGER__SOURCES__VAULT__ADDRESS=http://127.0.0.1:8200
 
 `ORB_` → root `orb`, then `SECRETS_MANAGER` → `secrets_manager` (single `_` preserved), `SOURCES` → `sources`, `VAULT` → `vault`, `ADDRESS` → `address`. `ORB_SECRETS_MANAGER__ACTIVE` accepts one of `vault`, `doppler`, `delinea`, `cyberark`, `fleet`.
 
+The same scheme applies to any other `orb.*` key — for example `ORB_CONFIG_MANAGER__ACTIVE` or `ORB_BACKENDS__...` — not just the secrets manager.
+
 ## Worked examples
 
-### Docker: Fleet config manager, Vault secrets via static token
+### Docker: config file for the config manager, Vault secrets via static token
 
-The config manager stays on `fleet` (from the file); only the secrets manager is selected and configured entirely from the environment.
+The config manager is whatever the file specifies (`local`, `git`, or another supported manager); only the secrets manager is selected and configured entirely from the environment.
 
 `agent.yaml`:
 
@@ -43,13 +45,10 @@ The config manager stays on `fleet` (from the file); only the secrets manager is
 version: 1.0
 orb:
   config_manager:
-    active: fleet
+    active: local
     sources:
-      fleet:
-        url: "http://fleet.example.com:8080"
-        token_url: "${FLEET_AUTH_URL}"
-        client_id: "${FLEET_CLIENT_ID}"
-        client_secret: "${FLEET_CLIENT_SECRET}"
+      local:
+        config: /opt/orb/agent.yaml
   backends:
     network_discovery:
 ```
@@ -57,9 +56,6 @@ orb:
 ```sh
 docker run --net=host \
   -v ${PWD}:/opt/orb/ \
-  -e FLEET_AUTH_URL=http://fleet.example.com:8080/auth/token \
-  -e FLEET_CLIENT_ID=your-fleet-client-id \
-  -e FLEET_CLIENT_SECRET=your-fleet-client-secret \
   -e ORB_SECRETS_MANAGER__ACTIVE=vault \
   -e ORB_SECRETS_MANAGER__SOURCES__VAULT__ADDRESS=http://127.0.0.1:8200 \
   -e ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH=token \
@@ -67,7 +63,7 @@ docker run --net=host \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
-The agent starts with `secrets_manager.active=vault`, a populated Vault source (token auth), and the Fleet config manager untouched — policies can then reference `${vault://...}` secrets as usual. The `${FLEET_CLIENT_ID}`/`${FLEET_CLIENT_SECRET}` placeholders in the YAML file are resolved from the environment at runtime; this `${VAR}` mechanism is unrelated to the `ORB_*` overlay and is unchanged.
+The agent starts with `secrets_manager.active=vault`, a populated Vault source (token auth), and the config manager untouched — policies can then reference `${vault://...}` secrets as usual. The config manager's own secrets (for example a Git deploy key, or a Fleet client ID/secret if using the Fleet config manager) can still be injected into the YAML file with the `${VAR}` placeholder mechanism, resolved from the environment at runtime; that mechanism is unrelated to the `ORB_*` overlay described here and is unchanged.
 
 ### Kubernetes: Vault via pod ServiceAccount (no static token)
 
@@ -113,8 +109,8 @@ No static token is set anywhere. The agent configures the Vault source with `aut
 
 ## See also
 
-- [HashiCorp Vault secrets manager](./vault.md)
-- [Doppler secrets manager](./doppler.md)
-- [Delinea Secret Server secrets manager](./delinea.md)
-- [CyberArk (CCP) secrets manager](./cyberark.md)
-- [Agent Configuration File reference](../configs/agent_yaml.md)
+- [HashiCorp Vault secrets manager](./secretsmgr/vault.md)
+- [Doppler secrets manager](./secretsmgr/doppler.md)
+- [Delinea Secret Server secrets manager](./secretsmgr/delinea.md)
+- [CyberArk (CCP) secrets manager](./secretsmgr/cyberark.md)
+- [Agent Configuration File reference](./configs/agent_yaml.md)
