@@ -30,21 +30,18 @@ orb:
     network_discovery:
 `
 
-func emptyGetenv(string) string { return "" }
-func emptyEnviron() []string    { return nil }
+func emptyEnviron() []string { return nil }
 
-// envFromMap builds a getenv + environ pair from a map so Load tests run against
-// a fully controlled environment (no leakage from the dev/CI shell).
-func envFromMap(m map[string]string) (func(string) string, func() []string) {
-	getenv := func(k string) string { return m[k] }
-	environ := func() []string {
+// envFromMap builds an environ func from a map so Load tests run against a
+// fully controlled environment (no leakage from the dev/CI shell).
+func envFromMap(m map[string]string) func() []string {
+	return func() []string {
 		out := make([]string, 0, len(m))
 		for k, v := range m {
 			out = append(out, k+"="+v)
 		}
 		return out
 	}
-	return getenv, environ
 }
 
 func writeTempConfig(t *testing.T, body string) string {
@@ -79,7 +76,7 @@ func TestLoad_FileOnly_MatchesLegacy_DefaultConfig(t *testing.T) {
 	t.Parallel()
 	const p = "../docker/default_config.yaml"
 
-	got, err := loadWithEnv(nil, []string{p}, emptyGetenv, os.ReadFile, emptyEnviron)
+	got, err := loadWithEnv(nil, []string{p}, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -106,7 +103,7 @@ orb:
       foo: bar
 `
 	p := writeTempConfig(t, body)
-	got, err := loadWithEnv(nil, []string{p}, emptyGetenv, os.ReadFile, emptyEnviron)
+	got, err := loadWithEnv(nil, []string{p}, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -133,7 +130,7 @@ orb:
         skip_tls: yes
 `
 	p := writeTempConfig(t, body)
-	got, err := loadWithEnv(nil, []string{p}, emptyGetenv, os.ReadFile, emptyEnviron)
+	got, err := loadWithEnv(nil, []string{p}, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -155,7 +152,7 @@ func TestLoad_MultiFile_ReplaceSemantics(t *testing.T) {
 	a := writeTempConfig(t, "orb:\n  backends:\n    network_discovery:\n      a: 1\n")
 	b := writeTempConfig(t, "orb:\n  backends:\n    network_discovery:\n      b: 2\n")
 
-	got, err := loadWithEnv(nil, []string{a, b}, emptyGetenv, os.ReadFile, emptyEnviron)
+	got, err := loadWithEnv(nil, []string{a, b}, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -177,13 +174,14 @@ func TestLoad_MultiFile_ReplaceSemantics(t *testing.T) {
 func TestLoad_Overlay_PreservesFileSiblings(t *testing.T) {
 	t.Parallel()
 	p := writeTempConfig(t, sampleYAML)
-	getenv, environ := envFromMap(map[string]string{
-		"ORB_SECRETS_MANAGER": "vault",
-		"VAULT_ADDR":          "http://127.0.0.1:8200",
-		"VAULT_TOKEN":         "root",
+	environ := envFromMap(map[string]string{
+		"ORB_SECRETS_MANAGER__ACTIVE":                           "vault",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__ADDRESS":          "http://127.0.0.1:8200",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH":             "token",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__TOKEN": "root",
 	})
 
-	got, err := loadWithEnv(nil, []string{p}, getenv, os.ReadFile, environ)
+	got, err := loadWithEnv(nil, []string{p}, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -204,22 +202,21 @@ func TestLoad_Overlay_PreservesFileSiblings(t *testing.T) {
 	}
 }
 
-// Generic overlay coerces string->*int and wins over the friendly alias.
-func TestLoad_GenericOverlay_CoercionAndPrecedence(t *testing.T) {
+// Generic overlay coerces string->*int.
+func TestLoad_GenericOverlay_Coercion(t *testing.T) {
 	t.Parallel()
 	p := writeTempConfig(t, sampleYAML)
-	getenv, environ := envFromMap(map[string]string{
-		"ORB_SECRETS_MANAGER":                          "doppler", // alias
-		"ORB_SECRETS_MANAGER__ACTIVE":                  "vault",   // generic wins
-		"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": "45",      // string -> *int
+	environ := envFromMap(map[string]string{
+		"ORB_SECRETS_MANAGER__ACTIVE":                  "vault",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": "45", // string -> *int
 	})
 
-	got, err := loadWithEnv(nil, []string{p}, getenv, os.ReadFile, environ)
+	got, err := loadWithEnv(nil, []string{p}, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if got.OrbAgent.SecretsManager.Active != "vault" {
-		t.Errorf("active = %q; want vault (generic beats alias)", got.OrbAgent.SecretsManager.Active)
+		t.Errorf("active = %q; want vault", got.OrbAgent.SecretsManager.Active)
 	}
 	to := got.OrbAgent.SecretsManager.Sources.Vault.Timeout
 	if to == nil || *to != 45 {
@@ -231,11 +228,11 @@ func TestLoad_GenericOverlay_CoercionAndPrecedence(t *testing.T) {
 func TestLoad_UnknownGenericKey_IgnoredAndLogged(t *testing.T) {
 	t.Parallel()
 	p := writeTempConfig(t, sampleYAML)
-	getenv, environ := envFromMap(map[string]string{"ORB_SECRETS_MANAGER__BOGUSKEY": "x"})
+	environ := envFromMap(map[string]string{"ORB_SECRETS_MANAGER__BOGUSKEY": "x"})
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	got, err := loadWithEnv(logger, []string{p}, getenv, os.ReadFile, environ)
+	got, err := loadWithEnv(logger, []string{p}, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -260,9 +257,9 @@ orb:
       tap: file-tap
 `
 	p := writeTempConfig(t, body)
-	getenv, environ := envFromMap(map[string]string{"ORB_BACKENDS__PKTVISOR__FOO": "bar"})
+	environ := envFromMap(map[string]string{"ORB_BACKENDS__PKTVISOR__FOO": "bar"})
 
-	got, err := loadWithEnv(nil, []string{p}, getenv, os.ReadFile, environ)
+	got, err := loadWithEnv(nil, []string{p}, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -285,9 +282,26 @@ func TestLoad_MalformedOverlayValue_Errors(t *testing.T) {
 		{"ORB_SECRETS_MANAGER__ACTIVE__X": "vault"},             // extra segment nests a map under a string leaf
 	}
 	for _, bad := range cases {
-		getenv, environ := envFromMap(bad)
-		if _, err := loadWithEnv(nil, []string{p}, getenv, os.ReadFile, environ); err == nil {
+		environ := envFromMap(bad)
+		if _, err := loadWithEnv(nil, []string{p}, environ); err == nil {
 			t.Errorf("expected error for malformed overlay %v, got nil", bad)
+		}
+	}
+}
+
+// A path set BOTH as a scalar and as a parent of a deeper key is rejected
+// deterministically, regardless of env order.
+func TestLoad_GenericOverlay_ScalarParentCollision_Errors(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	orders := [][]string{
+		{"ORB_SECRETS_MANAGER__ACTIVE=vault", "ORB_SECRETS_MANAGER__ACTIVE__X=y"},
+		{"ORB_SECRETS_MANAGER__ACTIVE__X=y", "ORB_SECRETS_MANAGER__ACTIVE=vault"},
+	}
+	for _, env := range orders {
+		environ := func() []string { return env }
+		if _, err := loadWithEnv(nil, []string{p}, environ); err == nil {
+			t.Errorf("expected collision error for %v, got nil", env)
 		}
 	}
 }
