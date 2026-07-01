@@ -55,6 +55,8 @@ Supported secrets managers:
 - [CyberArk (CCP)](./docs/secretsmgr/cyberark.md) (beta)
 - [Delinea Secret Server](./docs/secretsmgr/delinea.md) (beta)
 
+The secrets manager to use, and its connection settings, can also be selected and configured entirely via environment variables — independently of the config manager and without editing the YAML file. See [Environment-Driven Configuration and Secrets Manager Selection](./docs/secretsmgr/env-config.md).
+
 ### Backends
 The `backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
 
