@@ -56,12 +56,16 @@ func decodeLegacy(t *testing.T, files ...string) Config {
 	t.Helper()
 	var want Config
 	for _, p := range files {
-		data, err := os.ReadFile(p)
+		f, err := os.Open(p)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := yaml.Unmarshal(data, &want); err != nil {
+		if err := yaml.NewDecoder(f).Decode(&want); err != nil {
+			_ = f.Close()
 			t.Fatalf("legacy decode %s: %v", p, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close %s: %v", p, err)
 		}
 	}
 	return want
