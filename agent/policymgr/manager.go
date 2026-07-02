@@ -103,7 +103,12 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 				return
 			}
 			updatePolicy = true
-			if currentPolicy.Name != pd.Name {
+			if currentPolicy.PreviousPolicyData != nil {
+				// a rename is already pending: the persisted PreviousPolicyData names
+				// the policy the backend actually runs; keep it through stacked
+				// renames until an apply succeeds
+				pd.PreviousPolicyData = currentPolicy.PreviousPolicyData
+			} else if currentPolicy.Name != pd.Name {
 				pd.PreviousPolicyData = &policies.PolicyData{Name: currentPolicy.Name}
 			}
 			pd.Datasets = currentPolicy.Datasets
@@ -140,6 +145,11 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 				pd.Data = payload.Data
 			}
 		}
+		if pd.State == policies.Running {
+			// the apply (incl. any pending rename removal) reached the backend:
+			// persisted PreviousPolicyData means exactly "rename pending"
+			pd.PreviousPolicyData = nil
+		}
 		// save policy (with latest status) to local policy db
 		err := a.repo.Update(pd)
 		if err != nil {
@@ -162,6 +172,11 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 	pd := policies.PolicyData{
 		ID:   policyID,
 		Name: policyName,
+	}
+	if stored, err := a.repo.Get(policyID); err == nil {
+		// use the stored record so the backend's remove honors a pending rename
+		// (PreviousPolicyData) recorded by a manage that never reached it
+		pd = stored
 	}
 	if !backend.HaveBackend(beName) {
 		return errors.New("policy remove for a backend we do not have, ignoring")
@@ -289,6 +304,7 @@ func (a *policyManager) ApplyBackendPolicies(be backend.Backend) error {
 			a.logger.Info("policy applied successfully", "policy_id", policy.ID, "policy_name", policy.Name)
 			policy.State = policies.Running
 			policy.BackendErr = ""
+			policy.PreviousPolicyData = nil
 		}
 		err = a.repo.Update(policy)
 		if err != nil {
@@ -332,6 +348,11 @@ func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
 				a.applyPolicy(payload, be, &policy, true)
 				policy.Data = payload.Data
 			}
+		}
+
+		if policy.State == policies.Running {
+			// see manage branch: persisted PreviousPolicyData means "rename pending"
+			policy.PreviousPolicyData = nil
 		}
 
 		if err = a.repo.Update(policy); err != nil {
