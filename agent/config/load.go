@@ -49,7 +49,7 @@ func loadWithEnv(logger *slog.Logger, files []string, environ func() []string) (
 			TagName:          "yaml",
 			WeaklyTypedInput: true, // string env values -> int/bool/etc.
 			Metadata:         &md,
-			DecodeHook:       mapstructure.ComposeDecodeHookFunc(decimalIntHook(), stringToBoolInterfaceHook()),
+			DecodeHook:       decimalIntHook(),
 		})
 		if err != nil {
 			return Config{}, fmt.Errorf("building config decoder: %w", err)
@@ -96,36 +96,6 @@ func decimalIntHook() mapstructure.DecodeHookFunc {
 		default:
 			return data, nil
 		}
-	}
-}
-
-// stringToBoolInterfaceHook converts the string leaves "true"/"false"/"1"/"0"
-// to a bool when the destination is an untyped (any/map[string]any) slot,
-// such as VaultManager.AuthArgs. Env overlay values start life as strings,
-// and WeaklyTypedInput only coerces string->bool when the destination field
-// is itself typed bool; an untyped map[string]any slot has destination kind
-// Interface, so mapstructure leaves the value as the string "true" instead of
-// the bool true. That breaks a subsequent yaml.Marshal/Unmarshal round-trip
-// (e.g. into AuthAppRole.WrappingToken bool) in agent/secretsmgr/vault_auth.go,
-// which is strict-typed and rejects the quoted string. This hook fires only
-// for the String->Interface pair and converts exactly the four values
-// documented in docs/env-config.md as accepted ORB_* boolean spellings —
-// deliberately not strconv.ParseBool, which would also accept "t"/"T"/"f"/"F"/
-// "TRUE"/etc. and blur that contract. Everything else, including a
-// numeric-looking auth_args string like role_id "0123", is returned
-// unchanged: we don't infer ints/floats here, and multi-digit numeric
-// strings are not in the documented boolean set.
-func stringToBoolInterfaceHook() mapstructure.DecodeHookFunc {
-	return func(from, to reflect.Type, data any) (any, error) {
-		if from.Kind() == reflect.String && to.Kind() == reflect.Interface {
-			switch data.(string) {
-			case "true", "1":
-				return true, nil
-			case "false", "0":
-				return false, nil
-			}
-		}
-		return data, nil
 	}
 }
 

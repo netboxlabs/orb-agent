@@ -263,57 +263,54 @@ func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
 }
 
 // An env override landing in an untyped map[string]any slot (auth_args) must
-// type "true"/"false"/"1"/"0" as bool, not leave them as strings —
-// vault_auth.go yaml-marshals auth_args and unmarshals into
-// AuthAppRole.WrappingToken bool, which rejects a quoted "true" or "1". A
-// numeric-looking sibling (role_id) must stay a string: we don't want to
-// silently coerce credential-shaped values.
-func TestLoad_GenericOverlay_AuthArgsBoolTyped(t *testing.T) {
+// stay a string, never be type-guessed into a bool. For an UNTYPED slot the
+// loader cannot know whether a value is meant to be a bool or a string
+// without coupling to the secrets-manager's auth-struct schema, and guessing
+// corrupts string credentials whose literal value happens to be "0"/"1" (for
+// example a Vault AppRole password of "0" must NOT become the bool false).
+// The one non-string auth_arg — Vault AppRole's wrapping_token bool — must
+// therefore be set in the config file (where YAML typing applies), not via
+// an ORB_* override; see docs/env-config.md.
+func TestLoad_GenericOverlay_AuthArgsStayStrings(t *testing.T) {
 	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{
+		"ORB_SECRETS_MANAGER__ACTIVE":                                    "vault",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__WRAPPING_TOKEN": "true",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__ROLE_ID":        "0123",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__PASSWORD":       "0",
+	})
 
-	tests := []struct {
-		name string
-		env  string
-		want bool
-	}{
-		{name: "true", env: "true", want: true},
-		{name: "1", env: "1", want: true},
-		{name: "false", env: "false", want: false},
-		{name: "0", env: "0", want: false},
+	got, err := loadWithEnv(nil, []string{p}, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	authArgs := got.OrbAgent.SecretsManager.Sources.Vault.AuthArgs
+
+	wt, ok := authArgs["wrapping_token"].(string)
+	if !ok {
+		t.Fatalf("wrapping_token = %#v (%T); want string", authArgs["wrapping_token"], authArgs["wrapping_token"])
+	}
+	if wt != "true" {
+		t.Errorf("wrapping_token = %q; want \"true\" (untyped slot values stay strings)", wt)
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			p := writeTempConfig(t, sampleYAML)
-			environ := envFromMap(map[string]string{
-				"ORB_SECRETS_MANAGER__ACTIVE":                                    "vault",
-				"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__WRAPPING_TOKEN": tc.env,
-				"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__ROLE_ID":        "0123",
-			})
+	roleID, ok := authArgs["role_id"].(string)
+	if !ok {
+		t.Fatalf("role_id = %#v (%T); want string", authArgs["role_id"], authArgs["role_id"])
+	}
+	if roleID != "0123" {
+		t.Errorf("role_id = %q; want \"0123\" (preserved as string, not coerced)", roleID)
+	}
 
-			got, err := loadWithEnv(nil, []string{p}, environ)
-			if err != nil {
-				t.Fatalf("Load: %v", err)
-			}
-			authArgs := got.OrbAgent.SecretsManager.Sources.Vault.AuthArgs
-
-			wt, ok := authArgs["wrapping_token"].(bool)
-			if !ok {
-				t.Fatalf("wrapping_token = %#v (%T); want bool", authArgs["wrapping_token"], authArgs["wrapping_token"])
-			}
-			if wt != tc.want {
-				t.Errorf("wrapping_token = %v; want %v", wt, tc.want)
-			}
-
-			roleID, ok := authArgs["role_id"].(string)
-			if !ok {
-				t.Fatalf("role_id = %#v (%T); want string", authArgs["role_id"], authArgs["role_id"])
-			}
-			if roleID != "0123" {
-				t.Errorf("role_id = %q; want \"0123\" (preserved as string, not coerced)", roleID)
-			}
-		})
+	// The credential-preservation case: a password whose literal value is
+	// "0" must never be silently turned into the bool false.
+	password, ok := authArgs["password"].(string)
+	if !ok {
+		t.Fatalf("password = %#v (%T); want string", authArgs["password"], authArgs["password"])
+	}
+	if password != "0" {
+		t.Errorf("password = %q; want \"0\" (NOT bool false — credential value must be preserved)", password)
 	}
 }
 
