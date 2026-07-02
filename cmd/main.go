@@ -54,7 +54,7 @@ func Run(_ *cobra.Command, _ []string) {
 		cobra.CheckErr(fmt.Errorf("no config file specified, use --config or -c flag to provide config files"))
 	}
 
-	// logger (constructed before Load so unknown ORB_ overrides can be debug-logged)
+	// logger (constructed before Load so unknown ORB_ overrides can be logged)
 	var l slog.Level
 	if debug {
 		l = slog.LevelDebug
@@ -64,7 +64,7 @@ func Run(_ *cobra.Command, _ []string) {
 	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l, AddSource: false})
 	logger := slog.New(h)
 
-	configData, err := config.Load(logger, cfgFiles)
+	configData, err := config.Load(cfgFiles, logger)
 	if err != nil {
 		cobra.CheckErr(fmt.Errorf("error loading configuration: %w", err))
 	}

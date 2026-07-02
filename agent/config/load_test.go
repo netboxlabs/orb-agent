@@ -78,7 +78,7 @@ func TestLoad_FileOnly_MatchesLegacy_DefaultConfig(t *testing.T) {
 	t.Parallel()
 	const p = "../docker/default_config.yaml"
 
-	got, err := loadWithEnv(nil, []string{p}, emptyEnviron)
+	got, err := loadWithEnv([]string{p}, nil, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -105,7 +105,7 @@ orb:
       foo: bar
 `
 	p := writeTempConfig(t, body)
-	got, err := loadWithEnv(nil, []string{p}, emptyEnviron)
+	got, err := loadWithEnv([]string{p}, nil, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -133,7 +133,7 @@ orb:
         skip_tls: yes
 `
 	p := writeTempConfig(t, body)
-	got, err := loadWithEnv(nil, []string{p}, emptyEnviron)
+	got, err := loadWithEnv([]string{p}, nil, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestLoad_MultiFile_ReplaceSemantics(t *testing.T) {
 	a := writeTempConfig(t, "orb:\n  backends:\n    network_discovery:\n      a: 1\n")
 	b := writeTempConfig(t, "orb:\n  backends:\n    network_discovery:\n      b: 2\n")
 
-	got, err := loadWithEnv(nil, []string{a, b}, emptyEnviron)
+	got, err := loadWithEnv([]string{a, b}, nil, emptyEnviron)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestLoad_Overlay_PreservesFileSiblings(t *testing.T) {
 		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__TOKEN": "root",
 	})
 
-	got, err := loadWithEnv(nil, []string{p}, environ)
+	got, err := loadWithEnv([]string{p}, nil, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestLoad_GenericOverlay_Coercion(t *testing.T) {
 		"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": "45", // string -> *int
 	})
 
-	got, err := loadWithEnv(nil, []string{p}, environ)
+	got, err := loadWithEnv([]string{p}, nil, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
 				"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": tc.env,
 			})
 
-			got, err := loadWithEnv(nil, []string{p}, environ)
+			got, err := loadWithEnv([]string{p}, nil, environ)
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
@@ -270,7 +270,7 @@ func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
 // example a Vault AppRole password of "0" must NOT become the bool false).
 // The one non-string auth_arg — Vault AppRole's wrapping_token bool — must
 // therefore be set in the config file (where YAML typing applies), not via
-// an ORB_* override; see docs/env-config.md.
+// an ORB_* override; see docs/env_config.md.
 func TestLoad_GenericOverlay_AuthArgsStayStrings(t *testing.T) {
 	t.Parallel()
 	p := writeTempConfig(t, sampleYAML)
@@ -281,7 +281,7 @@ func TestLoad_GenericOverlay_AuthArgsStayStrings(t *testing.T) {
 		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__PASSWORD":       "0",
 	})
 
-	got, err := loadWithEnv(nil, []string{p}, environ)
+	got, err := loadWithEnv([]string{p}, nil, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -314,15 +314,17 @@ func TestLoad_GenericOverlay_AuthArgsStayStrings(t *testing.T) {
 	}
 }
 
-// Unknown/mistyped ORB_* keys are ignored and surfaced at debug.
+// Unknown/mistyped ORB_* keys are ignored and surfaced at warning level (a
+// typo'd override silently not applying is operator-relevant, so it must
+// surface without debug logging enabled).
 func TestLoad_UnknownGenericKey_IgnoredAndLogged(t *testing.T) {
 	t.Parallel()
 	p := writeTempConfig(t, sampleYAML)
 	environ := envFromMap(map[string]string{"ORB_SECRETS_MANAGER__BOGUSKEY": "x"})
 	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	got, err := loadWithEnv(logger, []string{p}, environ)
+	got, err := loadWithEnv([]string{p}, logger, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -330,7 +332,41 @@ func TestLoad_UnknownGenericKey_IgnoredAndLogged(t *testing.T) {
 		t.Errorf("bogus key altered config: active = %q", got.OrbAgent.SecretsManager.Active)
 	}
 	if !strings.Contains(buf.String(), "boguskey") {
-		t.Errorf("expected the unused key logged at debug; log = %q", buf.String())
+		t.Errorf("expected the unused key logged at warning (no debug enabled); log = %q", buf.String())
+	}
+}
+
+// An ORB_* variable that is set but empty is treated as unset — it must not
+// clobber a file-set value with a zero value.
+func TestLoad_GenericOverlay_EmptyValueIgnored(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{"ORB_SECRETS_MANAGER__ACTIVE": ""})
+
+	got, err := loadWithEnv([]string{p}, nil, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.OrbAgent.SecretsManager.Active != "doppler" {
+		t.Errorf("active = %q; want doppler (empty override must be ignored)", got.OrbAgent.SecretsManager.Active)
+	}
+}
+
+// Two ORB_* names that map to the same config path (differing only in case)
+// are a real conflict — the outcome must be a deterministic error, not a
+// silent last-wins depending on os.Environ order.
+func TestLoad_GenericOverlay_SamePathCollision_Errors(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	orders := [][]string{
+		{"ORB_SECRETS_MANAGER__ACTIVE=vault", "ORB_SECRETS_MANAGER__Active=doppler"},
+		{"ORB_SECRETS_MANAGER__Active=doppler", "ORB_SECRETS_MANAGER__ACTIVE=vault"},
+	}
+	for _, env := range orders {
+		environ := func() []string { return env }
+		if _, err := loadWithEnv([]string{p}, nil, environ); err == nil {
+			t.Errorf("expected same-path collision error for %v, got nil", env)
+		}
 	}
 }
 
@@ -349,7 +385,7 @@ orb:
 	p := writeTempConfig(t, body)
 	environ := envFromMap(map[string]string{"ORB_BACKENDS__PKTVISOR__FOO": "bar"})
 
-	got, err := loadWithEnv(nil, []string{p}, environ)
+	got, err := loadWithEnv([]string{p}, nil, environ)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -373,7 +409,7 @@ func TestLoad_MalformedOverlayValue_Errors(t *testing.T) {
 	}
 	for _, bad := range cases {
 		environ := envFromMap(bad)
-		if _, err := loadWithEnv(nil, []string{p}, environ); err == nil {
+		if _, err := loadWithEnv([]string{p}, nil, environ); err == nil {
 			t.Errorf("expected error for malformed overlay %v, got nil", bad)
 		}
 	}
@@ -390,8 +426,28 @@ func TestLoad_GenericOverlay_ScalarParentCollision_Errors(t *testing.T) {
 	}
 	for _, env := range orders {
 		environ := func() []string { return env }
-		if _, err := loadWithEnv(nil, []string{p}, environ); err == nil {
+		if _, err := loadWithEnv([]string{p}, nil, environ); err == nil {
 			t.Errorf("expected collision error for %v, got nil", env)
 		}
+	}
+}
+
+// decimalIntHook also handles unsigned integer kinds as base-10, mirroring
+// the signed case. No uint fields exist in Config today, so the hook is
+// exercised directly rather than through Load.
+func TestDecimalIntHook_Uint(t *testing.T) {
+	t.Parallel()
+	hook := decimalIntHook().(func(reflect.Kind, reflect.Kind, any) (any, error))
+
+	got, err := hook(reflect.String, reflect.Uint64, "010")
+	if err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	if got != uint64(10) {
+		t.Errorf("hook(%q) = %#v; want uint64(10) (decimal, not octal)", "010", got)
+	}
+
+	if _, err := hook(reflect.String, reflect.Uint64, "abc"); err == nil {
+		t.Error("expected error for non-numeric uint input, got nil")
 	}
 }

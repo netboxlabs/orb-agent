@@ -15,13 +15,13 @@ import (
 // from the legacy cmd/main loop) and then applies the generic ORB_* env overlay
 // on top, in precedence order file < env. ${VAR} placeholders are left literal
 // for the managers to resolve lazily.
-func Load(logger *slog.Logger, files []string) (Config, error) {
-	return loadWithEnv(logger, files, os.Environ)
+func Load(files []string, logger *slog.Logger) (Config, error) {
+	return loadWithEnv(files, logger, os.Environ)
 }
 
 // loadWithEnv is the testable core. environ backs the generic ORB_* overlay, so
 // tests inject a controlled environment; production Load wires os.Environ.
-func loadWithEnv(logger *slog.Logger, files []string, environ func() []string) (Config, error) {
+func loadWithEnv(files []string, logger *slog.Logger, environ func() []string) (Config, error) {
 	var cfg Config
 
 	// Layer 1: files, via the legacy yaml.v3 struct decode. This preserves
@@ -34,7 +34,7 @@ func loadWithEnv(logger *slog.Logger, files []string, environ func() []string) (
 	}
 
 	// Layer 2: the generic ORB_* overlay, applied via mapstructure directly.
-	overlay, err := envToNestedMap(environ())
+	overlay, err := envToNestedMap(environ(), logger)
 	if err != nil {
 		return Config{}, err
 	}
@@ -58,7 +58,7 @@ func loadWithEnv(logger *slog.Logger, files []string, environ func() []string) (
 			return Config{}, fmt.Errorf("applying env overlay to config: %w", err)
 		}
 		if logger != nil && len(md.Unused) > 0 {
-			logger.Debug("ignoring unknown ORB_ config overrides", "keys", md.Unused)
+			logger.Warn("ignoring unknown ORB_ config overrides", "keys", md.Unused)
 		}
 	}
 
@@ -91,6 +91,16 @@ func decimalIntHook() mapstructure.DecodeHookFunc {
 			n, err := strconv.ParseInt(s, 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("parsing %q as a base-10 integer: %w", s, err)
+			}
+			return n, nil
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			s := data.(string)
+			if s == "" {
+				return data, nil
+			}
+			n, err := strconv.ParseUint(s, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("parsing %q as a base-10 unsigned integer: %w", s, err)
 			}
 			return n, nil
 		default:
