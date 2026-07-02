@@ -20,6 +20,7 @@ func TestEnvKeyToConfigPath(t *testing.T) {
 		{"trailing delimiter skipped (empty segment)", "ORB_FOO__", "", false},
 		{"doubled delimiter skipped (empty segment)", "ORB_A____B", "", false},
 		{"trailing delimiter on real path skipped", "ORB_SECRETS_MANAGER__ACTIVE__", "", false},
+		{"dotted name skipped", "ORB_FOO__BAR.BAZ", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
