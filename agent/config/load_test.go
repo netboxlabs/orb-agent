@@ -451,3 +451,37 @@ func TestDecimalIntHook_Uint(t *testing.T) {
 		t.Error("expected error for non-numeric uint input, got nil")
 	}
 }
+
+// The parse bit size matches the destination kind, so an out-of-range value
+// fails deterministically at parse time instead of being truncated by the
+// later reflect conversion.
+func TestDecimalIntHook_KindMatchedBitSize(t *testing.T) {
+	t.Parallel()
+	hook := decimalIntHook().(func(reflect.Kind, reflect.Kind, any) (any, error))
+
+	if _, err := hook(reflect.String, reflect.Uint8, "300"); err == nil {
+		t.Error("expected out-of-range error for uint8 value 300, got nil")
+	}
+	if _, err := hook(reflect.String, reflect.Int8, "128"); err == nil {
+		t.Error("expected out-of-range error for int8 value 128, got nil")
+	}
+	if _, err := hook(reflect.String, reflect.Int16, "40000"); err == nil {
+		t.Error("expected out-of-range error for int16 value 40000, got nil")
+	}
+
+	// In-range values for small kinds still parse.
+	got, err := hook(reflect.String, reflect.Uint8, "255")
+	if err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	if got != uint64(255) {
+		t.Errorf("hook(%q) = %#v; want uint64(255)", "255", got)
+	}
+	got, err = hook(reflect.String, reflect.Int32, "010")
+	if err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	if got != int64(10) {
+		t.Errorf("hook(%q) = %#v; want int64(10) (decimal, not octal)", "010", got)
+	}
+}

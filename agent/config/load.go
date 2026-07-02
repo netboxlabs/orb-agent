@@ -88,7 +88,7 @@ func decimalIntHook() mapstructure.DecodeHookFunc {
 			if s == "" {
 				return data, nil
 			}
-			n, err := strconv.ParseInt(s, 10, 64)
+			n, err := strconv.ParseInt(s, 10, intKindBitSize(to))
 			if err != nil {
 				return nil, fmt.Errorf("parsing %q as a base-10 integer: %w", s, err)
 			}
@@ -98,7 +98,7 @@ func decimalIntHook() mapstructure.DecodeHookFunc {
 			if s == "" {
 				return data, nil
 			}
-			n, err := strconv.ParseUint(s, 10, 64)
+			n, err := strconv.ParseUint(s, 10, intKindBitSize(to))
 			if err != nil {
 				return nil, fmt.Errorf("parsing %q as a base-10 unsigned integer: %w", s, err)
 			}
@@ -106,6 +106,22 @@ func decimalIntHook() mapstructure.DecodeHookFunc {
 		default:
 			return data, nil
 		}
+	}
+}
+
+// intKindBitSize returns the strconv bit size matching an integer kind, so an
+// out-of-range value fails deterministically at parse time instead of being
+// truncated by the later reflect conversion.
+func intKindBitSize(k reflect.Kind) int {
+	switch k {
+	case reflect.Int8, reflect.Uint8:
+		return 8
+	case reflect.Int16, reflect.Uint16:
+		return 16
+	case reflect.Int32, reflect.Uint32:
+		return 32
+	default:
+		return 64
 	}
 }
 
