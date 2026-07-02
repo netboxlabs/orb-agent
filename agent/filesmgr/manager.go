@@ -42,9 +42,9 @@ type Manager interface {
 	// Get returns the current entry for a logical name, if installed.
 	Get(name string) (FileEntry, bool)
 
-	// List returns a snapshot of all currently installed entries. The slice is
-	// a fresh copy; mutating it does not affect manager state, and order is
-	// unspecified. Results are keyed by FileEntry.Name.
+	// List returns a snapshot of all currently installed entries. The slice is a
+	// fresh copy; mutating it does not affect manager state, and order is
+	// unspecified. Each FileEntry.Name is the logical key and is unique.
 	List() []FileEntry
 
 	// Remove deletes a tracked file and its on-disk version directory.
