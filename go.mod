@@ -9,6 +9,7 @@ require (
 	github.com/go-co-op/gocron/v2 v2.20.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-getter v1.8.6
 	github.com/hashicorp/vault/api v1.23.0

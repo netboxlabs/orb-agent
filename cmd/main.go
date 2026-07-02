@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
@@ -49,37 +48,13 @@ func Version(_ *cobra.Command, _ []string) {
 	os.Exit(0)
 }
 
-func loadConfig(path string, configData *config.Config) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("failed to open config file: %w", err)
-	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			cobra.CheckErr(fmt.Errorf("failed to close config file: %w", err))
-		}
-	}()
-
-	decoder := yaml.NewDecoder(file)
-	if err := decoder.Decode(configData); err != nil {
-		return fmt.Errorf("failed to parse config file: %w", err)
-	}
-
-	return nil
-}
-
 // Run starts the agent
 func Run(_ *cobra.Command, _ []string) {
-	var configData config.Config
-
-	// Override with user-provided config files
-	for _, conf := range cfgFiles {
-		if err := loadConfig(conf, &configData); err != nil {
-			cobra.CheckErr(fmt.Errorf("error loading config file %s: %w", conf, err))
-		}
+	if len(cfgFiles) == 0 {
+		cobra.CheckErr(fmt.Errorf("no config file specified, use --config or -c flag to provide config files"))
 	}
 
-	// logger
+	// logger (constructed before Load so unknown ORB_ overrides can be debug-logged)
 	var l slog.Level
 	if debug {
 		l = slog.LevelDebug
@@ -89,10 +64,9 @@ func Run(_ *cobra.Command, _ []string) {
 	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l, AddSource: false})
 	logger := slog.New(h)
 
-	if len(cfgFiles) > 0 {
-		configData.OrbAgent.ConfigFile = cfgFiles[0]
-	} else {
-		cobra.CheckErr(fmt.Errorf("no config file specified, use --config or -c flag to provide config files"))
+	configData, err := config.Load(logger, cfgFiles)
+	if err != nil {
+		cobra.CheckErr(fmt.Errorf("error loading configuration: %w", err))
 	}
 
 	logger.Info("backends loaded", "backends", redact.SensitiveData(configData.OrbAgent.Backends))
