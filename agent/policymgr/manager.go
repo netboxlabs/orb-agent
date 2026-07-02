@@ -132,11 +132,13 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 			newPayload, err := a.secrets.SolvePolicySecrets(payload)
 			if err != nil {
 				a.logger.Error("failed to solve secrets", "policy_id", payload.ID, "policy_name", payload.Name, "error", err)
-				return
+				pd.State = policies.FailedToApply
+				pd.BackendErr = secretsFailureReason(err)
+			} else {
+				pd.Data = newPayload.Data
+				a.applyPolicy(payload, be, &pd, updatePolicy)
+				pd.Data = payload.Data
 			}
-			pd.Data = newPayload.Data
-			a.applyPolicy(payload, be, &pd, updatePolicy)
-			pd.Data = payload.Data
 		}
 		// save policy (with latest status) to local policy db
 		err := a.repo.Update(pd)
@@ -322,16 +324,33 @@ func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
 			newPayload, err := a.secrets.SolvePolicySecrets(payload)
 			if err != nil {
 				a.logger.Error("failed to solve secrets", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
-				continue
+				policy.State = policies.FailedToApply
+				policy.BackendErr = secretsFailureReason(err)
+			} else {
+				policy.Data = newPayload.Data
+				be := backend.GetBackend(policy.Backend)
+				a.applyPolicy(payload, be, &policy, true)
+				policy.Data = payload.Data
 			}
-			policy.Data = newPayload.Data
-			be := backend.GetBackend(policy.Backend)
-			a.applyPolicy(payload, be, &policy, true)
-			policy.Data = payload.Data
 		}
 
 		if err = a.repo.Update(policy); err != nil {
 			a.logger.Error("got error in update last status", "error", err)
 		}
 	}
+}
+
+// maxSecretsFailureReasonLen bounds the operator-facing reason: provider errors
+// can embed raw HTTP response bodies, and the reason rides in every heartbeat.
+const maxSecretsFailureReasonLen = 1024
+
+// secretsFailureReason builds the operator-facing reason for a failed secret
+// resolution. It contains secret references from the policy body and provider
+// error messages, never resolved secret values.
+func secretsFailureReason(err error) string {
+	reason := "failed to resolve policy secrets: " + err.Error()
+	if len(reason) > maxSecretsFailureReasonLen {
+		reason = reason[:maxSecretsFailureReasonLen] + "... (truncated)"
+	}
+	return reason
 }
