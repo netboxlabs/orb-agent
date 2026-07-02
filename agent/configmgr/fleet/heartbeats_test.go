@@ -1840,6 +1840,50 @@ func TestHeartbeater_GetPolicyState_PropagatesTargetsFromRunData(t *testing.T) {
 	mockPMgr.AssertExpectations(t)
 }
 
+func TestHeartbeater_SendSingleHeartbeat_SerializesBundleState(t *testing.T) {
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	groupManager := newGroupManager()
+	hb := &heartbeater{
+		logger:         logger,
+		backendState:   &mockBackendState{},
+		policyManager:  &mockPolicyManagerForHeartbeat{},
+		groupRetriever: &groupManager,
+		bundleRetriever: stubBundleRetriever{entries: []filesmgr.FileEntry{
+			{
+				Name:        "nbl_cisco_meraki",
+				Version:     "2.15.0",
+				SHA256:      "57c56d72",
+				InstalledAt: testTime,
+			},
+		}},
+	}
+	hb.policyManager.(*mockPolicyManagerForHeartbeat).On("GetPolicyState").Return([]policies.PolicyData{}, nil)
+
+	var capturedPayload []byte
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	hb.sendSingleHeartbeat(context.Background(), "test/topic", publishFunc, "agent-id", testTime, messages.Online, nil)
+
+	require.NotNil(t, capturedPayload)
+
+	var hb2 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &hb2))
+
+	require.Contains(t, hb2.BundleState, "nbl_cisco_meraki")
+	bs := hb2.BundleState["nbl_cisco_meraki"]
+	assert.Equal(t, messages.BundleStateInstalled, bs.State)
+	assert.Equal(t, "2.15.0", bs.Version)
+	assert.Equal(t, "57c56d72", bs.SHA256)
+	assert.True(t, testTime.Equal(bs.InstalledAt))
+
+	assert.Contains(t, string(capturedPayload), `"nbl_cisco_meraki":{"state":"installed","version":"2.15.0","sha256":"57c56d72"`)
+}
+
 func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
 	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
