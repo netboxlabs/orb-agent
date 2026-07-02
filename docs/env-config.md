@@ -51,7 +51,17 @@ orb:
         config: /opt/orb/agent.yaml
   backends:
     network_discovery:
+  policies:
+    network_discovery:
+      policy_1:
+        config:
+          schedule: "0 */2 * * *"
+          timeout: 5
+        scope:
+          targets: [192.168.1.1/22]
 ```
+
+(The `local` config manager requires at least one policy, so a minimal `policies` block is included; without it the agent exits with `no policies specified`. A `git` or `fleet` config manager fetches policies elsewhere and would not need them inline.)
 
 ```sh
 docker run --net=host \
