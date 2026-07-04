@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -24,6 +25,13 @@ func envKeyToConfigPath(name string) (string, bool) {
 	if !strings.Contains(rest, envPathDelim) {
 		return "", false
 	}
+	if strings.Contains(rest, ".") {
+		// An env name containing "." would mis-nest when the joined dot path
+		// is re-split on "." in envToNestedMap, so it is not a valid override
+		// name even though "." is legal in an env var name (e.g. via execve
+		// or an --env-file).
+		return "", false
+	}
 	segments := strings.Split(rest, envPathDelim)
 	for i, s := range segments {
 		if s == "" {
@@ -42,10 +50,15 @@ func envKeyToConfigPath(name string) (string, bool) {
 // rooted at "orb", suitable for a mapstructure overlay onto Config. It reuses
 // envKeyToConfigPath for the naming rules (prefix, "__" delimiter, lowercasing).
 // A "<NAME>=<value>" entry is split on the FIRST "=" only (values may contain "=").
-// It returns an error on a scalar/parent collision (the same env root set both as a
-// leaf value and as a parent of a deeper key) so the outcome is deterministic
+// It returns an error on a collision — the same config path set as a leaf value
+// both by a scalar/parent mismatch and by two different env names mapping to the
+// same path (e.g. differing only in case) — so the outcome is deterministic
 // regardless of os.Environ ordering.
-func envToNestedMap(environ []string) (map[string]any, error) {
+//
+// logger is nil-safe: it is used to debug-log ORB_-prefixed names that are
+// skipped because they are not a valid override (bare name, empty segment, or
+// a dotted name).
+func envToNestedMap(environ []string, logger *slog.Logger) (map[string]any, error) {
 	root := map[string]any{}
 	for _, e := range environ {
 		name, val, ok := strings.Cut(e, "=")
@@ -54,9 +67,20 @@ func envToNestedMap(environ []string) (map[string]any, error) {
 		}
 		path, ok := envKeyToConfigPath(name)
 		if !ok {
+			if logger != nil && strings.HasPrefix(name, envPrefix) {
+				logger.Debug("ignoring ORB_ environment variable that is not a valid config override", "name", name)
+			}
 			continue
 		}
-		segments := strings.Split(path, ".") // safe: config keys are snake_case, never contain "."
+		if val == "" {
+			// A set-but-empty ORB_* value is treated as unset, not as an
+			// override to a zero value, so it never clobbers a file-set value.
+			if logger != nil {
+				logger.Debug("ignoring empty-valued ORB_ environment variable", "name", name)
+			}
+			continue
+		}
+		segments := strings.Split(path, ".") // safe: envKeyToConfigPath rejects names containing "."
 		if err := nest(root, segments, val); err != nil {
 			return nil, err
 		}
@@ -66,7 +90,10 @@ func envToNestedMap(environ []string) (map[string]any, error) {
 
 // nest walks segments creating intermediate maps, setting val at the leaf.
 // It errors on a collision: descending through a segment that already holds a
-// scalar, or setting a leaf where a map already exists.
+// scalar, setting a leaf where a map already exists, or setting a leaf that
+// was already set as a leaf by a different env name mapping to the same path
+// (env names are unique, so a same-path leaf duplicate can only come from two
+// different names — always a real conflict, e.g. differing only in case).
 func nest(m map[string]any, segments []string, val string) error {
 	for i, seg := range segments {
 		last := i == len(segments)-1
@@ -75,6 +102,7 @@ func nest(m map[string]any, segments []string, val string) error {
 				if _, isMap := existing.(map[string]any); isMap {
 					return fmt.Errorf("conflicting ORB_ override: %q is set both as a value and as a parent of deeper keys", strings.Join(segments, "."))
 				}
+				return fmt.Errorf("conflicting ORB_ overrides: %q is set more than once", strings.Join(segments, "."))
 			}
 			m[seg] = val
 			return nil
