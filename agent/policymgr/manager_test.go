@@ -1237,7 +1237,8 @@ func TestManagePolicy_SecretsFailure_ReasonTruncated(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, state, 1)
 	assert.True(t, strings.HasPrefix(state[0].BackendErr, "failed to resolve policy secrets:"))
-	assert.LessOrEqual(t, len(state[0].BackendErr), 1024+len("... (truncated)"))
+	// total length (marker included) must stay within the 1024-byte bound
+	assert.LessOrEqual(t, len(state[0].BackendErr), 1024)
 	assert.True(t, strings.HasSuffix(state[0].BackendErr, "... (truncated)"))
 }
 

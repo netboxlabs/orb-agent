@@ -146,8 +146,17 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 			}
 		}
 		if pd.State == policies.Running {
-			// the apply (incl. any pending rename removal) reached the backend:
-			// persisted PreviousPolicyData means exactly "rename pending"
+			// A successful apply clears any pending rename, so persisted
+			// PreviousPolicyData means exactly "rename pending".
+			//
+			// Caveat: State==Running proves only that the NEW-name apply
+			// succeeded. Backends swallow the update-embedded RemovePolicy
+			// error for the OLD name (they log it and proceed to apply), so a
+			// rename whose old-name delete transiently failed can leave the old
+			// policy installed while we drop its cleanup reference here. This
+			// orphan-on-failed-delete predates this change — the old name was
+			// likewise dropped on the following manage — and closing it needs
+			// the backend to report the delete outcome separately from the apply.
 			pd.PreviousPolicyData = nil
 		}
 		// save policy (with latest status) to local policy db
@@ -304,6 +313,8 @@ func (a *policyManager) ApplyBackendPolicies(be backend.Backend) error {
 			a.logger.Info("policy applied successfully", "policy_id", policy.ID, "policy_name", policy.Name)
 			policy.State = policies.Running
 			policy.BackendErr = ""
+			// see ManagePolicy: clearing on Running assumes the rename delete
+			// succeeded, which backends do not confirm (swallowed remove error)
 			policy.PreviousPolicyData = nil
 		}
 		err = a.repo.Update(policy)
@@ -351,7 +362,8 @@ func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
 		}
 
 		if policy.State == policies.Running {
-			// see manage branch: persisted PreviousPolicyData means "rename pending"
+			// see ManagePolicy: persisted PreviousPolicyData means "rename pending"
+			// (and the same swallowed-remove caveat about the old-name delete)
 			policy.PreviousPolicyData = nil
 		}
 
@@ -369,9 +381,12 @@ const maxSecretsFailureReasonLen = 1024
 // resolution. It contains secret references from the policy body and provider
 // error messages, never resolved secret values.
 func secretsFailureReason(err error) string {
+	const truncationMarker = "... (truncated)"
 	reason := "failed to resolve policy secrets: " + err.Error()
 	if len(reason) > maxSecretsFailureReasonLen {
-		reason = reason[:maxSecretsFailureReasonLen] + "... (truncated)"
+		// keep the TOTAL length within maxSecretsFailureReasonLen, marker included,
+		// so the reason rides every heartbeat with a bounded payload
+		reason = reason[:maxSecretsFailureReasonLen-len(truncationMarker)] + truncationMarker
 	}
 	return reason
 }
