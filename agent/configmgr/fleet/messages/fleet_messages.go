@@ -6,7 +6,7 @@ import (
 )
 
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
-const CurrentHeartbeatSchemaVersion = "1.1"
+const CurrentHeartbeatSchemaVersion = "1.2"
 
 var (
 	// ErrSchemaVersion a message was received indicating a version we don't support
@@ -60,6 +60,19 @@ type GroupStateInfo struct {
 	GroupID   string `json:"id"`
 }
 
+// BundleStateInstalled is the reported state for a bundle present on disk.
+// Lifecycle states (installing/failed/expired) are intentionally out of scope
+// for schema 1.2; the store only records successfully installed bundles.
+const BundleStateInstalled = "installed"
+
+// BundleStateInfo contains state information for an installed bundle.
+type BundleStateInfo struct {
+	State       string    `json:"state"`
+	Version     string    `json:"version,omitempty"`
+	SHA256      string    `json:"sha256,omitempty"`
+	InstalledAt time.Time `json:"installed_at,omitzero"`
+}
+
 // Heartbeat represents an agent heartbeat message
 type Heartbeat struct {
 	SchemaVersion string                      `json:"schema_version"`
@@ -68,6 +81,7 @@ type Heartbeat struct {
 	BackendState  map[string]BackendStateInfo `json:"backend_state"`
 	PolicyState   map[string]PolicyStateInfo  `json:"policy_state"`
 	GroupState    map[string]GroupStateInfo   `json:"group_state"`
+	BundleState   map[string]BundleStateInfo  `json:"bundle_state"`
 }
 
 // HeartbeatState represents the current state of an agent in the system

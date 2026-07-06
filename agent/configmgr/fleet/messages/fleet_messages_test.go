@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCurrentHeartbeatSchemaVersion_IsOneOne(t *testing.T) {
-	assert.Equal(t, "1.1", CurrentHeartbeatSchemaVersion)
+func TestCurrentHeartbeatSchemaVersion_IsOneTwo(t *testing.T) {
+	assert.Equal(t, "1.2", CurrentHeartbeatSchemaVersion)
 }
 
 func TestRunStateInfo_TargetsOmittedWhenNil(t *testing.T) {

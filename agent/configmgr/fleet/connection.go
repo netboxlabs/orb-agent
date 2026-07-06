@@ -55,7 +55,7 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 	return &MQTTConnection{
 		connectionManager:  nil,
 		logger:             logger,
-		heartbeater:        newHeartbeater(logger, backendState, pMgr, &groupManager),
+		heartbeater:        newHeartbeater(logger, backendState, pMgr, &groupManager, filesManager),
 		messaging:          NewMessaging(logger, pMgr, resetChan, &groupManager, filesManager),
 		resetChan:          resetChan,
 		onReadyHooks:       make([]func(cm *autopaho.ConnectionManager, topics TokenResponseTopics), 0),
