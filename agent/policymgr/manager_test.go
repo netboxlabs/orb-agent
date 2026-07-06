@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,9 +255,8 @@ func TestManagePolicy_ManageAction_UpdatePolicy(t *testing.T) {
 	assert.True(t, state[0].Datasets["dataset1"])
 	assert.True(t, state[0].Datasets["dataset2"])
 
-	// Check for PreviousPolicyData with original name
-	require.NotNil(t, state[0].PreviousPolicyData)
-	assert.Equal(t, "Test Policy", state[0].PreviousPolicyData.Name)
+	// a successful apply consumes the pending rename: no residue persists
+	assert.Nil(t, state[0].PreviousPolicyData)
 }
 
 func TestManagePolicy_BackendNotRunning(t *testing.T) {
@@ -1085,6 +1085,163 @@ func TestManagePolicy_DefaultAction(t *testing.T) {
 	assert.Empty(t, state)
 }
 
+func TestManagePolicy_ManageAction_SecretsFailure(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "secretsfailbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("secretsfailbackend", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	payload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "policy-sf1",
+		Name:      "Secrets Fail Policy",
+		Backend:   "secretsfailbackend",
+		Version:   1,
+		Data:      map[string]any{"password": "${secret://vault/kv/password}"},
+		DatasetID: "dataset-sf1",
+	}
+	secretsErr := errors.New("failed to get secret path kv/data/kv/password: secret not found")
+	secretsMgr.On("SolvePolicySecrets", payload).Return(config.PolicyPayload{}, secretsErr)
+
+	mgr.ManagePolicy(payload)
+
+	// The policy must never reach the backend.
+	mockBe.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	secretsMgr.AssertExpectations(t)
+
+	// The failure is PERSISTED so the heartbeat's policy_state channel reports it.
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	pd := state[0]
+	assert.Equal(t, policies.FailedToApply, pd.State)
+	// Short reason: exact value, untruncated, no marker.
+	assert.Equal(t, "failed to resolve policy secrets: "+secretsErr.Error(), pd.BackendErr)
+
+	// A second failing manage (e.g. full-list re-delivery on reconnect) is
+	// idempotent: still one policy, still failed.
+	payload2 := payload
+	payload2.Version = 2
+	payload2.DatasetID = "" // updates usually do not carry a dataset id
+	secretsMgr.On("SolvePolicySecrets", payload2).Return(config.PolicyPayload{}, secretsErr)
+	mgr.ManagePolicy(payload2)
+
+	state, err = mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.FailedToApply, state[0].State)
+
+	// Recovery: a manage with WORKING secrets applies normally and clears the error.
+	payload3 := payload
+	payload3.Version = 3
+	payload3.DatasetID = ""
+	secretsMgr.On("SolvePolicySecrets", payload3).Return(payload3, nil)
+	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
+		return pd.ID == "policy-sf1" && pd.Version == 3
+	}), true).Return(nil)
+	mgr.ManagePolicy(payload3)
+
+	state, err = mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.Running, state[0].State)
+	assert.Empty(t, state[0].BackendErr)
+}
+
+func TestPoliciesChanged_SecretsFailureAndRecovery(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "secretsreapplybackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("secretsreapplybackend", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	policyData := map[string]any{"key": "value"}
+	payload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "policy-rc1",
+		Name:      "Recheck Policy",
+		Backend:   "secretsreapplybackend",
+		Version:   1,
+		Data:      policyData,
+		DatasetID: "dataset-rc1",
+	}
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
+	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
+		return pd.ID == "policy-rc1"
+	}), mock.Anything).Return(nil)
+	mgr.ManagePolicy(payload)
+
+	// The secrets-changed callback rebuilds a minimal payload from the repo.
+	// IMPORTANT: verify the matcher against the ACTUAL payload construction in
+	// the re-apply loop (config.PolicyPayload{ID, Name, Data}) before finalizing.
+	reapplyPayload := config.PolicyPayload{ID: "policy-rc1", Name: "Recheck Policy", Data: policyData}
+	secretsMgr.On("SolvePolicySecrets", reapplyPayload).Return(config.PolicyPayload{}, errors.New("vault sealed")).Once()
+	secretsMgr.TriggerCallbacks(map[string]bool{"policy-rc1": true})
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.FailedToApply, state[0].State)
+	assert.Contains(t, state[0].BackendErr, "failed to resolve policy secrets:")
+	assert.Contains(t, state[0].BackendErr, "vault sealed")
+
+	// Recovery through the callback: secrets resolve again -> Running, error cleared.
+	secretsMgr.On("SolvePolicySecrets", reapplyPayload).Return(reapplyPayload, nil)
+	secretsMgr.TriggerCallbacks(map[string]bool{"policy-rc1": true})
+
+	state, err = mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.Running, state[0].State)
+	assert.Empty(t, state[0].BackendErr)
+}
+
+func TestManagePolicy_SecretsFailure_ReasonTruncated(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "secretstruncbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("secretstruncbackend", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	payload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "policy-tr1",
+		Name:      "Trunc Policy",
+		Backend:   "secretstruncbackend",
+		Version:   1,
+		Data:      map[string]any{"key": "value"},
+		DatasetID: "dataset-tr1",
+	}
+	// Provider errors can embed unbounded HTTP response bodies.
+	giant := errors.New(strings.Repeat("x", 5000))
+	secretsMgr.On("SolvePolicySecrets", payload).Return(config.PolicyPayload{}, giant)
+	mgr.ManagePolicy(payload)
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.True(t, strings.HasPrefix(state[0].BackendErr, "failed to resolve policy secrets:"))
+	// total length (marker included) must stay within the 1024-byte bound
+	assert.LessOrEqual(t, len(state[0].BackendErr), 1024)
+	assert.True(t, strings.HasSuffix(state[0].BackendErr, "... (truncated)"))
+}
+
 func TestRemoveBackendPolicies_BackendError_Permanently(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := new(mockSecretsManager)
@@ -1114,4 +1271,132 @@ func TestRemoveBackendPolicies_BackendError_Permanently(t *testing.T) {
 	state, err := mgr.GetPolicyState()
 	require.NoError(t, err)
 	assert.Empty(t, state)
+}
+
+func TestManagePolicy_RenameSecretsFailure_CarriesPreviousPolicyData(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "secretsrenamebackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("secretsrenamebackend", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	policyData := map[string]any{"key": "value"}
+	payloadV1 := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "policy-rn1",
+		Name:      "Old Name",
+		Backend:   "secretsrenamebackend",
+		Version:   1,
+		Data:      policyData,
+		DatasetID: "dataset-rn1",
+	}
+	secretsMgr.On("SolvePolicySecrets", payloadV1).Return(payloadV1, nil)
+	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
+		return pd.ID == "policy-rn1" && pd.Version == 1
+	}), false).Return(nil)
+	mgr.ManagePolicy(payloadV1)
+
+	// v2 renames the policy AND fails secret resolution: the rename never
+	// reaches the backend, but the pending rename chain must be persisted.
+	payloadV2 := payloadV1
+	payloadV2.Name = "New Name"
+	payloadV2.Version = 2
+	payloadV2.DatasetID = ""
+	secretsMgr.On("SolvePolicySecrets", payloadV2).Return(config.PolicyPayload{}, errors.New("vault sealed"))
+	mgr.ManagePolicy(payloadV2)
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.FailedToApply, state[0].State)
+	require.NotNil(t, state[0].PreviousPolicyData)
+	assert.Equal(t, "Old Name", state[0].PreviousPolicyData.Name)
+
+	// v3: same-name manage, still failing — the pending chain is carried, not lost.
+	payloadV3 := payloadV2
+	payloadV3.Version = 3
+	secretsMgr.On("SolvePolicySecrets", payloadV3).Return(config.PolicyPayload{}, errors.New("vault sealed"))
+	mgr.ManagePolicy(payloadV3)
+
+	state, err = mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	require.NotNil(t, state[0].PreviousPolicyData)
+	assert.Equal(t, "Old Name", state[0].PreviousPolicyData.Name)
+
+	// v4: a STACKED rename (to a third name) with recovered secrets. The PENDING
+	// chain must win over the intermediate repo name ("New Name" never reached
+	// the backend): the backend must be told to remove "Old Name".
+	payloadV4 := payloadV3
+	payloadV4.Name = "Third Name"
+	payloadV4.Version = 4
+	secretsMgr.On("SolvePolicySecrets", payloadV4).Return(payloadV4, nil)
+	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
+		return pd.ID == "policy-rn1" && pd.Version == 4 && pd.Name == "Third Name" &&
+			pd.PreviousPolicyData != nil && pd.PreviousPolicyData.Name == "Old Name"
+	}), true).Return(nil)
+	mgr.ManagePolicy(payloadV4)
+
+	mockBe.AssertExpectations(t)
+
+	// Invariant: after the successful apply, the pending rename is consumed —
+	// the persisted PreviousPolicyData must be nil (persisted PPD == pending).
+	state, err = mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.Running, state[0].State)
+	assert.Nil(t, state[0].PreviousPolicyData)
+}
+
+func TestRemovePolicy_PendingRenameTargetsBackendName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	cfg := config.Config{}
+
+	mockBe := &mockBackend{name: "secretsremovebackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("secretsremovebackend", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	require.NoError(t, err)
+
+	policyData := map[string]any{"key": "value"}
+	payloadV1 := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "policy-rm1",
+		Name:      "Live Name",
+		Backend:   "secretsremovebackend",
+		Version:   1,
+		Data:      policyData,
+		DatasetID: "dataset-rm1",
+	}
+	secretsMgr.On("SolvePolicySecrets", payloadV1).Return(payloadV1, nil)
+	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
+		return pd.ID == "policy-rm1" && pd.Version == 1
+	}), false).Return(nil)
+	mgr.ManagePolicy(payloadV1)
+
+	// Rename fails secrets: repo now says "Renamed Name" but the backend still
+	// runs "Live Name" (pending rename persisted by Task 1).
+	payloadV2 := payloadV1
+	payloadV2.Name = "Renamed Name"
+	payloadV2.Version = 2
+	payloadV2.DatasetID = ""
+	secretsMgr.On("SolvePolicySecrets", payloadV2).Return(config.PolicyPayload{}, errors.New("vault sealed"))
+	mgr.ManagePolicy(payloadV2)
+
+	// Removal must hand the backend the STORED record so its remove honors the
+	// pending rename (all backends prefer PreviousPolicyData.Name for deletes).
+	mockBe.On("RemovePolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
+		return pd.ID == "policy-rm1" &&
+			pd.PreviousPolicyData != nil && pd.PreviousPolicyData.Name == "Live Name"
+	})).Return(nil)
+	require.NoError(t, mgr.RemovePolicy("policy-rm1", "Renamed Name", "secretsremovebackend"))
+
+	mockBe.AssertExpectations(t)
 }
