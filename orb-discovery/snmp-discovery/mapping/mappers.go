@@ -30,10 +30,11 @@ const (
 	// exact value on certain internal interfaces as an "unlimited" sentinel rather than a
 	// real MTU, which is why a second, tighter cap (netboxMaxInterfaceMTU) exists below.
 	maxInterfaceMTU = 2147483647
-	// netboxMaxInterfaceMTU is NetBox's actual field constraint (see issue #444). Values
-	// that pass the protocol-level maxInterfaceMTU check above can still exceed this and
-	// fail NetBox ingestion, taking down the entire batch — so this is enforced separately,
-	// just before the value is attached to the entity, rather than folded into the check above.
+	// netboxMaxInterfaceMTU is NetBox's actual field constraint. Values that pass the
+	// protocol-level maxInterfaceMTU check above can still exceed this and fail NetBox
+	// ingestion, taking down the entire batch — so this is enforced separately, just
+	// before the value would be attached to the entity, rather than folded into the
+	// check above.
 	netboxMaxInterfaceMTU = 65536
 )
 
@@ -933,14 +934,18 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						continue
 					}
 					// Some vendors (observed: JUNOS) report maxInterfaceMTU itself as an
-					// "unlimited" sentinel on certain internal interfaces. NetBox's actual
-					// field constraint is much lower (issue #444) — clip to it here so one
-					// out-of-range interface doesn't fail the entire ingest batch.
+					// "unlimited" sentinel on certain internal interfaces, rather than a real
+					// MTU. NetBox's actual field constraint is much lower, so a value this
+					// large would still fail NetBox ingestion downstream. Skip the field
+					// rather than clip it — clipping would attach a fabricated value that
+					// isn't the interface's real MTU, and every other out-of-range MTU case
+					// in this function (zero, negative, int32-overflow) already skips rather
+					// than substitutes an approximation.
 					if mtu > netboxMaxInterfaceMTU {
-						m.logger.Warn("interface MTU exceeds NetBox's field limit, clipping", "mtu", mtu,
+						m.logger.Warn("interface MTU exceeds NetBox's field limit, skipping", "mtu", mtu,
 							"netbox_max_mtu", netboxMaxInterfaceMTU, "value", value.Value,
 							"mapping_id", propertyMappingEntry.OID, "interface_index", objectID)
-						mtu = netboxMaxInterfaceMTU
+						continue
 					}
 					mtu64 := mtu
 					interfaceEntity.Mtu = &mtu64

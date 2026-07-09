@@ -1185,11 +1185,12 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
-			// Regression test for issue #444: some vendors (observed: JUNOS) report this
-			// exact value on certain internal interfaces as an "unlimited" sentinel. It
-			// passes the protocol-level int32 bound but must be clipped to NetBox's real
-			// field limit (65536), or the entire ingest batch fails downstream.
-			name: "mapping with MTU at protocol maximum should be clipped to NetBox's limit",
+			// Regression test: some vendors (observed: JUNOS) report this exact value on
+			// certain internal interfaces as an "unlimited" sentinel rather than a real
+			// MTU. It passes the protocol-level int32 bound but exceeds NetBox's real
+			// field limit (65536) — the field is skipped (not clipped to a fabricated
+			// value), consistent with how every other out-of-range MTU case here behaves.
+			name: "mapping with MTU at protocol maximum should be skipped, not clipped",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.2.2.1.1.1": {
 					OID:    "1.3.6.1.2.1.2.2.1.1.1",
@@ -1238,7 +1239,7 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			defaults: nil,
 			expectedEntity: &diode.Interface{
 				Name: mapping.StringPtr("eth0"),
-				Mtu:  int64Ptr(65536), // clipped to NetBox's field limit, not the raw 2147483647 sentinel
+				Mtu:  nil, // skipped: 2147483647 exceeds NetBox's field limit, not attached as a fabricated value
 			},
 			expectError: false,
 		},
