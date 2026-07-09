@@ -25,7 +25,16 @@ const (
 // MTU constants
 const (
 	minInterfaceMTU = 1
+	// maxInterfaceMTU guards against corrupt/overflowed SNMP data — it's the protocol-level
+	// int32 bound, not NetBox's schema limit. Some vendors (observed: JUNOS) report this
+	// exact value on certain internal interfaces as an "unlimited" sentinel rather than a
+	// real MTU, which is why a second, tighter cap (netboxMaxInterfaceMTU) exists below.
 	maxInterfaceMTU = 2147483647
+	// netboxMaxInterfaceMTU is NetBox's actual field constraint (see issue #444). Values
+	// that pass the protocol-level maxInterfaceMTU check above can still exceed this and
+	// fail NetBox ingestion, taking down the entire batch — so this is enforced separately,
+	// just before the value is attached to the entity, rather than folded into the check above.
+	netboxMaxInterfaceMTU = 65536
 )
 
 // IPAddressMapper is a struct that maps IP addresses to entities
@@ -922,6 +931,16 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						m.logger.Warn("interface MTU is outside valid range (1-2147483647) or overflows int32", "mtu", mtu,
 							"value", value.Value, "mapping_id", propertyMappingEntry.OID, "interface_index", objectID)
 						continue
+					}
+					// Some vendors (observed: JUNOS) report maxInterfaceMTU itself as an
+					// "unlimited" sentinel on certain internal interfaces. NetBox's actual
+					// field constraint is much lower (issue #444) — clip to it here so one
+					// out-of-range interface doesn't fail the entire ingest batch.
+					if mtu > netboxMaxInterfaceMTU {
+						m.logger.Warn("interface MTU exceeds NetBox's field limit, clipping", "mtu", mtu,
+							"netbox_max_mtu", netboxMaxInterfaceMTU, "value", value.Value,
+							"mapping_id", propertyMappingEntry.OID, "interface_index", objectID)
+						mtu = netboxMaxInterfaceMTU
 					}
 					mtu64 := mtu
 					interfaceEntity.Mtu = &mtu64
