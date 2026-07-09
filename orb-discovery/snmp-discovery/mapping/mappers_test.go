@@ -1185,7 +1185,12 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "mapping with MTU at maximum valid value should succeed",
+			// Regression test: some vendors (observed: JUNOS) report this exact value on
+			// certain internal interfaces as an "unlimited" sentinel rather than a real
+			// MTU. It passes the protocol-level int32 bound but exceeds NetBox's real
+			// field limit (65536) — the field is skipped (not clipped to a fabricated
+			// value), consistent with how every other out-of-range MTU case here behaves.
+			name: "mapping with MTU at protocol maximum should be skipped, not clipped",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.2.2.1.1.1": {
 					OID:    "1.3.6.1.2.1.2.2.1.1.1",
@@ -1234,7 +1239,63 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			defaults: nil,
 			expectedEntity: &diode.Interface{
 				Name: mapping.StringPtr("eth0"),
-				Mtu:  int64Ptr(2147483647), // MTU should be set when value is at maximum valid range
+				Mtu:  nil, // skipped: 2147483647 exceeds NetBox's field limit, not attached as a fabricated value
+			},
+			expectError: false,
+		},
+		{
+			// Boundary check: exactly at NetBox's limit must pass through unclipped —
+			// only values *above* netboxMaxInterfaceMTU should be modified.
+			name: "mapping with MTU exactly at NetBox's limit should not be clipped",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.1.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.1",
+					Value:  "1",
+					Type:   mapping.Integer,
+				},
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.4.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.4.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.4",
+					Value:  "65536",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.1",
+						Entity: "interface",
+						Field:  "_id",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.4",
+						Entity: "interface",
+						Field:  "mtu",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("eth0"),
+				Mtu:  int64Ptr(65536),
 			},
 			expectError: false,
 		},
