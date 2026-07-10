@@ -359,8 +359,20 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
 
         # --- system info via ntc-template ---
         raw_system = self.device.send_command("show system")
+        # The hp_procurve show system template (ntc-templates >= 9.2) is strict
+        # (single state ending in ``^. -> Error``): the banner line real devices
+        # print before the "Status and Counters" header — e.g. the model name —
+        # aborts the parse. Feed the template only the recognized section; the
+        # banner is still harvested for the model below.
+        system_lines = raw_system.splitlines()
+        section_start = next(
+            (i for i, ln in enumerate(system_lines) if "Status and Counters" in ln),
+            0,
+        )
         parsed_system = parse_output(
-            platform=_NTC_PLATFORM, command="show system", data=raw_system
+            platform=_NTC_PLATFORM,
+            command="show system",
+            data="\n".join(system_lines[section_start:]),
         )
         if parsed_system:
             row = parsed_system[0]
