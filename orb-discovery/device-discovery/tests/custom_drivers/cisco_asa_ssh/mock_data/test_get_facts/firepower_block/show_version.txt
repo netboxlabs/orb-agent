@@ -1,0 +1,17 @@
+Cisco Adaptive Security Appliance Software Version 9.16.4
+
+fw-lab-1 up 3 hours 24 mins
+
+Hardware:   ASA5516-X
+
+Model Id:   ASA5516-X
+Serial Number: JADFPWR0001
+
+                              Driver version        : 4.12.0
+                              Firmware version       : 5.10
+                              NPU utilization        : 0%
+
+  0: Ext: GigabitEthernet1/1
+  1: Ext: GigabitEthernet1/2
+  2: Ext: GigabitEthernet1/3
+  3: Mgmt: Management1/1

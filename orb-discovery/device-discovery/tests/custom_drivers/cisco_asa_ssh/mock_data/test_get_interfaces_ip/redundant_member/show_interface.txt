@@ -1,0 +1,36 @@
+Interface GigabitEthernet1/1 "", is up, line protocol is up
+  Hardware is en_vec, BW 1000000 Kbit, DLY 10 usec
+        Auto-Duplex(Full-duplex), Auto-Speed(1000 Mbps)
+  MAC address aabb.cc00.0100, MTU not set
+  IP address unassigned
+  Active member of Redundant1
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec
+
+Interface GigabitEthernet1/2 "", is up, line protocol is up
+  Hardware is en_vec, BW 1000000 Kbit, DLY 10 usec
+        Auto-Duplex(Full-duplex), Auto-Speed(1000 Mbps)
+  MAC address aabb.cc00.0200, MTU not set
+  IP address unassigned
+	Standby member of Redundant1
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec
+
+Interface Redundant1 "inside", is up, line protocol is up
+  Hardware is Redundant Interface, BW 1000000 Kbit, DLY 10 usec
+  MAC address aabb.cc00.0100, MTU 1500
+  IP address 192.0.2.1, subnet mask 255.255.255.0
+  1 minute input rate 0 pkts/sec, 0 bytes/sec
+  1 minute output rate 0 pkts/sec, 0 bytes/sec
+  1 minute drop rate, 0 pkts/sec
+  5 minute input rate 0 pkts/sec, 0 bytes/sec
+  5 minute output rate 0 pkts/sec, 0 bytes/sec
+  5 minute drop rate, 0 pkts/sec
