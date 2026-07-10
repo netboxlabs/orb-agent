@@ -1,0 +1,15 @@
+{
+  "hostname": "fw-lab-1",
+  "vendor": "Cisco",
+  "model": "ASA5516-X",
+  "os_version": "9.16.4",
+  "serial_number": "JADFPWR0001",
+  "uptime": 12240.0,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "GigabitEthernet1/1",
+    "GigabitEthernet1/2",
+    "GigabitEthernet1/3",
+    "Management1/1"
+  ]
+}

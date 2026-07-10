@@ -16,6 +16,7 @@ from napalm.base import models
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
+from textfsm.parser import TextFSMError
 
 logger = logging.getLogger(__name__)
 
@@ -98,15 +99,61 @@ def _parse_speed(speed_raw: str) -> float:
 # parsing lets the template emit one row per physical AND one per
 # sub-interface. VLAN ID is currently unused by get_interfaces /
 # get_interfaces_ip — preserving it is not required.
-_ENCAP_LINE_RE = re.compile(
-    r"^\s+Encapsulation:.*$",
+#
+# Redundant-interface member lines (``  Active member of Redundant1`` /
+# ``  Standby member of Redundant1``) hit the same strict rule: the template
+# only recognises the "Active" form, so a "Standby member of RedundantN"
+# line (observed TAB-indented on some platform variants) raises TextFSMError.
+# Neither form is consumed by get_interfaces / get_interfaces_ip, so both are
+# safe to strip pre-emptively.
+_UNPARSEABLE_LINE_RE = re.compile(
+    r"^\s+Encapsulation:.*$|^\s+(?:Active|Standby) member of Redundant\d+\s*$",
     re.MULTILINE,
 )
 
 
 def _strip_unparseable_lines(raw: str) -> str:
     """Pre-filter raw ``show interface`` output so the ntc-template's strict ``^. -> Error`` rule doesn't trip."""
-    return _ENCAP_LINE_RE.sub("", raw)
+    return _UNPARSEABLE_LINE_RE.sub("", raw)
+
+
+# --- resilient TextFSM parsing (handles platform-variant lines the static
+# pre-filter above doesn't anticipate, e.g. Firepower hardware running ASA
+# software emitting extra indented blocks in ``show version``) ---
+_INPUT_LINE_RE = re.compile(r"Input Line:\s?(.*)")
+_MAX_STRIPPED_LINES = 25
+
+
+def _parse_output_resilient(command: str, data: str, logger: logging.Logger) -> list:
+    """
+    parse_output with a bounded retry that strips lines the template rejects.
+
+    ASA-family firmware variants (e.g. Firepower hardware running ASA
+    software) emit lines the strict cisco_asa ntc-templates raise
+    TextFSMError on. Each retry removes every occurrence of the offending
+    line (matched on stripped content) and warns, so one unknown line costs
+    one retry instead of failing the whole getter.
+    """
+    for _ in range(_MAX_STRIPPED_LINES):
+        try:
+            return parse_output(platform="cisco_asa", command=command, data=data)
+        except TextFSMError as e:
+            m = _INPUT_LINE_RE.search(str(e))
+            if not m:
+                raise
+            offending = m.group(1).strip()
+            if not offending:
+                raise
+            kept = [ln for ln in data.splitlines() if ln.strip() != offending]
+            if len(kept) == len(data.splitlines()):
+                raise  # nothing removed — avoid an infinite loop
+            logger.warning(
+                "cisco_asa template rejected line; stripped and retrying: %r", offending
+            )
+            data = "\n".join(kept)
+    raise TextFSMError(
+        f"cisco_asa template rejected more than {_MAX_STRIPPED_LINES} lines for {command!r}"
+    )
 
 
 class ASASSHDriver(_napalm_base.NetworkDriver):
@@ -152,7 +199,7 @@ class ASASSHDriver(_napalm_base.NetworkDriver):
     def get_facts(self) -> dict:
         """Return general device facts."""
         raw = self.device.send_command("show version")
-        parsed = parse_output(platform="cisco_asa", command="show version", data=raw)
+        parsed = _parse_output_resilient("show version", raw, logger)
         if not parsed:
             return {}
 
@@ -181,10 +228,8 @@ class ASASSHDriver(_napalm_base.NetworkDriver):
     def get_interfaces(self) -> dict:
         """Return interface details keyed by interface name (physical + sub-interfaces)."""
         raw = self.device.send_command("show interface")
-        parsed = parse_output(
-            platform="cisco_asa",
-            command="show interface",
-            data=_strip_unparseable_lines(raw),
+        parsed = _parse_output_resilient(
+            "show interface", _strip_unparseable_lines(raw), logger
         )
 
         interfaces = {}
@@ -217,10 +262,8 @@ class ASASSHDriver(_napalm_base.NetworkDriver):
     def get_interfaces_ip(self) -> dict:
         """Return IP addresses per interface (keyed by physical OR sub-interface name)."""
         raw = self.device.send_command("show interface")
-        parsed = parse_output(
-            platform="cisco_asa",
-            command="show interface",
-            data=_strip_unparseable_lines(raw),
+        parsed = _parse_output_resilient(
+            "show interface", _strip_unparseable_lines(raw), logger
         )
 
         interfaces_ip: dict = {}
