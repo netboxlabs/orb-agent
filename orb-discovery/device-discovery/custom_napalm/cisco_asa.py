@@ -8,6 +8,12 @@ Enable the REST API on the device with: rest-api agent
 Implements only the methods used by device-discovery:
   get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
 
+Supported optional_args:
+  port        REST API port (default 443)
+  ssl_verify  validate the device TLS certificate against the system CA
+              store (default False — ASA management interfaces typically
+              present self-signed certificates)
+
 Reference: https://github.com/napalm-automation-community/napalm-asa
 """
 
@@ -95,13 +101,25 @@ class _LegacyTLSAdapter(HTTPAdapter):
     ASA 9.15+ uses an older TLS renegotiation mode that Python/OpenSSL 3.0
     rejects by default. Setting OP_LEGACY_SERVER_CONNECT restores the old
     behaviour. See napalm-asa issue #37.
+
+    With verify=False (the default) certificate validation is disabled, as ASA
+    management interfaces typically present self-signed certificates. With
+    verify=True the system CA store validates the chain and hostname.
     """
+
+    def __init__(self, verify: bool = False, **kwargs: object) -> None:
+        """Store the verification mode before HTTPAdapter builds the pool manager."""
+        self._verify = verify
+        super().__init__(**kwargs)
 
     def init_poolmanager(self, *args: object, **kwargs: object) -> None:
         """Create an SSL context with legacy renegotiation support."""
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        if self._verify:
+            ctx = ssl.create_default_context()
+        else:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         ctx.options |= _OP_LEGACY_SERVER_CONNECT
         kwargs["ssl_context"] = ctx
         super().init_poolmanager(*args, **kwargs)
@@ -115,15 +133,16 @@ class _LegacyTLSAdapter(HTTPAdapter):
 class _ASARest:
     """Private HTTP helper: session management, token auth, paginated requests."""
 
-    def __init__(self, username: str, password: str, base_url: str, timeout: int) -> None:
+    def __init__(self, username: str, password: str, base_url: str, timeout: int, ssl_verify: bool = False) -> None:
         """Initialise session and mount the legacy-TLS adapter."""
         self.username = username
         self.password = password
         self.base_url = base_url
         self.timeout = timeout
+        self.ssl_verify = ssl_verify
         self.token = ""
         self.session = requests.Session()
-        self.session.mount("https://", _LegacyTLSAdapter())
+        self.session.mount("https://", _LegacyTLSAdapter(verify=ssl_verify))
         self.session.headers.update({"Content-Type": "application/json"})
 
     def get_auth_token(self) -> tuple[bool, int | None]:
@@ -137,7 +156,7 @@ class _ASARest:
                     auth=(self.username, self.password),
                     data="",
                     timeout=self.timeout,
-                    verify=False,
+                    verify=self.ssl_verify,
                 )
             if resp.status_code == 204 and "X-Auth-Token" in resp.headers:
                 self.token = resp.headers["X-Auth-Token"]
@@ -157,7 +176,7 @@ class _ASARest:
                     full_url,
                     auth=(self.username, self.password),
                     timeout=self.timeout,
-                    verify=False,
+                    verify=self.ssl_verify,
                 )
             if resp.status_code == 204:
                 self.session.headers.pop("X-Auth-Token", None)
@@ -180,9 +199,9 @@ class _ASARest:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", _InsecureRequestWarning)
                 if data is not None:
-                    resp = self.session.post(full_url, data=data, timeout=self.timeout, params=params, verify=False)
+                    resp = self.session.post(full_url, data=data, timeout=self.timeout, params=params, verify=self.ssl_verify)
                 else:
-                    resp = self.session.get(full_url, timeout=self.timeout, params=params, verify=False)
+                    resp = self.session.get(full_url, timeout=self.timeout, params=params, verify=self.ssl_verify)
             if resp.status_code != 200:
                 if throw:
                     raise CommandErrorException(f"Operation returned an error: {resp.status_code}")
@@ -227,6 +246,7 @@ class ASADriver(_napalm_base.NetworkDriver):
             password=password,
             base_url=f"https://{hostname}:{port}/api",
             timeout=timeout,
+            ssl_verify=bool(optional_args.get("ssl_verify", False)),
         )
 
     def open(self) -> None:
