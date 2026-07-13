@@ -89,7 +89,7 @@ FROM netboxlabs/pktvisor:${PKTVISOR_TAG} AS pktvisor
 FROM python:3.14-alpine AS python-builder
 
 # Upgrade pip to latest version with fewer vulnerabilities
-RUN python -m pip install --upgrade --no-cache-dir pip==26.1 && \
+RUN python -m pip install --upgrade --no-cache-dir pip==26.1.2 && \
     rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
 # Install the Python backends from in-repo source (was: published PyPI packages
