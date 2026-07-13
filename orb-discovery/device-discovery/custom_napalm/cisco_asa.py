@@ -102,12 +102,13 @@ class _LegacyTLSAdapter(HTTPAdapter):
     rejects by default. Setting OP_LEGACY_SERVER_CONNECT restores the old
     behaviour. See napalm-asa issue #37.
 
-    With verify=False (the default) certificate validation is disabled, as ASA
-    management interfaces typically present self-signed certificates. With
-    verify=True the system CA store validates the chain and hostname.
+    With verify=True (the default) the system CA store validates the chain and
+    hostname. ASADriver passes verify=False unless the ssl_verify optional_arg
+    is set, as ASA management interfaces typically present self-signed
+    certificates.
     """
 
-    def __init__(self, verify: bool = False, **kwargs: object) -> None:
+    def __init__(self, verify: bool = True, **kwargs: object) -> None:
         """Store the verification mode before HTTPAdapter builds the pool manager."""
         self._verify = verify
         super().__init__(**kwargs)
@@ -133,7 +134,7 @@ class _LegacyTLSAdapter(HTTPAdapter):
 class _ASARest:
     """Private HTTP helper: session management, token auth, paginated requests."""
 
-    def __init__(self, username: str, password: str, base_url: str, timeout: int, ssl_verify: bool = False) -> None:
+    def __init__(self, username: str, password: str, base_url: str, timeout: int, ssl_verify: bool = True) -> None:
         """Initialise session and mount the legacy-TLS adapter."""
         self.username = username
         self.password = password

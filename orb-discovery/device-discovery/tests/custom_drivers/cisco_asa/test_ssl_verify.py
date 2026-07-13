@@ -56,7 +56,7 @@ def test_tls_context_verifies_certificates_when_enabled():
 
 
 def test_tls_context_skips_verification_by_default():
-    """The default TLS context still disables validation for self-signed certs."""
-    ctx = _https_ssl_context(_ASARest("user", "pass", "https://device.example.invalid/api", timeout=5))
+    """A driver without ssl_verify still gets the non-validating legacy TLS context."""
+    ctx = _https_ssl_context(ASADriver("device.example.invalid", "user", "pass").device)
     assert ctx.check_hostname is False
     assert ctx.verify_mode == ssl.CERT_NONE
