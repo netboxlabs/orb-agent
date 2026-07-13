@@ -43,6 +43,8 @@ func (d *delineaManager) Start(ctx context.Context) error {
 		*f.ptr = resolved
 	}
 
+	d.preLogger.Info("starting secrets manager", "active", "delinea", "server_url", d.config.ServerURL, "tenant", d.config.Tenant)
+
 	if (d.config.ServerURL == "" && d.config.Tenant == "") ||
 		(d.config.ServerURL != "" && d.config.Tenant != "") {
 		return fmt.Errorf("exactly one of server_url or tenant must be set")
@@ -70,7 +72,11 @@ func (d *delineaManager) Start(ctx context.Context) error {
 	d.client = c
 
 	d.init(ctx, d.preLogger, "delinea", d.fetch)
-	return d.startScheduler(d.config.Schedule)
+	if err := d.startScheduler(d.config.Schedule); err != nil {
+		return err
+	}
+	d.preLogger.Info("secrets manager started", "active", "delinea")
+	return nil
 }
 
 // fetch performs the actual SDK call for a parsed body.
