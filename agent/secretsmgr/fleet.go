@@ -254,8 +254,10 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 
 // Start initializes the Fleet secrets manager
 func (f *FleetSecretsManager) Start(ctx context.Context) error {
+	f.logger.Info("starting secrets manager", "active", "fleet")
 	f.ctx = ctx
 	f.usedVars = make(map[string]fleetCachedSecret)
+	f.logger.Info("secrets manager started", "active", "fleet")
 	return nil
 }
 
