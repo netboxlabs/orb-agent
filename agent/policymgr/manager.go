@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -193,7 +194,18 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 	be := backend.GetBackend(beName)
 	err := be.RemovePolicy(pd)
 	if err != nil {
-		a.logger.Error("backend remove policy failed: will still remove from PolicyManager", "policy_id", policyID, "error", err)
+		var httpErr *backend.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			// Expected for run-once policies the backend already dropped after
+			// completion: the desired state (policy absent) is reached, so this
+			// is a no-op. Kept at WARN (not DEBUG) because a 404 here can also
+			// signal a rename-bookkeeping bug leaving a stale policy running
+			// under another name on the backend.
+			a.logger.Warn("policy not present on backend at removal; treating as already removed",
+				"policy_id", policyID, "policy_name", pd.Name, "error", err)
+		} else {
+			a.logger.Error("backend remove policy failed: will still remove from PolicyManager", "policy_id", policyID, "error", err)
+		}
 	}
 	// Remove policy from orb-agent local repo
 	err = a.repo.Remove(pd.ID)

@@ -34,6 +34,17 @@ func GetRunningStatus(proc Commander) (RunningStatus, string, error) {
 	return Running, "", nil
 }
 
+// HTTPError is returned by CommonRequest for non-2xx responses so callers can
+// branch on the status code (e.g. treat a 404 on DELETE as already-removed).
+// Message is the fully formatted detail; Error returns it unchanged.
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+// Error returns the pre-formatted message.
+func (e *HTTPError) Error() string { return e.Message }
+
 // CommonRequest is a generic function to make HTTP requests to the backend
 func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url string, payload any,
 	method string, body io.Reader, contentType string, timeout int32, errorMsg string,
@@ -70,21 +81,21 @@ func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url 
 	if (res.StatusCode < 200) || (res.StatusCode > 299) {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return fmt.Errorf("non 2xx HTTP error code from %s, no or invalid body: %d", backendName, res.StatusCode)
+			return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("non 2xx HTTP error code from %s, no or invalid body: %d", backendName, res.StatusCode)}
 		}
 		if len(body) == 0 {
-			return fmt.Errorf("%d empty body", res.StatusCode)
+			return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d empty body", res.StatusCode)}
 		} else if body[0] == '{' {
 			var jsonBody map[string]any
 			if err := json.Unmarshal(body, &jsonBody); err == nil {
 				if errMsg, ok := jsonBody[errorMsg]; ok {
-					return fmt.Errorf("%d %s", res.StatusCode, errMsg)
+					return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, errMsg)}
 				}
 			} else {
-				return fmt.Errorf("%d %s", res.StatusCode, body)
+				return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, body)}
 			}
 		} else {
-			return fmt.Errorf("%d %s", res.StatusCode, body)
+			return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, body)}
 		}
 	}
 

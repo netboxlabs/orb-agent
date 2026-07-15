@@ -1400,3 +1400,63 @@ func TestRemovePolicy_PendingRenameTargetsBackendName(t *testing.T) {
 
 	mockBe.AssertExpectations(t)
 }
+
+func removePolicySetup(t *testing.T, beName string, removeErr error) (policymgr.PolicyManager, *strings.Builder) {
+	t.Helper()
+	logs := &strings.Builder{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	secretsMgr := new(mockSecretsManager)
+
+	mockBe := &mockBackend{name: beName}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register(beName, mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+
+	addPayload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "policy1",
+		Name:      "Test Policy",
+		Backend:   beName,
+		Version:   1,
+		Data:      map[string]any{},
+		DatasetID: "dataset1",
+	}
+	secretsMgr.On("SolvePolicySecrets", addPayload).Return(addPayload, nil)
+	mockBe.On("ApplyPolicy", mock.Anything, false).Return(nil)
+	mgr.ManagePolicy(addPayload)
+
+	mockBe.On("RemovePolicy", mock.Anything).Return(removeErr)
+	return mgr, logs
+}
+
+func TestRemovePolicyBackend404IsNoOpNotError(t *testing.T) {
+	notFound := &backend.HTTPError{StatusCode: 404, Message: "policy 'Test Policy' not found"}
+	mgr, logs := removePolicySetup(t, "testbackend404", notFound)
+
+	err := mgr.RemovePolicy("policy1", "Test Policy", "testbackend404")
+	require.NoError(t, err)
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.Empty(t, state, "policy must still be removed from the local PolicyManager")
+
+	assert.NotContains(t, logs.String(), "level=ERROR", "a 404 on removal is a no-op, not an error")
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "already removed")
+}
+
+func TestRemovePolicyBackendNon404StillLogsError(t *testing.T) {
+	serverErr := &backend.HTTPError{StatusCode: 500, Message: "boom"}
+	mgr, logs := removePolicySetup(t, "testbackend500", serverErr)
+
+	err := mgr.RemovePolicy("policy1", "Test Policy", "testbackend500")
+	require.NoError(t, err)
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.Empty(t, state)
+
+	assert.Contains(t, logs.String(), "level=ERROR", "non-404 backend failures must stay ERROR")
+}
