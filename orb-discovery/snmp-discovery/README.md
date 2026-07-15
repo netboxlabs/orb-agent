@@ -47,6 +47,7 @@ policies:
         site: "datacenter-01"
         location: "rack-42"
         role: "network"
+        tenant: "customer-a" # (Optional) Tenant applied to discovered devices. Accepts a plain string or a mapping: {name, group, description, comments, tags}
         ip_address:
           description: "SNMP discovered IP"
           role: "management"
@@ -156,7 +157,7 @@ policies:
 
 ### Per-Target Override Defaults
 
-SNMP discovery supports per-target default overrides, allowing you to customize site, role, tags, and other entity defaults for individual targets while maintaining policy-wide defaults as fallbacks.
+SNMP discovery supports per-target default overrides, allowing you to customize site, role, tenant, tags, and other entity defaults for individual targets while maintaining policy-wide defaults as fallbacks. The `tenant` default accepts either a plain string (the tenant name) or a mapping, and overrides merge field-wise — a per-target override can refine one tenant field (e.g. `name`) without restating the rest.
 
 #### Example Configuration
 
@@ -167,6 +168,9 @@ policies:
       defaults:
         site: "New York"
         role: "switch"
+        tenant:
+          name: "customer-a"
+          group: "customers"
         tags: ["snmp", "network"]
     scope:
       targets:
@@ -179,6 +183,12 @@ policies:
             site: "New York/DC-A"
             role: "router"
             tags: ["core", "production"]
+
+        # Scalar tenant override: sets the tenant name for this target
+        # while keeping the policy-level group "customers" (field-wise merge)
+        - host: "192.168.1.4"
+          override_defaults:
+            tenant: "customer-b"
 
         # Override nested defaults
         - host: "192.168.1.3"

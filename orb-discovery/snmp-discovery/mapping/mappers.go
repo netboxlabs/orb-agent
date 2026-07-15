@@ -1108,6 +1108,23 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 		}
 	}
 
+	if entity.Tenant == nil && defaults.Tenant.Name != "" {
+		tenant := &diode.Tenant{Name: &defaults.Tenant.Name}
+		if defaults.Tenant.Group != "" {
+			tenant.Group = &diode.TenantGroup{Name: &defaults.Tenant.Group}
+		}
+		if defaults.Tenant.Description != "" {
+			tenant.Description = &defaults.Tenant.Description
+		}
+		if defaults.Tenant.Comments != "" {
+			tenant.Comments = &defaults.Tenant.Comments
+		}
+		for i := range defaults.Tenant.Tags {
+			tenant.Tags = append(tenant.Tags, &diode.Tag{Name: &defaults.Tenant.Tags[i]})
+		}
+		entity.Tenant = tenant
+	}
+
 	if defaults.Location != "" {
 		if resolved, ok := data.ResolveDefault(defaults.Location, walked); ok {
 			// Builds a fresh Location, overriding anything a future
