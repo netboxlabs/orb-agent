@@ -41,7 +41,7 @@ func (m *ChassisInventoryMapper) Map(
 
 // ChassisMember is one row of ENTITY-MIB entPhysicalTable identified
 // as a top-level chassis (class=3, containedIn=0). The ID is the
-// derived logical member id (see deriveMemberID); EntPhysicalIndex is
+// derived logical member id (see assignMemberIDs); EntPhysicalIndex is
 // the raw row index used for entAliasMappingTable chain walks.
 // AssetTag is the trimmed entPhysicalAssetID value ("" when unset or not walked).
 type ChassisMember struct {
@@ -108,9 +108,9 @@ func isStackContainerParent(oids ObjectIDValueMap, idx string) bool {
 //     container; used by Cisco StackWise Virtual on the 9400/9500/9600
 //     series and similar pair architectures).
 //
-// Returns members sorted ascending by ID. Member id derivation uses
-// the full 3-tier precedence in deriveMemberID (ParentRelPos > 0 →
-// trailing-int parse of EntName → ordinal fallback).
+// Returns members sorted ascending by ID. Member ids are derived
+// set-wide by assignMemberIDs (one scheme for all members:
+// parentRelPos → entPhysicalName trailing int → ordinal).
 func extractInventory(oids ObjectIDValueMap, logger *slog.Logger) ChassisInventory {
 	candidates := []string{}
 	for oid, v := range oids {
@@ -147,17 +147,16 @@ func extractInventory(oids ObjectIDValueMap, logger *slog.Logger) ChassisInvento
 		})
 	}
 
-	// Sort by entPhysicalIndex first so the ordinal fallback is
-	// deterministic when neither parentRelPos nor entPhysicalName
-	// provides an id signal.
+	// Sort by entPhysicalIndex first so assignMemberIDs' set-wide
+	// ordinal tier (used when neither the parentRelPos column nor
+	// entPhysicalName is usable for the whole set) assigns
+	// deterministic walk-order ids.
 	slices.SortFunc(members, func(a, b ChassisMember) int {
 		ai, _ := strconv.Atoi(a.EntPhysicalIndex)
 		bi, _ := strconv.Atoi(b.EntPhysicalIndex)
 		return ai - bi
 	})
-	for i := range members {
-		members[i].ID = deriveMemberID(members[i], i+1)
-	}
+	assignMemberIDs(members, logger)
 	// Dedup pass 1: drop later-occurring duplicates of the same serial,
 	// keep the lowest-id occurrence. Track dropped ids and their
 	// entPhysicalIndexes for the routing warn-and-skip rule.
@@ -353,25 +352,188 @@ func trimSNMPString(s string) string {
 
 var trailingIntRe = regexp.MustCompile(`(\d+)\s*$`)
 
-// deriveMemberID picks the logical member id with precedence:
-//  1. ParentRelPos when > 0 (ENTITY-MIB standard signal)
-//  2. Trailing integer in EntName ("Switch 1", "FPC 0", "Member 7")
-//  3. ordinalFallback (the caller-supplied 1-based position after
-//     sorting by entPhysicalIndex)
+// prelState classifies the member set's entPhysicalParentRelPos values.
+type prelState int
+
+const (
+	prelUsable    prelState = iota // all values > 0 and distinct: use as ids
+	prelAmbiguous                  // all values > 0 but duplicated: device asserts two rows at one position
+	prelAbsent                     // any value <= 0: unpopulated or zero-based numbering
+)
+
+// assignMemberIDs derives every member's logical id using ONE scheme for
+// the whole set. Per-member tier fallback (the previous deriveMemberID)
+// mixed schemes across siblings: a member with parentRelPos=0 fell to the
+// name tier while the rest used the prel tier, and on devices that number
+// entPhysicalParentRelPos zero-based the two schemes are offset by one —
+// colliding ids sent valid members into the ambiguous-id dedup (#458).
 //
-// ParentRelPos == 0 deliberately defers to (2)/(3): the column is
-// often unpopulated and 0 is the "unknown / not in a relative
-// position" sentinel per RFC 6933.
-func deriveMemberID(m ChassisMember, ordinalFallback int) int {
-	if m.ParentRelPos > 0 {
-		return m.ParentRelPos
+// Tier precedence, first usable wins for ALL members:
+//  1. parentRelPos when USABLE (every value > 0, distinct);
+//  2. entPhysicalName trailing int — usable iff every member has one and
+//     they are distinct (0 is allowed: FPC-style members are genuinely
+//     zero-numbered);
+//  3. when parentRelPos is AMBIGUOUS (duplicate positive positions) or
+//     names are AMBIGUOUS (full coverage, duplicate numbers) and the other
+//     signal could not rescue, keep the colliding values so the caller's
+//     ambiguity dedup refuses those rows — silently renumbering them
+//     would mis-attribute ifName-routed interfaces;
+//  4. ordinal 1..N in slice order (callers pass entPhysicalIndex-sorted
+//     members, so this is walk order).
+//
+// Scheme selection runs over the pre-dedup member rows: a duplicate-serial
+// junk row with an out-of-scheme prel/name can downgrade the tier for the
+// whole set. Accepted for now — no real walk exhibiting it is known, and
+// pass-1 serial dedup still bounds the damage.
+//
+// Any value <= 0 marks the WHOLE prel column untrustworthy (prelAbsent):
+// duplicates inside a zero-containing set carry no position signal and do
+// not trigger ambiguity refusal — the column is simply abandoned.
+// Observability: a wrong-but-distinct assignment is silent downstream
+// (vc_position, member device names, ifName routing all trust the ids),
+// so every lossy or low-confidence set-wide rejection of a PRESENT signal
+// is warn-logged; the high-confidence names-rescue path logs Info (only
+// when prel carried any positive signal — an all-zero column is normal).
+func assignMemberIDs(members []ChassisMember, logger *slog.Logger) {
+	if len(members) == 0 {
+		return
 	}
-	if match := trailingIntRe.FindString(m.EntName); match != "" {
-		if id, err := strconv.Atoi(strings.TrimSpace(match)); err == nil {
-			return id
+	prel, state := parentRelIDs(members)
+	if state == prelUsable {
+		applyIDs(members, prel)
+		return
+	}
+	names, nstate := nameIDs(members)
+	if nstate == nameUsable {
+		// High-confidence outcome: names carry explicit distinct numbers.
+		// Info (not Warn) when prel had signal — a zero-based prel column
+		// with numbered names is this code's normal, correct path, and a
+		// permanent Warn on every poll would be noise.
+		if hasPositivePrel(members) {
+			logger.Info("member id: entPhysicalParentRelPos unusable set-wide, using entPhysicalName-derived ids",
+				"reason", prelStateReason(state), "members", len(members))
+		}
+		applyIDs(members, names)
+		return
+	}
+	// From here every outcome is lossy or low-confidence: Warn. Colliding
+	// ids are deliberately KEPT so the caller's ambiguity dedup refuses
+	// those rows — silently renumbering them would mis-attribute
+	// ifName-routed interfaces.
+	if state == prelAmbiguous {
+		logger.Warn("member id: duplicate positive entPhysicalParentRelPos and no usable names; keeping colliding ids for ambiguity refusal",
+			"members", len(members))
+		applyIDs(members, prel)
+		return
+	}
+	if nstate == nameAmbiguous {
+		logger.Warn("member id: duplicate entPhysicalName numbers and no usable positions; keeping colliding ids for ambiguity refusal",
+			"members", len(members))
+		applyIDs(members, names)
+		return
+	}
+	if partialNames(members) {
+		logger.Warn("member id: entPhysicalName carries numbers on some members only; ignoring name signal set-wide",
+			"members", len(members))
+	}
+	if hasPositivePrel(members) {
+		logger.Warn("member id: no usable id signal; assigning ordinal member ids in walk order",
+			"members", len(members))
+	}
+	ordinal := make([]int, len(members))
+	for i := range ordinal {
+		ordinal[i] = i + 1
+	}
+	applyIDs(members, ordinal)
+}
+
+func hasPositivePrel(members []ChassisMember) bool {
+	for _, m := range members {
+		if m.ParentRelPos > 0 {
+			return true
 		}
 	}
-	return ordinalFallback
+	return false
+}
+
+func partialNames(members []ChassisMember) bool {
+	n := 0
+	for _, m := range members {
+		if trailingIntRe.FindString(m.EntName) != "" {
+			n++
+		}
+	}
+	return n > 0 && n < len(members)
+}
+
+func prelStateReason(s prelState) string {
+	if s == prelAmbiguous {
+		return "duplicate positive positions"
+	}
+	return "contains zero or negative positions"
+}
+
+func applyIDs(members []ChassisMember, ids []int) {
+	for i := range members {
+		members[i].ID = ids[i]
+	}
+}
+
+// parentRelIDs returns the members' parentRelPos values and their
+// classification. The values are only meaningful for prelUsable (distinct
+// ids) and prelAmbiguous (deliberately colliding ids for the caller's
+// ambiguity dedup); prelAbsent returns nil.
+func parentRelIDs(members []ChassisMember) ([]int, prelState) {
+	ids := make([]int, len(members))
+	seen := make(map[int]struct{}, len(members))
+	state := prelUsable
+	for i, m := range members {
+		if m.ParentRelPos <= 0 {
+			return nil, prelAbsent
+		}
+		if _, dup := seen[m.ParentRelPos]; dup {
+			state = prelAmbiguous
+		}
+		seen[m.ParentRelPos] = struct{}{}
+		ids[i] = m.ParentRelPos
+	}
+	return ids, state
+}
+
+// nameState classifies the member set's entPhysicalName trailing-int values.
+type nameState int
+
+const (
+	nameUsable    nameState = iota // every member has a trailing int, all distinct: use as ids
+	nameAmbiguous                  // every member has a trailing int, but duplicated: device asserts one number twice
+	nameAbsent                     // at least one member has no trailing int
+)
+
+// nameIDs returns trailing-integer ids parsed from entPhysicalName and
+// their classification. Zero is a valid id here (FPC-style members are
+// genuinely zero-numbered). The ids are meaningful for nameUsable
+// (distinct) and nameAmbiguous (deliberately colliding, for the caller's
+// ambiguity refusal); nameAbsent returns nil.
+func nameIDs(members []ChassisMember) ([]int, nameState) {
+	ids := make([]int, len(members))
+	seen := make(map[int]struct{}, len(members))
+	state := nameUsable
+	for i, m := range members {
+		match := trailingIntRe.FindString(m.EntName)
+		if match == "" {
+			return nil, nameAbsent
+		}
+		id, err := strconv.Atoi(strings.TrimSpace(match))
+		if err != nil {
+			return nil, nameAbsent
+		}
+		if _, dup := seen[id]; dup {
+			state = nameAmbiguous
+		}
+		seen[id] = struct{}{}
+		ids[i] = id
+	}
+	return ids, state
 }
 
 // resolveAssetTags maps member ID -> the entPhysicalAssetID value that

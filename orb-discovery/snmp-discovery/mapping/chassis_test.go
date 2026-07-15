@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -261,37 +262,6 @@ func TestTrimSNMPString(t *testing.T) {
 			assert.Equal(t, tc.want, trimSNMPString(tc.in))
 		})
 	}
-}
-
-func TestDeriveMemberID_ParentRelPosWins(t *testing.T) {
-	m := ChassisMember{ParentRelPos: 5, EntName: "Switch 9"}
-	assert.Equal(t, 5, deriveMemberID(m, 0))
-}
-
-func TestDeriveMemberID_NameTrailingIntFallback(t *testing.T) {
-	cases := []struct {
-		entName string
-		want    int
-	}{
-		{"Switch 1", 1},
-		{"Switch 2", 2},
-		{"FPC 0", 0},
-		{"Member 7", 7},
-		{"Virtual Chassis Member 3", 3},
-		{"Chassis 12", 12},
-	}
-	for _, tc := range cases {
-		t.Run(tc.entName, func(t *testing.T) {
-			m := ChassisMember{ParentRelPos: 0, EntName: tc.entName}
-			assert.Equal(t, tc.want, deriveMemberID(m, 99))
-		})
-	}
-}
-
-func TestDeriveMemberID_FinalIndexFallback(t *testing.T) {
-	// parentRelPos=0, EntName has no trailing int → use ordinal fallback.
-	m := ChassisMember{ParentRelPos: 0, EntName: "Chassis"}
-	assert.Equal(t, 4, deriveMemberID(m, 4))
 }
 
 func TestExtractInventory_JunosFPC_TrailingIntFromName(t *testing.T) {
@@ -1518,4 +1488,243 @@ func TestTranslateAsStack_DefaultsTagRegisteredWithClaimer(t *testing.T) {
 		assert.Equal(t, "OPERATOR-TAG", *master.AssetTag,
 			"operator-supplied defaults tag is never stripped; the claimer's warn covers the conflict")
 	})
+}
+
+// Regression for issue #458: zero-based entPhysicalParentRelPos must not
+// collide with name-derived ids. All four members survive with the true
+// 1-based member numbers taken from entPhysicalName.
+func TestExtractInventory_ZeroBasedParentRelStack(t *testing.T) {
+	inv := extractInventory(fixtureZeroBasedParentRelWrappedStack(), slog.Default())
+
+	require.Len(t, inv.Members, 4)
+	assert.Empty(t, inv.DroppedIDs)
+	// Non-sequential member numbers (1,2,4,5) prove the ids came from the
+	// name tier, not ordinal walk order.
+	wantIDs := []int{1, 2, 4, 5}
+	for i, m := range inv.Members {
+		assert.Equal(t, wantIDs[i], m.ID)
+		assert.Equal(t, fmt.Sprintf("Switch %d", wantIDs[i]), m.EntName)
+	}
+	assert.Equal(t, "SN0000000001", inv.Members[0].Serial)
+	assert.Equal(t, "SN0000000027", inv.Members[3].Serial)
+}
+
+// End-to-end on the same fixture: the NetBox-visible symptoms of #458 —
+// vc_position numbering and member device naming — must be correct.
+// Mirrors TestTranslateAsStack_JunosQFX_4MemberVC (4-member shape) and
+// TestTranslateAsStack_CiscoStackWiseVirtual_EmitsVCAndMember
+// (wrapped-container shape). TranslateAsStack does NOT set VcPosition on
+// the master, and a 4-member stack emits master + 3 member Devices.
+func TestTranslateAsStack_ZeroBasedParentRelStack(t *testing.T) {
+	logger := slog.Default()
+	master := &diode.Device{
+		Name: strPtr("stack.example"),
+		Site: &diode.Site{Name: strPtr("dc1")},
+		DeviceType: &diode.DeviceType{
+			Model:        strPtr("Model-48P"),
+			Manufacturer: &diode.Manufacturer{Name: strPtr("Example")},
+		},
+	}
+	entities := []diode.Entity{master}
+
+	out := TranslateAsStack(entities, fixtureZeroBasedParentRelWrappedStack(), nil, nil, logger)
+
+	var vc *diode.VirtualChassis
+	var members []*diode.Device
+	for _, e := range out {
+		switch v := e.(type) {
+		case *diode.VirtualChassis:
+			vc = v
+		case *diode.Device:
+			if v != master {
+				members = append(members, v)
+			}
+		}
+	}
+	assert.NotNil(t, vc, "4-member stack must emit a VirtualChassis")
+
+	// Master: serial from the lowest-id chassis row, no VcPosition.
+	assert.Equal(t, "SN0000000001", *master.Serial)
+	assert.Nil(t, master.VcPosition)
+
+	// Exactly 3 non-master member Devices with vc_position 2, 4, 5 and
+	// the "{vcName}-{id}" naming convention.
+	require.Len(t, members, 3, "4-member stack -> master + 3 member Devices")
+	wantPositions := []int64{2, 4, 5}
+	for i, m := range members {
+		assert.Equal(t, wantPositions[i], *m.VcPosition)
+		assert.Equal(t, fmt.Sprintf("stack.example-%d", wantPositions[i]), *m.Name)
+	}
+
+	// The class=11 container row ("Stack") must never become a Device.
+	for _, e := range out {
+		if d, ok := e.(*diode.Device); ok {
+			assert.NotEqual(t, "Stack", strDeref(d.Name))
+		}
+	}
+}
+
+func TestAssignMemberIDs_PrelTierAllPositiveDistinct(t *testing.T) {
+	members := []ChassisMember{
+		{ParentRelPos: 2, EntName: "Switch 9"},
+		{ParentRelPos: 5, EntName: "Switch 1"},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 2, members[0].ID, "prel wins over conflicting names when whole set is usable")
+	assert.Equal(t, 5, members[1].ID)
+}
+
+func TestAssignMemberIDs_ZeroInPrelSetFallsToNames(t *testing.T) {
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "Switch 1"},
+		{ParentRelPos: 1, EntName: "Switch 2"},
+		{ParentRelPos: 2, EntName: "Switch 3"},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, []int{1, 2, 3}, []int{members[0].ID, members[1].ID, members[2].ID},
+		"a set containing prel=0 must use one scheme for ALL members, not mix tiers")
+}
+
+func TestAssignMemberIDs_DuplicatePrelFallsToNames(t *testing.T) {
+	members := []ChassisMember{
+		{ParentRelPos: 1, EntName: "Member 3"},
+		{ParentRelPos: 1, EntName: "Member 7"},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 3, members[0].ID)
+	assert.Equal(t, 7, members[1].ID)
+}
+
+func TestAssignMemberIDs_NamesAllowZero(t *testing.T) {
+	// FPC-style members are genuinely zero-numbered; id 0 must survive.
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "FPC 0"},
+		{ParentRelPos: 0, EntName: "FPC 1"},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 0, members[0].ID)
+	assert.Equal(t, 1, members[1].ID)
+}
+
+func TestAssignMemberIDs_AmbiguousPrelWithoutNamesKeepsCollision(t *testing.T) {
+	// Duplicate positive prel and no usable names: the device asserts two
+	// rows at one position. assignMemberIDs must KEEP the colliding ids so
+	// extractInventory's ambiguity dedup refuses the rows (it must never
+	// silently renumber them via ordinal — that would mis-attribute
+	// ifName-routed interfaces).
+	members := []ChassisMember{
+		{ParentRelPos: 1, EntName: ""},
+		{ParentRelPos: 1, EntName: ""},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 1, members[0].ID)
+	assert.Equal(t, 1, members[1].ID)
+}
+
+func TestAssignMemberIDs_RejectedPrelValuesAreAbandonedNotRebased(t *testing.T) {
+	// Pins the design choice: a rejected prel tier is ABANDONED — a future
+	// "shift zero-based prel by +1" heuristic would yield {1,2} here and
+	// must fail this test. Names win with their own values.
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "Member 5"},
+		{ParentRelPos: 1, EntName: "Member 7"},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 5, members[0].ID)
+	assert.Equal(t, 7, members[1].ID)
+}
+
+func TestAssignMemberIDs_NameFormats(t *testing.T) {
+	// Name-parse variety preserved from the deleted per-member tests.
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "Virtual Chassis Member 3"},
+		{ParentRelPos: 0, EntName: "Chassis 12"},
+		{ParentRelPos: 0, EntName: "Member 7"},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 3, members[0].ID)
+	assert.Equal(t, 12, members[1].ID)
+	assert.Equal(t, 7, members[2].ID)
+}
+
+func TestAssignMemberIDs_SingleMember(t *testing.T) {
+	members := []ChassisMember{{ParentRelPos: 0, EntName: "Chassis"}}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 1, members[0].ID)
+}
+
+func TestAssignMemberIDs_PartialNamesDiscardedWithWarn(t *testing.T) {
+	// One numbered name + one blank: per-member mixing is the #458 bug
+	// class, so the name signal is discarded set-wide (ordinal wins) — but
+	// loudly, because the surviving assignment may cross-wire ifName
+	// routing.
+	logs := &strings.Builder{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "Switch 2"},
+		{ParentRelPos: 0, EntName: ""},
+	}
+	assignMemberIDs(members, logger)
+	assert.Equal(t, 1, members[0].ID)
+	assert.Equal(t, 2, members[1].ID)
+	assert.Contains(t, logs.String(), "ignoring name signal set-wide")
+}
+
+func TestAssignMemberIDs_ZeroBasedPrelLogsInfoWhenNamesRescue(t *testing.T) {
+	// Names rescuing a zero-based prel column is the normal corrected path
+	// for issue #458 devices: logged at INFO (TextHandler default level
+	// emits Info), never WARN — this device now works correctly.
+	logs := &strings.Builder{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "Switch 1"},
+		{ParentRelPos: 1, EntName: "Switch 2"},
+	}
+	assignMemberIDs(members, logger)
+	assert.Contains(t, logs.String(), "entPhysicalParentRelPos unusable set-wide")
+	assert.NotContains(t, logs.String(), "level=WARN")
+}
+
+func TestAssignMemberIDs_ZeroWithDuplicatePositivesUsesOrdinal(t *testing.T) {
+	// Design choice pinned: ANY <=0 value marks the whole prel column
+	// untrustworthy (prelAbsent) — duplicates inside a zero-containing set
+	// carry no position signal, so with no usable names the set gets
+	// ordinal ids rather than ambiguity refusal.
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: ""},
+		{ParentRelPos: 2, EntName: ""},
+		{ParentRelPos: 2, EntName: ""},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, []int{1, 2, 3}, []int{members[0].ID, members[1].ID, members[2].ID})
+}
+
+func TestAssignMemberIDs_DuplicateNamesWithoutPrelKeptForRefusal(t *testing.T) {
+	// Full-coverage but duplicated name numbers with no positional signal:
+	// the device asserts the same member number twice. Keep the colliding
+	// ids so extractInventory's ambiguity dedup refuses the rows — never
+	// silently renumber them via ordinal (that would cross-wire
+	// ifName-routed interfaces).
+	logs := &strings.Builder{}
+	logger := slog.New(slog.NewTextHandler(logs, nil))
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "Slot 1"},
+		{ParentRelPos: 0, EntName: "Slot 1"},
+	}
+	assignMemberIDs(members, logger)
+	assert.Equal(t, 1, members[0].ID)
+	assert.Equal(t, 1, members[1].ID)
+	assert.Contains(t, logs.String(), "duplicate entPhysicalName numbers")
+}
+
+func TestAssignMemberIDs_OrdinalFallback(t *testing.T) {
+	// No usable prel set (dup zeros), no usable names (one lacks a trailing
+	// int) -> ordinal 1..N in slice (entPhysicalIndex) order for ALL members.
+	members := []ChassisMember{
+		{ParentRelPos: 0, EntName: "Chassis"},
+		{ParentRelPos: 0, EntName: "Chassis 7"},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 1, members[0].ID)
+	assert.Equal(t, 2, members[1].ID)
 }

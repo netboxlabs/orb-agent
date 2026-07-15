@@ -122,3 +122,33 @@ func fixtureCiscoCat9400xStackWiseVirtual() ObjectIDValueMap {
 		".1.3.6.1.2.1.47.1.1.1.1.13.500": {Value: "C9407R"},
 	}
 }
+
+// fixtureZeroBasedParentRelWrappedStack returns an ObjectIDValueMap shaped
+// like a 4-member stack (issue #458): a class=11 stack container at index 1
+// that shares member 1's serial, wrapping four class=3 chassis rows whose
+// entPhysicalParentRelPos is ZERO-BASED (0,1,2,3) while entPhysicalName
+// carries the true member numbers 1, 2, 4, 5 — non-sequential, as after a
+// member replacement — so tests can distinguish name-derived ids from a
+// broken ordinal assignment that would coincide with sequential names.
+func fixtureZeroBasedParentRelWrappedStack() ObjectIDValueMap {
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.1.5.0": {Value: "stack.example"},
+		// Stack container (class=11) — shares member 1's serial; never a member.
+		".1.3.6.1.2.1.47.1.1.1.1.4.1":  {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.1":  {Value: "11"},
+		".1.3.6.1.2.1.47.1.1.1.1.6.1":  {Value: "-1"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.1":  {Value: "Stack"},
+		".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SN0000000001"},
+	}
+	serials := []string{"SN0000000001", "SN0000000013", "SN0000000023", "SN0000000027"}
+	memberNums := []int{1, 2, 4, 5}
+	for i := 0; i < 4; i++ {
+		idx := fmt.Sprintf("%d", (i+1)*1000)
+		oids[".1.3.6.1.2.1.47.1.1.1.1.4."+idx] = Value{Value: "1"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.5."+idx] = Value{Value: "3"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.6."+idx] = Value{Value: fmt.Sprintf("%d", i)} // ZERO-BASED
+		oids[".1.3.6.1.2.1.47.1.1.1.1.7."+idx] = Value{Value: fmt.Sprintf("Switch %d", memberNums[i])}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.11."+idx] = Value{Value: serials[i]}
+	}
+	return oids
+}
