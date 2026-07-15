@@ -2,10 +2,15 @@ package backend_test
 
 import (
 	"errors"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 )
@@ -66,4 +71,45 @@ func TestGetRunningStatus_Stopped(t *testing.T) {
 	assert.Equal(t, backend.Offline, status)
 	assert.Equal(t, "backend process ended", detail)
 	assert.NoError(t, err)
+}
+
+func TestCommonRequest_Non2xxReturnsHTTPError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proc := &mockCommander{status: backend.CmdStatus{PID: 123}}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"detail": "policy 'test-job' not found"}`))
+	}))
+	defer srv.Close()
+
+	var resp any
+	err := backend.CommonRequest("testbackend", proc, logger, srv.URL, &resp,
+		http.MethodDelete, http.NoBody, "application/json", 5, "detail")
+
+	require.Error(t, err)
+	var httpErr *backend.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
+	assert.Contains(t, err.Error(), "404 policy 'test-job' not found")
+}
+
+func TestCommonRequest_Non2xxEmptyBodyReturnsHTTPError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proc := &mockCommander{status: backend.CmdStatus{PID: 123}}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	var resp any
+	err := backend.CommonRequest("testbackend", proc, logger, srv.URL, &resp,
+		http.MethodGet, http.NoBody, "application/json", 5, "detail")
+
+	require.Error(t, err)
+	var httpErr *backend.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusInternalServerError, httpErr.StatusCode)
 }
