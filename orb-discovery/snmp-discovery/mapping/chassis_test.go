@@ -515,8 +515,9 @@ func TestTranslateAsStack_StandaloneSetsSerialAndReturnsUnchangedShape(t *testin
 func TestTranslateAsStack_TwoMemberStackEmitsVCAndMember(t *testing.T) {
 	logger := slog.Default()
 	master := &diode.Device{
-		Name: strPtr("3850-stack.example"),
-		Site: &diode.Site{Name: strPtr("dc1")},
+		Name:   strPtr("3850-stack.example"),
+		Site:   &diode.Site{Name: strPtr("dc1")},
+		Tenant: &diode.Tenant{Name: strPtr("acme")},
 		DeviceType: &diode.DeviceType{
 			Model:        strPtr("WS-C3850-48P"),
 			Manufacturer: &diode.Manufacturer{Name: strPtr("Cisco")},
@@ -548,6 +549,16 @@ func TestTranslateAsStack_TwoMemberStackEmitsVCAndMember(t *testing.T) {
 	assert.Len(t, members, 1)
 	assert.Equal(t, "FCW2147L0K4", *members[0].Serial)
 	assert.Equal(t, int64(2), *members[0].VcPosition)
+
+	// Tenant propagation: members and the VC master ref inherit the
+	// master's tenant (which defaults.tenant sets on the master device).
+	require.NotNil(t, members[0].Tenant)
+	assert.Equal(t, "acme", *members[0].Tenant.Name,
+		"member device inherits master tenant")
+	require.NotNil(t, vc.Master)
+	require.NotNil(t, vc.Master.Tenant)
+	assert.Equal(t, "acme", *vc.Master.Tenant.Name,
+		"VC master ref carries master tenant")
 
 	// Master remains plain (no VcPosition, no VirtualChassis).
 	assert.Nil(t, master.VcPosition)

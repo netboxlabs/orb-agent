@@ -357,6 +357,43 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 	}
 }
 
+// TestVlanMapper_PostMap_DeviceTenantDoesNotCascade pins the no-cascade
+// design decision: the top-level defaults.tenant is device-only
+// (matching device-discovery semantics) and must never leak onto
+// emitted VLANs — only defaults.vlan.tenant sets a VLAN tenant.
+func TestVlanMapper_PostMap_DeviceTenantDoesNotCascade(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+
+	// Minimal: one VLAN with a static name row so it will always be emitted.
+	rows := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10": Value{Value: "Engineering", Type: OctetString},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.10": Value{Value: "1", Type: Integer},
+	}
+
+	// Top-level device tenant set; defaults.vlan.tenant unset.
+	defaults := &config.Defaults{
+		Tenant: config.TenantParameters{Name: "acme", Group: "customers"},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{CreateUnknownVlans: ptrBool(true)})
+	emitted := vm.PostMap(rows, registry, defaults)
+
+	var got *diode.VLAN
+	for _, e := range emitted {
+		if v, ok := e.(*diode.VLAN); ok && v.Vid != nil && *v.Vid == 10 {
+			got = v
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("expected VLAN entity for VID 10, got none")
+	}
+	if got.Tenant != nil {
+		t.Errorf("Tenant: got %+v, want nil (top-level defaults.tenant must not cascade to VLANs)", got.Tenant)
+	}
+}
+
 // TestVlanMapper_EmitVLANs_StripsNullBytesFromName verifies that NUL-padded or
 // NUL-interrupted dot1qVlanStaticName values (seen on FS switches and other vendor
 // agents) are sanitized before reaching the Diode payload. NetBox/PostgreSQL rejects
