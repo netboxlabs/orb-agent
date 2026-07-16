@@ -90,6 +90,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | location | string | no | Default location for discovered devices. Accepts a literal name or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)) |
 | asset_tag | string | no | Default asset tag for discovered devices. Accepts a literal value or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)). NetBox enforces a 50-character limit; resolved values longer than 50 characters are warn-logged and skipped |
 | role | string | no | Default role for discovered devices |
+| tenant | string \| map | no | Default tenant for discovered devices. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see the [tenant map](#tenant-map) below). Applies to Device entities only — IP address, prefix, and VLAN tenants keep their own per-entity defaults (`ip_address.tenant`, `prefix.tenant`, `vlan.tenant`). Virtual-chassis members inherit the master's tenant. In a per-target `override_defaults`, tenant merges field-wise: overriding `name` keeps an inherited `group` |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 
@@ -135,6 +136,17 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ group | string | VLAN group name. When set, every emitted VLAN is attached to an `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
 | ├─ tenant | string | VLAN tenant |
 | ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
+
+##### Tenant Map
+The top-level `tenant` default accepts either a bare string (tenant name) or a map:
+
+| Parameter | Type | Description |
+|---------|----|-----------|
+| name | string  | Tenant name |
+| group | string  | Tenant group name |
+| description | string  | Tenant description |
+| comments | string  | Tenant comments |
+| tags | list  | Tenant tags |
 
 ### Scope Section
 | Parameter | Type | Required | Description |
@@ -213,6 +225,7 @@ config:
     location: ".1.3.6.1.2.1.1.6.0"     # Resolve from sysLocation (or use a literal like "rack-42")
     asset_tag: ".1.3.6.1.2.1.1.4.0"    # Resolve from sysContact (or use a literal)
     role: "network"
+    tenant: "network-ops"              # Bare name, or a map: { name: network-ops, group: infrastructure }
     ip_address:
       description: "SNMP discovered IP"
       role: "management"
