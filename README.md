@@ -55,10 +55,10 @@ Supported secrets managers:
 - [CyberArk (CCP)](./docs/secretsmgr/cyberark.md) (beta)
 - [Delinea Secret Server](./docs/secretsmgr/delinea.md) (beta)
 
-The secrets manager to use, and its connection settings, can also be selected and configured entirely via environment variables — independently of the config manager and without editing the YAML file. See [Environment-Driven Configuration](./docs/env_config.md).
+The secrets manager to use, and its connection settings, can also be selected and configured entirely via environment variables — independently of the config manager and without editing the YAML file. See [Environment-Driven Configuration](./docs/advanced_config/env_config.md).
 
 ### Environment variable configuration
-Any `orb.*` configuration value can be set or overridden with `ORB_*` environment variables layered on top of the `--config` file(s), using `__` as the path delimiter (for example `ORB_SECRETS_MANAGER__ACTIVE=vault`). This is most commonly used to select and configure the secrets manager per deployment without editing or templating the YAML, but it applies to any config key. See [Environment-Driven Configuration](./docs/env_config.md) for the full scheme, precedence rules, and worked examples.
+Any `orb.*` configuration value can be set or overridden with `ORB_*` environment variables layered on top of the `--config` file(s), using `__` as the path delimiter (for example `ORB_SECRETS_MANAGER__ACTIVE=vault`). This is most commonly used to select and configure the secrets manager per deployment without editing or templating the YAML, but it applies to any config key. See [Environment-Driven Configuration](./docs/advanced_config/env_config.md) for the full scheme, precedence rules, and worked examples.
 
 ### Backends
 The `backends` section specifies what Orb agent backends should be enabled. Each Orb agent backend offers specific discovery or observability capabilities and may require specific configuration information.  
@@ -72,11 +72,12 @@ orb:
 ```
 
 #### Discovery Backends
-Only the `network_discovery`, `device_discovery`, `worker` and `snmp_discovery` backends are currently supported. They do not require any special configuration.
+Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and `gnmi_discovery` (beta) backends are currently supported. They do not require any special configuration.
 - [Device Discovery](./docs/backends/device_discovery/README.md) ([supported platforms](./docs/backends/device_discovery/supported_platforms.md))
 - [Network Discovery](./docs/backends/network_discovery.md)
 - [Worker](./docs/backends/worker.md)
 - [SNMP Discovery](./docs/backends/snmp_discovery/README.md) ([supported platforms](./docs/backends/snmp_discovery/supported_platforms.md))
+- [gNMI Discovery](./docs/backends/gnmi_discovery.md) (beta)
 
 #### Observability Backends
 Observability backends focus on collecting and exporting rich telemetry from network traffic or probes so you can feed metrics into your monitoring stack.
@@ -178,7 +179,7 @@ podman run -d --privileged --net=host \
 **Note for rootless podman users:** If running podman without root/sudo privileges, network discovery requires specific configuration to avoid raw socket limitations. The command above requires `sudo` for full NMAP functionality. For rootless operation, see the [Network Discovery backend documentation](./docs/backends/network_discovery.md#rootless-podman-deployment) for TCP connect scan configuration.
 
 ### Outbound proxy
-If the agent must send outbound traffic to your Diode target through a corporate forward proxy, see the [Outbound Proxy Support](./docs/outbound_proxy.md) guide for the supported proxy environment variables and examples.
+If the agent must send outbound traffic to your Diode target through a corporate forward proxy, see the [Outbound Proxy Support](./docs/advanced_config/outbound_proxy.md) guide for the supported proxy environment variables and examples.
 
 ### Configuration samples
 You can find complete sample configurations [here](./docs/config_samples.md) of how to configure Orb agent to run network and device discoveries, as well as the relevant `docker run` commands.

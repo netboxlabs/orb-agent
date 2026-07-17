@@ -125,8 +125,8 @@ No static token is set anywhere. The agent configures the Vault source with `aut
 
 ## See also
 
-- [HashiCorp Vault secrets manager](./secretsmgr/vault.md)
-- [Doppler secrets manager](./secretsmgr/doppler.md)
-- [Delinea Secret Server secrets manager](./secretsmgr/delinea.md)
-- [CyberArk (CCP) secrets manager](./secretsmgr/cyberark.md)
-- [Agent Configuration File reference](./configs/agent_yaml.md)
+- [HashiCorp Vault secrets manager](../secretsmgr/vault.md)
+- [Doppler secrets manager](../secretsmgr/doppler.md)
+- [Delinea Secret Server secrets manager](../secretsmgr/delinea.md)
+- [CyberArk (CCP) secrets manager](../secretsmgr/cyberark.md)
+- [Agent Configuration File reference](../configs/agent_yaml.md)

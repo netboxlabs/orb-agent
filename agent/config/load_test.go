@@ -270,7 +270,7 @@ func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
 // example a Vault AppRole password of "0" must NOT become the bool false).
 // The one non-string auth_arg — Vault AppRole's wrapping_token bool — must
 // therefore be set in the config file (where YAML typing applies), not via
-// an ORB_* override; see docs/env_config.md.
+// an ORB_* override; see docs/advanced_config/env_config.md.
 func TestLoad_GenericOverlay_AuthArgsStayStrings(t *testing.T) {
 	t.Parallel()
 	p := writeTempConfig(t, sampleYAML)
