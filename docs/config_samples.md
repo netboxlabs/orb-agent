@@ -605,6 +605,16 @@ When running in dry run mode, the agent will:
 This allows you to inspect the data that would be collected and sent to Diode Server before configuring the actual connection.
 This feature is supported by the [Device Discovery](./backends/device_discovery/README.md), [Network Discovery](./backends/network_discovery.md), [Worker](./backends/worker.md) and [SNMP Discovery](./backends/snmp_discovery/README.md) backends.
 
+## Debug Logging
+
+Setting `orb.debug.enable: true` in the config file enables debug-level logging, equivalent to running the agent with the `-d` flag, except that debug messages emitted while the config file is still being parsed (such as the skipped `ORB_*` override diagnostics described in [Environment Variable Configuration](./env_config.md)) are only captured with `-d`.
+
+```yaml
+orb:
+  debug:
+    enable: true   # equivalent to the -d flag; backends inherit debug too
+```
+
 ## Exporting OpenTelemetry Metrics
 
 The backends support exporting metrics using OpenTelemetryover GRPC.
