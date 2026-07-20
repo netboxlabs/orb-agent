@@ -610,12 +610,13 @@ func TestCyberArkPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
 
 func TestNewManager_ReturnsCyberArkManagerWhenActive(t *testing.T) {
 	logger := newTestLogger()
-	m := New(logger, config.ManagerSecrets{
+	m, err := New(logger, config.ManagerSecrets{
 		Active: "cyberark",
 		Sources: config.SecretsSources{
 			CyberArk: config.CyberArkManager{URL: "https://ccp.example.com", AppID: "orb"},
 		},
 	})
+	require.NoError(t, err)
 	_, ok := m.(*cyberarkManager)
 	require.True(t, ok, "New() with active=cyberark must return *cyberarkManager, got %T", m)
 }
