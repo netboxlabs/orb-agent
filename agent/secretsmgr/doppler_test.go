@@ -429,12 +429,13 @@ func TestDopplerPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
 
 func TestNewManager_ReturnsDopplerManagerWhenActive(t *testing.T) {
 	logger := newTestLogger()
-	m := New(logger, config.ManagerSecrets{
+	m, err := New(logger, config.ManagerSecrets{
 		Active: "doppler",
 		Sources: config.SecretsSources{
 			Doppler: config.DopplerManager{Token: "dp.st.anything"},
 		},
 	})
+	require.NoError(t, err)
 	_, ok := m.(*dopplerManager)
 	require.True(t, ok, "New() with active=doppler must return *dopplerManager, got %T", m)
 }

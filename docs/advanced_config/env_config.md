@@ -30,7 +30,7 @@ ORB_SECRETS_MANAGER__ACTIVE=vault
 ORB_SECRETS_MANAGER__SOURCES__VAULT__ADDRESS=http://127.0.0.1:8200
 ```
 
-`ORB_` → root `orb`, then `SECRETS_MANAGER` → `secrets_manager` (single `_` preserved), `SOURCES` → `sources`, `VAULT` → `vault`, `ADDRESS` → `address`. `ORB_SECRETS_MANAGER__ACTIVE` accepts one of `vault`, `doppler`, `delinea`, `cyberark`, `fleet`.
+`ORB_` → root `orb`, then `SECRETS_MANAGER` → `secrets_manager` (single `_` preserved), `SOURCES` → `sources`, `VAULT` → `vault`, `ADDRESS` → `address`. `ORB_SECRETS_MANAGER__ACTIVE` accepts one of `vault`, `doppler`, `delinea`, `cyberark`, `fleet`. An empty or unset active value skips the secrets manager and the agent starts normally, but a non-empty unsupported value now fails startup with an error listing the supported types.
 
 The same scheme applies to any other `orb.*` key — for example `ORB_CONFIG_MANAGER__ACTIVE` or `ORB_BACKENDS__...` — not just the secrets manager.
 
