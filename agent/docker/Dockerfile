@@ -139,7 +139,7 @@ RUN mkdir -p /opt/orb /opt/orb/files /opt/orb/pip-cache /usr/local/share/orb-age
 
 ENV PATH=/opt/orb/files:$PATH
 ENV PIP_CACHE_DIR=/opt/orb/pip-cache
-ENV ORB_DEFAULT_CONFIG=/usr/local/share/orb-agent/default_config.yaml
+ENV DEFAULT_CONFIG_PATH=/usr/local/share/orb-agent/default_config.yaml
 
 # Copy Python site-packages and binaries from builder (includes pip and package executables)
 COPY --from=python-builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
