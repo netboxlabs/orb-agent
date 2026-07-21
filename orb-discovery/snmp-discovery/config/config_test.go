@@ -862,3 +862,15 @@ func TestMergeDefaults_TenantFieldWise(t *testing.T) {
 	assert.Equal(t, "acme", merged.Tenant.Name)
 	assert.Equal(t, "internal", merged.Tenant.Group)
 }
+
+func TestDeviceNameEmissionEnabled(t *testing.T) {
+	var nilOpts *Options
+	assert.True(t, nilOpts.DeviceNameEmissionEnabled(), "nil Options must default to emitting")
+	assert.True(t, (&Options{}).DeviceNameEmissionEnabled(), "unset must default to emitting")
+
+	on := true
+	assert.True(t, (&Options{EmitDeviceName: &on}).DeviceNameEmissionEnabled())
+
+	off := false
+	assert.False(t, (&Options{EmitDeviceName: &off}).DeviceNameEmissionEnabled())
+}
