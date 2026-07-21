@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -482,8 +481,11 @@ func (m *filesmgr) setPendingInstalling(name, version string) {
 
 // setPendingFailed records name's most recent failed Ensure attempt,
 // overwriting whatever pending entry it may have had before (only the latest
-// attempt is kept).
-func (m *filesmgr) setPendingFailed(name, version string, err error, timedOut bool) {
+// attempt is kept). err's message (e.g. containing "context deadline
+// exceeded" for the install timeout) is the sole signal for the failure
+// cause — see FileEntry's doc comment for why there is no separate
+// structured field for this.
+func (m *filesmgr) setPendingFailed(name, version string, err error) {
 	m.pendingMu.Lock()
 	defer m.pendingMu.Unlock()
 	m.pending[name] = FileEntry{
@@ -491,7 +493,6 @@ func (m *filesmgr) setPendingFailed(name, version string, err error, timedOut bo
 		Version:   version,
 		State:     FileEntryStateFailed,
 		Error:     err.Error(),
-		Timeout:   timedOut,
 		UpdatedAt: time.Now().UTC(),
 	}
 }
@@ -538,7 +539,7 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 
 	path, err := m.ensureLocked(ctx, spec)
 	if err != nil {
-		m.setPendingFailed(spec.Name, spec.Version, err, errors.Is(ctx.Err(), context.DeadlineExceeded))
+		m.setPendingFailed(spec.Name, spec.Version, err)
 		return path, err
 	}
 	m.clearPending(spec.Name)

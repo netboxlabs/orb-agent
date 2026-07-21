@@ -144,15 +144,15 @@ type FileEntry struct {
 	Source      string    `json:"source"`
 	InstalledAt time.Time `json:"installed_at"`
 
-	// State, Error, Timeout, and UpdatedAt below are populated only on
-	// entries returned by Manager.ListPending (installing/failed); they are
-	// always zero on entries returned by Manager.List.
-	State string `json:"state,omitempty"`
-	Error string `json:"error,omitempty"`
-	// Timeout is true when a failed attempt's context deadline was exceeded
-	// (the 10-minute install timeout), as opposed to a checksum mismatch or
-	// download/extract error.
-	Timeout   bool      `json:"timeout,omitempty"`
+	// State, Error, and UpdatedAt below are populated only on entries
+	// returned by Manager.ListPending (installing/failed); they are always
+	// zero on entries returned by Manager.List. Error's message text
+	// distinguishes the failure cause (e.g. it contains "context deadline
+	// exceeded" for the 10-minute install timeout) — there is no separate
+	// structured field for this, matching the plain-error-string decision
+	// used elsewhere (PolicyStateInfo.Error, BackendStateInfo.Error).
+	State     string    `json:"state,omitempty"`
+	Error     string    `json:"error,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 

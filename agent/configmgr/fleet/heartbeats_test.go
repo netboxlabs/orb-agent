@@ -1928,7 +1928,6 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesFailedBundleState(t *testing.
 					Version:   "1.0.0",
 					State:     filesmgr.FileEntryStateFailed,
 					Error:     "context deadline exceeded",
-					Timeout:   true,
 					UpdatedAt: changedTime,
 				},
 				{

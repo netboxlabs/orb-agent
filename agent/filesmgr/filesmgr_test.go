@@ -1241,7 +1241,7 @@ func TestManager_EnsureRecordsFailureOnChecksumMismatch(t *testing.T) {
 	assert.Equal(t, "1.0.0", pending[0].Version)
 	assert.Equal(t, FileEntryStateFailed, pending[0].State)
 	assert.NotEmpty(t, pending[0].Error)
-	assert.False(t, pending[0].Timeout)
+	assert.NotContains(t, pending[0].Error, "deadline exceeded", "a checksum mismatch must not read like a timeout")
 	assert.WithinDuration(t, time.Now(), pending[0].UpdatedAt, 5*time.Second)
 
 	// The failed name must not appear in List() (no successful install).
@@ -1294,7 +1294,7 @@ func TestManager_EnsureRecordsTimeoutFailure(t *testing.T) {
 	require.Len(t, pending, 1)
 	assert.Equal(t, "pkg-timeout", pending[0].Name)
 	assert.Equal(t, FileEntryStateFailed, pending[0].State)
-	assert.True(t, pending[0].Timeout, "expected a context-deadline failure to be flagged as a timeout")
+	assert.Contains(t, pending[0].Error, "deadline exceeded", "the install timeout should surface as a deadline-exceeded error message")
 }
 
 // TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls covers a
