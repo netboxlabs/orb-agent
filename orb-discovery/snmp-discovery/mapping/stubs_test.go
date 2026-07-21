@@ -214,17 +214,23 @@ func TestNewInterfaceStub_Nil(t *testing.T) {
 	assert.Nil(t, newInterfaceStub(nil, nil))
 }
 
-func TestNewInterfaceStub_KeepsNameDeviceMACTypeDropsRest(t *testing.T) {
+func TestNewInterfaceStub_KeepsAttributesDropsStructuralRefs(t *testing.T) {
 	mac := "aa:bb:cc:dd:ee:ff"
 	ifType := strPtr("1000base-t")
+	desc := strPtr("ACA-VOIP")
+	speed := int64Ptr(1000000)
+	mtu := int64Ptr(1500)
+	enabled := boolPtr(true)
 	deviceStub := &diode.Device{Name: strPtr("sw1")}
 	rich := &diode.Interface{
-		Name:              strPtr("Gi1/0/1"),
+		Name:              strPtr("Vlan101"),
 		Device:            &diode.Device{Name: strPtr("sw1"), Serial: strPtr("FCW123")},
 		PrimaryMacAddress: &diode.MACAddress{MacAddress: &mac, Description: strPtr("primary")},
 		Type:              ifType,
-		Mtu:               int64Ptr(1500),
-		Description:       strPtr("uplink"),
+		Description:       desc,
+		Speed:             speed,
+		Mtu:               mtu,
+		Enabled:           enabled,
 		Parent:            &diode.Interface{Name: strPtr("Po1")},
 		Bridge:            &diode.Interface{Name: strPtr("br0")},
 		Lag:               &diode.Interface{Name: strPtr("Po1")},
@@ -234,22 +240,24 @@ func TestNewInterfaceStub_KeepsNameDeviceMACTypeDropsRest(t *testing.T) {
 
 	assert.NotNil(t, stub)
 	assert.NotSame(t, rich, stub)
-	assert.Equal(t, strPtr("Gi1/0/1"), stub.Name)
+	assert.Equal(t, strPtr("Vlan101"), stub.Name)
 	assert.Same(t, deviceStub, stub.Device, "must use the supplied device stub, not rich.Device")
 
-	// Type pointer-shared so NetBox create-validation succeeds when the
-	// stub is the only wire representation of an interface (see
-	// newInterfaceStub doc-comment).
+	// Type + plain attributes pointer-shared so NetBox create-validation
+	// succeeds and ifAlias/speed/mtu/enabled survive when the stub is the
+	// only wire representation of the interface.
 	assert.Same(t, ifType, stub.Type)
+	assert.Same(t, desc, stub.Description)
+	assert.Same(t, speed, stub.Speed)
+	assert.Same(t, mtu, stub.Mtu)
+	assert.Same(t, enabled, stub.Enabled)
 
 	assert.NotNil(t, stub.PrimaryMacAddress)
 	assert.NotSame(t, rich.PrimaryMacAddress, stub.PrimaryMacAddress)
 	assert.Equal(t, &mac, stub.PrimaryMacAddress.MacAddress)
 	assert.Nil(t, stub.PrimaryMacAddress.Description)
 
-	// Other fields cleared.
-	assert.Nil(t, stub.Mtu)
-	assert.Nil(t, stub.Description)
+	// Structural refs stay cleared (they carry their own nested payloads).
 	assert.Nil(t, stub.Parent)
 	assert.Nil(t, stub.Bridge)
 	assert.Nil(t, stub.Lag)
