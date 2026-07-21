@@ -378,11 +378,14 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	if target.NetboxID != nil {
 		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
 	}
+	// Resolve the master once; reused for name suppression and pruning.
+	currentDevice := mapping.CurrentDeviceFrom(entities)
 	// Suppress Device.name (emit_device_name: false) after source_match is
 	// stamped so the matcher guard can see netbox_id, and before
 	// PruneNestedRefs so the device stubs inherit the cleared name.
 	mapping.ApplyDeviceNameEmission(
-		mapping.CurrentDeviceFrom(entities),
+		entities,
+		currentDevice,
 		r.config.Options.DeviceNameEmissionEnabled(),
 		targetHost,
 		r.logger,
@@ -394,7 +397,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	// the wire payload. Runs after annotation so the annotators can walk
 	// the rich shared graph with their unsafe.Pointer dedup intact —
 	// otherwise every stub would need its own metadata pass.
-	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
+	mapping.PruneNestedRefs(entities, currentDevice, primaryHits)
 
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
