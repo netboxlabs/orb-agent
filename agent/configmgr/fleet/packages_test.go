@@ -41,7 +41,8 @@ func (m *mockFilesManager) Get(name string) (filesmgr.FileEntry, bool) {
 	return args.Get(0).(filesmgr.FileEntry), args.Bool(1)
 }
 
-func (m *mockFilesManager) List() []filesmgr.FileEntry { return nil }
+func (m *mockFilesManager) List() []filesmgr.FileEntry        { return nil }
+func (m *mockFilesManager) ListPending() []filesmgr.FileEntry { return nil }
 
 func (m *mockFilesManager) Remove(ctx context.Context, name string) error {
 	args := m.Called(ctx, name)

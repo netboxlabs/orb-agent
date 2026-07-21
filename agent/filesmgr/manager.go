@@ -47,6 +47,13 @@ type Manager interface {
 	// unspecified. Each FileEntry.Name is the logical key and is unique.
 	List() []FileEntry
 
+	// ListPending returns a snapshot of the current installing/failed entry
+	// for each name that has one outstanding. Unlike List, this is never
+	// persisted to disk — see FileEntry's doc comment. A name only appears
+	// here while its most recent Ensure call is in flight or after it has
+	// failed; a subsequent successful Ensure for the same name clears it.
+	ListPending() []FileEntry
+
 	// Remove deletes a tracked file and its on-disk version directory.
 	// Idempotent.
 	Remove(ctx context.Context, name string) error

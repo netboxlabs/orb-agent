@@ -99,7 +99,43 @@ func (s FileSpec) Validate() error {
 	return nil
 }
 
+// FileEntryState values describe where a name is in its install lifecycle,
+// mirroring the State+Error pattern policies.PolicyData already uses
+// (State + BackendErr). FileEntry itself only ever carries
+// FileEntryStateInstalled implicitly for entries returned by Manager.List
+// (the persisted, successfully-installed set) — State/Error/UpdatedAt below
+// are populated only on the transient entries Manager.ListPending returns.
+const (
+	// FileEntryStateInstalling marks a name whose Ensure call is currently
+	// in flight (set at the start of Ensure, before fetch/verify begins).
+	FileEntryStateInstalling = "installing"
+	// FileEntryStateInstalled marks a name with a successful, persisted
+	// install. Entries from Manager.List are always in this state, though
+	// FileEntry.State is left unset on them (see doc above) — this constant
+	// exists for callers that want to compare against ListPending entries
+	// uniformly.
+	FileEntryStateInstalled = "installed"
+	// FileEntryStateFailed marks a name whose most recent Ensure attempt
+	// failed (checksum mismatch, install timeout, or download/extract
+	// error).
+	FileEntryStateFailed = "failed"
+)
+
 // FileEntry is the recorded state for one logical name.
+//
+// Manager.List returns only successfully-installed entries persisted to
+// state.json; on those, State/Error/UpdatedAt are always zero and only
+// Name/Version/Path/SHA256/Source/InstalledAt are meaningful.
+//
+// Manager.ListPending returns a second, in-memory-only view of names whose
+// most recent Ensure call is either still in flight (State ==
+// FileEntryStateInstalling) or failed (State == FileEntryStateFailed, Error
+// populated). This is intentionally NOT persisted to state.json: neither an
+// in-flight nor a failed attempt has an on-disk artifact worth surviving a
+// restart, and every restart/reconnect already triggers a fresh install
+// attempt anyway (see FleetFilesManager.SendBundleListRequest). A name is
+// cleared from the pending view as soon as a subsequent Ensure call for it
+// succeeds.
 type FileEntry struct {
 	Name        string    `json:"name"`
 	Version     string    `json:"version,omitempty"`
@@ -107,6 +143,17 @@ type FileEntry struct {
 	SHA256      string    `json:"sha256"`
 	Source      string    `json:"source"`
 	InstalledAt time.Time `json:"installed_at"`
+
+	// State, Error, and UpdatedAt below are populated only on entries
+	// returned by Manager.ListPending (installing/failed); they are always
+	// zero on entries returned by Manager.List. Error's message text
+	// distinguishes the failure cause (e.g. it contains "context deadline
+	// exceeded" for the 10-minute install timeout) — there is no separate
+	// structured field for this, matching the plain-error-string decision
+	// used elsewhere (PolicyStateInfo.Error, BackendStateInfo.Error).
+	State     string    `json:"state,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 
 // FileEventType is the kind of state transition.

@@ -35,7 +35,8 @@ func (m *mockEngine) Get(name string) (FileEntry, bool) {
 	return args.Get(0).(FileEntry), args.Bool(1)
 }
 
-func (m *mockEngine) List() []FileEntry { return nil }
+func (m *mockEngine) List() []FileEntry        { return nil }
+func (m *mockEngine) ListPending() []FileEntry { return nil }
 
 func (m *mockEngine) Remove(ctx context.Context, name string) error {
 	args := m.Called(ctx, name)

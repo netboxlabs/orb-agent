@@ -6,7 +6,7 @@ import (
 )
 
 // CurrentHeartbeatSchemaVersion defines the current version of the heartbeat schema
-const CurrentHeartbeatSchemaVersion = "1.2"
+const CurrentHeartbeatSchemaVersion = "1.3"
 
 var (
 	// ErrSchemaVersion a message was received indicating a version we don't support
@@ -60,17 +60,39 @@ type GroupStateInfo struct {
 	GroupID   string `json:"id"`
 }
 
+// BundleStateInstalling is the reported state for a bundle whose Ensure call
+// is currently in flight (added in schema 1.3, alongside BundleStateFailed
+// below).
+const BundleStateInstalling = "installing"
+
 // BundleStateInstalled is the reported state for a bundle present on disk.
-// Lifecycle states (installing/failed/expired) are intentionally out of scope
-// for schema 1.2; the store only records successfully installed bundles.
 const BundleStateInstalled = "installed"
 
-// BundleStateInfo contains state information for an installed bundle.
+// BundleStateFailed is the reported state for a bundle whose most recent
+// install attempt (checksum mismatch, install timeout, or download/extract
+// error) did not succeed. Added in schema 1.3; previously a failed
+// install was silently omitted from bundle_state instead of being reported.
+const BundleStateFailed = "failed"
+
+// BundleStateInfo contains state information for a bundle, following the same
+// pattern as PolicyStateInfo/BackendStateInfo: State plus a flat Error string
+// that is set on the most recent failed attempt and cleared (empty) once a
+// later attempt succeeds — there is no separate parallel set of "failed"
+// fields. When State is BundleStateInstalling or BundleStateFailed, Version
+// is the version of that in-flight/failed attempt (which may differ from a
+// still-installed prior version); SHA256/InstalledAt continue to reflect the
+// last successful install, if any, same as BackendStateInfo retains
+// LastRestartTS/LastRestartReason alongside a current Error.
 type BundleStateInfo struct {
 	State       string    `json:"state"`
 	Version     string    `json:"version,omitempty"`
 	SHA256      string    `json:"sha256,omitempty"`
 	InstalledAt time.Time `json:"installed_at,omitzero"`
+	Error       string    `json:"error,omitempty"`
+	// StateChangedAt is when the current State began — i.e. when an
+	// installing attempt started, or when a failed attempt failed. Zero when
+	// State is BundleStateInstalled.
+	StateChangedAt time.Time `json:"state_changed_at,omitzero"`
 }
 
 // Heartbeat represents an agent heartbeat message
