@@ -43,8 +43,23 @@ type filesmgr struct {
 	fetcher *fetcher
 	bus     *eventBus
 
-	// perNameMu serializes Ensure calls for the same logical name.
+	// perNameMu serializes the actual install work (fetch/verify/symlink-swap)
+	// inside ensureLocked for a given name.
 	perNameMu sync.Map // name -> *sync.Mutex
+
+	// callMu serializes an entire Ensure call — including the record/clear
+	// failure-bookkeeping in the Ensure wrapper below — for a given name. This
+	// is deliberately a second, separate mutex from perNameMu rather than
+	// reusing it: ensureLocked acquires/releases perNameMu internally and
+	// returns before Ensure's wrapper runs recordFailure/clearFailure, so
+	// without an outer lock two overlapping Ensure calls for the same name
+	// could have their record/clear calls execute out of completion order (an
+	// older, slower failing call could record a failure after a newer,
+	// faster successful call already cleared it). Holding callMu across the
+	// whole wrapper call ties the record/clear decision to the same
+	// happens-before order as lock acquisition, so whichever call finishes
+	// last is guaranteed to be the one whose outcome is recorded.
+	callMu sync.Map // name -> *sync.Mutex
 
 	// failuresMu guards failures. Deliberately separate from store's locking:
 	// failures are in-memory-only (never persisted to state.json — see
@@ -498,6 +513,10 @@ func (m *filesmgr) Subscribe(handler func(FileEvent)) (unsubscribe func()) {
 // surface it instead of silently omitting the bundle; a succeeding attempt
 // clears any previously recorded failure for the same name.
 func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
+	callMu := m.ensureCallMutexFor(spec.Name)
+	callMu.Lock()
+	defer callMu.Unlock()
+
 	path, err := m.ensureLocked(ctx, spec)
 	if err != nil {
 		m.recordFailure(spec.Name, spec.Version, err, errors.Is(ctx.Err(), context.DeadlineExceeded))
@@ -784,6 +803,16 @@ func versionDirFromEntry(root string, entry FileEntry) string {
 
 func (m *filesmgr) mutexFor(name string) *sync.Mutex {
 	v, _ := m.perNameMu.LoadOrStore(name, &sync.Mutex{})
+	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
+	return mu
+}
+
+// ensureCallMutexFor returns the outer per-name mutex used by Ensure to
+// serialize an entire call (install + failure record/clear) against other
+// concurrent Ensure calls for the same name. See the callMu field doc for why
+// this is a distinct mutex from the one mutexFor returns.
+func (m *filesmgr) ensureCallMutexFor(name string) *sync.Mutex {
+	v, _ := m.callMu.LoadOrStore(name, &sync.Mutex{})
 	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
 	return mu
 }

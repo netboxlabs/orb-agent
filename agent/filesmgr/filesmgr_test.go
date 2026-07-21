@@ -1294,3 +1294,108 @@ func TestManager_EnsureRecordsTimeoutFailure(t *testing.T) {
 	assert.Equal(t, "pkg-timeout", failures[0].Name)
 	assert.True(t, failures[0].Timeout, "expected a context-deadline failure to be flagged as a timeout")
 }
+
+// TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls covers a
+// race flagged in review: Ensure's wrapper calls recordFailure/clearFailure
+// AFTER ensureLocked has already released its internal per-name mutex
+// (mutexFor), so relying on that mutex alone leaves a brief unprotected
+// window where an older but slower failing call's recordFailure could run
+// after a newer but faster successful call's clearFailure — leaving
+// ListFailures reporting "failed" even though the most recent attempt
+// actually succeeded. The fix adds a second, outer per-name mutex
+// (ensureCallMutexFor) that Ensure holds across the whole call, including
+// record/clear, so no other Ensure call for the same name can even begin
+// until the previous one's record/clear has completed.
+//
+// Note: black-box channel handshakes can force call B to block until call A
+// finishes its fetch (mutexFor already guarantees that much on its own), but
+// cannot deterministically land B inside the few-instruction gap between
+// ensureLocked's internal unlock and the wrapper's record/clear call that
+// was the actual unprotected window — that gap is too narrow to hit
+// reliably without instrumenting the code under test. This test instead
+// verifies the resulting behavioral guarantee: when call A (fails) and call
+// B (succeeds) for the same name genuinely run concurrently, whichever call
+// completes last — proven here by explicit channel signals establishing A
+// starts and blocks first while B is confirmed still waiting — is the one
+// whose outcome is reflected once both have returned. Reverting the
+// ensureCallMutexFor fix does not make this specific test fail (the
+// existing internal mutex already serializes enough of the operation for
+// this particular interleaving), but the outer lock is still required to
+// close the general case Codex identified.
+func TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls(t *testing.T) {
+	const name = "pkg-race"
+
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	sum := sha256Hex(archive)
+
+	aStarted := make(chan struct{})
+	var aStartedOnce sync.Once
+	aProceed := make(chan struct{})
+	aSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// go-getter/http may retry the request; only signal aStarted once so
+		// a retry doesn't panic on a double-close.
+		aStartedOnce.Do(func() { close(aStarted) })
+		<-aProceed
+		// Fail the fetch outright (no valid archive body).
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer aSrv.Close()
+
+	bStarted := make(chan struct{})
+	bSrv := serveTarGz(t, archive)
+	defer bSrv.Close()
+
+	m, _ := newTestManager(t)
+
+	var wg sync.WaitGroup
+	var errA, errB error
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, errA = m.Ensure(context.Background(), FileSpec{
+			Name:    name,
+			Version: "1.0.0",
+			URL:     aSrv.URL + "/x.tar.gz",
+			SHA256:  strings.Repeat("0", 64),
+			Extract: true,
+		})
+	}()
+
+	<-aStarted // A is now inside its fetch, holding Ensure's outer per-name lock.
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		close(bStarted) // signals only that the goroutine is running, not that B's HTTP handler fired
+		_, errB = m.Ensure(context.Background(), FileSpec{
+			Name:    name,
+			Version: "2.0.0",
+			URL:     bSrv.URL + "/x.tar.gz",
+			SHA256:  sum,
+			Extract: true,
+		})
+	}()
+	<-bStarted // B's goroutine is running and calling Ensure, but should block on the lock A holds.
+
+	// B must still be blocked waiting for A's lock — it cannot have installed
+	// yet. This is best-effort timing but generous enough (50ms) to catch a
+	// regression where B is not blocked at all.
+	time.Sleep(50 * time.Millisecond)
+	assert.Empty(t, m.List(), "B must not have been able to proceed while A holds the outer lock")
+
+	close(aProceed) // let A fail and run its recordFailure + release the lock.
+	wg.Wait()
+
+	require.Error(t, errA)
+	require.NoError(t, errB)
+
+	// B ran strictly after A (including A's recordFailure) and succeeded, so
+	// the final state must show no outstanding failure and the successful
+	// install — never a stale "failed" left over from A.
+	assert.Empty(t, m.ListFailures(), "B's success must have cleared any failure A recorded")
+	entries := m.List()
+	require.Len(t, entries, 1)
+	assert.Equal(t, name, entries[0].Name)
+	assert.Equal(t, "2.0.0", entries[0].Version)
+}
