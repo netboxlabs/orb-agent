@@ -378,6 +378,15 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	if target.NetboxID != nil {
 		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
 	}
+	// Suppress Device.name (emit_device_name: false) after source_match is
+	// stamped so the matcher guard can see netbox_id, and before
+	// PruneNestedRefs so the device stubs inherit the cleared name.
+	mapping.ApplyDeviceNameEmission(
+		mapping.CurrentDeviceFrom(entities),
+		r.config.Options.DeviceNameEmissionEnabled(),
+		targetHost,
+		r.logger,
+	)
 	annotateEntitiesWithRunID(entities, run.ID)
 	r.logEntitiesForIngestion(entities)
 
