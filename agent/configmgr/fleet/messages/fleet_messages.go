@@ -60,6 +60,11 @@ type GroupStateInfo struct {
 	GroupID   string `json:"id"`
 }
 
+// BundleStateInstalling is the reported state for a bundle whose Ensure call
+// is currently in flight (added in schema 1.3, alongside BundleStateFailed
+// below).
+const BundleStateInstalling = "installing"
+
 // BundleStateInstalled is the reported state for a bundle present on disk.
 const BundleStateInstalled = "installed"
 
@@ -73,20 +78,21 @@ const BundleStateFailed = "failed"
 // pattern as PolicyStateInfo/BackendStateInfo: State plus a flat Error string
 // that is set on the most recent failed attempt and cleared (empty) once a
 // later attempt succeeds — there is no separate parallel set of "failed"
-// fields. When State is BundleStateFailed, Version is the version that most
-// recently failed to install (which may differ from a still-installed prior
-// version); SHA256/InstalledAt continue to reflect the last successful
-// install, if any, same as BackendStateInfo retains LastRestartTS/
-// LastRestartReason alongside a current Error.
+// fields. When State is BundleStateInstalling or BundleStateFailed, Version
+// is the version of that in-flight/failed attempt (which may differ from a
+// still-installed prior version); SHA256/InstalledAt continue to reflect the
+// last successful install, if any, same as BackendStateInfo retains
+// LastRestartTS/LastRestartReason alongside a current Error.
 type BundleStateInfo struct {
 	State       string    `json:"state"`
 	Version     string    `json:"version,omitempty"`
 	SHA256      string    `json:"sha256,omitempty"`
 	InstalledAt time.Time `json:"installed_at,omitzero"`
 	Error       string    `json:"error,omitempty"`
-	// FailedAt is when the most recent install attempt failed. Populated
-	// when Error is set.
-	FailedAt time.Time `json:"failed_at,omitzero"`
+	// StateChangedAt is when the current State began — i.e. when an
+	// installing attempt started, or when a failed attempt failed. Zero when
+	// State is BundleStateInstalled.
+	StateChangedAt time.Time `json:"state_changed_at,omitzero"`
 }
 
 // Heartbeat represents an agent heartbeat message

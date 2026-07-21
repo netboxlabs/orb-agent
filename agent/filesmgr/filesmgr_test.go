@@ -1215,7 +1215,7 @@ func TestManager_StartCleansUpStaleBackupDirs(t *testing.T) {
 
 // TestManager_EnsureRecordsFailureOnChecksumMismatch verifies that a
 // failed Ensure (here, a SHA256 that doesn't match the fetched archive) is
-// recorded via ListFailures instead of being silently dropped, and a
+// recorded via ListPending instead of being silently dropped, and a
 // subsequent successful Ensure for the same name clears it.
 func TestManager_EnsureRecordsFailureOnChecksumMismatch(t *testing.T) {
 	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
@@ -1235,13 +1235,14 @@ func TestManager_EnsureRecordsFailureOnChecksumMismatch(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	failures := m.ListFailures()
-	require.Len(t, failures, 1)
-	assert.Equal(t, "pkg", failures[0].Name)
-	assert.Equal(t, "1.0.0", failures[0].Version)
-	assert.NotEmpty(t, failures[0].Error)
-	assert.False(t, failures[0].Timeout)
-	assert.WithinDuration(t, time.Now(), failures[0].FailedAt, 5*time.Second)
+	pending := m.ListPending()
+	require.Len(t, pending, 1)
+	assert.Equal(t, "pkg", pending[0].Name)
+	assert.Equal(t, "1.0.0", pending[0].Version)
+	assert.Equal(t, FileEntryStateFailed, pending[0].State)
+	assert.NotEmpty(t, pending[0].Error)
+	assert.False(t, pending[0].Timeout)
+	assert.WithinDuration(t, time.Now(), pending[0].UpdatedAt, 5*time.Second)
 
 	// The failed name must not appear in List() (no successful install).
 	assert.Empty(t, m.List())
@@ -1255,7 +1256,7 @@ func TestManager_EnsureRecordsFailureOnChecksumMismatch(t *testing.T) {
 		Extract: true,
 	})
 	require.NoError(t, err)
-	assert.Empty(t, m.ListFailures())
+	assert.Empty(t, m.ListPending())
 }
 
 // TestManager_EnsureRecordsTimeoutFailure verifies a context deadline
@@ -1289,19 +1290,20 @@ func TestManager_EnsureRecordsTimeoutFailure(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	failures := m.ListFailures()
-	require.Len(t, failures, 1)
-	assert.Equal(t, "pkg-timeout", failures[0].Name)
-	assert.True(t, failures[0].Timeout, "expected a context-deadline failure to be flagged as a timeout")
+	pending := m.ListPending()
+	require.Len(t, pending, 1)
+	assert.Equal(t, "pkg-timeout", pending[0].Name)
+	assert.Equal(t, FileEntryStateFailed, pending[0].State)
+	assert.True(t, pending[0].Timeout, "expected a context-deadline failure to be flagged as a timeout")
 }
 
 // TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls covers a
-// race flagged in review: Ensure's wrapper calls recordFailure/clearFailure
+// race flagged in review: Ensure's wrapper calls setPendingFailed/clearPending
 // AFTER ensureLocked has already released its internal per-name mutex
 // (mutexFor), so relying on that mutex alone leaves a brief unprotected
-// window where an older but slower failing call's recordFailure could run
-// after a newer but faster successful call's clearFailure — leaving
-// ListFailures reporting "failed" even though the most recent attempt
+// window where an older but slower failing call's setPendingFailed could run
+// after a newer but faster successful call's clearPending — leaving
+// ListPending reporting "failed" even though the most recent attempt
 // actually succeeded. The fix adds a second, outer per-name mutex
 // (ensureCallMutexFor) that Ensure holds across the whole call, including
 // record/clear, so no other Ensure call for the same name can even begin
@@ -1384,16 +1386,16 @@ func TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls(t *test
 	time.Sleep(50 * time.Millisecond)
 	assert.Empty(t, m.List(), "B must not have been able to proceed while A holds the outer lock")
 
-	close(aProceed) // let A fail and run its recordFailure + release the lock.
+	close(aProceed) // let A fail and run its setPendingFailed + release the lock.
 	wg.Wait()
 
 	require.Error(t, errA)
 	require.NoError(t, errB)
 
-	// B ran strictly after A (including A's recordFailure) and succeeded, so
+	// B ran strictly after A (including A's setPendingFailed) and succeeded, so
 	// the final state must show no outstanding failure and the successful
 	// install — never a stale "failed" left over from A.
-	assert.Empty(t, m.ListFailures(), "B's success must have cleared any failure A recorded")
+	assert.Empty(t, m.ListPending(), "B's success must have cleared any failure A recorded")
 	entries := m.List()
 	require.Len(t, entries, 1)
 	assert.Equal(t, name, entries[0].Name)

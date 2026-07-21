@@ -24,12 +24,12 @@ import (
 )
 
 type stubBundleRetriever struct {
-	entries  []filesmgr.FileEntry
-	failures []filesmgr.FailureEntry
+	entries []filesmgr.FileEntry
+	pending []filesmgr.FileEntry
 }
 
-func (s stubBundleRetriever) List() []filesmgr.FileEntry            { return s.entries }
-func (s stubBundleRetriever) ListFailures() []filesmgr.FailureEntry { return s.failures }
+func (s stubBundleRetriever) List() []filesmgr.FileEntry        { return s.entries }
+func (s stubBundleRetriever) ListPending() []filesmgr.FileEntry { return s.pending }
 
 func init() {
 	heartbeatTickInterval = 50 * time.Millisecond
@@ -1893,10 +1893,11 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesBundleState(t *testing.T) {
 // bundle_state as "failed" (previously it was silently omitted), and that a
 // name with both a last-known-good install and a newer failed attempt (e.g.
 // a failed re-fetch on reconnect) surfaces both the failure and the
-// last-known-good version rather than losing one or the other.
+// last-known-good version rather than losing one or the other. Also covers
+// the transitional "installing" state added per review feedback.
 func TestHeartbeater_SendSingleHeartbeat_SerializesFailedBundleState(t *testing.T) {
 	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-	failTime := time.Date(2024, 1, 2, 8, 0, 0, 0, time.UTC)
+	changedTime := time.Date(2024, 1, 2, 8, 0, 0, 0, time.UTC)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	groupManager := newGroupManager()
@@ -1914,19 +1915,27 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesFailedBundleState(t *testing.
 					InstalledAt: testTime,
 				},
 			},
-			failures: []filesmgr.FailureEntry{
+			pending: []filesmgr.FileEntry{
 				{
-					Name:     "nbl_cisco_meraki",
-					Version:  "2.16.0",
-					Error:    "checksum mismatch",
-					FailedAt: failTime,
+					Name:      "nbl_cisco_meraki",
+					Version:   "2.16.0",
+					State:     filesmgr.FileEntryStateFailed,
+					Error:     "checksum mismatch",
+					UpdatedAt: changedTime,
 				},
 				{
-					Name:     "nbl_never_installed",
-					Version:  "1.0.0",
-					Error:    "context deadline exceeded",
-					Timeout:  true,
-					FailedAt: failTime,
+					Name:      "nbl_never_installed",
+					Version:   "1.0.0",
+					State:     filesmgr.FileEntryStateFailed,
+					Error:     "context deadline exceeded",
+					Timeout:   true,
+					UpdatedAt: changedTime,
+				},
+				{
+					Name:      "nbl_installing_now",
+					Version:   "3.0.0",
+					State:     filesmgr.FileEntryStateInstalling,
+					UpdatedAt: changedTime,
 				},
 			},
 		},
@@ -1956,15 +1965,23 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesFailedBundleState(t *testing.
 	assert.Equal(t, "2.16.0", merakiState.Version, "version reflects the most recent (failed) attempt")
 	assert.Equal(t, "57c56d72", merakiState.SHA256, "last successful install's SHA256 is retained")
 	assert.Equal(t, "checksum mismatch", merakiState.Error)
-	assert.True(t, failTime.Equal(merakiState.FailedAt))
+	assert.True(t, changedTime.Equal(merakiState.StateChangedAt))
 
 	// A bundle that has never successfully installed reports state/version/error
-	// from the failure alone.
+	// from the pending entry alone.
 	require.Contains(t, hb2.BundleState, "nbl_never_installed")
 	neverInstalled := hb2.BundleState["nbl_never_installed"]
 	assert.Equal(t, messages.BundleStateFailed, neverInstalled.State)
 	assert.Equal(t, "1.0.0", neverInstalled.Version)
 	assert.Equal(t, "context deadline exceeded", neverInstalled.Error)
+
+	// A bundle currently installing (never previously installed) reports the
+	// transitional "installing" state with no error.
+	require.Contains(t, hb2.BundleState, "nbl_installing_now")
+	installingNow := hb2.BundleState["nbl_installing_now"]
+	assert.Equal(t, messages.BundleStateInstalling, installingNow.State)
+	assert.Equal(t, "3.0.0", installingNow.Version)
+	assert.Empty(t, installingNow.Error)
 }
 
 func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {

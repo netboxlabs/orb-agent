@@ -51,7 +51,7 @@ type filesmgr struct {
 	// failure-bookkeeping in the Ensure wrapper below — for a given name. This
 	// is deliberately a second, separate mutex from perNameMu rather than
 	// reusing it: ensureLocked acquires/releases perNameMu internally and
-	// returns before Ensure's wrapper runs recordFailure/clearFailure, so
+	// returns before Ensure's wrapper runs setPendingFailed/clearPending, so
 	// without an outer lock two overlapping Ensure calls for the same name
 	// could have their record/clear calls execute out of completion order (an
 	// older, slower failing call could record a failure after a newer,
@@ -61,12 +61,12 @@ type filesmgr struct {
 	// last is guaranteed to be the one whose outcome is recorded.
 	callMu sync.Map // name -> *sync.Mutex
 
-	// failuresMu guards failures. Deliberately separate from store's locking:
-	// failures are in-memory-only (never persisted to state.json — see
-	// FailureEntry doc comment in types.go) and are updated on the Ensure
-	// error path, which does not hold store.mu.
-	failuresMu sync.RWMutex
-	failures   map[string]FailureEntry // name -> most recent failure
+	// pendingMu guards pending. Deliberately separate from store's locking:
+	// pending entries are in-memory-only (never persisted to state.json —
+	// see FileEntry's doc comment in types.go) and are updated on the
+	// Ensure call path, which does not hold store.mu.
+	pendingMu sync.RWMutex
+	pending   map[string]FileEntry // name -> current installing/failed entry
 }
 
 // defaultRoot is the directory used when FilesManagerConfig.Root is empty.
@@ -101,12 +101,12 @@ func NewManager(logger *slog.Logger, root string) Manager {
 	}
 	l := logger.With("subsystem", "filesmgr")
 	return &filesmgr{
-		logger:   l,
-		root:     root,
-		store:    newStore(filepath.Join(root, "state.json")),
-		fetcher:  newFetcher(l),
-		bus:      newEventBusWithLogger(logger),
-		failures: make(map[string]FailureEntry),
+		logger:  l,
+		root:    root,
+		store:   newStore(filepath.Join(root, "state.json")),
+		fetcher: newFetcher(l),
+		bus:     newEventBusWithLogger(logger),
+		pending: make(map[string]FileEntry),
 	}
 }
 
@@ -466,38 +466,54 @@ func (m *filesmgr) List() []FileEntry {
 	return out
 }
 
-// recordFailure records name's most recent failed Ensure attempt, overwriting
-// any prior failure for the same name (only the latest attempt is kept).
-func (m *filesmgr) recordFailure(name, version string, err error, timedOut bool) {
-	m.failuresMu.Lock()
-	defer m.failuresMu.Unlock()
-	m.failures[name] = FailureEntry{
-		Name:     name,
-		Version:  version,
-		Error:    err.Error(),
-		Timeout:  timedOut,
-		FailedAt: time.Now().UTC(),
+// setPendingInstalling marks name as currently installing, overwriting
+// whatever pending entry (installing or failed) it may have had before. Called
+// at the start of Ensure, before the fetch/verify work begins.
+func (m *filesmgr) setPendingInstalling(name, version string) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	m.pending[name] = FileEntry{
+		Name:      name,
+		Version:   version,
+		State:     FileEntryStateInstalling,
+		UpdatedAt: time.Now().UTC(),
 	}
 }
 
-// clearFailure drops any recorded failure for name. Called after a
-// successful Ensure so a subsequent heartbeat stops reporting a since-resolved
-// failure.
-func (m *filesmgr) clearFailure(name string) {
-	m.failuresMu.Lock()
-	defer m.failuresMu.Unlock()
-	delete(m.failures, name)
+// setPendingFailed records name's most recent failed Ensure attempt,
+// overwriting whatever pending entry it may have had before (only the latest
+// attempt is kept).
+func (m *filesmgr) setPendingFailed(name, version string, err error, timedOut bool) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	m.pending[name] = FileEntry{
+		Name:      name,
+		Version:   version,
+		State:     FileEntryStateFailed,
+		Error:     err.Error(),
+		Timeout:   timedOut,
+		UpdatedAt: time.Now().UTC(),
+	}
 }
 
-// ListFailures returns a snapshot of the most recent failed Ensure attempt for
-// each name that currently has one outstanding (i.e. no later Ensure for that
-// name has succeeded). Order is unspecified.
-func (m *filesmgr) ListFailures() []FailureEntry {
-	m.failuresMu.RLock()
-	defer m.failuresMu.RUnlock()
-	out := make([]FailureEntry, 0, len(m.failures))
-	for _, f := range m.failures {
-		out = append(out, f)
+// clearPending drops any pending (installing/failed) entry for name. Called
+// after a successful Ensure so a subsequent heartbeat stops reporting a
+// since-resolved installing/failed state.
+func (m *filesmgr) clearPending(name string) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	delete(m.pending, name)
+}
+
+// ListPending returns a snapshot of the current installing/failed entry for
+// each name that has one outstanding (i.e. no later Ensure call for that name
+// has succeeded since). Order is unspecified.
+func (m *filesmgr) ListPending() []FileEntry {
+	m.pendingMu.RLock()
+	defer m.pendingMu.RUnlock()
+	out := make([]FileEntry, 0, len(m.pending))
+	for _, p := range m.pending {
+		out = append(out, p)
 	}
 	return out
 }
@@ -507,22 +523,25 @@ func (m *filesmgr) Subscribe(handler func(FileEvent)) (unsubscribe func()) {
 }
 
 // Ensure makes sure the file described by spec is present on disk and matches
-// the declared SHA256. It wraps ensureLocked to record/clear per-name failure
-// state for heartbeat reporting: a failing attempt is recorded via
-// recordFailure so getBundleState (agent/configmgr/fleet/heartbeats.go) can
-// surface it instead of silently omitting the bundle; a succeeding attempt
-// clears any previously recorded failure for the same name.
+// the declared SHA256. It wraps ensureLocked to maintain per-name pending
+// state for heartbeat reporting (getBundleState in
+// agent/configmgr/fleet/heartbeats.go): the name is marked "installing" for
+// the duration of the call, then either "failed" (with Error set) or cleared
+// entirely on success, so a bundle's install lifecycle is never silently
+// omitted from the heartbeat.
 func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	callMu := m.ensureCallMutexFor(spec.Name)
 	callMu.Lock()
 	defer callMu.Unlock()
 
+	m.setPendingInstalling(spec.Name, spec.Version)
+
 	path, err := m.ensureLocked(ctx, spec)
 	if err != nil {
-		m.recordFailure(spec.Name, spec.Version, err, errors.Is(ctx.Err(), context.DeadlineExceeded))
+		m.setPendingFailed(spec.Name, spec.Version, err, errors.Is(ctx.Err(), context.DeadlineExceeded))
 		return path, err
 	}
-	m.clearFailure(spec.Name)
+	m.clearPending(spec.Name)
 	return path, err
 }
 
