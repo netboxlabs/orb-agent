@@ -23,9 +23,13 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
-type stubBundleRetriever struct{ entries []filesmgr.FileEntry }
+type stubBundleRetriever struct {
+	entries  []filesmgr.FileEntry
+	failures []filesmgr.FailureEntry
+}
 
-func (s stubBundleRetriever) List() []filesmgr.FileEntry { return s.entries }
+func (s stubBundleRetriever) List() []filesmgr.FileEntry            { return s.entries }
+func (s stubBundleRetriever) ListFailures() []filesmgr.FailureEntry { return s.failures }
 
 func init() {
 	heartbeatTickInterval = 50 * time.Millisecond
@@ -1884,6 +1888,85 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesBundleState(t *testing.T) {
 	assert.Contains(t, string(capturedPayload), `"nbl_cisco_meraki":{"state":"installed","version":"2.15.0","sha256":"57c56d72"`)
 }
 
+// TestHeartbeater_SendSingleHeartbeat_SerializesFailedBundleState verifies
+// that a bundle whose most recent install attempt failed is reported in
+// bundle_state as "failed" (previously it was silently omitted), and that a
+// name with both a last-known-good install and a newer failed attempt (e.g.
+// a failed re-fetch on reconnect) surfaces both the failure and the
+// last-known-good version rather than losing one or the other.
+func TestHeartbeater_SendSingleHeartbeat_SerializesFailedBundleState(t *testing.T) {
+	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	failTime := time.Date(2024, 1, 2, 8, 0, 0, 0, time.UTC)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	groupManager := newGroupManager()
+	hb := &heartbeater{
+		logger:         logger,
+		backendState:   &mockBackendState{},
+		policyManager:  &mockPolicyManagerForHeartbeat{},
+		groupRetriever: &groupManager,
+		bundleRetriever: stubBundleRetriever{
+			entries: []filesmgr.FileEntry{
+				{
+					Name:        "nbl_cisco_meraki",
+					Version:     "2.15.0",
+					SHA256:      "57c56d72",
+					InstalledAt: testTime,
+				},
+			},
+			failures: []filesmgr.FailureEntry{
+				{
+					Name:     "nbl_cisco_meraki",
+					Version:  "2.16.0",
+					Error:    "checksum mismatch",
+					FailedAt: failTime,
+				},
+				{
+					Name:     "nbl_never_installed",
+					Version:  "1.0.0",
+					Error:    "context deadline exceeded",
+					Timeout:  true,
+					FailedAt: failTime,
+				},
+			},
+		},
+	}
+	hb.policyManager.(*mockPolicyManagerForHeartbeat).On("GetPolicyState").Return([]policies.PolicyData{}, nil)
+
+	var capturedPayload []byte
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	hb.sendSingleHeartbeat(context.Background(), "test/topic", publishFunc, "agent-id", testTime, messages.Online, nil)
+
+	require.NotNil(t, capturedPayload)
+
+	var hb2 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &hb2))
+
+	// A bundle with a last-known-good install AND a newer failed attempt
+	// reports "failed" state, Version updated to the failed attempt, and
+	// Error set — while SHA256/InstalledAt still reflect the last successful
+	// install (same State+Error pattern as PolicyStateInfo/BackendStateInfo).
+	require.Contains(t, hb2.BundleState, "nbl_cisco_meraki")
+	merakiState := hb2.BundleState["nbl_cisco_meraki"]
+	assert.Equal(t, messages.BundleStateFailed, merakiState.State)
+	assert.Equal(t, "2.16.0", merakiState.Version, "version reflects the most recent (failed) attempt")
+	assert.Equal(t, "57c56d72", merakiState.SHA256, "last successful install's SHA256 is retained")
+	assert.Equal(t, "checksum mismatch", merakiState.Error)
+	assert.True(t, failTime.Equal(merakiState.FailedAt))
+
+	// A bundle that has never successfully installed reports state/version/error
+	// from the failure alone.
+	require.Contains(t, hb2.BundleState, "nbl_never_installed")
+	neverInstalled := hb2.BundleState["nbl_never_installed"]
+	assert.Equal(t, messages.BundleStateFailed, neverInstalled.State)
+	assert.Equal(t, "1.0.0", neverInstalled.Version)
+	assert.Equal(t, "context deadline exceeded", neverInstalled.Error)
+}
+
 func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
 	testTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	mockPMgr := &mockPolicyManagerForHeartbeat{}
@@ -1922,7 +2005,7 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesPerRunTargets(t *testing.T) {
 	var hb2 messages.Heartbeat
 	require.NoError(t, json.Unmarshal(capturedPayload, &hb2))
 
-	assert.Equal(t, "1.2", hb2.SchemaVersion)
+	assert.Equal(t, "1.3", hb2.SchemaVersion)
 	require.Len(t, hb2.PolicyState["policy-1"].Runs, 1)
 	assert.Equal(t, []string{"10.0.0.1"}, hb2.PolicyState["policy-1"].Runs[0].Targets)
 	assert.Equal(t, "ios", hb2.PolicyState["policy-1"].Runs[0].Driver)

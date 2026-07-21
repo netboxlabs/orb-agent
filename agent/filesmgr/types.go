@@ -109,6 +109,20 @@ type FileEntry struct {
 	InstalledAt time.Time `json:"installed_at"`
 }
 
+// FailureEntry records the most recent failed Ensure attempt for a logical
+// name. It is intentionally NOT persisted to state.json: a failed attempt
+// carries no on-disk artifact worth surviving a restart, and every restart or
+// reconnect naturally triggers a fresh install attempt anyway (see
+// FleetFilesManager.SendBundleListRequest). Kept in-memory only, and cleared
+// as soon as a subsequent Ensure for the same name succeeds.
+type FailureEntry struct {
+	Name     string    `json:"name"`
+	Version  string    `json:"version,omitempty"`
+	Error    string    `json:"error"`
+	Timeout  bool      `json:"timeout,omitempty"`
+	FailedAt time.Time `json:"failed_at"`
+}
+
 // FileEventType is the kind of state transition.
 type FileEventType int
 

@@ -47,6 +47,13 @@ type Manager interface {
 	// unspecified. Each FileEntry.Name is the logical key and is unique.
 	List() []FileEntry
 
+	// ListFailures returns a snapshot of the most recent failed Ensure attempt
+	// for each name that has one outstanding. Unlike List, this is
+	// never persisted to disk — see FailureEntry's doc comment. A name only
+	// appears here if its most recent Ensure call failed; a subsequent
+	// successful Ensure for the same name clears it.
+	ListFailures() []FailureEntry
+
 	// Remove deletes a tracked file and its on-disk version directory.
 	// Idempotent.
 	Remove(ctx context.Context, name string) error

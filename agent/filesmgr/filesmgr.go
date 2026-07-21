@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,6 +45,13 @@ type filesmgr struct {
 
 	// perNameMu serializes Ensure calls for the same logical name.
 	perNameMu sync.Map // name -> *sync.Mutex
+
+	// failuresMu guards failures. Deliberately separate from store's locking:
+	// failures are in-memory-only (never persisted to state.json — see
+	// FailureEntry doc comment in types.go) and are updated on the Ensure
+	// error path, which does not hold store.mu.
+	failuresMu sync.RWMutex
+	failures   map[string]FailureEntry // name -> most recent failure
 }
 
 // defaultRoot is the directory used when FilesManagerConfig.Root is empty.
@@ -78,11 +86,12 @@ func NewManager(logger *slog.Logger, root string) Manager {
 	}
 	l := logger.With("subsystem", "filesmgr")
 	return &filesmgr{
-		logger:  l,
-		root:    root,
-		store:   newStore(filepath.Join(root, "state.json")),
-		fetcher: newFetcher(l),
-		bus:     newEventBusWithLogger(logger),
+		logger:   l,
+		root:     root,
+		store:    newStore(filepath.Join(root, "state.json")),
+		fetcher:  newFetcher(l),
+		bus:      newEventBusWithLogger(logger),
+		failures: make(map[string]FailureEntry),
 	}
 }
 
@@ -442,16 +451,68 @@ func (m *filesmgr) List() []FileEntry {
 	return out
 }
 
+// recordFailure records name's most recent failed Ensure attempt, overwriting
+// any prior failure for the same name (only the latest attempt is kept).
+func (m *filesmgr) recordFailure(name, version string, err error, timedOut bool) {
+	m.failuresMu.Lock()
+	defer m.failuresMu.Unlock()
+	m.failures[name] = FailureEntry{
+		Name:     name,
+		Version:  version,
+		Error:    err.Error(),
+		Timeout:  timedOut,
+		FailedAt: time.Now().UTC(),
+	}
+}
+
+// clearFailure drops any recorded failure for name. Called after a
+// successful Ensure so a subsequent heartbeat stops reporting a since-resolved
+// failure.
+func (m *filesmgr) clearFailure(name string) {
+	m.failuresMu.Lock()
+	defer m.failuresMu.Unlock()
+	delete(m.failures, name)
+}
+
+// ListFailures returns a snapshot of the most recent failed Ensure attempt for
+// each name that currently has one outstanding (i.e. no later Ensure for that
+// name has succeeded). Order is unspecified.
+func (m *filesmgr) ListFailures() []FailureEntry {
+	m.failuresMu.RLock()
+	defer m.failuresMu.RUnlock()
+	out := make([]FailureEntry, 0, len(m.failures))
+	for _, f := range m.failures {
+		out = append(out, f)
+	}
+	return out
+}
+
 func (m *filesmgr) Subscribe(handler func(FileEvent)) (unsubscribe func()) {
 	return m.bus.subscribe(handler)
 }
 
 // Ensure makes sure the file described by spec is present on disk and matches
-// the declared SHA256. Correct operation order (atomicity guarantee):
+// the declared SHA256. It wraps ensureLocked to record/clear per-name failure
+// state for heartbeat reporting: a failing attempt is recorded via
+// recordFailure so getBundleState (agent/configmgr/fleet/heartbeats.go) can
+// surface it instead of silently omitting the bundle; a succeeding attempt
+// clears any previously recorded failure for the same name.
+func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
+	path, err := m.ensureLocked(ctx, spec)
+	if err != nil {
+		m.recordFailure(spec.Name, spec.Version, err, errors.Is(ctx.Err(), context.DeadlineExceeded))
+		return path, err
+	}
+	m.clearFailure(spec.Name)
+	return path, err
+}
+
+// ensureLocked contains the original Ensure implementation. Correct operation
+// order (atomicity guarantee):
 //  1. Fetch into fresh version directory.
 //  2. Attempt store.put; if it fails, clean up the version dir.
 //  3. Swap the "current" symlink; if it fails, roll back store.put.
-func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
+func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, error) {
 	if err := spec.Validate(); err != nil {
 		return "", err
 	}

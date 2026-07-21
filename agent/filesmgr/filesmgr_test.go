@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1210,4 +1211,86 @@ func TestManager_StartCleansUpStaleBackupDirs(t *testing.T) {
 	assert.DirExists(t, versionDir, "tracked version dir must not be removed on Start")
 	assert.FileExists(t, filepath.Join(unversionedNameDir, "file.txt"),
 		"unversioned content must not be removed on Start")
+}
+
+// TestManager_EnsureRecordsFailureOnChecksumMismatch verifies that a
+// failed Ensure (here, a SHA256 that doesn't match the fetched archive) is
+// recorded via ListFailures instead of being silently dropped, and a
+// subsequent successful Ensure for the same name clears it.
+func TestManager_EnsureRecordsFailureOnChecksumMismatch(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	realSum := sha256Hex(archive)
+	wrongSum := strings.Repeat("0", len(realSum))
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+
+	m, _ := newTestManager(t)
+
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name:    "pkg",
+		Version: "1.0.0",
+		URL:     srv.URL + "/x.tar.gz",
+		SHA256:  wrongSum,
+		Extract: true,
+	})
+	require.Error(t, err)
+
+	failures := m.ListFailures()
+	require.Len(t, failures, 1)
+	assert.Equal(t, "pkg", failures[0].Name)
+	assert.Equal(t, "1.0.0", failures[0].Version)
+	assert.NotEmpty(t, failures[0].Error)
+	assert.False(t, failures[0].Timeout)
+	assert.WithinDuration(t, time.Now(), failures[0].FailedAt, 5*time.Second)
+
+	// The failed name must not appear in List() (no successful install).
+	assert.Empty(t, m.List())
+
+	// A subsequent successful Ensure for the same name clears the failure.
+	_, err = m.Ensure(context.Background(), FileSpec{
+		Name:    "pkg",
+		Version: "1.0.0",
+		URL:     srv.URL + "/x.tar.gz",
+		SHA256:  realSum,
+		Extract: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, m.ListFailures())
+}
+
+// TestManager_EnsureRecordsTimeoutFailure verifies a context deadline
+// exceeded during Ensure is recorded as a Timeout failure —
+// distinguishing the 10-minute install timeout case from other errors, per
+// the ticket's requirement to report checksum mismatch, timeout, and
+// download errors distinctly enough to be useful.
+func TestManager_EnsureRecordsTimeoutFailure(t *testing.T) {
+	// A server that never responds within the deadline forces ctx.Err() to be
+	// DeadlineExceeded by the time Ensure returns.
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-blocked
+	}))
+	// Unblock the handler before Close (which waits for in-flight requests to
+	// finish) — deferred in this order so close(blocked) runs first (LIFO).
+	defer srv.Close()
+	defer close(blocked)
+
+	m, _ := newTestManager(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := m.Ensure(ctx, FileSpec{
+		Name:    "pkg-timeout",
+		Version: "1.0.0",
+		URL:     srv.URL + "/x.tar.gz",
+		SHA256:  strings.Repeat("0", 64),
+		Extract: true,
+	})
+	require.Error(t, err)
+
+	failures := m.ListFailures()
+	require.Len(t, failures, 1)
+	assert.Equal(t, "pkg-timeout", failures[0].Name)
+	assert.True(t, failures[0].Timeout, "expected a context-deadline failure to be flagged as a timeout")
 }

@@ -151,6 +151,7 @@ func (s *stubDirFilesManager) Get(name string) (filesmgr.FileEntry, bool) {
 }
 
 func (s *stubDirFilesManager) List() []filesmgr.FileEntry                 { return nil }
+func (s *stubDirFilesManager) ListFailures() []filesmgr.FailureEntry      { return nil }
 func (s *stubDirFilesManager) Remove(_ context.Context, _ string) error   { return nil }
 func (s *stubDirFilesManager) Rollback(_ context.Context, _ string) error { return nil }
 func (s *stubDirFilesManager) Subscribe(_ func(filesmgr.FileEvent)) func() {

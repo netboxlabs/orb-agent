@@ -8,8 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCurrentHeartbeatSchemaVersion_IsOneTwo(t *testing.T) {
-	assert.Equal(t, "1.2", CurrentHeartbeatSchemaVersion)
+func TestCurrentHeartbeatSchemaVersion_IsOneThree(t *testing.T) {
+	// Bumped 1.2 -> 1.3: bundle_state gained a "failed" state
+	// (BundleStateFailed) in addition to "installed".
+	assert.Equal(t, "1.3", CurrentHeartbeatSchemaVersion)
 }
 
 func TestRunStateInfo_TargetsOmittedWhenNil(t *testing.T) {

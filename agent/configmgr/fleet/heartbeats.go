@@ -21,10 +21,13 @@ const (
 // heartbeatTickInterval is the delay between periodic heartbeats. Tests shorten it.
 var heartbeatTickInterval = heartbeatFreq
 
-// BundleStateRetriever provides read-only access to installed bundle state for
-// heartbeats. Satisfied by filesmgr.Manager.
+// BundleStateRetriever provides read-only access to installed and failed
+// bundle state for heartbeats. Satisfied by filesmgr.Manager.
 type BundleStateRetriever interface {
 	List() []filesmgr.FileEntry
+	// ListFailures reports bundles whose most recent install attempt failed.
+	// See filesmgr.FailureEntry for why this is in-memory only.
+	ListFailures() []filesmgr.FailureEntry
 }
 
 type heartbeater struct {
@@ -208,6 +211,15 @@ func (hb *heartbeater) getGroupState() map[string]messages.GroupStateInfo {
 	return gs
 }
 
+// getBundleState reports, per bundle name, both installed and failed state,
+// following the same State+Error pattern as getPolicyState/
+// getBackendState: a name that has successfully installed at least once but
+// whose most recent attempt (e.g. a re-fetch on reconnect) failed reports
+// State as BundleStateFailed with Version updated to the failed attempt's
+// version and Error set, while still retaining SHA256/InstalledAt from the
+// last successful install — mirroring how BackendStateInfo keeps
+// LastRestartTS/LastRestartReason alongside a current Error. A name with no
+// successful install at all reports State/Version/Error from the failure only.
 func (hb *heartbeater) getBundleState() map[string]messages.BundleStateInfo {
 	bs := make(map[string]messages.BundleStateInfo)
 	if hb.bundleRetriever == nil {
@@ -220,6 +232,14 @@ func (hb *heartbeater) getBundleState() map[string]messages.BundleStateInfo {
 			SHA256:      entry.SHA256,
 			InstalledAt: entry.InstalledAt,
 		}
+	}
+	for _, failure := range hb.bundleRetriever.ListFailures() {
+		info := bs[failure.Name] // zero value if no prior successful install
+		info.State = messages.BundleStateFailed
+		info.Version = failure.Version
+		info.Error = failure.Error
+		info.FailedAt = failure.FailedAt
+		bs[failure.Name] = info
 	}
 	return bs
 }
