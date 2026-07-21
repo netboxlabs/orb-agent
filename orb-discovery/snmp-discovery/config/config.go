@@ -491,6 +491,15 @@ type Options struct {
 	// matching device-discovery's behavior. Set false to opt out.
 	EmitPrefixes *bool `yaml:"emit_prefixes,omitempty"`
 
+	// Tri-state pointer; unset defaults to TRUE — Device.name is emitted
+	// from SNMP sysName, matching legacy behaviour. Set false to suppress
+	// the name on the matched device so continual discovery under
+	// Assurance stops proposing hostname renames when sysName differs from
+	// the NetBox name. Only takes effect when the device is matchable
+	// another way (netbox_id / source_match, or asset_tag); otherwise the
+	// name is kept and a warning is logged.
+	EmitDeviceName *bool `yaml:"emit_device_name,omitempty"`
+
 	// When true AND no explicit defaults.prefix.scope_* is set,
 	// defaults.site cascades to Prefix scope site and defaults.location
 	// to Prefix scope location (the more specific location wins).
@@ -510,6 +519,12 @@ type Options struct {
 // defaulting to TRUE.
 func (o *Options) PrefixEmissionEnabled() bool {
 	return o == nil || o.EmitPrefixes == nil || *o.EmitPrefixes
+}
+
+// DeviceNameEmissionEnabled returns the effective emit_device_name
+// toggle, defaulting to TRUE.
+func (o *Options) DeviceNameEmissionEnabled() bool {
+	return o == nil || o.EmitDeviceName == nil || *o.EmitDeviceName
 }
 
 // PrefixScopeCascadeEnabled returns the effective
