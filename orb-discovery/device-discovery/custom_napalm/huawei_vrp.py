@@ -694,8 +694,24 @@ class VRPDriver(_napalm_base.NetworkDriver):
 
     def get_vlans(self) -> dict:
         """Return VLAN information keyed by VLAN ID string."""
-        output = self.device.send_command("display vlan brief")
-        parsed = parse_output(platform="huawei_vrp", command="display vlan brief", data=output)
+        # `display vlan brief` returns a name-bearing VLAN table on some
+        # models (e.g. WLAN AC/AP), but CE and S-series switches reject the
+        # `brief` suffix. Try `brief` first, then fall back to bare
+        # `display vlan` (supported across VRP V5/V8) when it errors or yields
+        # nothing. Both are parsed with the `display vlan brief` template, the
+        # general Huawei VLAN-table parser.
+        parsed: list = []
+        for command in ("display vlan brief", "display vlan"):
+            try:
+                output = self.device.send_command(command)
+                parsed = parse_output(
+                    platform="huawei_vrp", command="display vlan brief", data=output
+                )
+            except Exception:
+                logger.debug("VRP %r parse failed", command, exc_info=True)
+                parsed = []
+            if parsed:
+                break
 
         # The template uses Filldown + List, so rows may repeat VLAN_ID.
         # Aggregate interfaces per VLAN_ID.
