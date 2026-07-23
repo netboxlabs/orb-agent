@@ -974,3 +974,24 @@ def test_invalid_driver_type_falls_through_and_warns(
         )
     assert interface.type == "other"
     assert any("not a valid netbox" in r.message.lower() for r in caplog.records)
+
+
+def test_detect_type_by_speed_only_emits_valid_netbox_types():
+    """Every speed-based type (incl. the >400G fallback) is a valid NetBox type."""
+    from device_discovery.interface import detect_type_by_speed
+    from device_discovery.interface_types import VALID_INTERFACE_TYPES
+
+    for mbps in (100, 1000, 2500, 5000, 10000, 25000, 40000, 50000,
+                 100000, 200000, 400000, 800000, 1600000):
+        t = detect_type_by_speed(mbps)
+        assert t in VALID_INTERFACE_TYPES, f"{mbps} Mbps -> {t!r} not a valid NetBox type"
+    assert detect_type_by_speed(800000) == "800gbase-x-qsfpdd"
+
+
+def test_builtin_patterns_only_emit_valid_netbox_types():
+    """Every built-in interface pattern maps to a valid NetBox type."""
+    from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
+    from device_discovery.interface_types import VALID_INTERFACE_TYPES
+
+    for p in DEFAULT_INTERFACE_PATTERNS:
+        assert p.type in VALID_INTERFACE_TYPES, f"pattern {p.match!r} -> {p.type!r} invalid"

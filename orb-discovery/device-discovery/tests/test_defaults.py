@@ -87,7 +87,7 @@ def test_speed_based_detection():
     assert detect_type_by_speed(100000) == "100gbase-x-qsfp28"
     assert detect_type_by_speed(200000) == "200gbase-x-qsfp56"
     assert detect_type_by_speed(400000) == "400gbase-x-qsfp112"
-    assert detect_type_by_speed(800000) == "800gbase-x-qsfp-dd"
+    assert detect_type_by_speed(800000) == "800gbase-x-qsfpdd"
 
 
 def test_speed_based_detection_boundaries():

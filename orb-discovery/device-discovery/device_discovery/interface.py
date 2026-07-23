@@ -53,7 +53,7 @@ def detect_type_by_speed(speed_mbps: float) -> str:
             return interface_type
 
     # Default to highest speed for anything above 400G
-    return "800gbase-x-qsfp-dd"
+    return "800gbase-x-qsfpdd"
 
 
 def merge_interface_patterns(
