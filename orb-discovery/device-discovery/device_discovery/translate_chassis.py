@@ -30,6 +30,7 @@ from netboxlabs.diode.sdk.ingester import Entity
 
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import Defaults, Options
+from device_discovery.stack_naming import render_stack_member_name
 from device_discovery.translate_modules import emit_modules_if_requested
 
 logger = logging.getLogger(__name__)
@@ -221,7 +222,9 @@ def _build_member_devices(
 
     def _one(m: dict, *, is_master: bool) -> pb.Device:
         member_info = dict(device_info)
-        member_info["hostname"] = f"{vc_name}-{m['id']}"
+        member_info["hostname"] = render_stack_member_name(
+            defaults.stack_member_name_template, vc_name, m["id"]
+        )
         member_info["serial_number"] = m["serial"]
         if m.get("model"):
             member_info["model"] = m["model"]

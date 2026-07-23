@@ -123,6 +123,43 @@ def test_two_members_emits_master_plain_then_vc_then_member():
     assert not member.virtual_chassis.master.HasField("virtual_chassis")
 
 
+def test_custom_stack_member_name_template_applies_to_master_and_members():
+    """A custom template renames master, member, and the VC master ref."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(stack_member_name_template="{name}-css{id}")
+    entities = list(translate_data(data))
+
+    device_indices = [i for i, e in enumerate(entities) if e.HasField("device")]
+    vc = next(e.virtual_chassis for e in entities if e.HasField("virtual_chassis"))
+    master = entities[device_indices[0]].device
+    member = entities[device_indices[1]].device
+
+    assert master.name == "core-sw-css1"
+    assert member.name == "core-sw-css2"
+    assert vc.name == "core-sw"  # VC name itself is not templated
+    assert vc.master.name == "core-sw-css1"
+    assert member.virtual_chassis.master.name == "core-sw-css1"
+
+
+def test_custom_stack_member_name_template_routes_interfaces():
+    """Interfaces route to the templated member names."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(stack_member_name_template="{name}-css{id}")
+    entities = list(translate_data(data))
+    by_name = {e.interface.name: e.interface for e in entities if e.HasField("interface")}
+    assert by_name["GigabitEthernet1/0/1"].device.name == "core-sw-css1"
+    assert by_name["GigabitEthernet2/0/1"].device.name == "core-sw-css2"
+
+
+def test_bad_stack_member_name_template_falls_back_to_default():
+    """An unusable template is normalized to the default → legacy names, no crash."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(stack_member_name_template="{name}-{id:09d}")
+    entities = list(translate_data(data))
+    names = {e.device.name for e in entities if e.HasField("device")}
+    assert names == {"core-sw-1", "core-sw-2"}
+
+
 def test_interface_routed_to_correct_member():
     """An interface name with a parseable member id routes to that member's Device."""
     data = _base_data(_two_member_payload())
