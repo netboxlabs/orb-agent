@@ -918,3 +918,80 @@ def test_prefix_emission_scope_location_alone_emits_without_site(sample_diode_de
     assert prefix.scope_location.name == "Floor-3"
     # No site embedded — operator didn't provide one and cascade is off.
     assert prefix.scope_location.site.name == ""
+
+
+def test_driver_type_honored_when_valid(
+    sample_device_info, sample_defaults
+):
+    """A valid driver-provided type is used (tier 3)."""
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device, "UnknownInterface0", {"is_enabled": True, "type": "lag"}, sample_defaults
+    )
+    assert interface.type == "lag"
+
+
+def test_driver_type_below_user_patterns(
+    sample_device_info, sample_defaults
+):
+    """A user interface_pattern (tier 2) overrides the driver-provided type (tier 3)."""
+    sample_defaults.interface_patterns = [
+        InterfacePattern(match="^UnknownInterface0$", type="1000base-t"),
+    ]
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device, "UnknownInterface0", {"is_enabled": True, "type": "lag"}, sample_defaults
+    )
+    assert interface.type == "1000base-t"
+
+
+def test_driver_type_beats_speed_and_builtin(
+    sample_device_info, sample_defaults
+):
+    """A valid driver type wins over speed-based detection (tier 5)."""
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device,
+        "UnknownInterface0",
+        {"is_enabled": True, "type": "lag", "speed": 10000},
+        sample_defaults,
+    )
+    assert interface.type == "lag"
+
+
+def test_invalid_driver_type_falls_through_and_warns(
+    sample_device_info, sample_defaults, caplog
+):
+    """An invalid driver type is ignored (with a warning) and resolution falls through."""
+    sample_defaults.if_type = "other"
+    device = translate_device(sample_device_info, sample_defaults)
+    with caplog.at_level("WARNING"):
+        interface = translate_interface(
+            device,
+            "UnknownInterface0",
+            {"is_enabled": True, "type": "G/10Gig", "speed": 0},
+            sample_defaults,
+        )
+    assert interface.type == "other"
+    assert any("not a valid netbox" in r.message.lower() for r in caplog.records)
+
+
+def test_detect_type_by_speed_only_emits_valid_netbox_types():
+    """Every speed-based type (incl. the >400G fallback) is a valid NetBox type."""
+    from device_discovery.interface import detect_type_by_speed
+    from device_discovery.interface_types import VALID_INTERFACE_TYPES
+
+    for mbps in (100, 1000, 2500, 5000, 10000, 25000, 40000, 50000,
+                 100000, 200000, 400000, 800000, 1600000):
+        t = detect_type_by_speed(mbps)
+        assert t in VALID_INTERFACE_TYPES, f"{mbps} Mbps -> {t!r} not a valid NetBox type"
+    assert detect_type_by_speed(800000) == "800gbase-x-qsfpdd"
+
+
+def test_builtin_patterns_only_emit_valid_netbox_types():
+    """Every built-in interface pattern maps to a valid NetBox type."""
+    from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
+    from device_discovery.interface_types import VALID_INTERFACE_TYPES
+
+    for p in DEFAULT_INTERFACE_PATTERNS:
+        assert p.type in VALID_INTERFACE_TYPES, f"pattern {p.match!r} -> {p.type!r} invalid"

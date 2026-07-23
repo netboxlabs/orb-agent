@@ -11,6 +11,7 @@ from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, Location, Prefix
 
 from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
+from device_discovery.interface_types import VALID_INTERFACE_TYPES
 from device_discovery.policy.models import Defaults, Options
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ def detect_type_by_speed(speed_mbps: float) -> str:
             return interface_type
 
     # Default to highest speed for anything above 400G
-    return "800gbase-x-qsfp-dd"
+    return "800gbase-x-qsfpdd"
 
 
 def merge_interface_patterns(
@@ -174,6 +175,52 @@ def int32_overflows(number: int) -> bool:
     return not (INT32_MIN <= number <= INT32_MAX)
 
 
+def _resolve_non_subinterface_type(
+    if_name: str,
+    interface_info: dict,
+    defaults: Defaults,
+) -> str:
+    """
+    Resolve a non-subinterface type by descending priority.
+
+    user patterns -> driver-provided type -> built-in patterns -> speed ->
+    if_type. A driver-provided type is honored only when it is a valid NetBox
+    interface type; an invalid value is ignored (with a warning) so an invalid
+    type is never emitted.
+    """
+    # Tier 2: user-defined patterns (explicit operator override)
+    user_patterns = defaults.interface_patterns or []
+    if user_patterns:
+        matched = match_interface_type(if_name, user_patterns, len(user_patterns))
+        if matched:
+            return matched
+
+    # Tier 3: type asserted by the driver from device state
+    driver_type = interface_info.get("type")
+    if driver_type:
+        if driver_type in VALID_INTERFACE_TYPES:
+            return driver_type
+        logger.warning(
+            "Driver-provided interface type %r for %s is not a valid NetBox "
+            "interface type; ignoring.",
+            driver_type,
+            if_name,
+        )
+
+    # Tier 4: built-in patterns
+    matched = match_interface_type(if_name, DEFAULT_INTERFACE_PATTERNS, 0)
+    if matched:
+        return matched
+
+    # Tier 5: speed-based detection
+    speed = interface_info.get("speed")
+    if speed and speed > 0:
+        return detect_type_by_speed(speed)
+
+    # Tier 6: configured default
+    return defaults.if_type
+
+
 def translate_interface(
     device: Device,
     if_name: str,
@@ -211,13 +258,13 @@ def translate_interface(
         else None
     )
 
-    # Determine interface type with five-tier priority:
-    # 1. Subinterface (has parent) -> "virtual"
-    # 2. User-defined pattern match -> matched type
-    # 3. Built-in pattern match -> matched type
-    # 4. Speed-based detection -> type from speed
-    # 5. Fallback -> defaults.if_type
-    interface_type = defaults.if_type
+    # Determine interface type by descending priority:
+    # 1. Subinterface (has parent) -> "virtual" (structural)
+    # 2. User-defined pattern match
+    # 3. Driver-provided type (validated against NetBox interface types)
+    # 4. Built-in pattern match
+    # 5. Speed-based detection
+    # 6. Fallback -> defaults.if_type
     is_subinterface = parent is not None
 
     if is_subinterface:
@@ -229,21 +276,9 @@ def translate_interface(
             type=parent.type,
         )
     else:
-        # Tier 2 & 3: Try pattern matching (user + built-in merged)
-        user_patterns = defaults.interface_patterns
-        merged_patterns = merge_interface_patterns(user_patterns, include_defaults=True)
-
-        # Count user patterns to maintain priority during matching
-        user_pattern_count = len(user_patterns) if user_patterns else 0
-        matched_type = match_interface_type(if_name, merged_patterns, user_pattern_count)
-        if matched_type:
-            interface_type = matched_type
-        else:
-            # Tier 4: Speed-based detection fallback
-            speed = interface_info.get("speed")
-            if speed and speed > 0:
-                interface_type = detect_type_by_speed(speed)
-            # Else: Tier 5 - interface_type already has defaults.if_type fallback
+        interface_type = _resolve_non_subinterface_type(
+            if_name, interface_info, defaults
+        )
 
     interface = Interface(
         device=device,

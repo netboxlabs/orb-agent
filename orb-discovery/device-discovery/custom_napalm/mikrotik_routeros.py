@@ -228,6 +228,42 @@ def _parse_vlans(output: str) -> dict:
     return vlans
 
 
+_ROS_TYPE_TO_NETBOX = {
+    "bond": "lag",
+    "bridge": "bridge",
+    "vlan": "virtual",
+    "vxlan": "virtual",
+    "vpls": "virtual",
+    "vrrp": "virtual",
+    "eoip": "virtual",
+    "eoipv6": "virtual",
+    "gre-tunnel": "virtual",
+    "gre6-tunnel": "virtual",
+    "ipip-tunnel": "virtual",
+    "ipipv6-tunnel": "virtual",
+    "6to4-tunnel": "virtual",
+    "ppp-out": "virtual",
+    "pppoe-out": "virtual",
+    "l2tp-out": "virtual",
+    "pptp-out": "virtual",
+    "sstp-out": "virtual",
+    "ovpn-out": "virtual",
+    "wg": "virtual",
+    "veth": "virtual",
+}
+
+
+def _ros_type_to_netbox(ros_type: str) -> str | None:
+    """
+    Map a RouterOS interface type to a NetBox interface type.
+
+    Structural / logical types are mapped (bond->lag, vlan->virtual,
+    bridge->bridge, tunnels/ppp->virtual). Physical (ether) and wireless are
+    left unset so the pipeline's name/speed/if_type logic applies.
+    """
+    return _ROS_TYPE_TO_NETBOX.get((ros_type or "").strip().lower())
+
+
 class ROSDriver(_napalm_base.NetworkDriver):
     """MikroTik RouterOS (ros) NAPALM driver (read-only subset for device-discovery)."""
 
@@ -439,6 +475,9 @@ class ROSDriver(_napalm_base.NetworkDriver):
                 "speed": -1.0,
                 "mac_address": row["mac_address"],
             }
+            nb_type = _ros_type_to_netbox(row.get("type", ""))
+            if nb_type:
+                result[name]["type"] = nb_type
         return result
 
     def get_interfaces_ip(self) -> dict:
