@@ -85,6 +85,33 @@ def _speed_to_mbps(speed_str: str) -> float:
     return value * _MULTIPLIERS.get(unit, 1.0)
 
 
+def _saos_port_type_to_netbox(saos_type: str) -> str | None:
+    """
+    Map a SAOS ``port show`` TYPE value to a NetBox interface type.
+
+    Only aggregation ports are asserted (TYPE ``LAG`` -> ``lag``); physical
+    ports are left unset so the pipeline's speed-based detection assigns an
+    accurate physical type.
+    """
+    return "lag" if saos_type.strip().upper() == "LAG" else None
+
+
+def _apply_saos_port_types(interfaces: dict, port_parsed: list) -> None:
+    """
+    Set each interface's NetBox type from the SAOS ``port show`` TYPE column.
+
+    Mutates ``interfaces`` in place, adding ``type`` only where
+    ``_saos_port_type_to_netbox`` returns a value (aggregation ports).
+    """
+    saos_type_by_name = {
+        r.get("name", ""): r.get("type", "") for r in port_parsed if r.get("name")
+    }
+    for name, info in interfaces.items():
+        nb_type = _saos_port_type_to_netbox(saos_type_by_name.get(name, ""))
+        if nb_type:
+            info["type"] = nb_type
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -248,6 +275,12 @@ class SAOSDriver(_napalm_base.NetworkDriver):
                 "speed": speed,
                 "mac_address": "",
             }
+
+        # Assert a NetBox type from the SAOS port TYPE column where meaningful
+        # (aggregation ports -> "lag"). Physical ports are left for speed-based
+        # detection downstream.
+        _apply_saos_port_types(interfaces, port_parsed)
+
         return interfaces
 
     def _build_interfaces_from_status(
