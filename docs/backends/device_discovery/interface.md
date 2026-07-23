@@ -1,6 +1,6 @@
 # Device Discovery - Interface Type Matching
 
-The device discovery backend uses an intelligent **five-tier priority system** to automatically determine interface types. This system provides zero-configuration support for common network equipment while allowing fine-grained customization through user-defined patterns.
+The device discovery backend uses an intelligent **six-tier priority system** to automatically determine interface types. This system provides zero-configuration support for common network equipment while allowing fine-grained customization through user-defined patterns.
 
 ## Priority Order
 
@@ -8,24 +8,30 @@ Interface types are determined using the following priority order (first match w
 
 **1. Structural Detection (Highest Priority)**
    - Subinterfaces (e.g., `GigabitEthernet0/0.100`, `ethernet-1/1.0`) are always assigned type `virtual`
-   - This rule applies regardless of any patterns or speed data
+   - This rule applies regardless of any patterns, driver-reported type, or speed data
 
 **2. User-Defined Patterns**
    - Patterns configured in `defaults.interface_patterns` are checked first
    - If ANY user pattern matches, the most specific (longest) user match is used
    - User patterns ALWAYS take priority over built-in patterns, even if the built-in pattern would be more specific
 
-**3. Built-In Patterns**
-   - If no user pattern matches, built-in vendor patterns are checked
+**3. Driver-Reported Type**
+   - Some backend drivers report the interface type directly from device state (rather than inferring it from the name), which is more reliable on platforms whose interface names do not encode the type — e.g. Ciena SAOS (LAGs) and MikroTik RouterOS
+   - When a driver reports a type, it is honored over the built-in patterns, speed, and default below — but a user pattern (tier 2) still wins, so you retain an explicit override
+   - The reported value must be a valid NetBox interface type; an invalid value is ignored (a warning is logged) and matching falls through to the tiers below
+   - Drivers that do not report a type skip this tier entirely (no change to behavior)
+
+**4. Built-In Patterns**
+   - If no user pattern matches and no driver type applies, built-in vendor patterns are checked
    - Provides zero-configuration support for common network equipment (Cisco, Juniper, Arista, Nokia, etc.)
    - Most specific (longest) built-in match is used
 
-**4. Speed-Based Detection**
-   - If no patterns match, interface speed (from NAPALM) is used to determine type
+**5. Speed-Based Detection**
+   - If nothing above matches, interface speed (from NAPALM) is used to determine type
    - Only applies when speed data is present and greater than 0
    - Maps speeds from 100 Mbps to 800G to appropriate interface types
 
-**5. Default Fallback (Lowest Priority)**
+**6. Default Fallback (Lowest Priority)**
    - If nothing else matches, uses `defaults.if_type`
    - Defaults to `other` if not specified
 
@@ -163,7 +169,7 @@ When no patterns match, the system uses interface speed (in Mbps from NAPALM) to
 | ≤ 400000 | `400gbase-x-qsfp112` |
 | > 400000 | `800gbase-x-qsfp-dd` |
 
-**Note:** Speed-based detection is **skipped** if any pattern (user or built-in) matches the interface name, even if the speed suggests a different type.
+**Note:** Speed-based detection is **skipped** if any pattern (user or built-in) matches the interface name, or if the driver reported a valid type, even if the speed suggests a different type.
 
 ## Complete Matching Flow Example
 
@@ -177,13 +183,14 @@ defaults:
 
 **Interface Matching Results:**
 
-| Interface Name | Has Parent? | User Match? | Built-in Match? | Speed | Final Type | Reason |
-|----------------|-------------|-------------|-----------------|-------|------------|--------|
-| `GigabitEthernet0/0.100` | Yes | - | - | - | `virtual` | Tier 1: Subinterface |
-| `GigabitEthernet0/0` | No | `^Gi.*` ✓ | - | 1000 | `10gbase-x-sfpp` | Tier 2: User pattern |
-| `TenGigabitEthernet1/0/1` | No | ✗ | `^(TenGig\|Te).*` ✓ | 10000 | `10gbase-x-sfpp` | Tier 3: Built-in |
-| `Ethernet1` | No | ✗ | ✗ | 25000 | `25gbase-x-sfp28` | Tier 4: Speed |
-| `UnknownInt0` | No | ✗ | ✗ | 0 | `other` | Tier 5: Default |
+| Interface Name | Has Parent? | User Match? | Driver Type? | Built-in Match? | Speed | Final Type | Reason |
+|----------------|-------------|-------------|--------------|-----------------|-------|------------|--------|
+| `GigabitEthernet0/0.100` | Yes | - | - | - | - | `virtual` | Tier 1: Subinterface |
+| `GigabitEthernet0/0` | No | `^Gi.*` ✓ | - | - | 1000 | `10gbase-x-sfpp` | Tier 2: User pattern |
+| `LAG1` (Ciena SAOS) | No | ✗ | `lag` | - | - | `lag` | Tier 3: Driver-reported type |
+| `TenGigabitEthernet1/0/1` | No | ✗ | - | `^(TenGig\|Te).*` ✓ | 10000 | `10gbase-x-sfpp` | Tier 4: Built-in |
+| `Ethernet1` | No | ✗ | - | ✗ | 25000 | `25gbase-x-sfp28` | Tier 5: Speed |
+| `UnknownInt0` | No | ✗ | - | ✗ | 0 | `other` | Tier 6: Default |
 
 ## Zero-Configuration Support
 
