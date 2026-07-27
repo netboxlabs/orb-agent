@@ -37,3 +37,9 @@ def test_non_string_falls_back():
     """A non-string template falls back rather than raising a ValidationError."""
     d = Defaults(stack_member_name_template=123)
     assert d.stack_member_name_template == DEFAULT_STACK_MEMBER_TEMPLATE
+
+
+def test_stray_brace_template_falls_back():
+    """A template with an unbalanced brace falls back instead of leaking the brace."""
+    d = Defaults(stack_member_name_template="{name}-{id}}")
+    assert d.stack_member_name_template == DEFAULT_STACK_MEMBER_TEMPLATE

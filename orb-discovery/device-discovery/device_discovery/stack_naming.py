@@ -44,6 +44,14 @@ def stack_template_problem(template: str) -> str | None:
             return f"unknown placeholder {{{tok}}}"
     if "name" not in tokens:
         return "template must include the {name} placeholder"
+    # Stray / unbalanced braces: _PLACEHOLDER_RE only matches balanced {...}
+    # pairs, so a template like "{name}-{id}}" or "{{name}-{id}" passes the
+    # token checks above yet leaves a literal brace after rendering
+    # (e.g. "vc-1}"). Substitute the two allowed placeholders and reject if any
+    # brace remains, so such a template falls back to the default.
+    residual = template.replace("{name}", "").replace("{id}", "")
+    if "{" in residual or "}" in residual:
+        return "template has stray or unbalanced braces"
     if render_stack_member_name(template, "vc", "1") == render_stack_member_name(
         template, "vc", "2"
     ):

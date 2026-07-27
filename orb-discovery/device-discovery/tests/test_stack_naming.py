@@ -38,9 +38,19 @@ def test_valid_templates_have_no_problem(tmpl):
         ("{name}-{foo}", "unknown"),  # unknown placeholder
         ("{name}-{id:09d}", "disallow"),  # ':' format spec
         ("{name}-{id.real}", "disallow"),  # '.' attribute access
+        ("{name}-{id}}", "brace"),  # stray trailing brace
+        ("{{name}-{id}", "brace"),  # stray leading brace
+        ("{name}-{id}{", "brace"),  # dangling open brace
     ],
 )
 def test_invalid_templates_report_a_problem(tmpl, needle):
     """Unusable templates report a reason containing the expected keyword."""
     problem = stack_template_problem(tmpl)
     assert problem is not None and needle in problem.lower()
+
+
+def test_stray_brace_template_does_not_leak_into_rendered_name():
+    """A stray-brace template is rejected, so the Defaults validator won't accept it."""
+    # Guards the specific hazard: "{name}-{id}}" renders to "vc-1}" if accepted.
+    assert stack_template_problem("{name}-{id}}") is not None
+    assert render_stack_member_name("{name}-{id}}", "vc", 1) == "vc-1}"
