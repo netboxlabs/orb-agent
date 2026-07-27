@@ -505,6 +505,13 @@ func TestEmbeddedLookupExtensions_CiscoCatalyst1200And1300(t *testing.T) {
 		".1.3.6.1.4.1.9.1.3225": "ciscoC120048P4X",   // C1200-48P-4X
 		".1.3.6.1.4.1.9.1.3226": "ciscoC13008TE2G",   // C1300-8T-E-2G
 		".1.3.6.1.4.1.9.1.3247": "ciscoC130048MGP4X", // C1300-48MGP-4X
+		// Entries past the Catalyst 1200/1300 block, from the same refresh.
+		".1.3.6.1.4.1.9.1.3293": "ciscoC935048U", // Catalyst 9350-48U
+		".1.3.6.1.4.1.9.1.3542": "ciscoC8475G2",  // highest suffix in the MIB
+		// ciscoProducts 229 carries a live ciscoMGX8830 plus a commented-out
+		// ciscoMGX8820 alias. A generator that ignores ASN.1 comments picks up
+		// the dead name, so pin the live one.
+		".1.3.6.1.4.1.9.1.229": "ciscoMGX8830",
 	} {
 		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
 		assert.NoError(t, err, "OID %s should resolve", oid)
