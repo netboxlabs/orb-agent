@@ -491,6 +491,34 @@ func TestEmbeddedLookupExtensions_DataIntegrity(t *testing.T) {
 	assert.Greater(t, count, 500, "Expected at least 500 device entries across all embedded lookup files")
 }
 
+func TestEmbeddedLookupExtensions_CiscoCatalyst1200And1300(t *testing.T) {
+	// The Catalyst 1200/1300 smart-switch family (CISCO-PRODUCTS-MIB
+	// ciscoProducts 3210-3253) shipped after this table was last refreshed, so
+	// these sysObjectIDs resolved to "device ID not found" and the model fell
+	// back to the raw OID string.
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+
+	for oid, want := range map[string]string{
+		".1.3.6.1.4.1.9.1.3213": "ciscoC12008FP2G",   // C1200-8FP-2G
+		".1.3.6.1.4.1.9.1.3216": "ciscoC120024T4G",   // C1200-24T-4G
+		".1.3.6.1.4.1.9.1.3225": "ciscoC120048P4X",   // C1200-48P-4X
+		".1.3.6.1.4.1.9.1.3226": "ciscoC13008TE2G",   // C1300-8T-E-2G
+		".1.3.6.1.4.1.9.1.3247": "ciscoC130048MGP4X", // C1300-48MGP-4X
+		// Entries past the Catalyst 1200/1300 block, from the same refresh.
+		".1.3.6.1.4.1.9.1.3293": "ciscoC935048U", // Catalyst 9350-48U
+		".1.3.6.1.4.1.9.1.3542": "ciscoC8475G2",  // highest suffix in the MIB
+		// ciscoProducts 229 carries a live ciscoMGX8830 plus a commented-out
+		// ciscoMGX8820 alias. A generator that ignores ASN.1 comments picks up
+		// the dead name, so pin the live one.
+		".1.3.6.1.4.1.9.1.229": "ciscoMGX8830",
+	} {
+		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
+		assert.NoError(t, err, "OID %s should resolve", oid)
+		assert.Equal(t, want, model, "OID %s", oid)
+	}
+}
+
 func TestEmbeddedLookupExtensions_NoDuplicateOIDs(t *testing.T) {
 	oidSources := make(map[string]string) // oid -> first file it was seen in
 
