@@ -29,6 +29,14 @@ class TestEOSDriver(BaseDriverTest):
         # which our FakeJsonRpcDevice implements.
         driver = super()._build_driver(mock_dir)
         driver.transport = "https"
+        # napalm >= 5.2 reads self.send_enable on the eAPI path
+        # (kwargs.setdefault("send_enable", self.send_enable)). Both attributes
+        # are only assigned in EOSDriver.__init__, which _build_driver bypasses
+        # via object.__new__, so each one has to be supplied here or
+        # _run_commands raises AttributeError. Our getters catch that broadly
+        # and return None/{}, which surfaces as a confusing equality failure
+        # rather than an error.
+        driver.send_enable = False
         return driver
 
     # Skip inherited NAPALM getters — covered by upstream tests.
