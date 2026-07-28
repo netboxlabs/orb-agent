@@ -139,6 +139,15 @@ def _strip_config_header(text: str) -> str:
 # and aruba_procurve platform strings via the index regex (hp|aruba)_procurve.
 _NTC_PLATFORM = "hp_procurve"
 
+# Read timeout for commands whose output is far too large for Netmiko's 10s
+# per-command default (`show tech` runs to thousands of lines on real
+# hardware, and a full config is not much better). Exceeding the default
+# raises ReadTimeout out of the getter, which aborts the whole driver: a
+# 2510G reporting no model banner falls back to `show tech`, times out, and
+# discovery then declares the driver unusable even though `show system`
+# already returned a valid hostname, version and serial.
+HEAVY_COMMAND_READ_TIMEOUT = 120.0
+
 
 # Per-VLAN membership row from `show vlans <vid>`. Columns are:
 #   Port Information  Mode      Unknown VLAN  Status
@@ -390,7 +399,9 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
         if m:
             model = m.group(1).strip()
         else:
-            raw_tech = self.device.send_command("show tech")
+            raw_tech = self.device.send_command(
+                "show tech", read_timeout=HEAVY_COMMAND_READ_TIMEOUT
+            )
             m2 = re.search(r"^Name:\s+(.+)$", raw_tech, re.MULTILINE)
             if m2:
                 model = m2.group(1).strip()
@@ -504,11 +515,15 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
         config: models.ConfigDict = {"running": "", "candidate": "", "startup": ""}
 
         if retrieve.lower() in ("running", "all"):
-            raw = self.device.send_command("show running-config")
+            raw = self.device.send_command(
+                "show running-config", read_timeout=HEAVY_COMMAND_READ_TIMEOUT
+            )
             config["running"] = _strip_config_header(raw)
 
         if retrieve.lower() in ("startup", "all"):
-            raw = self.device.send_command("show config")
+            raw = self.device.send_command(
+                "show config", read_timeout=HEAVY_COMMAND_READ_TIMEOUT
+            )
             config["startup"] = _strip_config_header(raw)
 
         if sanitized:

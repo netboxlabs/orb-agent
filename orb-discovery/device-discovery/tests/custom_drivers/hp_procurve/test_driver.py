@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from custom_napalm.hp_procurve import (
+    HEAVY_COMMAND_READ_TIMEOUT,
     ProcurveDriver,
     _parse_procurve_intf_mac_addresses,
 )
@@ -75,3 +76,67 @@ def test_parse_procurve_intf_mac_addresses_empty_and_none():
     """Empty / None input → empty dict, never raises."""
     assert _parse_procurve_intf_mac_addresses("") == {}
     assert _parse_procurve_intf_mac_addresses(None) == {}  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Heavy-command read timeouts (issue #484)
+# ---------------------------------------------------------------------------
+
+
+class _RecordingDevice:
+    """CLI fake that records the read_timeout each command was sent with."""
+
+    def __init__(self, responses: dict[str, str]):
+        self._responses = responses
+        self.calls: list[tuple[str, float | None]] = []
+
+    def send_command(self, command: str, **kwargs) -> str:
+        self.calls.append((command, kwargs.get("read_timeout")))
+        return self._responses.get(command, "")
+
+    def timeout_for(self, command: str) -> float | None:
+        return next(t for c, t in self.calls if c == command)
+
+
+def _driver_with(device) -> ProcurveDriver:
+    drv = ProcurveDriver("host", "user", "pw")
+    drv.device = device
+    return drv
+
+
+def test_show_tech_fallback_gets_an_explicit_read_timeout():
+    """
+    ``show tech`` must not run on Netmiko's 10s default read timeout.
+
+    Devices that omit the model banner (e.g. ProCurve 2510G) fall back to
+    ``show tech``, which emits thousands of lines on real hardware and blows
+    past the default, aborting get_facts() and taking the whole driver down.
+    """
+    # show system without a model banner -> forces the show tech fallback.
+    system = " Status and Counters - General System Information\n\n  System Name        : sw1\n"
+    dev = _RecordingDevice({"show system": system, "show tech": "Name:      HP ProCurve Switch 2510G-48\n"})
+    facts = _driver_with(dev).get_facts()
+
+    assert dev.timeout_for("show tech") == HEAVY_COMMAND_READ_TIMEOUT
+    assert HEAVY_COMMAND_READ_TIMEOUT >= 60
+    # The model still comes from show tech, not a placeholder.
+    assert facts["model"] == "HP ProCurve Switch 2510G-48"
+
+
+def test_banner_model_skips_show_tech_entirely():
+    """When the banner carries the model, the heavy command is never sent."""
+    system = "HP ProCurve Switch 2650\n\n Status and Counters - General System Information\n\n  System Name : sw1\n"
+    dev = _RecordingDevice({"show system": system})
+    facts = _driver_with(dev).get_facts()
+
+    assert "show tech" not in [c for c, _ in dev.calls]
+    assert facts["model"] == "HP ProCurve Switch 2650"
+
+
+def test_config_commands_get_an_explicit_read_timeout():
+    """Full-config retrieval is also far too large for the 10s default."""
+    dev = _RecordingDevice({"show running-config": "cfg\n", "show config": "cfg\n"})
+    _driver_with(dev).get_config(retrieve="all")
+
+    assert dev.timeout_for("show running-config") == HEAVY_COMMAND_READ_TIMEOUT
+    assert dev.timeout_for("show config") == HEAVY_COMMAND_READ_TIMEOUT
