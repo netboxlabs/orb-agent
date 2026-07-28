@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -426,19 +427,39 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 		return
 	}
 
+	safeDir := sanitizeLogValue(dir)
 	total := 0
 	for _, f := range files {
 		switch {
 		case f.Err != nil:
 			m.logger.Warn("lookup extension file could not be parsed; skipping it",
-				"directory", dir, "file", f.Name, "error", f.Err)
+				"directory", safeDir,
+				"file", sanitizeLogValue(f.Name),
+				"error", sanitizeLogValue(f.Err.Error()))
 		case f.Entries == 0:
 			m.logger.Warn("lookup extension file contributed no device entries; check that it starts with a 'devices:' key and is indented with spaces",
-				"directory", dir, "file", f.Name)
+				"directory", safeDir, "file", sanitizeLogValue(f.Name))
 		default:
 			total += f.Entries
 		}
 	}
 	m.logger.Info("loaded device lookup extensions",
-		"directory", dir, "files", len(files), "entries", total)
+		"directory", safeDir, "files", len(files), "entries", total)
+}
+
+// sanitizeLogValue flattens CR and LF so a value cannot forge additional log
+// records.
+//
+// A filename or YAML parse error is operator-supplied and can echo file
+// content, and both reach the log. slog's own handlers escape newlines, so this
+// is belt and braces there, but it keeps the guarantee in this code rather than
+// resting on which handler happens to be installed, and it restores a
+// protection the previous logging here applied deliberately.
+func sanitizeLogValue(s string) string {
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.ReplaceAll(s, "\r", " ")
 }

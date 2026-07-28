@@ -139,3 +139,50 @@ func TestLogReportedExtensionFiles_NoUserDirKeepsPlainMessage(t *testing.T) {
 			lines[0].Entries, lines[0].Files)
 	}
 }
+
+// A filename or parse error is operator-supplied and can echo file content, so
+// it must not be able to forge extra log records. The logging this replaced
+// stripped CR/LF deliberately; keep that guarantee here rather than resting on
+// which slog handler happens to be installed.
+func TestSanitizeLogValue(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"plain value untouched", "fs_custom.yaml", "fs_custom.yaml"},
+		{"newline flattened", "a.yaml\nforged", "a.yaml forged"},
+		{"carriage return flattened", "a.yaml\rforged", "a.yaml forged"},
+		{"crlf becomes one space", "a.yaml\r\nforged", "a.yaml forged"},
+		{"multi-line yaml error", "yaml: line 2:\n  bad indent", "yaml: line 2:   bad indent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeLogValue(tc.in); got != tc.want {
+				t.Errorf("sanitizeLogValue(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// End to end: a crafted filename must produce exactly one log record.
+func TestLogReportedExtensionFiles_CraftedFilenameCannotForgeARecord(t *testing.T) {
+	dir := t.TempDir()
+	// A filename cannot contain a newline on most filesystems, so drive the
+	// helper directly with a report whose file name carries one.
+	var buf bytes.Buffer
+	m, err := NewManager(context.Background(),
+		slog.New(slog.NewJSONHandler(&buf, nil)), nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	writeExtFile(t, dir, "ok.yaml", "devices:\n  .1.3.6.1.4.1.9.1.1: m\n")
+	lookup, err := data.LoadDeviceLookupExtensions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.logReportedExtensionFiles(lookup, "/opt/orb\nFAKE level=ERROR msg=forged")
+
+	records := strings.Count(strings.TrimSpace(buf.String()), "\n") + 1
+	if records != 1 {
+		t.Errorf("got %d log records, want 1; output:\n%s", records, buf.String())
+	}
+	if strings.Contains(buf.String(), "\nFAKE") {
+		t.Error("a raw newline reached the log output")
+	}
+}
