@@ -455,11 +455,13 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 // is belt and braces there, but it keeps the guarantee in this code rather than
 // resting on which handler happens to be installed, and it restores a
 // protection the previous logging here applied deliberately.
+// Every path runs the replacements. An early return for values that contain no
+// newline would be a shortcut from input to output that bypasses them, which
+// leaves the value tainted as far as static analysis is concerned and is the
+// kind of subtlety worth not being clever about in a sanitizer.
 func sanitizeLogValue(s string) string {
-	if !strings.ContainsAny(s, "\r\n") {
-		return s
-	}
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
-	return strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
 }
