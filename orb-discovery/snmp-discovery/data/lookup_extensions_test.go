@@ -1029,3 +1029,84 @@ func TestResolveDefault_ExistingOIDPatternUnchanged(t *testing.T) {
 	assert.True(t, oidPattern.MatchString(".1.3.6.1.4.1.14988.1"))
 	assert.True(t, oidPattern.MatchString("3.14.159"))
 }
+
+// A user file can be read successfully and still contribute nothing: a wrong
+// top-level key or bad indentation yields an empty devices map with no error.
+// Before this report existed the loader reported plain success in that case, so
+// an operator whose custom OID was ignored had no way to tell from the logs
+// (issue #486). Each file's contribution is now recorded for the caller to log.
+func TestLoadDeviceLookupExtensions_UserFileReport(t *testing.T) {
+	const oid = ".1.3.6.1.4.1.52642.1.439.0"
+	tests := []struct {
+		name        string
+		body        string
+		wantEntries int
+		wantErr     bool
+		wantResolve bool
+	}{
+		{
+			name:        "well-formed file",
+			body:        "devices:\n  " + oid + ": S3400-24T4FP\n",
+			wantEntries: 1,
+			wantResolve: true,
+		},
+		{
+			name:        "tab indentation is a parse error",
+			body:        "devices:\n\t" + oid + ": S3400-24T4FP\n",
+			wantEntries: 0,
+			wantErr:     true,
+		},
+		{
+			name:        "wrong top-level key parses to nothing",
+			body:        "device:\n  " + oid + ": S3400-24T4FP\n",
+			wantEntries: 0,
+		},
+		{
+			name:        "no devices key at all",
+			body:        "  " + oid + ": S3400-24T4FP\n",
+			wantEntries: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "fs_custom.yaml"), []byte(tt.body), 0o600))
+
+			dl, err := LoadDeviceLookupExtensions(dir)
+			require.NoError(t, err, "a bad user file must not fail the whole load")
+
+			files := dl.UserExtensionFiles()
+			require.Len(t, files, 1, "the file must be reported either way")
+			assert.Equal(t, "fs_custom.yaml", files[0].Name)
+			assert.Equal(t, tt.wantEntries, files[0].Entries)
+			if tt.wantErr {
+				assert.Error(t, files[0].Err, "a parse failure must be reported, not swallowed")
+			} else {
+				assert.NoError(t, files[0].Err)
+			}
+
+			_, lookupErr := dl.GetDeviceModel(oid, map[string]string{})
+			assert.Equal(t, tt.wantResolve, lookupErr == nil)
+		})
+	}
+}
+
+func TestLoadDeviceLookupExtensions_NoUserDirReportsNoFiles(t *testing.T) {
+	dl, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	assert.Empty(t, dl.UserExtensionFiles(), "built-in-only load has no user files to report")
+}
+
+func TestLoadDeviceLookupExtensions_ReportSkipsNonYAML(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignore me"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ok.yaml"),
+		[]byte("devices:\n  .1.3.6.1.4.1.9.1.1: someModel\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1, "only YAML files are loaded, so only they are reported")
+	assert.Equal(t, "ok.yaml", files[0].Name)
+	assert.Equal(t, 1, files[0].Entries)
+}

@@ -251,7 +251,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 		if err != nil {
 			m.logger.Warn("failed to load device lookup extensions", "error", err, "directory", policy.Config.LookupExtensionsDir)
 		} else {
-			m.logger.Info("loaded device lookup extensions", "directory", policy.Config.LookupExtensionsDir)
+			m.logReportedExtensionFiles(deviceLookup, policy.Config.LookupExtensionsDir)
 		}
 
 		// Build the per-policy manufacturer resolver: the built-in IANA
@@ -408,4 +408,37 @@ func (m *Manager) GetPolicyStatuses() []Status {
 	}
 
 	return statuses
+}
+
+// logReportedExtensionFiles logs what lookup_extensions_dir actually
+// contributed.
+//
+// The bare "loaded device lookup extensions" message this replaces only proved
+// the directory was readable. A file with a wrong top-level key or bad
+// indentation parses to zero entries without error, so an operator whose custom
+// OID was ignored saw nothing but a success line followed by the model falling
+// back to the raw OID (issue #486). Reporting per-file entry counts, and
+// warning on the two cases that contribute nothing, makes that self-diagnosing.
+func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir string) {
+	files := lookup.UserExtensionFiles()
+	if dir == "" || len(files) == 0 {
+		m.logger.Info("loaded device lookup extensions", "directory", dir)
+		return
+	}
+
+	total := 0
+	for _, f := range files {
+		switch {
+		case f.Err != nil:
+			m.logger.Warn("lookup extension file could not be parsed; skipping it",
+				"directory", dir, "file", f.Name, "error", f.Err)
+		case f.Entries == 0:
+			m.logger.Warn("lookup extension file contributed no device entries; check that it starts with a 'devices:' key and is indented with spaces",
+				"directory", dir, "file", f.Name)
+		default:
+			total += f.Entries
+		}
+	}
+	m.logger.Info("loaded device lookup extensions",
+		"directory", dir, "files", len(files), "entries", total)
 }
