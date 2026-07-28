@@ -234,6 +234,39 @@ entries:
         entity: "interface_vlan"
         field: "vmVoiceVlanId"
 
+  # CISCOSB private vlan group — Cisco small-business switches (Catalyst
+  # 1200/1300, CBS/SG). On these, dot1qPvid is not merely absent but wrong: it
+  # answers 1 on every port whatever the port is configured for, and the
+  # per-VLAN egress/untagged masks come back empty, so Q-BRIDGE alone reports
+  # the whole switch as access VLAN 1. These two columns carry the real
+  # untagged VLAN and are indexed by ifIndex, not bridge port.
+  #
+  # Scoped to the existing cisco vendor gate, which already covers these
+  # devices: they report sysObjectIDs under ciscoProducts
+  # (.1.3.6.1.4.1.9.1.NNNN), so gating on the private .9.6.1 arc would miss
+  # them. Other Cisco platforms simply do not answer.
+  - oid: ".1.3.6.1.4.1.9.6.1.101.48.61.1"
+    entity: "interface_vlan"
+    field: "_id"
+    identifier_size: 1
+    vendor: "cisco"
+    description: "CISCOSB vlanTrunkPortModeTable (per-port trunk native VLAN)"
+    mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.6.1.101.48.61.1.1"
+        entity: "interface_vlan"
+        field: "ciscoSBTrunkNativeVlanId"
+
+  - oid: ".1.3.6.1.4.1.9.6.1.101.48.62.1"
+    entity: "interface_vlan"
+    field: "_id"
+    identifier_size: 1
+    vendor: "cisco"
+    description: "CISCOSB vlanAccessPortModeTable (per-port access VLAN)"
+    mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.6.1.101.48.62.1.1"
+        entity: "interface_vlan"
+        field: "ciscoSBAccessVlanId"
+
   # --- VRF discovery (gated by options.discover_vrfs) ------------------- #
   # Three MIB tiers, resolved in order by mapping.TranslateVrfs: the
   # standards-based MPLS-L3VPN-STD-MIB, the pre-standard MPLS-VPN-MIB
