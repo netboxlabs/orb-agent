@@ -24,6 +24,10 @@ const (
 	// Cisco overlay
 	oidCiscoVMVlan        = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
 	oidCiscoVMVoiceVlanID = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
+	// CISCOSB overlay (Cisco small-business: Catalyst 1200/1300, CBS/SG).
+	// Both are indexed by ifIndex, not by bridge port.
+	oidCiscoSBTrunkNativeVlan = ".1.3.6.1.4.1.9.6.1.101.48.61.1.1."
+	oidCiscoSBAccessVlan      = ".1.3.6.1.4.1.9.6.1.101.48.62.1.1."
 )
 
 // ifTypeNumericToString maps a small subset of IANAifType numeric values
@@ -106,6 +110,14 @@ func (m *VlanMapper) PostMap(
 	// and to keep the no-op explicit.
 	if len(cisco.MembershipAccessVlan) > 0 || len(cisco.VoiceVlanByIfIndex) > 0 {
 		qbridge.ApplyCisco(infos, cisco)
+	}
+	// CISCOSB last: on those switches dot1qPvid is actively wrong rather than
+	// absent (it answers 1 on every port), so the private columns have to be
+	// able to overrule whatever the generic pass and the IOS overlay concluded.
+	// The two overlays never both answer in practice, since a device populates
+	// either the IOS vmMembership table or the CISCOSB one.
+	if ciscosb := m.buildCiscoSBRows(allObjectIDs); ciscosb.HasData() {
+		qbridge.ApplyCiscoSB(infos, ciscosb)
 	}
 
 	// Build VLAN entities first — interface refs link to them by VID.
@@ -324,6 +336,32 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	return rows
 }
 
+// buildCiscoSBRows extracts the CISCOSB private-MIB per-port VLAN columns,
+// keyed by ifIndex.
+func (m *VlanMapper) buildCiscoSBRows(all ObjectIDValueMap) qbridge.CiscoSBRows {
+	rows := qbridge.CiscoSBRows{
+		AccessVlan: map[int]int{},
+		NativeVlan: map[int]int{},
+	}
+	for oid, v := range all {
+		switch {
+		case strings.HasPrefix(oid, oidCiscoSBAccessVlan):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoSBAccessVlan))
+			vid, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.AccessVlan[ifx] = vid
+			}
+		case strings.HasPrefix(oid, oidCiscoSBTrunkNativeVlan):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoSBTrunkNativeVlan))
+			vid, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.NativeVlan[ifx] = vid
+			}
+		}
+	}
+	return rows
+}
+
 // buildCiscoRows extracts Cisco overlay rows.
 func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 	rows := qbridge.CiscoRows{
@@ -467,6 +505,8 @@ func hasVLANSignal(all ObjectIDValueMap) bool {
 		oidDot1qPvid,
 		oidCiscoVMVlan,
 		oidCiscoVMVoiceVlanID,
+		oidCiscoSBAccessVlan,
+		oidCiscoSBTrunkNativeVlan,
 	}
 	for oid := range all {
 		for _, p := range prefixes {
