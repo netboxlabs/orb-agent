@@ -297,6 +297,11 @@ type ExtensionFileResult struct {
 	Name string
 	// Entries is how many device OIDs the file registered.
 	Entries int
+	// ManufacturerEntries is how many manufacturer overrides the file declares.
+	// A file may legitimately carry only a manufacturers: block: the same
+	// directory is also read by NewManufacturerResolver, which applies those
+	// overrides. Callers must not treat such a file as contributing nothing.
+	ManufacturerEntries int
 	// Err is set when the file could not be parsed. Such a file is skipped
 	// rather than failing the whole load, so the rest still apply.
 	Err error
@@ -426,6 +431,22 @@ func loadBuiltInExtensions(devicesByVendor map[string]deviceRef) error {
 	return nil
 }
 
+// countManufacturerEntries reports how many manufacturer overrides a
+// lookup-extension file declares, for reporting only. The overrides themselves
+// are applied by NewManufacturerResolver, which reads the same directory.
+//
+// Keys are IANA Private Enterprise Numbers and so are numeric in YAML; decoding
+// into map[string]any lets them be counted without caring about their type.
+func countManufacturerEntries(data []byte) int {
+	var probe struct {
+		Manufacturers map[string]any `yaml:"manufacturers"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return 0
+	}
+	return len(probe.Manufacturers)
+}
+
 // loadUserProvidedExtensions merges every YAML file in dir into
 // devicesByVendor and returns one result per file for the caller to log.
 //
@@ -463,9 +484,10 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 			}
 		}
 		results = append(results, ExtensionFileResult{
-			Name:    file.Name(),
-			Entries: len(fileRefs),
-			Err:     parseErr,
+			Name:                file.Name(),
+			Entries:             len(fileRefs),
+			ManufacturerEntries: countManufacturerEntries(data),
+			Err:                 parseErr,
 		})
 	}
 	return results, nil

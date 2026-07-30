@@ -69,7 +69,7 @@ func TestLogReportedExtensionFiles_WarnsOnFileThatContributesNothing(t *testing.
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "no device entries") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "no device or manufacturer entries") {
 			warned = true
 			if l.File != "fs_custom.yaml" {
 				t.Errorf("warning names file %q, want fs_custom.yaml", l.File)
@@ -241,5 +241,35 @@ func TestLogReportedExtensionFiles_CraftedDirIsSanitizedOnEveryPath(t *testing.T
 				}
 			}
 		})
+	}
+}
+
+// A file carrying only a manufacturers: block declares no devices by design.
+// The manufacturer resolver reads the same directory and applies its overrides,
+// so warning about it would nag a healthy configuration.
+func TestLogReportedExtensionFiles_NoWarnForManufacturerOnlyFile(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "mfr.yaml", "manufacturers:\n  52642: FS\n")
+
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level == "WARN" {
+			t.Errorf("manufacturer-only file must not warn, got: %s %q file=%q", l.Level, l.Msg, l.File)
+		}
+	}
+}
+
+// The counterpart: a file with neither recognised section still warns.
+func TestLogReportedExtensionFiles_WarnsWhenNeitherSectionContributes(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "typo.yaml", "device:\n  .1.3.6.1.4.1.52642.1.439.0: S3400\n")
+
+	var warned bool
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "no device or manufacturer entries") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("a file contributing neither devices nor manufacturers must warn")
 	}
 }

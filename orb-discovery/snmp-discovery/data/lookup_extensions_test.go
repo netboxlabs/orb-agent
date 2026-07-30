@@ -1110,3 +1110,48 @@ func TestLoadDeviceLookupExtensions_ReportSkipsNonYAML(t *testing.T) {
 	assert.Equal(t, "ok.yaml", files[0].Name)
 	assert.Equal(t, 1, files[0].Entries)
 }
+
+// A lookup-extension file may legitimately carry only a manufacturers: block.
+// The same directory is read by NewManufacturerResolver, where such a file is
+// valid and its overrides are applied, so the report must not present it as
+// contributing nothing.
+func TestLoadDeviceLookupExtensions_ManufacturerOnlyFileIsReported(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mfr.yaml"),
+		[]byte("manufacturers:\n  52642: FS\n  664: Adtran\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Equal(t, 0, files[0].Entries, "it declares no devices")
+	assert.Equal(t, 2, files[0].ManufacturerEntries, "but it does declare manufacturers")
+	assert.NoError(t, files[0].Err)
+}
+
+func TestLoadDeviceLookupExtensions_ReportCountsBothSections(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "both.yaml"), []byte(
+		"devices:\n  .1.3.6.1.4.1.52642.1.439.0: S3400-24T4FP\nmanufacturers:\n  52642: FS\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Equal(t, 1, files[0].Entries)
+	assert.Equal(t, 1, files[0].ManufacturerEntries)
+}
+
+func TestLoadDeviceLookupExtensions_FileWithNeitherSectionReportsNothing(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.yaml"),
+		[]byte("device:\n  .1.3.6.1.4.1.52642.1.439.0: S3400\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Equal(t, 0, files[0].Entries)
+	assert.Equal(t, 0, files[0].ManufacturerEntries)
+}
