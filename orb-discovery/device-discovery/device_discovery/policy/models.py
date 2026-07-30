@@ -307,6 +307,18 @@ class Options(BaseModel):
             "keep the configured defaults. Default False."
         ),
     )
+    emit_host_prefixes: bool = Field(
+        default=False,
+        description=(
+            "Derive a Prefix from IPv4 /32 and IPv6 /128 addresses. A host "
+            "prefix only restates the address, which is already emitted as "
+            "an IPAddress entity, so this defaults to False and no prefix "
+            "is derived for them. Set True to restore the prefix, e.g. when "
+            "loopback /32s are tracked as prefixes in NetBox. IPv6 "
+            "link-local prefixes are never derived and are not affected by "
+            "this option."
+        ),
+    )
 
 
 class Config(BaseModel):

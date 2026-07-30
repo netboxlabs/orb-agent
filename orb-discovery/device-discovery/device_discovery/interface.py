@@ -372,6 +372,56 @@ def _resolve_prefix_scope_kwargs(
     return scope_kwargs
 
 
+def _undesirable_prefix_reason(
+    network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    emit_host_prefixes: bool = False,
+) -> str | None:
+    """
+    Return why ``network`` must not be emitted as a Prefix, or None to emit it.
+
+    A Prefix is derived from the network of every discovered interface IP, but
+    two shapes carry no IPAM value and only add noise:
+
+    - **Host prefixes** (IPv4 /32, IPv6 /128) restate the address itself. A
+      router loopback of 10.0.0.1/32 yields the "prefix" 10.0.0.1/32, which
+      duplicates the IPAddress entity that is emitted alongside it. Operators
+      who do track loopback /32s as NetBox prefixes can set the
+      ``emit_host_prefixes`` option to keep them.
+    - **IPv6 link-locals** (fe80::/10) are per-link and not globally
+      meaningful, so a prefix per link-local address is pure churn. There is
+      no opt-in for these: an fe80:: prefix is never useful IPAM data, and
+      ``emit_host_prefixes`` deliberately does not resurrect them.
+
+    IPv4 link-local (169.254.0.0/16) and the loopback net (127.0.0.0/8) are
+    deliberately NOT suppressed — they are ordinary networks by mask, so they
+    keep the existing behavior.
+
+    Suppression applies only to the derived Prefix. The IPAddress entity is
+    always still emitted, so the interface and its address stay documented.
+    """
+    # Link-local is judged on the ADDRESS, not the derived network. A mask
+    # shorter than /10 widens the network out of fe80::/10 — fe80::1/9
+    # normalizes to fe80::/9 and fe80::1/8 to fe00::/8, neither of which is
+    # link-local by containment — so testing the network would emit a huge
+    # container prefix for an address that is plainly link-local. Devices and
+    # SNMP agents do report nonsense masks, which is why this is judged on the
+    # address the device actually reported.
+    #
+    # The rule is not gated on emit_host_prefixes, which is what keeps an
+    # fe80::x/128 address suppressed even when the opt-in is on: it is a
+    # link-local that happens to carry host length, not a loopback an operator
+    # wants tracked. Checked first only so the logged reason names link-local
+    # rather than host length.
+    # Only IPv6: ipaddress treats 169.254.0.0/16 as link-local too, and that
+    # one stays in scope for emission.
+    if address.version == 6 and address.is_link_local:
+        return "IPv6 link-local"
+    if not emit_host_prefixes and network.prefixlen == network.max_prefixlen:
+        return "host prefix"
+    return None
+
+
 def translate_interface_ips(
     interface: Interface,
     interfaces_ip: dict,
@@ -450,6 +500,8 @@ def translate_interface_ips(
         prefix_vrf_ipv6 = translate_vrf(defaults.prefix.vrf_ipv6)
 
     scope_kwargs = _resolve_prefix_scope_kwargs(defaults, options)
+    # Opt-in: host prefixes are not derived unless the operator asks for them.
+    emit_host_prefixes = bool(options and options.emit_host_prefixes)
 
     # Device state beats policy defaults: a VRF discovered for this
     # interface overrides every configured vrf default for its IPs and
@@ -471,21 +523,37 @@ def translate_interface_ips(
                 ) or prefix_vrf
                 for ip, details in ip_info.get(ip_version, {}).items():
                     ip_address = f"{ip}/{details.get('prefix_length', default_prefix)}"
-                    network = ipaddress.ip_network(ip_address, strict=False)
-                    ip_entities.append(
-                        Entity(
-                            prefix=Prefix(
-                                prefix=str(network),
-                                vrf=af_prefix_vrf,
-                                role=prefix_role,
-                                tenant=prefix_tenant,
-                                tags=prefix_tags,
-                                comments=prefix_comments,
-                                description=prefix_description,
-                                **scope_kwargs,
+                    # ip_interface keeps the host bits, so .ip is the address
+                    # the device reported and .network is the same value
+                    # ip_network(..., strict=False) produced. Parsing once
+                    # means the two can never disagree.
+                    interface_address = ipaddress.ip_interface(ip_address)
+                    network = interface_address.network
+                    skip_reason = _undesirable_prefix_reason(
+                        network, interface_address.ip, emit_host_prefixes
+                    )
+                    if skip_reason:
+                        logger.debug(
+                            "%s: not deriving a prefix from %s (%s)",
+                            interface.name,
+                            ip_address,
+                            skip_reason,
+                        )
+                    else:
+                        ip_entities.append(
+                            Entity(
+                                prefix=Prefix(
+                                    prefix=str(network),
+                                    vrf=af_prefix_vrf,
+                                    role=prefix_role,
+                                    tenant=prefix_tenant,
+                                    tags=prefix_tags,
+                                    comments=prefix_comments,
+                                    description=prefix_description,
+                                    **scope_kwargs,
+                                )
                             )
                         )
-                    )
                     ip_entities.append(
                         Entity(
                             ip_address=IPAddress(

@@ -28,7 +28,7 @@ The device discovery backend uses [Diode Python SDK](https://github.com/netboxla
 * [Module](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/module.py)
 * [ModuleBay](https://github.com/netboxlabs/diode-sdk-python/blob/develop/docs/examples/module_bay.py)
 
-Interfaces are attached to the device and ip addresses will be attached to the interfaces. Prefixes are added to the same interface site that it belongs to.
+Interfaces are attached to the device and ip addresses will be attached to the interfaces. Prefixes are added to the same interface site that it belongs to. Host prefixes (IPv4 `/32`, IPv6 `/128`) and IPv6 link-locals (`fe80::/10`) are not derived as prefixes by default; host prefixes can be restored with the `emit_host_prefixes` option — see [Prefix](#prefix).
 
 When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), device-discovery emits one `VirtualChassis` entity plus one `Device` per member, and routes each interface/IP to the member that physically owns it — see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) below. Drivers that do not implement stack discovery (or devices not in stack mode) fall through to the existing single-`Device` path with no change in behaviour.
 
@@ -82,6 +82,7 @@ Current supported options:
 | discover_modules | str | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards, supervisors, etc. — transceiver sub-bays skipped), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Only drivers that implement `get_modules()` populate module data — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 | propagate_defaults_to_prefix_scope | bool | When `True` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to `Prefix.scope_site` (the literal placeholder `"undefined"` is skipped) and `defaults.location` cascades to `Prefix.scope_location`. Defaults to `False`. Setting any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale. |
 | discover_vrfs | bool | When `True`, discovers VRFs from the device via the driver's `get_network_instances()` and attaches each VRF to the IP addresses and prefixes of its member interfaces. A discovered VRF takes precedence over the `defaults.*.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for those interfaces; interfaces in the default routing table keep the configured defaults. Defaults to `False`. Only drivers that implement `get_network_instances()` populate VRF data — see the [supported platforms page](./supported_platforms.md#vrfs). See [VRFs](#vrfs) for filtering rules and route-distinguisher handling. |
+| emit_host_prefixes | bool | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. Defaults to `False`: a host prefix only restates the address, which is already emitted as an `IPAddress` entity, so no prefix is derived for them. Set `True` to restore them, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefix](#prefix). |
 
 #### Defaults
 Current supported defaults:
@@ -422,9 +423,30 @@ The tables below show which fields are populated automatically from the device v
 
 Prefixes are derived from IP addresses discovered on interfaces. The network address is computed automatically from each discovered IP/prefix-length.
 
+Two shapes are **not** derived by default, because they carry no IPAM value and generate large volumes of noise:
+
+| Not derived | Example | Why | Restorable |
+|-------------|---------|-----|------------|
+| Host prefixes — IPv4 `/32`, IPv6 `/128` | a `10.0.0.1/32` loopback | The "prefix" only restates the address, duplicating the `IPAddress` entity emitted alongside it. A driver that reports no prefix length defaults to `/32` / `/128`, so this also covers those. | Yes — `emit_host_prefixes: true` |
+| IPv6 link-local — `fe80::/10`, any mask | `fe80::5a86:70f0:a8:e47f/128` | Link-locals are per-link and not globally meaningful, so one prefix per link-local address is pure churn. | No |
+
+The `IPAddress` entity is always still emitted in both cases, so the interface and its address stay fully documented — only the derived `Prefix` is skipped. IPv4 link-local (`169.254.0.0/16`) and the loopback net (`127.0.0.0/8`) are ordinary networks by mask and are still derived.
+
+Set `emit_host_prefixes: true` in the policy options to derive host prefixes again — for example when loopback `/32`s are deliberately tracked as prefixes in NetBox:
+
+```yaml
+policies:
+  my-policy:
+    config:
+      options:
+        emit_host_prefixes: true
+```
+
+The opt-in covers host prefixes only. IPv6 link-local prefixes stay suppressed even with it enabled, including an `fe80::…/128` address, which is a link-local that happens to carry host length rather than a loopback worth tracking.
+
 | Field | Source | Notes |
 |-------|--------|-------|
-| Prefix (network address) | Derived from IP address | Auto-computed |
+| Prefix (network address) | Derived from IP address | Auto-computed; host prefixes and IPv6 link-locals are skipped (see above) |
 | VRF | `get_network_instances()` when `options.discover_vrfs: true` | Otherwise set via `defaults.prefix.vrf` (a discovered VRF wins over the defaults — see [VRFs](#vrfs)) |
 | Role / Tenant | **Not collected** | Must be set via `defaults.prefix.*` |
 | Scope (site / location) | **Not collected** | Set via `defaults.prefix.scope_*` (see Nested Defaults) or opt into the cascade via `options.propagate_defaults_to_prefix_scope` |
