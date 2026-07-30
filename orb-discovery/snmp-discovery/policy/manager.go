@@ -425,8 +425,16 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 	safeDir := sanitizeLogValue(dir)
 
 	files := lookup.UserExtensionFiles()
-	if dir == "" || len(files) == 0 {
+	if dir == "" {
 		m.logger.Info("loaded device lookup extensions", "directory", safeDir)
+		return
+	}
+	if len(files) == 0 {
+		// The operator configured a directory and nothing in it was read, so
+		// none of their overrides are in effect. Reporting success here is the
+		// misleading case this reporting exists to remove.
+		m.logger.Warn("lookup_extensions_dir has no .yaml or .yml files; no custom entries were loaded",
+			"directory", safeDir, "files_ignored", lookup.UserExtensionSkippedFiles())
 		return
 	}
 
@@ -435,9 +443,13 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 		mfrTotal += f.ManufacturerEntries
 		switch {
 		case f.Err != nil:
-			m.logger.Warn("lookup extension file could not be parsed; skipping it",
+			// Only the devices section is lost. A manufacturers section in the
+			// same file is parsed separately by the manufacturer resolver and
+			// still applies, so do not imply the whole file was discarded.
+			m.logger.Warn("lookup extension file has an unparseable devices section; its device entries were skipped",
 				"directory", safeDir,
 				"file", sanitizeLogValue(f.Name),
+				"manufacturer_entries", f.ManufacturerEntries,
 				"error", sanitizeLogValue(f.Err.Error()))
 		case f.Entries == 0 && f.ManufacturerEntries == 0:
 			// Only when neither recognised section contributed. A file carrying

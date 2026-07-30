@@ -15,13 +15,14 @@ import (
 
 // logLine is one slog JSON record, decoded far enough to assert on.
 type logLine struct {
-	Level     string `json:"level"`
-	Msg       string `json:"msg"`
-	Directory string `json:"directory"`
-	File      string `json:"file"`
-	Entries   int    `json:"entries"`
-	Files     int    `json:"files"`
-	Err       string `json:"error"`
+	Level               string `json:"level"`
+	Msg                 string `json:"msg"`
+	Directory           string `json:"directory"`
+	File                string `json:"file"`
+	Entries             int    `json:"entries"`
+	Files               int    `json:"files"`
+	ManufacturerEntries int    `json:"manufacturer_entries"`
+	Err                 string `json:"error"`
 }
 
 func captureExtensionLogs(t *testing.T, dir string) []logLine {
@@ -88,7 +89,7 @@ func TestLogReportedExtensionFiles_WarnsOnUnparseableFile(t *testing.T) {
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "could not be parsed") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "unparseable devices section") {
 			warned = true
 			if l.File != "broken.yaml" || l.Err == "" {
 				t.Errorf("warning must name the file and the parse error, got file=%q err=%q", l.File, l.Err)
@@ -271,5 +272,54 @@ func TestLogReportedExtensionFiles_WarnsWhenNeitherSectionContributes(t *testing
 	}
 	if !warned {
 		t.Error("a file contributing neither devices nor manufacturers must warn")
+	}
+}
+
+// A configured directory holding no .yaml/.yml files means none of the
+// operator's files were considered. Logging the plain success message there
+// recreates exactly the misleading success this reporting exists to remove: the
+// previous loader at least logged a line per skipped file.
+func TestLogReportedExtensionFiles_WarnsWhenDirHasNoYamlFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "custom.yaml.bak", "devices:\n  .1.2.3: m\n")
+
+	var warned bool
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "no .yaml") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Error("a directory with no usable YAML files must warn, not report success")
+	}
+}
+
+// A devices: section that fails to parse does not stop the manufacturers:
+// section of the same file being applied, so the warning must not imply the
+// whole file was discarded.
+func TestLogReportedExtensionFiles_ParseFailureScopedToDeviceSection(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "mixed.yaml",
+		"devices:\n  .1.3.6.1.4.1.1: {nested: map}\nmanufacturers:\n  52642: FS\n")
+
+	var found *logLine
+	lines := captureExtensionLogs(t, dir)
+	for i := range lines {
+		if lines[i].Level == "WARN" {
+			found = &lines[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("a devices-section parse failure must still warn")
+	}
+	if strings.Contains(found.Msg, "skipping it") {
+		t.Errorf("warning implies the whole file was skipped: %q", found.Msg)
+	}
+	if !strings.Contains(found.Msg, "device") {
+		t.Errorf("warning should identify the device entries as the skipped part: %q", found.Msg)
+	}
+	if found.ManufacturerEntries != 1 {
+		t.Errorf("manufacturer_entries = %d, want 1 so the operator sees that part still applied",
+			found.ManufacturerEntries)
 	}
 }

@@ -280,8 +280,9 @@ type DeviceRetriever interface {
 
 // DeviceLookup represents a device lookup service.
 type DeviceLookup struct {
-	devicesByVendor   map[string]deviceRef
-	userExtensionFile []ExtensionFileResult
+	devicesByVendor      map[string]deviceRef
+	userExtensionFile    []ExtensionFileResult
+	userExtensionSkipped int
 }
 
 // ExtensionFileResult records what one file in lookup_extensions_dir
@@ -311,6 +312,13 @@ type ExtensionFileResult struct {
 // contributed, in directory order. Empty when no user directory was configured.
 func (d *DeviceLookup) UserExtensionFiles() []ExtensionFileResult {
 	return d.userExtensionFile
+}
+
+// UserExtensionSkippedFiles is how many entries in lookup_extensions_dir were
+// ignored for not being .yaml or .yml. It distinguishes an empty directory from
+// one holding files the loader will never read, such as a custom.yaml.bak.
+func (d *DeviceLookup) UserExtensionSkippedFiles() int {
+	return d.userExtensionSkipped
 }
 
 // lookupOIDBothSpellings indexes m by oid, accepting either leading-dot or
@@ -389,11 +397,12 @@ func LoadDeviceLookupExtensions(dir string) (*DeviceLookup, error) {
 
 	if dir != "" {
 		// Extend built in extensions with user provided extensions
-		results, err := loadUserProvidedExtensions(dir, devicesByVendor)
+		results, skipped, err := loadUserProvidedExtensions(dir, devicesByVendor)
 		if err != nil {
 			return &deviceLookup, err
 		}
 		deviceLookup.userExtensionFile = results
+		deviceLookup.userExtensionSkipped = skipped
 	}
 
 	return &deviceLookup, nil
@@ -454,22 +463,24 @@ func countManufacturerEntries(data []byte) int {
 // bad file cannot cost an operator every other override they wrote. The failure
 // is returned in the results instead of being logged here, so it reaches the
 // structured logger the caller already holds.
-func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef) ([]ExtensionFileResult, error) {
+func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef) ([]ExtensionFileResult, int, error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read directory %s: %w", dir, err)
+		return nil, 0, fmt.Errorf("failed to read directory %s: %w", dir, err)
 	}
 
 	var results []ExtensionFileResult
+	skipped := 0
 	for _, file := range files {
 		if !isLookupExtensionFile(file) {
+			skipped++
 			continue
 		}
 
 		filePath := filepath.Join(dir, file.Name())
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
+			return nil, 0, fmt.Errorf("failed to read file %s: %w", filePath, err)
 		}
 
 		// Parse into a per-file map first so the entry count is this file's own
@@ -490,7 +501,7 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 			Err:                 parseErr,
 		})
 	}
-	return results, nil
+	return results, skipped, nil
 }
 
 func isLookupExtensionFile(file os.DirEntry) bool {
