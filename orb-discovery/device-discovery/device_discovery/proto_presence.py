@@ -25,6 +25,8 @@ Reading an unset scalar through the normal attribute accessor yields the proto3 
 into an explicit empty string. See ``copy_scalar_if_set``.
 """
 
+from typing import Any
+
 from google.protobuf.message import Message
 
 
@@ -61,3 +63,35 @@ def copy_scalar_if_set(dst: Message, src: Message, *fields: str) -> None:
         if descriptor.fields_by_name[field].has_presence and not src.HasField(field):
             continue
         setattr(dst, field, getattr(src, field))
+
+
+def blank_to_none(value: Any) -> Any:
+    """
+    Map a blank NAPALM string to ``None`` so the field is omitted rather than sent empty.
+
+    NAPALM's getter contract uses ``""`` for "this value is not available", not for
+    "this value is empty on the device" — 17 of the custom drivers hardcode
+    ``"description": ""`` in ``get_interfaces`` without ever reading a description off
+    the box. Passing that straight through sets a presence-bearing proto field to an
+    explicit empty string, which the plugin reads as a real value: a no-op deviation
+    that reapplies forever on plugin v1.13.0, and an actual field clear on v1.14.1.
+
+    Whitespace-only values are treated as blank too, since they only ever come from a
+    parser that matched nothing. Non-blank values are returned unchanged and unstripped,
+    so genuine content is never rewritten. ``str`` and ``bytes`` are both handled; any
+    other type passes straight through.
+
+    Args:
+    ----
+        value: A value from a NAPALM getter, or anything else (returned unchanged).
+
+    Returns:
+    -------
+        ``None`` when ``value`` is a blank string, otherwise ``value`` unchanged.
+
+    """
+    # bytes as well as str: translate_device deliberately lets a bytes serial through
+    # its type normalisation, so b"" must be blanked too.
+    if isinstance(value, str | bytes) and not value.strip():
+        return None
+    return value
