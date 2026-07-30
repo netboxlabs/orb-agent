@@ -199,8 +199,9 @@ func TestLogReportedExtensionFiles_CraftedDirIsSanitizedOnEveryPath(t *testing.T
 		setup func(t *testing.T) string // returns the dir to load from
 	}{
 		{
-			name:  "early return, no user files",
-			setup: func(t *testing.T) string { return "" },
+			name: "early return, no user files",
+			// No directory to build, so the helper is unused here.
+			setup: func(_ *testing.T) string { return "" },
 		},
 		{
 			name: "populated directory",
