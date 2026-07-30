@@ -372,6 +372,37 @@ def _resolve_prefix_scope_kwargs(
     return scope_kwargs
 
 
+def _undesirable_prefix_reason(
+    network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+) -> str | None:
+    """
+    Return why ``network`` must not be emitted as a Prefix, or None to emit it.
+
+    A Prefix is derived from the network of every discovered interface IP, but
+    two shapes carry no IPAM value and only add noise:
+
+    - **Host prefixes** (IPv4 /32, IPv6 /128) restate the address itself. A
+      router loopback of 10.0.0.1/32 yields the "prefix" 10.0.0.1/32, which
+      duplicates the IPAddress entity that is emitted alongside it.
+    - **IPv6 link-locals** (fe80::/10) are per-link and not globally
+      meaningful, so a prefix per link-local address is pure churn.
+
+    IPv4 link-local (169.254.0.0/16) and the loopback net (127.0.0.0/8) are
+    deliberately NOT suppressed — they are ordinary networks by mask, so they
+    keep the existing behavior.
+
+    Suppression applies only to the derived Prefix. The IPAddress entity is
+    always still emitted, so the interface and its address stay documented.
+    """
+    if network.prefixlen == network.max_prefixlen:
+        return "host prefix"
+    # Only IPv6: ipaddress treats 169.254.0.0/16 as link-local too, and that
+    # one stays in scope for emission.
+    if network.version == 6 and network.is_link_local:
+        return "IPv6 link-local"
+    return None
+
+
 def translate_interface_ips(
     interface: Interface,
     interfaces_ip: dict,
@@ -472,20 +503,29 @@ def translate_interface_ips(
                 for ip, details in ip_info.get(ip_version, {}).items():
                     ip_address = f"{ip}/{details.get('prefix_length', default_prefix)}"
                     network = ipaddress.ip_network(ip_address, strict=False)
-                    ip_entities.append(
-                        Entity(
-                            prefix=Prefix(
-                                prefix=str(network),
-                                vrf=af_prefix_vrf,
-                                role=prefix_role,
-                                tenant=prefix_tenant,
-                                tags=prefix_tags,
-                                comments=prefix_comments,
-                                description=prefix_description,
-                                **scope_kwargs,
+                    skip_reason = _undesirable_prefix_reason(network)
+                    if skip_reason:
+                        logger.debug(
+                            "%s: not deriving a prefix from %s (%s)",
+                            interface.name,
+                            ip_address,
+                            skip_reason,
+                        )
+                    else:
+                        ip_entities.append(
+                            Entity(
+                                prefix=Prefix(
+                                    prefix=str(network),
+                                    vrf=af_prefix_vrf,
+                                    role=prefix_role,
+                                    tenant=prefix_tenant,
+                                    tags=prefix_tags,
+                                    comments=prefix_comments,
+                                    description=prefix_description,
+                                    **scope_kwargs,
+                                )
                             )
                         )
-                    )
                     ip_entities.append(
                         Entity(
                             ip_address=IPAddress(
