@@ -27,6 +27,7 @@ from netboxlabs.diode.sdk.ingester import Entity, Module, ModuleBay, ModuleType
 
 from device_discovery.metrics import get_metric
 from device_discovery.policy.models import Options
+from device_discovery.proto_presence import blank_to_none
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +263,10 @@ def _emit_bay_recursive(
     bay = ModuleBay(
         device=device,
         name=bay_data["name"],
-        position=bay_data.get("position") or bay_data["name"],
+        # ModuleBay.position and Module.serial declare presence. custom_napalm
+        # normally drops blank-serial bays, but a driver assembling the envelope
+        # without to_payload must not be able to emit an explicit empty value.
+        position=blank_to_none(bay_data.get("position") or bay_data["name"]),
     )
     entities.append(Entity(module_bay=bay))
     _bump("module_bays_emitted", 1, {"vendor": manufacturer.name})
@@ -275,7 +279,7 @@ def _emit_bay_recursive(
         "device": device,
         "module_bay": bay,
         "module_type": module_type,
-        "serial": module_data["serial"],
+        "serial": blank_to_none(module_data["serial"]),
     }
     if module_data.get("description"):
         module_kwargs["description"] = module_data["description"]

@@ -32,6 +32,7 @@ from device_discovery.policy.models import (
     TenantParameters,
     VrfParameters,
 )
+from device_discovery.proto_presence import blank_to_none
 from device_discovery.translate_chassis import (
     translate_as_stack,
     validate_chassis_payload,
@@ -72,7 +73,10 @@ def translate_vrf(
     if isinstance(vrf, VrfParameters):
         return VRF(
             name=vrf.name,
-            rd=vrf.rd,
+            # VRF.rd declares presence, and stubs.py omits a falsy rd — a policy
+            # supplying rd="" would otherwise make the rich VRF and its stub resolve
+            # via different matchers.
+            rd=blank_to_none(vrf.rd),
             comments=vrf.comments,
             description=vrf.description,
             tags=vrf.tags,
@@ -141,6 +145,9 @@ def translate_device(
                 serial_number = str(serial_number[0])
     elif serial_number is not None and not isinstance(serial_number, str | bytes):
         serial_number = str(serial_number)
+    # Device.serial declares proto presence too, so a blank serial must be omitted
+    # rather than sent as an explicit empty value.
+    serial_number = blank_to_none(serial_number)
 
     device_config = None
     if config_info and options:
@@ -148,12 +155,19 @@ def translate_device(
 
     # Build Device parameters
     device_params = {
-        "name": device_info.get("hostname"),
+        # A driver that discovered no hostname must OMIT device.name. An explicit
+        # empty name is a real value to the Diode plugin, not an omission.
+        "name": blank_to_none(device_info.get("hostname")),
         "device_type": DeviceType(model=model, manufacturer=manufacturer),
         "platform": Platform(name=platform, manufacturer=manufacturer),
         "role": defaults.role,
         "serial": serial_number,
-        "asset_tag": defaults.device.asset_tag if defaults.device else None,
+        # asset_tag is the highest-precedence dcim.device matcher and comes straight
+        # from policy. Blanking it here keeps the rich entity consistent with the
+        # nested stub, which omits a falsy asset_tag.
+        "asset_tag": blank_to_none(defaults.device.asset_tag)
+        if defaults.device
+        else None,
         "status": "active",
         "site": defaults.site,
         "tags": tags,

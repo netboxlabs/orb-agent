@@ -1,0 +1,15 @@
+{
+  "hostname": "test-host",
+  "vendor": "Nokia",
+  "model": "7750 SR-12",
+  "os_version": "TiMOS-B-21.10.R2",
+  "serial_number": "NS1921F1814",
+  "uptime": 3802044.41,
+  "fqdn": "test-host",
+  "interface_list": [
+    "1/1/1",
+    "management/management",
+    "system",
+    "to_RTR-01"
+  ]
+}

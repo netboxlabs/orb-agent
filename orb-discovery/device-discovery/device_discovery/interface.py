@@ -13,6 +13,7 @@ from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, 
 from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
 from device_discovery.interface_types import VALID_INTERFACE_TYPES
 from device_discovery.policy.models import Defaults, Options
+from device_discovery.proto_presence import blank_to_none
 
 logger = logging.getLogger(__name__)
 
@@ -251,12 +252,14 @@ def translate_interface(
         tags.extend(defaults.interface.tags or [])
         description = defaults.interface.description
 
-    description = interface_info.get("description", description)
-    mac_address = (
-        interface_info.get("mac_address")
-        if interface_info.get("mac_address") != ""
-        else None
-    )
+    # NAPALM uses "" for "not available", and 17 of the custom drivers hardcode
+    # `"description": ""` without ever reading a description off the box. A blank
+    # driver value must therefore neither override the policy default nor reach the
+    # wire, where the plugin would treat it as an explicit clear.
+    driver_description = blank_to_none(interface_info.get("description"))
+    if driver_description is not None:
+        description = driver_description
+    mac_address = blank_to_none(interface_info.get("mac_address"))
 
     # Determine interface type by descending priority:
     # 1. Subinterface (has parent) -> "virtual" (structural)

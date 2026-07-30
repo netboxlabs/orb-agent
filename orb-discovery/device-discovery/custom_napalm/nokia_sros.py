@@ -929,7 +929,13 @@ class SROSDriver(_napalm_base.NetworkDriver):
         """Return general device facts via NETCONF state tree."""
         try:
             result = _parse_xml(self.conn.get(filter=_FILTER_FACTS).data_xml)
-            hostname = _find_txt(result, "state_ns:state/state_ns:system/state_ns:oper-name")
+            # ``_find_txt`` returns "" when the XPath misses, and an empty hostname
+            # becomes an empty Device.name on the wire. Every other driver falls back
+            # to the target host or "Unknown"; do the same here.
+            hostname = (
+                _find_txt(result, "state_ns:state/state_ns:system/state_ns:oper-name")
+                or self.hostname
+            )
             uptime_ms_str = _find_txt(result, "state_ns:state/state_ns:system/state_ns:up-time")
             # Nokia YANG up-time is milliseconds (integer string)
             uptime = convert(float, uptime_ms_str, default=0.0) / 1000.0 if uptime_ms_str else 0.0
