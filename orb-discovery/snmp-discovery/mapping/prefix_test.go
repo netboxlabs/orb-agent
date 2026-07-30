@@ -173,3 +173,174 @@ func TestPrefixEmissionEnabled_DefaultOnOptOut(t *testing.T) {
 	assert.False(t, (&config.Options{EmitPrefixes: boolPtr(false)}).PrefixEmissionEnabled())
 	assert.True(t, (&config.Options{EmitPrefixes: boolPtr(true)}).PrefixEmissionEnabled())
 }
+
+func TestDerivePrefixes_SkipsHostAndIPv6LinkLocal(t *testing.T) {
+	// A Prefix derived from a host address only restates it, and an fe80::
+	// prefix is per-link churn. Both produced large volumes of spurious
+	// prefixes on real networks. The IPAddress entities are untouched.
+	for _, tc := range []struct {
+		name string
+		addr string
+	}{
+		{"ipv4 host prefix", "10.0.0.1/32"},
+		{"ipv6 host prefix", "2001:db8::5/128"},
+		{"ipv6 link-local, host length", "fe80::5a86:70f0:a8:e47f/128"},
+		{"ipv6 link-local, /64", "fe80::42:acff:fe12:6/64"},
+		{"ipv6 link-local at its own /10", "fe80::1/10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(tc.addr)},
+				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+			)
+			assert.Empty(t, prefixes, "no prefix may be derived from %s", tc.addr)
+		})
+	}
+}
+
+func TestDerivePrefixes_KeepsOrdinaryNetworks(t *testing.T) {
+	// The skip is narrowly scoped. IPv4 link-local and the loopback net are
+	// ordinary networks by mask and keep the existing behavior; /31 and /127
+	// are real point-to-point subnets, not host routes.
+	for _, tc := range []struct {
+		name string
+		addr string
+		want string
+	}{
+		{"ipv4 /24", "172.24.0.101/24", "172.24.0.0/24"},
+		{"ipv4 /31 p2p", "10.1.1.0/31", "10.1.1.0/31"},
+		{"ipv4 link-local", "169.254.10.5/16", "169.254.0.0/16"},
+		{"ipv4 loopback net", "127.0.0.1/8", "127.0.0.0/8"},
+		{"ipv6 /64", "2001:db8::1/64", "2001:db8::/64"},
+		{"ipv6 /127 p2p", "2001:db8::2/127", "2001:db8::2/127"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(tc.addr)},
+				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+			)
+			require.Len(t, prefixes, 1)
+			assert.Equal(t, tc.want, *(prefixes[0].(*diode.Prefix)).Prefix)
+		})
+	}
+}
+
+func TestDerivePrefixes_SkippedAddressDoesNotDropSiblings(t *testing.T) {
+	// A skipped address must not cost its neighbours their prefixes.
+	entities := []diode.Entity{
+		ipEntity("172.24.0.101/24"),
+		ipEntity("10.0.0.1/32"),             // host prefix → skipped
+		ipEntity("2001:db8::1/64"),          //
+		ipEntity("fe80::42:acff:fe12:6/64"), // link-local → skipped
+	}
+	prefixes := DerivePrefixes(entities, nil, &config.Defaults{}, &config.Options{}, slog.Default())
+	require.Len(t, prefixes, 2)
+	got := make([]string, 0, 2)
+	for _, p := range prefixes {
+		got = append(got, *(p.(*diode.Prefix)).Prefix)
+	}
+	assert.Equal(t, []string{"172.24.0.0/24", "2001:db8::/64"}, got)
+}
+
+func TestDerivePrefixes_EmitHostPrefixesOptsBackIn(t *testing.T) {
+	// Operators who track loopback /32s as NetBox prefixes need a way to keep
+	// them; before this option snmp-discovery could only disable prefixes
+	// wholesale via emit_prefixes.
+	opts := &config.Options{EmitHostPrefixes: boolPtr(true)}
+	for _, tc := range []struct {
+		name string
+		addr string
+		want string
+	}{
+		{"ipv4 host prefix", "10.0.0.1/32", "10.0.0.1/32"},
+		{"ipv6 host prefix", "2001:db8::5/128", "2001:db8::5/128"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(tc.addr)},
+				nil, &config.Defaults{}, opts, slog.Default(),
+			)
+			require.Len(t, prefixes, 1)
+			assert.Equal(t, tc.want, *(prefixes[0].(*diode.Prefix)).Prefix)
+		})
+	}
+}
+
+func TestDerivePrefixes_EmitHostPrefixesDoesNotResurrectLinkLocal(t *testing.T) {
+	// The link-local rule is ungated by the option on purpose: an fe80::x/128
+	// is a link-local carrying host length, not a loopback worth tracking. If
+	// it were gated, opting in to host prefixes would restore the exact noise
+	// the skip removes.
+	opts := &config.Options{EmitHostPrefixes: boolPtr(true)}
+	for _, addr := range []string{
+		"fe80::5a86:70f0:a8:e47f/128",
+		"fe80::42:acff:fe12:6/64",
+		"fe80::1/10",
+		// Wide masks must stay suppressed with the opt-in on too.
+		"fe80::1/8",
+		"fe80::1/1",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(addr)},
+				nil, &config.Defaults{}, opts, slog.Default(),
+			)
+			assert.Empty(t, prefixes, "emit_host_prefixes must not resurrect %s", addr)
+		})
+	}
+}
+
+func TestOptions_HostPrefixEmissionEnabled(t *testing.T) {
+	// Defaults to FALSE, the opposite of emit_prefixes. A nil receiver must be
+	// safe: DerivePrefixes is called with whatever the policy supplied.
+	assert.False(t, (*config.Options)(nil).HostPrefixEmissionEnabled(), "nil options")
+	assert.False(t, (&config.Options{}).HostPrefixEmissionEnabled(), "unset")
+	assert.False(t, (&config.Options{EmitHostPrefixes: boolPtr(false)}).HostPrefixEmissionEnabled())
+	assert.True(t, (&config.Options{EmitHostPrefixes: boolPtr(true)}).HostPrefixEmissionEnabled())
+}
+
+func TestDerivePrefixes_HostPrefixesStaySuppressedWithNilOptions(t *testing.T) {
+	// nil options must behave as the default (suppressed), not panic.
+	prefixes := DerivePrefixes(
+		[]diode.Entity{ipEntity("10.0.0.1/32"), ipEntity("172.24.0.101/24")},
+		nil, &config.Defaults{}, nil, slog.Default(),
+	)
+	require.Len(t, prefixes, 1)
+	assert.Equal(t, "172.24.0.0/24", *(prefixes[0].(*diode.Prefix)).Prefix)
+}
+
+func TestDerivePrefixes_LinkLocalJudgedOnAddressNotMaskedNetwork(t *testing.T) {
+	// A mask of /8 or wider moves the masked network out of the fe80::/10 bit
+	// pattern — fe80::1/8 masks to fe00:: and fe80::1/1 to 8000:: — so testing
+	// network.IP let a colossal container prefix through for an address that is
+	// plainly link-local. Agents do report nonsense masks, which is why the
+	// zero-length guard above this check exists in the first place.
+	for _, addr := range []string{
+		"fe80::1/10",
+		"fe80::1/9",
+		"fe80::1/8",
+		"fe80::1/1",
+		"fe80::1/64",
+		"fe80::1/128",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(addr)},
+				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+			)
+			assert.Empty(t, prefixes,
+				"%s is link-local by address; no prefix may be derived at any mask", addr)
+		})
+	}
+}
+
+func TestDerivePrefixes_WideMaskIPv4LinkLocalStillDerived(t *testing.T) {
+	// The address-based test must not start suppressing IPv4: 169.254.0.0/16
+	// is link-local to IsLinkLocalUnicast but stays in scope for emission.
+	prefixes := DerivePrefixes(
+		[]diode.Entity{ipEntity("169.254.10.5/16")},
+		nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+	)
+	require.Len(t, prefixes, 1)
+	assert.Equal(t, "169.254.0.0/16", *(prefixes[0].(*diode.Prefix)).Prefix)
+}

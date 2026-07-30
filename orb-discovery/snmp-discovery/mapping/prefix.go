@@ -16,6 +16,13 @@ import (
 // One Prefix is emitted per unique (network, VRF) pair, sorted for
 // deterministic output.
 //
+// Host prefixes (/32, /128) and IPv6 link-locals (fe80::/10) are skipped:
+// the former only restates an address that is already emitted as an
+// IPAddress, and the latter is per-link and not globally meaningful. The
+// IPAddress entities themselves are untouched, so the addresses stay
+// documented — only the derived Prefix is dropped. Host prefixes can be
+// opted back in with emit_host_prefixes; link-locals cannot, by design.
+//
 // The prefix VRF follows device-discovery's precedence: an IP whose
 // address was attached to a DISCOVERED VRF (vrfByAddress, produced by
 // AttachVrfs) carries that VRF onto its prefix; every other prefix gets
@@ -50,17 +57,47 @@ func DerivePrefixes(
 			logger.Debug("prefix: skipping IPv4-mapped IPv6 address", "address", addr)
 			continue
 		}
-		_, network, err := net.ParseCIDR(addr)
+		addrIP, network, err := net.ParseCIDR(addr)
 		if err != nil {
 			logger.Debug("prefix: unparseable IP address, skipping", "address", addr)
 			continue
 		}
+		ones, bits := network.Mask.Size()
 		// A zero-length mask comes from agent quirks (ipAdEntNetMask
 		// 0.0.0.0 on loopback/unnumbered rows) — no SNMP-discovered
 		// subnet can legitimately be the default route, and ingesting
 		// 0.0.0.0/0 or ::/0 would parent the entire IPAM tree.
-		if ones, _ := network.Mask.Size(); ones == 0 {
+		if ones == 0 {
 			logger.Debug("prefix: skipping zero-length network", "address", addr)
+			continue
+		}
+		// IPv6 link-locals are per-link and not globally meaningful, so a
+		// prefix per fe80:: address is churn.
+		//
+		// Judged on the ADDRESS, not the masked network. A mask of /8 or
+		// wider moves the network out of the fe80::/10 bit pattern —
+		// fe80::1/8 masks to fe00:: and fe80::1/1 to 8000:: — so testing
+		// network.IP emitted a colossal container prefix for an address
+		// that is plainly link-local. Agents do report nonsense masks;
+		// that is why the zero-length guard above exists.
+		//
+		// Deliberately NOT gated on emit_host_prefixes: an fe80::x/128 is
+		// a link-local that happens to carry host length, not a loopback
+		// an operator wants tracked, so opting in to host prefixes must
+		// not resurrect it. Gated on the family instead, because
+		// IsLinkLocalUnicast also covers IPv4 169.254.0.0/16, an ordinary
+		// network by mask that stays in scope.
+		if addrIP.To4() == nil && addrIP.IsLinkLocalUnicast() {
+			logger.Debug("prefix: skipping IPv6 link-local", "address", addr)
+			continue
+		}
+		// A host prefix (/32, /128) only restates the address, which is
+		// already emitted as an IPAddress entity — the derived prefix is a
+		// duplicate of it under a different object type. Rows with no
+		// usable mask also land here, so this covers those too. Operators
+		// who track loopback /32s as prefixes can opt back in.
+		if ones == bits && !options.HostPrefixEmissionEnabled() {
+			logger.Debug("prefix: skipping host prefix", "address", addr)
 			continue
 		}
 		family := "ipv4"
