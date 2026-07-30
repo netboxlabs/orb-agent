@@ -193,10 +193,17 @@ def _show_system_fallback(data: str) -> list[dict]:
     # Deliberately not anchored to the start of a line: ProCurve prints this
     # screen in two columns, so Serial Number arrives as the *second* field on
     # the ROM Version line ("ROM Version : N.10.02   Serial Number : SG00XX0000").
+    #
+    # Post-colon whitespace is horizontal-only ([^\S\n]), not \s, because a
+    # configured-but-empty field would otherwise let the match run past the
+    # newline and capture the *next* field's label as the value: a blank
+    # "System Name :" yields the hostname "System" from the "System Contact"
+    # line below it, and a blank Serial Number yields "Up" from "Up Time".
+    # Leaving the field unset is correct there; the caller renders "Unknown".
     for key, pattern in (
-        ("name", r"System\s+Name\s*:\s*(\S+)"),
-        ("software_version", r"Software\s+revision\s*:\s*(\S+)"),
-        ("serial", r"Serial\s+Number\s*:\s*(\S+)"),
+        ("name", r"System\s+Name\s*:[^\S\n]*(\S+)"),
+        ("software_version", r"Software\s+revision\s*:[^\S\n]*(\S+)"),
+        ("serial", r"Serial\s+Number\s*:[^\S\n]*(\S+)"),
     ):
         m = re.search(pattern, data, re.IGNORECASE)
         if m:

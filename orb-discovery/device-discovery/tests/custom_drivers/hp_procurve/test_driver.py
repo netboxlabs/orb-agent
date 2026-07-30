@@ -222,3 +222,30 @@ def test_parse_show_system_falls_back_when_template_rejects_output():
 def test_parse_show_system_returns_empty_for_unusable_output():
     """Nothing recognizable at all → empty list, never an exception."""
     assert _parse_show_system(["total garbage", "no fields here"]) == []
+
+
+def test_parse_show_system_leaves_valueless_fields_unset():
+    r"""
+    A configured-but-empty field must not absorb the next field's label.
+
+    Post-colon whitespace has to stay horizontal: with ``\s*`` the match runs
+    past the newline and captures the following line's label as the value, so a
+    blank ``System Name :`` yields the hostname ``System`` from the
+    ``System Contact`` line under it, and a blank serial yields ``Up`` from
+    ``Up Time``. Both would reach NetBox as real values.
+    """
+    body = """ Status and Counters - General System Information
+
+  System Name        :
+  System Contact     :
+  Software revision  : Y.11.16
+  ROM Version        : Y.11.03   Serial Number :
+  Up Time            : 64 days
+"""
+    rows = _parse_show_system(body.splitlines())
+    row = rows[0] if rows else {}
+
+    assert row.get("name") is None, f"blank System Name leaked {row.get('name')!r}"
+    assert row.get("serial") is None, f"blank Serial Number leaked {row.get('serial')!r}"
+    # The field that does have a value is still recovered.
+    assert row.get("software_version") == "Y.11.16"
