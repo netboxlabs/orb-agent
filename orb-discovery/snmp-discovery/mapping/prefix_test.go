@@ -173,3 +173,71 @@ func TestPrefixEmissionEnabled_DefaultOnOptOut(t *testing.T) {
 	assert.False(t, (&config.Options{EmitPrefixes: boolPtr(false)}).PrefixEmissionEnabled())
 	assert.True(t, (&config.Options{EmitPrefixes: boolPtr(true)}).PrefixEmissionEnabled())
 }
+
+func TestDerivePrefixes_SkipsHostAndIPv6LinkLocal(t *testing.T) {
+	// A Prefix derived from a host address only restates it, and an fe80::
+	// prefix is per-link churn. Both produced large volumes of spurious
+	// prefixes on real networks. The IPAddress entities are untouched.
+	for _, tc := range []struct {
+		name string
+		addr string
+	}{
+		{"ipv4 host prefix", "10.0.0.1/32"},
+		{"ipv6 host prefix", "2001:db8::5/128"},
+		{"ipv6 link-local, host length", "fe80::5a86:70f0:a8:e47f/128"},
+		{"ipv6 link-local, /64", "fe80::42:acff:fe12:6/64"},
+		{"ipv6 link-local at its own /10", "fe80::1/10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(tc.addr)},
+				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+			)
+			assert.Empty(t, prefixes, "no prefix may be derived from %s", tc.addr)
+		})
+	}
+}
+
+func TestDerivePrefixes_KeepsOrdinaryNetworks(t *testing.T) {
+	// The skip is narrowly scoped. IPv4 link-local and the loopback net are
+	// ordinary networks by mask and keep the existing behavior; /31 and /127
+	// are real point-to-point subnets, not host routes.
+	for _, tc := range []struct {
+		name string
+		addr string
+		want string
+	}{
+		{"ipv4 /24", "172.24.0.101/24", "172.24.0.0/24"},
+		{"ipv4 /31 p2p", "10.1.1.0/31", "10.1.1.0/31"},
+		{"ipv4 link-local", "169.254.10.5/16", "169.254.0.0/16"},
+		{"ipv4 loopback net", "127.0.0.1/8", "127.0.0.0/8"},
+		{"ipv6 /64", "2001:db8::1/64", "2001:db8::/64"},
+		{"ipv6 /127 p2p", "2001:db8::2/127", "2001:db8::2/127"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(tc.addr)},
+				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+			)
+			require.Len(t, prefixes, 1)
+			assert.Equal(t, tc.want, *(prefixes[0].(*diode.Prefix)).Prefix)
+		})
+	}
+}
+
+func TestDerivePrefixes_SkippedAddressDoesNotDropSiblings(t *testing.T) {
+	// A skipped address must not cost its neighbours their prefixes.
+	entities := []diode.Entity{
+		ipEntity("172.24.0.101/24"),
+		ipEntity("10.0.0.1/32"),             // host prefix → skipped
+		ipEntity("2001:db8::1/64"),          //
+		ipEntity("fe80::42:acff:fe12:6/64"), // link-local → skipped
+	}
+	prefixes := DerivePrefixes(entities, nil, &config.Defaults{}, &config.Options{}, slog.Default())
+	require.Len(t, prefixes, 2)
+	got := make([]string, 0, 2)
+	for _, p := range prefixes {
+		got = append(got, *(p.(*diode.Prefix)).Prefix)
+	}
+	assert.Equal(t, []string{"172.24.0.0/24", "2001:db8::/64"}, got)
+}

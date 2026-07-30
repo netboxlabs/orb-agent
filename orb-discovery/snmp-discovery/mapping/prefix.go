@@ -16,6 +16,12 @@ import (
 // One Prefix is emitted per unique (network, VRF) pair, sorted for
 // deterministic output.
 //
+// Host prefixes (/32, /128) and IPv6 link-locals (fe80::/10) are skipped:
+// the former only restates an address that is already emitted as an
+// IPAddress, and the latter is per-link and not globally meaningful. The
+// IPAddress entities themselves are untouched, so the addresses stay
+// documented — only the derived Prefix is dropped.
+//
 // The prefix VRF follows device-discovery's precedence: an IP whose
 // address was attached to a DISCOVERED VRF (vrfByAddress, produced by
 // AttachVrfs) carries that VRF onto its prefix; every other prefix gets
@@ -55,12 +61,29 @@ func DerivePrefixes(
 			logger.Debug("prefix: unparseable IP address, skipping", "address", addr)
 			continue
 		}
+		ones, bits := network.Mask.Size()
 		// A zero-length mask comes from agent quirks (ipAdEntNetMask
 		// 0.0.0.0 on loopback/unnumbered rows) — no SNMP-discovered
 		// subnet can legitimately be the default route, and ingesting
 		// 0.0.0.0/0 or ::/0 would parent the entire IPAM tree.
-		if ones, _ := network.Mask.Size(); ones == 0 {
+		if ones == 0 {
 			logger.Debug("prefix: skipping zero-length network", "address", addr)
+			continue
+		}
+		// A host prefix (/32, /128) only restates the address, which is
+		// already emitted as an IPAddress entity — the derived prefix is a
+		// duplicate of it under a different object type. Rows with no
+		// usable mask also land here, so this covers those too.
+		if ones == bits {
+			logger.Debug("prefix: skipping host prefix", "address", addr)
+			continue
+		}
+		// IPv6 link-locals are per-link and not globally meaningful, so a
+		// prefix per fe80:: address is churn. Gated on the family because
+		// IsLinkLocalUnicast also covers IPv4 169.254.0.0/16, which is an
+		// ordinary network by mask and stays in scope for emission.
+		if network.IP.To4() == nil && network.IP.IsLinkLocalUnicast() {
+			logger.Debug("prefix: skipping IPv6 link-local", "address", addr)
 			continue
 		}
 		family := "ipv4"

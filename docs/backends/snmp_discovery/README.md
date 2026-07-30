@@ -343,7 +343,8 @@ Prefix entities are derived from the discovered IP addresses — the network of 
 - **VRF**: a prefix whose addresses were attached to a discovered VRF (see [VRFs](#vrfs)) carries that VRF; everything else resolves from `defaults.prefix.vrf` / `vrf_ipv4` / `vrf_ipv6` (independent of the `ip_address` knobs).
 - **Scope**: explicit `defaults.prefix.scope_site` / `scope_location` always win; with `propagate_defaults_to_prefix_scope: true` and no explicit scope, `defaults.site` / `defaults.location` cascade in.
 - **Safety guards**: zero-length networks (agent-quirk `0.0.0.0` masks) and IPv4-mapped IPv6 addresses never derive prefixes.
-- **Data-quality note**: when an agent doesn't implement `ipAddressPrefixTable`, addresses fall back to host length, so their derived prefixes are `/32` / `/128` — the same shape device-discovery emits for loopbacks. Opt out if host prefixes are unwanted in your IPAM tree.
+- **Host prefixes and IPv6 link-locals are never derived**: an IPv4 `/32` or IPv6 `/128` "prefix" only restates the address, which is already emitted as an `IPAddress` entity, and an `fe80::` prefix is per-link rather than globally meaningful. Both are skipped. The `IPAddress` entities are untouched, so the addresses stay documented — only the derived `Prefix` is dropped. IPv4 link-local (`169.254.0.0/16`) and the loopback net (`127.0.0.0/8`) are ordinary networks by mask and are still derived.
+- **Data-quality note**: when an agent doesn't implement `ipAddressPrefixTable`, addresses fall back to host length. Those addresses simply derive no prefix, per the rule above, so a missing prefix table costs prefix coverage rather than filling IPAM with host routes.
 
 
 ## Modules / ModuleBays
