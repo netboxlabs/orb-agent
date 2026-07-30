@@ -2015,7 +2015,11 @@ def test_translate_data_subinterface_becomes_virtual_with_parent(
 
 
 def _emit_ips_for(
-    sample_device_info, sample_interface_info, sample_defaults, interfaces_ip
+    sample_device_info,
+    sample_interface_info,
+    sample_defaults,
+    interfaces_ip,
+    options=None,
 ):
     """Translate one interface's IPs and split the result into prefixes and addresses."""
     device = translate_device(sample_device_info, sample_defaults)
@@ -2026,7 +2030,9 @@ def _emit_ips_for(
         sample_defaults,
     )
     entities = list(
-        translate_interface_ips(interface, interfaces_ip, sample_defaults)
+        translate_interface_ips(
+            interface, interfaces_ip, sample_defaults, options=options
+        )
     )
     prefixes = [e.prefix.prefix for e in entities if e.HasField("prefix")]
     addresses = [e.ip_address.address for e in entities if e.HasField("ip_address")]
@@ -2156,3 +2162,119 @@ def test_suppressed_prefix_does_not_drop_sibling_prefixes(
 
     assert sorted(prefixes) == ["172.24.0.0/24", "2001:db8::/64"]
     assert len(addresses) == 3, "every address is still emitted, including the fe80::"
+
+
+@pytest.mark.parametrize(
+    ("family", "ip", "prefix_length", "expected_prefix"),
+    [
+        ("ipv4", "10.0.0.1", 32, "10.0.0.1/32"),
+        ("ipv6", "2001:db8::5", 128, "2001:db8::5/128"),
+    ],
+)
+def test_emit_host_prefixes_restores_host_prefixes(
+    sample_device_info,
+    sample_interface_info,
+    sample_defaults,
+    family,
+    ip,
+    prefix_length,
+    expected_prefix,
+):
+    """
+    emit_host_prefixes: true opts back in to /32 and /128 prefixes.
+
+    Some operators do track loopback /32s as NetBox prefixes; without this
+    option they had no way to keep them.
+    """
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {family: {ip: {"prefix_length": prefix_length}}}
+    }
+    prefixes, _ = _emit_ips_for(
+        sample_device_info,
+        sample_interface_info,
+        sample_defaults,
+        interfaces_ip,
+        options=Options(emit_host_prefixes=True),
+    )
+
+    assert prefixes == [expected_prefix]
+
+
+@pytest.mark.parametrize(
+    ("ip", "prefix_length"),
+    [
+        ("fe80::5a86:70f0:a8:e47f", 128),
+        ("fe80::42:acff:fe12:6", 64),
+    ],
+)
+def test_emit_host_prefixes_does_not_resurrect_ipv6_link_local(
+    sample_device_info,
+    sample_interface_info,
+    sample_defaults,
+    ip,
+    prefix_length,
+):
+    """
+    emit_host_prefixes must not bring back fe80:: prefixes.
+
+    An fe80::x/128 address is a link-local that happens to carry host length,
+    not a loopback an operator wants tracked. The link-local rule is therefore
+    ungated by the option; if it were gated, opting in to host prefixes would
+    silently restore the exact noise this suppresses.
+    """
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {"ipv6": {ip: {"prefix_length": prefix_length}}}
+    }
+    prefixes, addresses = _emit_ips_for(
+        sample_device_info,
+        sample_interface_info,
+        sample_defaults,
+        interfaces_ip,
+        options=Options(emit_host_prefixes=True),
+    )
+
+    assert prefixes == [], (
+        f"emit_host_prefixes must not resurrect the link-local {ip}/{prefix_length}"
+    )
+    assert addresses == [f"{ip}/{prefix_length}"]
+
+
+def test_emit_host_prefixes_defaults_to_off(
+    sample_device_info, sample_interface_info, sample_defaults
+):
+    """An explicit Options() with no override still suppresses host prefixes."""
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {"ipv4": {"10.0.0.1": {"prefix_length": 32}}}
+    }
+    prefixes, addresses = _emit_ips_for(
+        sample_device_info,
+        sample_interface_info,
+        sample_defaults,
+        interfaces_ip,
+        options=Options(),
+    )
+
+    assert Options().emit_host_prefixes is False
+    assert prefixes == []
+    assert addresses == ["10.0.0.1/32"]
+
+
+def test_emit_host_prefixes_keeps_real_subnets_untouched(
+    sample_device_info, sample_interface_info, sample_defaults
+):
+    """The opt-in only adds host prefixes; ordinary subnets are unaffected."""
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {
+            "ipv4": {"172.24.0.101": {"prefix_length": 24}, "10.0.0.1": {"prefix_length": 32}},
+            "ipv6": {"fe80::42:acff:fe12:6": {"prefix_length": 64}},
+        }
+    }
+    prefixes, _ = _emit_ips_for(
+        sample_device_info,
+        sample_interface_info,
+        sample_defaults,
+        interfaces_ip,
+        options=Options(emit_host_prefixes=True),
+    )
+
+    assert sorted(prefixes) == ["10.0.0.1/32", "172.24.0.0/24"]
