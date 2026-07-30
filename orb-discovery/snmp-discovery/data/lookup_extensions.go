@@ -444,16 +444,17 @@ func loadBuiltInExtensions(devicesByVendor map[string]deviceRef) error {
 // lookup-extension file declares, for reporting only. The overrides themselves
 // are applied by NewManufacturerResolver, which reads the same directory.
 //
-// Keys are IANA Private Enterprise Numbers and so are numeric in YAML; decoding
-// into map[string]any lets them be counted without caring about their type.
+// Counts through the resolver's own decoder rather than a looser probe, so the
+// number always matches what will actually be applied. A non-string value makes
+// the resolver reject the whole manufacturers block, and a count that ignored
+// that would report entries nobody applied, suppressing the no-contribution
+// warning for a file that contributes nothing.
 func countManufacturerEntries(data []byte) int {
-	var probe struct {
-		Manufacturers map[string]any `yaml:"manufacturers"`
-	}
-	if err := yaml.Unmarshal(data, &probe); err != nil {
+	applied := make(map[string]string)
+	if err := loadManufacturerYAML(data, applied); err != nil {
 		return 0
 	}
-	return len(probe.Manufacturers)
+	return len(applied)
 }
 
 // loadUserProvidedExtensions merges every YAML file in dir into

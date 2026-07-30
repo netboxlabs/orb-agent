@@ -1155,3 +1155,37 @@ func TestLoadDeviceLookupExtensions_FileWithNeitherSectionReportsNothing(t *test
 	assert.Equal(t, 0, files[0].Entries)
 	assert.Equal(t, 0, files[0].ManufacturerEntries)
 }
+
+// The manufacturer count must match what the resolver will actually apply.
+// Counting with looser rules over-reports, which suppresses the
+// no-contribution warning for a file that in fact contributes nothing.
+func TestCountManufacturerEntries_MatchesResolverRules(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"string values are applied", "manufacturers:\n  999999: AcmeCorp\n", 1},
+		{"nested map value is rejected", "manufacturers:\n  999999:\n    name: AcmeCorp\n", 0},
+		{"list value is rejected", "manufacturers:\n  999999:\n    - AcmeCorp\n", 0},
+		{
+			// The resolver rejects the whole block, so the valid sibling is lost too.
+			name: "one bad value rejects the block",
+			body: "manufacturers:\n  888888: GoodCo\n  999999:\n    name: AcmeCorp\n",
+			want: 0,
+		},
+		{"no manufacturers section", "devices:\n  .1.2.3: m\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := countManufacturerEntries([]byte(tc.body))
+			assert.Equal(t, tc.want, got)
+
+			// Pin it against the resolver itself so the two cannot drift.
+			applied := map[string]string{}
+			if err := loadManufacturerYAML([]byte(tc.body), applied); err != nil {
+				applied = map[string]string{}
+			}
+			assert.Equal(t, len(applied), got, "count must equal what the resolver applies")
+		})
+	}
+}
