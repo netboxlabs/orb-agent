@@ -241,3 +241,67 @@ func TestDerivePrefixes_SkippedAddressDoesNotDropSiblings(t *testing.T) {
 	}
 	assert.Equal(t, []string{"172.24.0.0/24", "2001:db8::/64"}, got)
 }
+
+func TestDerivePrefixes_EmitHostPrefixesOptsBackIn(t *testing.T) {
+	// Operators who track loopback /32s as NetBox prefixes need a way to keep
+	// them; before this option snmp-discovery could only disable prefixes
+	// wholesale via emit_prefixes.
+	opts := &config.Options{EmitHostPrefixes: boolPtr(true)}
+	for _, tc := range []struct {
+		name string
+		addr string
+		want string
+	}{
+		{"ipv4 host prefix", "10.0.0.1/32", "10.0.0.1/32"},
+		{"ipv6 host prefix", "2001:db8::5/128", "2001:db8::5/128"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(tc.addr)},
+				nil, &config.Defaults{}, opts, slog.Default(),
+			)
+			require.Len(t, prefixes, 1)
+			assert.Equal(t, tc.want, *(prefixes[0].(*diode.Prefix)).Prefix)
+		})
+	}
+}
+
+func TestDerivePrefixes_EmitHostPrefixesDoesNotResurrectLinkLocal(t *testing.T) {
+	// The link-local rule is ungated by the option on purpose: an fe80::x/128
+	// is a link-local carrying host length, not a loopback worth tracking. If
+	// it were gated, opting in to host prefixes would restore the exact noise
+	// the skip removes.
+	opts := &config.Options{EmitHostPrefixes: boolPtr(true)}
+	for _, addr := range []string{
+		"fe80::5a86:70f0:a8:e47f/128",
+		"fe80::42:acff:fe12:6/64",
+		"fe80::1/10",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(addr)},
+				nil, &config.Defaults{}, opts, slog.Default(),
+			)
+			assert.Empty(t, prefixes, "emit_host_prefixes must not resurrect %s", addr)
+		})
+	}
+}
+
+func TestOptions_HostPrefixEmissionEnabled(t *testing.T) {
+	// Defaults to FALSE, the opposite of emit_prefixes. A nil receiver must be
+	// safe: DerivePrefixes is called with whatever the policy supplied.
+	assert.False(t, (*config.Options)(nil).HostPrefixEmissionEnabled(), "nil options")
+	assert.False(t, (&config.Options{}).HostPrefixEmissionEnabled(), "unset")
+	assert.False(t, (&config.Options{EmitHostPrefixes: boolPtr(false)}).HostPrefixEmissionEnabled())
+	assert.True(t, (&config.Options{EmitHostPrefixes: boolPtr(true)}).HostPrefixEmissionEnabled())
+}
+
+func TestDerivePrefixes_HostPrefixesStaySuppressedWithNilOptions(t *testing.T) {
+	// nil options must behave as the default (suppressed), not panic.
+	prefixes := DerivePrefixes(
+		[]diode.Entity{ipEntity("10.0.0.1/32"), ipEntity("172.24.0.101/24")},
+		nil, &config.Defaults{}, nil, slog.Default(),
+	)
+	require.Len(t, prefixes, 1)
+	assert.Equal(t, "172.24.0.0/24", *(prefixes[0].(*diode.Prefix)).Prefix)
+}

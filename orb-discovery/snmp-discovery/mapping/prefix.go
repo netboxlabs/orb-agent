@@ -20,7 +20,8 @@ import (
 // the former only restates an address that is already emitted as an
 // IPAddress, and the latter is per-link and not globally meaningful. The
 // IPAddress entities themselves are untouched, so the addresses stay
-// documented — only the derived Prefix is dropped.
+// documented — only the derived Prefix is dropped. Host prefixes can be
+// opted back in with emit_host_prefixes; link-locals cannot, by design.
 //
 // The prefix VRF follows device-discovery's precedence: an IP whose
 // address was attached to a DISCOVERED VRF (vrfByAddress, produced by
@@ -70,20 +71,24 @@ func DerivePrefixes(
 			logger.Debug("prefix: skipping zero-length network", "address", addr)
 			continue
 		}
+		// IPv6 link-locals are per-link and not globally meaningful, so a
+		// prefix per fe80:: address is churn. Deliberately NOT gated on
+		// emit_host_prefixes: an fe80::x/128 is a link-local that happens
+		// to carry host length, not a loopback an operator wants tracked,
+		// so opting in to host prefixes must not resurrect it. Gated on
+		// the family instead, because IsLinkLocalUnicast also covers IPv4
+		// 169.254.0.0/16, an ordinary network by mask that stays in scope.
+		if network.IP.To4() == nil && network.IP.IsLinkLocalUnicast() {
+			logger.Debug("prefix: skipping IPv6 link-local", "address", addr)
+			continue
+		}
 		// A host prefix (/32, /128) only restates the address, which is
 		// already emitted as an IPAddress entity — the derived prefix is a
 		// duplicate of it under a different object type. Rows with no
-		// usable mask also land here, so this covers those too.
-		if ones == bits {
+		// usable mask also land here, so this covers those too. Operators
+		// who track loopback /32s as prefixes can opt back in.
+		if ones == bits && !options.HostPrefixEmissionEnabled() {
 			logger.Debug("prefix: skipping host prefix", "address", addr)
-			continue
-		}
-		// IPv6 link-locals are per-link and not globally meaningful, so a
-		// prefix per fe80:: address is churn. Gated on the family because
-		// IsLinkLocalUnicast also covers IPv4 169.254.0.0/16, which is an
-		// ordinary network by mask and stays in scope for emission.
-		if network.IP.To4() == nil && network.IP.IsLinkLocalUnicast() {
-			logger.Debug("prefix: skipping IPv6 link-local", "address", addr)
 			continue
 		}
 		family := "ipv4"
