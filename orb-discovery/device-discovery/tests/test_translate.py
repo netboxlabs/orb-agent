@@ -2053,6 +2053,14 @@ def _emit_ips_for(
         ),
         ("ipv6", "fe80::42:acff:fe12:6", 64, "fe80::42:acff:fe12:6/64", "link-local, /64"),
         ("ipv6", "fe80::1", 10, "fe80::1/10", "link-local at its own /10"),
+        # A mask wider than /10 widens the network out of fe80::/10, so the
+        # network is no longer link-local by containment even though the
+        # address plainly is: fe80::1/9 -> fe80::/9, fe80::1/8 -> fe00::/8.
+        # Judging the network instead of the address emitted an enormous
+        # container prefix for a link-local address.
+        ("ipv6", "fe80::1", 9, "fe80::1/9", "link-local, mask wider than /10"),
+        ("ipv6", "fe80::1", 8, "fe80::1/8", "link-local normalizing to fe00::/8"),
+        ("ipv6", "fe80::1", 1, "fe80::1/1", "link-local with an absurd /1 mask"),
     ],
 )
 def test_no_prefix_derived_for_host_and_ipv6_link_local(
@@ -2205,6 +2213,9 @@ def test_emit_host_prefixes_restores_host_prefixes(
     [
         ("fe80::5a86:70f0:a8:e47f", 128),
         ("fe80::42:acff:fe12:6", 64),
+        # The wide-mask cases must stay suppressed with the opt-in on too.
+        ("fe80::1", 9),
+        ("fe80::1", 8),
     ],
 )
 def test_emit_host_prefixes_does_not_resurrect_ipv6_link_local(

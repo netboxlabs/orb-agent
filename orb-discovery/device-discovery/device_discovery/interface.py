@@ -374,6 +374,7 @@ def _resolve_prefix_scope_kwargs(
 
 def _undesirable_prefix_reason(
     network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
     emit_host_prefixes: bool = False,
 ) -> str | None:
     """
@@ -399,14 +400,22 @@ def _undesirable_prefix_reason(
     Suppression applies only to the derived Prefix. The IPAddress entity is
     always still emitted, so the interface and its address stay documented.
     """
-    # The link-local rule is not gated on emit_host_prefixes, which is what
-    # keeps an fe80::x/128 address suppressed even when the opt-in is on: it
-    # is a link-local that happens to carry host length, not a loopback an
-    # operator wants tracked. Checked first only so the logged reason names
-    # link-local rather than host length; either order suppresses the same set.
+    # Link-local is judged on the ADDRESS, not the derived network. A mask
+    # shorter than /10 widens the network out of fe80::/10 — fe80::1/9
+    # normalizes to fe80::/9 and fe80::1/8 to fe00::/8, neither of which is
+    # link-local by containment — so testing the network would emit a huge
+    # container prefix for an address that is plainly link-local. Devices and
+    # SNMP agents do report nonsense masks, which is why this is judged on the
+    # address the device actually reported.
+    #
+    # The rule is not gated on emit_host_prefixes, which is what keeps an
+    # fe80::x/128 address suppressed even when the opt-in is on: it is a
+    # link-local that happens to carry host length, not a loopback an operator
+    # wants tracked. Checked first only so the logged reason names link-local
+    # rather than host length.
     # Only IPv6: ipaddress treats 169.254.0.0/16 as link-local too, and that
     # one stays in scope for emission.
-    if network.version == 6 and network.is_link_local:
+    if address.version == 6 and address.is_link_local:
         return "IPv6 link-local"
     if not emit_host_prefixes and network.prefixlen == network.max_prefixlen:
         return "host prefix"
@@ -514,9 +523,14 @@ def translate_interface_ips(
                 ) or prefix_vrf
                 for ip, details in ip_info.get(ip_version, {}).items():
                     ip_address = f"{ip}/{details.get('prefix_length', default_prefix)}"
-                    network = ipaddress.ip_network(ip_address, strict=False)
+                    # ip_interface keeps the host bits, so .ip is the address
+                    # the device reported and .network is the same value
+                    # ip_network(..., strict=False) produced. Parsing once
+                    # means the two can never disagree.
+                    interface_address = ipaddress.ip_interface(ip_address)
+                    network = interface_address.network
                     skip_reason = _undesirable_prefix_reason(
-                        network, emit_host_prefixes
+                        network, interface_address.ip, emit_host_prefixes
                     )
                     if skip_reason:
                         logger.debug(
