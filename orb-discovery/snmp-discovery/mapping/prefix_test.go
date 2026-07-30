@@ -276,6 +276,9 @@ func TestDerivePrefixes_EmitHostPrefixesDoesNotResurrectLinkLocal(t *testing.T) 
 		"fe80::5a86:70f0:a8:e47f/128",
 		"fe80::42:acff:fe12:6/64",
 		"fe80::1/10",
+		// Wide masks must stay suppressed with the opt-in on too.
+		"fe80::1/8",
+		"fe80::1/1",
 	} {
 		t.Run(addr, func(t *testing.T) {
 			prefixes := DerivePrefixes(
@@ -304,4 +307,40 @@ func TestDerivePrefixes_HostPrefixesStaySuppressedWithNilOptions(t *testing.T) {
 	)
 	require.Len(t, prefixes, 1)
 	assert.Equal(t, "172.24.0.0/24", *(prefixes[0].(*diode.Prefix)).Prefix)
+}
+
+func TestDerivePrefixes_LinkLocalJudgedOnAddressNotMaskedNetwork(t *testing.T) {
+	// A mask of /8 or wider moves the masked network out of the fe80::/10 bit
+	// pattern — fe80::1/8 masks to fe00:: and fe80::1/1 to 8000:: — so testing
+	// network.IP let a colossal container prefix through for an address that is
+	// plainly link-local. Agents do report nonsense masks, which is why the
+	// zero-length guard above this check exists in the first place.
+	for _, addr := range []string{
+		"fe80::1/10",
+		"fe80::1/9",
+		"fe80::1/8",
+		"fe80::1/1",
+		"fe80::1/64",
+		"fe80::1/128",
+	} {
+		t.Run(addr, func(t *testing.T) {
+			prefixes := DerivePrefixes(
+				[]diode.Entity{ipEntity(addr)},
+				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+			)
+			assert.Empty(t, prefixes,
+				"%s is link-local by address; no prefix may be derived at any mask", addr)
+		})
+	}
+}
+
+func TestDerivePrefixes_WideMaskIPv4LinkLocalStillDerived(t *testing.T) {
+	// The address-based test must not start suppressing IPv4: 169.254.0.0/16
+	// is link-local to IsLinkLocalUnicast but stays in scope for emission.
+	prefixes := DerivePrefixes(
+		[]diode.Entity{ipEntity("169.254.10.5/16")},
+		nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+	)
+	require.Len(t, prefixes, 1)
+	assert.Equal(t, "169.254.0.0/16", *(prefixes[0].(*diode.Prefix)).Prefix)
 }

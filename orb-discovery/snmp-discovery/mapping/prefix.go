@@ -57,7 +57,7 @@ func DerivePrefixes(
 			logger.Debug("prefix: skipping IPv4-mapped IPv6 address", "address", addr)
 			continue
 		}
-		_, network, err := net.ParseCIDR(addr)
+		addrIP, network, err := net.ParseCIDR(addr)
 		if err != nil {
 			logger.Debug("prefix: unparseable IP address, skipping", "address", addr)
 			continue
@@ -72,13 +72,22 @@ func DerivePrefixes(
 			continue
 		}
 		// IPv6 link-locals are per-link and not globally meaningful, so a
-		// prefix per fe80:: address is churn. Deliberately NOT gated on
-		// emit_host_prefixes: an fe80::x/128 is a link-local that happens
-		// to carry host length, not a loopback an operator wants tracked,
-		// so opting in to host prefixes must not resurrect it. Gated on
-		// the family instead, because IsLinkLocalUnicast also covers IPv4
-		// 169.254.0.0/16, an ordinary network by mask that stays in scope.
-		if network.IP.To4() == nil && network.IP.IsLinkLocalUnicast() {
+		// prefix per fe80:: address is churn.
+		//
+		// Judged on the ADDRESS, not the masked network. A mask of /8 or
+		// wider moves the network out of the fe80::/10 bit pattern —
+		// fe80::1/8 masks to fe00:: and fe80::1/1 to 8000:: — so testing
+		// network.IP emitted a colossal container prefix for an address
+		// that is plainly link-local. Agents do report nonsense masks;
+		// that is why the zero-length guard above exists.
+		//
+		// Deliberately NOT gated on emit_host_prefixes: an fe80::x/128 is
+		// a link-local that happens to carry host length, not a loopback
+		// an operator wants tracked, so opting in to host prefixes must
+		// not resurrect it. Gated on the family instead, because
+		// IsLinkLocalUnicast also covers IPv4 169.254.0.0/16, an ordinary
+		// network by mask that stays in scope.
+		if addrIP.To4() == nil && addrIP.IsLinkLocalUnicast() {
 			logger.Debug("prefix: skipping IPv6 link-local", "address", addr)
 			continue
 		}
