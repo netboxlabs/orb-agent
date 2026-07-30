@@ -15,12 +15,13 @@ import (
 
 // logLine is one slog JSON record, decoded far enough to assert on.
 type logLine struct {
-	Level   string `json:"level"`
-	Msg     string `json:"msg"`
-	File    string `json:"file"`
-	Entries int    `json:"entries"`
-	Files   int    `json:"files"`
-	Err     string `json:"error"`
+	Level     string `json:"level"`
+	Msg       string `json:"msg"`
+	Directory string `json:"directory"`
+	File      string `json:"file"`
+	Entries   int    `json:"entries"`
+	Files     int    `json:"files"`
+	Err       string `json:"error"`
 }
 
 func captureExtensionLogs(t *testing.T, dir string) []logLine {
@@ -184,5 +185,60 @@ func TestLogReportedExtensionFiles_CraftedFilenameCannotForgeARecord(t *testing.
 	}
 	if strings.Contains(buf.String(), "\nFAKE") {
 		t.Error("a raw newline reached the log output")
+	}
+}
+
+// The early-return branch logs the directory too, and it was the one call site
+// that escaped sanitization: the existing crafted-value test only exercised the
+// populated path, so it never touched this branch. Cover both.
+func TestLogReportedExtensionFiles_CraftedDirIsSanitizedOnEveryPath(t *testing.T) {
+	craftedDir := "/opt/orb\nFAKE level=ERROR msg=forged"
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) string // returns the dir to load from
+	}{
+		{
+			name:  "early return, no user files",
+			setup: func(t *testing.T) string { return "" },
+		},
+		{
+			name: "populated directory",
+			setup: func(t *testing.T) string {
+				dir := t.TempDir()
+				writeExtFile(t, dir, "ok.yaml", "devices:\n  .1.3.6.1.4.1.9.1.1: m\n")
+				return dir
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			m, err := NewManager(context.Background(),
+				slog.New(slog.NewJSONHandler(&buf, nil)), nil, nil)
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			lookup, err := data.LoadDeviceLookupExtensions(tc.setup(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Always report against the crafted directory string.
+			m.logReportedExtensionFiles(lookup, craftedDir)
+
+			// Assert on the decoded attribute, not the rendered line: slog
+			// escapes newlines on output, so a raw value looks harmless there
+			// while still being unsanitized in the record itself.
+			out := strings.TrimSpace(buf.String())
+			for _, raw := range strings.Split(out, "\n") {
+				var l logLine
+				if err := json.Unmarshal([]byte(raw), &l); err != nil {
+					t.Fatalf("decode %q: %v", raw, err)
+				}
+				if strings.ContainsAny(l.Directory, "\r\n") {
+					t.Errorf("directory attribute still carries a newline: %q", l.Directory)
+				}
+			}
+		})
 	}
 }

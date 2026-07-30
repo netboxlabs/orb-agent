@@ -421,13 +421,15 @@ func (m *Manager) GetPolicyStatuses() []Status {
 // back to the raw OID (issue #486). Reporting per-file entry counts, and
 // warning on the two cases that contribute nothing, makes that self-diagnosing.
 func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir string) {
+	// Sanitize before any branch uses it, so no path can log the raw value.
+	safeDir := sanitizeLogValue(dir)
+
 	files := lookup.UserExtensionFiles()
 	if dir == "" || len(files) == 0 {
-		m.logger.Info("loaded device lookup extensions", "directory", dir)
+		m.logger.Info("loaded device lookup extensions", "directory", safeDir)
 		return
 	}
 
-	safeDir := sanitizeLogValue(dir)
 	total := 0
 	for _, f := range files {
 		switch {
