@@ -139,6 +139,77 @@ def _strip_config_header(text: str) -> str:
 # and aruba_procurve platform strings via the index regex (hp|aruba)_procurve.
 _NTC_PLATFORM = "hp_procurve"
 
+# Read timeout for commands whose output is far too large for Netmiko's 10s
+# per-command default (`show tech` runs to thousands of lines on real
+# hardware, and a full config is not much better). Exceeding the default
+# raises ReadTimeout out of the getter, which aborts the whole driver: a
+# 2510G reporting no model banner falls back to `show tech`, times out, and
+# discovery then declares the driver unusable even though `show system`
+# already returned a valid hostname, version and serial.
+HEAVY_COMMAND_READ_TIMEOUT = 120.0
+
+# A `show system` line that names a field but carries no value, e.g.
+# "  System Location    : " on a switch where the location was never set.
+# ntc-templates >= 9.2 requires a non-empty value for System Contact and
+# System Location, and its Start state ends in `^. -> Error`, so one unset
+# field aborts the entire parse.
+_EMPTY_FIELD_RE = re.compile(r"^\s*\S[^:]*:\s*$")
+
+
+def _parse_show_system(section_lines: list[str]) -> list[dict]:
+    """
+    Parse the `show system` body with ntc-templates, degrading instead of raising.
+
+    The template is strict by design and this driver cannot enumerate every
+    field variation real ProCurve firmware emits. A parse failure must not
+    propagate: driver auto-discovery treats any exception from a getter as
+    "this driver does not work" and drops the device entirely, even though the
+    hostname, version and serial are all sitting in plain text right here.
+    So on failure we log and recover those three fields directly.
+    """
+    data = "\n".join(section_lines)
+    try:
+        return parse_output(
+            platform=_NTC_PLATFORM, command="show system", data=data
+        )
+    except Exception:
+        logger.warning(
+            "hp_procurve: `show system` did not match the ntc template; "
+            "falling back to direct field extraction",
+            exc_info=True,
+        )
+        return _show_system_fallback(data)
+
+
+def _show_system_fallback(data: str) -> list[dict]:
+    """
+    Recover just the fields get_facts needs from a `show system` body.
+
+    Returns the same one-row shape the template produces so callers need no
+    special case. Keys absent from the output are simply omitted, which the
+    caller already renders as "Unknown".
+    """
+    row: dict[str, str] = {}
+    # Deliberately not anchored to the start of a line: ProCurve prints this
+    # screen in two columns, so Serial Number arrives as the *second* field on
+    # the ROM Version line ("ROM Version : N.10.02   Serial Number : SG00XX0000").
+    #
+    # Post-colon whitespace is horizontal-only ([^\S\n]), not \s, because a
+    # configured-but-empty field would otherwise let the match run past the
+    # newline and capture the *next* field's label as the value: a blank
+    # "System Name :" yields the hostname "System" from the "System Contact"
+    # line below it, and a blank Serial Number yields "Up" from "Up Time".
+    # Leaving the field unset is correct there; the caller renders "Unknown".
+    for key, pattern in (
+        ("name", r"System\s+Name\s*:[^\S\n]*(\S+)"),
+        ("software_version", r"Software\s+revision\s*:[^\S\n]*(\S+)"),
+        ("serial", r"Serial\s+Number\s*:[^\S\n]*(\S+)"),
+    ):
+        m = re.search(pattern, data, re.IGNORECASE)
+        if m:
+            row[key] = m.group(1)
+    return [row] if row else []
+
 
 # Per-VLAN membership row from `show vlans <vid>`. Columns are:
 #   Port Information  Mode      Unknown VLAN  Status
@@ -369,11 +440,15 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
             (i for i, ln in enumerate(system_lines) if "Status and Counters" in ln),
             0,
         )
-        parsed_system = parse_output(
-            platform=_NTC_PLATFORM,
-            command="show system",
-            data="\n".join(system_lines[section_start:]),
-        )
+        # That strictness also rejects a field that is present but *unset*: the
+        # System Contact / System Location rules both require a non-empty value,
+        # so a switch with no location configured — very common — aborts the
+        # whole parse and takes get_facts() down with it. Neither field is
+        # consumed here, so drop key-with-no-value lines before parsing.
+        section = [
+            ln for ln in system_lines[section_start:] if not _EMPTY_FIELD_RE.match(ln)
+        ]
+        parsed_system = _parse_show_system(section)
         if parsed_system:
             row = parsed_system[0]
             hostname = row.get("name") or "Unknown"
@@ -390,7 +465,9 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
         if m:
             model = m.group(1).strip()
         else:
-            raw_tech = self.device.send_command("show tech")
+            raw_tech = self.device.send_command(
+                "show tech", read_timeout=HEAVY_COMMAND_READ_TIMEOUT
+            )
             m2 = re.search(r"^Name:\s+(.+)$", raw_tech, re.MULTILINE)
             if m2:
                 model = m2.group(1).strip()
@@ -504,11 +581,15 @@ class ProcurveDriver(_napalm_base.NetworkDriver):
         config: models.ConfigDict = {"running": "", "candidate": "", "startup": ""}
 
         if retrieve.lower() in ("running", "all"):
-            raw = self.device.send_command("show running-config")
+            raw = self.device.send_command(
+                "show running-config", read_timeout=HEAVY_COMMAND_READ_TIMEOUT
+            )
             config["running"] = _strip_config_header(raw)
 
         if retrieve.lower() in ("startup", "all"):
-            raw = self.device.send_command("show config")
+            raw = self.device.send_command(
+                "show config", read_timeout=HEAVY_COMMAND_READ_TIMEOUT
+            )
             config["startup"] = _strip_config_header(raw)
 
         if sanitized:

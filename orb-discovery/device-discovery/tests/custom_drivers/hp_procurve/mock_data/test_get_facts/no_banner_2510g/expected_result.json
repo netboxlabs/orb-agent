@@ -1,0 +1,14 @@
+{
+  "hostname": "2510G-48-1",
+  "vendor": "HPE",
+  "model": "HP ProCurve Switch 2510G-48",
+  "os_version": "Y.11.52",
+  "serial_number": "SG00XX0000",
+  "uptime": 21600,
+  "fqdn": "Unknown",
+  "interface_list": [
+    "1",
+    "2",
+    "48"
+  ]
+}
