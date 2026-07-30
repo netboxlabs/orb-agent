@@ -14,6 +14,7 @@ from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Entity
 
 from custom_napalm._modules import MAX_BAY_DEPTH
+from device_discovery.proto_presence import copy_scalar_if_set
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,11 @@ def _device_match_stub(
     defaults.device.asset_tag — kept on the stub so the rich entity and stub never resolve
     via different matchers.
     """
-    stub = pb.Device(name=d.name)
+    # copy_scalar_if_set, not pb.Device(name=d.name): Device.name declares proto
+    # presence, so reading an unset name as "" and passing it to the constructor
+    # would mark the field PRESENT and send an explicit empty name.
+    stub = pb.Device()
+    copy_scalar_if_set(stub, d, "name")
     _copy_device_relations(
         stub, d, keep_primary_ip4=keep_primary_ip4, keep_primary_ip6=keep_primary_ip6
     )
@@ -253,12 +258,12 @@ def _module_match_stub(rich: pb.Module, dev_stub: pb.Device) -> pb.Module:
     Interface entities does not duplicate the running-config-bearing
     Device proto per port.
     """
-    stub = pb.Module(serial=rich.serial)
+    stub = pb.Module()
+    copy_scalar_if_set(stub, rich, "serial")
     stub.device.CopyFrom(dev_stub)
     if rich.HasField("module_bay"):
-        bay_stub = pb.ModuleBay(
-            name=rich.module_bay.name, position=rich.module_bay.position,
-        )
+        bay_stub = pb.ModuleBay(name=rich.module_bay.name)
+        copy_scalar_if_set(bay_stub, rich.module_bay, "position")
         bay_stub.device.CopyFrom(dev_stub)
         stub.module_bay.CopyFrom(bay_stub)
     return stub

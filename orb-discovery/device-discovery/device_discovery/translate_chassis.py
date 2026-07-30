@@ -30,6 +30,7 @@ from netboxlabs.diode.sdk.ingester import Entity
 
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import Defaults, Options
+from device_discovery.proto_presence import copy_scalar_if_set
 from device_discovery.stack_naming import render_stack_member_name
 from device_discovery.translate_modules import emit_modules_if_requested
 
@@ -114,7 +115,12 @@ def _master_device_ref(master_dev: pb.Device) -> pb.Device:
     and device.primary_ip4 is a circular reference the plugin can only resolve in
     the single change set that also assigns the IP to its interface.
     """
-    stub = pb.Device(name=master_dev.name, serial=master_dev.serial)
+    # Defensive: the master name is currently always non-empty (hostname or
+    # target_hostname or "unknown") and member serials are validated non-empty, so
+    # neither field can be blank today. Routed through copy_scalar_if_set anyway so
+    # this stub cannot regress into emitting an explicit empty matcher value.
+    stub = pb.Device()
+    copy_scalar_if_set(stub, master_dev, "name", "serial")
     _copy_master_ref_fields(stub, master_dev)
     if master_dev.asset_tag:
         stub.asset_tag = master_dev.asset_tag
