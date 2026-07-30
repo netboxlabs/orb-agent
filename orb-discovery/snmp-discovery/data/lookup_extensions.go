@@ -280,7 +280,45 @@ type DeviceRetriever interface {
 
 // DeviceLookup represents a device lookup service.
 type DeviceLookup struct {
-	devicesByVendor map[string]deviceRef
+	devicesByVendor      map[string]deviceRef
+	userExtensionFile    []ExtensionFileResult
+	userExtensionSkipped int
+}
+
+// ExtensionFileResult records what one file in lookup_extensions_dir
+// contributed.
+//
+// A file can be read successfully and still contribute nothing: a wrong
+// top-level key or bad indentation yields an empty devices map with no error.
+// Reporting Entries alongside Err lets the caller distinguish "loaded 12
+// entries" from "loaded, but your OID was never registered", which is otherwise
+// indistinguishable from the logs (issue #486).
+type ExtensionFileResult struct {
+	// Name is the file's base name, not its path.
+	Name string
+	// Entries is how many device OIDs the file registered.
+	Entries int
+	// ManufacturerEntries is how many manufacturer overrides the file declares.
+	// A file may legitimately carry only a manufacturers: block: the same
+	// directory is also read by NewManufacturerResolver, which applies those
+	// overrides. Callers must not treat such a file as contributing nothing.
+	ManufacturerEntries int
+	// Err is set when the file could not be parsed. Such a file is skipped
+	// rather than failing the whole load, so the rest still apply.
+	Err error
+}
+
+// UserExtensionFiles reports what each YAML file in lookup_extensions_dir
+// contributed, in directory order. Empty when no user directory was configured.
+func (d *DeviceLookup) UserExtensionFiles() []ExtensionFileResult {
+	return d.userExtensionFile
+}
+
+// UserExtensionSkippedFiles is how many entries in lookup_extensions_dir were
+// ignored for not being .yaml or .yml. It distinguishes an empty directory from
+// one holding files the loader will never read, such as a custom.yaml.bak.
+func (d *DeviceLookup) UserExtensionSkippedFiles() int {
+	return d.userExtensionSkipped
 }
 
 // lookupOIDBothSpellings indexes m by oid, accepting either leading-dot or
@@ -359,10 +397,12 @@ func LoadDeviceLookupExtensions(dir string) (*DeviceLookup, error) {
 
 	if dir != "" {
 		// Extend built in extensions with user provided extensions
-		err = loadUserProvidedExtensions(dir, devicesByVendor)
+		results, skipped, err := loadUserProvidedExtensions(dir, devicesByVendor)
 		if err != nil {
 			return &deviceLookup, err
 		}
+		deviceLookup.userExtensionFile = results
+		deviceLookup.userExtensionSkipped = skipped
 	}
 
 	return &deviceLookup, nil
@@ -400,35 +440,69 @@ func loadBuiltInExtensions(devicesByVendor map[string]deviceRef) error {
 	return nil
 }
 
-func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef) error {
-	// Read all files in the directory
+// countManufacturerEntries reports how many manufacturer overrides a
+// lookup-extension file declares, for reporting only. The overrides themselves
+// are applied by NewManufacturerResolver, which reads the same directory.
+//
+// Counts through the resolver's own decoder rather than a looser probe, so the
+// number always matches what will actually be applied. A non-string value makes
+// the resolver reject the whole manufacturers block, and a count that ignored
+// that would report entries nobody applied, suppressing the no-contribution
+// warning for a file that contributes nothing.
+func countManufacturerEntries(data []byte) int {
+	applied := make(map[string]string)
+	if err := loadManufacturerYAML(data, applied); err != nil {
+		return 0
+	}
+	return len(applied)
+}
+
+// loadUserProvidedExtensions merges every YAML file in dir into
+// devicesByVendor and returns one result per file for the caller to log.
+//
+// A file that fails to parse is skipped rather than aborting the load, so one
+// bad file cannot cost an operator every other override they wrote. The failure
+// is returned in the results instead of being logged here, so it reaches the
+// structured logger the caller already holds.
+func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef) ([]ExtensionFileResult, int, error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("failed to read directory %s: %w", dir, err)
+		return nil, 0, fmt.Errorf("failed to read directory %s: %w", dir, err)
 	}
 
+	var results []ExtensionFileResult
+	skipped := 0
 	for _, file := range files {
 		if !isLookupExtensionFile(file) {
-			log.Printf("Warning: skipping file %s", file.Name())
+			skipped++
 			continue
 		}
 
 		filePath := filepath.Join(dir, file.Name())
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			return fmt.Errorf("failed to read file %s: %w", filePath, err)
+			return nil, 0, fmt.Errorf("failed to read file %s: %w", filePath, err)
 		}
 
-		if err := loadYAMLFile(data, devicesByVendor); err != nil {
-			safeFilePath := strings.ReplaceAll(filePath, "\n", "")
-			safeFilePath = strings.ReplaceAll(safeFilePath, "\r", "")
-			safeErr := strings.ReplaceAll(err.Error(), "\n", "")
-			safeErr = strings.ReplaceAll(safeErr, "\r", "")
-			log.Printf("Warning: failed to load YAML file %s: %s", safeFilePath, safeErr)
-			continue
+		// Parse into a per-file map first so the entry count is this file's own
+		// contribution rather than the running total, then merge. Merging only
+		// on success keeps the pre-existing behaviour that a rejected file
+		// contributes nothing.
+		fileRefs := make(map[string]deviceRef)
+		parseErr := loadYAMLFile(data, fileRefs)
+		if parseErr == nil {
+			for oid, ref := range fileRefs {
+				devicesByVendor[oid] = ref
+			}
 		}
+		results = append(results, ExtensionFileResult{
+			Name:                file.Name(),
+			Entries:             len(fileRefs),
+			ManufacturerEntries: countManufacturerEntries(data),
+			Err:                 parseErr,
+		})
 	}
-	return nil
+	return results, skipped, nil
 }
 
 func isLookupExtensionFile(file os.DirEntry) bool {

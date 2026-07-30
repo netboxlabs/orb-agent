@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -251,7 +252,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 		if err != nil {
 			m.logger.Warn("failed to load device lookup extensions", "error", err, "directory", policy.Config.LookupExtensionsDir)
 		} else {
-			m.logger.Info("loaded device lookup extensions", "directory", policy.Config.LookupExtensionsDir)
+			m.logReportedExtensionFiles(deviceLookup, policy.Config.LookupExtensionsDir)
 		}
 
 		// Build the per-policy manufacturer resolver: the built-in IANA
@@ -408,4 +409,79 @@ func (m *Manager) GetPolicyStatuses() []Status {
 	}
 
 	return statuses
+}
+
+// logReportedExtensionFiles logs what lookup_extensions_dir actually
+// contributed.
+//
+// The bare "loaded device lookup extensions" message this replaces only proved
+// the directory was readable. A file with a wrong top-level key or bad
+// indentation parses to zero entries without error, so an operator whose custom
+// OID was ignored saw nothing but a success line followed by the model falling
+// back to the raw OID (issue #486). Reporting per-file entry counts, and
+// warning on the two cases that contribute nothing, makes that self-diagnosing.
+func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir string) {
+	// Sanitize before any branch uses it, so no path can log the raw value.
+	safeDir := sanitizeLogValue(dir)
+
+	files := lookup.UserExtensionFiles()
+	if dir == "" {
+		m.logger.Info("loaded device lookup extensions", "directory", safeDir)
+		return
+	}
+	if len(files) == 0 {
+		// The operator configured a directory and nothing in it was read, so
+		// none of their overrides are in effect. Reporting success here is the
+		// misleading case this reporting exists to remove.
+		m.logger.Warn("lookup_extensions_dir has no .yaml or .yml files; no custom entries were loaded",
+			"directory", safeDir, "files_ignored", lookup.UserExtensionSkippedFiles())
+		return
+	}
+
+	total, mfrTotal := 0, 0
+	for _, f := range files {
+		mfrTotal += f.ManufacturerEntries
+		switch {
+		case f.Err != nil:
+			// Only the devices section is lost. A manufacturers section in the
+			// same file is parsed separately by the manufacturer resolver and
+			// still applies, so do not imply the whole file was discarded.
+			m.logger.Warn("lookup extension file has an unparseable devices section; its device entries were skipped",
+				"directory", safeDir,
+				"file", sanitizeLogValue(f.Name),
+				"manufacturer_entries", f.ManufacturerEntries,
+				"error", sanitizeLogValue(f.Err.Error()))
+		case f.Entries == 0 && f.ManufacturerEntries == 0:
+			// Only when neither recognised section contributed. A file carrying
+			// just a manufacturers: block declares no devices by design, and its
+			// overrides are applied by the manufacturer resolver over the same
+			// directory, so warning about it would nag a healthy config.
+			m.logger.Warn("lookup extension file contributed no device or manufacturer entries; check that it starts with a 'devices:' or 'manufacturers:' key and is indented with spaces",
+				"directory", safeDir, "file", sanitizeLogValue(f.Name))
+		default:
+			total += f.Entries
+		}
+	}
+	m.logger.Info("loaded device lookup extensions",
+		"directory", safeDir, "files", len(files),
+		"entries", total, "manufacturer_entries", mfrTotal)
+}
+
+// sanitizeLogValue flattens CR and LF so a value cannot forge additional log
+// records.
+//
+// A filename or YAML parse error is operator-supplied and can echo file
+// content, and both reach the log. slog's own handlers escape newlines, so this
+// is belt and braces there, but it keeps the guarantee in this code rather than
+// resting on which handler happens to be installed, and it restores a
+// protection the previous logging here applied deliberately.
+// Every path runs the replacements. An early return for values that contain no
+// newline would be a shortcut from input to output that bypasses them, which
+// leaves the value tainted as far as static analysis is concerned and is the
+// kind of subtlety worth not being clever about in a sanitizer.
+func sanitizeLogValue(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
 }
