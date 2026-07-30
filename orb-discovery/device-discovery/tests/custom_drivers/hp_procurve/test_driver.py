@@ -3,9 +3,11 @@
 from pathlib import Path
 
 from custom_napalm.hp_procurve import (
+    _EMPTY_FIELD_RE,
     HEAVY_COMMAND_READ_TIMEOUT,
     ProcurveDriver,
     _parse_procurve_intf_mac_addresses,
+    _parse_show_system,
 )
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
@@ -140,3 +142,83 @@ def test_config_commands_get_an_explicit_read_timeout():
 
     assert dev.timeout_for("show running-config") == HEAVY_COMMAND_READ_TIMEOUT
     assert dev.timeout_for("show config") == HEAVY_COMMAND_READ_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# `show system` robustness: unset fields must not abort the parse (issue #484)
+# ---------------------------------------------------------------------------
+
+
+# Real 2510G-48 body (issue #484) with System Location left unset. The
+# ntc-templates >= 9.2 template requires a non-empty value there and ends its
+# Start state in `^. -> Error`, so this exact shape used to raise TextFSMError
+# straight out of get_facts().
+_SHOW_SYSTEM_EMPTY_LOCATION = """ Status and Counters - General System Information
+
+  System Name        : 2510G-48-1
+  System Contact     : netops@example.com
+  System Location    :
+
+  MAC Age Time (sec) : 300
+
+  Time Zone          : -300
+  Daylight Time Rule : Continental-US-and-Canada
+
+
+  Software revision  : Y.11.52          Base MAC Addr      : 001122-334455
+  ROM Version        : N.10.02          Serial Number      : SG00XX0000
+
+  Up Time            : 6 hours          Memory   - Total   : 23,546,528
+  CPU Util (%)       : 11                          Free    : 15,295,568
+
+  IP Mgmt  - Pkts Rx : 28,953           Packet   - Total   : 3022
+             Pkts Tx : 12,243           Buffers    Free    : 2787
+                                                   Lowest  : 2660
+                                                   Missed  : 0
+"""
+
+
+def test_empty_field_re_matches_only_valueless_lines():
+    """The filter targets `key :` with nothing after it, and nothing else."""
+    assert _EMPTY_FIELD_RE.match("  System Location    : ")
+    assert _EMPTY_FIELD_RE.match("  System Location    :")
+    # A populated field, a header and a blank line must all survive.
+    assert not _EMPTY_FIELD_RE.match("  System Name        : 2510G-48-1")
+    assert not _EMPTY_FIELD_RE.match(" Status and Counters - General System Information")
+    assert not _EMPTY_FIELD_RE.match("")
+
+
+def test_parse_show_system_survives_unset_location():
+    """An unset System Location still yields hostname, version and serial."""
+    lines = [
+        ln
+        for ln in _SHOW_SYSTEM_EMPTY_LOCATION.splitlines()
+        if not _EMPTY_FIELD_RE.match(ln)
+    ]
+    rows = _parse_show_system(lines)
+    assert rows, "expected a parsed row, got nothing"
+    row = rows[0]
+    assert row.get("name") == "2510G-48-1"
+    assert row.get("software_version") == "Y.11.52"
+    assert row.get("serial") == "SG00XX0000"
+
+
+def test_parse_show_system_falls_back_when_template_rejects_output():
+    """
+    A body the template cannot parse degrades instead of raising.
+
+    Passing the unfiltered text (System Location still unset) drives the
+    template into its Error state. The driver must recover the three fields it
+    needs rather than let the exception escape and cost us the whole device.
+    """
+    rows = _parse_show_system(_SHOW_SYSTEM_EMPTY_LOCATION.splitlines())
+    assert rows, "fallback should still produce a row"
+    row = rows[0]
+    assert row.get("name") == "2510G-48-1"
+    assert row.get("software_version") == "Y.11.52"
+    assert row.get("serial") == "SG00XX0000"
+
+
+def test_parse_show_system_returns_empty_for_unusable_output():
+    """Nothing recognizable at all → empty list, never an exception."""
+    assert _parse_show_system(["total garbage", "no fields here"]) == []
