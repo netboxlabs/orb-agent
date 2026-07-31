@@ -266,6 +266,71 @@ def classify_module_type_cisco_ios(pid: str) -> _ModuleType:
     return "linecard"
 
 
+# Stack-member table row from "show switch" / "show switch detail".
+#
+# Parsed driver-locally rather than via ntc-templates because
+# cisco_ios_show_switch_detail.textfsm is ALL-OR-NOTHING: its STATE value is
+# (\w+), so a multi-word state such as "Version Mismatch" or "Sync not
+# started" raises TextFSMError and discards EVERY member row, not just the
+# offending one. A physical stack mid-upgrade therefore emitted no
+# VirtualChassis at all. Verified: those two states lose all rows; "Ready" and
+# "Provisioned" parse fine.
+#
+# Requiring the MAC column is what makes this safe. No header, separator,
+# banner or stack-port row carries one, which is why the stack-port data row
+# "1  Ok  Ok" cannot be mistaken for a member.
+_SWITCH_ROW_RE = re.compile(
+    r"^\s*\*?\s*(?P<id>\d{1,2})\s+"
+    r"(?P<role>[A-Za-z][A-Za-z-]*)\s+"
+    r"(?P<mac>[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}"
+    r"|[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+"
+    r"(?P<priority>\d+)"
+    r"(?:\s+(?P<version>V?[0-9][\w.]*))?"
+    r"\s+(?P<state>[A-Za-z][A-Za-z0-9 /_-]*?)\s*$"
+)
+
+# The Stack Port / Neighbors sections follow the member table on physical
+# stacks. Their rows cannot match _SWITCH_ROW_RE anyway (no MAC column), so
+# this bound is defence in depth, not the primary mechanism.
+_SWITCH_TABLE_END_RE = re.compile(
+    r"^\s*(?:Switch#\s+Port\s+1\b|Stack\s+Port\s+Status)",
+    re.IGNORECASE,
+)
+
+
+def _parse_switch_table(text: str) -> list[dict]:
+    """
+    Parse the stack-member table from "show switch" / "show switch detail".
+
+    Returns one dict per member row, with the same keys the ntc template
+    produces (switch, role, mac_address, priority, version, state) so callers
+    are unchanged. ``version`` is "" when the column is absent.
+
+    Degrades one row at a time: an unrecognised line is skipped rather than
+    discarding the whole table, which is the behaviour difference from
+    ntc-templates that this function exists for.
+    """
+    rows: list[dict] = []
+    for line in (text or "").splitlines():
+        if _SWITCH_TABLE_END_RE.match(line):
+            break
+        match = _SWITCH_ROW_RE.match(line)
+        if not match:
+            continue
+        found = match.groupdict()
+        rows.append(
+            {
+                "switch": found["id"],
+                "role": found["role"],
+                "mac_address": found["mac"],
+                "priority": found["priority"],
+                "version": found["version"] or "",
+                "state": found["state"],
+            }
+        )
+    return rows
+
+
 # Two NAME formats are seen in the wild for stack members:
 #   "Switch 1"   — Catalyst 3850/9300/2960X StackWise (most common)
 #   "1"          — Some IOS / IOS-XE versions emit just the slot number
