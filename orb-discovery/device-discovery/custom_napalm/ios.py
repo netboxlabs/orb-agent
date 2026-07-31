@@ -279,13 +279,20 @@ def classify_module_type_cisco_ios(pid: str) -> _ModuleType:
 # Requiring the MAC column is what makes this safe. No header, separator,
 # banner or stack-port row carries one, which is why the stack-port data row
 # "1  Ok  Ok" cannot be mistaken for a member.
+#
+# The version column is captured as \S+ rather than a digit-leading pattern
+# because real H/W versions are often letter-leading (a 2960X reports "P2B").
+# Anchoring it to digits made the version fall through into state, producing
+# state="P2B     Ready". A row with no version column AND a multi-word state
+# would still mis-split, but every multi-word state observed occurs on a
+# present member, which always reports a version.
 _SWITCH_ROW_RE = re.compile(
     r"^\s*\*?\s*(?P<id>\d{1,2})\s+"
     r"(?P<role>[A-Za-z][A-Za-z-]*)\s+"
     r"(?P<mac>[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}"
     r"|[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+"
     r"(?P<priority>\d+)"
-    r"(?:\s+(?P<version>V?[0-9][\w.]*))?"
+    r"(?:\s+(?P<version>\S+))?"
     r"\s+(?P<state>[A-Za-z][A-Za-z0-9 /_-]*?)\s*$"
 )
 
