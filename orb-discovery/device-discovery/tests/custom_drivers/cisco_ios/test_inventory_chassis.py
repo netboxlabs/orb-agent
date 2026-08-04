@@ -113,12 +113,12 @@ def test_whitespace_and_casing_tolerated():
 
 
 def test_accepts_the_no_space_switch_form():
-    """
+    r"""
     Some IOS-XE releases emit "Switch1" with no space before the id.
 
     This file's module-discovery regexes (_INVENTORY_VC_SLOT_RE,
-    _INVENTORY_VC_FRU_RE, _SWITCH_PREFIX_RE) all use \\s* for exactly that
-    reason. With \\s+ here, those releases matched no chassis row, left the
+    _INVENTORY_VC_FRU_RE, _SWITCH_PREFIX_RE) all use \s* for exactly that
+    reason. With \s+ here, those releases matched no chassis row, left the
     serial index empty, and to_payload dropped every member -- so an SVL pair
     still degraded to a single Device even though the member table parsed.
     """
