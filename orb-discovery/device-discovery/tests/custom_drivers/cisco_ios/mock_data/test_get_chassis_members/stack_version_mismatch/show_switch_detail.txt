@@ -1,0 +1,7 @@
+Switch/Stack Mac Address : 0026.5a4b.c000 - Local Mac Address
+Mac persistency wait time: Indefinite
+                                             H/W   Current
+Switch#   Role    Mac Address     Priority Version  State
+-------------------------------------------------------------------------
+*1       Active   0026.5a4b.c000     15     V02     Ready
+ 2       Standby  0026.5a4b.d000     14     V02     Version Mismatch

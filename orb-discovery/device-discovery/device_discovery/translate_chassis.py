@@ -93,6 +93,14 @@ def validate_chassis_payload(payload) -> list[dict] | None:
         seen_serials.add(serial)
         valid.append(m)
     if len(valid) < 2:
+        # Say so rather than returning None silently: a partial parse degrading
+        # to a single Device is otherwise indistinguishable from a device that
+        # was never in a stack.
+        logger.warning(
+            "chassis_members: %d valid member(s) after validation, need at least 2; "
+            "falling back to a single Device",
+            len(valid),
+        )
         return None
     valid.sort(key=lambda m: m["id"])
     return valid

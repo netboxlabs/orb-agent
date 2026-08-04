@@ -395,20 +395,131 @@ def _index_inventory_by_switch(rows: list[dict]) -> tuple[dict[int, str], dict[i
     return serial_by_id, model_by_id
 
 
-def _ios_get_chassis_members_impl(driver) -> dict | None:
-    """Implementation of IOSDriver.get_chassis_members (factored for testability)."""
+# A CLI rejection means the platform has no stack concept at all (ISR / ASR /
+# CSR, and any Catalyst predating the command). That is the expected answer for
+# most of a mixed fleet, so it must not warn every discovery cycle.
+_CLI_ERROR_RE = re.compile(
+    r"%\s*(?:Invalid input detected|Incomplete command|Ambiguous command)",
+    re.IGNORECASE,
+)
+
+# A standalone Catalyst positively says so.
+_NOT_STACKED_RE = re.compile(
+    r"Switch\s+is\s+not\s+(?:on|in)\s+(?:any\s+)?stack",
+    re.IGNORECASE,
+)
+
+# The member-table header. Present but no rows parsed means we were handed a
+# switch table we failed to understand, which is worth an operator's attention.
+_SWITCH_TABLE_HEADER_RE = re.compile(
+    r"^\s*Switch#\s+Role\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+# "show stackwise-virtual" has no ntc-template (no template file, no index
+# entry), so the one line we need is read directly. Only Catalyst 9400/9500/9600
+# in StackWise Virtual mode answer this command; physical stacks reject it, which
+# is expected and simply leaves the domain unset.
+_SVL_DOMAIN_RE = re.compile(
+    r"^\s*Domain\s+Number\s*:\s*(\d+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _ios_svl_domain(driver) -> str | None:
+    """
+    Return the StackWise Virtual domain number, or None when unavailable.
+
+    Purely additive: any failure (command rejected, no match, empty output)
+    yields None, which is the pre-existing behaviour, so this can never turn a
+    working stack into a failure.
+    """
     try:
-        detail_out = driver.device.send_command("show switch detail")
-        detail_rows = parse_output(
-            platform="cisco_ios",
-            command="show switch detail",
-            data=detail_out or "",
-        )
+        raw = driver.device.send_command("show stackwise-virtual")
     except Exception as e:
-        logger.warning("ios.get_chassis_members: show switch detail failed: %s", e)
+        logger.debug(
+            "ios.get_chassis_members: %s: show stackwise-virtual failed: %s",
+            driver.hostname, e,
+        )
         return None
+    match = _SVL_DOMAIN_RE.search(raw or "")
+    return match.group(1) if match else None
+
+
+def _log_no_members(driver, attempts: list[tuple[str, str]]) -> None:
+    """
+    Explain why no stack members were found, at a level matching how odd it is.
+
+    Fails safe: the WARNING fires unless the output was POSITIVELY identified as
+    a CLI rejection or an explicit standalone answer. An unrecognised shape warns
+    rather than going quiet, because a silent None is what made this class of gap
+    invisible until a user noticed missing NetBox data.
+
+    Note DEBUG is effectively silent in this backend today — the root logger is
+    pinned to INFO by an import-time basicConfig and there is no log-level flag
+    (see the device-discovery log-level work tracked separately). That is the
+    intended outcome for the expected cases, and it removes the per-cycle
+    WARNING that every non-Catalyst IOS device used to emit.
+    """
+    looked_like_a_table = any(
+        _SWITCH_TABLE_HEADER_RE.search(text) for _cmd, text in attempts
+    )
+    # Only non-empty output carries information. A command that returned nothing
+    # tells us neither that the platform rejected it nor that anything is wrong,
+    # so it must not drag the classification into the WARNING branch.
+    informative = [(cmd, text) for cmd, text in attempts if text.strip()]
+    rejected = bool(informative) and all(
+        _CLI_ERROR_RE.search(text) or _NOT_STACKED_RE.search(text)
+        for _cmd, text in informative
+    )
+    if looked_like_a_table or (informative and not rejected):
+        logger.warning(
+            "ios.get_chassis_members: %s: no stack members parsed from %s; the device "
+            "neither rejected the command nor reported itself standalone",
+            driver.hostname,
+            " then ".join(cmd for cmd, _text in attempts) or "no command",
+        )
+    else:
+        logger.debug(
+            "ios.get_chassis_members: %s: no stack concept on this platform "
+            "(commands rejected, or reported standalone)",
+            driver.hostname,
+        )
+
+
+def _ios_get_chassis_members_impl(driver) -> dict | None:
+    """
+    Implementation of IOSDriver.get_chassis_members (factored for testability).
+
+    Tries "show switch detail" first, which is what physical StackWise platforms
+    answer, then falls back to "show switch", the only form Catalyst
+    9400/9500/9600 in StackWise Virtual mode supports (they reject the "detail"
+    keyword outright). Both print the same member table, so one parser handles
+    both.
+    """
+    detail_rows: list[dict] = []
+    attempts: list[tuple[str, str]] = []
+    for command in ("show switch detail", "show switch"):
+        try:
+            raw = driver.device.send_command(command)
+        except Exception as e:
+            logger.warning(
+                "ios.get_chassis_members: %s: %s failed: %s",
+                driver.hostname, command, e,
+            )
+            continue
+        raw = raw or ""
+        attempts.append((command, raw))
+        # _parse_switch_table is a pure regex loop called OUTSIDE the try on
+        # purpose: it cannot raise on device output, so a genuine bug in it must
+        # propagate rather than be swallowed as "this host has no stack".
+        detail_rows = _parse_switch_table(raw)
+        if detail_rows:
+            break
 
     if not detail_rows:
+        _log_no_members(driver, attempts)
         return None
 
     try:
@@ -419,7 +530,10 @@ def _ios_get_chassis_members_impl(driver) -> dict | None:
             data=inv_out or "",
         )
     except Exception as e:
-        logger.warning("ios.get_chassis_members: show inventory failed: %s", e)
+        logger.warning(
+            "ios.get_chassis_members: %s: show inventory failed: %s",
+            driver.hostname, e,
+        )
         inv_rows = []
 
     serial_by_id, model_by_id = _index_inventory_by_switch(inv_rows or [])
@@ -441,7 +555,17 @@ def _ios_get_chassis_members_impl(driver) -> dict | None:
             )
         )
 
-    return to_payload(members, domain=None)
+    if len(members) < 2:
+        logger.warning(
+            "ios.get_chassis_members: %s: parsed %d stack member(s), need at least 2 "
+            "for a virtual chassis; falling back to a single Device",
+            driver.hostname, len(members),
+        )
+
+    # Additive: only StackWise Virtual platforms answer this, and a None domain
+    # is what physical stacks have always emitted.
+    domain = _ios_svl_domain(driver) if len(members) > 1 else None
+    return to_payload(members, domain=domain)
 
 
 # ---- module inventory ----------------------------------------------------

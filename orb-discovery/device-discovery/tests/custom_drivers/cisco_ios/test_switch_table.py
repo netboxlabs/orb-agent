@@ -128,19 +128,38 @@ def _comparable(row: dict) -> tuple:
     return tuple((row.get(field) or "") for field in _COMPARISON_FIELDS)
 
 
+# Fixtures whose show_switch_detail.txt makes the ntc template raise, mapped to
+# the member-row count the local parser must recover from the same text. Keeping
+# this explicit is what makes the template-raises branch below a real assertion
+# rather than a tautology, and a new raising fixture fails loudly until its
+# expected count is recorded here.
+_TEMPLATE_RAISES_EXPECTED_ROWS = {
+    # Banner only ("Switch is not on any stack."); no member row exists at all,
+    # so recovering nothing is the correct answer.
+    "standalone_3850": 0,
+    # StackWise Virtual rejects the "detail" keyword outright, so this file holds
+    # only "% Invalid input detected". Zero rows is correct FROM THIS FILE; the
+    # members come from show_switch.txt, which the driver falls back to and which
+    # this parity test does not read.
+    "cat9500_svl_pair": 0,
+    # The reason this parser exists: the template's STATE value is (\w+), so the
+    # multi-word "Version Mismatch" makes it discard BOTH member rows. The local
+    # parser must still return both.
+    "stack_version_mismatch": 2,
+}
+
+
 @pytest.mark.parametrize("fixture", _fixture_dirs(), ids=lambda d: d.name)
 def test_parity_with_ntc_template(fixture):
     """
     The local parser agrees with the template field-for-field, and is a strict superset.
 
-    Where the template succeeds, every row must match on all six shared
-    fields (switch, role, mac_address, priority, version, state) — not just
-    the switch id, which would miss a field-level regression such as version
-    data bleeding into state. Where the template raises (it is
-    all-or-nothing) the local parser must still return a list, never raise;
-    for the one fixture that triggers this today ("Switch is not on any
-    stack.", which carries no member row at all) that list is empty, and the
-    test asserts that exact count rather than merely the type.
+    Where the template succeeds, every row must match on all six shared fields
+    (switch, role, mac_address, priority, version, state) — not just the switch
+    id, which would miss a field-level regression such as version data bleeding
+    into state. Where the template raises (it is all-or-nothing) the local parser
+    must not raise, and must recover the row count recorded in
+    ``_TEMPLATE_RAISES_EXPECTED_ROWS`` for that input.
     """
     text = (fixture / "show_switch_detail.txt").read_text()
     local_rows = _parse_switch_table(text)
@@ -149,12 +168,15 @@ def test_parity_with_ntc_template(fixture):
             platform="cisco_ios", command="show switch detail", data=text
         )
     except Exception:
-        # local_rows was already produced above, unguarded, so simply
-        # reaching this branch already proves the local parser did not
-        # raise where the template did. The substantive check is that its
-        # row count is the one actually correct for this input: this
-        # fixture's raw text is only the "not on any stack" banner, with no
-        # member row for either parser to find.
-        assert local_rows == []
+        # Reaching this branch already proves the local parser did not raise,
+        # since local_rows was produced above unguarded. The substantive check is
+        # that it recovered the count that is actually correct for this input.
+        expected = _TEMPLATE_RAISES_EXPECTED_ROWS.get(fixture.name)
+        assert expected is not None, (
+            f"{fixture.name}: the ntc template raises on this fixture but no "
+            "expected local row count is recorded in "
+            "_TEMPLATE_RAISES_EXPECTED_ROWS"
+        )
+        assert len(local_rows) == expected
         return
     assert [_comparable(r) for r in local_rows] == [_comparable(r) for r in template_rows]

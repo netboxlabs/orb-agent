@@ -1,0 +1,7 @@
+Switch/Stack Mac Address : e41f.0000.0001 - Local Mac Address
+Mac persistency wait time: Indefinite
+                                             H/W   Current
+Switch#   Role    Mac Address     Priority Version  State
+-------------------------------------------------------------------------------------
+*1       Active   e41f.0000.0001     15     V02     Ready
+ 2       Standby  e41f.0000.0002     14     V02     Ready
