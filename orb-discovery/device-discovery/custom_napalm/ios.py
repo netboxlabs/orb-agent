@@ -409,14 +409,6 @@ _NOT_STACKED_RE = re.compile(
     re.IGNORECASE,
 )
 
-# The member-table header. Present but no rows parsed means we were handed a
-# switch table we failed to understand, which is worth an operator's attention.
-_SWITCH_TABLE_HEADER_RE = re.compile(
-    r"^\s*Switch#\s+Role\b",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
 # "show stackwise-virtual" has no ntc-template (no template file, no index
 # entry), so the one line we need is read directly. Only Catalyst 9400/9500/9600
 # in StackWise Virtual mode answer this command; physical stacks reject it, which
@@ -462,9 +454,6 @@ def _log_no_members(driver, attempts: list[tuple[str, str]]) -> None:
     intended outcome for the expected cases, and it removes the per-cycle
     WARNING that every non-Catalyst IOS device used to emit.
     """
-    looked_like_a_table = any(
-        _SWITCH_TABLE_HEADER_RE.search(text) for _cmd, text in attempts
-    )
     # Only non-empty output carries information. A command that returned nothing
     # tells us neither that the platform rejected it nor that anything is wrong,
     # so it must not drag the classification into the WARNING branch.
@@ -473,7 +462,12 @@ def _log_no_members(driver, attempts: list[tuple[str, str]]) -> None:
         _CLI_ERROR_RE.search(text) or _NOT_STACKED_RE.search(text)
         for _cmd, text in informative
     )
-    if looked_like_a_table or (informative and not rejected):
+    # Deliberately NOT also testing for the member-table header. Output that
+    # looks like a table but parses to nothing already lands here via
+    # "not rejected", so a header test adds nothing — and it would actively
+    # misfire on a release that prints the column header above an explicit
+    # "Switch is not on any stack.", turning a standalone device into a warning.
+    if informative and not rejected:
         logger.warning(
             "ios.get_chassis_members: %s: no stack members parsed from %s; the device "
             "neither rejected the command nor reported itself standalone",
@@ -555,17 +549,32 @@ def _ios_get_chassis_members_impl(driver) -> dict | None:
             )
         )
 
-    if len(members) < 2:
-        logger.warning(
-            "ios.get_chassis_members: %s: parsed %d stack member(s), need at least 2 "
-            "for a virtual chassis; falling back to a single Device",
-            driver.hostname, len(members),
-        )
-
     # Additive: only StackWise Virtual platforms answer this, and a None domain
     # is what physical stacks have always emitted.
     domain = _ios_svl_domain(driver) if len(members) > 1 else None
-    return to_payload(members, domain=domain)
+    payload = to_payload(members, domain=domain)
+
+    emitted = len(payload["members"]) if payload else 0
+    if emitted < 2:
+        if len(detail_rows) >= 2:
+            # The device reported a stack but we cannot represent it: to_payload
+            # drops members whose serial could not be resolved from inventory.
+            # That is a real gap worth an operator's attention.
+            logger.warning(
+                "ios.get_chassis_members: %s: the device reported %d stack member row(s) "
+                "but only %d had a resolvable serial; falling back to a single Device",
+                driver.hostname, len(detail_rows), emitted,
+            )
+        else:
+            # A single-unit stack-capable Catalyst honestly reports one row. That
+            # is the most common deployment in a fleet and is not a problem, so
+            # it must not warn on every discovery cycle.
+            logger.debug(
+                "ios.get_chassis_members: %s: device reported a single unit; "
+                "not a virtual chassis",
+                driver.hostname,
+            )
+    return payload
 
 
 # ---- module inventory ----------------------------------------------------

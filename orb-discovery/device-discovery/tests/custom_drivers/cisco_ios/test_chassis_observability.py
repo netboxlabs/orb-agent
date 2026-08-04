@@ -38,8 +38,18 @@ SWITCH_TABLE_HEADER = (
 )
 
 
-def _warnings(caplog):
-    return [r for r in caplog.records if r.levelno >= logging.WARNING]
+def _warnings(caplog, logger="custom_napalm.ios"):
+    """
+    Return WARNING+ records from one logger.
+
+    Scoped by logger because _chassis.to_payload legitimately warns about each
+    serial-less member it drops; that is complementary detail, not a duplicate of
+    the driver's summary, and it is not what these tests are pinning.
+    """
+    return [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING and r.name == logger
+    ]
 
 
 def test_unsupported_platform_is_quiet(caplog):
@@ -74,8 +84,15 @@ def test_unparseable_switch_table_warns_with_hostname_and_command(caplog):
     assert "show switch" in message
 
 
-def test_single_member_warns_with_the_count(caplog):
-    """One member cannot form a VirtualChassis; say so rather than going quiet."""
+def test_honest_single_unit_does_not_warn(caplog):
+    """
+    A standalone stack-capable Catalyst reports one row and must stay quiet.
+
+    2960S/2960X/3850/9200/9300 answer "show switch detail" with a one-row member
+    table when they are not stacked. That is the most common deployment in a
+    fleet, so warning would fire on every device on every discovery cycle. Only
+    a stack we could not REPRESENT is worth a warning (see the test below).
+    """
     driver = _FakeDriver(
         {
             "show switch detail": (
@@ -90,10 +107,8 @@ def test_single_member_warns_with_the_count(caplog):
     )
     with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
         _ios_get_chassis_members_impl(driver)
-    warnings = _warnings(caplog)
-    assert len(warnings) == 1
-    assert "1" in warnings[0].getMessage()
-    assert "device-01" in warnings[0].getMessage()
+    assert _warnings(caplog) == []
+    assert any("single unit" in r.getMessage() for r in caplog.records)
 
 
 def test_falls_back_to_show_switch_and_sends_both_commands():
@@ -139,3 +154,73 @@ def test_domain_is_not_requested_on_a_single_member():
     )
     _ios_get_chassis_members_impl(driver)
     assert "show stackwise-virtual" not in driver.device.commands
+
+
+def test_unresolvable_serial_on_a_real_stack_warns(caplog):
+    """
+    A reported stack we cannot represent IS worth a warning.
+
+    Two member rows but only one resolvable serial means to_payload drops a
+    member, so the pair silently degrades to a single Device. That is the case
+    an operator needs to see, as distinct from an honest single unit.
+    """
+    driver = _FakeDriver(
+        {
+            "show switch detail": (
+                SWITCH_TABLE_HEADER
+                + "*1       Active   0026.5a4b.c000     15     V02     Ready\n"
+                + " 2       Standby  0026.5a4b.d000     14     V02     Ready\n"
+            ),
+            # Only member 1 has an inventory chassis row.
+            "show inventory": (
+                'NAME: "Switch 1", DESCR: "Cisco Catalyst 9300 Switch"\n'
+                "PID: C9300-24T          , VID: V02 , SN: FOC1111111\n"
+            ),
+        }
+    )
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
+        _ios_get_chassis_members_impl(driver)
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "device-01" in message
+    assert "resolvable serial" in message
+
+
+def test_send_command_failure_still_tries_the_next_command():
+    """
+    A raising command must not abort the fallback.
+
+    If the first command raises (transport hiccup, unexpected prompt) the loop
+    must continue to "show switch"; returning early instead would make SVL
+    discovery depend on a command that platform does not implement.
+    """
+    calls: list[str] = []
+
+    class _RaisingDevice:
+        def send_command(self, command):
+            calls.append(command)
+            if command == "show switch detail":
+                raise RuntimeError("transport hiccup")
+            if command == "show switch":
+                return (
+                    SWITCH_TABLE_HEADER
+                    + "*1       Active   e41f.0000.0001     15     V02     Ready\n"
+                    + " 2       Standby  e41f.0000.0002     14     V02     Ready\n"
+                )
+            if command == "show inventory":
+                return (
+                    'NAME: "Switch 1 Chassis", DESCR: "C9500"\n'
+                    "PID: C9500-48Y4C , VID: V02 , SN: CAT11111111\n"
+                    "\n"
+                    'NAME: "Switch 2 Chassis", DESCR: "C9500"\n'
+                    "PID: C9500-48Y4C , VID: V02 , SN: CAT22222222\n"
+                )
+            return ""
+
+    driver = _FakeDriver({})
+    driver.device = _RaisingDevice()
+    result = _ios_get_chassis_members_impl(driver)
+    assert result is not None
+    assert [m["id"] for m in result["members"]] == [1, 2]
+    assert "show switch" in calls
