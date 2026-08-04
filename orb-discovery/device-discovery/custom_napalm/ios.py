@@ -338,36 +338,60 @@ def _parse_switch_table(text: str) -> list[dict]:
     return rows
 
 
-# Two NAME formats are seen in the wild for stack members:
-#   "Switch 1"   — Catalyst 3850/9300/2960X StackWise (most common)
-#   "1"          — Some IOS / IOS-XE versions emit just the slot number
-# Anything else (e.g. "Chassis", "GigabitEthernet1/0/1") is ignored — the caller
-# treats an empty index as "no per-member inventory available" and the affected
-# members are dropped by to_payload().
-_INVENTORY_NAME_RE = re.compile(r"^(?:Switch\s+)?(\d+)$", re.IGNORECASE)
+# show inventory NAME rows that identify a stack/VC member CHASSIS:
+#   "Switch 1"          — Catalyst 3850/9300/2960X StackWise (most common)
+#   "1"                 — Some IOS / IOS-XE versions emit just the slot number
+#   "Switch 1 Chassis"  — Catalyst 9400/9500/9600 StackWise Virtual
+#
+# ANCHORED ON PURPOSE. Loosening this to r"^Switch\s+(\d+)\b" so that any suffix
+# is allowed also matches "Switch 1 Power Supply Module 0", "Switch 1 Fan Tray
+# 0" and "Switch 1 Slot 1 Supervisor". On a C9500 that happens to be harmless
+# because the chassis and supervisor report the same PID and serial, but on a
+# modular 9400 it yields model="C9400-PWR-3200AC" and the power supply's
+# serial. Serial is NetBox's device matcher, so that attaches discovery to the
+# WRONG device record. Do not relax the trailing anchor.
+#
+# A bare "Chassis" (standalone, no member id) deliberately does not match — the
+# caller treats an empty index as "no per-member inventory available" and the
+# affected members are dropped by to_payload().
+_INVENTORY_CHASSIS_RE = re.compile(
+    r"^\s*(?:Switch\s+(\d+)(?:\s+Chassis)?|(\d+))\s*$",
+    re.IGNORECASE,
+)
 
 
 def _index_inventory_by_switch(rows: list[dict]) -> tuple[dict[int, str], dict[int, str]]:
     """
     Return (serial_by_switch_id, model_by_switch_id) parsed from `show inventory`.
 
-    Matches NAME values of the form 'Switch N' or bare 'N' (case-insensitive). On
-    standalone IOS the NAME is 'Chassis' and yields empty dicts — caller treats
-    that as "no per-member inventory available".
+    Both fields for a member are committed from the SAME inventory row, so they
+    can never be mixed across rows. When several rows claim one member id the
+    winner is chosen by (has a serial, then an explicit "Chassis" suffix) rather
+    than by emission order.
+
+    On standalone IOS the NAME is 'Chassis' and this yields empty dicts — caller
+    treats that as "no per-member inventory available".
     """
-    serial_by_id: dict[int, str] = {}
-    model_by_id: dict[int, str] = {}
+    # sid -> (rank, serial, model); rank orders candidate rows for one member.
+    best: dict[int, tuple[tuple[int, int], str, str]] = {}
     for row in rows or []:
-        m = _INVENTORY_NAME_RE.match((row.get("name") or "").strip())
-        if not m:
+        name = (row.get("name") or "").strip()
+        match = _INVENTORY_CHASSIS_RE.match(name)
+        if not match:
             continue
-        sid = int(m.group(1))
-        sn = (row.get("sn") or "").strip()
-        pid = (row.get("pid") or "").strip()
-        if sn:
-            serial_by_id[sid] = sn
-        if pid:
-            model_by_id[sid] = pid
+        sid = int(match.group(1) or match.group(2))
+        serial = (row.get("sn") or "").strip()
+        model = (row.get("pid") or "").strip()
+        # A serial-bearing row always beats one without, so a chassis row with a
+        # blank SN cannot shadow a usable bare "Switch N" row and leave the
+        # member serial-less.
+        rank = (1 if serial else 0, 1 if name.lower().endswith("chassis") else 0)
+        current = best.get(sid)
+        if current is None or rank >= current[0]:
+            best[sid] = (rank, serial, model)
+
+    serial_by_id = {sid: s for sid, (_rank, s, _m) in best.items() if s}
+    model_by_id = {sid: m for sid, (_rank, _s, m) in best.items() if m}
     return serial_by_id, model_by_id
 
 
