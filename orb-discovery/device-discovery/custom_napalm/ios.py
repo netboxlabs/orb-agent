@@ -354,8 +354,14 @@ def _parse_switch_table(text: str) -> list[dict]:
 # A bare "Chassis" (standalone, no member id) deliberately does not match — the
 # caller treats an empty index as "no per-member inventory available" and the
 # affected members are dropped by to_payload().
+# The whitespace between "Switch" and the id is OPTIONAL (\s*), matching
+# _INVENTORY_VC_SLOT_RE, _INVENTORY_VC_FRU_RE and _SWITCH_PREFIX_RE in this same
+# file: some IOS-XE releases emit the no-space "Switch1" form. With \s+ here,
+# those releases matched no chassis row at all, left serial_by_id empty, and
+# to_payload dropped every member -- so an SVL pair still fell back to a single
+# Device even though "show switch" had returned both members.
 _INVENTORY_CHASSIS_RE = re.compile(
-    r"^\s*(?:Switch\s+(\d+)(?:\s+Chassis)?|(\d+))\s*$",
+    r"^\s*(?:Switch\s*(\d+)(?:\s+Chassis)?|(\d+))\s*$",
     re.IGNORECASE,
 )
 

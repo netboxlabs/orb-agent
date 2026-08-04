@@ -110,3 +110,42 @@ def test_whitespace_and_casing_tolerated():
     )
     assert serial == {1: "CAT11111111"}
     assert model == {1: "C9500-48Y4C"}
+
+
+def test_accepts_the_no_space_switch_form():
+    """
+    Some IOS-XE releases emit "Switch1" with no space before the id.
+
+    This file's module-discovery regexes (_INVENTORY_VC_SLOT_RE,
+    _INVENTORY_VC_FRU_RE, _SWITCH_PREFIX_RE) all use \\s* for exactly that
+    reason. With \\s+ here, those releases matched no chassis row, left the
+    serial index empty, and to_payload dropped every member -- so an SVL pair
+    still degraded to a single Device even though the member table parsed.
+    """
+    serial, model = _index_inventory_by_switch(
+        _rows(
+            ("Switch1 Chassis", "C9500-48Y4C", "CAT11111111"),
+            ("Switch2 Chassis", "C9500-48Y4C", "CAT22222222"),
+        )
+    )
+    assert serial == {1: "CAT11111111", 2: "CAT22222222"}
+    assert model == {1: "C9500-48Y4C", 2: "C9500-48Y4C"}
+
+
+def test_no_space_bare_switch_form_also_accepted():
+    """The no-space form without a Chassis suffix is a physical-stack shape."""
+    serial, _model = _index_inventory_by_switch(
+        _rows(("Switch1", "WS-C3850-12XS", "FOC1111111"))
+    )
+    assert serial == {1: "FOC1111111"}
+
+
+def test_no_space_component_rows_are_still_rejected():
+    """Optional whitespace must not weaken the component-row protection."""
+    assert _index_inventory_by_switch(
+        _rows(
+            ("Switch1 Power Supply Module 0", "C9K-PWR-650WAC-R", "XXXXXXXXXXX"),
+            ("Switch1 Slot 1 Supervisor", "C9500-48Y4C", "CAT11111111"),
+            ("Switch1 Fan Tray 0", "C9K-T1-FANTRAY", ""),
+        )
+    ) == ({}, {})
