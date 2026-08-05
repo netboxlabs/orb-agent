@@ -307,6 +307,20 @@ class Options(BaseModel):
             "keep the configured defaults. Default False."
         ),
     )
+    emit_device_name: bool = Field(
+        default=True,
+        description=(
+            "Emit Device.name from the hostname the driver reported. "
+            "Defaults to True. Set False to suppress the name on the matched "
+            "device so continual discovery stops proposing a hostname rename "
+            "when the discovered hostname differs from the NetBox name. Only "
+            "takes effect when the device is matchable another way (a scope "
+            "netbox_id, or defaults.device.asset_tag); otherwise the name is "
+            "kept and a warning is logged. On a virtual-chassis stack only the "
+            "master's name is suppressed; member names come from "
+            "stack_member_name_template."
+        ),
+    )
     emit_host_prefixes: bool = Field(
         default=False,
         description=(

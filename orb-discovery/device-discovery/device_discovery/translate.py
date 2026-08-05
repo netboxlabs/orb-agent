@@ -25,6 +25,7 @@ from netboxlabs.diode.sdk.ingester import (
     slugify,
 )
 
+from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import (
     Defaults,
@@ -723,6 +724,14 @@ def translate_data(data: dict) -> Iterable[Entity]:
     if device_info:
         device = translate_device(
             device_info, defaults, config_info, options, netbox_id=netbox_id
+        )
+        # Suppress Device.name (emit_device_name: false) BEFORE the deepcopy
+        # below, so every nested interface/IP reference derived from it inherits
+        # the suppression rather than carrying the name we just dropped.
+        # translate_device has already stamped metadata.source_match from
+        # netbox_id, so the matcher guard can see it.
+        apply_device_name_emission(
+            device, options.emit_device_name, target_hostname
         )
         device_for_interfaces = copy.deepcopy(device)
         device_for_interfaces.ClearField("config")
