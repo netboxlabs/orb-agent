@@ -93,6 +93,22 @@ def validate_chassis_payload(payload) -> list[dict] | None:
         seen_serials.add(serial)
         valid.append(m)
     if len(valid) < 2:
+        # Warn only when validation actually DROPPED members, which means a
+        # driver handed us a stack we could not represent — worth an operator's
+        # attention because the silent version of this was invisible until a user
+        # noticed missing NetBox data.
+        #
+        # A payload that simply contains fewer than two members is a standalone
+        # device, not a partial parse. This function is driver-agnostic, and a
+        # single-member payload is documented-normal for several drivers, so
+        # warning on it would spam every standalone device in a fleet on every
+        # cycle.
+        if len(members_raw) >= 2:
+            logger.warning(
+                "chassis_members: %d of %d member(s) survived validation, need at "
+                "least 2; falling back to a single Device",
+                len(valid), len(members_raw),
+            )
         return None
     valid.sort(key=lambda m: m["id"])
     return valid

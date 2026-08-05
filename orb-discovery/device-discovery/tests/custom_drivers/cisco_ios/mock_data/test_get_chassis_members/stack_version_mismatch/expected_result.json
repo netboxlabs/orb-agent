@@ -1,0 +1,23 @@
+{
+  "members": [
+    {
+      "id": 1,
+      "serial": "FOC1111111",
+      "model": "C9300-24T",
+      "role": "active",
+      "priority": 15,
+      "mac": "0026.5a4b.c000",
+      "state": "Ready"
+    },
+    {
+      "id": 2,
+      "serial": "FOC2222222",
+      "model": "C9300-24T",
+      "role": "standby",
+      "priority": 14,
+      "mac": "0026.5a4b.d000",
+      "state": "Version Mismatch"
+    }
+  ],
+  "domain": null
+}

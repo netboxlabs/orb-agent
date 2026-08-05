@@ -1,0 +1,23 @@
+NAME: "Switch 1 Chassis", DESCR: "Cisco Catalyst 9500 Series Chassis"
+PID: C9500-48Y4C       , VID: V02  , SN: CAT11111111
+
+NAME: "Switch 1 Power Supply Module 0", DESCR: "Cisco Catalyst 9500 Series 650W AC Power Supply"
+PID: C9K-PWR-650WAC-R  , VID: V01  , SN: XXXXXXXXXXX
+
+NAME: "Switch 1 Fan Tray 0", DESCR: "Cisco Catalyst 9500 Series Fan Tray"
+PID: C9K-T1-FANTRAY    , VID:      , SN:
+
+NAME: "Switch 1 Slot 1 Supervisor", DESCR: "Cisco Catalyst 9500 Series Router"
+PID: C9500-48Y4C       , VID: V02  , SN: CAT11111111
+
+NAME: "TwentyFiveGigE1/0/43", DESCR: "SFP 10/25GE CSR-S"
+PID: SFP-10/25G-CSR-S    , VID: V03  , SN: XXXXXXXXXXX
+
+NAME: "Switch 2 Chassis", DESCR: "Cisco Catalyst 9500 Series Chassis"
+PID: C9500-48Y4C       , VID: V02  , SN: CAT22222222
+
+NAME: "Switch 2 Power Supply Module 0", DESCR: "Cisco Catalyst 9500 Series 650W AC Power Supply"
+PID: C9K-PWR-650WAC-R  , VID: V01  , SN: XXXXXXXXXXX
+
+NAME: "Switch 2 Slot 1 Supervisor", DESCR: "Cisco Catalyst 9500 Series Router"
+PID: C9500-48Y4C       , VID: V02  , SN: CAT22222222

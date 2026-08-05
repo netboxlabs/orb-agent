@@ -579,3 +579,57 @@ def test_vc_cascade_propagates_options_through_per_member_builder():
     assert prefixes, "expected at least one Prefix from interface_ip on the VC path"
     # Cascade from defaults.site → Prefix.scope_site (NetBox 4.2+ scope oneof).
     assert prefixes[0].scope_site.name == "DC-East"
+
+
+def test_single_member_payload_does_not_warn(caplog):
+    """
+    A one-member payload is a standalone device, not a partial parse.
+
+    validate_chassis_payload is driver-agnostic and several drivers emit a
+    single-member payload as documented-normal behaviour, so warning here would
+    fire for every standalone device in a fleet on every discovery cycle.
+    """
+    import logging
+
+    from device_discovery.translate_chassis import validate_chassis_payload
+
+    payload = {
+        "members": [
+            {"id": 1, "serial": "FOC1111111", "model": "C9300-24T", "role": "active"}
+        ],
+        "domain": None,
+    }
+    with caplog.at_level(logging.DEBUG, logger="device_discovery.translate_chassis"):
+        assert validate_chassis_payload(payload) is None
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_dropped_members_do_warn(caplog):
+    """
+    Validation dropping members IS worth a warning.
+
+    Two members in, fewer than two out means a driver handed us a stack we could
+    not represent. The silent version of this was invisible until a user noticed
+    missing NetBox data.
+    """
+    import logging
+
+    from device_discovery.translate_chassis import validate_chassis_payload
+
+    payload = {
+        "members": [
+            {"id": 1, "serial": "FOC1111111", "model": "C9300-24T", "role": "active"},
+            # Same serial: dropped as a duplicate, leaving one valid member.
+            {"id": 2, "serial": "FOC1111111", "model": "C9300-24T", "role": "standby"},
+        ],
+        "domain": None,
+    }
+    with caplog.at_level(logging.DEBUG, logger="device_discovery.translate_chassis"):
+        assert validate_chassis_payload(payload) is None
+    warnings = [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING
+        and "survived validation" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "1 of 2" in warnings[0].getMessage()

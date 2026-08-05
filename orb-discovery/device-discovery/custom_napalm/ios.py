@@ -266,53 +266,260 @@ def classify_module_type_cisco_ios(pid: str) -> _ModuleType:
     return "linecard"
 
 
-# Two NAME formats are seen in the wild for stack members:
-#   "Switch 1"   — Catalyst 3850/9300/2960X StackWise (most common)
-#   "1"          — Some IOS / IOS-XE versions emit just the slot number
-# Anything else (e.g. "Chassis", "GigabitEthernet1/0/1") is ignored — the caller
-# treats an empty index as "no per-member inventory available" and the affected
-# members are dropped by to_payload().
-_INVENTORY_NAME_RE = re.compile(r"^(?:Switch\s+)?(\d+)$", re.IGNORECASE)
+# Stack-member table row from "show switch" / "show switch detail".
+#
+# Parsed driver-locally rather than via ntc-templates because
+# cisco_ios_show_switch_detail.textfsm is ALL-OR-NOTHING: its STATE value is
+# (\w+), so a multi-word state such as "Version Mismatch" or "Sync not
+# started" raises TextFSMError and discards EVERY member row, not just the
+# offending one. A physical stack mid-upgrade therefore emitted no
+# VirtualChassis at all. Verified: those two states lose all rows; "Ready" and
+# "Provisioned" parse fine.
+#
+# Requiring the MAC column is what makes this safe. No header, separator,
+# banner or stack-port row carries one, which is why the stack-port data row
+# "1  Ok  Ok" cannot be mistaken for a member.
+#
+# The version column is captured as \S+ rather than a digit-leading pattern
+# because real H/W versions are often letter-leading (a 2960X reports "P2B").
+# Anchoring it to digits made the version fall through into state, producing
+# state="P2B     Ready". A row with no version column AND a multi-word state
+# would still mis-split, but every multi-word state observed occurs on a
+# present member, which always reports a version.
+_SWITCH_ROW_RE = re.compile(
+    r"^\s*\*?\s*(?P<id>\d{1,2})\s+"
+    r"(?P<role>[A-Za-z][A-Za-z-]*)\s+"
+    r"(?P<mac>[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}"
+    r"|[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+"
+    r"(?P<priority>\d+)"
+    r"(?:\s+(?P<version>\S+))?"
+    r"\s+(?P<state>[A-Za-z][A-Za-z0-9 /_-]*?)\s*$"
+)
+
+# The Stack Port / Neighbors sections follow the member table on physical
+# stacks. Their rows cannot match _SWITCH_ROW_RE anyway (no MAC column), so
+# this bound is defence in depth, not the primary mechanism.
+_SWITCH_TABLE_END_RE = re.compile(
+    r"^\s*(?:Switch#\s+Port\s+1\b|Stack\s+Port\s+Status)",
+    re.IGNORECASE,
+)
+
+
+def _parse_switch_table(text: str) -> list[dict]:
+    """
+    Parse the stack-member table from "show switch" / "show switch detail".
+
+    Returns one dict per member row, with the same keys the ntc template
+    produces (switch, role, mac_address, priority, version, state) so callers
+    are unchanged. ``version`` is "" when the column is absent.
+
+    Degrades one row at a time: an unrecognised line is skipped rather than
+    discarding the whole table, which is the behaviour difference from
+    ntc-templates that this function exists for.
+    """
+    rows: list[dict] = []
+    for line in (text or "").splitlines():
+        if _SWITCH_TABLE_END_RE.match(line):
+            break
+        match = _SWITCH_ROW_RE.match(line)
+        if not match:
+            continue
+        found = match.groupdict()
+        rows.append(
+            {
+                "switch": found["id"],
+                "role": found["role"],
+                "mac_address": found["mac"],
+                "priority": found["priority"],
+                "version": found["version"] or "",
+                "state": found["state"],
+            }
+        )
+    return rows
+
+
+# show inventory NAME rows that identify a stack/VC member CHASSIS:
+#   "Switch 1"          — Catalyst 3850/9300/2960X StackWise (most common)
+#   "1"                 — Some IOS / IOS-XE versions emit just the slot number
+#   "Switch 1 Chassis"  — Catalyst 9400/9500/9600 StackWise Virtual
+#
+# ANCHORED ON PURPOSE. Loosening this to r"^Switch\s+(\d+)\b" so that any suffix
+# is allowed also matches "Switch 1 Power Supply Module 0", "Switch 1 Fan Tray
+# 0" and "Switch 1 Slot 1 Supervisor". On a C9500 that happens to be harmless
+# because the chassis and supervisor report the same PID and serial, but on a
+# modular 9400 it yields model="C9400-PWR-3200AC" and the power supply's
+# serial. Serial is NetBox's device matcher, so that attaches discovery to the
+# WRONG device record. Do not relax the trailing anchor.
+#
+# A bare "Chassis" (standalone, no member id) deliberately does not match — the
+# caller treats an empty index as "no per-member inventory available" and the
+# affected members are dropped by to_payload().
+# The whitespace between "Switch" and the id is OPTIONAL (\s*), matching
+# _INVENTORY_VC_SLOT_RE, _INVENTORY_VC_FRU_RE and _SWITCH_PREFIX_RE in this same
+# file: some IOS-XE releases emit the no-space "Switch1" form. With \s+ here,
+# those releases matched no chassis row at all, left serial_by_id empty, and
+# to_payload dropped every member -- so an SVL pair still fell back to a single
+# Device even though "show switch" had returned both members.
+_INVENTORY_CHASSIS_RE = re.compile(
+    r"^\s*(?:Switch\s*(\d+)(?:\s+Chassis)?|(\d+))\s*$",
+    re.IGNORECASE,
+)
 
 
 def _index_inventory_by_switch(rows: list[dict]) -> tuple[dict[int, str], dict[int, str]]:
     """
     Return (serial_by_switch_id, model_by_switch_id) parsed from `show inventory`.
 
-    Matches NAME values of the form 'Switch N' or bare 'N' (case-insensitive). On
-    standalone IOS the NAME is 'Chassis' and yields empty dicts — caller treats
-    that as "no per-member inventory available".
+    Both fields for a member are committed from the SAME inventory row, so they
+    can never be mixed across rows. When several rows claim one member id the
+    winner is chosen by (has a serial, then an explicit "Chassis" suffix) rather
+    than by emission order.
+
+    On standalone IOS the NAME is 'Chassis' and this yields empty dicts — caller
+    treats that as "no per-member inventory available".
     """
-    serial_by_id: dict[int, str] = {}
-    model_by_id: dict[int, str] = {}
+    # sid -> (rank, serial, model); rank orders candidate rows for one member.
+    best: dict[int, tuple[tuple[int, int], str, str]] = {}
     for row in rows or []:
-        m = _INVENTORY_NAME_RE.match((row.get("name") or "").strip())
-        if not m:
+        name = (row.get("name") or "").strip()
+        match = _INVENTORY_CHASSIS_RE.match(name)
+        if not match:
             continue
-        sid = int(m.group(1))
-        sn = (row.get("sn") or "").strip()
-        pid = (row.get("pid") or "").strip()
-        if sn:
-            serial_by_id[sid] = sn
-        if pid:
-            model_by_id[sid] = pid
+        sid = int(match.group(1) or match.group(2))
+        serial = (row.get("sn") or "").strip()
+        model = (row.get("pid") or "").strip()
+        # A serial-bearing row always beats one without, so a chassis row with a
+        # blank SN cannot shadow a usable bare "Switch N" row and leave the
+        # member serial-less.
+        rank = (1 if serial else 0, 1 if name.lower().endswith("chassis") else 0)
+        current = best.get(sid)
+        if current is None or rank >= current[0]:
+            best[sid] = (rank, serial, model)
+
+    serial_by_id = {sid: s for sid, (_rank, s, _m) in best.items() if s}
+    model_by_id = {sid: m for sid, (_rank, _s, m) in best.items() if m}
     return serial_by_id, model_by_id
 
 
-def _ios_get_chassis_members_impl(driver) -> dict | None:
-    """Implementation of IOSDriver.get_chassis_members (factored for testability)."""
+# A CLI rejection means the platform has no stack concept at all (ISR / ASR /
+# CSR, and any Catalyst predating the command). That is the expected answer for
+# most of a mixed fleet, so it must not warn every discovery cycle.
+_CLI_ERROR_RE = re.compile(
+    r"%\s*(?:Invalid input detected|Incomplete command|Ambiguous command)",
+    re.IGNORECASE,
+)
+
+# A standalone Catalyst positively says so.
+_NOT_STACKED_RE = re.compile(
+    r"Switch\s+is\s+not\s+(?:on|in)\s+(?:any\s+)?stack",
+    re.IGNORECASE,
+)
+
+# "show stackwise-virtual" has no ntc-template (no template file, no index
+# entry), so the one line we need is read directly. Only Catalyst 9400/9500/9600
+# in StackWise Virtual mode answer this command; physical stacks reject it, which
+# is expected and simply leaves the domain unset.
+_SVL_DOMAIN_RE = re.compile(
+    r"^\s*Domain\s+Number\s*:\s*(\d+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _ios_svl_domain(driver) -> str | None:
+    """
+    Return the StackWise Virtual domain number, or None when unavailable.
+
+    Purely additive: any failure (command rejected, no match, empty output)
+    yields None, which is the pre-existing behaviour, so this can never turn a
+    working stack into a failure.
+    """
     try:
-        detail_out = driver.device.send_command("show switch detail")
-        detail_rows = parse_output(
-            platform="cisco_ios",
-            command="show switch detail",
-            data=detail_out or "",
-        )
+        raw = driver.device.send_command("show stackwise-virtual")
     except Exception as e:
-        logger.warning("ios.get_chassis_members: show switch detail failed: %s", e)
+        logger.debug(
+            "ios.get_chassis_members: %s: show stackwise-virtual failed: %s",
+            driver.hostname, e,
+        )
         return None
+    match = _SVL_DOMAIN_RE.search(raw or "")
+    return match.group(1) if match else None
+
+
+def _log_no_members(driver, attempts: list[tuple[str, str]]) -> None:
+    """
+    Explain why no stack members were found, at a level matching how odd it is.
+
+    Fails safe: the WARNING fires unless the output was POSITIVELY identified as
+    a CLI rejection or an explicit standalone answer. An unrecognised shape warns
+    rather than going quiet, because a silent None is what made this class of gap
+    invisible until a user noticed missing NetBox data.
+
+    Note DEBUG is effectively silent in this backend today — the root logger is
+    pinned to INFO by an import-time basicConfig and there is no log-level flag
+    (see the device-discovery log-level work tracked separately). That is the
+    intended outcome for the expected cases, and it removes the per-cycle
+    WARNING that every non-Catalyst IOS device used to emit.
+    """
+    # Only non-empty output carries information. A command that returned nothing
+    # tells us neither that the platform rejected it nor that anything is wrong,
+    # so it must not drag the classification into the WARNING branch.
+    informative = [(cmd, text) for cmd, text in attempts if text.strip()]
+    rejected = bool(informative) and all(
+        _CLI_ERROR_RE.search(text) or _NOT_STACKED_RE.search(text)
+        for _cmd, text in informative
+    )
+    # Deliberately NOT also testing for the member-table header. Output that
+    # looks like a table but parses to nothing already lands here via
+    # "not rejected", so a header test adds nothing — and it would actively
+    # misfire on a release that prints the column header above an explicit
+    # "Switch is not on any stack.", turning a standalone device into a warning.
+    if informative and not rejected:
+        logger.warning(
+            "ios.get_chassis_members: %s: no stack members parsed from %s; the device "
+            "neither rejected the command nor reported itself standalone",
+            driver.hostname,
+            " then ".join(cmd for cmd, _text in attempts) or "no command",
+        )
+    else:
+        logger.debug(
+            "ios.get_chassis_members: %s: no stack concept on this platform "
+            "(commands rejected, or reported standalone)",
+            driver.hostname,
+        )
+
+
+def _ios_get_chassis_members_impl(driver) -> dict | None:
+    """
+    Implementation of IOSDriver.get_chassis_members (factored for testability).
+
+    Tries "show switch detail" first, which is what physical StackWise platforms
+    answer, then falls back to "show switch", the only form Catalyst
+    9400/9500/9600 in StackWise Virtual mode supports (they reject the "detail"
+    keyword outright). Both print the same member table, so one parser handles
+    both.
+    """
+    detail_rows: list[dict] = []
+    attempts: list[tuple[str, str]] = []
+    for command in ("show switch detail", "show switch"):
+        try:
+            raw = driver.device.send_command(command)
+        except Exception as e:
+            logger.warning(
+                "ios.get_chassis_members: %s: %s failed: %s",
+                driver.hostname, command, e,
+            )
+            continue
+        raw = raw or ""
+        attempts.append((command, raw))
+        # _parse_switch_table is a pure regex loop called OUTSIDE the try on
+        # purpose: it cannot raise on device output, so a genuine bug in it must
+        # propagate rather than be swallowed as "this host has no stack".
+        detail_rows = _parse_switch_table(raw)
+        if detail_rows:
+            break
 
     if not detail_rows:
+        _log_no_members(driver, attempts)
         return None
 
     try:
@@ -323,7 +530,10 @@ def _ios_get_chassis_members_impl(driver) -> dict | None:
             data=inv_out or "",
         )
     except Exception as e:
-        logger.warning("ios.get_chassis_members: show inventory failed: %s", e)
+        logger.warning(
+            "ios.get_chassis_members: %s: show inventory failed: %s",
+            driver.hostname, e,
+        )
         inv_rows = []
 
     serial_by_id, model_by_id = _index_inventory_by_switch(inv_rows or [])
@@ -345,7 +555,32 @@ def _ios_get_chassis_members_impl(driver) -> dict | None:
             )
         )
 
-    return to_payload(members, domain=None)
+    # Additive: only StackWise Virtual platforms answer this, and a None domain
+    # is what physical stacks have always emitted.
+    domain = _ios_svl_domain(driver) if len(members) > 1 else None
+    payload = to_payload(members, domain=domain)
+
+    emitted = len(payload["members"]) if payload else 0
+    if emitted < 2:
+        if len(detail_rows) >= 2:
+            # The device reported a stack but we cannot represent it: to_payload
+            # drops members whose serial could not be resolved from inventory.
+            # That is a real gap worth an operator's attention.
+            logger.warning(
+                "ios.get_chassis_members: %s: the device reported %d stack member row(s) "
+                "but only %d had a resolvable serial; falling back to a single Device",
+                driver.hostname, len(detail_rows), emitted,
+            )
+        else:
+            # A single-unit stack-capable Catalyst honestly reports one row. That
+            # is the most common deployment in a fleet and is not a problem, so
+            # it must not warn on every discovery cycle.
+            logger.debug(
+                "ios.get_chassis_members: %s: device reported a single unit; "
+                "not a virtual chassis",
+                driver.hostname,
+            )
+    return payload
 
 
 # ---- module inventory ----------------------------------------------------
