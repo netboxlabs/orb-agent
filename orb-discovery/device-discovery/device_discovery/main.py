@@ -11,6 +11,7 @@ import netboxlabs.diode.sdk.version as SdkVersion
 import uvicorn
 
 from device_discovery.client import Client
+from device_discovery.log_config import configure_logging
 from device_discovery.metrics import setup_metrics_export
 from device_discovery.server import app
 from device_discovery.version import version_semver
@@ -35,11 +36,15 @@ def resolve_env_var(value: str) -> str:
     return value
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     """
-    Main entry point for the Agent CLI.
+    Build the CLI argument parser.
 
-    Parses command-line arguments and starts the backend.
+    Extracted from main() so a test can feed it the exact argument vector the
+    Go agent's buildArgs emits, pinning both sides of that boundary without a
+    subprocess. See agent/backend/devicediscovery/device_discovery.go.
+
+    Returns the configured argparse.ArgumentParser.
     """
     parser = argparse.ArgumentParser(description="Orb Device Discovery Backend")
     parser.add_argument(
@@ -129,8 +134,37 @@ def main():
         required=False,
     )
 
+    # Long flag only: -d is --dry-run, and -s -p -t -c -k -a -o -V are taken.
+    #
+    # Deliberately no choices=. A typo in the agent's YAML would make argparse
+    # exit(2), and the backend would crash-loop and never pass readiness --
+    # the same class of defect as #494, inverted. Unrecognised values fall
+    # back to INFO and warn instead.
+    parser.add_argument(
+        "--log-level",
+        help="Log level: trace/debug/info/warn/error/critical (default: INFO)",
+        type=str,
+        default="INFO",
+        required=False,
+    )
+
+    return parser
+
+
+def main():
+    """
+    Main entry point for the Agent CLI.
+
+    Parses command-line arguments and starts the backend.
+    """
+    parser = build_parser()
+
     try:
         args = parser.parse_args()
+        # Before the dry-run validation and before setup_metrics_export,
+        # Client() and uvicorn.run: basicConfig(force=True) replaces the root
+        # handlers installed at import time.
+        configure_logging(args.log_level)
         if not args.dry_run:
             missing = [
                 name

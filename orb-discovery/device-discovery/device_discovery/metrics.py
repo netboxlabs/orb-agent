@@ -12,10 +12,11 @@ from opentelemetry.sdk.metrics.export import (
     PeriodicExportingMetricReader,
 )
 
+from device_discovery.log_config import configure_default_logging
 from device_discovery.version import version_semver
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+configure_default_logging()
 logger = logging.getLogger(__name__)
 
 # Global variables to store the provider and meter
