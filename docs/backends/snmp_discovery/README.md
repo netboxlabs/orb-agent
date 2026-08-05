@@ -26,6 +26,8 @@ When the `discover_vrfs` policy option is enabled, snmp-discovery emits a `VRF` 
 
 When the `discover_asset_tags` policy option is enabled, snmp-discovery reads `ENTITY-MIB::entPhysicalAssetID` and populates `asset_tag` on each emitted device — including per-member tags on virtual-chassis stacks. Defaults to `false`, so existing operators see zero behaviour change. Note that NetBox `asset_tag` values are unique and act as the highest-precedence device matcher during ingestion: enable this only if the tags provisioned on your devices are trustworthy and unique.
 
+When the `emit_device_name` policy option is set to `false`, snmp-discovery still walks `sysName` but does **not** emit `Device.name` on the matched device. Use this with a target `netbox_id` / `metadata.source_match` so Diode matches the existing NetBox record without proposing a hostname rename when the device's `sysName` differs from the NetBox name. The name is suppressed only when the device carries a matcher that also travels on its nested references — `source_match` (netbox_id) or `asset_tag`; if neither is present the name is kept and a warning is logged. (Matching by `serial` or `primary_ip` alone does not enable omission: `serial` is not a unique NetBox matcher, and `primary_ip` is stripped from the nested device stubs.) On a virtual-chassis stack the master device's name is suppressed across all its representations (the device and the shared virtual-chassis master reference); member names and the virtual-chassis name are unaffected. Defaults to `true`.
+
 When a device exposes the relevant MIBs, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. VLAN discovery uses Q-BRIDGE-MIB (RFC 4363) as the generic source and a Cisco-specific overlay (CISCO-VLAN-MEMBERSHIP-MIB, CISCO-VOICE-VLAN-MIB) on Cisco devices that don't fully implement Q-BRIDGE — see [SNMP Discovery — Supported Platforms](./supported_platforms.md#interface--vlan-associations) for which device classes are covered.
 
 Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately. The same caveat applies on device-discovery.
@@ -79,6 +81,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | discover_modules | string | no | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards and supervisors; PSU / fan recognised by the PID classifier but never emitted), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Detection is vendor-neutral via `ENTITY-MIB::entPhysicalTable` — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 | discover_vrfs | bool | no | When `true`, discovers VRFs from the device's VRF MIB tables and attaches them to the IP addresses of each VRF's member interfaces (matched by `ifIndex`). A discovered VRF takes precedence over the `vrf` / `vrf_ipv4` / `vrf_ipv6` defaults for those interfaces; other addresses keep the configured defaults. Defaults to `false` — the VRF tables are not even walked when off. See [VRFs](#vrfs) for the MIB tiers, route-distinguisher handling, and limitations. |
 | emit_prefixes | bool | no | Derive one `Prefix` entity per unique (network, VRF) from the discovered IP addresses, matching device-discovery's behavior. **Defaults to `true`** — set `false` to opt out. See [Prefixes](#prefixes). |
+| emit_host_prefixes | bool | no | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. **Defaults to `false`** (the opposite of `emit_prefixes`): a host prefix only restates the address, which is already emitted as an `IPAddress` entity. Set `true` to derive them anyway, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefixes](#prefixes). |
+| emit_device_name | bool | no | **Defaults to `true`.** Set `false` to stop emitting `Device.name` (from `sysName`) on the matched device, so continual discovery under Assurance does not propose a hostname rename when `sysName` differs from the NetBox name. `sysName` is still walked; only the emitted field is suppressed. Intended for use with a target `netbox_id` / `metadata.source_match`. Takes effect only when the device is matchable by a field that also travels on its nested references — `source_match` (netbox_id) or `asset_tag`; if neither is present the name is kept and a warning is logged, to avoid emitting an unmatchable device. Matching by `serial` (not unique in NetBox) or `primary_ip` alone does **not** enable omission. Does not affect virtual-chassis member names. |
 | interface_name_source | string | no | Source for the NetBox interface **name**. One of `auto` (default — ifDescr preferred, ifName used when ifDescr is empty or looks like a hardware description; zero behaviour change), `ifname` (force SNMP `ifName`), or `ifdescr` (force `ifDescr`). Each forced mode falls back to the other field when its primary is empty for an interface. An unrecognized value is warned once and treated as `auto`. ⚠️ Changing this on an existing deployment renames interfaces — see [Interface Name Selection](./interface.md#interface-name-selection). |
 | propagate_defaults_to_prefix_scope | bool | no | When `true` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to the Prefix scope site and `defaults.location` to the scope location (location wins, carrying the site). Defaults to `false`. Any explicit `defaults.prefix.scope_*` skips the cascade wholesale. |
 
@@ -90,6 +94,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | location | string | no | Default location for discovered devices. Accepts a literal name or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)) |
 | asset_tag | string | no | Default asset tag for discovered devices. Accepts a literal value or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)). NetBox enforces a 50-character limit; resolved values longer than 50 characters are warn-logged and skipped |
 | role | string | no | Default role for discovered devices |
+| tenant | string \| map | no | Default tenant for discovered devices. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see the [tenant map](#tenant-map) below). Applies to Device entities only — IP address, prefix, and VLAN tenants keep their own per-entity defaults (`ip_address.tenant`, `prefix.tenant`, `vlan.tenant`). Virtual-chassis members inherit the master's tenant. In a per-target `override_defaults`, tenant merges field-wise: overriding `name` keeps an inherited `group` |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 
@@ -135,6 +140,17 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ group | string | VLAN group name. When set, every emitted VLAN is attached to an `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
 | ├─ tenant | string | VLAN tenant |
 | ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
+
+##### Tenant Map
+The top-level `tenant` default accepts either a bare string (tenant name) or a map:
+
+| Parameter | Type | Description |
+|---------|----|-----------|
+| name | string  | Tenant name |
+| group | string  | Tenant group name |
+| description | string  | Tenant description |
+| comments | string  | Tenant comments |
+| tags | list  | Tenant tags |
 
 ### Scope Section
 | Parameter | Type | Required | Description |
@@ -213,6 +229,7 @@ config:
     location: ".1.3.6.1.2.1.1.6.0"     # Resolve from sysLocation (or use a literal like "rack-42")
     asset_tag: ".1.3.6.1.2.1.1.4.0"    # Resolve from sysContact (or use a literal)
     role: "network"
+    tenant: "network-ops"              # Bare name, or a map: { name: network-ops, group: infrastructure }
     ip_address:
       description: "SNMP discovered IP"
       role: "management"
@@ -327,7 +344,9 @@ Prefix entities are derived from the discovered IP addresses — the network of 
 - **VRF**: a prefix whose addresses were attached to a discovered VRF (see [VRFs](#vrfs)) carries that VRF; everything else resolves from `defaults.prefix.vrf` / `vrf_ipv4` / `vrf_ipv6` (independent of the `ip_address` knobs).
 - **Scope**: explicit `defaults.prefix.scope_site` / `scope_location` always win; with `propagate_defaults_to_prefix_scope: true` and no explicit scope, `defaults.site` / `defaults.location` cascade in.
 - **Safety guards**: zero-length networks (agent-quirk `0.0.0.0` masks) and IPv4-mapped IPv6 addresses never derive prefixes.
-- **Data-quality note**: when an agent doesn't implement `ipAddressPrefixTable`, addresses fall back to host length, so their derived prefixes are `/32` / `/128` — the same shape device-discovery emits for loopbacks. Opt out if host prefixes are unwanted in your IPAM tree.
+- **Host prefixes and IPv6 link-locals are not derived by default**: an IPv4 `/32` or IPv6 `/128` "prefix" only restates the address, which is already emitted as an `IPAddress` entity, and an `fe80::` prefix is per-link rather than globally meaningful. Both are skipped. The `IPAddress` entities are untouched, so the addresses stay documented — only the derived `Prefix` is dropped. IPv4 link-local (`169.254.0.0/16`) and the loopback net (`127.0.0.0/8`) are ordinary networks by mask and are still derived.
+- **Opting back in to host prefixes**: set `emit_host_prefixes: true` to derive `/32` and `/128` prefixes again, for example when loopback `/32`s are deliberately tracked as prefixes in NetBox. Note its default (`false`) is the opposite of `emit_prefixes` (`true`). The opt-in covers host prefixes only: IPv6 link-local prefixes stay suppressed even with it enabled, including an `fe80::…/128` address, which is a link-local that happens to carry host length rather than a loopback worth tracking.
+- **Data-quality note**: when an agent doesn't implement `ipAddressPrefixTable`, addresses fall back to host length. With the default settings those addresses derive no prefix, per the rule above, so a missing prefix table costs prefix coverage rather than filling IPAM with host routes. Enabling `emit_host_prefixes` on such a target will produce a host prefix for every address it reports, which is usually not what you want.
 
 
 ## Modules / ModuleBays

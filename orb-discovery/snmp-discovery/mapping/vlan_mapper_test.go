@@ -357,6 +357,43 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 	}
 }
 
+// TestVlanMapper_PostMap_DeviceTenantDoesNotCascade pins the no-cascade
+// design decision: the top-level defaults.tenant is device-only
+// (matching device-discovery semantics) and must never leak onto
+// emitted VLANs — only defaults.vlan.tenant sets a VLAN tenant.
+func TestVlanMapper_PostMap_DeviceTenantDoesNotCascade(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+
+	// Minimal: one VLAN with a static name row so it will always be emitted.
+	rows := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10": Value{Value: "Engineering", Type: OctetString},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.10": Value{Value: "1", Type: Integer},
+	}
+
+	// Top-level device tenant set; defaults.vlan.tenant unset.
+	defaults := &config.Defaults{
+		Tenant: config.TenantParameters{Name: "acme", Group: "customers"},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{CreateUnknownVlans: ptrBool(true)})
+	emitted := vm.PostMap(rows, registry, defaults)
+
+	var got *diode.VLAN
+	for _, e := range emitted {
+		if v, ok := e.(*diode.VLAN); ok && v.Vid != nil && *v.Vid == 10 {
+			got = v
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("expected VLAN entity for VID 10, got none")
+	}
+	if got.Tenant != nil {
+		t.Errorf("Tenant: got %+v, want nil (top-level defaults.tenant must not cascade to VLANs)", got.Tenant)
+	}
+}
+
 // TestVlanMapper_EmitVLANs_StripsNullBytesFromName verifies that NUL-padded or
 // NUL-interrupted dot1qVlanStaticName values (seen on FS switches and other vendor
 // agents) are sanitized before reaching the Diode payload. NetBox/PostgreSQL rejects
@@ -505,5 +542,140 @@ func TestApplyVLANDefaults_NoGroup_SiteIgnored(t *testing.T) {
 
 	if v.Group != nil {
 		t.Errorf("Group: got %v, want nil (no group configured)", v.Group)
+	}
+}
+
+// buildCiscoSBFixture models a Cisco Catalyst 1200 as reported in issue #482:
+// dot1qPvid answers 1 for the port even though it is really on accessVid, the
+// per-VLAN egress/untagged masks come back empty, and the private CISCOSB
+// column carries the real VLAN keyed by ifIndex.
+func buildCiscoSBFixture(ifIndex, accessVid int) ObjectIDValueMap {
+	out := ObjectIDValueMap{}
+	put := func(oid, val string, t Asn1BER) { out[oid] = Value{Value: val, Type: t} }
+	idx := strconv.Itoa(ifIndex)
+	vid := strconv.Itoa(accessVid)
+
+	put(".1.3.6.1.2.1.17.1.4.1.2."+idx, idx, Integer)     // bridge port -> ifIndex
+	put(".1.3.6.1.2.1.17.7.1.4.5.1.1."+idx, "1", Integer) // the platform's wrong PVID
+	put(".1.3.6.1.2.1.2.2.1.7."+idx, "1", Integer)
+	put(".1.3.6.1.2.1.2.2.1.3."+idx, "6", Integer)
+
+	// The VLAN exists in the static table but its port masks are all zero.
+	put(".1.3.6.1.2.1.17.7.1.4.3.1.1."+vid, "vlan"+vid, OctetString)
+	put(".1.3.6.1.2.1.17.7.1.4.3.1.2."+vid, string(make([]byte, 126)), OctetString)
+	put(".1.3.6.1.2.1.17.7.1.4.3.1.4."+vid, string(make([]byte, 126)), OctetString)
+	put(".1.3.6.1.2.1.17.7.1.4.3.1.5."+vid, "1", Integer)
+
+	put(".1.3.6.1.4.1.9.6.1.101.48.62.1.1."+idx, vid, Integer)
+	return out
+}
+
+func newVlanTestRegistry(t *testing.T, ifIndex int, name string) (*EntityRegistry, *diode.Interface) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	iface := &diode.Interface{Name: StringPtr(name)}
+	if registry.entities[InterfaceEntityType] == nil {
+		registry.entities[InterfaceEntityType] = map[ObjectIDIndex]diode.Entity{}
+	}
+	registry.entities[InterfaceEntityType][ObjectIDIndex(strconv.Itoa(ifIndex))] = iface
+	registry.MarkInterfaceVerified(iface)
+	return registry, iface
+}
+
+// Issue #482: the port must land on the VLAN the private column reports, not on
+// the 1 that dot1qPvid claims.
+func TestVlanMapper_PostMap_CiscoSB_OverridesWrongPvid(t *testing.T) {
+	registry, iface := newVlanTestRegistry(t, 2, "gi2")
+	NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(buildCiscoSBFixture(2, 2137), registry,
+			&config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if iface.Mode == nil || *iface.Mode != "access" {
+		t.Fatalf("Interface.Mode: got %v, want access", iface.Mode)
+	}
+	if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil {
+		t.Fatalf("Interface.UntaggedVlan: got %+v, want VID 2137", iface.UntaggedVlan)
+	}
+	if got := *iface.UntaggedVlan.Vid; got != 2137 {
+		t.Fatalf("UntaggedVlan.Vid: got %d, want 2137 (dot1qPvid's 1 must not win)", got)
+	}
+}
+
+// Non-CISCOSB Cisco gear is walked for these OIDs too, so a host that does not
+// answer them must classify exactly as before.
+func TestVlanMapper_PostMap_CiscoSB_AbsentLeavesGenericBehaviour(t *testing.T) {
+	registry, iface := newVlanTestRegistry(t, 101, "Ethernet1")
+	NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(buildAccessPortFixture(101, 10), registry,
+			&config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 10 {
+		t.Fatalf("Interface.UntaggedVlan: got %+v, want VID 10", iface.UntaggedVlan)
+	}
+}
+
+// A port the bridge-port table omits stays untouched even when CISCOSB reports
+// a VLAN for it: the overlay refines ports, it does not create them.
+func TestVlanMapper_PostMap_CiscoSB_DoesNotCreatePorts(t *testing.T) {
+	registry, bridged := newVlanTestRegistry(t, 2, "gi2")
+	omitted := &diode.Interface{Name: StringPtr("gi3")}
+	registry.entities[InterfaceEntityType]["3"] = omitted
+	registry.MarkInterfaceVerified(omitted)
+
+	rows := buildCiscoSBFixture(2, 2137)
+	rows[".1.3.6.1.2.1.2.2.1.7.3"] = Value{Value: "1", Type: Integer}
+	rows[".1.3.6.1.2.1.2.2.1.3.3"] = Value{Value: "6", Type: Integer}
+	rows[".1.3.6.1.4.1.9.6.1.101.48.62.1.1.3"] = Value{Value: "999", Type: Integer}
+
+	NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if bridged.UntaggedVlan == nil || *bridged.UntaggedVlan.Vid != 2137 {
+		t.Fatalf("bridged port: got %+v, want 2137", bridged.UntaggedVlan)
+	}
+	if omitted.Mode != nil || omitted.UntaggedVlan != nil {
+		t.Fatalf("port omitted from the bridge table was mutated: mode=%v untagged=%+v",
+			omitted.Mode, omitted.UntaggedVlan)
+	}
+}
+
+// The two private columns are not interchangeable. An access column that
+// explicitly reports VLAN 1 is evidence, because the operator configured it;
+// the trunk-native column reading 1 is the factory default and is ignored on an
+// access port. Parsing one into the other's map would silently swap the rules.
+func TestVlanMapper_PostMap_CiscoSB_AccessAndNativeColumnsAreDistinct(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		oid          string
+		wantUntagged int64
+	}{
+		// The access column naming VLAN 1 overrides the generic PVID of 50.
+		{"access column", ".1.3.6.1.4.1.9.6.1.101.48.62.1.1.2", 1},
+		// The native column naming VLAN 1 is indistinguishable from unset on an
+		// access port, so the generic value stands.
+		{"native column", ".1.3.6.1.4.1.9.6.1.101.48.61.1.1.2", 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, iface := newVlanTestRegistry(t, 2, "gi2")
+			rows := ObjectIDValueMap{
+				".1.3.6.1.2.1.17.1.4.1.2.2":      Value{Value: "2", Type: Integer},
+				".1.3.6.1.2.1.17.7.1.4.5.1.1.2":  Value{Value: "50", Type: Integer},
+				".1.3.6.1.2.1.17.7.1.4.3.1.1.50": Value{Value: "vlan50", Type: OctetString},
+				".1.3.6.1.2.1.17.7.1.4.3.1.5.50": Value{Value: "1", Type: Integer},
+				".1.3.6.1.2.1.2.2.1.7.2":         Value{Value: "1", Type: Integer},
+				".1.3.6.1.2.1.2.2.1.3.2":         Value{Value: "6", Type: Integer},
+				tc.oid:                           Value{Value: "1", Type: Integer},
+			}
+			NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+				PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+			if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil {
+				t.Fatalf("UntaggedVlan: got %+v, want VID %d", iface.UntaggedVlan, tc.wantUntagged)
+			}
+			if got := *iface.UntaggedVlan.Vid; got != tc.wantUntagged {
+				t.Fatalf("UntaggedVlan.Vid: got %d, want %d", got, tc.wantUntagged)
+			}
+		})
 	}
 }

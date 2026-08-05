@@ -157,7 +157,7 @@ See [Switch stacks / Virtual Chassis](./README.md#switch-stacks--virtual-chassis
 
 | Driver | Status |
 |--------|--------|
-| `ios` | Supported (Cisco IOS / IOS-XE) — Catalyst StackWise (3850, 9300, 2960X, etc.); parses `show switch detail` + `show inventory` via ntc-templates |
+| `ios` | Supported (Cisco IOS / IOS-XE) — Catalyst StackWise (3850, 9300, 2960X, etc.) **and** Catalyst 9400 / 9500 / 9600 StackWise Virtual (SVL). Tries `show switch detail`, falling back to `show switch` for SVL, which rejects the `detail` keyword; the member table is parsed driver-locally rather than via ntc-templates, because that template discards every member row when any row carries a multi-word state such as `Version Mismatch`. Per-member serial and model come from the `show inventory` chassis rows (`Switch N` on StackWise, `Switch N Chassis` on SVL), matched anchored so component rows (power supply, fan tray, supervisor) can never supply a member's identity. On SVL the domain number is read from `show stackwise-virtual`, the only command that exposes it — physical stacks emit no domain. |
 | `junos` | Supported (Juniper EX / QFX) — Virtual Chassis via the `<get-virtual-chassis-information>` PyEZ RPC; tolerates both `<member-list>/<member>` (modern) and bare `<member>` (older releases) shapes |
 | `aruba_aoscx` | Supported (HPE Aruba AOS-CX) — Virtual Switching Framework (VSF) via pyaoscx REST (`/system/vsf_members` + optional `/system/vsf`); tolerates list-of-members and dict-keyed-by-id payload shapes |
 | `aruba_aoscx_ssh` | Supported (HPE Aruba AOS-CX) — VSF via SSH `show vsf detail` (ntc-template `aruba_aoscx_show_vsf_detail`); member role comes from the `Status` field |

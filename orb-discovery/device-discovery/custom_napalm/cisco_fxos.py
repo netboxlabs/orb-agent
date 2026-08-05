@@ -17,8 +17,11 @@ import re
 
 import napalm.base as _napalm_base
 from napalm.base import models
+from napalm.base.exceptions import ConnectionException
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
+from netmiko.cisco.cisco_nxos import CiscoNxosSSH
+from netmiko.exceptions import NetmikoTimeoutException, ReadTimeout
 from ntc_templates.parse import ParsingException, parse_output
 from textfsm.parser import TextFSMError
 
@@ -236,6 +239,36 @@ def _fxos_get_modules_impl(driver) -> dict | None:
     return _modules_to_payload({None: _MemberModules(bays=bays, interfaces_by_bay={})})
 
 
+class _TolerantNxosSSH(CiscoNxosSSH):
+    """
+    NX-OS session prep that tolerates shells lacking terminal-width/paging echo.
+
+    FXOS (and similar NX-OS-lookalike shells) authenticate fine but never
+    echo "terminal width 511" or the paging-disable command, so the stock
+    ``CiscoNxosSSH.session_preparation`` dies in ``ReadTimeout`` before any
+    getter can run. Each prep step is attempted and simply skipped (with a
+    warning) on timeout instead of failing the connect; ``set_base_prompt``
+    still runs so the session is otherwise fully usable.
+    """
+
+    def session_preparation(self) -> None:
+        """Prepare the session, tolerating shells that don't echo prep commands."""
+        self.ansi_escape_codes = True
+        # NX-OS (and FXOS) can echo the command before returning the prompt.
+        self._test_channel_read(pattern=r"[>#]")
+        try:
+            self.set_terminal_width(
+                command="terminal width 511", pattern=r"terminal width 511"
+            )
+        except ReadTimeout:
+            logger.warning("cisco_fxos: terminal width not echoed by shell; continuing")
+        try:
+            self.disable_paging()
+        except ReadTimeout:
+            logger.warning("cisco_fxos: disable paging not echoed by shell; continuing")
+        self.set_base_prompt()
+
+
 class FXOSDriver(_napalm_base.NetworkDriver):
     """
     Cisco FXOS NAPALM driver (read-only subset for device-discovery).
@@ -260,10 +293,36 @@ class FXOSDriver(_napalm_base.NetworkDriver):
         self.netmiko_optional_args.setdefault("port", 22)
 
     def open(self):
-        """Open an SSH connection via Netmiko (cisco_nxos device type)."""
-        self.device = self._netmiko_open(
-            "cisco_nxos", netmiko_optional_args=self.netmiko_optional_args
-        )
+        """
+        Open an SSH connection via Netmiko, using a tolerant NX-OS-derived session.
+
+        Constructs ``_TolerantNxosSSH`` directly instead of going through
+        ``self._netmiko_open("cisco_nxos", ...)`` — the stock ``cisco_nxos``
+        session preparation hardcodes a "terminal width 511" round-trip that
+        FXOS (and similar shells) never echo, raising ReadTimeout before any
+        getter runs. All existing optional-args behaviour (port default 22,
+        etc.) is preserved via ``self.netmiko_optional_args``.
+        """
+        try:
+            device = _TolerantNxosSSH(
+                host=self.hostname,
+                username=self.username,
+                password=self.password,
+                device_type="cisco_nxos",
+                timeout=self.timeout,
+                **self.netmiko_optional_args,
+            )
+        except NetmikoTimeoutException:
+            # keep napalm _netmiko_open parity: unreachable devices surface
+            # ConnectionException like every other driver
+            raise ConnectionException(f"Cannot connect to {self.hostname}") from None
+        self.device = device
+        self._netmiko_device = device
+        try:
+            if not self.force_no_enable:
+                self._netmiko_device.enable()
+        except AttributeError:
+            self._netmiko_device.enable()
 
     def close(self):
         """Close the connection."""

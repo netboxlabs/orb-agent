@@ -3,11 +3,10 @@ package networkdiscovery
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -25,7 +24,6 @@ var _ backend.Backend = (*networkDiscoveryBackend)(nil)
 const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
-	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	statusTimeout       = 5
@@ -81,41 +79,16 @@ func (d *networkDiscoveryBackend) Configure(logger *slog.Logger, repo policies.P
 	d.policyRepo = repo
 	d.diodeTargetFromOtel = false
 
-	var prs bool
-	if d.apiHost, prs = config["host"].(string); !prs {
-		d.apiHost = defaultAPIHost
-	}
-	if port, prs := config["port"]; prs {
-		d.apiPort = fmt.Sprintf("%v", port)
-	} else {
-		d.apiPort = defaultAPIPort
-	}
+	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
+	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
-	d.diodeTarget = common.Diode.Target
-	d.diodeClientID = common.Diode.ClientID
-	d.diodeClientSecret = common.Diode.ClientSecret
-	d.diodeAppNamePrefix = common.Diode.AgentName
-	d.diodeDryRun = common.Diode.DryRun
-	d.diodeDryRunOutputDir = common.Diode.DryRunOutputDir
+	d.diodeTarget = backend.ConfigValueOrDefault(config, "target", common.Diode.Target)
+	d.diodeClientID = backend.ConfigValueOrDefault(config, "client_id", common.Diode.ClientID)
+	d.diodeClientSecret = backend.ConfigValueOrDefault(config, "client_secret", common.Diode.ClientSecret)
+	d.diodeAppNamePrefix = backend.ConfigValueOrDefault(config, "agent_name", common.Diode.AgentName)
+	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", common.Diode.DryRun)
+	d.diodeDryRunOutputDir = backend.ConfigValueOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
 
-	if target, prs := config["target"].(string); prs {
-		d.diodeTarget = target
-	}
-	if clientID, prs := config["client_id"].(string); prs {
-		d.diodeClientID = clientID
-	}
-	if clientSecret, prs := config["client_secret"].(string); prs {
-		d.diodeClientSecret = clientSecret
-	}
-	if agentName, prs := config["agent_name"].(string); prs {
-		d.diodeAppNamePrefix = agentName
-	}
-	if dryRun, prs := config["dry_run"].(bool); prs {
-		d.diodeDryRun = dryRun
-	}
-	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
-		d.diodeDryRunOutputDir = dryRunOutputDir
-	}
 	if logLevel, prs := config["log_level"].(string); prs {
 		d.diodeLogLevel = logLevel
 	} else if debug, prs := config["debug"].(bool); prs && debug {
@@ -148,11 +121,7 @@ func (d *networkDiscoveryBackend) Version() (string, error) {
 	return info.Version, nil
 }
 
-func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
-	d.startTime = time.Now()
-	d.cancelFunc = cancelFunc
-	d.ctx = ctx
-
+func (d *networkDiscoveryBackend) buildArgs() []string {
 	dOptions := []string{
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		"--host", d.apiHost,
@@ -188,96 +157,41 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 			"endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("network-discovery startup", "arguments", redact.Args(dOptions))
-
-	d.proc = backend.NewCmdOptions(backend.CmdOptions{
-		Buffered:  false,
-		Streaming: true,
-	}, d.exec, dOptions...)
-	d.statusChan = d.proc.Start()
-
-	// log STDOUT and STDERR lines streaming from Cmd
-	doneChan := make(chan struct{})
-	go func() {
-		defer func() {
-			if doneChan != nil {
-				close(doneChan)
-			}
-		}()
-		stdout := d.proc.GetStdout()
-		stderr := d.proc.GetStderr()
-		for stdout != nil || stderr != nil {
-			select {
-			case line, open := <-stdout:
-				if !open {
-					stdout = nil
-					continue
-				}
-				d.logNetworkDiscoveryOutput(line, slog.LevelInfo)
-			case line, open := <-stderr:
-				if !open {
-					stderr = nil
-					continue
-				}
-				d.logNetworkDiscoveryOutput(line, slog.LevelError)
-			}
-		}
-	}()
-
-	// wait for simple startup errors
-	time.Sleep(time.Second)
-
-	status := d.proc.Status()
-
-	if status.Error != nil {
-		d.logger.Error("network-discovery startup error", "error", status.Error)
-		return status.Error
-	}
-
-	if status.Complete {
-		err := d.proc.Stop()
-		if err != nil {
-			d.logger.Error("proc.Stop error", "error", err)
-		}
-		return errors.New("network-discovery startup error, check log")
-	}
-
-	d.logger.Info("network-discovery process started", "pid", status.PID)
-
-	var version string
-	var readinessErr error
-	for backoff := range readinessBackoff {
-		if status := d.proc.Status(); status.Complete {
-			err := d.proc.Stop()
-			if err != nil {
-				d.logger.Error("proc.Stop error", "error", err)
-			}
-			return errors.New("network-discovery process ended unexpectedly, check log")
-		}
-		version, readinessErr = d.Version()
-		if readinessErr == nil {
-			d.logger.Info("network-discovery readiness ok, got version", "version", version)
-			break
-		}
-		backoffDuration := time.Duration(backoff) * time.Second
-		d.logger.Info("network-discovery is not ready, trying again with backoff",
-			"backoff backoffDuration", backoffDuration.String())
-		time.Sleep(backoffDuration)
-	}
-
-	if readinessErr != nil {
-		d.logger.Error("network-discovery error on readiness", "error", readinessErr)
-		err := d.proc.Stop()
-		if err != nil {
-			d.logger.Error("proc.Stop error", "error", err)
-		}
-		return readinessErr
-	}
-
-	return nil
+	return dOptions
 }
 
-func (d *networkDiscoveryBackend) logNetworkDiscoveryOutput(line string, fallback slog.Level) {
+func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
+	d.startTime = time.Now()
+	d.cancelFunc = cancelFunc
+	d.ctx = ctx
+
+	args := d.buildArgs()
+
+	d.logger.Info("network-discovery startup", "arguments", redact.Args(args))
+
+	return backend.StartProcess(backend.StartSpec{
+		Logger:         d.logger,
+		NameDisplay:    "network-discovery",
+		NameUnderscore: "network_discovery",
+		Exec:           d.exec,
+		Args:           args,
+		LogLine:        d.logLineAdapter,
+		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
+			d.proc = p
+			d.statusChan = ch
+		},
+		ReadinessCheck: d.Version,
+	})
+}
+
+// logLineAdapter routes a streamed stdout/stderr line to the network-discovery
+// output normalizer with the level matching the source stream.
+func (d *networkDiscoveryBackend) logLineAdapter(line string, isStderr bool) {
+	fallback := slog.LevelInfo
+	if isStderr {
+		fallback = slog.LevelError
+	}
+
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return
@@ -287,7 +201,7 @@ func (d *networkDiscoveryBackend) logNetworkDiscoveryOutput(line string, fallbac
 	attrs := []slog.Attr(nil)
 	level := fallback
 
-	if parsedMsg, parsedAttrs, parsedLevel, ok := normalizeNetworkDiscoveryLine(trimmed, fallback); ok {
+	if parsedMsg, parsedAttrs, parsedLevel, ok := backend.NormalizeLogfmtLine(trimmed, fallback); ok {
 		msg = parsedMsg
 		attrs = parsedAttrs
 		level = parsedLevel
@@ -403,7 +317,7 @@ func (d *networkDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, name)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, neturl.PathEscape(name))
 	err := backend.CommonRequest("network-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
@@ -421,162 +335,4 @@ func (d *networkDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, err
 		return nil, err
 	}
 	return resp.Policies, nil
-}
-
-func normalizeNetworkDiscoveryLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
-	fields, ok := parseNetworkDiscoveryLogfmt(line)
-	if !ok {
-		return "", nil, fallback, false
-	}
-
-	msg, ok := fields["msg"]
-	if !ok || strings.TrimSpace(msg) == "" {
-		return "", nil, fallback, false
-	}
-
-	level := fallback
-	if lvlValue, exists := fields["level"]; exists {
-		if parsedLevel, levelOK := parseNetworkDiscoveryLevel(lvlValue); levelOK {
-			level = parsedLevel
-		}
-	}
-
-	delete(fields, "msg")
-	delete(fields, "level")
-	delete(fields, "time")
-
-	if len(fields) == 0 {
-		return msg, nil, level, true
-	}
-
-	keys := make([]string, 0, len(fields))
-	for key := range fields {
-		if strings.TrimSpace(key) == "" {
-			continue
-		}
-		keys = append(keys, key)
-	}
-
-	if len(keys) == 0 {
-		return msg, nil, level, true
-	}
-
-	sort.Strings(keys)
-
-	attrs := make([]slog.Attr, 0, len(keys))
-	for _, key := range keys {
-		attrs = append(attrs, slog.String(key, fields[key]))
-	}
-
-	return msg, attrs, level, true
-}
-
-func parseNetworkDiscoveryLevel(value string) (slog.Level, bool) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "debug":
-		return slog.LevelDebug, true
-	case "info":
-		return slog.LevelInfo, true
-	case "warn", "warning":
-		return slog.LevelWarn, true
-	case "error", "err":
-		return slog.LevelError, true
-	default:
-		return 0, false
-	}
-}
-
-func parseNetworkDiscoveryLogfmt(line string) (map[string]string, bool) {
-	result := make(map[string]string)
-	runes := []rune(line)
-	length := len(runes)
-	index := 0
-
-	for index < length {
-		for index < length && runes[index] == ' ' {
-			index++
-		}
-		if index >= length {
-			break
-		}
-
-		keyStart := index
-		for index < length && runes[index] != '=' && runes[index] != ' ' {
-			index++
-		}
-		if index >= length || runes[index] != '=' {
-			return nil, false
-		}
-
-		key := strings.TrimSpace(string(runes[keyStart:index]))
-		index++ // skip '='
-
-		value, nextIndex, ok := readLogfmtValue(runes, index)
-		if !ok {
-			return nil, false
-		}
-
-		result[key] = value
-		index = nextIndex
-	}
-
-	if len(result) == 0 {
-		return nil, false
-	}
-
-	return result, true
-}
-
-func readLogfmtValue(runes []rune, start int) (string, int, bool) {
-	length := len(runes)
-	if start >= length {
-		return "", start, true
-	}
-
-	switch runes[start] {
-	case '"', '\'':
-		return readQuotedValue(runes, start)
-	default:
-		return readUnquotedValue(runes, start)
-	}
-}
-
-func readQuotedValue(runes []rune, start int) (string, int, bool) {
-	length := len(runes)
-	quote := runes[start]
-	index := start + 1
-	var builder strings.Builder
-
-	for index < length {
-		char := runes[index]
-		if char == '\\' && index+1 < length {
-			builder.WriteRune(runes[index+1])
-			index += 2
-			continue
-		}
-		if char == quote {
-			index++
-			for index < length && runes[index] == ' ' {
-				index++
-			}
-			return builder.String(), index, true
-		}
-		builder.WriteRune(char)
-		index++
-	}
-
-	return "", length, false
-}
-
-func readUnquotedValue(runes []rune, start int) (string, int, bool) {
-	length := len(runes)
-	index := start
-	for index < length && runes[index] != ' ' {
-		index++
-	}
-	value := string(runes[start:index])
-	for index < length && runes[index] == ' ' {
-		index++
-	}
-	return value, index, true
 }

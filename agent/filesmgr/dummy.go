@@ -13,6 +13,8 @@ func (dummyFilesManager) Start(context.Context) error                      { ret
 func (dummyFilesManager) Stop(context.Context) error                       { return nil }
 func (dummyFilesManager) Ensure(context.Context, FileSpec) (string, error) { return "", nil }
 func (dummyFilesManager) Get(string) (FileEntry, bool)                     { return FileEntry{}, false }
+func (dummyFilesManager) List() []FileEntry                                { return nil }
+func (dummyFilesManager) ListPending() []FileEntry                         { return nil }
 func (dummyFilesManager) Remove(context.Context, string) error             { return nil }
 func (dummyFilesManager) Rollback(context.Context, string) error           { return nil }
 func (dummyFilesManager) Subscribe(func(FileEvent)) func()                 { return func() {} }

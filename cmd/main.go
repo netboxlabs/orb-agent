@@ -3,16 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/gnmidiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/opentelemetryinfinity"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
@@ -34,6 +35,7 @@ var (
 
 func init() {
 	devicediscovery.Register()
+	gnmidiscovery.Register()
 	networkdiscovery.Register()
 	opentelemetryinfinity.Register()
 	snmpdiscovery.Register()
@@ -47,56 +49,53 @@ func Version(_ *cobra.Command, _ []string) {
 	os.Exit(0)
 }
 
-func loadConfig(path string, configData *config.Config) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("failed to open config file: %w", err)
+// newRootLogger builds the agent's JSON logger on a mutable LevelVar so the
+// level can be raised after the config file is parsed. The logger must exist
+// before config.Load so the ORB_ env overlay can log through it; when debug
+// comes only from the YAML file, the overlay's debug-level skip diagnostics
+// are suppressed (the level is still Info while the file is being parsed) —
+// only the -d flag captures those.
+func newRootLogger(w io.Writer, debugFlag bool) (*slog.Logger, *slog.LevelVar) {
+	level := new(slog.LevelVar) // defaults to Info
+	if debugFlag {
+		level.Set(slog.LevelDebug)
 	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			cobra.CheckErr(fmt.Errorf("failed to close config file: %w", err))
-		}
-	}()
+	h := slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level, AddSource: false})
+	return slog.New(h), level
+}
 
-	decoder := yaml.NewDecoder(file)
-	if err := decoder.Decode(configData); err != nil {
-		return fmt.Errorf("failed to parse config file: %w", err)
+// applyConfigDebug raises the log level to Debug when the config file asks
+// for it (orb.debug.enable) and returns the effective debug state (flag OR
+// config) that downstream consumers (BackendCommons.Debug, backend -d
+// propagation) must see so YAML debug behaves exactly like -d.
+func applyConfigDebug(logger *slog.Logger, level *slog.LevelVar, debugFlag bool, cfg config.Config) bool {
+	if cfg.OrbAgent.Debug.Enable && !debugFlag {
+		level.Set(slog.LevelDebug)
+		logger.Debug("debug logging enabled via config file (orb.debug.enable)")
 	}
-
-	return nil
+	return debugFlag || cfg.OrbAgent.Debug.Enable
 }
 
 // Run starts the agent
 func Run(_ *cobra.Command, _ []string) {
-	var configData config.Config
-
-	// Override with user-provided config files
-	for _, conf := range cfgFiles {
-		if err := loadConfig(conf, &configData); err != nil {
-			cobra.CheckErr(fmt.Errorf("error loading config file %s: %w", conf, err))
-		}
-	}
-
-	// logger
-	var l slog.Level
-	if debug {
-		l = slog.LevelDebug
-	} else {
-		l = slog.LevelInfo
-	}
-	h := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l, AddSource: false})
-	logger := slog.New(h)
-
-	if len(cfgFiles) > 0 {
-		configData.OrbAgent.ConfigFile = cfgFiles[0]
-	} else {
+	if len(cfgFiles) == 0 {
 		cobra.CheckErr(fmt.Errorf("no config file specified, use --config or -c flag to provide config files"))
+	}
+
+	// logger (constructed before Load so unknown ORB_ overrides can be logged)
+	logger, logLevel := newRootLogger(os.Stdout, debug)
+
+	configData, err := config.Load(cfgFiles, logger)
+	if err != nil {
+		cobra.CheckErr(fmt.Errorf("error loading configuration: %w", err))
 	}
 
 	logger.Info("backends loaded", "backends", redact.SensitiveData(configData.OrbAgent.Backends))
 
+	effectiveDebug := applyConfigDebug(logger, logLevel, debug, configData)
+
 	// new agent
-	a, err := agent.New(logger, configData, debug)
+	a, err := agent.New(logger, configData, effectiveDebug)
 	if err != nil {
 		logger.Error("agent start up error", "error", err)
 		os.Exit(1)

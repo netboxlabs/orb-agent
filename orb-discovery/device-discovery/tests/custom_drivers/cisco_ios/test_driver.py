@@ -52,7 +52,7 @@ class TestIOSDriver(BaseDriverTest):
         """
         ``Fi*`` short-form expands to FiveGigabitEthernet, not FiftyGigabitEthernet.
 
-        Regression for ENGHLP-1279: netutils.BASE_INTERFACES maps ``"Fi"`` to
+        Regression test: netutils.BASE_INTERFACES maps ``"Fi"`` to
         ``"FiftyGigabitEthernet"``, which is wrong for Cisco IOS Catalyst
         multigig hardware. Without the IOS-specific ``addl_name_map`` override,
         every ``Fi*`` port returned by ``show interfaces switchport`` ended up

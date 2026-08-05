@@ -1185,7 +1185,12 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "mapping with MTU at maximum valid value should succeed",
+			// Regression test: some vendors (observed: JUNOS) report this exact value on
+			// certain internal interfaces as an "unlimited" sentinel rather than a real
+			// MTU. It passes the protocol-level int32 bound but exceeds NetBox's real
+			// field limit (65536) — the field is skipped (not clipped to a fabricated
+			// value), consistent with how every other out-of-range MTU case here behaves.
+			name: "mapping with MTU at protocol maximum should be skipped, not clipped",
 			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
 				"1.3.6.1.2.1.2.2.1.1.1": {
 					OID:    "1.3.6.1.2.1.2.2.1.1.1",
@@ -1234,7 +1239,63 @@ func TestInterfaceMapper_Map(t *testing.T) {
 			defaults: nil,
 			expectedEntity: &diode.Interface{
 				Name: mapping.StringPtr("eth0"),
-				Mtu:  int64Ptr(2147483647), // MTU should be set when value is at maximum valid range
+				Mtu:  nil, // skipped: 2147483647 exceeds NetBox's field limit, not attached as a fabricated value
+			},
+			expectError: false,
+		},
+		{
+			// Boundary check: exactly at NetBox's limit must pass through unclipped —
+			// only values *above* netboxMaxInterfaceMTU should be modified.
+			name: "mapping with MTU exactly at NetBox's limit should not be clipped",
+			values: map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+				"1.3.6.1.2.1.2.2.1.1.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.1.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.1",
+					Value:  "1",
+					Type:   mapping.Integer,
+				},
+				"1.3.6.1.2.1.2.2.1.2.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.2.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.2",
+					Value:  "eth0",
+					Type:   mapping.OctetString,
+				},
+				"1.3.6.1.2.1.2.2.1.4.1": {
+					OID:    "1.3.6.1.2.1.2.2.1.4.1",
+					Index:  "1",
+					Parent: "1.3.6.1.2.1.2.2.1.4",
+					Value:  "65536",
+					Type:   mapping.Integer,
+				},
+			},
+			mappingEntry: &mapping.Entry{
+				OID:    "1.3.6.1.2.1.2.2.1.1",
+				Entity: "interface",
+				Field:  "_id",
+				MappingEntries: []mapping.Entry{
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.1",
+						Entity: "interface",
+						Field:  "_id",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.2",
+						Entity: "interface",
+						Field:  "name",
+					},
+					{
+						OID:    "1.3.6.1.2.1.2.2.1.4",
+						Entity: "interface",
+						Field:  "mtu",
+					},
+				},
+			},
+			defaults: nil,
+			expectedEntity: &diode.Interface{
+				Name: mapping.StringPtr("eth0"),
+				Mtu:  int64Ptr(65536),
 			},
 			expectError: false,
 		},
@@ -4802,4 +4863,191 @@ func TestInterfaceMapper_Map_NameSourceModes(t *testing.T) {
 			assert.Equal(t, "uplink to core", *got.Description, "ifAlias description unaffected by name source")
 		})
 	}
+}
+
+// TestDeviceMapper_Map_TenantDefaultApplied verifies that a fully
+// populated top-level defaults.tenant lands on the emitted device with
+// all fields set (Group as *diode.TenantGroup{Name}, Tags as
+// []*diode.Tag by Name). Mirrors the standalone harness of
+// TestDeviceMapper_Map_DefaultsResolveFromWalkedSnapshot.
+func TestDeviceMapper_Map_TenantDefaultApplied(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.5.0": {
+			OID:    "1.3.6.1.2.1.1.5.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.5",
+			Value:  "router1",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.5", Entity: "device", Field: "name"},
+		},
+	}
+	defaults := &config.Defaults{
+		Tenant: config.TenantParameters{
+			Name:        "acme",
+			Group:       "customers",
+			Description: "d",
+			Comments:    "c",
+			Tags:        []string{"a", "b"},
+		},
+	}
+
+	registry := mapping.NewEntityRegistry(logger)
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+	require.NotNil(t, entity)
+	device, ok := entity.(*diode.Device)
+	require.True(t, ok)
+
+	require.NotNil(t, device.Tenant)
+	require.NotNil(t, device.Tenant.Name)
+	assert.Equal(t, "acme", *device.Tenant.Name)
+	require.NotNil(t, device.Tenant.Group)
+	require.NotNil(t, device.Tenant.Group.Name)
+	assert.Equal(t, "customers", *device.Tenant.Group.Name)
+	require.NotNil(t, device.Tenant.Description)
+	assert.Equal(t, "d", *device.Tenant.Description)
+	require.NotNil(t, device.Tenant.Comments)
+	assert.Equal(t, "c", *device.Tenant.Comments)
+	require.Len(t, device.Tenant.Tags, 2)
+	require.NotNil(t, device.Tenant.Tags[0].Name)
+	assert.Equal(t, "a", *device.Tenant.Tags[0].Name)
+	require.NotNil(t, device.Tenant.Tags[1].Name)
+	assert.Equal(t, "b", *device.Tenant.Tags[1].Name)
+}
+
+// TestDeviceMapper_Map_TenantDefaultNameOnly verifies the scalar form:
+// only Name is set on the emitted tenant; Group, Description, Comments
+// stay nil and Tags stays empty.
+func TestDeviceMapper_Map_TenantDefaultNameOnly(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.5.0": {
+			OID:    "1.3.6.1.2.1.1.5.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.5",
+			Value:  "router1",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.5", Entity: "device", Field: "name"},
+		},
+	}
+	defaults := &config.Defaults{
+		Tenant: config.TenantParameters{Name: "acme"},
+	}
+
+	registry := mapping.NewEntityRegistry(logger)
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+	require.NotNil(t, entity)
+	device, ok := entity.(*diode.Device)
+	require.True(t, ok)
+
+	require.NotNil(t, device.Tenant)
+	require.NotNil(t, device.Tenant.Name)
+	assert.Equal(t, "acme", *device.Tenant.Name)
+	assert.Nil(t, device.Tenant.Group)
+	assert.Nil(t, device.Tenant.Description)
+	assert.Nil(t, device.Tenant.Comments)
+	assert.Empty(t, device.Tenant.Tags)
+}
+
+// TestDeviceMapper_Map_TenantDefaultUnsetLeavesNil pins the current
+// behavior: with no defaults.tenant configured, the emitted device
+// carries no tenant.
+func TestDeviceMapper_Map_TenantDefaultUnsetLeavesNil(t *testing.T) {
+	logger := slog.Default()
+	mapper := mapping.NewDeviceMapper(&MockManufacturerDataRetriever{}, &MockDeviceLookup{}, logger)
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.1.5.0": {
+			OID:    "1.3.6.1.2.1.1.5.0",
+			Index:  "0",
+			Parent: "1.3.6.1.2.1.1.5",
+			Value:  "router1",
+			Type:   mapping.OctetString,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.1",
+		Entity: "device",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{OID: "1.3.6.1.2.1.1.5", Entity: "device", Field: "name"},
+		},
+	}
+	defaults := &config.Defaults{Site: "dc1"}
+
+	registry := mapping.NewEntityRegistry(logger)
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+	require.NotNil(t, entity)
+	device, ok := entity.(*diode.Device)
+	require.True(t, ok)
+
+	assert.Nil(t, device.Tenant)
+}
+
+// TestIPAddressMapper_Map_DeviceTenantDoesNotCascade pins the
+// no-cascade design decision: the top-level defaults.tenant is
+// device-only (matching device-discovery semantics) and must never leak
+// onto IP addresses — only defaults.ip_address.tenant does that.
+func TestIPAddressMapper_Map_DeviceTenantDoesNotCascade(t *testing.T) {
+	logger := slog.Default()
+
+	values := map[mapping.ObjectIDIndex]*mapping.ObjectIDValue{
+		"1.3.6.1.2.1.4.20.1.1.192.168.1.1": {
+			OID:    "1.3.6.1.2.1.4.20.1.1.192.168.1.1",
+			Index:  "192.168.1.1",
+			Parent: "1.3.6.1.2.1.4.20.1.1",
+			Value:  "192.168.1.1",
+			Type:   mapping.IPAddress,
+		},
+	}
+	mappingEntry := &mapping.Entry{
+		OID:    "1.3.6.1.2.1.4.20.1.1",
+		Entity: "ipAddress",
+		Field:  "_id",
+		MappingEntries: []mapping.Entry{
+			{
+				OID:    "1.3.6.1.2.1.4.20.1.1",
+				Entity: "ipAddress",
+				Field:  "_id",
+			},
+			{
+				OID:    "1.3.6.1.2.1.4.20.1.1",
+				Entity: "ipAddress",
+				Field:  "address",
+			},
+		},
+	}
+	// Top-level device tenant set; defaults.ip_address.tenant unset.
+	defaults := &config.Defaults{
+		Tenant: config.TenantParameters{Name: "acme", Group: "customers"},
+	}
+
+	registry := mapping.NewEntityRegistry(logger)
+	mapper := mapping.NewIPAddressMapper(logger)
+	entity := mapper.Map(values, mappingEntry, registry, defaults)
+
+	require.NotNil(t, entity)
+	ipAddress, ok := entity.(*diode.IPAddress)
+	require.True(t, ok)
+	assert.Equal(t, "192.168.1.1/32", *ipAddress.Address)
+	assert.Nil(t, ipAddress.Tenant,
+		"top-level defaults.tenant must not cascade to IP addresses")
 }

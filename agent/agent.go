@@ -98,7 +98,11 @@ var _ Agent = (*orbAgent)(nil)
 
 // New creates a new agent
 func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
-	sm := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
+	sm, err := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
+	if err != nil {
+		logger.Error("error during create secrets manager, exiting", "error", err)
+		return nil, err
+	}
 	fm := filesmgr.New(logger, c.OrbAgent.FilesManager)
 	pm, err := policymgr.New(logger, sm, c)
 	if err != nil {

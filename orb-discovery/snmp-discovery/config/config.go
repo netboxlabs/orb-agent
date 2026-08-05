@@ -62,6 +62,67 @@ func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
+// TenantParameters names the tenant applied to discovered devices. Accepts
+// either a plain string (tenant name) or a mapping, mirroring
+// device-discovery's defaults.tenant. Merged field-wise at override time
+// (see mergeTenantParameters), with the same accepted divergence as
+// VrfParameters: a scalar override sets Name only and cannot clear other
+// inherited fields, because post-unmarshal the scalar and mapping forms
+// are indistinguishable.
+type TenantParameters struct {
+	Name        string   `yaml:"name"`
+	Group       string   `yaml:"group,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	Comments    string   `yaml:"comments,omitempty"`
+	Tags        []string `yaml:"tags,omitempty"`
+}
+
+// UnmarshalYAML accepts a scalar tenant name or a mapping.
+func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
+	// Reset up front so a stale receiver doesn't keep fields from a
+	// previous mapping-form pass when the new YAML is scalar.
+	*t = TenantParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			return nil
+		}
+		t.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		type alias TenantParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		*t = TenantParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("tenant: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
+// mergeTenantParameters overlays non-zero override fields onto dst in
+// place, mirroring mergeVrfParameters so a per-target override can refine
+// a single knob without restating the rest.
+func mergeTenantParameters(dst, override *TenantParameters) {
+	if override.Name != "" {
+		dst.Name = override.Name
+	}
+	if override.Group != "" {
+		dst.Group = override.Group
+	}
+	if override.Description != "" {
+		dst.Description = override.Description
+	}
+	if override.Comments != "" {
+		dst.Comments = override.Comments
+	}
+	if len(override.Tags) > 0 {
+		dst.Tags = override.Tags
+	}
+}
+
 // Status represents the status of the snmp-discovery service
 type Status struct {
 	StartTime     time.Time `json:"start_time"`
@@ -204,6 +265,7 @@ type Defaults struct {
 	Location                 string             `yaml:"location,omitempty"`
 	Role                     string             `yaml:"role,omitempty"`
 	AssetTag                 string             `yaml:"asset_tag,omitempty"`
+	Tenant                   TenantParameters   `yaml:"tenant,omitempty"`
 	IPAddress                IPAddressDefaults  `yaml:"ip_address,omitempty"`
 	Prefix                   PrefixDefaults     `yaml:"prefix,omitempty"`
 	Interface                InterfaceDefaults  `yaml:"interface,omitempty"`
@@ -255,6 +317,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.AssetTag != "" {
 		merged.AssetTag = overrideDefaults.AssetTag
 	}
+	mergeTenantParameters(&merged.Tenant, &overrideDefaults.Tenant)
 	if len(overrideDefaults.Tags) > 0 {
 		merged.Tags = overrideDefaults.Tags
 	}
@@ -428,6 +491,24 @@ type Options struct {
 	// matching device-discovery's behavior. Set false to opt out.
 	EmitPrefixes *bool `yaml:"emit_prefixes,omitempty"`
 
+	// Tri-state pointer; unset defaults to FALSE — no Prefix is derived
+	// from an IPv4 /32 or IPv6 /128 address, because a host prefix only
+	// restates the address that is already emitted as an IPAddress. Set
+	// true to derive them anyway, e.g. when loopback /32s are tracked as
+	// prefixes in NetBox. Note the default is the opposite of
+	// emit_prefixes. IPv6 link-local prefixes are never derived and this
+	// option does not affect them.
+	EmitHostPrefixes *bool `yaml:"emit_host_prefixes,omitempty"`
+
+	// Tri-state pointer; unset defaults to TRUE — Device.name is emitted
+	// from SNMP sysName, matching legacy behaviour. Set false to suppress
+	// the name on the matched device so continual discovery under
+	// Assurance stops proposing hostname renames when sysName differs from
+	// the NetBox name. Only takes effect when the device is matchable
+	// another way (netbox_id / source_match, or asset_tag); otherwise the
+	// name is kept and a warning is logged.
+	EmitDeviceName *bool `yaml:"emit_device_name,omitempty"`
+
 	// When true AND no explicit defaults.prefix.scope_* is set,
 	// defaults.site cascades to Prefix scope site and defaults.location
 	// to Prefix scope location (the more specific location wins).
@@ -447,6 +528,20 @@ type Options struct {
 // defaulting to TRUE.
 func (o *Options) PrefixEmissionEnabled() bool {
 	return o == nil || o.EmitPrefixes == nil || *o.EmitPrefixes
+}
+
+// HostPrefixEmissionEnabled returns the effective emit_host_prefixes
+// toggle, defaulting to FALSE — the opposite of PrefixEmissionEnabled,
+// because a /32 or /128 prefix only restates an address already emitted
+// as an IPAddress entity.
+func (o *Options) HostPrefixEmissionEnabled() bool {
+	return o != nil && o.EmitHostPrefixes != nil && *o.EmitHostPrefixes
+}
+
+// DeviceNameEmissionEnabled returns the effective emit_device_name
+// toggle, defaulting to TRUE.
+func (o *Options) DeviceNameEmissionEnabled() bool {
+	return o == nil || o.EmitDeviceName == nil || *o.EmitDeviceName
 }
 
 // PrefixScopeCascadeEnabled returns the effective

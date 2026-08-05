@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Device Discovery Policy Models."""
 
+import logging
 import re
 import time
 import uuid
@@ -10,6 +11,13 @@ from typing import Any, Literal
 
 from croniter import CroniterBadCronError, croniter
 from pydantic import BaseModel, Field, field_validator
+
+from device_discovery.stack_naming import (
+    DEFAULT_STACK_MEMBER_TEMPLATE,
+    stack_template_problem,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class Status(Enum):
@@ -151,6 +159,14 @@ class Defaults(BaseModel):
     )
     location: str | None = Field(default=None, description="Location name, optional")
     rack: str | None = Field(default=None, description="Rack name, optional")
+    stack_member_name_template: str = Field(
+        default=DEFAULT_STACK_MEMBER_TEMPLATE,
+        description=(
+            "Template for stack (virtual-chassis) member device names. "
+            "Placeholders: {name} (stack name), {id} (member id). "
+            "Default '{name}-{id}' reproduces the legacy naming."
+        ),
+    )
 
     @field_validator("interface_patterns", "interface_exclude_patterns", mode="before")
     @classmethod
@@ -158,6 +174,30 @@ class Defaults(BaseModel):
         """Treat an empty list as None so override_defaults does not clear the global list."""
         if isinstance(v, list) and len(v) == 0:
             return None
+        return v
+
+    @field_validator("stack_member_name_template", mode="before")
+    @classmethod
+    def _normalize_stack_member_name_template(cls, v: object) -> str:
+        """Fall back to the default template (with a WARN) rather than reject a bad one."""
+        if v is None:
+            return DEFAULT_STACK_MEMBER_TEMPLATE
+        if not isinstance(v, str):
+            logger.warning(
+                "stack_member_name_template must be a string, got %s; using default %r",
+                type(v).__name__,
+                DEFAULT_STACK_MEMBER_TEMPLATE,
+            )
+            return DEFAULT_STACK_MEMBER_TEMPLATE
+        problem = stack_template_problem(v)
+        if problem is not None:
+            logger.warning(
+                "ignoring stack_member_name_template %r (%s); using default %r",
+                v,
+                problem,
+                DEFAULT_STACK_MEMBER_TEMPLATE,
+            )
+            return DEFAULT_STACK_MEMBER_TEMPLATE
         return v
     tenant: str | TenantParameters | None = Field(
         default=None, description="Tenant, optional"
@@ -265,6 +305,18 @@ class Options(BaseModel):
             "takes precedence over defaults vrf / vrf_ipv4 / vrf_ipv6 for "
             "those interfaces; interfaces in the default routing table "
             "keep the configured defaults. Default False."
+        ),
+    )
+    emit_host_prefixes: bool = Field(
+        default=False,
+        description=(
+            "Derive a Prefix from IPv4 /32 and IPv6 /128 addresses. A host "
+            "prefix only restates the address, which is already emitted as "
+            "an IPAddress entity, so this defaults to False and no prefix "
+            "is derived for them. Set True to restore the prefix, e.g. when "
+            "loopback /32s are tracked as prefixes in NetBox. IPv6 "
+            "link-local prefixes are never derived and are not affected by "
+            "this option."
         ),
     )
 

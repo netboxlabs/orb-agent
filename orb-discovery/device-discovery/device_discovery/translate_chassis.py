@@ -30,6 +30,8 @@ from netboxlabs.diode.sdk.ingester import Entity
 
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import Defaults, Options
+from device_discovery.proto_presence import copy_scalar_if_set
+from device_discovery.stack_naming import render_stack_member_name
 from device_discovery.translate_modules import emit_modules_if_requested
 
 logger = logging.getLogger(__name__)
@@ -91,6 +93,22 @@ def validate_chassis_payload(payload) -> list[dict] | None:
         seen_serials.add(serial)
         valid.append(m)
     if len(valid) < 2:
+        # Warn only when validation actually DROPPED members, which means a
+        # driver handed us a stack we could not represent — worth an operator's
+        # attention because the silent version of this was invisible until a user
+        # noticed missing NetBox data.
+        #
+        # A payload that simply contains fewer than two members is a standalone
+        # device, not a partial parse. This function is driver-agnostic, and a
+        # single-member payload is documented-normal for several drivers, so
+        # warning on it would spam every standalone device in a fleet on every
+        # cycle.
+        if len(members_raw) >= 2:
+            logger.warning(
+                "chassis_members: %d of %d member(s) survived validation, need at "
+                "least 2; falling back to a single Device",
+                len(valid), len(members_raw),
+            )
         return None
     valid.sort(key=lambda m: m["id"])
     return valid
@@ -113,7 +131,12 @@ def _master_device_ref(master_dev: pb.Device) -> pb.Device:
     and device.primary_ip4 is a circular reference the plugin can only resolve in
     the single change set that also assigns the IP to its interface.
     """
-    stub = pb.Device(name=master_dev.name, serial=master_dev.serial)
+    # Defensive: the master name is currently always non-empty (hostname or
+    # target_hostname or "unknown") and member serials are validated non-empty, so
+    # neither field can be blank today. Routed through copy_scalar_if_set anyway so
+    # this stub cannot regress into emitting an explicit empty matcher value.
+    stub = pb.Device()
+    copy_scalar_if_set(stub, master_dev, "name", "serial")
     _copy_master_ref_fields(stub, master_dev)
     if master_dev.asset_tag:
         stub.asset_tag = master_dev.asset_tag
@@ -221,7 +244,9 @@ def _build_member_devices(
 
     def _one(m: dict, *, is_master: bool) -> pb.Device:
         member_info = dict(device_info)
-        member_info["hostname"] = f"{vc_name}-{m['id']}"
+        member_info["hostname"] = render_stack_member_name(
+            defaults.stack_member_name_template, vc_name, m["id"]
+        )
         member_info["serial_number"] = m["serial"]
         if m.get("model"):
             member_info["model"] = m["model"]

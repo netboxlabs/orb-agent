@@ -42,8 +42,30 @@ type filesmgr struct {
 	fetcher *fetcher
 	bus     *eventBus
 
-	// perNameMu serializes Ensure calls for the same logical name.
+	// perNameMu serializes the actual install work (fetch/verify/symlink-swap)
+	// inside ensureLocked for a given name.
 	perNameMu sync.Map // name -> *sync.Mutex
+
+	// callMu serializes an entire Ensure call — including the record/clear
+	// failure-bookkeeping in the Ensure wrapper below — for a given name. This
+	// is deliberately a second, separate mutex from perNameMu rather than
+	// reusing it: ensureLocked acquires/releases perNameMu internally and
+	// returns before Ensure's wrapper runs setPendingFailed/clearPending, so
+	// without an outer lock two overlapping Ensure calls for the same name
+	// could have their record/clear calls execute out of completion order (an
+	// older, slower failing call could record a failure after a newer,
+	// faster successful call already cleared it). Holding callMu across the
+	// whole wrapper call ties the record/clear decision to the same
+	// happens-before order as lock acquisition, so whichever call finishes
+	// last is guaranteed to be the one whose outcome is recorded.
+	callMu sync.Map // name -> *sync.Mutex
+
+	// pendingMu guards pending. Deliberately separate from store's locking:
+	// pending entries are in-memory-only (never persisted to state.json —
+	// see FileEntry's doc comment in types.go) and are updated on the
+	// Ensure call path, which does not hold store.mu.
+	pendingMu sync.RWMutex
+	pending   map[string]FileEntry // name -> current installing/failed entry
 }
 
 // defaultRoot is the directory used when FilesManagerConfig.Root is empty.
@@ -83,6 +105,7 @@ func NewManager(logger *slog.Logger, root string) Manager {
 		store:   newStore(filepath.Join(root, "state.json")),
 		fetcher: newFetcher(l),
 		bus:     newEventBusWithLogger(logger),
+		pending: make(map[string]FileEntry),
 	}
 }
 
@@ -433,16 +456,102 @@ func (m *filesmgr) Get(name string) (FileEntry, bool) {
 	return m.store.get(name)
 }
 
+func (m *filesmgr) List() []FileEntry {
+	entries := m.store.all()
+	out := make([]FileEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, entry)
+	}
+	return out
+}
+
+// setPendingInstalling marks name as currently installing, overwriting
+// whatever pending entry (installing or failed) it may have had before. Called
+// at the start of Ensure, before the fetch/verify work begins.
+func (m *filesmgr) setPendingInstalling(name, version string) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	m.pending[name] = FileEntry{
+		Name:      name,
+		Version:   version,
+		State:     FileEntryStateInstalling,
+		UpdatedAt: time.Now().UTC(),
+	}
+}
+
+// setPendingFailed records name's most recent failed Ensure attempt,
+// overwriting whatever pending entry it may have had before (only the latest
+// attempt is kept). err's message (e.g. containing "context deadline
+// exceeded" for the install timeout) is the sole signal for the failure
+// cause — see FileEntry's doc comment for why there is no separate
+// structured field for this.
+func (m *filesmgr) setPendingFailed(name, version string, err error) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	m.pending[name] = FileEntry{
+		Name:      name,
+		Version:   version,
+		State:     FileEntryStateFailed,
+		Error:     err.Error(),
+		UpdatedAt: time.Now().UTC(),
+	}
+}
+
+// clearPending drops any pending (installing/failed) entry for name. Called
+// after a successful Ensure so a subsequent heartbeat stops reporting a
+// since-resolved installing/failed state.
+func (m *filesmgr) clearPending(name string) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	delete(m.pending, name)
+}
+
+// ListPending returns a snapshot of the current installing/failed entry for
+// each name that has one outstanding (i.e. no later Ensure call for that name
+// has succeeded since). Order is unspecified.
+func (m *filesmgr) ListPending() []FileEntry {
+	m.pendingMu.RLock()
+	defer m.pendingMu.RUnlock()
+	out := make([]FileEntry, 0, len(m.pending))
+	for _, p := range m.pending {
+		out = append(out, p)
+	}
+	return out
+}
+
 func (m *filesmgr) Subscribe(handler func(FileEvent)) (unsubscribe func()) {
 	return m.bus.subscribe(handler)
 }
 
 // Ensure makes sure the file described by spec is present on disk and matches
-// the declared SHA256. Correct operation order (atomicity guarantee):
+// the declared SHA256. It wraps ensureLocked to maintain per-name pending
+// state for heartbeat reporting (getBundleState in
+// agent/configmgr/fleet/heartbeats.go): the name is marked "installing" for
+// the duration of the call, then either "failed" (with Error set) or cleared
+// entirely on success, so a bundle's install lifecycle is never silently
+// omitted from the heartbeat.
+func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
+	callMu := m.ensureCallMutexFor(spec.Name)
+	callMu.Lock()
+	defer callMu.Unlock()
+
+	m.setPendingInstalling(spec.Name, spec.Version)
+
+	path, err := m.ensureLocked(ctx, spec)
+	if err != nil {
+		m.setPendingFailed(spec.Name, spec.Version, err)
+		return path, err
+	}
+	m.clearPending(spec.Name)
+	return path, err
+}
+
+// ensureLocked contains the original Ensure implementation. Correct operation
+// order (atomicity guarantee):
 //  1. Fetch into fresh version directory.
 //  2. Attempt store.put; if it fails, clean up the version dir.
 //  3. Swap the "current" symlink; if it fails, roll back store.put.
-func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
+func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, error) {
 	if err := spec.Validate(); err != nil {
 		return "", err
 	}
@@ -714,6 +823,16 @@ func versionDirFromEntry(root string, entry FileEntry) string {
 
 func (m *filesmgr) mutexFor(name string) *sync.Mutex {
 	v, _ := m.perNameMu.LoadOrStore(name, &sync.Mutex{})
+	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
+	return mu
+}
+
+// ensureCallMutexFor returns the outer per-name mutex used by Ensure to
+// serialize an entire call (install + failure record/clear) against other
+// concurrent Ensure calls for the same name. See the callMu field doc for why
+// this is a distinct mutex from the one mutexFor returns.
+func (m *filesmgr) ensureCallMutexFor(name string) *sync.Mutex {
+	v, _ := m.callMu.LoadOrStore(name, &sync.Mutex{})
 	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
 	return mu
 }

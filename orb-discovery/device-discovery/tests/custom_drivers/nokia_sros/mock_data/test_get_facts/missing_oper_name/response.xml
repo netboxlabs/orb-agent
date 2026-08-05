@@ -1,0 +1,34 @@
+<data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+    <state xmlns="urn:nokia.com:sros:ns:yang:sr:state">
+        <chassis>
+            <hardware-data>
+                <serial-number>NS1921F1814</serial-number>
+            </hardware-data>
+        </chassis>
+        <port>
+            <port-id>1/1/1</port-id>
+        </port>
+        <router>
+            <router-name>Base</router-name>
+            <interface>
+                <interface-name>system</interface-name>
+            </interface>
+            <interface>
+                <interface-name>to_RTR-01</interface-name>
+            </interface>
+        </router>
+        <router>
+            <router-name>management</router-name>
+            <interface>
+                <interface-name>management</interface-name>
+            </interface>
+        </router>
+        <system>
+            <platform>7750 SR-12</platform>
+            <up-time>3802044410</up-time>
+            <version>
+                <version-number>TiMOS-B-21.10.R2</version-number>
+            </version>
+        </system>
+    </state>
+</data>

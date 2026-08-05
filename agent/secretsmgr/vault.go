@@ -25,6 +25,8 @@ type vaultManager struct {
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
+	v.preLogger.Info("starting secrets manager", "active", "vault", "address", v.config.Address)
+
 	if v.config.Mount != "" && hasEmptySegment(v.config.Mount) {
 		return fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
 	}
@@ -66,7 +68,14 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	if err := v.startScheduler(v.config.Schedule); err != nil {
 		return err
 	}
-	return v.addTokenLifecycleWatcher()
+	if err := v.addTokenLifecycleWatcher(); err != nil {
+		return err
+	}
+	// Authentication above round-tripped to the server, so the connection is
+	// genuinely validated at this point — unlike the other managers, which
+	// only reach their backend on first fetch.
+	v.preLogger.Info("secrets manager connection established", "active", "vault")
+	return nil
 }
 
 func (v *vaultManager) addTokenLifecycleWatcher() error {

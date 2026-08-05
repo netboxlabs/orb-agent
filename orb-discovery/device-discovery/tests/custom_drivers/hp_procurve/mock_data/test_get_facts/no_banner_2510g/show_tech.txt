@@ -1,0 +1,13 @@
+CRASHLogfileshow
+
+
+Active Management Module 1 Crash Log
+
+...Crash Log File Header..........................
+Product:   HP J9280A
+Name:      HP ProCurve Switch 2510G-48
+Date:      Feb 22 2011 16:35:47
+Build:     356
+Version:   Y.11.52
+Directory: /sw/code/build/btm(t4a)
+CPU:       P

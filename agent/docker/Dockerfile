@@ -64,13 +64,32 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -ldflags="-s -w" -trimpath -o /usr/local/bin/snmp-discovery ./cmd/main.go
 
 ########################################################################
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS gnmi-discovery
+
+WORKDIR /src/gnmi-discovery
+
+COPY orb-discovery/gnmi-discovery/ .
+
+ARG TARGETOS TARGETARCH
+# Stamp the backend version: its version package go:embeds version/BUILD_*.txt.
+ARG GNMI_DISCOVERY_VERSION=0.0.0
+ARG BUILD_COMMIT=unknown
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    echo "${GNMI_DISCOVERY_VERSION}" > version/BUILD_VERSION.txt && \
+    echo "${BUILD_COMMIT}" > version/BUILD_COMMIT.txt && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w" -trimpath -o /usr/local/bin/gnmi-discovery ./cmd/main.go
+
+########################################################################
 FROM netboxlabs/pktvisor:${PKTVISOR_TAG} AS pktvisor
 
 ########################################################################
 FROM python:3.14-alpine AS python-builder
 
 # Upgrade pip to latest version with fewer vulnerabilities
-RUN python -m pip install --upgrade --no-cache-dir pip==26.1 && \
+RUN python -m pip install --upgrade --no-cache-dir pip==26.1.2 && \
     rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
 # Install the Python backends from in-repo source (was: published PyPI packages
@@ -120,7 +139,7 @@ RUN mkdir -p /opt/orb /opt/orb/files /opt/orb/pip-cache /usr/local/share/orb-age
 
 ENV PATH=/opt/orb/files:$PATH
 ENV PIP_CACHE_DIR=/opt/orb/pip-cache
-ENV ORB_DEFAULT_CONFIG=/usr/local/share/orb-agent/default_config.yaml
+ENV DEFAULT_CONFIG_PATH=/usr/local/share/orb-agent/default_config.yaml
 
 # Copy Python site-packages and binaries from builder (includes pip and package executables)
 COPY --from=python-builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
@@ -136,6 +155,8 @@ COPY --from=otlpinf /exe /usr/local/bin/otlpinf
 COPY --from=network-discovery /usr/local/bin/network-discovery /usr/local/bin/network-discovery
 
 COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-discovery
+
+COPY --from=gnmi-discovery /usr/local/bin/gnmi-discovery /usr/local/bin/gnmi-discovery
 
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh

@@ -1,0 +1,24 @@
+2510G-48-1# show system
+
+ Status and Counters - General System Information
+
+  System Name        : 2510G-48-1                                      
+  System Contact     : netops@example.com
+  System Location    : 
+
+  MAC Age Time (sec) : 300    
+
+  Time Zone          : -300 
+  Daylight Time Rule : Continental-US-and-Canada 
+
+
+  Software revision  : Y.11.52          Base MAC Addr      : 001122-334455
+  ROM Version        : N.10.02          Serial Number      : SG00XX0000  
+
+  Up Time            : 6 hours          Memory   - Total   : 23,546,528  
+  CPU Util (%)       : 11                          Free    : 15,295,568  
+
+  IP Mgmt  - Pkts Rx : 28,953           Packet   - Total   : 3022        
+             Pkts Tx : 12,243           Buffers    Free    : 2787        
+                                                   Lowest  : 2660        
+                                                   Missed  : 0          

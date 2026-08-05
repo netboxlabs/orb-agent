@@ -1,0 +1,2 @@
+                            ^
+Error: Unrecognized command found at '^' position.

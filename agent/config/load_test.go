@@ -1,0 +1,487 @@
+package config
+
+import (
+	"bytes"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+const sampleYAML = `
+orb:
+  config_manager:
+    active: local
+    sources:
+      local:
+        config: /etc/orb/agent.yaml
+  secrets_manager:
+    active: doppler
+    sources:
+      doppler:
+        timeout: 30
+  backends:
+    network_discovery:
+`
+
+func emptyEnviron() []string { return nil }
+
+// envFromMap builds an environ func from a map so Load tests run against a
+// fully controlled environment (no leakage from the dev/CI shell).
+func envFromMap(m map[string]string) func() []string {
+	return func() []string {
+		out := make([]string, 0, len(m))
+		for k, v := range m {
+			out = append(out, k+"="+v)
+		}
+		return out
+	}
+}
+
+func writeTempConfig(t *testing.T, body string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "cfg.yaml")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// decodeLegacy mimics today's cmd/main loadConfig loop for the golden comparison.
+func decodeLegacy(t *testing.T, files ...string) Config {
+	t.Helper()
+	var want Config
+	for _, p := range files {
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.NewDecoder(f).Decode(&want); err != nil {
+			_ = f.Close()
+			t.Fatalf("legacy decode %s: %v", p, err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatalf("close %s: %v", p, err)
+		}
+	}
+	return want
+}
+
+// GOLDEN: file-only Load of the REAL shipped default_config.yaml must equal the
+// legacy yaml decode (exercises files_manager empty-struct, otlp_bridge port int,
+// multi-backend nil maps, and ${FLEET_*} literals).
+func TestLoad_FileOnly_MatchesLegacy_DefaultConfig(t *testing.T) {
+	t.Parallel()
+	const p = "../docker/default_config.yaml"
+
+	got, err := loadWithEnv([]string{p}, nil, emptyEnviron)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := decodeLegacy(t, p)
+	want.OrbAgent.ConfigFile = p
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Load != legacy decode of default_config.yaml\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// GOLDEN: a local-config-manager example round-trips identically too.
+func TestLoad_FileOnly_MatchesLegacy_LocalConfig(t *testing.T) {
+	t.Parallel()
+	const body = `
+orb:
+  config_manager:
+    active: local
+    sources:
+      local:
+        config: /etc/orb/agent.yaml
+  backends:
+    network_discovery:
+      foo: bar
+`
+	p := writeTempConfig(t, body)
+	got, err := loadWithEnv([]string{p}, nil, emptyEnviron)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := decodeLegacy(t, p)
+	want.OrbAgent.ConfigFile = p
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Load != legacy decode (local)\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// The corruption guard: string fields whose YAML looks octal/hex/bool must NOT
+// be coerced, and YAML 1.1 bool words must still parse (all preserved because
+// files are decoded straight into the struct by yaml.v3, not through the env
+// overlay).
+func TestLoad_FileOnly_StringFieldsNotCoerced(t *testing.T) {
+	t.Parallel()
+	const body = `
+orb:
+  config_manager:
+    active: fleet
+    sources:
+      fleet:
+        client_id: true
+        client_secret: 0700
+        skip_tls: yes
+`
+	p := writeTempConfig(t, body)
+	got, err := loadWithEnv([]string{p}, nil, emptyEnviron)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	fleet := got.OrbAgent.ConfigManager.Sources.Fleet
+	if fleet.ClientID != "true" {
+		t.Errorf("client_id = %q; want \"true\" (not bool-coerced)", fleet.ClientID)
+	}
+	if fleet.ClientSecret != "0700" {
+		t.Errorf("client_secret = %q; want \"0700\" (not octal-coerced)", fleet.ClientSecret)
+	}
+	if !fleet.SkipTLS {
+		t.Errorf("skip_tls = %v; want true (YAML 1.1 bool leniency preserved)", fleet.SkipTLS)
+	}
+}
+
+// Multi-file uses replace (last-wins), NOT deep-merge, of nested map values.
+func TestLoad_MultiFile_ReplaceSemantics(t *testing.T) {
+	t.Parallel()
+	a := writeTempConfig(t, "orb:\n  backends:\n    network_discovery:\n      a: 1\n")
+	b := writeTempConfig(t, "orb:\n  backends:\n    network_discovery:\n      b: 2\n")
+
+	got, err := loadWithEnv([]string{a, b}, nil, emptyEnviron)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	nd, _ := got.OrbAgent.Backends["network_discovery"].(map[string]any)
+	if _, hasA := nd["a"]; hasA {
+		t.Errorf("expected replace semantics; key 'a' from file A survived: %#v", nd)
+	}
+	if _, hasB := nd["b"]; !hasB {
+		t.Errorf("expected 'b' from file B present: %#v", nd)
+	}
+	want := decodeLegacy(t, a, b)
+	want.OrbAgent.ConfigFile = a
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("multi-file Load != legacy loop\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// The overlay merges onto the decoded struct without zeroing file-set siblings.
+func TestLoad_Overlay_PreservesFileSiblings(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{
+		"ORB_SECRETS_MANAGER__ACTIVE":                           "vault",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__ADDRESS":          "http://127.0.0.1:8200",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH":             "token",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__TOKEN": "root",
+	})
+
+	got, err := loadWithEnv([]string{p}, nil, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.OrbAgent.SecretsManager.Active != "vault" {
+		t.Errorf("active = %q; want vault", got.OrbAgent.SecretsManager.Active)
+	}
+	// Config manager (file-set) must survive the overlay.
+	if got.OrbAgent.ConfigManager.Active != "local" {
+		t.Errorf("config manager clobbered: %q", got.OrbAgent.ConfigManager.Active)
+	}
+	// Sibling secrets source (file-set) must survive.
+	if dt := got.OrbAgent.SecretsManager.Sources.Doppler.Timeout; dt == nil || *dt != 30 {
+		t.Errorf("file's secrets doppler.timeout not preserved: %v", dt)
+	}
+	v := got.OrbAgent.SecretsManager.Sources.Vault
+	if v.Address != "http://127.0.0.1:8200" || v.Auth != "token" || v.AuthArgs["token"] != "root" {
+		t.Errorf("vault source not populated: %#v", v)
+	}
+}
+
+// Generic overlay coerces string->*int.
+func TestLoad_GenericOverlay_Coercion(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{
+		"ORB_SECRETS_MANAGER__ACTIVE":                  "vault",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": "45", // string -> *int
+	})
+
+	got, err := loadWithEnv([]string{p}, nil, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.OrbAgent.SecretsManager.Active != "vault" {
+		t.Errorf("active = %q; want vault", got.OrbAgent.SecretsManager.Active)
+	}
+	to := got.OrbAgent.SecretsManager.Sources.Vault.Timeout
+	if to == nil || *to != 45 {
+		t.Errorf("vault.timeout not coerced to 45: %v", to)
+	}
+}
+
+// Generic overlay parses string->*int as base-10 decimal, not base-0
+// auto-detect: a leading zero must NOT be misread as octal (e.g. "08"
+// failing to parse, or "010" silently becoming 8).
+func TestLoad_GenericOverlay_IntCoercionIsDecimal(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{"leading-zero decimal ten", "010", 10},
+		{"leading-zero eight", "08", 8},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := writeTempConfig(t, sampleYAML)
+			environ := envFromMap(map[string]string{
+				"ORB_SECRETS_MANAGER__ACTIVE":                  "vault",
+				"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": tc.env,
+			})
+
+			got, err := loadWithEnv([]string{p}, nil, environ)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			to := got.OrbAgent.SecretsManager.Sources.Vault.Timeout
+			if to == nil || *to != tc.want {
+				t.Errorf("vault.timeout for env %q = %v; want %d (decimal, not octal)", tc.env, to, tc.want)
+			}
+		})
+	}
+}
+
+// An env override landing in an untyped map[string]any slot (auth_args) must
+// stay a string, never be type-guessed into a bool. For an UNTYPED slot the
+// loader cannot know whether a value is meant to be a bool or a string
+// without coupling to the secrets-manager's auth-struct schema, and guessing
+// corrupts string credentials whose literal value happens to be "0"/"1" (for
+// example a Vault AppRole password of "0" must NOT become the bool false).
+// The one non-string auth_arg — Vault AppRole's wrapping_token bool — must
+// therefore be set in the config file (where YAML typing applies), not via
+// an ORB_* override; see docs/advanced_config/env_config.md.
+func TestLoad_GenericOverlay_AuthArgsStayStrings(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{
+		"ORB_SECRETS_MANAGER__ACTIVE":                                    "vault",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__WRAPPING_TOKEN": "true",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__ROLE_ID":        "0123",
+		"ORB_SECRETS_MANAGER__SOURCES__VAULT__AUTH_ARGS__PASSWORD":       "0",
+	})
+
+	got, err := loadWithEnv([]string{p}, nil, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	authArgs := got.OrbAgent.SecretsManager.Sources.Vault.AuthArgs
+
+	wt, ok := authArgs["wrapping_token"].(string)
+	if !ok {
+		t.Fatalf("wrapping_token = %#v (%T); want string", authArgs["wrapping_token"], authArgs["wrapping_token"])
+	}
+	if wt != "true" {
+		t.Errorf("wrapping_token = %q; want \"true\" (untyped slot values stay strings)", wt)
+	}
+
+	roleID, ok := authArgs["role_id"].(string)
+	if !ok {
+		t.Fatalf("role_id = %#v (%T); want string", authArgs["role_id"], authArgs["role_id"])
+	}
+	if roleID != "0123" {
+		t.Errorf("role_id = %q; want \"0123\" (preserved as string, not coerced)", roleID)
+	}
+
+	// The credential-preservation case: a password whose literal value is
+	// "0" must never be silently turned into the bool false.
+	password, ok := authArgs["password"].(string)
+	if !ok {
+		t.Fatalf("password = %#v (%T); want string", authArgs["password"], authArgs["password"])
+	}
+	if password != "0" {
+		t.Errorf("password = %q; want \"0\" (NOT bool false — credential value must be preserved)", password)
+	}
+}
+
+// Unknown/mistyped ORB_* keys are ignored and surfaced at warning level (a
+// typo'd override silently not applying is operator-relevant, so it must
+// surface without debug logging enabled).
+func TestLoad_UnknownGenericKey_IgnoredAndLogged(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{"ORB_SECRETS_MANAGER__BOGUSKEY": "x"})
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	got, err := loadWithEnv([]string{p}, logger, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.OrbAgent.SecretsManager.Active != "doppler" {
+		t.Errorf("bogus key altered config: active = %q", got.OrbAgent.SecretsManager.Active)
+	}
+	if !strings.Contains(buf.String(), "boguskey") {
+		t.Errorf("expected the unused key logged at warning (no debug enabled); log = %q", buf.String())
+	}
+}
+
+// An ORB_* variable that is set but empty is treated as unset — it must not
+// clobber a file-set value with a zero value.
+func TestLoad_GenericOverlay_EmptyValueIgnored(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	environ := envFromMap(map[string]string{"ORB_SECRETS_MANAGER__ACTIVE": ""})
+
+	got, err := loadWithEnv([]string{p}, nil, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.OrbAgent.SecretsManager.Active != "doppler" {
+		t.Errorf("active = %q; want doppler (empty override must be ignored)", got.OrbAgent.SecretsManager.Active)
+	}
+}
+
+// Two ORB_* names that map to the same config path (differing only in case)
+// are a real conflict — the outcome must be a deterministic error, not a
+// silent last-wins depending on os.Environ order.
+func TestLoad_GenericOverlay_SamePathCollision_Errors(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	orders := [][]string{
+		{"ORB_SECRETS_MANAGER__ACTIVE=vault", "ORB_SECRETS_MANAGER__Active=doppler"},
+		{"ORB_SECRETS_MANAGER__Active=doppler", "ORB_SECRETS_MANAGER__ACTIVE=vault"},
+	}
+	for _, env := range orders {
+		environ := func() []string { return env }
+		if _, err := loadWithEnv([]string{p}, nil, environ); err == nil {
+			t.Errorf("expected same-path collision error for %v, got nil", env)
+		}
+	}
+}
+
+// A generic override that reaches INTO a file-populated map[string]any entry
+// (backends/policies) REPLACES the entry value wholesale — file sibling keys
+// under it are dropped. This is documented, intentional behavior; the test
+// locks it so it can't silently change.
+func TestLoad_GenericOverlay_ReplacesBackendEntry(t *testing.T) {
+	t.Parallel()
+	const body = `
+orb:
+  backends:
+    pktvisor:
+      tap: file-tap
+`
+	p := writeTempConfig(t, body)
+	environ := envFromMap(map[string]string{"ORB_BACKENDS__PKTVISOR__FOO": "bar"})
+
+	got, err := loadWithEnv([]string{p}, nil, environ)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	pk, _ := got.OrbAgent.Backends["pktvisor"].(map[string]any)
+	if _, hasTap := pk["tap"]; hasTap {
+		t.Errorf("expected wholesale replace of the pktvisor entry; file key 'tap' survived: %#v", pk)
+	}
+	if pk["foo"] != "bar" {
+		t.Errorf("expected overlay key foo=bar in replaced entry: %#v", pk)
+	}
+}
+
+// A malformed generic value on a known key fails the load (fail-fast, not
+// silently ignored) — a deliberate override must not be swallowed.
+func TestLoad_MalformedOverlayValue_Errors(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	cases := []map[string]string{
+		{"ORB_SECRETS_MANAGER__SOURCES__VAULT__TIMEOUT": "abc"}, // string -> *int cannot coerce
+		{"ORB_SECRETS_MANAGER__ACTIVE__X": "vault"},             // extra segment nests a map under a string leaf
+	}
+	for _, bad := range cases {
+		environ := envFromMap(bad)
+		if _, err := loadWithEnv([]string{p}, nil, environ); err == nil {
+			t.Errorf("expected error for malformed overlay %v, got nil", bad)
+		}
+	}
+}
+
+// A path set BOTH as a scalar and as a parent of a deeper key is rejected
+// deterministically, regardless of env order.
+func TestLoad_GenericOverlay_ScalarParentCollision_Errors(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, sampleYAML)
+	orders := [][]string{
+		{"ORB_SECRETS_MANAGER__ACTIVE=vault", "ORB_SECRETS_MANAGER__ACTIVE__X=y"},
+		{"ORB_SECRETS_MANAGER__ACTIVE__X=y", "ORB_SECRETS_MANAGER__ACTIVE=vault"},
+	}
+	for _, env := range orders {
+		environ := func() []string { return env }
+		if _, err := loadWithEnv([]string{p}, nil, environ); err == nil {
+			t.Errorf("expected collision error for %v, got nil", env)
+		}
+	}
+}
+
+// decimalIntHook also handles unsigned integer kinds as base-10, mirroring
+// the signed case. No uint fields exist in Config today, so the hook is
+// exercised directly rather than through Load.
+func TestDecimalIntHook_Uint(t *testing.T) {
+	t.Parallel()
+	hook := decimalIntHook().(func(reflect.Kind, reflect.Kind, any) (any, error))
+
+	got, err := hook(reflect.String, reflect.Uint64, "010")
+	if err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	if got != uint64(10) {
+		t.Errorf("hook(%q) = %#v; want uint64(10) (decimal, not octal)", "010", got)
+	}
+
+	if _, err := hook(reflect.String, reflect.Uint64, "abc"); err == nil {
+		t.Error("expected error for non-numeric uint input, got nil")
+	}
+}
+
+// The parse bit size matches the destination kind, so an out-of-range value
+// fails deterministically at parse time instead of being truncated by the
+// later reflect conversion.
+func TestDecimalIntHook_KindMatchedBitSize(t *testing.T) {
+	t.Parallel()
+	hook := decimalIntHook().(func(reflect.Kind, reflect.Kind, any) (any, error))
+
+	if _, err := hook(reflect.String, reflect.Uint8, "300"); err == nil {
+		t.Error("expected out-of-range error for uint8 value 300, got nil")
+	}
+	if _, err := hook(reflect.String, reflect.Int8, "128"); err == nil {
+		t.Error("expected out-of-range error for int8 value 128, got nil")
+	}
+	if _, err := hook(reflect.String, reflect.Int16, "40000"); err == nil {
+		t.Error("expected out-of-range error for int16 value 40000, got nil")
+	}
+
+	// In-range values for small kinds still parse.
+	got, err := hook(reflect.String, reflect.Uint8, "255")
+	if err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	if got != uint64(255) {
+		t.Errorf("hook(%q) = %#v; want uint64(255)", "255", got)
+	}
+	got, err = hook(reflect.String, reflect.Int32, "010")
+	if err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	if got != int64(10) {
+		t.Errorf("hook(%q) = %#v; want int64(10) (decimal, not octal)", "010", got)
+	}
+}

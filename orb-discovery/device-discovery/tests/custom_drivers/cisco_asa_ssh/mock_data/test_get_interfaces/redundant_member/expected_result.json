@@ -1,0 +1,29 @@
+{
+  "GigabitEthernet1/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": "AA:BB:CC:00:01:00"
+  },
+  "GigabitEthernet1/2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": "AA:BB:CC:00:02:00"
+  },
+  "Redundant1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": 0.0,
+    "mac_address": "AA:BB:CC:00:01:00"
+  }
+}

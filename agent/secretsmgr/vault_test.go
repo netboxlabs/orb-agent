@@ -861,6 +861,7 @@ func TestNew(t *testing.T) {
 		name         string
 		config       config.ManagerSecrets
 		expectedType string
+		expectErr    bool
 	}{
 		{
 			name: "vault manager",
@@ -882,11 +883,11 @@ func TestNew(t *testing.T) {
 			expectedType: "*secretsmgr.dummyManager",
 		},
 		{
-			name: "dummy manager when active is invalid",
+			name: "error when active is unsupported",
 			config: config.ManagerSecrets{
 				Active: "invalid",
 			},
-			expectedType: "*secretsmgr.dummyManager",
+			expectErr: true,
 		},
 		{
 			name: "delinea manager",
@@ -906,8 +907,13 @@ func TestNew(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := New(logger, tt.config)
-
+			manager, err := New(logger, tt.config)
+			if tt.expectErr {
+				assert.Error(t, err)
+				assert.Nil(t, manager)
+				return
+			}
+			assert.NoError(t, err)
 			assert.NotNil(t, manager)
 			assert.Equal(t, tt.expectedType, fmt.Sprintf("%T", manager))
 		})

@@ -491,6 +491,34 @@ func TestEmbeddedLookupExtensions_DataIntegrity(t *testing.T) {
 	assert.Greater(t, count, 500, "Expected at least 500 device entries across all embedded lookup files")
 }
 
+func TestEmbeddedLookupExtensions_CiscoCatalyst1200And1300(t *testing.T) {
+	// The Catalyst 1200/1300 smart-switch family (CISCO-PRODUCTS-MIB
+	// ciscoProducts 3210-3253) shipped after this table was last refreshed, so
+	// these sysObjectIDs resolved to "device ID not found" and the model fell
+	// back to the raw OID string.
+	deviceLookup, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+
+	for oid, want := range map[string]string{
+		".1.3.6.1.4.1.9.1.3213": "ciscoC12008FP2G",   // C1200-8FP-2G
+		".1.3.6.1.4.1.9.1.3216": "ciscoC120024T4G",   // C1200-24T-4G
+		".1.3.6.1.4.1.9.1.3225": "ciscoC120048P4X",   // C1200-48P-4X
+		".1.3.6.1.4.1.9.1.3226": "ciscoC13008TE2G",   // C1300-8T-E-2G
+		".1.3.6.1.4.1.9.1.3247": "ciscoC130048MGP4X", // C1300-48MGP-4X
+		// Entries past the Catalyst 1200/1300 block, from the same refresh.
+		".1.3.6.1.4.1.9.1.3293": "ciscoC935048U", // Catalyst 9350-48U
+		".1.3.6.1.4.1.9.1.3542": "ciscoC8475G2",  // highest suffix in the MIB
+		// ciscoProducts 229 carries a live ciscoMGX8830 plus a commented-out
+		// ciscoMGX8820 alias. A generator that ignores ASN.1 comments picks up
+		// the dead name, so pin the live one.
+		".1.3.6.1.4.1.9.1.229": "ciscoMGX8830",
+	} {
+		model, err := deviceLookup.GetDeviceModel(oid, map[string]string{})
+		assert.NoError(t, err, "OID %s should resolve", oid)
+		assert.Equal(t, want, model, "OID %s", oid)
+	}
+}
+
 func TestEmbeddedLookupExtensions_NoDuplicateOIDs(t *testing.T) {
 	oidSources := make(map[string]string) // oid -> first file it was seen in
 
@@ -1000,4 +1028,164 @@ func TestResolveDefault_ExistingOIDPatternUnchanged(t *testing.T) {
 	// not be tightened by this change.
 	assert.True(t, oidPattern.MatchString(".1.3.6.1.4.1.14988.1"))
 	assert.True(t, oidPattern.MatchString("3.14.159"))
+}
+
+// A user file can be read successfully and still contribute nothing: a wrong
+// top-level key or bad indentation yields an empty devices map with no error.
+// Before this report existed the loader reported plain success in that case, so
+// an operator whose custom OID was ignored had no way to tell from the logs
+// (issue #486). Each file's contribution is now recorded for the caller to log.
+func TestLoadDeviceLookupExtensions_UserFileReport(t *testing.T) {
+	const oid = ".1.3.6.1.4.1.52642.1.439.0"
+	tests := []struct {
+		name        string
+		body        string
+		wantEntries int
+		wantErr     bool
+		wantResolve bool
+	}{
+		{
+			name:        "well-formed file",
+			body:        "devices:\n  " + oid + ": S3400-24T4FP\n",
+			wantEntries: 1,
+			wantResolve: true,
+		},
+		{
+			name:        "tab indentation is a parse error",
+			body:        "devices:\n\t" + oid + ": S3400-24T4FP\n",
+			wantEntries: 0,
+			wantErr:     true,
+		},
+		{
+			name:        "wrong top-level key parses to nothing",
+			body:        "device:\n  " + oid + ": S3400-24T4FP\n",
+			wantEntries: 0,
+		},
+		{
+			name:        "no devices key at all",
+			body:        "  " + oid + ": S3400-24T4FP\n",
+			wantEntries: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "fs_custom.yaml"), []byte(tt.body), 0o600))
+
+			dl, err := LoadDeviceLookupExtensions(dir)
+			require.NoError(t, err, "a bad user file must not fail the whole load")
+
+			files := dl.UserExtensionFiles()
+			require.Len(t, files, 1, "the file must be reported either way")
+			assert.Equal(t, "fs_custom.yaml", files[0].Name)
+			assert.Equal(t, tt.wantEntries, files[0].Entries)
+			if tt.wantErr {
+				assert.Error(t, files[0].Err, "a parse failure must be reported, not swallowed")
+			} else {
+				assert.NoError(t, files[0].Err)
+			}
+
+			_, lookupErr := dl.GetDeviceModel(oid, map[string]string{})
+			assert.Equal(t, tt.wantResolve, lookupErr == nil)
+		})
+	}
+}
+
+func TestLoadDeviceLookupExtensions_NoUserDirReportsNoFiles(t *testing.T) {
+	dl, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	assert.Empty(t, dl.UserExtensionFiles(), "built-in-only load has no user files to report")
+}
+
+func TestLoadDeviceLookupExtensions_ReportSkipsNonYAML(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignore me"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "ok.yaml"),
+		[]byte("devices:\n  .1.3.6.1.4.1.9.1.1: someModel\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1, "only YAML files are loaded, so only they are reported")
+	assert.Equal(t, "ok.yaml", files[0].Name)
+	assert.Equal(t, 1, files[0].Entries)
+}
+
+// A lookup-extension file may legitimately carry only a manufacturers: block.
+// The same directory is read by NewManufacturerResolver, where such a file is
+// valid and its overrides are applied, so the report must not present it as
+// contributing nothing.
+func TestLoadDeviceLookupExtensions_ManufacturerOnlyFileIsReported(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mfr.yaml"),
+		[]byte("manufacturers:\n  52642: FS\n  664: Adtran\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Equal(t, 0, files[0].Entries, "it declares no devices")
+	assert.Equal(t, 2, files[0].ManufacturerEntries, "but it does declare manufacturers")
+	assert.NoError(t, files[0].Err)
+}
+
+func TestLoadDeviceLookupExtensions_ReportCountsBothSections(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "both.yaml"), []byte(
+		"devices:\n  .1.3.6.1.4.1.52642.1.439.0: S3400-24T4FP\nmanufacturers:\n  52642: FS\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Equal(t, 1, files[0].Entries)
+	assert.Equal(t, 1, files[0].ManufacturerEntries)
+}
+
+func TestLoadDeviceLookupExtensions_FileWithNeitherSectionReportsNothing(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "empty.yaml"),
+		[]byte("device:\n  .1.3.6.1.4.1.52642.1.439.0: S3400\n"), 0o600))
+
+	dl, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+	files := dl.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Equal(t, 0, files[0].Entries)
+	assert.Equal(t, 0, files[0].ManufacturerEntries)
+}
+
+// The manufacturer count must match what the resolver will actually apply.
+// Counting with looser rules over-reports, which suppresses the
+// no-contribution warning for a file that in fact contributes nothing.
+func TestCountManufacturerEntries_MatchesResolverRules(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"string values are applied", "manufacturers:\n  999999: AcmeCorp\n", 1},
+		{"nested map value is rejected", "manufacturers:\n  999999:\n    name: AcmeCorp\n", 0},
+		{"list value is rejected", "manufacturers:\n  999999:\n    - AcmeCorp\n", 0},
+		{
+			// The resolver rejects the whole block, so the valid sibling is lost too.
+			name: "one bad value rejects the block",
+			body: "manufacturers:\n  888888: GoodCo\n  999999:\n    name: AcmeCorp\n",
+			want: 0,
+		},
+		{"no manufacturers section", "devices:\n  .1.2.3: m\n", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := countManufacturerEntries([]byte(tc.body))
+			assert.Equal(t, tc.want, got)
+
+			// Pin it against the resolver itself so the two cannot drift.
+			applied := map[string]string{}
+			if err := loadManufacturerYAML([]byte(tc.body), applied); err != nil {
+				applied = map[string]string{}
+			}
+			assert.Equal(t, len(applied), got, "count must equal what the resolver applies")
+		})
+	}
 }

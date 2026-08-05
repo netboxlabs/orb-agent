@@ -161,21 +161,23 @@ func newDeviceStubKeepingPrimary(owner *diode.Device, isV6 bool, primary *diode.
 	return stub
 }
 
-// newInterfaceStub returns an Interface populated with matcher fields
-// plus the validation-required `Type` field. Used wherever an
-// Interface appears as a nested reference: Parent, Bridge, Lag,
-// IPAddress.AssignedObject, MACAddress.AssignedObject. PrimaryMacAddress
-// is preserved (via newMACMatchStub) so the stub keeps the
-// unique_primary_mac_address matcher precedence and resolves to the
-// same interface as the rich top-level entity.
+// newInterfaceStub returns an Interface populated with the matcher
+// fields plus the interface's plain attributes (type, description,
+// speed, mtu, enabled). Used wherever an Interface appears as a nested
+// reference: Parent, Bridge, Lag, IPAddress.AssignedObject,
+// MACAddress.AssignedObject. PrimaryMacAddress is preserved (via
+// newMACMatchStub) so the stub keeps the unique_primary_mac_address
+// matcher precedence and resolves to the same interface as the rich
+// top-level entity.
 //
-// Why Type: snmp-discovery filters interfaces that are referenced as
-// IPAddress.AssignedObject from top-level emission to avoid emitting
-// them twice (mapping.go:716-718). For those interfaces, the nested
-// stub is the *only* wire payload representing them. If first-time
-// discovery needs to create the interface row, NetBox rejects creation
-// without `type`. Pointer-sharing iface.Type costs negligible bytes
-// and prevents the lossy first-discovery path.
+// Why the plain attributes: snmp-discovery filters interfaces that are
+// referenced as IPAddress.AssignedObject from top-level emission to
+// avoid emitting them twice. For those interfaces the nested stub is
+// the *only* wire payload, so it must carry both `type` (NetBox
+// rejects first-time interface creation without it) and the plain
+// attributes the mapper computed, or they are silently lost. Pointer-
+// sharing them costs negligible bytes. Structural refs (parent/bridge/
+// lag) are intentionally dropped; they carry their own nested payloads.
 func newInterfaceStub(iface *diode.Interface, deviceStub *diode.Device) *diode.Interface {
 	if iface == nil {
 		return nil
@@ -184,6 +186,10 @@ func newInterfaceStub(iface *diode.Interface, deviceStub *diode.Device) *diode.I
 		Name:              iface.Name,
 		Device:            deviceStub,
 		Type:              iface.Type,
+		Description:       iface.Description,
+		Speed:             iface.Speed,
+		Mtu:               iface.Mtu,
+		Enabled:           iface.Enabled,
 		PrimaryMacAddress: newMACMatchStub(iface.PrimaryMacAddress),
 	}
 }

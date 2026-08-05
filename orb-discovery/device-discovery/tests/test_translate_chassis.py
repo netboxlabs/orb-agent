@@ -123,6 +123,43 @@ def test_two_members_emits_master_plain_then_vc_then_member():
     assert not member.virtual_chassis.master.HasField("virtual_chassis")
 
 
+def test_custom_stack_member_name_template_applies_to_master_and_members():
+    """A custom template renames master, member, and the VC master ref."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(stack_member_name_template="{name}-css{id}")
+    entities = list(translate_data(data))
+
+    device_indices = [i for i, e in enumerate(entities) if e.HasField("device")]
+    vc = next(e.virtual_chassis for e in entities if e.HasField("virtual_chassis"))
+    master = entities[device_indices[0]].device
+    member = entities[device_indices[1]].device
+
+    assert master.name == "core-sw-css1"
+    assert member.name == "core-sw-css2"
+    assert vc.name == "core-sw"  # VC name itself is not templated
+    assert vc.master.name == "core-sw-css1"
+    assert member.virtual_chassis.master.name == "core-sw-css1"
+
+
+def test_custom_stack_member_name_template_routes_interfaces():
+    """Interfaces route to the templated member names."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(stack_member_name_template="{name}-css{id}")
+    entities = list(translate_data(data))
+    by_name = {e.interface.name: e.interface for e in entities if e.HasField("interface")}
+    assert by_name["GigabitEthernet1/0/1"].device.name == "core-sw-css1"
+    assert by_name["GigabitEthernet2/0/1"].device.name == "core-sw-css2"
+
+
+def test_bad_stack_member_name_template_falls_back_to_default():
+    """An unusable template is normalized to the default → legacy names, no crash."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(stack_member_name_template="{name}-{id:09d}")
+    entities = list(translate_data(data))
+    names = {e.device.name for e in entities if e.HasField("device")}
+    assert names == {"core-sw-1", "core-sw-2"}
+
+
 def test_interface_routed_to_correct_member():
     """An interface name with a parseable member id routes to that member's Device."""
     data = _base_data(_two_member_payload())
@@ -542,3 +579,57 @@ def test_vc_cascade_propagates_options_through_per_member_builder():
     assert prefixes, "expected at least one Prefix from interface_ip on the VC path"
     # Cascade from defaults.site → Prefix.scope_site (NetBox 4.2+ scope oneof).
     assert prefixes[0].scope_site.name == "DC-East"
+
+
+def test_single_member_payload_does_not_warn(caplog):
+    """
+    A one-member payload is a standalone device, not a partial parse.
+
+    validate_chassis_payload is driver-agnostic and several drivers emit a
+    single-member payload as documented-normal behaviour, so warning here would
+    fire for every standalone device in a fleet on every discovery cycle.
+    """
+    import logging
+
+    from device_discovery.translate_chassis import validate_chassis_payload
+
+    payload = {
+        "members": [
+            {"id": 1, "serial": "FOC1111111", "model": "C9300-24T", "role": "active"}
+        ],
+        "domain": None,
+    }
+    with caplog.at_level(logging.DEBUG, logger="device_discovery.translate_chassis"):
+        assert validate_chassis_payload(payload) is None
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+def test_dropped_members_do_warn(caplog):
+    """
+    Validation dropping members IS worth a warning.
+
+    Two members in, fewer than two out means a driver handed us a stack we could
+    not represent. The silent version of this was invisible until a user noticed
+    missing NetBox data.
+    """
+    import logging
+
+    from device_discovery.translate_chassis import validate_chassis_payload
+
+    payload = {
+        "members": [
+            {"id": 1, "serial": "FOC1111111", "model": "C9300-24T", "role": "active"},
+            # Same serial: dropped as a duplicate, leaving one valid member.
+            {"id": 2, "serial": "FOC1111111", "model": "C9300-24T", "role": "standby"},
+        ],
+        "domain": None,
+    }
+    with caplog.at_level(logging.DEBUG, logger="device_discovery.translate_chassis"):
+        assert validate_chassis_payload(payload) is None
+    warnings = [
+        r for r in caplog.records
+        if r.levelno >= logging.WARNING
+        and "survived validation" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "1 of 2" in warnings[0].getMessage()

@@ -175,6 +175,7 @@ jobs:
     outputs:
       network: ${{ steps.versions.outputs.network }}
       snmp: ${{ steps.versions.outputs.snmp }}
+      gnmi: ${{ steps.versions.outputs.gnmi }}
       device: ${{ steps.versions.outputs.device }}
       worker: ${{ steps.versions.outputs.worker }}
     steps:
@@ -192,6 +193,7 @@ jobs:
     with:
       network-version: ${{ needs.resolve-versions.outputs.network }}
       snmp-version: ${{ needs.resolve-versions.outputs.snmp }}
+      gnmi-version: ${{ needs.resolve-versions.outputs.gnmi }}
       device-version: ${{ needs.resolve-versions.outputs.device }}
       worker-version: ${{ needs.resolve-versions.outputs.worker }}
     secrets: inherit

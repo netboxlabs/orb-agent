@@ -94,8 +94,13 @@ Switchport-to-VLAN association discovery is built on standard MIBs with one vend
 |-------|----------------|------------------|
 | **Generic** | Q-BRIDGE-MIB (RFC 4363, `1.3.6.1.2.1.17.7.1.4`) + BRIDGE-MIB `dot1dBasePortIfIndex` | VLAN catalog (`dot1qVlanStaticTable` — names + admin status), per-port PVID (`dot1qPvid`), per-VLAN egress + untagged port masks (`dot1qVlanStatic{Egress,Untagged}Ports`). Required for trunk classification. |
 | **Cisco overlay** | CISCO-VLAN-MEMBERSHIP-MIB `vmMembershipTable`, CISCO-VOICE-VLAN-MIB `vmVoiceVlanId` | Access VLAN refinement on non-trunk ports + voice-VLAN promotion. Walked only when `sysObjectID` falls under enterprise prefix `1.3.6.1.4.1.9.` (Cisco Systems) or `1.3.6.1.4.1.29671.` (Meraki). |
+| **CISCOSB overlay** | CISCOSB private `vlan` group (`1.3.6.1.4.1.9.6.1.101.48`): `vlanAccessPortModeVlanId`, `vlanTrunkPortModeNativeVlanId` | Corrects the untagged VLAN on Cisco small-business switches, where the standard sources are wrong rather than absent. Indexed by `ifIndex` rather than bridge port. Shares the Cisco vendor gate above. |
 
 When a switchport has both Q-BRIDGE membership and the Cisco overlay rows, the overlay layers on top of the generic classification (vmMembership refines the access VLAN for non-trunk ports; vmVoiceVlanId is promoted into the tagged VLAN list per Cisco's voice-on-access semantics). When a device exposes only the Cisco overlay (classic Cisco IOS without Q-BRIDGE), the overlay alone is sufficient to classify access ports — but trunk allowed/native VLANs cannot be reconstructed from `vmMembershipTable` (which is non-trunk by spec).
+
+The CISCOSB overlay is different in kind from the Cisco one: on those switches the generic sources are not merely absent but actively wrong. `dot1qPvid` answers 1 for every port whatever the port is configured for, and the per-VLAN egress/untagged masks come back empty, so Q-BRIDGE alone reports the whole switch as access VLAN 1. Where these private columns are present they therefore take precedence for the untagged VLAN.
+
+The overlay corrects the untagged VLAN only. It does not determine tagged membership or access-vs-trunk mode, so a trunk port on one of these switches is reported as an access port carrying its native VLAN. The private MIB does define per-port egress bitmaps that would supply both, but they are returned empty in practice, leaving no reliable source to derive membership or mode from.
 
 ### Device coverage
 
@@ -105,6 +110,7 @@ When a switchport has both Q-BRIDGE membership and the Cisco overlay rows, the o
 | Classic Cisco IOS (e.g. Catalyst 2960, 2950) | ⚠️ None or partial | ✅ Available | Access classification via `vmMembershipTable`; trunk ports remain unclassified |
 | Cisco IOS-XE (e.g. Catalyst 3850, 9400) | ⚠️ Sometimes empty pre-16.x | ✅ Available | As above; access ports classify, trunks unclassified unless Q-BRIDGE is also present |
 | Cisco NX-OS | ⚠️ Q-BRIDGE present, trunk membership often vendor-only | ✅ Available | Access via overlay; trunks may rely on Q-BRIDGE membership masks |
+| Cisco small business (Catalyst 1200/1300, CBS/SG series) | ❌ Present but wrong: `dot1qPvid` answers 1 on every port, egress/untagged masks empty | ✅ CISCOSB overlay | Correct untagged VLAN per port; mode is not derived, so trunks appear as access on their native VLAN |
 | Pre-ELS Junos | ⚠️ Incomplete | n/a | Limited — defer to a future Junos overlay |
 | Cisco WLC (e.g. 9800), routers, anything without `dot1dBasePortIfIndex` | n/a | n/a | No interface mutations emitted (refused by design — see Bridge-port translation below); VLAN catalog still emitted if `dot1qVlanStaticTable` is present |
 

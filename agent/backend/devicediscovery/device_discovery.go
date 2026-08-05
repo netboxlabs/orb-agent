@@ -3,10 +3,10 @@ package devicediscovery
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -24,7 +24,6 @@ var _ backend.Backend = (*deviceDiscoveryBackend)(nil)
 const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
-	readinessBackoff    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	statusTimeout       = 5
@@ -79,41 +78,15 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	d.policyRepo = repo
 	d.diodeTargetFromOtel = false
 
-	var prs bool
-	if d.apiHost, prs = config["host"].(string); !prs {
-		d.apiHost = defaultAPIHost
-	}
-	if port, prs := config["port"]; prs {
-		d.apiPort = fmt.Sprintf("%v", port)
-	} else {
-		d.apiPort = defaultAPIPort
-	}
+	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
+	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
 
-	d.diodeTarget = common.Diode.Target
-	d.diodeClientID = common.Diode.ClientID
-	d.diodeClientSecret = common.Diode.ClientSecret
-	d.diodeAppNamePrefix = common.Diode.AgentName
-	d.diodeDryRun = common.Diode.DryRun
-	d.diodeDryRunOutputDir = common.Diode.DryRunOutputDir
-
-	if target, prs := config["target"].(string); prs {
-		d.diodeTarget = target
-	}
-	if clientID, prs := config["client_id"].(string); prs {
-		d.diodeClientID = clientID
-	}
-	if clientSecret, prs := config["client_secret"].(string); prs {
-		d.diodeClientSecret = clientSecret
-	}
-	if agentName, prs := config["agent_name"].(string); prs {
-		d.diodeAppNamePrefix = agentName
-	}
-	if dryRun, prs := config["dry_run"].(bool); prs {
-		d.diodeDryRun = dryRun
-	}
-	if dryRunOutputDir, prs := config["dry_run_output_dir"].(string); prs {
-		d.diodeDryRunOutputDir = dryRunOutputDir
-	}
+	d.diodeTarget = backend.ConfigValueOrDefault(config, "target", common.Diode.Target)
+	d.diodeClientID = backend.ConfigValueOrDefault(config, "client_id", common.Diode.ClientID)
+	d.diodeClientSecret = backend.ConfigValueOrDefault(config, "client_secret", common.Diode.ClientSecret)
+	d.diodeAppNamePrefix = backend.ConfigValueOrDefault(config, "agent_name", common.Diode.AgentName)
+	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", common.Diode.DryRun)
+	d.diodeDryRunOutputDir = backend.ConfigValueOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
@@ -139,11 +112,7 @@ func (d *deviceDiscoveryBackend) Version() (string, error) {
 	return info.Version, nil
 }
 
-func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
-	d.startTime = time.Now()
-	d.cancelFunc = cancelFunc
-	d.ctx = ctx
-
+func (d *deviceDiscoveryBackend) buildArgs() []string {
 	dOptions := []string{
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		"--host", d.apiHost,
@@ -171,96 +140,41 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		dOptions = append(dOptions, "--otel-endpoint", d.diodeOtelEndpoint)
 	}
 
-	d.logger.Info("device-discovery startup", "arguments", redact.Args(dOptions))
-
-	d.proc = backend.NewCmdOptions(backend.CmdOptions{
-		Buffered:  false,
-		Streaming: true,
-	}, d.exec, dOptions...)
-	d.statusChan = d.proc.Start()
-
-	// log STDOUT and STDERR lines streaming from Cmd
-	doneChan := make(chan struct{})
-	go func() {
-		defer func() {
-			if doneChan != nil {
-				close(doneChan)
-			}
-		}()
-		stdout := d.proc.GetStdout()
-		stderr := d.proc.GetStderr()
-		for stdout != nil || stderr != nil {
-			select {
-			case line, open := <-stdout:
-				if !open {
-					stdout = nil
-					continue
-				}
-				d.logDeviceDiscoveryOutput(line, slog.LevelInfo)
-			case line, open := <-stderr:
-				if !open {
-					stderr = nil
-					continue
-				}
-				d.logDeviceDiscoveryOutput(line, slog.LevelError)
-			}
-		}
-	}()
-
-	// wait for simple startup errors
-	time.Sleep(time.Second)
-
-	status := d.proc.Status()
-
-	if status.Error != nil {
-		d.logger.Error("device-discovery startup error", "error", status.Error)
-		return status.Error
-	}
-
-	if status.Complete {
-		err := d.proc.Stop()
-		if err != nil {
-			d.logger.Error("proc.Stop error", "error", err)
-		}
-		return errors.New("device-discovery startup error, check log")
-	}
-
-	d.logger.Info("device-discovery process started", "pid", status.PID)
-
-	var version string
-	var readinessErr error
-	for backoff := range readinessBackoff {
-		if status := d.proc.Status(); status.Complete {
-			err := d.proc.Stop()
-			if err != nil {
-				d.logger.Error("proc.Stop error", "error", err)
-			}
-			return errors.New("device-discovery process ended unexpectedly, check log")
-		}
-		version, readinessErr = d.Version()
-		if readinessErr == nil {
-			d.logger.Info("device-discovery readiness ok, got version", "version", version)
-			break
-		}
-		backoffDuration := time.Duration(backoff) * time.Second
-		d.logger.Info("device-discovery is not ready, trying again with backoff",
-			"backoff backoffDuration", backoffDuration.String())
-		time.Sleep(backoffDuration)
-	}
-
-	if readinessErr != nil {
-		d.logger.Error("device-discovery error on readiness", "error", readinessErr)
-		err := d.proc.Stop()
-		if err != nil {
-			d.logger.Error("proc.Stop error", "error", err)
-		}
-		return readinessErr
-	}
-
-	return nil
+	return dOptions
 }
 
-func (d *deviceDiscoveryBackend) logDeviceDiscoveryOutput(line string, fallback slog.Level) {
+func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
+	d.startTime = time.Now()
+	d.cancelFunc = cancelFunc
+	d.ctx = ctx
+
+	args := d.buildArgs()
+
+	d.logger.Info("device-discovery startup", "arguments", redact.Args(args))
+
+	return backend.StartProcess(backend.StartSpec{
+		Logger:         d.logger,
+		NameDisplay:    "device-discovery",
+		NameUnderscore: "device_discovery",
+		Exec:           d.exec,
+		Args:           args,
+		LogLine:        d.logLineAdapter,
+		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
+			d.proc = p
+			d.statusChan = ch
+		},
+		ReadinessCheck: d.Version,
+	})
+}
+
+// logLineAdapter routes a streamed stdout/stderr line to the device-discovery
+// output normalizer with the level matching the source stream.
+func (d *deviceDiscoveryBackend) logLineAdapter(line string, isStderr bool) {
+	fallback := slog.LevelInfo
+	if isStderr {
+		fallback = slog.LevelError
+	}
+
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return
@@ -388,7 +302,7 @@ func (d *deviceDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, name)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, neturl.PathEscape(name))
 	err := backend.CommonRequest("device-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {

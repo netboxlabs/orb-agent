@@ -195,6 +195,33 @@ the `parent.X` convention; would need driver-local synthesis of
 - Ericsson SmartEdge / IPOS (sub-interfaces under `circuit` profiles
   with operator-chosen names).
 
+### `get_interfaces()` — driver-provided `type`
+
+A driver MAY include a per-interface `type` key in the dict it returns from
+`get_interfaces()`. This is a device-discovery extension (standard NAPALM
+`get_interfaces()` has no type field): use it when the platform tells you the
+interface's kind from device state and name/speed inference would be
+unreliable — LAG / aggregation, virtual / logical, bridge, tunnels, etc.
+
+Rules:
+- The value **must be a valid NetBox interface type** (a member of
+  `device_discovery.interface_types.VALID_INTERFACE_TYPES` — the NetBox
+  `dcim` `InterfaceTypeChoices` values, e.g. `lag`, `virtual`, `bridge`,
+  `1000base-t`). Map the device-native value to a NetBox type in the driver;
+  do not emit the raw device string. An invalid value is ignored (with a
+  warning) and the pipeline falls back to its heuristics — it is never
+  emitted.
+- Precedence: the driver `type` is honored **below** a user
+  `interface_patterns` match (operators keep an explicit override) and
+  **above** the built-in patterns, speed-based detection, and `if_type`.
+- Omit the key (or set it empty) when you cannot classify reliably; leave
+  physical ports to speed-based detection, which is accurate when the driver
+  reports `speed`.
+
+Only classify what the device tells you authoritatively. Reference
+implementations: `ciena_saos` (`port show` TYPE column → `lag`) and
+`mikrotik_routeros` (RouterOS `type` → `lag`/`virtual`/`bridge`).
+
 ---
 
 ## Optional method: `get_interfaces_vlans`

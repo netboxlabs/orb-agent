@@ -65,6 +65,8 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		*f.ptr = resolved
 	}
 
+	c.preLogger.Info("starting secrets manager", "active", "cyberark", "url", c.config.URL)
+
 	if c.config.URL == "" {
 		return fmt.Errorf("cyberark: url is required")
 	}
@@ -149,7 +151,11 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	}
 
 	c.init(ctx, c.preLogger, "cyberark", c.fetch)
-	return c.startScheduler(c.config.Schedule)
+	if err := c.startScheduler(c.config.Schedule); err != nil {
+		return err
+	}
+	c.preLogger.Info("secrets manager started", "active", "cyberark")
+	return nil
 }
 
 // ccpErrorEnvelope is the JSON CyberArk sends on non-2xx responses.

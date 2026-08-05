@@ -2261,3 +2261,41 @@ func TestMapObjectIDsToEntity_VLANIndexCollision(t *testing.T) {
 		t.Errorf("expected VLAN entity for vid 10 (Engineering); got entities=%+v", entities)
 	}
 }
+
+// The CISCOSB overlay only works if these walks are declared. The Go collector
+// matches on OID prefixes, so dropping an entry here would silently stop the
+// rows arriving and send small-business switches back to reporting every port
+// as access VLAN 1 (issue #482), with nothing failing loudly.
+func TestMappingYAML_CiscoSBOverlayEntriesPresent(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	wanted := map[string]bool{
+		".1.3.6.1.4.1.9.6.1.101.48.61.1": false, // vlanTrunkPortModeTable
+		".1.3.6.1.4.1.9.6.1.101.48.62.1": false, // vlanAccessPortModeTable
+	}
+	for _, e := range doc.Entries {
+		if _, want := wanted[e.OID]; !want {
+			continue
+		}
+		wanted[e.OID] = true
+		if e.Vendor != "cisco" {
+			t.Errorf("%s: vendor = %q, want cisco (these devices report sysObjectIDs under ciscoProducts)", e.OID, e.Vendor)
+		}
+		// interface_vlan is what registers the OID as a post-pass prefix, which
+		// keeps these ifIndex-keyed rows out of the ifTable index buckets.
+		if e.Entity != "interface_vlan" {
+			t.Errorf("%s: entity = %q, want interface_vlan", e.OID, e.Entity)
+		}
+	}
+	for oid, found := range wanted {
+		if !found {
+			t.Errorf("mapping.yaml missing CISCOSB-scoped OID %s", oid)
+		}
+	}
+}

@@ -133,6 +133,9 @@ func (m *mockFilesManager) Ensure(_ context.Context, _ filesmgr.FileSpec) (strin
 func (m *mockFilesManager) Get(_ string) (filesmgr.FileEntry, bool) {
 	return filesmgr.FileEntry{}, false
 }
+
+func (m *mockFilesManager) List() []filesmgr.FileEntry                  { return nil }
+func (m *mockFilesManager) ListPending() []filesmgr.FileEntry           { return nil }
 func (m *mockFilesManager) Remove(_ context.Context, _ string) error    { return nil }
 func (m *mockFilesManager) Rollback(_ context.Context, _ string) error  { return nil }
 func (m *mockFilesManager) Subscribe(_ func(filesmgr.FileEvent)) func() { return func() {} }

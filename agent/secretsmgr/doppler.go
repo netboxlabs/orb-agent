@@ -52,15 +52,16 @@ func (d *dopplerManager) Start(ctx context.Context) error {
 		*f.ptr = resolved
 	}
 
-	if d.config.Token == "" {
-		return fmt.Errorf("doppler: token is required")
-	}
-
 	d.apiHost = d.config.APIHost
 	if d.apiHost == "" {
 		d.apiHost = defaultDopplerAPIHost
 	}
 	d.apiHost = strings.TrimRight(d.apiHost, "/")
+	d.preLogger.Info("starting secrets manager", "active", "doppler", "api_host", d.apiHost)
+
+	if d.config.Token == "" {
+		return fmt.Errorf("doppler: token is required")
+	}
 
 	timeout := defaultDopplerTimeout
 	if d.config.Timeout != nil && *d.config.Timeout > 0 {
@@ -69,7 +70,11 @@ func (d *dopplerManager) Start(ctx context.Context) error {
 	d.httpClient = &http.Client{Timeout: timeout}
 
 	d.init(ctx, d.preLogger, "doppler", d.fetch)
-	return d.startScheduler(d.config.Schedule)
+	if err := d.startScheduler(d.config.Schedule); err != nil {
+		return err
+	}
+	d.preLogger.Info("secrets manager started", "active", "doppler")
+	return nil
 }
 
 // parseBody splits a placeholder body into (project, config, name) according

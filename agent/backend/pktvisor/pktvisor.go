@@ -3,7 +3,6 @@ package pktvisor
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -26,7 +25,6 @@ var _ backend.Backend = (*pktvisorBackend)(nil)
 
 const (
 	defaultBinary       = "pktvisord"
-	readinessBackoff    = 10
 	readinessTimeout    = 10
 	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
@@ -127,93 +125,37 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	p.logger.Info("pktvisor startup", "arguments", pvOptions)
 
-	p.proc = backend.NewCmdOptions(backend.CmdOptions{
-		Buffered:  false,
-		Streaming: true,
-	}, p.binary, pvOptions...)
-	p.statusChan = p.proc.Start()
+	return backend.StartProcess(backend.StartSpec{
+		Logger:         p.logger,
+		NameDisplay:    "pktvisor",
+		NameUnderscore: "pktvisor",
+		Exec:           p.binary,
+		Args:           pvOptions,
+		LogLine:        p.logLineAdapter,
+		SetProc: func(proc backend.Commander, ch <-chan backend.CmdStatus) {
+			p.proc = proc
+			p.statusChan = ch
+		},
+		// Readiness probes /api/v1/metrics/app with readinessTimeout (10s), NOT
+		// getAppInfo (which uses versionTimeout=2). Returns the app version.
+		ReadinessCheck: func() (string, error) {
+			var appMetrics AppInfo
+			url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+			err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
+				http.NoBody, "application/json", readinessTimeout, "error")
+			return appMetrics.App.Version, err
+		},
+	})
+}
 
-	// log STDOUT and STDERR lines streaming from Cmd
-	doneChan := make(chan struct{})
-	go func() {
-		defer func() {
-			if doneChan != nil {
-				close(doneChan)
-			}
-		}()
-		stdout := p.proc.GetStdout()
-		stderr := p.proc.GetStderr()
-		for stdout != nil || stderr != nil {
-			select {
-			case line, open := <-stdout:
-				if !open {
-					stdout = nil
-					continue
-				}
-				p.logPktvisorOutput(line, slog.LevelInfo)
-			case line, open := <-stderr:
-				if !open {
-					stderr = nil
-					continue
-				}
-				p.logPktvisorOutput(line, slog.LevelError)
-			}
-		}
-	}()
-
-	// wait for simple startup errors
-	time.Sleep(time.Second)
-
-	status := p.proc.Status()
-
-	if status.Error != nil {
-		p.logger.Error("pktvisor startup error", "error", status.Error)
-		return status.Error
+// logLineAdapter routes a streamed stdout/stderr line to the pktvisor output
+// normalizer with the level matching the source stream.
+func (p *pktvisorBackend) logLineAdapter(line string, isStderr bool) {
+	level := slog.LevelInfo
+	if isStderr {
+		level = slog.LevelError
 	}
-
-	if status.Complete {
-		err = p.proc.Stop()
-		if err != nil {
-			p.logger.Error("proc.Stop error", "error", err)
-		}
-		return errors.New("pktvisor startup error, check log")
-	}
-
-	p.logger.Info("pktvisor process started", "pid", status.PID)
-
-	var readinessError error
-	for backoff := range readinessBackoff {
-		if status := p.proc.Status(); status.Complete {
-			err := p.proc.Stop()
-			if err != nil {
-				p.logger.Error("proc.Stop error", "error", err)
-			}
-			return errors.New("pktvisor process ended unexpectedly, check log")
-		}
-		var appMetrics AppInfo
-		url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
-		readinessError = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
-			http.NoBody, "application/json", readinessTimeout, "error")
-		if readinessError == nil {
-			p.logger.Info("pktvisor readiness ok, got version", "version", appMetrics.App.Version)
-			break
-		}
-		backoffDuration := time.Duration(backoff) * time.Second
-		p.logger.Info("pktvisor is not ready, trying again with backoff",
-			"backoff backoffDuration", backoffDuration.String())
-		time.Sleep(backoffDuration)
-	}
-
-	if readinessError != nil {
-		p.logger.Error("pktvisor error on readiness", "error", readinessError)
-		err = p.proc.Stop()
-		if err != nil {
-			p.logger.Error("proc.Stop error", "error", err)
-		}
-		return readinessError
-	}
-
-	return nil
+	p.logPktvisorOutput(line, level)
 }
 
 func (p *pktvisorBackend) logPktvisorOutput(line string, level slog.Level) {

@@ -11,7 +11,9 @@ from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, Location, Prefix
 
 from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
+from device_discovery.interface_types import VALID_INTERFACE_TYPES
 from device_discovery.policy.models import Defaults, Options
+from device_discovery.proto_presence import blank_to_none
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ def detect_type_by_speed(speed_mbps: float) -> str:
             return interface_type
 
     # Default to highest speed for anything above 400G
-    return "800gbase-x-qsfp-dd"
+    return "800gbase-x-qsfpdd"
 
 
 def merge_interface_patterns(
@@ -174,6 +176,52 @@ def int32_overflows(number: int) -> bool:
     return not (INT32_MIN <= number <= INT32_MAX)
 
 
+def _resolve_non_subinterface_type(
+    if_name: str,
+    interface_info: dict,
+    defaults: Defaults,
+) -> str:
+    """
+    Resolve a non-subinterface type by descending priority.
+
+    user patterns -> driver-provided type -> built-in patterns -> speed ->
+    if_type. A driver-provided type is honored only when it is a valid NetBox
+    interface type; an invalid value is ignored (with a warning) so an invalid
+    type is never emitted.
+    """
+    # Tier 2: user-defined patterns (explicit operator override)
+    user_patterns = defaults.interface_patterns or []
+    if user_patterns:
+        matched = match_interface_type(if_name, user_patterns, len(user_patterns))
+        if matched:
+            return matched
+
+    # Tier 3: type asserted by the driver from device state
+    driver_type = interface_info.get("type")
+    if driver_type:
+        if driver_type in VALID_INTERFACE_TYPES:
+            return driver_type
+        logger.warning(
+            "Driver-provided interface type %r for %s is not a valid NetBox "
+            "interface type; ignoring.",
+            driver_type,
+            if_name,
+        )
+
+    # Tier 4: built-in patterns
+    matched = match_interface_type(if_name, DEFAULT_INTERFACE_PATTERNS, 0)
+    if matched:
+        return matched
+
+    # Tier 5: speed-based detection
+    speed = interface_info.get("speed")
+    if speed and speed > 0:
+        return detect_type_by_speed(speed)
+
+    # Tier 6: configured default
+    return defaults.if_type
+
+
 def translate_interface(
     device: Device,
     if_name: str,
@@ -204,20 +252,22 @@ def translate_interface(
         tags.extend(defaults.interface.tags or [])
         description = defaults.interface.description
 
-    description = interface_info.get("description", description)
-    mac_address = (
-        interface_info.get("mac_address")
-        if interface_info.get("mac_address") != ""
-        else None
-    )
+    # NAPALM uses "" for "not available", and 17 of the custom drivers hardcode
+    # `"description": ""` without ever reading a description off the box. A blank
+    # driver value must therefore neither override the policy default nor reach the
+    # wire, where the plugin would treat it as an explicit clear.
+    driver_description = blank_to_none(interface_info.get("description"))
+    if driver_description is not None:
+        description = driver_description
+    mac_address = blank_to_none(interface_info.get("mac_address"))
 
-    # Determine interface type with five-tier priority:
-    # 1. Subinterface (has parent) -> "virtual"
-    # 2. User-defined pattern match -> matched type
-    # 3. Built-in pattern match -> matched type
-    # 4. Speed-based detection -> type from speed
-    # 5. Fallback -> defaults.if_type
-    interface_type = defaults.if_type
+    # Determine interface type by descending priority:
+    # 1. Subinterface (has parent) -> "virtual" (structural)
+    # 2. User-defined pattern match
+    # 3. Driver-provided type (validated against NetBox interface types)
+    # 4. Built-in pattern match
+    # 5. Speed-based detection
+    # 6. Fallback -> defaults.if_type
     is_subinterface = parent is not None
 
     if is_subinterface:
@@ -229,21 +279,9 @@ def translate_interface(
             type=parent.type,
         )
     else:
-        # Tier 2 & 3: Try pattern matching (user + built-in merged)
-        user_patterns = defaults.interface_patterns
-        merged_patterns = merge_interface_patterns(user_patterns, include_defaults=True)
-
-        # Count user patterns to maintain priority during matching
-        user_pattern_count = len(user_patterns) if user_patterns else 0
-        matched_type = match_interface_type(if_name, merged_patterns, user_pattern_count)
-        if matched_type:
-            interface_type = matched_type
-        else:
-            # Tier 4: Speed-based detection fallback
-            speed = interface_info.get("speed")
-            if speed and speed > 0:
-                interface_type = detect_type_by_speed(speed)
-            # Else: Tier 5 - interface_type already has defaults.if_type fallback
+        interface_type = _resolve_non_subinterface_type(
+            if_name, interface_info, defaults
+        )
 
     interface = Interface(
         device=device,
@@ -337,6 +375,56 @@ def _resolve_prefix_scope_kwargs(
     return scope_kwargs
 
 
+def _undesirable_prefix_reason(
+    network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    emit_host_prefixes: bool = False,
+) -> str | None:
+    """
+    Return why ``network`` must not be emitted as a Prefix, or None to emit it.
+
+    A Prefix is derived from the network of every discovered interface IP, but
+    two shapes carry no IPAM value and only add noise:
+
+    - **Host prefixes** (IPv4 /32, IPv6 /128) restate the address itself. A
+      router loopback of 10.0.0.1/32 yields the "prefix" 10.0.0.1/32, which
+      duplicates the IPAddress entity that is emitted alongside it. Operators
+      who do track loopback /32s as NetBox prefixes can set the
+      ``emit_host_prefixes`` option to keep them.
+    - **IPv6 link-locals** (fe80::/10) are per-link and not globally
+      meaningful, so a prefix per link-local address is pure churn. There is
+      no opt-in for these: an fe80:: prefix is never useful IPAM data, and
+      ``emit_host_prefixes`` deliberately does not resurrect them.
+
+    IPv4 link-local (169.254.0.0/16) and the loopback net (127.0.0.0/8) are
+    deliberately NOT suppressed — they are ordinary networks by mask, so they
+    keep the existing behavior.
+
+    Suppression applies only to the derived Prefix. The IPAddress entity is
+    always still emitted, so the interface and its address stay documented.
+    """
+    # Link-local is judged on the ADDRESS, not the derived network. A mask
+    # shorter than /10 widens the network out of fe80::/10 — fe80::1/9
+    # normalizes to fe80::/9 and fe80::1/8 to fe00::/8, neither of which is
+    # link-local by containment — so testing the network would emit a huge
+    # container prefix for an address that is plainly link-local. Devices and
+    # SNMP agents do report nonsense masks, which is why this is judged on the
+    # address the device actually reported.
+    #
+    # The rule is not gated on emit_host_prefixes, which is what keeps an
+    # fe80::x/128 address suppressed even when the opt-in is on: it is a
+    # link-local that happens to carry host length, not a loopback an operator
+    # wants tracked. Checked first only so the logged reason names link-local
+    # rather than host length.
+    # Only IPv6: ipaddress treats 169.254.0.0/16 as link-local too, and that
+    # one stays in scope for emission.
+    if address.version == 6 and address.is_link_local:
+        return "IPv6 link-local"
+    if not emit_host_prefixes and network.prefixlen == network.max_prefixlen:
+        return "host prefix"
+    return None
+
+
 def translate_interface_ips(
     interface: Interface,
     interfaces_ip: dict,
@@ -415,6 +503,8 @@ def translate_interface_ips(
         prefix_vrf_ipv6 = translate_vrf(defaults.prefix.vrf_ipv6)
 
     scope_kwargs = _resolve_prefix_scope_kwargs(defaults, options)
+    # Opt-in: host prefixes are not derived unless the operator asks for them.
+    emit_host_prefixes = bool(options and options.emit_host_prefixes)
 
     # Device state beats policy defaults: a VRF discovered for this
     # interface overrides every configured vrf default for its IPs and
@@ -436,21 +526,37 @@ def translate_interface_ips(
                 ) or prefix_vrf
                 for ip, details in ip_info.get(ip_version, {}).items():
                     ip_address = f"{ip}/{details.get('prefix_length', default_prefix)}"
-                    network = ipaddress.ip_network(ip_address, strict=False)
-                    ip_entities.append(
-                        Entity(
-                            prefix=Prefix(
-                                prefix=str(network),
-                                vrf=af_prefix_vrf,
-                                role=prefix_role,
-                                tenant=prefix_tenant,
-                                tags=prefix_tags,
-                                comments=prefix_comments,
-                                description=prefix_description,
-                                **scope_kwargs,
+                    # ip_interface keeps the host bits, so .ip is the address
+                    # the device reported and .network is the same value
+                    # ip_network(..., strict=False) produced. Parsing once
+                    # means the two can never disagree.
+                    interface_address = ipaddress.ip_interface(ip_address)
+                    network = interface_address.network
+                    skip_reason = _undesirable_prefix_reason(
+                        network, interface_address.ip, emit_host_prefixes
+                    )
+                    if skip_reason:
+                        logger.debug(
+                            "%s: not deriving a prefix from %s (%s)",
+                            interface.name,
+                            ip_address,
+                            skip_reason,
+                        )
+                    else:
+                        ip_entities.append(
+                            Entity(
+                                prefix=Prefix(
+                                    prefix=str(network),
+                                    vrf=af_prefix_vrf,
+                                    role=prefix_role,
+                                    tenant=prefix_tenant,
+                                    tags=prefix_tags,
+                                    comments=prefix_comments,
+                                    description=prefix_description,
+                                    **scope_kwargs,
+                                )
                             )
                         )
-                    )
                     ip_entities.append(
                         Entity(
                             ip_address=IPAddress(

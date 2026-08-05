@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -103,7 +104,12 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 				return
 			}
 			updatePolicy = true
-			if currentPolicy.Name != pd.Name {
+			if currentPolicy.PreviousPolicyData != nil {
+				// a rename is already pending: the persisted PreviousPolicyData names
+				// the policy the backend actually runs; keep it through stacked
+				// renames until an apply succeeds
+				pd.PreviousPolicyData = currentPolicy.PreviousPolicyData
+			} else if currentPolicy.Name != pd.Name {
 				pd.PreviousPolicyData = &policies.PolicyData{Name: currentPolicy.Name}
 			}
 			pd.Datasets = currentPolicy.Datasets
@@ -132,11 +138,27 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 			newPayload, err := a.secrets.SolvePolicySecrets(payload)
 			if err != nil {
 				a.logger.Error("failed to solve secrets", "policy_id", payload.ID, "policy_name", payload.Name, "error", err)
-				return
+				pd.State = policies.FailedToApply
+				pd.BackendErr = secretsFailureReason(err)
+			} else {
+				pd.Data = newPayload.Data
+				a.applyPolicy(payload, be, &pd, updatePolicy)
+				pd.Data = payload.Data
 			}
-			pd.Data = newPayload.Data
-			a.applyPolicy(payload, be, &pd, updatePolicy)
-			pd.Data = payload.Data
+		}
+		if pd.State == policies.Running {
+			// A successful apply clears any pending rename, so persisted
+			// PreviousPolicyData means exactly "rename pending".
+			//
+			// Caveat: State==Running proves only that the NEW-name apply
+			// succeeded. Backends swallow the update-embedded RemovePolicy
+			// error for the OLD name (they log it and proceed to apply), so a
+			// rename whose old-name delete transiently failed can leave the old
+			// policy installed while we drop its cleanup reference here. This
+			// orphan-on-failed-delete predates this change — the old name was
+			// likewise dropped on the following manage — and closing it needs
+			// the backend to report the delete outcome separately from the apply.
+			pd.PreviousPolicyData = nil
 		}
 		// save policy (with latest status) to local policy db
 		err := a.repo.Update(pd)
@@ -161,13 +183,29 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 		ID:   policyID,
 		Name: policyName,
 	}
+	if stored, err := a.repo.Get(policyID); err == nil {
+		// use the stored record so the backend's remove honors a pending rename
+		// (PreviousPolicyData) recorded by a manage that never reached it
+		pd = stored
+	}
 	if !backend.HaveBackend(beName) {
 		return errors.New("policy remove for a backend we do not have, ignoring")
 	}
 	be := backend.GetBackend(beName)
 	err := be.RemovePolicy(pd)
 	if err != nil {
-		a.logger.Error("backend remove policy failed: will still remove from PolicyManager", "policy_id", policyID, "error", err)
+		var httpErr *backend.HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			// Expected for run-once policies the backend already dropped after
+			// completion: the desired state (policy absent) is reached, so this
+			// is a no-op. Kept at WARN (not DEBUG) because a 404 here can also
+			// signal a rename-bookkeeping bug leaving a stale policy running
+			// under another name on the backend.
+			a.logger.Warn("policy not present on backend at removal; treating as already removed",
+				"policy_id", policyID, "policy_name", pd.Name, "error", err)
+		} else {
+			a.logger.Error("backend remove policy failed: will still remove from PolicyManager", "policy_id", policyID, "error", err)
+		}
 	}
 	// Remove policy from orb-agent local repo
 	err = a.repo.Remove(pd.ID)
@@ -287,6 +325,9 @@ func (a *policyManager) ApplyBackendPolicies(be backend.Backend) error {
 			a.logger.Info("policy applied successfully", "policy_id", policy.ID, "policy_name", policy.Name)
 			policy.State = policies.Running
 			policy.BackendErr = ""
+			// see ManagePolicy: clearing on Running assumes the rename delete
+			// succeeded, which backends do not confirm (swallowed remove error)
+			policy.PreviousPolicyData = nil
 		}
 		err = a.repo.Update(policy)
 		if err != nil {
@@ -322,16 +363,42 @@ func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
 			newPayload, err := a.secrets.SolvePolicySecrets(payload)
 			if err != nil {
 				a.logger.Error("failed to solve secrets", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
-				continue
+				policy.State = policies.FailedToApply
+				policy.BackendErr = secretsFailureReason(err)
+			} else {
+				policy.Data = newPayload.Data
+				be := backend.GetBackend(policy.Backend)
+				a.applyPolicy(payload, be, &policy, true)
+				policy.Data = payload.Data
 			}
-			policy.Data = newPayload.Data
-			be := backend.GetBackend(policy.Backend)
-			a.applyPolicy(payload, be, &policy, true)
-			policy.Data = payload.Data
+		}
+
+		if policy.State == policies.Running {
+			// see ManagePolicy: persisted PreviousPolicyData means "rename pending"
+			// (and the same swallowed-remove caveat about the old-name delete)
+			policy.PreviousPolicyData = nil
 		}
 
 		if err = a.repo.Update(policy); err != nil {
 			a.logger.Error("got error in update last status", "error", err)
 		}
 	}
+}
+
+// maxSecretsFailureReasonLen bounds the operator-facing reason: provider errors
+// can embed raw HTTP response bodies, and the reason rides in every heartbeat.
+const maxSecretsFailureReasonLen = 1024
+
+// secretsFailureReason builds the operator-facing reason for a failed secret
+// resolution. It contains secret references from the policy body and provider
+// error messages, never resolved secret values.
+func secretsFailureReason(err error) string {
+	const truncationMarker = "... (truncated)"
+	reason := "failed to resolve policy secrets: " + err.Error()
+	if len(reason) > maxSecretsFailureReasonLen {
+		// keep the TOTAL length within maxSecretsFailureReasonLen, marker included,
+		// so the reason rides every heartbeat with a bounded payload
+		reason = reason[:maxSecretsFailureReasonLen-len(truncationMarker)] + truncationMarker
+	}
+	return reason
 }

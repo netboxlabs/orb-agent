@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1210,4 +1211,193 @@ func TestManager_StartCleansUpStaleBackupDirs(t *testing.T) {
 	assert.DirExists(t, versionDir, "tracked version dir must not be removed on Start")
 	assert.FileExists(t, filepath.Join(unversionedNameDir, "file.txt"),
 		"unversioned content must not be removed on Start")
+}
+
+// TestManager_EnsureRecordsFailureOnChecksumMismatch verifies that a
+// failed Ensure (here, a SHA256 that doesn't match the fetched archive) is
+// recorded via ListPending instead of being silently dropped, and a
+// subsequent successful Ensure for the same name clears it.
+func TestManager_EnsureRecordsFailureOnChecksumMismatch(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	realSum := sha256Hex(archive)
+	wrongSum := strings.Repeat("0", len(realSum))
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+
+	m, _ := newTestManager(t)
+
+	_, err := m.Ensure(context.Background(), FileSpec{
+		Name:    "pkg",
+		Version: "1.0.0",
+		URL:     srv.URL + "/x.tar.gz",
+		SHA256:  wrongSum,
+		Extract: true,
+	})
+	require.Error(t, err)
+
+	pending := m.ListPending()
+	require.Len(t, pending, 1)
+	assert.Equal(t, "pkg", pending[0].Name)
+	assert.Equal(t, "1.0.0", pending[0].Version)
+	assert.Equal(t, FileEntryStateFailed, pending[0].State)
+	assert.NotEmpty(t, pending[0].Error)
+	assert.NotContains(t, pending[0].Error, "deadline exceeded", "a checksum mismatch must not read like a timeout")
+	assert.WithinDuration(t, time.Now(), pending[0].UpdatedAt, 5*time.Second)
+
+	// The failed name must not appear in List() (no successful install).
+	assert.Empty(t, m.List())
+
+	// A subsequent successful Ensure for the same name clears the failure.
+	_, err = m.Ensure(context.Background(), FileSpec{
+		Name:    "pkg",
+		Version: "1.0.0",
+		URL:     srv.URL + "/x.tar.gz",
+		SHA256:  realSum,
+		Extract: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, m.ListPending())
+}
+
+// TestManager_EnsureRecordsTimeoutFailure verifies a context deadline
+// exceeded during Ensure is recorded as a Timeout failure —
+// distinguishing the 10-minute install timeout case from other errors, per
+// the ticket's requirement to report checksum mismatch, timeout, and
+// download errors distinctly enough to be useful.
+func TestManager_EnsureRecordsTimeoutFailure(t *testing.T) {
+	// A server that never responds within the deadline forces ctx.Err() to be
+	// DeadlineExceeded by the time Ensure returns.
+	blocked := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-blocked
+	}))
+	// Unblock the handler before Close (which waits for in-flight requests to
+	// finish) — deferred in this order so close(blocked) runs first (LIFO).
+	defer srv.Close()
+	defer close(blocked)
+
+	m, _ := newTestManager(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := m.Ensure(ctx, FileSpec{
+		Name:    "pkg-timeout",
+		Version: "1.0.0",
+		URL:     srv.URL + "/x.tar.gz",
+		SHA256:  strings.Repeat("0", 64),
+		Extract: true,
+	})
+	require.Error(t, err)
+
+	pending := m.ListPending()
+	require.Len(t, pending, 1)
+	assert.Equal(t, "pkg-timeout", pending[0].Name)
+	assert.Equal(t, FileEntryStateFailed, pending[0].State)
+	assert.Contains(t, pending[0].Error, "deadline exceeded", "the install timeout should surface as a deadline-exceeded error message")
+}
+
+// TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls covers a
+// race flagged in review: Ensure's wrapper calls setPendingFailed/clearPending
+// AFTER ensureLocked has already released its internal per-name mutex
+// (mutexFor), so relying on that mutex alone leaves a brief unprotected
+// window where an older but slower failing call's setPendingFailed could run
+// after a newer but faster successful call's clearPending — leaving
+// ListPending reporting "failed" even though the most recent attempt
+// actually succeeded. The fix adds a second, outer per-name mutex
+// (ensureCallMutexFor) that Ensure holds across the whole call, including
+// record/clear, so no other Ensure call for the same name can even begin
+// until the previous one's record/clear has completed.
+//
+// Note: black-box channel handshakes can force call B to block until call A
+// finishes its fetch (mutexFor already guarantees that much on its own), but
+// cannot deterministically land B inside the few-instruction gap between
+// ensureLocked's internal unlock and the wrapper's record/clear call that
+// was the actual unprotected window — that gap is too narrow to hit
+// reliably without instrumenting the code under test. This test instead
+// verifies the resulting behavioral guarantee: when call A (fails) and call
+// B (succeeds) for the same name genuinely run concurrently, whichever call
+// completes last — proven here by explicit channel signals establishing A
+// starts and blocks first while B is confirmed still waiting — is the one
+// whose outcome is reflected once both have returned. Reverting the
+// ensureCallMutexFor fix does not make this specific test fail (the
+// existing internal mutex already serializes enough of the operation for
+// this particular interleaving), but the outer lock is still required to
+// close the general case Codex identified.
+func TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls(t *testing.T) {
+	const name = "pkg-race"
+
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	sum := sha256Hex(archive)
+
+	aStarted := make(chan struct{})
+	var aStartedOnce sync.Once
+	aProceed := make(chan struct{})
+	aSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// go-getter/http may retry the request; only signal aStarted once so
+		// a retry doesn't panic on a double-close.
+		aStartedOnce.Do(func() { close(aStarted) })
+		<-aProceed
+		// Fail the fetch outright (no valid archive body).
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer aSrv.Close()
+
+	bStarted := make(chan struct{})
+	bSrv := serveTarGz(t, archive)
+	defer bSrv.Close()
+
+	m, _ := newTestManager(t)
+
+	var wg sync.WaitGroup
+	var errA, errB error
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, errA = m.Ensure(context.Background(), FileSpec{
+			Name:    name,
+			Version: "1.0.0",
+			URL:     aSrv.URL + "/x.tar.gz",
+			SHA256:  strings.Repeat("0", 64),
+			Extract: true,
+		})
+	}()
+
+	<-aStarted // A is now inside its fetch, holding Ensure's outer per-name lock.
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		close(bStarted) // signals only that the goroutine is running, not that B's HTTP handler fired
+		_, errB = m.Ensure(context.Background(), FileSpec{
+			Name:    name,
+			Version: "2.0.0",
+			URL:     bSrv.URL + "/x.tar.gz",
+			SHA256:  sum,
+			Extract: true,
+		})
+	}()
+	<-bStarted // B's goroutine is running and calling Ensure, but should block on the lock A holds.
+
+	// B must still be blocked waiting for A's lock — it cannot have installed
+	// yet. This is best-effort timing but generous enough (50ms) to catch a
+	// regression where B is not blocked at all.
+	time.Sleep(50 * time.Millisecond)
+	assert.Empty(t, m.List(), "B must not have been able to proceed while A holds the outer lock")
+
+	close(aProceed) // let A fail and run its setPendingFailed + release the lock.
+	wg.Wait()
+
+	require.Error(t, errA)
+	require.NoError(t, errB)
+
+	// B ran strictly after A (including A's setPendingFailed) and succeeded, so
+	// the final state must show no outstanding failure and the successful
+	// install — never a stale "failed" left over from A.
+	assert.Empty(t, m.ListPending(), "B's success must have cleared any failure A recorded")
+	entries := m.List()
+	require.Len(t, entries, 1)
+	assert.Equal(t, name, entries[0].Name)
+	assert.Equal(t, "2.0.0", entries[0].Version)
 }

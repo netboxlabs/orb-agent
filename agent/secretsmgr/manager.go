@@ -2,6 +2,7 @@ package secretsmgr
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -15,22 +16,25 @@ type Manager interface {
 	SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error)
 }
 
-// New creates a new instance of ConfigManager based on the configuration
-func New(logger *slog.Logger, c config.ManagerSecrets) Manager {
+// New creates a secrets Manager from configuration. An empty active type is a
+// no-op manager; a non-empty unrecognized type is a configuration error.
+func New(logger *slog.Logger, c config.ManagerSecrets) (Manager, error) {
 	switch c.Active {
 	case "vault":
-		return &vaultManager{preLogger: logger, config: c.Sources.Vault}
+		return &vaultManager{preLogger: logger, config: c.Sources.Vault}, nil
 	case "fleet":
-		return NewFleetSecretsManager(logger, c.Sources.Fleet)
+		return NewFleetSecretsManager(logger, c.Sources.Fleet), nil
 	case "delinea":
-		return &delineaManager{preLogger: logger, config: c.Sources.Delinea}
+		return &delineaManager{preLogger: logger, config: c.Sources.Delinea}, nil
 	case "doppler":
-		return &dopplerManager{preLogger: logger, config: c.Sources.Doppler}
+		return &dopplerManager{preLogger: logger, config: c.Sources.Doppler}, nil
 	case "cyberark":
-		return &cyberarkManager{preLogger: logger, config: c.Sources.CyberArk}
+		return &cyberarkManager{preLogger: logger, config: c.Sources.CyberArk}, nil
+	case "":
+		logger.Info("no secrets manager specified, skipping")
+		return &dummyManager{}, nil
 	default:
-		logger.Info("no secrets manager specified or invalid type, skipping")
-		return &dummyManager{}
+		return nil, fmt.Errorf("unsupported secrets manager type %q (supported: vault, fleet, delinea, doppler, cyberark)", c.Active)
 	}
 }
 
