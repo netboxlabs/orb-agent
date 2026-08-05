@@ -15,6 +15,7 @@ from netboxlabs.diode.sdk import (
 )
 
 from device_discovery.entity_metadata import apply_run_id_to_entities
+from device_discovery.log_config import configure_default_logging
 from device_discovery.stubs import prune_nested_refs
 from device_discovery.translate import translate_data
 from device_discovery.version import version_semver
@@ -24,7 +25,7 @@ APP_VERSION = version_semver()
 MAX_MESSAGE_SIZE_BYTES = 3 * 1024 * 1024  # 3MB threshold for chunking
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+configure_default_logging()
 logger = logging.getLogger(__name__)
 
 

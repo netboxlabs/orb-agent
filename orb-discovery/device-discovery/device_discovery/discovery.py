@@ -12,10 +12,12 @@ from typing import Any
 from napalm import get_network_driver
 from napalm.base.base import NetworkDriver
 
+from device_discovery.log_config import configure_default_logging
+
 _DRIVER_MISMATCH_MARKERS = ["%", "Invalid input", "^"]
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+configure_default_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -184,11 +186,11 @@ def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str 
                         "Hostname %s: '%s' driver did not work", info.hostname, driver
                     )
                     continue
-                set_napalm_logs_level(logging.INFO)
+                set_napalm_logs_level(logging.getLogger().getEffectiveLevel())
                 return driver
         except Exception as e:
             logger.info(
                 "Hostname %s: '%s' driver did not work. Exception: %s", info.hostname, driver, str(e)
             )
-    set_napalm_logs_level(logging.INFO)
+    set_napalm_logs_level(logging.getLogger().getEffectiveLevel())
     return None
