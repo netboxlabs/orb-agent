@@ -49,6 +49,7 @@ type deviceDiscoveryBackend struct {
 	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
+	diodeLogLevel        string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -87,6 +88,21 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	d.diodeAppNamePrefix = backend.ConfigValueOrDefault(config, "agent_name", common.Diode.AgentName)
 	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", common.Diode.DryRun)
 	d.diodeDryRunOutputDir = backend.ConfigValueOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
+
+	// Mirrors networkdiscovery/network_discovery.go so the four backends stay
+	// greppably identical for the open de-duplication work. Precedence:
+	// explicit log_level > per-backend debug: true > the agent already running
+	// at debug (-d or orb.debug.enable, which cmd/main.go applies to the shared
+	// LevelVar before agent.New). Uses the logger parameter rather than
+	// d.logger, exactly as the sibling does. A non-string log_level (YAML
+	// `log_level: 3`) falls through the type assertion and cannot panic.
+	if logLevel, prs := config["log_level"].(string); prs {
+		d.diodeLogLevel = logLevel
+	} else if debug, prs := config["debug"].(bool); prs && debug {
+		d.diodeLogLevel = "debug"
+	} else if logger.Enabled(context.Background(), slog.LevelDebug) {
+		d.diodeLogLevel = "debug"
+	}
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
@@ -134,6 +150,12 @@ func (d *deviceDiscoveryBackend) buildArgs() []string {
 			)
 		}
 		dOptions = append(opts, dOptions...)
+	}
+
+	if d.diodeLogLevel != "" {
+		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
+		d.logger.Info("device-discovery using log level",
+			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {

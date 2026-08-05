@@ -88,6 +88,8 @@ func TestDeviceDiscoveryBackendStart(t *testing.T) {
 		assert.Contains(t, args, "device-secret", "Expected args to contain diode client secret")
 		assert.Contains(t, args, "--diode-app-name-prefix", "Expected args to contain diode app name prefix flag")
 		assert.Contains(t, args, "device-agent", "Expected args to contain diode app name prefix")
+		assert.Contains(t, args, "--log-level", "Expected args to contain log level flag")
+		assert.Contains(t, args, "debug", "Expected args to contain log level value")
 		assert.Contains(t, args, "--otel-endpoint", "Expected args to contain otel endpoint flag")
 		assert.Contains(t, args, "collector:4317", "Expected args to contain otel endpoint value")
 	})
@@ -116,6 +118,7 @@ func TestDeviceDiscoveryBackendStart(t *testing.T) {
 		"agent_name":         "device-agent",
 		"dry_run":            false,
 		"dry_run_output_dir": "/tmp/device",
+		"log_level":          "debug",
 	}, commons, nil)
 	require.NoError(t, err)
 
