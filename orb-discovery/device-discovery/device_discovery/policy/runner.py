@@ -4,6 +4,7 @@
 
 import logging
 import time
+import traceback
 import uuid
 from datetime import datetime, timedelta
 from typing import Any
@@ -13,9 +14,12 @@ from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from napalm import get_network_driver
+from napalm.base.exceptions import ConnectionException
+from netmiko.exceptions import NetmikoAuthenticationException
 
 from device_discovery.client import Client
 from device_discovery.discovery import discover_device_driver, supported_drivers
+from device_discovery.log_config import configure_default_logging, flatten_message
 from device_discovery.metrics import get_metric
 from device_discovery.policy.models import Config, Defaults, Napalm, Options, Status
 from device_discovery.policy.portscan import (
@@ -25,8 +29,45 @@ from device_discovery.policy.portscan import (
 from device_discovery.policy.run import RunStatus, RunStore
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+configure_default_logging()
 logger = logging.getLogger(__name__)
+
+# Per-target failures that are routine in a discovery sweep rather than bugs:
+# a host that is alive on the scanned port but is not a manageable device.
+# These log as ONE WARNING with no traceback; everything else keeps ERROR plus
+# full exc_info so real defects stay diagnosable.
+#
+# Both entries are required. Do not collapse this tuple:
+#   * napalm's NetworkDriver._netmiko_open (napalm/base/base.py) catches ONLY
+#     NetMikoTimeoutException and re-raises ConnectionException. Nothing there
+#     catches authentication failure.
+#   * netmiko declares NetmikoAuthenticationException on paramiko's
+#     AuthenticationException (netmiko/exceptions.py), so it is not a
+#     NapalmException at all -- issubclass(..., ConnectionException) is False.
+# A rejected credential therefore propagates raw, and dropping the second
+# entry restores the full ~63-record traceback wall for exactly the case
+# reported in #494 ("unable to log into the device with the provided
+# credentials").
+#
+# ConnectionException already subsumes ConnectAuthError, ConnectTimeoutError,
+# ConnectionClosedException and UnsupportedVersion, so they are not listed.
+# Builtin TimeoutError / ConnectionError / socket.gaierror are deliberately
+# EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
+# would relabel a dead Diode endpoint as a per-host connection failure and
+# send the operator hunting devices while ingestion is down.
+_EXPECTED_TARGET_FAILURES = (ConnectionException, NetmikoAuthenticationException)
+
+
+def _is_expected_target_failure(error: BaseException) -> bool:
+    """
+    Report whether a per-target failure is an expected unreachable/unauthenticated host.
+
+    Evaluated on the raised object only. The ``__cause__`` / ``__context__``
+    chain is deliberately NOT walked: a driver bug that surfaces while a
+    connection error is being handled must stay UNEXPECTED and keep its
+    traceback.
+    """
+    return isinstance(error, _EXPECTED_TARGET_FAILURES)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -204,7 +245,7 @@ class PolicyRunner:
             scope.driver = discover_device_driver(scope, drivers=discovery_drivers)
             if scope.driver is None:
                 self.status = Status.FAILED
-                logger.error(
+                logger.warning(
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Not able to discover device driver"
                 )
                 return False
@@ -375,6 +416,49 @@ class PolicyRunner:
                 f"Error getting network instances: {e}. "
                 "Continuing without VRF data."
             )
+
+    def _log_target_failure(self, sanitized_hostname: str, error: Exception) -> None:
+        """
+        Log a per-target discovery failure at a level matching how odd it is.
+
+        Expected transport and authentication failures emit exactly ONE
+        physical line at WARNING with the message flattened and no traceback --
+        the agent splits stderr per newline, so one logical record must be one
+        line. Their traceback is still recoverable at DEBUG, as a single
+        newline-escaped line.
+
+        Anything unexpected keeps ERROR with full exc_info. Diagnosability of
+        real bugs must not regress in service of quieting a routine condition.
+        The discipline matches custom_napalm/junos.py and aruba_aoscx.py:
+        expected signal goes quiet, unexpected stays loud.
+
+        Args:
+        ----
+            sanitized_hostname: target the failure belongs to.
+            error: the exception that reached the per-target catch-all.
+
+        """
+        message = (
+            f"Policy {self.name}, Hostname {sanitized_hostname}: "
+            f"{flatten_message(error)}"
+        )
+
+        if not _is_expected_target_failure(error):
+            # exc_info takes the instance, not True, so this helper does not
+            # depend on being called inside an active except block.
+            logger.error(message, exc_info=error)
+            return
+
+        logger.warning(message)
+        if logger.isEnabledFor(logging.DEBUG):
+            formatted = "".join(
+                traceback.format_exception(type(error), error, error.__traceback__)
+            )
+            # One physical line: newlines escaped, so the agent's per-line
+            # stderr split cannot fan this back out. Un-escape with
+            #   printf '%b\n' "<the traceback: value>"
+            escaped = formatted.replace("\\", "\\\\").replace("\n", "\\n")
+            logger.debug(f"{message} | traceback: {escaped}")
 
     def run_scan(
         self, hostnames: list[str], trigger: BaseTrigger, scope: Napalm, config: Config
@@ -562,9 +646,7 @@ class PolicyRunner:
             discovery_failure = get_metric("discovery_failure")
             if discovery_failure:
                 discovery_failure.add(1, {"policy": self.name})
-            logger.error(
-                f"Policy {self.name}, Hostname {sanitized_hostname}: {e}", exc_info=True
-            )
+            self._log_target_failure(sanitized_hostname, e)
             # Still record discovery duration on failure
             discovery_latency = get_metric("discovery_latency")
             if discovery_latency:
@@ -672,9 +754,7 @@ class PolicyRunner:
             discovery_failure = get_metric("discovery_failure")
             if discovery_failure:
                 discovery_failure.add(1, {"policy": self.name})
-            logger.error(
-                f"Policy {self.name}, Hostname {sanitized_hostname}: {e}", exc_info=True
-            )
+            self._log_target_failure(sanitized_hostname, e)
             # Still record discovery duration on failure
             discovery_latency = get_metric("discovery_latency")
             if discovery_latency:

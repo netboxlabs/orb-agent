@@ -8,6 +8,7 @@ import threading
 import time
 from typing import Any
 
+from device_discovery.log_config import flatten_message
 from device_discovery.policy.models import Run, RunStatus
 
 # Maximum number of runs to keep per target
@@ -165,7 +166,9 @@ class RunStore:
                     run.updated_at = time.time_ns()
 
                     if error:
-                        run.reason = str(error)
+                        # Flattened so the string in the JSON /api/v1/status
+                        # response is byte-identical to the log line.
+                        run.reason = flatten_message(error)
                     else:
                         run.reason = ""  # Clear reason when no error
 
