@@ -96,10 +96,6 @@ to go *quieter* than INFO. Note that DEBUG also raises napalm, netmiko, paramiko
 ncclient verbosity considerably (ncclient dumps multi-line XML), so point it at one
 target rather than a subnet.
 
-For a machine-readable per-target census instead of grepping logs, query
-`GET http://<host>:<port>/api/v1/status`. It keeps the last 3 runs per target, in memory
-only.
-
 ## Policy
 Device discovery policies are broken down into two subsections: `config` and `scope`. 
 
