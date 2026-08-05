@@ -28,6 +28,7 @@ import logging
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Entity
 
+from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import Defaults, Options
 from device_discovery.proto_presence import copy_scalar_if_set
@@ -408,6 +409,18 @@ def translate_as_stack(
     master_iface_entities = interface_entities_by_member[master_id]
     if master_iface_entities:
         assign_primary_ip(master_dev, master_iface_entities, target_hostname)
+
+    # Suppress the master's name (emit_device_name: false) BEFORE deriving
+    # vc_master_ref. _master_device_ref copies the name through
+    # copy_scalar_if_set, which skips an unset field, so the shared VC master
+    # ref inherits the suppression instead of resurrecting the name and
+    # recreating the divergence _master_device_ref exists to prevent.
+    #
+    # Master only: apply_device_name_emission no-ops on any device carrying
+    # vc_position, so member names are untouched.
+    apply_device_name_emission(
+        master_dev, options.emit_device_name, target_hostname
+    )
 
     # NOW derive vc_master_ref — captures master's primary_ip4/6 if assigned.
     vc_master_ref = _master_device_ref(master_dev)
