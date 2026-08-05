@@ -101,7 +101,18 @@ def _index_top_level_devices(entities: list[Entity]) -> dict[str, pb.Device]:
 def _resolve_device(
     nested: pb.Device, index: dict[str, pb.Device]
 ) -> pb.Device | None:
-    """Look up the rich top-level Device for a nested reference. Name first, serial fallback."""
+    """
+    Look up the rich top-level Device for a nested reference.
+
+    Tries, in order: name, serial, ``metadata["source_match"]``, ``asset_tag``.
+
+    The last two exist because ``emit_device_name: false`` unsets ``Device.name``
+    on the strength of exactly those two matchers. Without them here, a
+    suppressed device whose driver reported no serial resolves to nothing, so
+    every nested ref is left un-pruned and logs a warning — one per interface,
+    on every discovery cycle. Both fall back only on a unique match, so an
+    ambiguous index is left unresolved rather than mis-attributed.
+    """
     if nested.name and nested.name in index:
         return index[nested.name]
     if nested.serial:
@@ -114,6 +125,19 @@ def _resolve_device(
                     len(matches),
                     matches[0].name,
                 )
+            return matches[0]
+    if "source_match" in nested.metadata:
+        wanted = nested.metadata["source_match"]
+        matches = [
+            d
+            for d in index.values()
+            if "source_match" in d.metadata and d.metadata["source_match"] == wanted
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    if nested.asset_tag:
+        matches = [d for d in index.values() if d.asset_tag == nested.asset_tag]
+        if len(matches) == 1:
             return matches[0]
     return None
 

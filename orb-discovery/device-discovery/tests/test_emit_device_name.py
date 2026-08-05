@@ -200,3 +200,88 @@ def test_stack_default_keeps_every_name(device_info):
     assert all(d.HasField("name") for d in devices)
     vcs = [e.virtual_chassis for e in entities if e.HasField("virtual_chassis")]
     assert vcs[0].master.HasField("name") is True
+
+
+def test_standalone_suppression_precedes_the_nested_ref_deepcopy(device_info):
+    """
+    Suppression must run BEFORE translate.py's copy.deepcopy(device).
+
+    Every nested interface / IP device reference is derived from that copy, so
+    suppressing after it leaves them carrying the name that was just dropped.
+    This asserts on the pre-pruning shape deliberately: prune_nested_refs
+    regenerates nested refs at ingest and would mask the ordering.
+    """
+    data = {
+        "device": device_info,
+        "interface": {
+            "GigabitEthernet1/0/1": {
+                "is_enabled": True, "mtu": 1500, "mac_address": "",
+                "speed": 1000, "description": "",
+            },
+        },
+        "interface_ip": {},
+        "driver": "ios",
+        "defaults": _defaults(),
+        "options": Options(emit_device_name=False),
+        "netbox_id": 42,
+    }
+    entities = list(translate_data(data))
+    nested = [
+        e.interface.device for e in entities
+        if e.HasField("interface") and e.interface.HasField("device")
+    ]
+    assert nested, "expected interface entities carrying a nested device ref"
+    for ref in nested:
+        assert ref.HasField("name") is False, (
+            "a nested device ref still carries the suppressed name — suppression "
+            "ran after copy.deepcopy(device)"
+        )
+
+
+def test_suppressed_name_without_a_serial_still_prunes(device_info, caplog):
+    """
+    A suppressed device with no serial must still resolve during pruning.
+
+    prune_nested_refs resolves nested refs by name, then serial. Suppression is
+    permitted on the strength of source_match / asset_tag, so a device with a
+    netbox_id but no driver-reported serial would otherwise resolve to nothing:
+    every nested ref left un-pruned, with one WARNING per interface on every
+    discovery cycle.
+    """
+    from device_discovery.stubs import prune_nested_refs
+
+    info = dict(device_info)
+    del info["serial_number"]
+    data = {
+        "device": info,
+        "interface": {
+            f"GigabitEthernet1/0/{i}": {
+                "is_enabled": True, "mtu": 1500, "mac_address": "",
+                "speed": 1000, "description": "",
+            }
+            for i in (1, 2, 3)
+        },
+        "interface_ip": {},
+        "driver": "ios",
+        "defaults": _defaults(),
+        "options": Options(emit_device_name=False),
+        "netbox_id": 42,
+    }
+    entities = list(translate_data(data))
+    with caplog.at_level(logging.DEBUG, logger="device_discovery.stubs"):
+        prune_nested_refs(entities)
+
+    unresolved = [r for r in caplog.records if "could not resolve" in r.getMessage()]
+    assert unresolved == [], (
+        "nested refs failed to resolve for a suppressed, serial-less device"
+    )
+    nested = [
+        e.interface.device for e in entities
+        if e.HasField("interface") and e.interface.HasField("device")
+    ]
+    assert nested
+    for ref in nested:
+        # platform and status are stripped by _device_match_stub, so their
+        # presence proves the ref was left un-pruned.
+        assert not ref.HasField("platform")
+        assert not ref.HasField("status")
