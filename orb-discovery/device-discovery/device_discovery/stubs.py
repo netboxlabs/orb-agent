@@ -274,17 +274,36 @@ def _module_match_stub(rich: pb.Module, dev_stub: pb.Device) -> pb.Module:
     """
     Build a matcher-only Module for use as a nested reference.
 
-    Keeps just the fields Diode needs to resolve a Module — the chassis
-    device (matcher-stubbed) and the serial — plus a positional
-    module_bay reference (device-stubbed) when the rich Module carries
-    one. Drops module_type, description, asset_tag, status, and any
-    rich device fields, so that copying this stub into hundreds of
-    Interface entities does not duplicate the running-config-bearing
-    Device proto per port.
+    ``dcim.module`` resolves on ``module_bay`` (its only unique field
+    besides asset_tag), so the positional module_bay reference —
+    device-stubbed — is the load-bearing part of this stub, not the
+    serial. Serial is carried for create fidelity only; it matches
+    nothing. Drops description, asset_tag, status, and any rich device
+    fields, so that copying this stub into hundreds of Interface
+    entities does not duplicate the running-config-bearing Device proto
+    per port.
+
+    ``module_type`` is retained even though it plays no part in matching:
+    when a nested reference does not resolve, Diode falls back to
+    creating the Module, and NetBox rejects a Module without one
+    (``Field module_type is required``). Dropping it cost 48 failed
+    plans per run on a 6-linecard chassis, and those failures take every
+    other entity in the same batch down with them. Only the
+    ``(manufacturer, model)`` pair is copied — the complete matcher for
+    ``dcim.moduletype`` — rather than the rich ModuleType, so the
+    reference cannot grow as drivers start populating part_number,
+    attributes or profile.
     """
     stub = pb.Module()
     copy_scalar_if_set(stub, rich, "serial")
     stub.device.CopyFrom(dev_stub)
+    if rich.HasField("module_type"):
+        stub.module_type.CopyFrom(
+            pb.ModuleType(
+                model=rich.module_type.model,
+                manufacturer=pb.Manufacturer(name=rich.module_type.manufacturer.name),
+            ),
+        )
     if rich.HasField("module_bay"):
         bay_stub = pb.ModuleBay(name=rich.module_bay.name)
         copy_scalar_if_set(bay_stub, rich.module_bay, "position")
