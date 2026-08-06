@@ -50,7 +50,7 @@ orb:
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     device_discovery:
-      host: 192.168.5.11 # default 0.0.0.0
+      host: 192.168.5.11 # default localhost
       port: 8857 # default 8072
       log_level: ERROR # default INFO
 
@@ -58,7 +58,7 @@ orb:
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| host | str | no | REST API host (default `0.0.0.0`) |
+| host | str | no | REST API host (default `localhost`) |
 | port | int | no | REST API port (default `8072`) |
 | log_level | str | no | Log level (default `INFO`) - see [Log level and troubleshooting](#log-level-and-troubleshooting) |
 
