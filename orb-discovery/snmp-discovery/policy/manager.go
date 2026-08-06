@@ -152,6 +152,11 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 		return fmt.Errorf("%s: unsupported protocol version", context)
 	}
 
+	if auth.ContextName != "" && auth.ProtocolVersion != snmp.ProtocolVersion3 {
+		return fmt.Errorf("%s: context_name is only valid for SNMPv3 (got %q)",
+			context, auth.ProtocolVersion)
+	}
+
 	if auth.ProtocolVersion == "SNMPv2c" || auth.ProtocolVersion == "SNMPv1" {
 		if auth.Community == "" {
 			return fmt.Errorf("%s: missing community", context)
@@ -200,6 +205,15 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		if err := m.validateAuthentication(&policy.Scope.Authentication, "policy-level"); err != nil {
 			return err
 		}
+	} else if policy.Scope.Authentication.ContextName != "" {
+		// A scope.authentication block with a context_name but no
+		// protocol_version skips the check above entirely (hasPolicyAuth is
+		// false), yet it is still env-resolved and then silently discarded
+		// for any target with its own authentication block. Catch it here
+		// rather than letting it disappear the same way the missing-context
+		// bug this ticket exists to fix did.
+		return fmt.Errorf("policy-level: context_name is only valid for SNMPv3 (got %q)",
+			policy.Scope.Authentication.ProtocolVersion)
 	}
 
 	// Validate each target's authentication
@@ -326,6 +340,7 @@ func (m *Manager) resolveAuthenticationEnvVarsForAuth(auth *config.Authenticatio
 		{&auth.Username, "username"},
 		{&auth.AuthPassphrase, "auth_passphrase"},
 		{&auth.PrivPassphrase, "priv_passphrase"},
+		{&auth.ContextName, "context_name"},
 	}
 
 	// Iterate over the fields and resolve environment variables
