@@ -49,6 +49,7 @@ type deviceDiscoveryBackend struct {
 	diodeTargetFromOtel  bool
 	diodeDryRun          bool
 	diodeDryRunOutputDir string
+	diodeLogLevel        string
 
 	startTime  time.Time
 	proc       backend.Commander
@@ -87,6 +88,34 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	d.diodeAppNamePrefix = backend.ConfigValueOrDefault(config, "agent_name", common.Diode.AgentName)
 	d.diodeDryRun = backend.ConfigValueOrDefault(config, "dry_run", common.Diode.DryRun)
 	d.diodeDryRunOutputDir = backend.ConfigValueOrDefault(config, "dry_run_output_dir", common.Diode.DryRunOutputDir)
+
+	// Precedence: explicit log_level > per-backend debug: true > the agent
+	// itself running in debug mode. A non-string log_level (YAML
+	// `log_level: 3`) falls through the type assertion and cannot panic.
+	//
+	// The third branch deliberately reads common.Debug rather than
+	// logger.Enabled(ctx, slog.LevelDebug), which is what the other three
+	// discovery backends currently do. logger.Enabled is not a reliable proxy
+	// for debug mode here: when orb.backends.common.otlp.grpc is set,
+	// agent.go:165-166 replaces the agent logger with a telemetry.multiHandler
+	// wrapping both the console handler and the otelslog handler. multiHandler
+	// ORs Enabled across its handlers (telemetry/logs.go:52-59) and the
+	// otelslog handler applies no level filter, so Enabled(Debug) is true
+	// whenever OTLP log export is enabled -- with or without -d. That would
+	// silently start device-discovery at DEBUG and export the full traceback
+	// plus napalm/netmiko/paramiko/ncclient chatter to the collector.
+	//
+	// common.Debug is the explicit state: agent.go:160 sets it from a.debug,
+	// which cmd/main.go:95 derives as debugFlag || cfg.OrbAgent.Debug.Enable.
+	// The same fix is owed to networkdiscovery, snmpdiscovery and
+	// gnmidiscovery; tracked separately.
+	if logLevel, prs := config["log_level"].(string); prs {
+		d.diodeLogLevel = logLevel
+	} else if debug, prs := config["debug"].(bool); prs && debug {
+		d.diodeLogLevel = "debug"
+	} else if common.Debug {
+		d.diodeLogLevel = "debug"
+	}
 
 	if common.Otlp.Grpc != "" {
 		d.diodeOtelEndpoint = common.Otlp.Grpc
@@ -134,6 +163,12 @@ func (d *deviceDiscoveryBackend) buildArgs() []string {
 			)
 		}
 		dOptions = append(opts, dOptions...)
+	}
+
+	if d.diodeLogLevel != "" {
+		dOptions = append(dOptions, "--log-level", d.diodeLogLevel)
+		d.logger.Info("device-discovery using log level",
+			"log_level", d.diodeLogLevel)
 	}
 
 	if d.diodeOtelEndpoint != "" {

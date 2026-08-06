@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseDeviceDiscoveryLevel(t *testing.T) {
@@ -38,6 +39,36 @@ func TestParseDeviceDiscoveryLevel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNormalizeDeviceDiscoveryLine_ExpectedTargetFailureWarning(t *testing.T) {
+	// The verbatim line the Python backend now emits for an unreachable target
+	// (device_discovery/policy/runner.py, _log_target_failure). If this stops
+	// parsing, the agent silently falls back to assigning level by pipe and the
+	// #494 fix regresses from the operator's point of view.
+	line := "WARNING:device_discovery.policy.runner:Policy lab_mgmt_device_policy, " +
+		"Hostname 10.0.0.5: Cannot connect to 10.0.0.5"
+
+	msg, attrs, level, ok := normalizeDeviceDiscoveryLine(line, slog.LevelError)
+
+	assert.True(t, ok)
+	assert.Equal(t, slog.LevelWarn, level)
+	require.Len(t, attrs, 1)
+	assert.Equal(t, "module", attrs[0].Key)
+	assert.Equal(t, "device_discovery.policy.runner", attrs[0].Value.String())
+	assert.Contains(t, msg, "Cannot connect to 10.0.0.5")
+}
+
+func TestNormalizeDeviceDiscoveryLine_ContinuationStillFallsBackToStderrLevel(t *testing.T) {
+	// Known remaining behaviour, recorded as a test rather than left implicit.
+	// A traceback continuation line has no LEVEL: prefix, so it keeps the
+	// caller's fallback -- which logLineAdapter sets to ERROR for stderr. The
+	// generic per-line stderr amplifier is deliberately out of scope for #494;
+	// the Python side avoids it by emitting exactly one physical line.
+	_, _, level, ok := normalizeDeviceDiscoveryLine("    self._open()", slog.LevelError)
+
+	assert.False(t, ok)
+	assert.Equal(t, slog.LevelError, level)
 }
 
 func TestNormalizeDeviceDiscoveryLine_Valid(t *testing.T) {

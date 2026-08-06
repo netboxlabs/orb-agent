@@ -37,7 +37,7 @@ When a target is a modular chassis and the `discover_modules` policy option is e
 When the `discover_vrfs` policy option is enabled, device-discovery emits a `VRF` entity for each VRF configured on the device and attaches it to the IP addresses and prefixes of the interfaces inside that VRF — see [VRFs](#vrfs) below. Defaults to `false`, so existing operators see zero behaviour change.
 
 ## Configuration
-The `device_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
+The `device_discovery` backend does not require any special configuration, though overriding `host`, `port` and `log_level` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
 
 
 ```yaml
@@ -50,10 +50,51 @@ orb:
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     device_discovery:
-      host: 192.168.5.11 # default 0.0.0.0
+      host: 192.168.5.11 # default localhost
       port: 8857 # default 8072
+      log_level: ERROR # default INFO
 
 ```
+
+| Parameter | Type | Required | Description |
+|:---------:|:----:|:--------:|:-----------:|
+| host | str | no | REST API host (default `localhost`) |
+| port | int | no | REST API port (default `8072`) |
+| log_level | str | no | Log level (default `INFO`) - see [Log level and troubleshooting](#log-level-and-troubleshooting) |
+
+### Log level and troubleshooting
+
+`log_level` accepts `trace`, `debug`, `info`, `warn`/`warning`, `error`/`err`/`exception`
+and `critical`/`fatal`, case-insensitively. The default is `INFO`. An unrecognised value
+falls back to `INFO` and logs a warning rather than failing to start.
+
+Precedence, highest first: an explicit `log_level`, then `debug: true` on the backend,
+then the agent already running at debug (`-d` or `orb.debug.enable`).
+
+**A host that is reachable but not a manageable device logs exactly one record.** When
+a target answers on the scanned port but cannot be logged into, device-discovery emits a
+single WARNING per target per run, with no traceback:
+
+```
+WARNING:device_discovery.policy.runner:Policy my_policy, Hostname 10.0.0.5: Cannot connect to 10.0.0.5
+```
+
+Stable phrases to alert or grep on: `Cannot connect to` and `Authentication to device failed`.
+A sweep over unreachable address space produces one line per host, not one per traceback frame.
+
+Tracebacks for these expected failures are emitted only at DEBUG, on a single line with
+newlines escaped as `\n`. To read one back:
+
+```bash
+printf '%b\n' "<the traceback: value>"
+```
+
+**`log_level: DEBUG` alone is not enough to see debug output.** The agent maps the
+backend's `DEBUG:` lines to its own debug level and its root handler drops them at Info.
+Use `orb.debug.enable` or `-d` as the single troubleshooting switch; use `log_level` only
+to go *quieter* than INFO. Note that DEBUG also raises napalm, netmiko, paramiko and
+ncclient verbosity considerably (ncclient dumps multi-line XML), so point it at one
+target rather than a subnet.
 
 ## Policy
 Device discovery policies are broken down into two subsections: `config` and `scope`. 
