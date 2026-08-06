@@ -349,31 +349,36 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 				e.Lag = stubForIface(e.Lag)
 			}
 			if e.Module != nil {
-				// Reduce nested Interface.Module to a matcher-only ref:
-				// chassis Device stub + Serial (if known) + ModuleBay
-				// matcher (if known). The top-level Module entity
-				// carries the full record (module_type, description,
-				// status, etc.); this nested form lets the Diode
-				// reconciler resolve the ref to that top-level row via
-				// the (Device, ModuleBay) or (Device, Serial) match
-				// paths without re-creating it.
+				// Reduce nested Interface.Module to a matcher-only ref: chassis
+				// Device stub + ModuleBay matcher + ModuleType, plus Serial when
+				// known. The top-level Module entity carries the full record
+				// (description, status, etc.).
 				//
-				// Shape mirrors device-discovery's _module_match_stub
-				// (device-discovery/device_discovery/stubs.py
-				// `_module_match_stub`): emit Device unconditionally,
-				// then conditionally copy Serial and ModuleBay matcher
-				// fields when present on the rich Module. Vendors that
-				// omit transceiver serial in ENTITY-MIB (some Aruba
-				// and low-end OEMs) still populate the bay, so the
-				// (Device, ModuleBay) path alone must keep the ref
-				// resolvable.
+				// ModuleBay is the load-bearing part: it is dcim.module's only
+				// unique matcher besides asset_tag. Serial is carried for create
+				// fidelity only — dcim.module has no serial matcher, so a
+				// serial-only stub resolves nothing. Vendors that omit transceiver
+				// serial in ENTITY-MIB (some Aruba and low-end OEMs) still populate
+				// the bay, so the bay alone must keep the ref resolvable.
 				//
-				// Only when BOTH Serial AND ModuleBay are unusable do
-				// we drop the ref entirely — at that point the stub
-				// carries no identifier and the reconciler would fall
-				// into creation mode and fail the
-				// "module_bay required, module_type required"
-				// validation (we also strip ModuleType).
+				// ModuleType is retained even though it matches nothing. A ref only
+				// resolves once the referenced ModuleBay row exists; until then
+				// Diode falls back to CREATING the Module, and NetBox rejects a
+				// Module without a module_type. Emitting module entities ahead of
+				// interfaces does not prevent that: bulk-plan-apply batches plans
+				// and applies them independently, so payload order is not
+				// reconciliation order, and one failed plan takes its whole batch
+				// down — including unrelated interfaces. Only the
+				// (Manufacturer, Model) pair is copied, which is the complete
+				// dcim.moduletype matcher, so the ref cannot grow as drivers
+				// populate richer ModuleType fields.
+				//
+				// Mirrors device-discovery's _module_match_stub
+				// (device-discovery/device_discovery/stubs.py).
+				//
+				// Only when BOTH Serial AND ModuleBay are unusable do we drop the
+				// ref entirely: it then carries no identifier, and creating it
+				// would fail anyway because NetBox requires module_bay.
 				devStub := stubFor(e.Module.Device)
 				stub := &diode.Module{Device: devStub}
 				if e.Module.Serial != nil && *e.Module.Serial != "" {
@@ -384,6 +389,14 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 						Device:   devStub,
 						Name:     e.Module.ModuleBay.Name,
 						Position: e.Module.ModuleBay.Position,
+					}
+				}
+				if mt := e.Module.ModuleType; mt != nil {
+					stub.ModuleType = &diode.ModuleType{Model: mt.Model}
+					if mt.Manufacturer != nil {
+						stub.ModuleType.Manufacturer = &diode.Manufacturer{
+							Name: mt.Manufacturer.Name,
+						}
 					}
 				}
 				if stub.Serial == nil && stub.ModuleBay == nil {

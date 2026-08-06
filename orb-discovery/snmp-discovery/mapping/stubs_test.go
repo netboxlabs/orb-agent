@@ -603,16 +603,19 @@ func TestPruneNestedRefs_StubsModuleBayAndInterfaceModule(t *testing.T) {
 	assert.Nil(t, bay.Device.Status, "ModuleBay.Device status stripped on stub")
 
 	// Interface.Module reduced to a matcher-only ref: Device stub + Serial
-	// + ModuleBay matcher (name+position+device stub). Mirrors
-	// device-discovery's _module_match_stub so the Diode reconciler
-	// resolves the ref to the existing top-level Module instead of
-	// trying to create one and failing the "module_bay/module_type
-	// required" validation. ModuleType / Description / Status etc. stay
-	// dropped so the wire payload stays bounded.
+	// + ModuleBay matcher (name+position+device stub) + ModuleType.
+	// Mirrors device-discovery's _module_match_stub. ModuleType is not a
+	// matcher, but a ref that has not yet resolved is CREATED instead, and
+	// NetBox rejects a Module without one; only the (Manufacturer, Model)
+	// matcher pair is copied so the ref stays bounded. Description /
+	// Status etc. stay dropped.
 	require.NotNil(t, iface.Module)
 	assert.Equal(t, "FNS24010TR1", strDerefSafe(iface.Module.Serial))
-	assert.Nil(t, iface.Module.ModuleType,
-		"Interface.Module stub must not carry ModuleType (drops large nested manufacturer)")
+	require.NotNil(t, iface.Module.ModuleType,
+		"Interface.Module stub must carry ModuleType: NetBox requires it when the ref is created")
+	assert.Equal(t, "SFP-10G-LR", strDerefSafe(iface.Module.ModuleType.Model))
+	require.NotNil(t, iface.Module.ModuleType.Manufacturer)
+	assert.Equal(t, "Cisco", strDerefSafe(iface.Module.ModuleType.Manufacturer.Name))
 	assert.Nil(t, iface.Module.Description,
 		"Interface.Module stub must not carry Description")
 
@@ -675,7 +678,8 @@ func TestPruneNestedRefs_InterfaceModuleSurvivesWhenSerialNilButBayPresent(t *te
 	assert.Equal(t, "TenGigabitEthernet1/0/1", strDerefSafe(iface.Module.ModuleBay.Name))
 	assert.Equal(t, "1", strDerefSafe(iface.Module.ModuleBay.Position))
 	assert.Nil(t, iface.Module.Serial, "serial stays nil — matcher uses Device + Bay")
-	assert.Nil(t, iface.Module.ModuleType, "ModuleType still dropped per Python parity")
+	require.NotNil(t, iface.Module.ModuleType,
+		"ModuleType retained per Python parity: required when the ref is created")
 	require.NotNil(t, iface.Module.Device, "Interface.Module.Device must be a chassis stub")
 	assert.Equal(t, "sw1", strDerefSafe(iface.Module.Device.Name))
 	assert.Nil(t, iface.Module.Device.Status, "Module.Device must be stubbed (no rich Status)")
@@ -714,17 +718,64 @@ func TestPruneNestedRefs_InterfaceModuleStubDegradesToSerialOnly(t *testing.T) {
 	require.NotNil(t, iface.Module, "must not be cleared when serial is present")
 	assert.Equal(t, "FNS00000001", strDerefSafe(iface.Module.Serial))
 	assert.Nil(t, iface.Module.ModuleBay, "no bay was set on input, stays nil")
-	assert.Nil(t, iface.Module.ModuleType, "ModuleType still dropped per Python parity")
+	require.NotNil(t, iface.Module.ModuleType,
+		"ModuleType retained per Python parity: required when the ref is created")
 	require.NotNil(t, iface.Module.Device)
 	assert.Equal(t, "sw1", strDerefSafe(iface.Module.Device.Name))
+}
+
+// TestPruneNestedRefs_InterfaceModuleTypeCopyIsBounded — the nested ref keeps
+// ModuleType because NetBox requires it when the ref is created, but only the
+// (Manufacturer, Model) matcher pair is copied. This stub is duplicated into
+// every interface on a linecard, so it must not grow as drivers start
+// populating the richer ModuleType fields.
+func TestPruneNestedRefs_InterfaceModuleTypeCopyIsBounded(t *testing.T) {
+	rich := &diode.Device{
+		Name:   strPtr("sw1"),
+		Site:   &diode.Site{Name: strPtr("dc1")},
+		Serial: strPtr("FCW123"),
+	}
+	bay := &diode.ModuleBay{Device: rich, Name: strPtr("Gi1/0/1"), Position: strPtr("1")}
+	mod := &diode.Module{
+		Device:    rich,
+		ModuleBay: bay,
+		Serial:    strPtr("FNS24010TR1"),
+		ModuleType: &diode.ModuleType{
+			Model:       strPtr("SFP-10G-LR"),
+			PartNumber:  strPtr("SFP-10G-LR-S"),
+			Description: strPtr("10G LR optic"),
+			Comments:    strPtr("a field a driver may start populating"),
+			Manufacturer: &diode.Manufacturer{
+				Name:        strPtr("Cisco"),
+				Slug:        strPtr("cisco"),
+				Description: strPtr("vendor"),
+			},
+		},
+	}
+	iface := &diode.Interface{Name: strPtr("Gi1/0/1"), Device: rich, Module: mod}
+
+	PruneNestedRefs([]diode.Entity{rich, bay, mod, iface}, rich, nil)
+
+	require.NotNil(t, iface.Module)
+	require.NotNil(t, iface.Module.ModuleType)
+	mt := iface.Module.ModuleType
+	assert.Equal(t, "SFP-10G-LR", strDerefSafe(mt.Model))
+	require.NotNil(t, mt.Manufacturer)
+	assert.Equal(t, "Cisco", strDerefSafe(mt.Manufacturer.Name))
+	// everything outside the matcher pair must be absent
+	assert.Nil(t, mt.PartNumber, "PartNumber must not ride along")
+	assert.Nil(t, mt.Description, "ModuleType.Description must not ride along")
+	assert.Nil(t, mt.Comments, "ModuleType.Comments must not ride along")
+	assert.Nil(t, mt.Manufacturer.Slug, "Manufacturer.Slug must not ride along")
+	assert.Nil(t, mt.Manufacturer.Description, "Manufacturer.Description must not ride along")
 }
 
 // TestPruneNestedRefs_InterfaceModuleClearedWhenSerialAndBayBothMissing —
 // the only legitimate clear path. Without Serial AND without
 // ModuleBay, no matcher field can resolve the ref. Shipping such a
-// stub would force the reconciler into creation mode and fail
-// validation ("module_bay required, module_type required") because
-// the stub also strips ModuleType.
+// stub would force the reconciler into creation mode, which fails
+// because NetBox requires module_bay. Retaining ModuleType does not
+// rescue this case, so the ref is dropped instead.
 func TestPruneNestedRefs_InterfaceModuleClearedWhenSerialAndBayBothMissing(t *testing.T) {
 	rich := &diode.Device{
 		Name:   strPtr("sw1"),
