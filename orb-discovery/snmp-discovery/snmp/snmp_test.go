@@ -1,6 +1,7 @@
 package snmp_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
@@ -249,10 +251,18 @@ func TestSNMPHost(t *testing.T) {
 
 func TestNewClient(t *testing.T) {
 	testCases := []struct {
-		name           string
-		auth           *config.Authentication
-		expectError    bool
-		expectedErrMsg string
+		name                string
+		auth                *config.Authentication
+		expectError         bool
+		expectedErrMsg      string
+		expectedContextName string
+		// checkContextWire additionally encodes a packet and asserts the
+		// context name is (or isn't) present on the wire. Only exercised for
+		// the context-name-specific rows below: it requires SecurityLevel to
+		// be unset (msgFlags == NoAuthNoPriv), since authPriv needs a
+		// discovered engine and fails with "invalid key size 0", and relying
+		// on bytes.Contains with an empty expected value would always match.
+		checkContextWire bool
 	}{
 		{
 			name: "Creates SNMPv1 client successfully",
@@ -261,6 +271,44 @@ func TestNewClient(t *testing.T) {
 				Community:       "public",
 			},
 			expectError: false,
+		},
+		{
+			name: "Creates SNMPv3 client with context name",
+			auth: &config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion3,
+				Username:        "testuser",
+				AuthProtocol:    "MD5",
+				AuthPassphrase:  "testpass",
+				PrivProtocol:    "AES",
+				PrivPassphrase:  "testpass",
+				ContextName:     "mfpdirect",
+			},
+			expectError:         false,
+			expectedContextName: "mfpdirect",
+			checkContextWire:    true,
+		},
+		{
+			name: "Creates SNMPv3 client without context name",
+			auth: &config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion3,
+				Username:        "testuser",
+				AuthProtocol:    "MD5",
+				AuthPassphrase:  "testpass",
+				PrivProtocol:    "AES",
+				PrivPassphrase:  "testpass",
+			},
+			expectError:         false,
+			expectedContextName: "",
+		},
+		{
+			name: "SNMPv2c ignores context name field",
+			auth: &config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion2c,
+				Community:       "public",
+				ContextName:     "mfpdirect",
+			},
+			expectError:         false,
+			expectedContextName: "",
 		},
 		{
 			name: "Creates SNMPv2c client successfully",
@@ -445,6 +493,23 @@ func TestNewClient(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 				assert.NotNil(t, client)
+
+				typed, ok := client.(*snmp.Client)
+				assert.True(t, ok)
+				if ok {
+					assert.Equal(t, tc.expectedContextName, typed.ContextName)
+
+					if tc.checkContextWire {
+						// Assert at the wire, not just on the struct: SnmpEncodePacket runs
+						// the same mkSnmpPacket -> marshalMsg -> prepareV3ScopedPDU path as a
+						// live send, with no Connect() and no socket.
+						out, err := typed.SnmpEncodePacket(gosnmp.GetRequest,
+							[]gosnmp.SnmpPDU{{Name: "1.3.6.1.2.1.1.1.0", Type: gosnmp.Null}}, 0, 0)
+						require.NoError(t, err)
+						assert.Equal(t, tc.expectedContextName != "",
+							bytes.Contains(out, []byte(tc.expectedContextName)))
+					}
+				}
 			}
 		})
 	}
