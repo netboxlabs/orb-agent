@@ -917,6 +917,12 @@ func TestPrefixVlanMode(t *testing.T) {
 	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &corr}).PrefixVlanMode())
 	upper := "CORROBORATED"
 	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &upper}).PrefixVlanMode())
+	withSpace := "  corroborated  "
+	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &withSpace}).PrefixVlanMode(),
+		"must trim surrounding whitespace")
+	withSpaceAndUpper := " CORROBORATED "
+	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &withSpaceAndUpper}).PrefixVlanMode(),
+		"must handle both whitespace and case normalization together")
 	nonsense := "nonsense"
 	assert.Equal(t, "off", (&Options{EmitPrefixVlan: &nonsense}).PrefixVlanMode(),
 		"an unrecognised value must fail closed, never guess")
