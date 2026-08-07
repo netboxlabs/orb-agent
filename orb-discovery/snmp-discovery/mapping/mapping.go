@@ -963,6 +963,13 @@ func pickPrimaryIPHit(logger *slog.Logger, registry *EntityRegistry, target stri
 // still carries PrimaryIp4, reintroducing the cycle. The standalone
 // emitted Interface entities keep their full graph; only the snapshot is
 // pruned.
+//
+// The Device copy is a snapshot: anything a later stage writes to the rich
+// Device does not reach it. PruneNestedRefs.prunePrimarySnapshot rebuilds this
+// subtree as stubs after every mutator has run, which is what keeps the two
+// representations of the device consistent. Keep the clearing below anyway —
+// mapping-level callers must not have to depend on the prune having run — but
+// do not "simplify" either side without the other.
 func detachForPrimaryIP(ip *diode.IPAddress, owner *diode.Device) *diode.IPAddress {
 	if ip == nil {
 		return nil
@@ -999,6 +1006,9 @@ func detachForPrimaryIP(ip *diode.IPAddress, owner *diode.Device) *diode.IPAddre
 // introducing a reference cycle. Both PrimaryIp4 and PrimaryIp6 are
 // cleared on the embedded device copy so the snapshot is independent
 // of evaluation order between the v4 and v6 passes.
+//
+// Same snapshot caveat as detachForPrimaryIP: PruneNestedRefs rebuilds this
+// subtree once every mutator has run. Both families must be kept in step.
 func detachForPrimaryIP6(ip *diode.IPAddress, owner *diode.Device) *diode.IPAddress {
 	if ip == nil {
 		return nil
