@@ -909,3 +909,15 @@ func TestDeviceNameEmissionEnabled(t *testing.T) {
 	off := false
 	assert.False(t, (&Options{EmitDeviceName: &off}).DeviceNameEmissionEnabled())
 }
+
+func TestPrefixVlanMode(t *testing.T) {
+	assert.Equal(t, "off", (*Options)(nil).PrefixVlanMode())
+	assert.Equal(t, "off", (&Options{}).PrefixVlanMode())
+	corr := "corroborated"
+	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &corr}).PrefixVlanMode())
+	upper := "CORROBORATED"
+	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &upper}).PrefixVlanMode())
+	nonsense := "nonsense"
+	assert.Equal(t, "off", (&Options{EmitPrefixVlan: &nonsense}).PrefixVlanMode(),
+		"an unrecognised value must fail closed, never guess")
+}

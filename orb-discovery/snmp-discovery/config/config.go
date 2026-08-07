@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -527,6 +528,16 @@ type Options struct {
 	// empty for a given interface. Unknown values normalize to "auto"
 	// (with a warning) at policy parse.
 	InterfaceNameSource *string `yaml:"interface_name_source,omitempty"`
+
+	// Associates a derived prefix with the VLAN of the SVI-style interface
+	// its address lives on. "off" (default) or "corroborated", which emits
+	// only when the parsed VLAN exists in the device's own VLAN database.
+	//
+	// Off by default because the association cannot be retracted: the
+	// reconciler never diffs a field the payload omits, so a value written
+	// once cannot later be cleared by discovery, and while this is on any
+	// manual correction is overwritten on the next poll.
+	EmitPrefixVlan *string `yaml:"emit_prefix_vlan,omitempty"`
 }
 
 // PrefixEmissionEnabled returns the effective emit_prefixes toggle,
@@ -547,6 +558,21 @@ func (o *Options) HostPrefixEmissionEnabled() bool {
 // toggle, defaulting to TRUE.
 func (o *Options) DeviceNameEmissionEnabled() bool {
 	return o == nil || o.EmitDeviceName == nil || *o.EmitDeviceName
+}
+
+// PrefixVlanMode returns the effective emit_prefix_vlan mode, defaulting to
+// "off". An unrecognised value returns "off" rather than erroring, so a typo
+// disables the feature instead of writing guesses into NetBox.
+func (o *Options) PrefixVlanMode() string {
+	if o == nil || o.EmitPrefixVlan == nil {
+		return "off"
+	}
+	switch strings.ToLower(strings.TrimSpace(*o.EmitPrefixVlan)) {
+	case "corroborated":
+		return "corroborated"
+	default:
+		return "off"
+	}
 }
 
 // PrefixScopeCascadeEnabled returns the effective
