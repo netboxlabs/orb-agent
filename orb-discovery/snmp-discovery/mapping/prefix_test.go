@@ -26,7 +26,7 @@ func TestDerivePrefixes_DedupesPerNetworkAndVrf(t *testing.T) {
 		ipEntity("2001:db8::1/64"),
 		ipEntity("bogus"), // unparseable → skipped
 	}
-	prefixes := DerivePrefixes(entities, nil, &config.Defaults{}, &config.Options{}, slog.Default())
+	prefixes := DerivePrefixes(entities, nil, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default())
 	require.Len(t, prefixes, 3)
 	got := make([]string, 0, 3)
 	for _, p := range prefixes {
@@ -50,7 +50,7 @@ func TestDerivePrefixes_DiscoveredVrfWinsOverPrefixDefaults(t *testing.T) {
 		ipEntity("2001:db8::1/64"), // falls to prefix defaults (ipv6 → vrf_ipv6)
 	}
 	vrfByAddress := map[string]*diode.VRF{"10.0.0.1/24": mgmt}
-	prefixes := DerivePrefixes(entities, vrfByAddress, defaults, &config.Options{}, slog.Default())
+	prefixes := DerivePrefixes(entities, vrfByAddress, nil, nil, defaults, &config.Options{}, slog.Default())
 	require.Len(t, prefixes, 3)
 	byNet := map[string]*diode.Prefix{}
 	for _, p := range prefixes {
@@ -77,7 +77,7 @@ func TestDerivePrefixes_SameNetworkDifferentVrfsBothEmitted(t *testing.T) {
 		"10.0.0.1/24": red,
 		"10.0.0.2/24": blu,
 	}
-	prefixes := DerivePrefixes(entities, vrfByAddress, &config.Defaults{}, &config.Options{}, slog.Default())
+	prefixes := DerivePrefixes(entities, vrfByAddress, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default())
 	require.Len(t, prefixes, 2, "same network in two VRFs is two NetBox prefixes")
 }
 
@@ -94,7 +94,7 @@ func TestDerivePrefixes_DefaultsAndExplicitScope(t *testing.T) {
 	}
 	prefixes := DerivePrefixes(
 		[]diode.Entity{ipEntity("10.0.0.1/24")},
-		nil, defaults, &config.Options{}, slog.Default(),
+		nil, nil, nil, defaults, &config.Options{}, slog.Default(),
 	)
 	require.Len(t, prefixes, 1)
 	p := prefixes[0].(*diode.Prefix)
@@ -112,7 +112,7 @@ func TestDerivePrefixes_ScopeCascadeAndExplicitMode(t *testing.T) {
 	// Cascade on, no explicit scope: location (with site) wins.
 	defaults := &config.Defaults{Site: "DC-1", Location: "Floor-2"}
 	options := &config.Options{PropagateDefaultsToPrefixScope: &on}
-	prefixes := DerivePrefixes([]diode.Entity{ipEntity("10.0.0.1/24")}, nil, defaults, options, slog.Default())
+	prefixes := DerivePrefixes([]diode.Entity{ipEntity("10.0.0.1/24")}, nil, nil, nil, defaults, options, slog.Default())
 	loc, ok := prefixes[0].(*diode.Prefix).Scope.(*diode.Location)
 	require.True(t, ok)
 	assert.Equal(t, "Floor-2", *loc.Name)
@@ -122,13 +122,13 @@ func TestDerivePrefixes_ScopeCascadeAndExplicitMode(t *testing.T) {
 	// Explicit scope_site puts the operator in explicit mode: the cascade
 	// is skipped wholesale (no cascaded location can override it).
 	defaults.Prefix.ScopeSite = "DC-Explicit"
-	prefixes = DerivePrefixes([]diode.Entity{ipEntity("10.0.0.1/24")}, nil, defaults, options, slog.Default())
+	prefixes = DerivePrefixes([]diode.Entity{ipEntity("10.0.0.1/24")}, nil, nil, nil, defaults, options, slog.Default())
 	site, ok := prefixes[0].(*diode.Prefix).Scope.(*diode.Site)
 	require.True(t, ok)
 	assert.Equal(t, "DC-Explicit", *site.Name)
 
 	// Cascade off, nothing explicit: no scope.
-	prefixes = DerivePrefixes([]diode.Entity{ipEntity("10.0.0.1/24")}, nil,
+	prefixes = DerivePrefixes([]diode.Entity{ipEntity("10.0.0.1/24")}, nil, nil, nil,
 		&config.Defaults{Site: "DC-1"}, &config.Options{}, slog.Default())
 	assert.Nil(t, prefixes[0].(*diode.Prefix).Scope)
 }
@@ -147,7 +147,7 @@ func TestDerivePrefixes_SkipsZeroMaskAndV4Mapped(t *testing.T) {
 		// Sanity: a real network still derives.
 		ipEntity("10.0.0.1/24"),
 	}
-	prefixes := DerivePrefixes(entities, nil, &config.Defaults{}, &config.Options{}, slog.Default())
+	prefixes := DerivePrefixes(entities, nil, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default())
 	require.Len(t, prefixes, 1)
 	assert.Equal(t, "10.0.0.0/24", *(prefixes[0].(*diode.Prefix)).Prefix)
 }
@@ -160,10 +160,56 @@ func TestDerivePrefixes_NamelessPrefixVrfDropsWithoutPanic(t *testing.T) {
 	}
 	prefixes := DerivePrefixes(
 		[]diode.Entity{ipEntity("10.0.0.1/24")},
-		nil, defaults, &config.Options{}, slog.Default(),
+		nil, nil, nil, defaults, &config.Options{}, slog.Default(),
 	)
 	require.Len(t, prefixes, 1)
 	assert.Nil(t, prefixes[0].(*diode.Prefix).Vrf)
+}
+
+func TestDerivePrefixes_AttachesVlanOnlyWhenUnanimous(t *testing.T) {
+	corroborated := "corroborated"
+	vlan10 := &diode.VLAN{Vid: int64Ptr(10), Name: strPtr("office")}
+	vlan20 := &diode.VLAN{Vid: int64Ptr(20), Name: strPtr("voice")}
+	opts := &config.Options{EmitPrefixVlan: &corroborated}
+
+	mk := func(addr string, iface *diode.Interface) *diode.IPAddress {
+		a := addr
+		return &diode.IPAddress{Address: &a, AssignedObject: iface}
+	}
+	ifA := &diode.Interface{Name: strPtr("Vlan10")}
+	ifB := &diode.Interface{Name: strPtr("Vlan20")}
+	idx := map[*diode.Interface]int{ifA: 1, ifB: 2}
+
+	t.Run("unanimous", func(t *testing.T) {
+		ents := []diode.Entity{mk("10.0.0.1/24", ifA), mk("10.0.0.2/24", ifA)}
+		out := DerivePrefixes(ents, nil, map[int]*diode.VLAN{1: vlan10}, idx, nil, opts, slog.Default())
+		require.Len(t, out, 1)
+		assert.Same(t, vlan10, out[0].(*diode.Prefix).Vlan)
+	})
+
+	t.Run("conflicting", func(t *testing.T) {
+		// One network reached from two interfaces in different VLANs.
+		ents := []diode.Entity{mk("10.0.0.1/24", ifA), mk("10.0.0.2/24", ifB)}
+		out := DerivePrefixes(ents, nil, map[int]*diode.VLAN{1: vlan10, 2: vlan20}, idx, nil, opts, slog.Default())
+		require.Len(t, out, 1)
+		assert.Nil(t, out[0].(*diode.Prefix).Vlan, "a contested VLAN must not be written")
+	})
+
+	t.Run("option off emits no vlan", func(t *testing.T) {
+		ents := []diode.Entity{mk("10.0.0.1/24", ifA)}
+		out := DerivePrefixes(ents, nil, map[int]*diode.VLAN{1: vlan10}, idx, nil, &config.Options{}, slog.Default())
+		require.Len(t, out, 1)
+		assert.Nil(t, out[0].(*diode.Prefix).Vlan)
+	})
+
+	t.Run("partial coverage attaches nothing", func(t *testing.T) {
+		// One contributing address resolves, the other does not. Silence is
+		// required: a half-attributed prefix is indistinguishable from a bug.
+		ents := []diode.Entity{mk("10.0.0.1/24", ifA), mk("10.0.0.2/24", ifB)}
+		out := DerivePrefixes(ents, nil, map[int]*diode.VLAN{1: vlan10}, idx, nil, opts, slog.Default())
+		require.Len(t, out, 1)
+		assert.Nil(t, out[0].(*diode.Prefix).Vlan)
+	})
 }
 
 func TestPrefixEmissionEnabled_DefaultOnOptOut(t *testing.T) {
@@ -191,7 +237,7 @@ func TestDerivePrefixes_SkipsHostAndIPv6LinkLocal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prefixes := DerivePrefixes(
 				[]diode.Entity{ipEntity(tc.addr)},
-				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+				nil, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default(),
 			)
 			assert.Empty(t, prefixes, "no prefix may be derived from %s", tc.addr)
 		})
@@ -217,7 +263,7 @@ func TestDerivePrefixes_KeepsOrdinaryNetworks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prefixes := DerivePrefixes(
 				[]diode.Entity{ipEntity(tc.addr)},
-				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+				nil, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default(),
 			)
 			require.Len(t, prefixes, 1)
 			assert.Equal(t, tc.want, *(prefixes[0].(*diode.Prefix)).Prefix)
@@ -233,7 +279,7 @@ func TestDerivePrefixes_SkippedAddressDoesNotDropSiblings(t *testing.T) {
 		ipEntity("2001:db8::1/64"),          //
 		ipEntity("fe80::42:acff:fe12:6/64"), // link-local → skipped
 	}
-	prefixes := DerivePrefixes(entities, nil, &config.Defaults{}, &config.Options{}, slog.Default())
+	prefixes := DerivePrefixes(entities, nil, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default())
 	require.Len(t, prefixes, 2)
 	got := make([]string, 0, 2)
 	for _, p := range prefixes {
@@ -258,7 +304,7 @@ func TestDerivePrefixes_EmitHostPrefixesOptsBackIn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prefixes := DerivePrefixes(
 				[]diode.Entity{ipEntity(tc.addr)},
-				nil, &config.Defaults{}, opts, slog.Default(),
+				nil, nil, nil, &config.Defaults{}, opts, slog.Default(),
 			)
 			require.Len(t, prefixes, 1)
 			assert.Equal(t, tc.want, *(prefixes[0].(*diode.Prefix)).Prefix)
@@ -283,7 +329,7 @@ func TestDerivePrefixes_EmitHostPrefixesDoesNotResurrectLinkLocal(t *testing.T) 
 		t.Run(addr, func(t *testing.T) {
 			prefixes := DerivePrefixes(
 				[]diode.Entity{ipEntity(addr)},
-				nil, &config.Defaults{}, opts, slog.Default(),
+				nil, nil, nil, &config.Defaults{}, opts, slog.Default(),
 			)
 			assert.Empty(t, prefixes, "emit_host_prefixes must not resurrect %s", addr)
 		})
@@ -303,7 +349,7 @@ func TestDerivePrefixes_HostPrefixesStaySuppressedWithNilOptions(t *testing.T) {
 	// nil options must behave as the default (suppressed), not panic.
 	prefixes := DerivePrefixes(
 		[]diode.Entity{ipEntity("10.0.0.1/32"), ipEntity("172.24.0.101/24")},
-		nil, &config.Defaults{}, nil, slog.Default(),
+		nil, nil, nil, &config.Defaults{}, nil, slog.Default(),
 	)
 	require.Len(t, prefixes, 1)
 	assert.Equal(t, "172.24.0.0/24", *(prefixes[0].(*diode.Prefix)).Prefix)
@@ -326,7 +372,7 @@ func TestDerivePrefixes_LinkLocalJudgedOnAddressNotMaskedNetwork(t *testing.T) {
 		t.Run(addr, func(t *testing.T) {
 			prefixes := DerivePrefixes(
 				[]diode.Entity{ipEntity(addr)},
-				nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+				nil, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default(),
 			)
 			assert.Empty(t, prefixes,
 				"%s is link-local by address; no prefix may be derived at any mask", addr)
@@ -339,7 +385,7 @@ func TestDerivePrefixes_WideMaskIPv4LinkLocalStillDerived(t *testing.T) {
 	// is link-local to IsLinkLocalUnicast but stays in scope for emission.
 	prefixes := DerivePrefixes(
 		[]diode.Entity{ipEntity("169.254.10.5/16")},
-		nil, &config.Defaults{}, &config.Options{}, slog.Default(),
+		nil, nil, nil, &config.Defaults{}, &config.Options{}, slog.Default(),
 	)
 	require.Len(t, prefixes, 1)
 	assert.Equal(t, "169.254.0.0/16", *(prefixes[0].(*diode.Prefix)).Prefix)

@@ -29,9 +29,20 @@ import (
 // the defaults.prefix vrf / vrf_ipv4 / vrf_ipv6 resolution for its
 // family. Note the prefix defaults are deliberately independent of the
 // ip_address ones.
+//
+// The prefix VLAN is corroborated rather than derived: sviVlanByIfIndex
+// (produced by ResolveSviVlans, keyed by ifIndex) and ifIndexByIface
+// (mapper.InterfacesByIfIndex) are only consulted when
+// options.PrefixVlanMode is "corroborated", and even then a prefix is
+// only tagged when every contributing address resolves to the SAME
+// VLAN. Any disagreement, or any contributing address with no VLAN,
+// leaves the prefix untagged and logs a warning — see the vote
+// accumulation below for why that check must span every address.
 func DerivePrefixes(
 	entities []diode.Entity,
 	vrfByAddress map[string]*diode.VRF,
+	sviVlanByIfIndex map[int]*diode.VLAN,
+	ifIndexByIface map[*diode.Interface]int,
 	defaults *config.Defaults,
 	options *config.Options,
 	logger *slog.Logger,
@@ -41,6 +52,19 @@ func DerivePrefixes(
 		vrf     *diode.VRF
 	}
 	seen := make(map[string]prefixSeed)
+	// Candidate VLANs per prefix key. A prefix is only associated when
+	// every address that formed it agrees, so this must be collected
+	// across ALL contributing addresses before the first-wins collapse
+	// below picks the surviving prefixSeed. Collecting only for the
+	// first address per key would make the association depend on Go map
+	// iteration order and flap between polls.
+	type vlanVote struct {
+		vlan     *diode.VLAN
+		conflict bool
+		total    int
+	}
+	votes := make(map[string]*vlanVote)
+	corroborateVlan := options.PrefixVlanMode() == "corroborated" && len(sviVlanByIfIndex) > 0
 	warnedNamelessVrf := false
 	for _, e := range entities {
 		ip, ok := e.(*diode.IPAddress)
@@ -119,6 +143,32 @@ func DerivePrefixes(
 			}
 		}
 		key := network.String() + "\x00" + vrfKey(vrf)
+		// Vote accumulation happens for EVERY contributing address, not
+		// only the one that wins the seen[key] first-wins guard below —
+		// see the vlanVote doc comment above for why that ordering
+		// matters.
+		if corroborateVlan {
+			var cand *diode.VLAN
+			if iface, ok := ip.AssignedObject.(*diode.Interface); ok && iface != nil {
+				if idx, known := ifIndexByIface[iface]; known {
+					cand = sviVlanByIfIndex[idx]
+				}
+			}
+			v := votes[key]
+			if v == nil {
+				v = &vlanVote{}
+				votes[key] = v
+			}
+			v.total++
+			switch {
+			case cand == nil:
+				v.conflict = true
+			case v.vlan == nil && !v.conflict:
+				v.vlan = cand
+			case v.vlan != cand:
+				v.conflict = true
+			}
+		}
 		if _, dup := seen[key]; !dup {
 			seen[key] = prefixSeed{network: network.String(), vrf: vrf}
 		}
@@ -138,6 +188,14 @@ func DerivePrefixes(
 		seed := seen[k]
 		network := seed.network
 		prefix := &diode.Prefix{Prefix: &network, Vrf: seed.vrf}
+		if v := votes[k]; v != nil {
+			if !v.conflict && v.vlan != nil {
+				prefix.Vlan = v.vlan
+			} else {
+				logger.Warn("prefix vlan: contested or partial VLAN attribution; emitting no vlan",
+					"prefix", network, "contributing_addresses", v.total)
+			}
+		}
 		applyPrefixDefaults(prefix, defaults, options)
 		prefixes = append(prefixes, prefix)
 	}
