@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1986,7 +1987,7 @@ func TestCollectDescendantIDs_TraversesNonPortRowsToReachPorts(t *testing.T) {
 		{EntPhysicalIndex: "101001"},
 		{EntPhysicalIndex: "201001"},
 	}
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
 	assert.Equal(t, []int{1}, members[0].DescendantIDs)
 	assert.Equal(t, []int{2}, members[1].DescendantIDs)
 }
@@ -2016,7 +2017,7 @@ func TestCollectDescendantIDs_StopsAtAnyChassisRowNotOnlyMembers(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.7.210": {Value: "2/1/1"},
 	}
 	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
 	assert.Equal(t, []int{1}, members[0].DescendantIDs, "9/1/1 lives behind another chassis row")
 	assert.Equal(t, []int{2}, members[1].DescendantIDs)
 }
@@ -2027,7 +2028,31 @@ func TestCollectDescendantIDs_SkipsSingleMemberSets(t *testing.T) {
 	// partially-reporting stack.
 	oids := fixtureSingleMemberWrappedStack()
 	members := []ChassisMember{{EntPhysicalIndex: "101001"}}
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
+	assert.Nil(t, members[0].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_StandaloneTargetDoesNotBuildContainmentIndex(t *testing.T) {
+	// The containment index scans the whole oids map, so it must be built only
+	// after the multi-member check — otherwise every plain switch in a fleet
+	// pays for it on every poll. Compare a large standalone inventory against
+	// the same map with the chassis row removed: neither reaches the walk, so
+	// allocations must not scale with the map.
+	big := ObjectIDValueMap{
+		".1.3.6.1.2.1.47.1.1.1.1.4.1":  {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.1":  {Value: "3"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.1":  {Value: "Chassis"},
+		".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SN0000000001"},
+	}
+	for i := 2; i < 2000; i++ {
+		idx := strconv.Itoa(i)
+		big[".1.3.6.1.2.1.47.1.1.1.1.4."+idx] = Value{Value: "1"}
+		big[".1.3.6.1.2.1.47.1.1.1.1.5."+idx] = Value{Value: "10"}
+		big[".1.3.6.1.2.1.47.1.1.1.1.7."+idx] = Value{Value: "1/1/" + idx}
+	}
+	members := []ChassisMember{{EntPhysicalIndex: "1"}}
+	allocs := testing.AllocsPerRun(20, func() { collectDescendantIDs(members, big) })
+	assert.Zero(t, allocs, "a single-member set must not build the containment index")
 	assert.Nil(t, members[0].DescendantIDs)
 }
 
@@ -2041,8 +2066,43 @@ func TestCollectDescendantIDs_IgnoresDecoratedAndNonPortNames(t *testing.T) {
 	oids[".1.3.6.1.2.1.47.1.1.1.1.5.199999"] = Value{Value: "9"}
 	oids[".1.3.6.1.2.1.47.1.1.1.1.7.199999"] = Value{Value: "7/1/1"}
 	members := []ChassisMember{{EntPhysicalIndex: "101001"}, {EntPhysicalIndex: "201001"}}
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
 	assert.Equal(t, []int{1}, members[0].DescendantIDs)
+}
+
+func TestExtractInventory_SlotNumberedPortsDeclineRatherThanBecomeMemberIDs(t *testing.T) {
+	// The leading field of a port name is not always a member number — on a
+	// modular chassis it is a local slot. The distinctness requirement is what
+	// keeps that from being mistaken for a member id: identical chassis each
+	// populated in their own slot 1 both yield {1}, which collides and declines
+	// the tier, leaving the pre-existing outcome (here: refusal) untouched.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.1.5.0": {Value: "modular.example"},
+	}
+	for member := 1; member <= 2; member++ {
+		chassis := fmt.Sprintf("%d0000", member)
+		module := fmt.Sprintf("%d1000", member)
+		set := func(col int, idx, val string) {
+			oids[fmt.Sprintf(".1.3.6.1.2.1.47.1.1.1.1.%d.%s", col, idx)] = Value{Value: val}
+		}
+		set(4, chassis, "0")
+		set(5, chassis, "3")
+		set(6, chassis, "1") // duplicate positive position on both rows
+		set(7, chassis, "Chassis")
+		set(11, chassis, fmt.Sprintf("SN0000000%03d", member))
+		set(4, module, chassis)
+		set(5, module, "9")
+		set(7, module, "1/1") // slot 1 on BOTH chassis
+		for port := 1; port <= 2; port++ {
+			idx := fmt.Sprintf("%d2%03d", member, port)
+			set(4, idx, module)
+			set(5, idx, "10")
+			set(7, idx, fmt.Sprintf("1/1/%d", port)) // slot-prefixed, not member-prefixed
+		}
+	}
+	inv := extractInventory(oids, slog.Default())
+	assert.Empty(t, inv.Members, "slot numbers must not be adopted as member ids")
+	assert.Len(t, inv.DroppedIDs, 1, "the pre-existing ambiguity refusal still fires")
 }
 
 func TestCollectDescendantIDs_LeadingNumberMustBeAnchored(t *testing.T) {
@@ -2062,7 +2122,7 @@ func TestCollectDescendantIDs_LeadingNumberMustBeAnchored(t *testing.T) {
 		oids[".1.3.6.1.2.1.47.1.1.1.1.7."+m.port] = Value{Value: m.name}
 	}
 	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
 	assert.Nil(t, members[0].DescendantIDs)
 	assert.Nil(t, members[1].DescendantIDs)
 }
@@ -2090,7 +2150,7 @@ func TestCollectDescendantIDs_StopsAtNestedStackRow(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.7.210": {Value: "2/1/1"},
 	}
 	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
 	assert.Equal(t, []int{1}, members[0].DescendantIDs, "7/1/1 lives behind a nested stack row")
 	assert.Equal(t, []int{2}, members[1].DescendantIDs)
 }
@@ -2112,7 +2172,7 @@ func TestCollectDescendantIDs_ToleratesNULPaddedValues(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.7.210": {Value: "2/1/1\x00"},
 	}
 	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
 	assert.Equal(t, []int{1}, members[0].DescendantIDs)
 	assert.Equal(t, []int{2}, members[1].DescendantIDs)
 }
@@ -2136,6 +2196,6 @@ func TestCollectDescendantIDs_TerminatesOnContainmentCycle(t *testing.T) {
 	children := childIndexFromOIDs(oids)
 	children["130"] = append(children["130"], "110") // cycle
 	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
-	assert.NotPanics(t, func() { collectDescendantIDs(members, oids, children) })
+	assert.NotPanics(t, func() { collectDescendantIDsFrom(members, oids, children) })
 	assert.Equal(t, []int{1}, members[0].DescendantIDs)
 }

@@ -165,7 +165,7 @@ func extractInventory(oids ObjectIDValueMap, logger *slog.Logger) ChassisInvento
 		bi, _ := strconv.Atoi(b.EntPhysicalIndex)
 		return ai - bi
 	})
-	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
+	collectDescendantIDs(members, oids)
 	assignMemberIDs(members, logger)
 	// Dedup pass 1: drop later-occurring duplicates of the same serial,
 	// keep the lowest-id occurrence. Track dropped ids and their
@@ -524,10 +524,22 @@ func childIndexFromOIDs(oids ObjectIDValueMap) map[string][]string {
 // sorted leading numbers on the port rows in its entPhysicalContainedIn
 // subtree. Input to the descendant tier.
 //
-// Multi-member sets only: a lone member trivially satisfies the tier's
-// predicate, so a subtree could renumber the one chassis of a
-// partially-reporting stack, and every standalone switch would pay a DFS per
-// poll for nothing.
+// Multi-member sets only, and the containment index is built AFTER that check
+// so a standalone target pays nothing: a lone member trivially satisfies the
+// tier's predicate, so a subtree could otherwise renumber the one chassis of a
+// partially-reporting stack, and childIndexFromOIDs scans the entire map —
+// which extractInventory would pay on every poll of every plain switch, twice
+// per target when discover_modules re-derives the inventory.
+func collectDescendantIDs(members []ChassisMember, oids ObjectIDValueMap) {
+	if len(members) < 2 {
+		return
+	}
+	collectDescendantIDsFrom(members, oids, childIndexFromOIDs(oids))
+}
+
+// collectDescendantIDsFrom is collectDescendantIDs over a supplied containment
+// index. Split out so tests can inject a tree the single-parent entPhysical
+// encoding cannot express, such as a cycle.
 //
 // Two properties are easy to get wrong:
 //
@@ -538,10 +550,7 @@ func childIndexFromOIDs(oids ObjectIDValueMap) map[string][]string {
 //     Class-3 rows are excluded from the member set for a non-root parent or
 //     a missing serial; descending through one would merge a rejected
 //     sibling's ports in and veto an otherwise-clean device.
-func collectDescendantIDs(members []ChassisMember, oids ObjectIDValueMap, childrenOf map[string][]string) {
-	if len(members) < 2 {
-		return
-	}
+func collectDescendantIDsFrom(members []ChassisMember, oids ObjectIDValueMap, childrenOf map[string][]string) {
 	classOf := func(idx string) string {
 		return trimSNMPString(oids[oidEntPhysicalClass+idx].Value)
 	}
@@ -665,6 +674,15 @@ const (
 // member really is zero-numbered. Here the leading field of a PORT name is a
 // slot, and devices do name every port "0/N" under a chassis called "Unit 1",
 // where 0 would set vc_position 0 and re-pin the master.
+//
+// Nothing in the MIB states that the leading field is a member rather than a
+// slot, so distinctness across members carries that weight: identical chassis
+// each populated in their own slot 1 all report "1/..." and collide, which
+// declines. The residual case is a stack of modular chassis populated in
+// DIFFERENT slots whose slot numbers are not the member numbers; there the
+// derived ids would be wrong but distinct. Checking entPhysicalName against
+// the aliased ifName would not catch it — a slot-prefixed name matches its own
+// ifName perfectly.
 //
 // Walk order need not match id order: extractInventory re-sorts by id, so an
 // agent enumerating chassis rows in join order is numbered, not refused.
