@@ -13,9 +13,14 @@ import (
 
 // OID prefixes for VlanMapper input.
 const (
-	oidDot1dBasePortIfIndex         = ".1.3.6.1.2.1.17.1.4.1.2."
-	oidDot1qPvid                    = ".1.3.6.1.2.1.17.7.1.4.5.1.1."
-	oidDot1qVlanStaticName          = ".1.3.6.1.2.1.17.7.1.4.3.1.1."
+	oidDot1dBasePortIfIndex = ".1.3.6.1.2.1.17.1.4.1.2."
+	oidDot1qPvid            = ".1.3.6.1.2.1.17.7.1.4.5.1.1."
+	oidDot1qVlanStaticName  = ".1.3.6.1.2.1.17.7.1.4.3.1.1."
+	// CISCO-VTP-MIB vtpVlanName. Cisco IOS and IOS-XE do not implement
+	// dot1qVlanStaticName in the default SNMP context, so this is the only
+	// place their VLAN database is readable. Indexed by
+	// (managementDomainIndex, vlanIndex), so the VID is the LAST element.
+	oidCiscoVtpVlanName             = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
 	oidDot1qVlanStaticEgressPorts   = ".1.3.6.1.2.1.17.7.1.4.3.1.2."
 	oidDot1qVlanStaticUntaggedPorts = ".1.3.6.1.2.1.17.7.1.4.3.1.4."
 	oidDot1qVlanStaticRowStatus     = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
@@ -423,6 +428,25 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 			// rejects NUL bytes in text fields, and a NUL-only name must
 			// collapse to "" so the VLAN<vid> default applies below.
 			p.name = trimSNMPString(v.Value)
+		case strings.HasPrefix(oid, oidCiscoVtpVlanName):
+			// Index is domain.vlan, so take the trailing element.
+			suffix := strings.TrimPrefix(oid, oidCiscoVtpVlanName)
+			last := suffix
+			if i := strings.LastIndex(suffix, "."); i >= 0 {
+				last = suffix[i+1:]
+			}
+			vid, ok := atoi(last)
+			if !ok {
+				continue
+			}
+			p, exists := byVid[vid]
+			if !exists {
+				p = &pending{}
+				byVid[vid] = p
+			}
+			if p.name == "" {
+				p.name = trimSNMPString(v.Value)
+			}
 		case strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus):
 			vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus))
 			if !ok {
@@ -499,6 +523,7 @@ func atoi(s string) (int, bool) {
 func hasVLANSignal(all ObjectIDValueMap) bool {
 	prefixes := [...]string{
 		oidDot1qVlanStaticName,
+		oidCiscoVtpVlanName,
 		oidDot1qVlanStaticEgressPorts,
 		oidDot1qVlanStaticUntaggedPorts,
 		oidDot1qVlanStaticRowStatus,

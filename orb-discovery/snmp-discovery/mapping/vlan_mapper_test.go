@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
@@ -678,4 +680,38 @@ func TestVlanMapper_PostMap_CiscoSB_AccessAndNativeColumnsAreDistinct(t *testing
 			}
 		})
 	}
+}
+
+func TestEmitVLANs_ReadsVtpVlanNameWhenDot1qAbsent(t *testing.T) {
+	// A device that publishes its VLAN database only through CISCO-VTP-MIB.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.10":  {Value: "office"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.20":  {Value: "voice"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.999": {Value: "engineering"},
+		// Out of range: must be dropped by the existing 1..4094 filter.
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.4095": {Value: "too-high"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.0":    {Value: "too-low"},
+	}
+	m := NewVlanMapper(slog.Default(), config.Options{})
+	got := map[int]string{}
+	for _, e := range m.emitVLANs(oids, nil) {
+		v, ok := e.(*diode.VLAN)
+		require.True(t, ok)
+		got[int(*v.Vid)] = *v.Name
+	}
+	assert.Equal(t, map[int]string{10: "office", 20: "voice", 999: "engineering"}, got,
+		"VTP names produce VLAN entities; 4095 and 0 are outside 1..4094 and must be dropped")
+}
+
+func TestEmitVLANs_Dot1qWinsOverVtpForTheSameVid(t *testing.T) {
+	// Both MIBs are disjoint across every device measured, but if one ever
+	// reports both, the standard MIB is authoritative.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10":     {Value: "from-dot1q"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.10": {Value: "from-vtp"},
+	}
+	m := NewVlanMapper(slog.Default(), config.Options{})
+	ents := m.emitVLANs(oids, nil)
+	require.Len(t, ents, 1)
+	assert.Equal(t, "from-dot1q", *ents[0].(*diode.VLAN).Name)
 }
