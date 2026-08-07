@@ -419,6 +419,152 @@ func TestManagerParsePolicies(t *testing.T) {
 	})
 }
 
+func TestManagerParsePolicies_ContextName(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	assert.NoError(t, err)
+
+	t.Run("Environment Variable Resolution - context_name", func(t *testing.T) {
+		err := os.Setenv("SNMP_CONTEXT_NAME", "mfpdirect")
+		require.NoError(t, err)
+		defer func() {
+			_ = os.Unsetenv("SNMP_CONTEXT_NAME")
+		}()
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv3
+                security_level: noAuthNoPriv
+                username: testuser
+                context_name: ${SNMP_CONTEXT_NAME}
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Contains(t, policies, "policy1")
+		assert.Equal(t, "mfpdirect", policies["policy1"].Scope.Authentication.ContextName)
+	})
+
+	t.Run("Environment Variable Resolution - Missing context_name Environment Variable", func(t *testing.T) {
+		err := os.Unsetenv("MISSING_SNMP_CONTEXT_NAME")
+		require.NoError(t, err)
+
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv3
+                security_level: noAuthNoPriv
+                username: testuser
+                context_name: ${MISSING_SNMP_CONTEXT_NAME}
+       `)
+
+		_, err = manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "policy1 : failed to resolve environment variables")
+		assert.Contains(t, err.Error(), "failed to resolve context_name environment variable")
+		assert.Contains(t, err.Error(), "environment variable MISSING_SNMP_CONTEXT_NAME is not set")
+	})
+
+	t.Run("Rejects context_name on SNMPv2c policy-level auth", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv2c
+                community: public
+                context_name: mfpdirect
+       `)
+
+		_, err := manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "policy-level: context_name is only valid for SNMPv3")
+	})
+
+	t.Run("Rejects context_name on SNMPv2c per-target auth", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv2c
+                    community: public
+                    context_name: mfpdirect
+       `)
+
+		_, err := manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "target 192.168.1.1: context_name is only valid for SNMPv3")
+	})
+
+	t.Run("Rejects context_name in scope.authentication with no protocol_version", func(t *testing.T) {
+		// hasPolicyAuth is false here (ProtocolVersion is unset), so the
+		// per-field validateAuthentication check never runs. Without the
+		// standalone check this block is silently discarded.
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+                  authentication:
+                    protocol_version: SNMPv3
+                    security_level: noAuthNoPriv
+                    username: testuser
+              authentication:
+                context_name: mfpdirect
+       `)
+
+		_, err := manager.ParsePolicies(yamlData)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "policy-level: context_name is only valid for SNMPv3")
+	})
+
+	t.Run("Accepts context_name on SNMPv3 policy-level auth", func(t *testing.T) {
+		yamlData := []byte(`
+        policies:
+          policy1:
+            config:
+              lookup_extensions_dir: /tmp/extensions
+            scope:
+              targets:
+                - host: 192.168.1.1
+              authentication:
+                protocol_version: SNMPv3
+                security_level: noAuthNoPriv
+                username: testuser
+                context_name: mfpdirect
+       `)
+
+		policies, err := manager.ParsePolicies(yamlData)
+		assert.NoError(t, err)
+		assert.Equal(t, "mfpdirect", policies["policy1"].Scope.Authentication.ContextName)
+	})
+}
+
 func TestManagerPolicyLifecycle(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug, AddSource: false}))
 	manager, err := policy.NewManager(context.Background(), logger, nil, nil)

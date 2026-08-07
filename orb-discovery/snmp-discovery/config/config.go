@@ -155,6 +155,11 @@ type Authentication struct {
 	AuthPassphrase  string `yaml:"auth_passphrase"`
 	PrivProtocol    string `yaml:"priv_protocol"`
 	PrivPassphrase  string `yaml:"priv_passphrase"`
+	// ContextName is the SNMPv3 context name (snmpwalk -n). Devices that expose
+	// their MIB data in a named context return nothing for the default context,
+	// so an absent value looks like a successful empty walk. Rejected for
+	// v1/v2c, which have no context concept.
+	ContextName string `yaml:"context_name,omitempty"`
 }
 
 // IPAddressDefaults represents default values for a specific entity type

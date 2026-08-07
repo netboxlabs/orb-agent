@@ -180,10 +180,11 @@ Each target in the `targets` list can include:
 | auth_passphrase | string | no | SNMPv3 authentication passphrase |
 | priv_protocol | string | no | SNMPv3 privacy protocol (see [SNMPv3 auth/priv protocols](#snmpv3-authpriv-protocols)) |
 | priv_passphrase | string | no | SNMPv3 privacy passphrase |
+| context_name | string | no | SNMPv3 context name (equivalent to `snmpwalk -n`). Required by devices that expose MIB data in a named context; such devices return an empty walk when it is omitted. Rejected for SNMPv1/v2c. |
 
 *Required for SNMPv1/v2c, optional for SNMPv3
 
-**Note:** Authentication can be specified at the policy level (under `scope.authentication`) as a fallback, or per-target (under each target's `authentication` field). Targets without authentication use the policy-level authentication. Environment variables are supported using `${VAR}` syntax for `community`, `username`, `auth_passphrase`, and `priv_passphrase` fields.
+**Note:** Authentication can be specified at the policy level (under `scope.authentication`) as a fallback, or per-target (under each target's `authentication` field). Targets without authentication use the policy-level authentication — this is a wholesale replacement, not a field-level merge: a target with its own `authentication` block does not inherit any individual field, such as `context_name`, from the policy-level block. Environment variables are supported using `${VAR}` syntax for `community`, `username`, `auth_passphrase`, `priv_passphrase`, and `context_name` fields.
 
 #### SNMPv3 auth/priv protocols
 Values are case-sensitive and must be passed as one of the strings in the tables below.
