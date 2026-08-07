@@ -2202,6 +2202,46 @@ func TestMappingYAML_CiscoOverlayEntriesPresent(t *testing.T) {
 	}
 }
 
+// CISCO-VTP-MIB is the only place Cisco IOS/IOS-XE devices expose a VLAN
+// name, since they don't implement dot1qVlanStaticName. Walking it
+// unconditionally (no vendor gate) would cost every non-Cisco host in a
+// fleet a pointless GETNEXT round-trip per scan, so it must live under
+// the same cisco vendor gate as the other CISCO-SMI-arc VLAN overlays.
+func TestMappingYAML_VtpEntryPresent(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	const vtpEntryOID = ".1.3.6.1.4.1.9.9.46.1.3.1.1"  // vtpVlanEntry
+	const vtpNameOID = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4" // vtpVlanName column
+	found := false
+	for _, e := range doc.Entries {
+		if e.OID != vtpEntryOID {
+			continue
+		}
+		found = true
+		if e.Vendor != "cisco" {
+			t.Errorf("%s: vendor = %q, want cisco (IOS/IOS-XE report sysObjectIDs under ciscoProducts)", e.OID, e.Vendor)
+		}
+		gotName := false
+		for _, c := range e.MappingEntries {
+			if c.OID == vtpNameOID {
+				gotName = true
+			}
+		}
+		if !gotName {
+			t.Errorf("%s: missing child mapping entry for vtpVlanName column %s", e.OID, vtpNameOID)
+		}
+	}
+	if !found {
+		t.Errorf("mapping.yaml missing cisco-scoped OID %s", vtpEntryOID)
+	}
+}
+
 // TestMapObjectIDsToEntity_VLANIndexCollision is a regression test for the
 // case where an ifIndex value and a VLAN VID share the same numeric form
 // (e.g., ifIndex=10 + dot1qVlanStaticName.10). The pre-fix
