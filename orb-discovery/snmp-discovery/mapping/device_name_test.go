@@ -156,6 +156,20 @@ func TestApplyDeviceNameEmission_StubsStayMatchable(t *testing.T) {
 			dev.AssetTag = StringPtr("ASSET-9")
 		}
 		iface := &diode.Interface{Name: StringPtr("Gi0/1"), Device: dev}
+		// A primary IP, so the device's PrimaryIp4 snapshot is covered too. That
+		// snapshot is a shallow copy taken during mapping, before suppression
+		// runs, so it is the one derived copy that can re-supply the hostname.
+		addr := "10.0.0.1/24"
+		dev.PrimaryIp4 = detachForPrimaryIP(&diode.IPAddress{
+			Address:        &addr,
+			AssignedObject: &diode.Interface{Name: StringPtr("Vlan10"), Device: dev},
+		}, dev)
+		// Both families, so the assertion loop below is not silently v4-only.
+		addr6 := "2001:db8::1/64"
+		dev.PrimaryIp6 = detachForPrimaryIP6(&diode.IPAddress{
+			Address:        &addr6,
+			AssignedObject: &diode.Interface{Name: StringPtr("Vlan10"), Device: dev},
+		}, dev)
 		return []diode.Entity{dev, iface}
 	}
 
@@ -165,16 +179,32 @@ func TestApplyDeviceNameEmission_StubsStayMatchable(t *testing.T) {
 		ApplyDeviceNameEmission(entities, dev, false, host, logger)
 		require.Nil(t, dev.Name, "top-level device name suppressed")
 		PruneNestedRefs(entities, dev, nil)
+		assertStub := func(stub *diode.Device, where string) {
+			assert.Nil(t, stub.Name, where+": nested device stub must not carry a name once suppressed")
+			_, hasSM := stub.Metadata["source_match"]
+			hasTag := stub.AssetTag != nil && strings.TrimSpace(*stub.AssetTag) != ""
+			assert.True(t, hasSM || hasTag, where+": nested device stub must keep a surviving matcher (source_match or asset_tag)")
+		}
 		for _, e := range entities {
 			iface, ok := e.(*diode.Interface)
 			if !ok || iface == nil || iface.Device == nil {
 				continue
 			}
-			stub := iface.Device
-			assert.Nil(t, stub.Name, "nested device stub must not carry a name once suppressed")
-			_, hasSM := stub.Metadata["source_match"]
-			hasTag := stub.AssetTag != nil && strings.TrimSpace(*stub.AssetTag) != ""
-			assert.True(t, hasSM || hasTag, "nested device stub must keep a surviving matcher (source_match or asset_tag)")
+			assertStub(iface.Device, "interface.device")
+		}
+		// The primary-IP snapshots are nested refs too, and are NOT reachable
+		// from the loop above: the IP-assigned interface is deliberately absent
+		// from the top-level entity slice.
+		for where, ip := range map[string]*diode.IPAddress{
+			"primary_ip4": dev.PrimaryIp4,
+			"primary_ip6": dev.PrimaryIp6,
+		} {
+			if ip == nil {
+				continue
+			}
+			if iface, ok := ip.AssignedObject.(*diode.Interface); ok && iface != nil && iface.Device != nil {
+				assertStub(iface.Device, where)
+			}
 		}
 	}
 
