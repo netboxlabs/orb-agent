@@ -1,8 +1,10 @@
 package mapping
 
 import (
+	"log/slog"
 	"testing"
 
+	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -60,4 +62,42 @@ func TestSviVlanID_EmptyAndWhitespace(t *testing.T) {
 		_, ok := sviVlanID(name)
 		assert.False(t, ok)
 	}
+}
+
+func TestResolveSviVlans(t *testing.T) {
+	vlan10 := &diode.VLAN{Vid: int64Ptr(10), Name: strPtr("office")}
+	vlan20 := &diode.VLAN{Vid: int64Ptr(20), Name: strPtr("voice")}
+	entities := []diode.Entity{vlan10, vlan20}
+
+	oids := ObjectIDValueMap{
+		// ifIndex 1: ifName carries the SVI name, ifDescr is generic. This is
+		// the shape the resolved Interface.Name would lose.
+		".1.3.6.1.2.1.2.2.1.2.1":    {Value: "802.1Q VLAN"},
+		".1.3.6.1.2.1.31.1.1.1.1.1": {Value: "vlan 10"},
+		// ifIndex 2: only ifDescr is present.
+		".1.3.6.1.2.1.2.2.1.2.2": {Value: "Vlan20"},
+		// ifIndex 3: SVI name, but VLAN 30 is not in the device's VLAN set.
+		".1.3.6.1.2.1.31.1.1.1.1.3": {Value: "Vlan30"},
+		// ifIndex 4: not an SVI.
+		".1.3.6.1.2.1.31.1.1.1.1.4": {Value: "GigabitEthernet1/0/1"},
+	}
+
+	got := ResolveSviVlans(oids, entities, slog.Default())
+
+	assert.Same(t, vlan10, got[1], "ifName must be consulted, not just ifDescr")
+	assert.Same(t, vlan20, got[2], "ifDescr alone must resolve")
+	assert.NotContains(t, got, 3, "an uncorroborated VID must not resolve")
+	assert.NotContains(t, got, 4, "a non-SVI name must not resolve")
+	assert.Len(t, got, 2)
+}
+
+func TestResolveSviVlans_SkipsVlansWithoutADeviceName(t *testing.T) {
+	// A stub VLAN carries a fabricated name. Referencing it would make the
+	// association rename the operator's VLAN, because a matched reference is
+	// applied as an update carrying the whole payload.
+	stub := &diode.VLAN{Vid: int64Ptr(1)}
+	oids := ObjectIDValueMap{".1.3.6.1.2.1.31.1.1.1.1.1": {Value: "Vlan1"}}
+
+	got := ResolveSviVlans(oids, []diode.Entity{stub}, slog.Default())
+	assert.Empty(t, got, "a VLAN with no name is a stub and must not be referenced")
 }

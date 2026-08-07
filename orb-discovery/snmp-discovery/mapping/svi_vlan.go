@@ -1,9 +1,12 @@
 package mapping
 
 import (
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/netboxlabs/diode-sdk-go/diode"
 )
 
 // sviVlanNameRe matches the interface-name shapes whose trailing integer is
@@ -43,4 +46,77 @@ func sviVlanID(name string) (int, bool) {
 		return 0, false
 	}
 	return vid, true
+}
+
+// ResolveSviVlans maps ifIndex to the VLAN an SVI-style interface belongs to.
+//
+// Only VLANs the DEVICE named are eligible: entities is scanned for VLANs whose
+// Name is set, which excludes the stubs ensureVLAN synthesises. That matters
+// beyond tidiness — a reference that matches an existing NetBox VLAN is applied
+// as an update carrying the whole payload, so referencing a stub named "VLAN1"
+// against a VLAN the operator calls "default" renames it.
+//
+// Both ifName and ifDescr are consulted because the interface-name resolver
+// prefers ifDescr, and several platforms put a generic string there and the
+// real SVI name in ifName.
+//
+// Callers must NOT substitute ensureVLAN for this lookup: it creates a stub on
+// a miss and appends it to the emitted entity list, which turns a
+// corroborated association into an invented one.
+func ResolveSviVlans(
+	oids ObjectIDValueMap,
+	entities []diode.Entity,
+	logger *slog.Logger,
+) map[int]*diode.VLAN {
+	named := map[int]*diode.VLAN{}
+	for _, e := range entities {
+		v, ok := e.(*diode.VLAN)
+		if !ok || v == nil || v.Vid == nil {
+			continue
+		}
+		if v.Name == nil || strings.TrimSpace(*v.Name) == "" {
+			continue
+		}
+		named[int(*v.Vid)] = v
+	}
+	if len(named) == 0 {
+		return nil
+	}
+
+	namesByIfIndex := map[int][]string{}
+	collect := func(prefix string) {
+		for oid, val := range oids {
+			if !strings.HasPrefix(oid, prefix) {
+				continue
+			}
+			idx, ok := atoi(strings.TrimPrefix(oid, prefix))
+			if !ok {
+				continue
+			}
+			if name := trimSNMPString(val.Value); name != "" {
+				namesByIfIndex[idx] = append(namesByIfIndex[idx], name)
+			}
+		}
+	}
+	collect(oidIfName)
+	collect(oidIfDescr)
+
+	out := map[int]*diode.VLAN{}
+	for idx, names := range namesByIfIndex {
+		for _, name := range names {
+			vid, ok := sviVlanID(name)
+			if !ok {
+				continue
+			}
+			vlan, known := named[vid]
+			if !known {
+				logger.Debug("svi vlan: parsed vid absent from the device VLAN database; not associating",
+					"ifIndex", idx, "interface", name, "vid", vid)
+				continue
+			}
+			out[idx] = vlan
+			break
+		}
+	}
+	return out
 }

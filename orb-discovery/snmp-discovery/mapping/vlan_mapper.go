@@ -26,6 +26,11 @@ const (
 	oidDot1qVlanStaticRowStatus     = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
 	oidIfAdminStatus                = ".1.3.6.1.2.1.2.2.1.7."
 	oidIfType                       = ".1.3.6.1.2.1.2.2.1.3."
+	// ifDescr / ifName, consulted by ResolveSviVlans (svi_vlan.go). Both are
+	// already walked for the interface-name resolver; SVI resolution reuses
+	// them rather than requiring a separate walk.
+	oidIfDescr = ".1.3.6.1.2.1.2.2.1.2."
+	oidIfName  = ".1.3.6.1.2.1.31.1.1.1.1."
 	// Cisco overlay
 	oidCiscoVMVlan        = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
 	oidCiscoVMVoiceVlanID = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
