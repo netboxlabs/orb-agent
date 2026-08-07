@@ -44,6 +44,13 @@ func (m *ChassisInventoryMapper) Map(
 // derived logical member id (see assignMemberIDs); EntPhysicalIndex is
 // the raw row index used for entAliasMappingTable chain walks.
 // AssetTag is the trimmed entPhysicalAssetID value ("" when unset or not walked).
+//
+// DescendantIDs is derivation-only input for assignMemberIDs' descendant
+// tier, in the same category as EntName and ParentRelPos (both exported,
+// both read only by the id helpers). It holds the DISTINCT SORTED leading
+// numbers found on this chassis's port descendants; nil means "no signal"
+// and makes the tier decline. Populated only for multi-member sets — see
+// collectDescendantIDs.
 type ChassisMember struct {
 	ID               int
 	EntPhysicalIndex string
@@ -52,6 +59,7 @@ type ChassisMember struct {
 	EntName          string
 	ParentRelPos     int
 	AssetTag         string
+	DescendantIDs    []int
 }
 
 // ChassisInventory is the deduped, validated, member-id-sorted set of
@@ -110,7 +118,8 @@ func isStackContainerParent(oids ObjectIDValueMap, idx string) bool {
 //
 // Returns members sorted ascending by ID. Member ids are derived
 // set-wide by assignMemberIDs (one scheme for all members:
-// parentRelPos → entPhysicalName trailing int → ordinal).
+// parentRelPos → entPhysicalName trailing int → port-descendant number
+// → ordinal).
 func extractInventory(oids ObjectIDValueMap, logger *slog.Logger) ChassisInventory {
 	candidates := []string{}
 	for oid, v := range oids {
@@ -156,6 +165,7 @@ func extractInventory(oids ObjectIDValueMap, logger *slog.Logger) ChassisInvento
 		bi, _ := strconv.Atoi(b.EntPhysicalIndex)
 		return ai - bi
 	})
+	collectDescendantIDs(members, oids, childIndexFromOIDs(oids))
 	assignMemberIDs(members, logger)
 	// Dedup pass 1: drop later-occurring duplicates of the same serial,
 	// keep the lowest-id occurrence. Track dropped ids and their
@@ -352,6 +362,14 @@ func trimSNMPString(s string) string {
 
 var trailingIntRe = regexp.MustCompile(`(\d+)\s*$`)
 
+// leadingMemberNumRe matches the leading slash-delimited number of an
+// interface-style entPhysicalName ("2/1/1" -> 2, "1/1/1:1" -> 1). Anchored so
+// vendor-decorated names that merely contain the pattern ("GigabitEthernet1/0/1",
+// "RPM sensor for fan Tray-2/1/1") yield nothing rather than a slot number.
+//
+// Not trailingIntRe: that reads the END of a member's own name ("Switch 2").
+var leadingMemberNumRe = regexp.MustCompile(`^(\d+)/`)
+
 // prelState classifies the member set's entPhysicalParentRelPos values.
 type prelState int
 
@@ -373,12 +391,20 @@ const (
 //  2. entPhysicalName trailing int — usable iff every member has one and
 //     they are distinct (0 is allowed: FPC-style members are genuinely
 //     zero-numbered);
-//  3. when parentRelPos is AMBIGUOUS (duplicate positive positions) or
-//     names are AMBIGUOUS (full coverage, duplicate numbers) and the other
-//     signal could not rescue, keep the colliding values so the caller's
-//     ambiguity dedup refuses those rows — silently renumbering them
-//     would mis-attribute ifName-routed interfaces;
-//  4. ordinal 1..N in slice order (callers pass entPhysicalIndex-sorted
+//  3. the leading number on each member's PORT descendants, reached through
+//     entPhysicalContainedIn, under descendantIDs' strict predicate. Resolves
+//     stacks that report the same position AND the same name on every chassis
+//     row while numbering their ports 1/1/x .. N/1/x. Port names are the
+//     namespace entAliasMappingTable maps to ifName, so this id and an
+//     ifName-derived id agree — on the vendors where that holds, which is why
+//     the predicate refuses rather than assumes;
+//  4. when parentRelPos is AMBIGUOUS (duplicate positive positions) or
+//     names are AMBIGUOUS (full coverage, duplicate numbers) and neither
+//     the other signal nor the descendant tier could rescue, keep the
+//     colliding values so the caller's ambiguity dedup refuses those rows —
+//     silently renumbering them would mis-attribute ifName-routed
+//     interfaces;
+//  5. ordinal 1..N in slice order (callers pass entPhysicalIndex-sorted
 //     members, so this is walk order).
 //
 // Scheme selection runs over the pre-dedup member rows: a duplicate-serial
@@ -416,10 +442,39 @@ func assignMemberIDs(members []ChassisMember, logger *slog.Logger) {
 		applyIDs(members, names)
 		return
 	}
+	// Tier 3: the device's own containment tree, ahead of both refusals and
+	// the ordinal fallback. A device asserting one position twice has asserted
+	// nonsense; one with both columns silent has asserted nothing. Containment
+	// beats walk order in either case, and descendantIDs' predicate is what
+	// makes trusting it safe.
+	desc, dstate := descendantIDs(members)
+	if dstate == descendantUsable {
+		logger.Info("member id: using entPhysicalContainedIn descendant-derived ids",
+			"reason", prelStateReason(state), "name_reason", nameStateReason(nstate),
+			"ids", desc, "members", len(members))
+		applyIDs(members, desc)
+		return
+	}
+	if dstate == descendantConflict {
+		// Warn only when this decline costs the device its stack: with
+		// ambiguous prel or names the next stop is refusal. Otherwise the
+		// ordinal fallback still emits a working stack, and a permanent Warn
+		// on every poll of a healthy device whose ports are merely
+		// slot-numbered ("1/1".."1/48" on every member) is noise.
+		log := logger.Debug
+		if state == prelAmbiguous || nstate == nameAmbiguous {
+			log = logger.Warn
+		}
+		log("member id: descendant-derived ids rejected as contradictory",
+			"sets", descendantSets(members), "members", len(members))
+	}
+
 	// From here every outcome is lossy or low-confidence: Warn. Colliding
 	// ids are deliberately KEPT so the caller's ambiguity dedup refuses
 	// those rows — silently renumbering them would mis-attribute
-	// ifName-routed interfaces.
+	// ifName-routed interfaces on any device whose ports are absent from
+	// entAliasMappingTable (present-table devices route by containment and
+	// use the id only as a map key — see chassisRouter.routeIfIndex).
 	if state == prelAmbiguous {
 		logger.Warn("member id: duplicate positive entPhysicalParentRelPos and no usable names; keeping colliding ids for ambiguity refusal",
 			"members", len(members))
@@ -445,6 +500,87 @@ func assignMemberIDs(members []ChassisMember, logger *slog.Logger) {
 		ordinal[i] = i + 1
 	}
 	applyIDs(members, ordinal)
+}
+
+// childIndexFromOIDs inverts entPhysicalContainedIn into parent -> children,
+// so the descendant walk can descend where routeIfIndex ascends.
+//
+// Values go through trimSNMPString, matching how extractInventory reads the
+// same column: a NUL-padded parent pointer must still key to its chassis, or
+// the subtree reads as empty and the descendant tier silently declines.
+func childIndexFromOIDs(oids ObjectIDValueMap) map[string][]string {
+	out := make(map[string][]string, len(oids)/8)
+	for oid, v := range oids {
+		if !strings.HasPrefix(oid, oidEntPhysicalContainedIn) {
+			continue
+		}
+		parent := trimSNMPString(v.Value)
+		out[parent] = append(out[parent], strings.TrimPrefix(oid, oidEntPhysicalContainedIn))
+	}
+	return out
+}
+
+// collectDescendantIDs populates each member's DescendantIDs with the distinct
+// sorted leading numbers on the port rows in its entPhysicalContainedIn
+// subtree. Input to the descendant tier.
+//
+// Multi-member sets only: a lone member trivially satisfies the tier's
+// predicate, so a subtree could renumber the one chassis of a
+// partially-reporting stack, and every standalone switch would pay a DFS per
+// poll for nothing.
+//
+// Two properties are easy to get wrong:
+//
+//   - The class filter gates COLLECTION, not traversal. The chain is
+//     port(10) -> module(9) -> chassis(3), so filtering the walk itself
+//     returns an empty set for every member.
+//   - The walk stops at any other chassis or stack row, member or not.
+//     Class-3 rows are excluded from the member set for a non-root parent or
+//     a missing serial; descending through one would merge a rejected
+//     sibling's ports in and veto an otherwise-clean device.
+func collectDescendantIDs(members []ChassisMember, oids ObjectIDValueMap, childrenOf map[string][]string) {
+	if len(members) < 2 {
+		return
+	}
+	classOf := func(idx string) string {
+		return trimSNMPString(oids[oidEntPhysicalClass+idx].Value)
+	}
+	for i := range members {
+		found := map[int]struct{}{}
+		seen := map[string]struct{}{members[i].EntPhysicalIndex: {}}
+		queue := append([]string(nil), childrenOf[members[i].EntPhysicalIndex]...)
+		for len(queue) > 0 {
+			idx := queue[len(queue)-1]
+			queue = queue[:len(queue)-1]
+			if _, dup := seen[idx]; dup {
+				continue
+			}
+			seen[idx] = struct{}{}
+			switch classOf(idx) {
+			case entPhysicalClassChassis, entPhysicalClassStack:
+				// Another chassis's territory (or a nested stack) — do not
+				// descend, do not collect.
+				continue
+			case entPhysicalClassPort:
+				name := trimSNMPString(oids[oidEntPhysicalName+idx].Value)
+				if m := leadingMemberNumRe.FindStringSubmatch(name); m != nil {
+					if n, err := strconv.Atoi(m[1]); err == nil {
+						found[n] = struct{}{}
+					}
+				}
+			}
+			queue = append(queue, childrenOf[idx]...)
+		}
+		if len(found) == 0 {
+			continue // leave nil: no signal
+		}
+		nums := make([]int, 0, len(found))
+		for n := range found {
+			nums = append(nums, n)
+		}
+		slices.Sort(nums)
+		members[i].DescendantIDs = nums
+	}
 }
 
 func hasPositivePrel(members []ChassisMember) bool {
@@ -473,6 +609,13 @@ func prelStateReason(s prelState) string {
 	return "contains zero or negative positions"
 }
 
+func nameStateReason(s nameState) string {
+	if s == nameAmbiguous {
+		return "duplicate name numbers"
+	}
+	return "name numbers missing on at least one member"
+}
+
 func applyIDs(members []ChassisMember, ids []int) {
 	for i := range members {
 		members[i].ID = ids[i]
@@ -498,6 +641,67 @@ func parentRelIDs(members []ChassisMember) ([]int, prelState) {
 		ids[i] = m.ParentRelPos
 	}
 	return ids, state
+}
+
+// descendantState classifies the member set's descendant-derived numbers.
+type descendantState int
+
+const (
+	descendantUsable   descendantState = iota // every member yields exactly one number, all distinct, all > 0
+	descendantConflict                        // a member's ports disagree, or two members claim one number
+	descendantAbsent                          // at least one member has no numbered port descendants
+)
+
+// descendantIDs returns member ids derived from the leading number on each
+// chassis's port descendants. Mirrors parentRelIDs and nameIDs: pure over the
+// member slice, meaningful only for descendantUsable.
+//
+// Strict on purpose — a wrong-but-distinct id is silent downstream. Any of
+// these vetoes the whole set: a member with no numbered ports; a member whose
+// ports carry more than one number; two members claiming one number; a number
+// <= 0.
+//
+// The zero rule differs from nameIDs, which allows 0 because an FPC-style
+// member really is zero-numbered. Here the leading field of a PORT name is a
+// slot, and devices do name every port "0/N" under a chassis called "Unit 1",
+// where 0 would set vc_position 0 and re-pin the master.
+//
+// Walk order need not match id order: extractInventory re-sorts by id, so an
+// agent enumerating chassis rows in join order is numbered, not refused.
+func descendantIDs(members []ChassisMember) ([]int, descendantState) {
+	ids := make([]int, len(members))
+	seen := make(map[int]struct{}, len(members))
+	for i, m := range members {
+		if len(m.DescendantIDs) == 0 {
+			return nil, descendantAbsent
+		}
+		if len(m.DescendantIDs) > 1 {
+			return nil, descendantConflict
+		}
+		id := m.DescendantIDs[0]
+		if id <= 0 {
+			return nil, descendantConflict
+		}
+		if _, dup := seen[id]; dup {
+			return nil, descendantConflict
+		}
+		seen[id] = struct{}{}
+		ids[i] = id
+	}
+	return ids, descendantUsable
+}
+
+// descendantSets renders the per-member descendant numbers for logging, so a
+// conflict decline says WHICH members disagreed instead of only that one did.
+func descendantSets(members []ChassisMember) string {
+	var b strings.Builder
+	for i, m := range members {
+		if i > 0 {
+			b.WriteString(" ")
+		}
+		fmt.Fprintf(&b, "%s=%v", m.EntPhysicalIndex, m.DescendantIDs)
+	}
+	return b.String()
 }
 
 // nameState classifies the member set's entPhysicalName trailing-int values.
@@ -609,11 +813,41 @@ func resolveAssetTags(members []ChassisMember, masterTag string, logger *slog.Lo
 	return out
 }
 
+// refusedMasterSerial returns the serial to put on the master when every
+// chassis row was refused, or "" when there was nothing to refuse (a device
+// with no chassis rows is simply not a stack, and must stay untouched).
+//
+// DroppedEntIndexes carries the refused rows' entPhysicalIndexes, so the
+// serial is read back from oids: the inventory itself keeps no serial for a
+// dropped row. Lowest index wins, matching the master-pinning convention.
+func refusedMasterSerial(inv ChassisInventory, oids ObjectIDValueMap) string {
+	if len(inv.DroppedEntIndexes) == 0 {
+		return ""
+	}
+	idxs := make([]string, 0, len(inv.DroppedEntIndexes))
+	for idx := range inv.DroppedEntIndexes {
+		idxs = append(idxs, idx)
+	}
+	slices.SortFunc(idxs, func(a, b string) int {
+		ai, _ := strconv.Atoi(a)
+		bi, _ := strconv.Atoi(b)
+		return ai - bi
+	})
+	for _, idx := range idxs {
+		if s := trimSNMPString(oids[oidEntPhysicalSerialNum+idx].Value); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // TranslateAsStack inspects the raw oids map for ENTITY-MIB chassis
 // inventory. Three outcomes:
 //
 //   - 0 chassis rows with non-empty serial -> entities returned
-//     unchanged (no Serial assignment possible).
+//     unchanged (no Serial assignment possible), EXCEPT when rows existed
+//     and were all refused as ambiguous, in which case the master keeps a
+//     serial but gets no VirtualChassis (see refusedMasterSerial).
 //   - 1 chassis row -> set master.Serial on the existing Device,
 //     return entities unchanged otherwise (standalone case).
 //   - >= 2 chassis rows -> emit master + top-level VirtualChassis +
@@ -661,6 +895,22 @@ func TranslateAsStack(
 
 	inv := extractInventory(oids, logger)
 	if len(inv.Members) == 0 {
+		// Two situations reach zero members: no chassis rows at all (not a
+		// stack, leave it alone) and every row refused as ambiguous. Only
+		// the member NUMBERING is ambiguous in the second case, so refuse
+		// the structure but keep the serial, taken from the lowest
+		// entPhysicalIndex — the one ordering that does not depend on the
+		// disputed ids, so it is stable across polls of the same data.
+		//
+		// Not guaranteed to equal what a later RESOLVING poll picks: that
+		// takes the lowest member id, which is the lowest index only when
+		// ids ascend with it. Still better than no serial, and serial is
+		// not a Diode matcher, so nothing re-keys.
+		if s := refusedMasterSerial(inv, oids); s != "" && master.Serial == nil {
+			master.Serial = &s
+			logger.Warn("stack refused: emitting master serial only, no virtual chassis",
+				"serial", s, "refused_ids", len(inv.DroppedIDs))
+		}
 		return entities
 	}
 
@@ -693,6 +943,14 @@ func TranslateAsStack(
 	// Master also gets its per-member Model in case the rich
 	// DeviceMapper picked a top-level chassis model that diverges
 	// (or didn't resolve a DeviceType at all — sysObjectID miss).
+	//
+	// Matches buildMemberDevice: every member's device_type comes from its own
+	// chassis row, which is what makes a mixed-model stack right, and the
+	// master is just the lowest-id chassis row. This does override
+	// override_defaults.device.model, which the backend documents as
+	// highest-priority — a real contract bug, but it applies equally to the
+	// member Devices and cannot be fixed here (no access to config.Defaults),
+	// and guarding only the master would split one stack across two types.
 	if lowest.Model != "" {
 		var mfg *diode.Manufacturer
 		if master.DeviceType != nil {
