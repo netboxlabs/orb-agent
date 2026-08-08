@@ -703,6 +703,116 @@ func TestEmitVLANs_ReadsVtpVlanNameWhenDot1qAbsent(t *testing.T) {
 		"VTP names produce VLAN entities; 4095 and 0 are outside 1..4094 and must be dropped")
 }
 
+// mergeVLANNames takes an ordered slice precisely so its precedence can be
+// pinned against every arrival order, rather than against whichever order
+// Go's randomised map iteration happens to produce on the day. Each case is
+// run against every permutation of its own rows, so both of the orders that
+// used to diverge are exercised on every run.
+func TestMergeVLANNames_ResolvesTheSameNameInEveryArrivalOrder(t *testing.T) {
+	const (
+		dot1q10   = ".1.3.6.1.2.1.17.7.1.4.3.1.1.10"
+		vtpDom1   = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.10"
+		vtpDom2   = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4.2.10"
+		nulPadded = "\x00\x00\x00"
+	)
+	cases := []struct {
+		name string
+		rows []vlanNameRow
+		want map[int]string
+	}{
+		{
+			// The flapping case: NUL padding collapses the dot1q name to
+			// "", so the VTP name is the only one the device supplied.
+			name: "an empty dot1q name never erases the vtp name",
+			rows: []vlanNameRow{
+				{oid: dot1q10, value: nulPadded},
+				{oid: vtpDom1, value: "office"},
+			},
+			want: map[int]string{10: "office"},
+		},
+		{
+			name: "a populated dot1q name always wins over vtp",
+			rows: []vlanNameRow{
+				{oid: dot1q10, value: "from-dot1q"},
+				{oid: vtpDom1, value: "from-vtp"},
+			},
+			want: map[int]string{10: "from-dot1q"},
+		},
+		{
+			// Two management domains listing the same VID: the populated
+			// row wins either way round.
+			name: "an empty vtp row never erases a populated one",
+			rows: []vlanNameRow{
+				{oid: vtpDom1, value: "office"},
+				{oid: vtpDom2, value: nulPadded},
+			},
+			want: map[int]string{10: "office"},
+		},
+		{
+			name: "two nameless rows leave the vid nameless",
+			rows: []vlanNameRow{
+				{oid: dot1q10, value: " "},
+				{oid: vtpDom1, value: nulPadded},
+			},
+			want: map[int]string{10: ""},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			orders := permuteVLANNameRows(tc.rows)
+			require.Len(t, orders, 2, "both arrival orders must be exercised")
+			for _, order := range orders {
+				assert.Equal(t, tc.want, mergeVLANNames(order),
+					"arrival order %v", oidsOfRows(order))
+			}
+		})
+	}
+}
+
+// permuteVLANNameRows returns every ordering of rows. The cases above are
+// pairs, so this enumerates both arrival orders exhaustively rather than
+// sampling whichever one a map iteration yields.
+func permuteVLANNameRows(rows []vlanNameRow) [][]vlanNameRow {
+	if len(rows) <= 1 {
+		return [][]vlanNameRow{append([]vlanNameRow(nil), rows...)}
+	}
+	var out [][]vlanNameRow
+	for i := range rows {
+		rest := make([]vlanNameRow, 0, len(rows)-1)
+		rest = append(rest, rows[:i]...)
+		rest = append(rest, rows[i+1:]...)
+		for _, tail := range permuteVLANNameRows(rest) {
+			out = append(out, append([]vlanNameRow{rows[i]}, tail...))
+		}
+	}
+	return out
+}
+
+func oidsOfRows(rows []vlanNameRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.oid)
+	}
+	return out
+}
+
+// A NUL-padded dot1qVlanStaticName collapses to "", which is not a name
+// the device supplied — the VTP catalog is the only place that VID is
+// named, and that name must survive whichever row is visited first.
+// mergeVLANNames is pinned against both orders explicitly above; this
+// case covers the map-level entry point.
+func TestEmitVLANs_VtpNameSurvivesAnEmptyDot1qName(t *testing.T) {
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10":     {Value: "\x00\x00\x00"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.10": {Value: "office"},
+	}
+	m := NewVlanMapper(slog.Default(), config.Options{})
+	ents := m.emitVLANs(oids, nil)
+	require.Len(t, ents, 1)
+	assert.Equal(t, "office", *ents[0].(*diode.VLAN).Name,
+		"an empty dot1q name must not erase the VTP name, nor fall through to the VLAN<vid> default")
+}
+
 func TestEmitVLANs_Dot1qWinsOverVtpForTheSameVid(t *testing.T) {
 	// Both MIBs are disjoint across every device measured, but if one ever
 	// reports both, the standard MIB is authoritative.
