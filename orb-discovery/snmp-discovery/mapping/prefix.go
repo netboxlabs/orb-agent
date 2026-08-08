@@ -36,8 +36,10 @@ import (
 // options.PrefixVlanMode is "corroborated", and even then a prefix is
 // only tagged when every contributing address resolves to the SAME
 // VLAN. Any disagreement, or any contributing address with no VLAN,
-// leaves the prefix untagged and logs a warning — see the vote
-// accumulation below for why that check must span every address.
+// leaves the prefix untagged — see the vote accumulation below for why
+// that check must span every address. The warning is reserved for a
+// prefix at least one address proposed a VLAN for: a prefix no address
+// proposed one for is an ordinary routed subnet, not a contest.
 func DerivePrefixes(
 	entities []diode.Entity,
 	vrfByAddress map[string]*diode.VRF,
@@ -58,10 +60,15 @@ func DerivePrefixes(
 	// below picks the surviving prefixSeed. Collecting only for the
 	// first address per key would make the association depend on Go map
 	// iteration order and flap between polls.
+	// proposed counts the contributors that actually named a VLAN, which
+	// is what separates a genuine disagreement from the ordinary case: on
+	// an L3 switch with one SVI and many routed subnets, most prefixes
+	// have no proposer at all and must be withheld silently.
 	type vlanVote struct {
 		vlan     *diode.VLAN
 		conflict bool
 		total    int
+		proposed int
 	}
 	votes := make(map[string]*vlanVote)
 	corroborateVlan := options.PrefixVlanMode() == "corroborated" && len(sviVlanByIfIndex) > 0
@@ -160,6 +167,9 @@ func DerivePrefixes(
 				votes[key] = v
 			}
 			v.total++
+			if cand != nil {
+				v.proposed++
+			}
 			switch {
 			case cand == nil:
 				v.conflict = true
@@ -189,11 +199,16 @@ func DerivePrefixes(
 		network := seed.network
 		prefix := &diode.Prefix{Prefix: &network, Vrf: seed.vrf}
 		if v := votes[k]; v != nil {
-			if !v.conflict && v.vlan != nil {
+			switch {
+			case !v.conflict && v.vlan != nil:
 				prefix.Vlan = v.vlan
-			} else {
+			case v.proposed > 0:
+				// Withheld despite a proposal: the contributors disagree,
+				// or some proposed while others had no resolvable VLAN.
 				logger.Warn("prefix vlan: contested or partial VLAN attribution; emitting no vlan",
-					"prefix", network, "contributing_addresses", v.total)
+					"prefix", network,
+					"contributing_addresses", v.total,
+					"proposing_addresses", v.proposed)
 			}
 		}
 		applyPrefixDefaults(prefix, defaults, options)

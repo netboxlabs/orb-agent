@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"bytes"
 	"log/slog"
 	"testing"
 
@@ -209,6 +210,56 @@ func TestDerivePrefixes_AttachesVlanOnlyWhenUnanimous(t *testing.T) {
 		out := DerivePrefixes(ents, nil, map[int]*diode.VLAN{1: vlan10}, idx, nil, opts, slog.Default())
 		require.Len(t, out, 1)
 		assert.Nil(t, out[0].(*diode.Prefix).Vlan)
+	})
+}
+
+// A prefix nobody proposed a VLAN for is the ordinary case on an L3
+// switch: one SVI alongside many routed subnets. Only a prefix where at
+// least one contributing address proposed a VID and the association was
+// still withheld is a genuine partial attribution worth a warning.
+func TestDerivePrefixes_WarnsOnlyWhenAVlanWasActuallyProposed(t *testing.T) {
+	corroborated := "corroborated"
+	opts := &config.Options{EmitPrefixVlan: &corroborated}
+	vlan10 := &diode.VLAN{Vid: int64Ptr(10), Name: strPtr("office")}
+
+	mk := func(addr string, iface *diode.Interface) *diode.IPAddress {
+		a := addr
+		return &diode.IPAddress{Address: &a, AssignedObject: iface}
+	}
+	svi := &diode.Interface{Name: strPtr("Vlan10")}
+	routedA := &diode.Interface{Name: strPtr("uplink-1")}
+	routedB := &diode.Interface{Name: strPtr("uplink-2")}
+	routedC := &diode.Interface{Name: strPtr("uplink-3")}
+	idx := map[*diode.Interface]int{svi: 1, routedA: 2, routedB: 3, routedC: 4}
+	sviVlans := map[int]*diode.VLAN{1: vlan10}
+
+	t.Run("routed prefixes are silent", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		ents := []diode.Entity{
+			mk("10.0.0.1/24", svi),
+			mk("10.1.0.1/24", routedA),
+			mk("10.2.0.1/24", routedB),
+			mk("10.3.0.1/24", routedC),
+		}
+		out := DerivePrefixes(ents, nil, sviVlans, idx, nil, opts, newCapturingLogger(buf))
+		require.Len(t, out, 4)
+		assert.Same(t, vlan10, out[0].(*diode.Prefix).Vlan, "the SVI prefix still resolves")
+		for _, p := range out[1:] {
+			assert.Nil(t, p.(*diode.Prefix).Vlan, "a routed prefix carries no VLAN")
+		}
+		assert.NotContains(t, buf.String(), "contested or partial",
+			"a prefix nobody proposed a VLAN for is not a contest")
+	})
+
+	t.Run("a genuinely partial prefix still warns", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		// One network reached from an SVI and from a routed interface: one
+		// proposer, one abstainer. Withheld, and worth saying so.
+		ents := []diode.Entity{mk("10.0.0.1/24", svi), mk("10.0.0.2/24", routedA)}
+		out := DerivePrefixes(ents, nil, sviVlans, idx, nil, opts, newCapturingLogger(buf))
+		require.Len(t, out, 1)
+		assert.Nil(t, out[0].(*diode.Prefix).Vlan)
+		assert.Contains(t, buf.String(), "contested or partial")
 	})
 }
 
