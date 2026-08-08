@@ -746,6 +746,13 @@ def translate_data(data: dict) -> Iterable[Entity]:
             {None: device_for_interfaces},
             module_entities,
         )
+        # Rebuilt here rather than reused from _apply_interface_vlan_associations
+        # below: that call only builds a vlan_cache when data["interfaces_vlans"]
+        # is present, and runs after this point in the sequence anyway.
+        # _build_vlan_cache is a pure, side-effect-free read of data["vlan"] (it
+        # never stubs), so recomputing it here is cheap and keeps this prefix-VLAN
+        # feature decoupled from the tagged/untagged-VLAN association flow.
+        vlan_cache = _build_vlan_cache(data.get("vlan") or {}, defaults)
         interface_related_entities = build_interface_entities(
             device_for_interfaces,
             interfaces,
@@ -754,6 +761,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
             iface_module_map=iface_module_map,
             options=options,
             iface_vrf_map=iface_vrf_map,
+            vlan_cache=vlan_cache,
         )
         # assign_primary_ip must run before the Device is wrapped into Entity
         # because Entity(device=...) copies the message; subsequent mutations

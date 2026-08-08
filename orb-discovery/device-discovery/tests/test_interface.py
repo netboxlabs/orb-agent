@@ -3,6 +3,7 @@
 """NetBox Labs - Interface Unit Tests."""
 
 import pytest
+from netboxlabs.diode.sdk.ingester import VLAN
 
 from device_discovery.interface import (
     build_interface_entities,
@@ -15,6 +16,7 @@ from device_discovery.policy.models import (
     InterfacePattern,
     IpamParameters,
     ObjectParameters,
+    Options,
     PrefixParameters,
     VlanParameters,
 )
@@ -995,3 +997,103 @@ def test_builtin_patterns_only_emit_valid_netbox_types():
 
     for p in DEFAULT_INTERFACE_PATTERNS:
         assert p.type in VALID_INTERFACE_TYPES, f"pattern {p.match!r} -> {p.type!r} invalid"
+
+
+# Unit Tests for emit_prefix_vlan (SVI VLAN attachment on derived prefixes)
+
+
+def _named_vlan(vid, name):
+    """Build a pb.VLAN with both fields set, mirroring _build_vlan_cache's output."""
+    return VLAN(vid=vid, name=name)
+
+
+def _prefixes(entities):
+    return [e.prefix for e in entities if e.HasField("prefix")]
+
+
+TWO_SVIS = {
+    "Vlan10": {"is_up": True, "is_enabled": True, "mtu": 1500, "speed": 1000},
+    "Vlan20": {"is_up": True, "is_enabled": True, "mtu": 1500, "speed": 1000},
+}
+TWO_SVIS_IP = {
+    "Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}},
+    "Vlan20": {"ipv4": {"10.0.0.2": {"prefix_length": 24}}},
+}
+
+
+def test_prefix_vlan_attaches_when_unanimous():
+    """A prefix derived from a single agreed-upon VLAN carries that VLAN."""
+    # Both addresses reach 10.0.0.0/24 through VLAN 10, so nothing is contested.
+    ents = build_interface_entities(
+        device="sw1",
+        interfaces={"Vlan10": TWO_SVIS["Vlan10"]},
+        interfaces_ip={
+            "Vlan10": {
+                "ipv4": {
+                    "10.0.0.1": {"prefix_length": 24},
+                    "10.0.0.2": {"prefix_length": 24},
+                }
+            }
+        },
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="corroborated"),
+        vlan_cache={10: _named_vlan(10, "office")},
+    )
+    got = [p for p in _prefixes(ents) if p.prefix == "10.0.0.0/24"]
+    assert got, "a prefix must still be derived"
+    assert all(p.vlan.vid == 10 for p in got)
+
+
+def test_prefix_vlan_withheld_when_contested():
+    """A prefix reached through two disagreeing VLANs carries neither."""
+    # One network reached through two different VLANs. Emitting both would put
+    # conflicting values on one object and fail the whole changeset.
+    ents = build_interface_entities(
+        device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="corroborated"),
+        vlan_cache={10: _named_vlan(10, "office"), 20: _named_vlan(20, "voice")},
+    )
+    for p in _prefixes(ents):
+        if p.prefix == "10.0.0.0/24":
+            assert not p.HasField("vlan"), "a contested VLAN must not be written"
+
+
+def test_prefix_vlan_withheld_when_partially_resolved():
+    """A prefix with one unresolved contributor carries no VLAN."""
+    # VLAN 20 is absent from the device database, so one contributor resolves
+    # and the other does not. Silence beats a half-attributed prefix.
+    ents = build_interface_entities(
+        device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="corroborated"),
+        vlan_cache={10: _named_vlan(10, "office")},
+    )
+    for p in _prefixes(ents):
+        if p.prefix == "10.0.0.0/24":
+            assert not p.HasField("vlan")
+
+
+def test_prefix_vlan_off_by_default():
+    """With emit_prefix_vlan left at its default, no prefix carries a VLAN."""
+    ents = build_interface_entities(
+        device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
+        defaults=Defaults(site="dc1"), options=Options(),
+        vlan_cache={10: _named_vlan(10, "office")},
+    )
+    assert all(not p.HasField("vlan") for p in _prefixes(ents))
+
+
+def test_prefix_vlan_skips_stub_named_vlan():
+    """A nameless VLAN cache entry is never used as a prefix's VLAN candidate."""
+    # A VLAN with no name is a stub; referencing it would rename the
+    # operator's VLAN, because a matched reference is applied as an update.
+    ents = build_interface_entities(
+        device="sw1",
+        interfaces={"Vlan10": TWO_SVIS["Vlan10"]},
+        interfaces_ip={"Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}}},
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="corroborated"),
+        vlan_cache={10: _named_vlan(10, "")},
+    )
+    assert all(not p.HasField("vlan") for p in _prefixes(ents))

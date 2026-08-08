@@ -296,6 +296,14 @@ class Options(BaseModel):
             "Default False preserves the no-cascade behavior."
         ),
     )
+    emit_prefix_vlan: str = Field(
+        default="off",
+        description=(
+            "Associate a derived prefix with the VLAN of the SVI-style "
+            "interface its address lives on. 'off' or 'corroborated'. Off by "
+            "default because the association cannot be retracted once sent."
+        ),
+    )
     discover_vrfs: bool = Field(
         default=False,
         description=(

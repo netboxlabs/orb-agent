@@ -289,6 +289,7 @@ def _build_per_member_interfaces(
     iface_module_map: dict[str, pb.Module] | None = None,
     options: "Options | None" = None,
     iface_vrf_map: dict[str, pb.VRF] | None = None,
+    vlan_cache: dict[int, pb.VLAN] | None = None,
 ) -> dict[int, list[Entity]]:
     """
     Run build_interface_entities once per member and return the per-member entity lists.
@@ -312,6 +313,7 @@ def _build_per_member_interfaces(
             iface_module_map=iface_module_map,
             options=options,
             iface_vrf_map=iface_vrf_map,
+            vlan_cache=vlan_cache,
         )
     return out
 
@@ -339,7 +341,7 @@ def translate_as_stack(
     by parse_member_id. Mirrors the emission shape required by the
     netbox-diode-plugin for VC ingestion via the unique_master matcher.
     """
-    from device_discovery.translate import assign_primary_ip
+    from device_discovery.translate import _build_vlan_cache, assign_primary_ip
 
     device_info = data.get("device") or {}
     interfaces = data.get("interface") or {}
@@ -398,11 +400,19 @@ def translate_as_stack(
         data, options, module_devices, module_entities,
     )
 
+    # Rebuilt from data["vlan"] here rather than threaded down from translate_data:
+    # _build_vlan_cache is a pure, side-effect-free read (it never stubs), and the
+    # stack path has its own vlan_cache-consuming call
+    # (_apply_interface_vlan_associations, gated on data["interfaces_vlans"])
+    # further up the call chain in translate_data, so there is nothing upstream
+    # to reuse here either.
+    vlan_cache = _build_vlan_cache(data.get("vlan") or {}, defaults)
     interface_entities_by_member = _build_per_member_interfaces(
         member_ids, member_devices, grouped_interfaces, grouped_ips, defaults,
         iface_module_map=iface_module_map,
         options=options,
         iface_vrf_map=iface_vrf_map,
+        vlan_cache=vlan_cache,
     )
 
     # Primary-IP back-pointer is only meaningful on the master (mgmt IP).
