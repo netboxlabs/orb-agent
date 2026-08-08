@@ -2242,6 +2242,49 @@ func TestMappingYAML_VtpEntryPresent(t *testing.T) {
 	}
 }
 
+// The VTP VLAN catalog exists to corroborate SVI-derived prefix VLANs, so
+// with emit_prefix_vlan off it must not be walked at all: a stock Cisco
+// switch has to emit exactly the VLAN entities it emitted before the
+// option existed, reserved VIDs 1002-1005 included. The sibling
+// Cisco-overlay tables are unrelated and must keep being walked either way.
+func TestVtpWalkGating(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+
+	const (
+		vtpNameOID      = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
+		vmMembershipOID = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2"
+	)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	off, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil, config.Options{})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	vendorOff := off.VendorObjectIDs("cisco")
+	assert.NotContains(t, vendorOff, vtpNameOID,
+		"the VTP VLAN name column must not be walked with emit_prefix_vlan off")
+	assert.NotContains(t, off.ObjectIDs(), vtpNameOID,
+		"the VTP VLAN name column must be absent from the full walk plan too")
+	assert.Contains(t, vendorOff, vmMembershipOID,
+		"the unrelated Cisco access-VLAN overlay must still be walked")
+
+	corroborated := "corroborated"
+	on, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil,
+		config.Options{EmitPrefixVlan: &corroborated})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	assert.Contains(t, on.VendorObjectIDs("cisco"), vtpNameOID,
+		"the VTP VLAN name column must be walked with emit_prefix_vlan corroborated")
+}
+
 // TestMapObjectIDsToEntity_VLANIndexCollision is a regression test for the
 // case where an ifIndex value and a VLAN VID share the same numeric form
 // (e.g., ifIndex=10 + dot1qVlanStaticName.10). The pre-fix
