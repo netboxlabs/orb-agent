@@ -70,6 +70,11 @@ func TestResolveSviVlans(t *testing.T) {
 	entities := []diode.Entity{vlan10, vlan20}
 
 	oids := ObjectIDValueMap{
+		// The dot1qVlanStaticName rows that produced the two VLAN entities
+		// above. Eligibility is read from these, so they travel with the
+		// entities exactly as they do on a real target.
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10": {Value: "office"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.20": {Value: "voice"},
 		// ifIndex 1: ifName carries the SVI name, ifDescr is generic. This is
 		// the shape the resolved Interface.Name would lose.
 		".1.3.6.1.2.1.2.2.1.2.1":    {Value: "802.1Q VLAN"},
@@ -91,13 +96,70 @@ func TestResolveSviVlans(t *testing.T) {
 	assert.Len(t, got, 2)
 }
 
-func TestResolveSviVlans_SkipsVlansWithoutADeviceName(t *testing.T) {
-	// A stub VLAN carries a fabricated name. Referencing it would make the
-	// association rename the operator's VLAN, because a matched reference is
-	// applied as an update carrying the whole payload.
-	stub := &diode.VLAN{Vid: int64Ptr(1)}
-	oids := ObjectIDValueMap{".1.3.6.1.2.1.31.1.1.1.1.1": {Value: "Vlan1"}}
+// The eligibility signal is whether the DEVICE named the VID, not whether
+// the entity carries a name: every producer of a *diode.VLAN with a
+// non-nil Vid sets Name, defaulting a nameless VID to the "VLAN<vid>"
+// placeholder, so the entity's own name cannot tell an operator's name
+// from one the agent synthesised.
+func TestResolveSviVlans_SkipsAVlanTheDeviceDidNotName(t *testing.T) {
+	const (
+		ifName1        = ".1.3.6.1.2.1.31.1.1.1.1.1"
+		dot1qName1     = ".1.3.6.1.2.1.17.7.1.4.3.1.1.1"
+		dot1qRowStatus = ".1.3.6.1.2.1.17.7.1.4.3.1.5.1"
+	)
 
-	got := ResolveSviVlans(oids, []diode.Entity{stub}, slog.Default())
-	assert.Empty(t, got, "a VLAN with no name is a stub and must not be referenced")
+	t.Run("a placeholder name is not a device name", func(t *testing.T) {
+		// Exactly the shape emitVLANs produces for a VID whose name row is
+		// NUL padding, and the shape ensureVLAN stubs. Referencing it would
+		// rename the operator's VLAN, because a matched reference is applied
+		// as an update carrying the whole payload.
+		placeholder := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
+		oids := ObjectIDValueMap{
+			ifName1:    {Value: "Vlan1"},
+			dot1qName1: {Value: "\x00\x00"},
+		}
+
+		got := ResolveSviVlans(oids, []diode.Entity{placeholder}, slog.Default())
+		assert.Empty(t, got, "the agent invented that name; it must not be attached")
+	})
+
+	t.Run("a vid known only from a status row is not named", func(t *testing.T) {
+		// No name column at all — the VID exists only because the device
+		// reported a row status for it.
+		placeholder := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
+		oids := ObjectIDValueMap{
+			ifName1:        {Value: "Vlan1"},
+			dot1qRowStatus: {Value: "1"},
+		}
+
+		got := ResolveSviVlans(oids, []diode.Entity{placeholder}, slog.Default())
+		assert.Empty(t, got)
+	})
+
+	t.Run("a device-named vid resolves", func(t *testing.T) {
+		named := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("default")}
+		oids := ObjectIDValueMap{
+			ifName1:    {Value: "Vlan1"},
+			dot1qName1: {Value: "default"},
+		}
+
+		got := ResolveSviVlans(oids, []diode.Entity{named}, slog.Default())
+		assert.Same(t, named, got[1])
+	})
+
+	t.Run("a vtp-sourced name is device-supplied", func(t *testing.T) {
+		// The VTP catalog is where devices that do not populate
+		// dot1qVlanStaticName publish their VLAN names. It comes from the
+		// device, so it qualifies — including when the dot1q row is present
+		// but empty.
+		named := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("default")}
+		oids := ObjectIDValueMap{
+			ifName1:                             {Value: "Vlan1"},
+			dot1qName1:                          {Value: "\x00\x00"},
+			".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.1": {Value: "default"},
+		}
+
+		got := ResolveSviVlans(oids, []diode.Entity{named}, slog.Default())
+		assert.Same(t, named, got[1])
+	})
 }

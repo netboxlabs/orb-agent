@@ -50,11 +50,19 @@ func sviVlanID(name string) (int, bool) {
 
 // ResolveSviVlans maps ifIndex to the VLAN an SVI-style interface belongs to.
 //
-// Only VLANs the DEVICE named are eligible: entities is scanned for VLANs whose
-// Name is set, which excludes the stubs ensureVLAN synthesises. That matters
-// beyond tidiness — a reference that matches an existing NetBox VLAN is applied
-// as an update carrying the whole payload, so referencing a stub named "VLAN1"
-// against a VLAN the operator calls "default" renames it.
+// Only VLANs the DEVICE named are eligible, and eligibility is decided by
+// re-reading the walked VLAN name columns rather than by inspecting the
+// entity: emitVLANs defaults a nameless VID to "VLAN<vid>" and ensureVLAN
+// stubs unknown VIDs under the same placeholder, so every emitted VLAN
+// carries a Name and the name alone cannot tell an operator's VLAN from one
+// the agent synthesised. That matters beyond tidiness — a reference that
+// matches an existing NetBox VLAN is applied as an update carrying the whole
+// payload, so referencing a placeholder named "VLAN1" against a VLAN the
+// operator calls "default" renames it.
+//
+// vlanNamesByVid is a pure, side-effect-free read of the same rows emission
+// consumes — it never stubs — so recomputing it here keeps the association
+// decoupled from the emission path.
 //
 // Both ifName and ifDescr are consulted because the interface-name resolver
 // prefers ifDescr, and several platforms put a generic string there and the
@@ -68,16 +76,18 @@ func ResolveSviVlans(
 	entities []diode.Entity,
 	logger *slog.Logger,
 ) map[int]*diode.VLAN {
+	deviceNames := vlanNamesByVid(oids)
 	named := map[int]*diode.VLAN{}
 	for _, e := range entities {
 		v, ok := e.(*diode.VLAN)
 		if !ok || v == nil || v.Vid == nil {
 			continue
 		}
-		if v.Name == nil || strings.TrimSpace(*v.Name) == "" {
+		vid := int(*v.Vid)
+		if deviceNames[vid] == "" {
 			continue
 		}
-		named[int(*v.Vid)] = v
+		named[vid] = v
 	}
 	if len(named) == 0 {
 		return nil
