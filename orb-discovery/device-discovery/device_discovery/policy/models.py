@@ -296,14 +296,51 @@ class Options(BaseModel):
             "Default False preserves the no-cascade behavior."
         ),
     )
-    emit_prefix_vlan: str = Field(
+    emit_prefix_vlan: Literal["off", "corroborated"] = Field(
         default="off",
         description=(
             "Associate a derived prefix with the VLAN of the SVI-style "
             "interface its address lives on. 'off' or 'corroborated'. Off by "
-            "default because the association cannot be retracted once sent."
+            "default because the association cannot be retracted once sent. "
+            "The value is trimmed and lowercased; an unrecognized value "
+            "resolves to 'off' rather than erroring."
         ),
     )
+
+    @field_validator("emit_prefix_vlan", mode="before")
+    @classmethod
+    def _normalize_emit_prefix_vlan(cls, v: object) -> str:
+        """
+        Normalize the mode string the way the snmp-discovery twin does.
+
+        Trim, lowercase, then fall back to 'off' for anything unrecognized so
+        a typo disables the feature instead of writing a guess into NetBox.
+        YAML 1.1 reads a bare ``off`` as the boolean False, so that form is
+        accepted as the string it was written as. A boolean true names no
+        mode, so it is rejected rather than guessed at.
+        """
+        if v is None:
+            return "off"
+        if isinstance(v, bool):
+            if v is False:
+                return "off"
+            raise ValueError(
+                "emit_prefix_vlan must be 'off' or 'corroborated'; YAML read "
+                "this value as the boolean true, which names no mode"
+            )
+        if not isinstance(v, str):
+            raise ValueError(
+                f"emit_prefix_vlan must be 'off' or 'corroborated', "
+                f"got {type(v).__name__}"
+            )
+        normalized = v.strip().lower()
+        if normalized == "corroborated":
+            return "corroborated"
+        if normalized not in ("off", ""):
+            logger.warning(
+                "unrecognized emit_prefix_vlan %r; using 'off'", v
+            )
+        return "off"
     discover_vrfs: bool = Field(
         default=False,
         description=(

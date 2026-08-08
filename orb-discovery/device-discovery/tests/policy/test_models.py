@@ -3,6 +3,7 @@
 """NetBox Labs - Policy Models Unit Tests."""
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from device_discovery.policy.models import Options
@@ -121,3 +122,40 @@ def test_options_propagate_defaults_to_prefix_scope_accepts_true():
 
     o = Options(propagate_defaults_to_prefix_scope=True)
     assert o.propagate_defaults_to_prefix_scope is True
+
+
+def test_options_emit_prefix_vlan_defaults_off():
+    """emit_prefix_vlan defaults to the 'off' mode string."""
+    assert Options().emit_prefix_vlan == "off"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The literal the README tells operators to write. YAML 1.1 parses a
+        # bare `off` as the boolean False, so the option must survive that.
+        ("emit_prefix_vlan: off", "off"),
+        ("emit_prefix_vlan: 'off'", "off"),
+        ("emit_prefix_vlan: corroborated", "corroborated"),
+        # Case and surrounding whitespace are normalised at the model
+        # boundary, exactly as the snmp-discovery twin does.
+        ("emit_prefix_vlan: Corroborated", "corroborated"),
+        ("emit_prefix_vlan: CORROBORATED", "corroborated"),
+        ("emit_prefix_vlan: '  corroborated  '", "corroborated"),
+        ("emit_prefix_vlan: Off", "off"),
+        # An explicit null is the same as omitting the option.
+        ("emit_prefix_vlan:", "off"),
+    ],
+)
+def test_options_emit_prefix_vlan_from_policy_yaml(text, expected):
+    """The option loads from the literal policy YAML text, not just a dict."""
+    opts = Options(**yaml.safe_load(text))
+    assert opts.emit_prefix_vlan == expected
+
+
+def test_options_emit_prefix_vlan_rejects_yaml_true():
+    """A bare `on` / `true` is meaningless for a mode string and is rejected."""
+    with pytest.raises(ValidationError) as excinfo:
+        Options(**yaml.safe_load("emit_prefix_vlan: on"))
+    message = str(excinfo.value)
+    assert "off" in message and "corroborated" in message
