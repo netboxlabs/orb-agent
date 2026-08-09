@@ -315,19 +315,23 @@ class Options(BaseModel):
 
         Trim, lowercase, then fall back to 'off' for anything unrecognized so
         a typo disables the feature instead of writing a guess into NetBox.
-        YAML 1.1 reads a bare ``off`` as the boolean False, so that form is
-        accepted as the string it was written as. A boolean true names no
-        mode, so it is rejected rather than guessed at.
+
+        YAML 1.1 reads a bare ``off`` as the boolean False and ``on``/``yes``
+        as True, so both arrive here as booleans. Neither may raise: the Go
+        twin's decoder hands it the *string* and resolves anything
+        unrecognized to 'off', so erroring on one of these would make a single
+        policy text valid for one backend and fatal for the other.
         """
         if v is None:
             return "off"
         if isinstance(v, bool):
-            if v is False:
-                return "off"
-            raise ValueError(
-                "emit_prefix_vlan must be 'off' or 'corroborated'; YAML read "
-                "this value as the boolean true, which names no mode"
-            )
+            if v:
+                logger.warning(
+                    "emit_prefix_vlan was read as a boolean — YAML treats a "
+                    "bare on/yes/true that way. It names no mode, so the "
+                    "feature stays off; quote 'corroborated' to enable it."
+                )
+            return "off"
         if not isinstance(v, str):
             raise ValueError(
                 f"emit_prefix_vlan must be 'off' or 'corroborated', "

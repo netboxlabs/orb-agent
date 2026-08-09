@@ -2,6 +2,8 @@
 # Copyright 2026 NetBox Labs Inc
 """NetBox Labs - Policy Models Unit Tests."""
 
+import logging
+
 import pytest
 import yaml
 from pydantic import ValidationError
@@ -153,9 +155,22 @@ def test_options_emit_prefix_vlan_from_policy_yaml(text, expected):
     assert opts.emit_prefix_vlan == expected
 
 
-def test_options_emit_prefix_vlan_rejects_yaml_true():
-    """A bare `on` / `true` is meaningless for a mode string and is rejected."""
-    with pytest.raises(ValidationError) as excinfo:
-        Options(**yaml.safe_load("emit_prefix_vlan: on"))
-    message = str(excinfo.value)
-    assert "off" in message and "corroborated" in message
+@pytest.mark.parametrize(
+    "text",
+    ["emit_prefix_vlan: on", "emit_prefix_vlan: yes", "emit_prefix_vlan: true"],
+)
+def test_options_emit_prefix_vlan_boolean_true_disables_rather_than_raising(text, caplog):
+    """
+    A bare on/yes/true names no mode, so it disables the feature.
+
+    It must not raise. The snmp-discovery twin's decoder hands these to
+    PrefixVlanMode as the string they were written as, and anything
+    unrecognized there resolves to 'off'. Raising here would make one policy
+    text valid for that backend and fatal for this one.
+    """
+    with caplog.at_level(logging.WARNING):
+        opts = Options(**yaml.safe_load(text))
+    assert opts.emit_prefix_vlan == "off"
+    assert any("names no mode" in r.getMessage() for r in caplog.records), (
+        "a value that silently disables the feature must be discoverable in the log"
+    )
