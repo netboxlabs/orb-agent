@@ -12,8 +12,17 @@ produce, in order:
   4. interface entities, each routed to the correct member by parse_member_id
 """
 
-from device_discovery.policy.models import Defaults, DeviceParameters, TenantParameters
+from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
+from netboxlabs.diode.sdk.ingester import VLAN
+
+from device_discovery.policy.models import (
+    Defaults,
+    DeviceParameters,
+    Options,
+    TenantParameters,
+)
 from device_discovery.translate import translate_data
+from device_discovery.translate_chassis import _build_per_member_interfaces
 
 
 def _base_data(chassis_members):
@@ -633,3 +642,77 @@ def test_dropped_members_do_warn(caplog):
     ]
     assert len(warnings) == 1
     assert "1 of 2" in warnings[0].getMessage()
+
+
+# Prefix VLAN unanimity must span the whole stack, not one member at a time.
+
+
+def _stack_vlan_inputs():
+    """Two members sharing one network: an SVI on member 1, a routed port on member 2."""
+    return {
+        "member_ids": [1, 2],
+        "member_devices": {1: pb.Device(name="sw-1"), 2: pb.Device(name="sw-2")},
+        "grouped_interfaces": {
+            1: {"Vlan10": {"is_up": True, "is_enabled": True, "mtu": 1500, "speed": 1000}},
+            2: {"Ethernet2/0/1": {"is_up": True, "is_enabled": True, "mtu": 1500, "speed": 1000}},
+        },
+        "grouped_ips": {
+            1: {"Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}}},
+            2: {"Ethernet2/0/1": {"ipv4": {"10.0.0.2": {"prefix_length": 24}}}},
+        },
+        "defaults": Defaults(site="dc1"),
+        "options": Options(emit_prefix_vlan="corroborated"),
+        "vlan_cache": {10: VLAN(vid=10, name="office")},
+    }
+
+
+def _prefixes_named(per_member, network):
+    out = []
+    for entities in per_member.values():
+        out.extend(e.prefix for e in entities if e.HasField("prefix") and e.prefix.prefix == network)
+    return out
+
+
+def test_prefix_vlan_unanimity_spans_every_stack_member():
+    """
+    A routed port on another member abstains, so the whole group withholds.
+
+    Reconciling one member at a time lets member 1's SVI win alone, emitting
+    one Prefix with a vlan and another without for the same network — the
+    disagreement that makes the reconciler reject the entire changeset.
+    """
+    per_member = _build_per_member_interfaces(**_stack_vlan_inputs())
+
+    got = _prefixes_named(per_member, "10.0.0.0/24")
+    assert len(got) == 2, "both members contribute an address to this network"
+    assert not any(p.HasField("vlan") for p in got), (
+        "one contributor could not resolve a VLAN, so no member's prefix may carry one"
+    )
+
+
+def test_prefix_vlan_still_attaches_when_every_member_agrees():
+    """The cross-member tally must not withhold when nothing actually disagrees."""
+    inputs = _stack_vlan_inputs()
+    # Member 2 reaches the same network through the same VLAN, so the group is unanimous.
+    inputs["grouped_interfaces"][2] = {
+        "Vlan10": {"is_up": True, "is_enabled": True, "mtu": 1500, "speed": 1000}
+    }
+    inputs["grouped_ips"][2] = {"Vlan10": {"ipv4": {"10.0.0.2": {"prefix_length": 24}}}}
+
+    per_member = _build_per_member_interfaces(**inputs)
+
+    got = _prefixes_named(per_member, "10.0.0.0/24")
+    assert len(got) == 2
+    assert all(p.vlan.vid == 10 for p in got), "an unanimous stack keeps its VLAN"
+
+
+def test_prefix_vlan_option_off_is_inert_on_a_stack():
+    """With the option off no prefix carries a VLAN, whatever the members disagree about."""
+    inputs = _stack_vlan_inputs()
+    inputs["options"] = Options()
+
+    per_member = _build_per_member_interfaces(**inputs)
+
+    got = _prefixes_named(per_member, "10.0.0.0/24")
+    assert len(got) == 2
+    assert not any(p.HasField("vlan") for p in got)

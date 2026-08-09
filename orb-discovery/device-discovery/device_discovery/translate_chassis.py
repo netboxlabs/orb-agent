@@ -29,7 +29,7 @@ from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Entity
 
 from device_discovery.device_name import apply_device_name_emission
-from device_discovery.interface import build_interface_entities
+from device_discovery.interface import _reconcile_prefix_vlans, build_interface_entities
 from device_discovery.policy.models import Defaults, Options
 from device_discovery.proto_presence import copy_scalar_if_set
 from device_discovery.stack_naming import render_stack_member_name
@@ -315,6 +315,11 @@ def _build_per_member_interfaces(
             iface_vrf_map=iface_vrf_map,
             vlan_cache=vlan_cache,
         )
+    # A prefix is keyed globally, not per member, so two members contributing
+    # addresses to one network must agree on its VLAN or none may carry it.
+    # Reconciling per member would let one member's SVI win alone and emit a
+    # second, VLAN-less prefix for the same network.
+    _reconcile_prefix_vlans([entity for entities in out.values() for entity in entities])
     return out
 
 
