@@ -137,7 +137,42 @@ are arriving with `flow_records_flows`.
 
 ## Send metrics to Grafana
 
-orb-agent exposes all policies' metrics on one endpoint — scrape it with Prometheus:
+**Recommended: push OTLP to Grafana Alloy.** orb-agent exports metrics over OTLP straight
+into Grafana's own collector — no scrape endpoint to expose or firewall, and the same path
+works self-hosted or to Grafana Cloud. Point orb-agent at Alloy:
+
+```yaml
+orb:
+  backends:
+    common:
+      otlp:
+        http: "http://<alloy-host>:4318"     # Alloy's OTLP/HTTP receiver
+```
+
+In Alloy, receive the OTLP and remote-write it to your Grafana store (Mimir, or Grafana
+Cloud). Keep metric names suffix-free so dashboards bind unchanged:
+
+```alloy
+otelcol.receiver.otlp "in" {
+  http { endpoint = "0.0.0.0:4318" }
+  output { metrics = [otelcol.exporter.prometheus.to_store.input] }
+}
+
+otelcol.exporter.prometheus "to_store" {
+  add_metric_suffixes = false          # keep flow_* names as pktvisor emits them
+  forward_to = [prometheus.remote_write.store.receiver]
+}
+
+prometheus.remote_write "store" {
+  endpoint { url = "http://<mimir-host>:9009/api/v1/push" }   # or your Grafana Cloud URL + token
+}
+```
+
+For Grafana Cloud, swap the `url` for your Cloud remote-write endpoint and add a `basic_auth`
+block — nothing upstream changes.
+
+**Alternative: Prometheus scrape.** If you already run Prometheus, orb-agent also exposes all
+policies' metrics on one endpoint:
 
 ```yaml
 scrape_configs:
@@ -146,8 +181,6 @@ scrape_configs:
     static_configs:
       - targets: ["<collector-host>:10853"]
 ```
-
-Or push OTLP by setting `orb.backends.common.otlp.http: "http://<otel-collector>:4318"`.
 
 ## NetBox enrichment (optional, recommended)
 
