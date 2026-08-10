@@ -389,7 +389,7 @@ def _aruba_build_bays(
         bays_by_member.setdefault(member, []).append(bay)
 
     _aruba_promote_orphan_optics(
-        optics_by_slot, consumed_optic_slots, vsf, bays_by_member, ifaces_by_member,
+        optics_by_slot, consumed_optic_slots, members, vsf, bays_by_member, ifaces_by_member,
     )
     return bays_by_member, ifaces_by_member
 
@@ -397,6 +397,7 @@ def _aruba_build_bays(
 def _aruba_promote_orphan_optics(
     optics_by_slot: dict[str, list[tuple[str, _ModuleEntry]]],
     consumed_optic_slots: set[str],
+    members: set[int],
     vsf: bool,
     bays_by_member: dict[int | None, list[_ModuleBay]],
     ifaces_by_member: dict[int | None, dict[str, list[str]]],
@@ -409,6 +410,11 @@ def _aruba_promote_orphan_optics(
             # Fixed-port CX switches expose optics on slots with no line
             # module, so the optic has no parent bay to nest under.
             member = _aruba_member_of(ifname) if vsf else None
+            if vsf and member not in members:
+                logger.warning(
+                    "aruba.get_modules: orphan optic %s member %s not in VSF set", ifname, member,
+                )
+                continue
             bays_by_member.setdefault(member, []).append(
                 orphan_optic_bay(ifname, optic),
             )

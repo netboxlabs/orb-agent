@@ -87,3 +87,72 @@ def test_chassis_members_unexpected_exception_logs_warning_with_traceback(caplog
     assert warning_records[0].exc_info is not None and warning_records[0].exc_info[0] is RuntimeError, (
         "WARNING record must carry the traceback (exc_info) so operators can diagnose"
     )
+
+
+def test_orphan_optic_out_of_roster_member_dropped_with_warning(caplog):
+    """
+    An orphan optic naming an out-of-roster VSF member must be dropped, with a warning.
+
+    Mirrors the subsystem loop's own out-of-roster guard ("subsystem member
+    %s not in VSF set") so the promotion path reads the same way instead of
+    staying silent and deferring to translate's generic orphan_member
+    warning two layers away.
+    """
+    import logging
+    from unittest.mock import MagicMock
+
+    from napalm.base.exceptions import CommandErrorException
+
+    from custom_napalm.aruba_aoscx import _aruba_get_modules_impl
+
+    subsystems = {
+        "chassis,1": {
+            "product_info": {"part_number": "JL375A", "serial_number": "SGROSTCHA1", "product_name": "8400 Chassis"},
+        },
+        "line_card,1/3": {
+            "product_info": {"part_number": "JL363A", "serial_number": "SGROSTLC1", "product_name": "8400X 32p"},
+        },
+        "chassis,2": {
+            "product_info": {"part_number": "JL375A", "serial_number": "SGROSTCHA2", "product_name": "8400 Chassis"},
+        },
+        "line_card,2/3": {
+            "product_info": {"part_number": "JL363A", "serial_number": "SGROSTLC2", "product_name": "8400X 32p"},
+        },
+    }
+    # Optic on member 3 — no line_card,3/x subsystem exists, so it's an
+    # orphan; member 3 is also absent from the roster (only 1 and 2 own
+    # subsystem slots), so the promotion guard must refuse it.
+    interfaces = {
+        "3/1/1": {
+            "name": "3/1/1",
+            "hw_intf_info": {"product_number": "SFP-10G-LR", "serial_number": "OPTIC-OUT-OF-ROSTER"},
+        },
+    }
+
+    def fake_get(path: str):
+        if path.startswith("system/subsystems"):
+            return subsystems
+        if path.startswith("system/interfaces"):
+            return interfaces
+        raise CommandErrorException(f"REST GET {path!r} returned HTTP 404: Not Found")
+
+    driver = MagicMock()
+    driver._get.side_effect = fake_get
+
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm.aruba_aoscx"):
+        result = _aruba_get_modules_impl(driver)
+
+    assert result is not None
+    members = result["members"]
+    assert set(members.keys()) == {1, 2}, "out-of-roster member 3 must not appear as a bucket"
+    all_serials = {
+        bay["module"]["serial"] for member in members.values() for bay in member["bays"]
+    }
+    assert "OPTIC-OUT-OF-ROSTER" not in all_serials, (
+        "orphan optic on an out-of-roster member must not be promoted anywhere"
+    )
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        "3/1/1" in r.message and "not in VSF set" in r.message for r in warnings
+    ), "expected a warning naming the dropped orphan optic and its out-of-roster member"
