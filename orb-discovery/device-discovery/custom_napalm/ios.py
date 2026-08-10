@@ -31,6 +31,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -770,6 +771,15 @@ def _parse_inventory_rows(
         sn = (row.get("sn") or "").strip()
         descr = (row.get("descr") or "").strip()
         if not (pid and sn):
+            if sn and not pid and _INVENTORY_IFNAME_RE.match(name):
+                # An optic the device serialised but did not identify. NetBox
+                # requires a module type, and substituting the description or
+                # a placeholder would split one optic model across two types,
+                # so the row is skipped — but not silently.
+                logger.warning(
+                    "ios.get_modules: %s reports a transceiver serial with no "
+                    "PID; skipping (no model to emit)", name,
+                )
             continue
 
         # VC slot pattern (Switch N Slot M [role]) is tried regardless of
@@ -912,19 +922,25 @@ def _attach_transceivers(
     """
     slot_depth = 2 if switch_prefixed else 1
     for member_id, transceivers in transceivers_by_member.items():
-        if member_id not in bays_by_member:
-            continue
         for raw_ifname, transceiver in transceivers.items():
             canonical = canonical_interface_name(
                 raw_ifname, addl_name_map=_IOS_ADDL_NAME_MAP,
             )
             slot = _interface_slot(canonical, depth=slot_depth)
-            if slot is None or slot not in bays_by_member[member_id]:
-                continue
-            parent_bay = bays_by_member[member_id][slot]
-            parent_bay.module.sub_bays.append(
-                _ModuleBay(name=canonical, position=canonical, module=transceiver),
-            )
+            parent_bay = None
+            if slot is not None:
+                parent_bay = bays_by_member.get(member_id, {}).get(slot)
+            if parent_bay is None or parent_bay.module is None:
+                # Fixed-port chassis, and fixed ports on a chassis whose only
+                # bay is an uplink module: the optic has no parent to nest
+                # under, so it becomes a bay in its own right.
+                bays_by_member.setdefault(member_id, {})[canonical] = (
+                    orphan_optic_bay(canonical, transceiver)
+                )
+            else:
+                parent_bay.module.sub_bays.append(
+                    _ModuleBay(name=canonical, position=canonical, module=transceiver),
+                )
             interfaces_by_member_and_slot.setdefault(member_id, {}).setdefault(
                 canonical, [],
             ).append(canonical)
@@ -954,7 +970,7 @@ def _ios_get_modules_impl(driver) -> dict | None:
     # single-chassis 9500 with Switch 1 prefix uses the same format.
     switch_prefixed = distinct_switch_count >= 1
     bays_by_member, transceivers_by_member = _parse_inventory_rows(inv_rows, vc_mode)
-    if not bays_by_member:
+    if not bays_by_member and not transceivers_by_member:
         return None
 
     interfaces_by_member_and_slot = _collect_interfaces_by_member_and_slot(
