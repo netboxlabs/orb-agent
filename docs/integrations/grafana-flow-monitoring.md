@@ -9,7 +9,10 @@ device/interface enrichment.
 Network devices export flow records to orb-agent, which computes streaming summaries — top
 talkers, ports, conversations, protocol mix, geo, ASN, interfaces, by bytes *and* packets —
 and exposes them as Prometheus metrics for Grafana. Optionally it enriches each exporter and
-interface with its real name from NetBox.
+interface with its real name from NetBox: you generate a `device_map` (exporter IP →
+device name; SNMP ifIndex → interface name) from your NetBox inventory and paste it into the
+flow policy config — this is live and verified today, not aspirational; see
+[NetBox enrichment](#netbox-enrichment-optional-recommended) below for exactly how it works.
 
 ```mermaid
 flowchart LR
@@ -69,20 +72,25 @@ flowchart TD
 ## Before you begin
 
 - Docker or Podman. Images are multi-arch (amd64 + arm64) — runs native on Apple Silicon.
-- Grafana + Prometheus (self-hosted or Grafana Cloud).
+- Grafana, plus a metrics store it can query — **Grafana Alloy + Mimir** (recommended, see
+  Install below) or Grafana Cloud, or a self-hosted Prometheus if you're already running one.
 - Devices able to export NetFlow/IPFIX (UDP 9995) or sFlow (UDP 6343).
 - Optional: a **NetBox** instance + API token (enrichment); a GeoLite2-ASN/City `.mmdb`
   (ASN / geo).
 
 ## Install
 
-Create `agent.yaml`:
+Create `agent.yaml`. This includes the **recommended OTLP-to-Alloy path** from the start —
+it's not an optional add-on, it's how orb-agent should ship metrics to Grafana by default:
 
 ```yaml
 orb:
   config_manager:
     active: local
   backends:
+    common:
+      otlp:
+        http: "http://<alloy-host>:4318"     # push metrics to Grafana Alloy's OTLP receiver
     pktvisor:                 # orb-agent's flow / network-analytics backend
       host: 0.0.0.0
       port: "10853"
@@ -122,35 +130,15 @@ Run it:
 docker run -d --name orb-agent \
   -v "$PWD/agent.yaml:/opt/orb/agent.yaml:ro" \
   -v "$PWD/geo:/geo:ro" \                 # only if using geo_asn
-  -p 10853:10853 -p 9995:9995/udp \
+  -p 9995:9995/udp \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
 > `netboxlabs/orb-agent:latest` is multi-arch (amd64 + arm64) and runs natively on both,
 > including Apple Silicon.
 
-## Configure your exporters
-
-Point devices at `<collector>:9995` (NetFlow/IPFIX) or `:6343` (sFlow). No hardware? On any
-Linux host, `softflowd -i eth0 -n <collector>:9995 -v 10` exports real IPFIX. Confirm flows
-are arriving with `flow_records_flows`.
-
-## Send metrics to Grafana
-
-**Recommended: push OTLP to Grafana Alloy.** orb-agent exports metrics over OTLP straight
-into Grafana's own collector — no scrape endpoint to expose or firewall, and the same path
-works self-hosted or to Grafana Cloud. Point orb-agent at Alloy:
-
-```yaml
-orb:
-  backends:
-    common:
-      otlp:
-        http: "http://<alloy-host>:4318"     # Alloy's OTLP/HTTP receiver
-```
-
-In Alloy, receive the OTLP and remote-write it to your Grafana store (Mimir, or Grafana
-Cloud). Keep metric names suffix-free so dashboards bind unchanged:
+On the receiving side, Grafana Alloy needs to accept that OTLP push and remote-write it to
+your metrics store (Mimir, self-hosted or Grafana Cloud):
 
 ```alloy
 otelcol.receiver.otlp "in" {
@@ -169,10 +157,19 @@ prometheus.remote_write "store" {
 ```
 
 For Grafana Cloud, swap the `url` for your Cloud remote-write endpoint and add a `basic_auth`
-block — nothing upstream changes.
+block — nothing upstream (orb-agent's config) changes.
 
-**Alternative: Prometheus scrape.** If you already run Prometheus, orb-agent also exposes all
-policies' metrics on one endpoint:
+## Configure your exporters
+
+Point devices at `<collector>:9995` (NetFlow/IPFIX) or `:6343` (sFlow). No hardware? On any
+Linux host, `softflowd -i eth0 -n <collector>:9995 -v 10` exports real IPFIX. Confirm flows
+are arriving with `flow_records_flows`.
+
+## Alternative: Prometheus scrape
+
+If you already run Prometheus and don't want to introduce Alloy, orb-agent also exposes all
+policies' metrics on one endpoint you can scrape directly — just drop the `common.otlp` block
+from the Install config above and point Prometheus here instead:
 
 ```yaml
 scrape_configs:
@@ -185,17 +182,33 @@ scrape_configs:
 ## NetBox enrichment (optional, recommended)
 
 Turns raw exporter IPs into authoritative names (`edge-router-01 / xe-0/0/0`) sourced from
-NetBox. Build the `device_map` from your NetBox inventory — map each exporter's primary IP to
-its device name, and each interface's SNMP ifIndex to its interface name — then paste it
-under `flow_stats.config` (keep `enrichment: true`) and restart orb-agent. Re-generate on a
-schedule to keep it current as inventory changes. For ASN, mount a `GeoLite2-ASN.mmdb` and
-set `geo_asn`.
+NetBox. This is a real, verified mechanism, not just a config flag: `device_map` and
+`enrichment` are config fields on pktvisor's `flow_stats` handler (part of the flow policy's
+`handlers.modules.flow_stats.config` block, same as `summarize_ips_by_asn`) — tested end to
+end here against pktvisor `4.5.0-develop-d942726` running under orb-agent, with the resolved
+`device` / `device_interface` labels showing up correctly on the metrics.
+
+This is the mechanism available today, at the collector layer. A native Grafana NetBox
+datasource is also in progress that would do this kind of enrichment at query time instead —
+once that ships, this section will be updated to point to it / clarify how the two relate.
+For now, `device_map` is the supported path and doesn't require anything beyond orb-agent +
+a NetBox API token.
+
+You generate the
+`device_map` from your NetBox inventory — mapping each exporter's primary IP to its device
+name, and each interface's SNMP ifIndex (stored in a NetBox interface custom field) to its
+interface name — then paste the generated block under `flow_stats.config` (keep
+`enrichment: true`) and restart orb-agent. Once enrichment is on, every relevant metric is
+labeled with the resolved `device` / `device_interface` names instead of raw IPs. Re-generate
+the `device_map` on a schedule (or run it as a sync loop) to keep it current as your NetBox
+inventory changes. For ASN, mount a `GeoLite2-ASN.mmdb` and set `geo_asn`.
 
 ## Import the dashboard
 
-In Grafana, import the **Flow Overview** dashboard JSON and select your Prometheus
-datasource. Panels: throughput (bytes + packets), protocol mix, top source IPs / dest ports /
-conversations / interfaces — with enriched device/interface names.
+In Grafana, import the **Flow Overview** dashboard JSON and select your metrics datasource
+(Mimir, Grafana Cloud, or Prometheus). Panels: throughput (bytes + packets), protocol mix,
+top source IPs / dest ports / conversations / interfaces — with enriched device/interface
+names.
 
 ## Metrics reference
 
@@ -224,4 +237,4 @@ Labels include `device`, `device_interface` (enriched from NetBox when enabled),
 docker rm -f orb-agent
 ```
 
-Stops collection; historical metrics remain in Prometheus per its retention.
+Stops collection; historical metrics remain in your metrics store per its retention.
