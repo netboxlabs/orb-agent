@@ -25,6 +25,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -165,10 +166,12 @@ def _nxos_ssh_attach_transceivers(
     transceivers_by_ifname: dict[str, _ModuleEntry],
 ) -> dict[str, list[str]]:
     """
-    Attach each optic as a sub_bay under its parent linecard slot.
+    Attach each optic as a sub_bay under its parent linecard slot, or as a device-rooted bay when there is no parent (fixed switch).
 
     ``interfaces_by_bay`` is keyed by the linecard SLOT NAME (= bay name) so
-    the translator can route ifnames into the matching bay.
+    the translator can route ifnames into the matching bay. Mutates
+    ``bays_by_slot`` in place — both the matched entries' parent
+    ``module.sub_bays`` and, for orphans, ``bays_by_slot`` itself.
     """
     interfaces_by_bay: dict[str, list[str]] = {}
     for ifname, optic in transceivers_by_ifname.items():
@@ -178,11 +181,13 @@ def _nxos_ssh_attach_transceivers(
         slot = port_match.group(1)
         parent = bays_by_slot.get(slot)
         if parent is None or parent.module is None:
-            continue
-        parent.module.sub_bays.append(_ModuleBay(
-            name=ifname, position=ifname, module=optic,
-        ))
-        interfaces_by_bay.setdefault(slot, []).append(ifname)
+            # Fixed switch, or an optic on a slot with no linecard bay.
+            bays_by_slot[ifname] = orphan_optic_bay(ifname, optic)
+        else:
+            parent.module.sub_bays.append(_ModuleBay(
+                name=ifname, position=ifname, module=optic,
+            ))
+            interfaces_by_bay.setdefault(slot, []).append(ifname)
         # Self-route the optic under its own sub-bay name so the translator's
         # deepest-wins logic links the interface to the transceiver (not the
         # parent linecard) in full mode. Mirrors ios.py:_attach_transceivers.
@@ -204,8 +209,11 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     directly. The wrapper handles enable-mode escalation, banner stripping,
     and per-command timeout normalization the raw Netmiko session exposes.
 
-    Returns None when the SSH calls fail, show module reports a single
-    self-row (fixed switch), or no supervisor / linecard slots survive.
+    Fixed switches report 0 or 1 show-module self-rows and no populated
+    slot bays; their optics are promoted to device-rooted bays instead of
+    being dropped (see ``_nxos_ssh_attach_transceivers``). Returns None
+    when the SSH calls fail, show inventory yields no rows, or no
+    supervisor / linecard slots survive AND no transceiver was recognized.
     """
     try:
         sm_out = driver._send_command("show module") or ""
@@ -221,10 +229,6 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     except Exception as e:
         logger.warning("nxos_ssh.get_modules: show module parse failed: %s", e)
         return None
-    # Fixed switch heuristic: 0 or 1 show-module rows is the chassis acting
-    # as its own "slot 1".
-    if not sm_rows or len(sm_rows) <= 1:
-        return None
 
     try:
         inv_rows = parse_output(
@@ -239,8 +243,14 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     inv_by_slot, transceivers_by_ifname = _nxos_ssh_parse_inventory(inv_rows)
 
     xbar_slots = _nxos_ssh_xbar_slots(sm_out)
-    bays_by_slot = _nxos_ssh_build_slot_bays(sm_rows, xbar_slots, inv_by_slot)
-    if not bays_by_slot:
+    # Fixed switch heuristic: 0 or 1 show-module rows is the chassis acting
+    # as its own "slot 1", so no slot bays are built. Optics still count —
+    # a fixed switch's ports carry them with no linecard above.
+    if not sm_rows or len(sm_rows) <= 1:
+        bays_by_slot = {}
+    else:
+        bays_by_slot = _nxos_ssh_build_slot_bays(sm_rows, xbar_slots, inv_by_slot)
+    if not bays_by_slot and not transceivers_by_ifname:
         return None
 
     interfaces_by_bay = _nxos_ssh_attach_transceivers(

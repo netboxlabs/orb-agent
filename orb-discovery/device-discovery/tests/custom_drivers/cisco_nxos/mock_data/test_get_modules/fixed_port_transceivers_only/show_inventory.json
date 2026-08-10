@@ -1,0 +1,8 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 9300 fixed\"", "productid": "\"N9K-C93180YC-FX\"", "vendorid": "V01", "serialnum": "\"FOC20001CHA\""},
+      {"name": "\"Ethernet1/1\"", "desc": "\"QSFP-100G-SR4\"", "productid": "\"QSFP-100G-SR4\"", "vendorid": "V02", "serialnum": "\"OPT20001001\""}
+    ]
+  }
+}

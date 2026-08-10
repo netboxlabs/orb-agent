@@ -23,6 +23,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -198,10 +199,12 @@ def _nxos_attach_transceivers(
     transceivers_by_ifname: dict[str, _ModuleEntry],
 ) -> dict[str, list[str]]:
     """
-    Attach each optic as a sub_bay under its parent linecard slot.
+    Attach each optic as a sub_bay under its parent linecard slot, or as a device-rooted bay when there is no parent (fixed switch).
 
     ``interfaces_by_bay`` is keyed by the linecard SLOT NAME (which equals the
     bay name) so the translator can route ifnames into the matching bay.
+    Mutates ``bays_by_slot`` in place — both the matched entries' parent
+    ``module.sub_bays`` and, for orphans, ``bays_by_slot`` itself.
     """
     interfaces_by_bay: dict[str, list[str]] = {}
     for ifname, optic in transceivers_by_ifname.items():
@@ -211,11 +214,13 @@ def _nxos_attach_transceivers(
         slot = port_match.group(1)
         parent = bays_by_slot.get(slot)
         if parent is None or parent.module is None:
-            continue
-        parent.module.sub_bays.append(_ModuleBay(
-            name=ifname, position=ifname, module=optic,
-        ))
-        interfaces_by_bay.setdefault(slot, []).append(ifname)
+            # Fixed switch, or an optic on a slot with no linecard bay.
+            bays_by_slot[ifname] = orphan_optic_bay(ifname, optic)
+        else:
+            parent.module.sub_bays.append(_ModuleBay(
+                name=ifname, position=ifname, module=optic,
+            ))
+            interfaces_by_bay.setdefault(slot, []).append(ifname)
         # Self-route the optic under its own sub-bay name so the translator's
         # deepest-wins logic links the interface to the transceiver (not the
         # parent linecard) in full mode. Mirrors ios.py:_attach_transceivers.
@@ -236,10 +241,12 @@ def _nxos_get_modules_impl(driver) -> dict | None:
     callsite above). This returns the parsed JSON payload dict directly
     (NOT wrapped in a command-keyed envelope, so no extra ``[cmd]`` lookup).
 
-    Returns None when:
+    Fixed switches report a single show-module self-row and no populated
+    slot bays; their optics are promoted to device-rooted bays instead of
+    being dropped (see ``_nxos_attach_transceivers``). Returns None when:
       - The NX-API calls fail.
-      - show module reports a single self-row (fixed switch).
-      - No supervisor / linecard slots survive classification.
+      - No supervisor / linecard slots survive classification AND no
+        transceiver was recognized either.
     """
     try:
         sm_payload = driver.device.show("show module", raw_text=False) or {}
@@ -252,16 +259,17 @@ def _nxos_get_modules_impl(driver) -> dict | None:
     xbar_rows = _flatten_table(sm_payload, "TABLE_xbarinfo", "ROW_xbarinfo")
     inv_rows = _flatten_table(inv_payload, "TABLE_inv", "ROW_inv")
 
-    # Fixed switch heuristic: a single show-module row is the chassis
-    # acting as its own "slot 1".
-    if len(sm_rows) <= 1:
-        return None
-
     # show inventory is the reliable source for PID + serial + description.
     inv_by_slot, transceivers_by_ifname = _nxos_parse_inventory(inv_rows)
 
-    bays_by_slot = _nxos_build_slot_bays(sm_rows, xbar_rows, inv_by_slot)
-    if not bays_by_slot:
+    # Fixed switch heuristic: a single show-module row is the chassis acting
+    # as its own "slot 1", so no slot bays are built. Optics still count —
+    # a fixed switch's ports carry them with no linecard above.
+    if len(sm_rows) <= 1:
+        bays_by_slot = {}
+    else:
+        bays_by_slot = _nxos_build_slot_bays(sm_rows, xbar_rows, inv_by_slot)
+    if not bays_by_slot and not transceivers_by_ifname:
         return None
 
     interfaces_by_bay = _nxos_attach_transceivers(bays_by_slot, transceivers_by_ifname)
@@ -429,6 +437,8 @@ class NXOSDriver(NapalmNXOSDriver):
         Return Module / ModuleBay inventory for Cisco Nexus modular chassis.
 
         Standalone modular only — vPC / VDC are not virtual chassis in
-        NetBox terms. Returns None for fixed switches (Nexus 9300/9200).
+        NetBox terms. Fixed switches (Nexus 9300/9200) report optics with
+        no linecard parent; those become device-rooted bays. Returns None
+        only when neither a slot bay nor a transceiver was recognized.
         """
         return _nxos_get_modules_impl(self)
