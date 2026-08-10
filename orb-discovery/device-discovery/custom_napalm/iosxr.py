@@ -176,20 +176,22 @@ def _iosxr_promote_orphan_optics(
     there is no parent bay to nest under. The rack is the port name's
     leading element.
 
-    ``bays_by_rack`` doubles as the rack roster, so a rack seen only on an
-    optic name is minted here. That is the intended fixed-port case when
-    the roster was empty. When the roster is NOT empty the optic's rack
-    must already be in it: a foreign rack would either be dropped
-    silently by the standalone tail (which emits one rack) or warn-dropped
-    by translate as an orphan member, so refuse it here where the reason
-    can be named.
+    ``bays_by_rack`` doubles as the rack roster, so the first orphan on a
+    device that reported no slot bays at all mints its rack — the intended
+    fixed-port case. Every orphan after that must name a rack already in
+    the roster, which is why the test below reads ``bays_by_rack`` live
+    rather than a pre-loop snapshot: a snapshot taken while the roster was
+    empty never refuses anything, so a second, differing rack would be
+    minted and then dropped without a word by the standalone tail (which
+    emits one rack) or warn-dropped a layer away by translate as an orphan
+    member. Refusing here is what gives the drop a name; nothing incorrect
+    reaches NetBox either way.
     """
-    known_racks = set(bays_by_rack)
     for pname, optic in optics.items():
         if pname in consumed:
             continue
         rack = int(pname.split("/")[0])
-        if known_racks and rack not in known_racks:
+        if bays_by_rack and rack not in bays_by_rack:
             logger.warning(
                 "iosxr.get_modules: orphan optic %s rack %s not in chassis set",
                 pname, rack,
