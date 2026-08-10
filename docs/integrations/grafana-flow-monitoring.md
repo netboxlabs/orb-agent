@@ -188,12 +188,6 @@ NetBox. This is a real, verified mechanism, not just a config flag: `device_map`
 end here against pktvisor `4.5.0-develop-d942726` running under orb-agent, with the resolved
 `device` / `device_interface` labels showing up correctly on the metrics.
 
-This is the mechanism available today, at the collector layer. A native Grafana NetBox
-datasource is also in progress that would do this kind of enrichment at query time instead —
-once that ships, this section will be updated to point to it / clarify how the two relate.
-For now, `device_map` is the supported path and doesn't require anything beyond orb-agent +
-a NetBox API token.
-
 You generate the
 `device_map` from your NetBox inventory — mapping each exporter's primary IP to its device
 name, and each interface's SNMP ifIndex (stored in a NetBox interface custom field) to its
