@@ -334,6 +334,22 @@ empty/no-VRFs scenario; pin any output variant your parser specifically
 handles. Also add the driver to the ownership pin matrix in
 `tests/test_runner_vrf_dispatch.py`.
 
+## Optional method: `get_modules`
+
+A driver MAY implement `get_modules()` to populate NetBox `Module` /
+`ModuleBay` entities, gated behind the `discover_modules` policy option
+(`off` / `linecards` / `full`). The runner calls it via `getattr(...)` so
+drivers without it are silently skipped. See
+`docs/backends/device_discovery/README.md#modules--modulebays` for the
+emission contract, the three modes, and the canonical envelope shape.
+
+**Optics without a parent module.** Do not require a parent slot / linecard / FRU
+bay in order to emit a transceiver. Fixed-port platforms report optics with nothing
+above them, and optics in the fixed ports of a partly-modular chassis have no parent
+either. Collect optics independently of the bay walk, attach the ones whose parent
+resolves, and promote the rest with `_modules.orphan_optic_bay(ifname, optic)`. Gate
+on "no bays AND no optics", never on "no bays" alone.
+
 ## Mock fakes for structured-API drivers
 
 For drivers that use a non-CLI transport, use these test fakes:
