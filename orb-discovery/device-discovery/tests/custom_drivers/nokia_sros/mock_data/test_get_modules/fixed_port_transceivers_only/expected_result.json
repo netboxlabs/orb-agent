@@ -1,0 +1,10 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1/1/c1", "position": "1/1/c1", "module": {"model": "SFP-10G-LR", "serial": "OPTIC-FIXED-0001", "description": "", "type": "transceiver", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {"1/1/c1": ["1/1/c1"]}
+    }
+  }
+}

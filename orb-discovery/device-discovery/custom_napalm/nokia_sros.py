@@ -40,6 +40,9 @@ from custom_napalm._modules import (
     ModuleEntry as _ModuleEntry,
 )
 from custom_napalm._modules import (
+    orphan_optic_bay as _orphan_optic_bay,
+)
+from custom_napalm._modules import (
     to_payload as _modules_to_payload,
 )
 
@@ -674,6 +677,7 @@ def _nokia_sros_attach_mda_sub_bays(
 def _nokia_sros_attach_transceiver_sub_bays(
     transceiver_rows: list[dict],
     mda_bays_by_path: dict[str, _ModuleBay],
+    bays: list[_ModuleBay],
 ) -> dict[str, list[str]]:
     """Route every port to its parent bays; emit transceiver sub-bay only when populated."""
     interfaces_by_bay: dict[str, list[str]] = {}
@@ -686,7 +690,16 @@ def _nokia_sros_attach_transceiver_sub_bays(
             continue
         mda_path = f"{parts[0]}/{parts[1]}"
         mda_bay = mda_bays_by_path.get(mda_path)
+        card_slot = parts[0]
+        model = row.get("model") or ""
+        sn = row.get("sn") or ""
         if mda_bay is None or mda_bay.module is None:
+            # Fixed platforms expose ports with no MDA module above them.
+            if model and sn:
+                bays.append(_orphan_optic_bay(port_id, _ModuleEntry(
+                    model=model, serial=sn, type="transceiver", description="",
+                )))
+                interfaces_by_bay[port_id] = [port_id]
             continue
         # Routing layers are emitted for EVERY discovered port (copper,
         # empty cage, optic-without-data, …) — get_interfaces() emits the
@@ -694,13 +707,10 @@ def _nokia_sros_attach_transceiver_sub_bays(
         # on in both linecards and full modes:
         #   - card-slot key   -> linecards mode routing
         #   - mda-path key    -> full mode at MDA depth
-        card_slot = parts[0]
         interfaces_by_bay.setdefault(card_slot, []).append(port_id)
         interfaces_by_bay.setdefault(mda_path, []).append(port_id)
         # Transceiver sub-bay (and its per-port deepest-wins routing key)
         # only emit when the optic exposes both model and serial.
-        model = row.get("model") or ""
-        sn = row.get("sn") or ""
         if model and sn:
             mda_bay.module.sub_bays.append(_ModuleBay(
                 name=port_id, position=port_id,
@@ -715,8 +725,11 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
     Module discovery for Nokia SR-OS via NETCONF.
 
     Two RPCs: first the card+MDA tree, then a best-effort transceiver pass.
-    Returns None if no card survives validation; the transceiver pass is
-    non-fatal — a card-only envelope still ships if the second RPC fails.
+    A fixed-port platform has no cards at all, so the "nothing found" gate
+    runs after the transceiver pass: an orphan optic promoted to a
+    device-rooted bay (no MDA parent) can carry the result on its own.
+    The transceiver pass itself is non-fatal — a card-only envelope still
+    ships if the second RPC fails.
     """
     # Narrow except scope: ncclient transport / RPC errors and lxml parse
     # errors are recoverable (return None / log + continue). Programming
@@ -739,8 +752,6 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
         return None
     rows = _nokia_sros_rows_from_state_xml(state)
     bays = _nokia_sros_build_card_bays(rows)
-    if not bays:
-        return None
     mda_bays_by_path = _nokia_sros_attach_mda_sub_bays(rows, bays)
 
     interfaces_by_bay: dict[str, list[str]] = {}
@@ -753,11 +764,14 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
             if tx_state is not None:
                 tx_rows = _nokia_sros_transceiver_rows_from_state_xml(tx_state)
                 interfaces_by_bay = _nokia_sros_attach_transceiver_sub_bays(
-                    tx_rows, mda_bays_by_path,
+                    tx_rows, mda_bays_by_path, bays,
                 )
     except (NCClientError, etree.XMLSyntaxError) as e:
         # Non-fatal: cards-only payload still ships.
         logger.warning("nokia_sros.get_modules: transceiver RPC failed: %s", e)
+
+    if not bays:
+        return None
 
     return _modules_to_payload({
         None: _MemberModules(bays=bays, interfaces_by_bay=interfaces_by_bay),
