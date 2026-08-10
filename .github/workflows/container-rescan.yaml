@@ -21,6 +21,14 @@ jobs:
       TRIVY_DISABLE_VEX_NOTICE: "true"
 
     steps:
+      # Only needed for .trivyignore.yaml: the scan target is the published
+      # image, not the working tree. The ignore file tracks the default branch,
+      # so an entry that expires takes effect on the next nightly run.
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
       - name: Pull image
         env:
           IMAGE_REF: ${{ env.IMAGE_REF }}
@@ -37,6 +45,9 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM,LOW
           ignore-unfixed: true
           exit-code: "0"
+          # Trivy only auto-detects a plain .trivyignore in the working
+          # directory, so the YAML variant has to be named explicitly.
+          trivyignores: .trivyignore.yaml
 
       - name: Build rescan summary
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

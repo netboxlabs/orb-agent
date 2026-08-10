@@ -87,6 +87,9 @@ jobs:
           ignore-unfixed: true
           exit-code: "0"
           list-all-pkgs: "true"
+          # Trivy only auto-detects a plain .trivyignore in the working
+          # directory, so the YAML variant has to be named explicitly.
+          trivyignores: .trivyignore.yaml
 
       - name: Build scan summary
         id: scan-summary

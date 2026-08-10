@@ -1,0 +1,60 @@
+# Trivy ignore file for the orb-agent image scans (build.yaml, container-rescan.yaml).
+#
+# Every entry names a finding that is not reachable in the shipped image, and
+# every entry carries an expiry so it cannot outlive its justification. When an
+# entry expires the scan goes red again on purpose: re-verify the reasoning
+# against the pip version in the image and either extend the date or drop the
+# entry.
+#
+# All three entries below are pip's *vendored* copies under
+# site-packages/pip/_vendor/. Trivy reports them because pip ships its own
+# CycloneDX SBOM at pip/_vendor/bom.cdx.json and Trivy parses it, which is what
+# the "Third-party SBOM may lead to inaccurate vulnerability detection" warning
+# in the scan log refers to. Neither package is an orb-agent dependency; nothing
+# in orb-discovery/device-discovery or orb-discovery/worker resolves to them.
+#
+# There is no upgrade path: pip 26.2.1 is the latest release and vendors exactly
+# these versions, and the image needs pip at runtime for the entrypoint's
+# INSTALL_DRIVERS_PATH / INSTALL_WORKERS_PATH feature.
+#
+# Entries are pinned by PURL, so a pip bump that moves a vendored version makes
+# the entry stop matching and the scan fail again. The pin it is coupled to is
+# the pip version in agent/docker/Dockerfile. `paths` is not usable for scoping
+# here: findings sourced from pip's embedded SBOM carry no PkgPath.
+#
+# Do not "fix" this class of finding by deleting pip/_vendor/bom.cdx.json from
+# the image. pip also vendors urllib3, requests and certifi, which do handle
+# untrusted network data when the entrypoint installs drivers from an index;
+# dropping the BOM would blind the scanner to those permanently.
+
+vulnerabilities:
+  - id: GHSA-6v7p-g79w-8964
+    purls:
+      - "pkg:pypi/msgpack@1.1.2"
+    statement: >-
+      msgpack is vendored by pip (pip/_vendor/msgpack). The out-of-bounds read
+      requires reusing an Unpacker after a caught exception. pip's only msgpack
+      consumer is the vendored CacheControl, which unpacks HTTP-cache entries
+      that it serialized itself and uses a fresh unpack call per cache read, so
+      the vulnerable reuse pattern does not occur.
+    expired_at: 2026-11-08
+
+  - id: CVE-2025-47273
+    purls:
+      - "pkg:pypi/setuptools@70.3.0"
+    statement: >-
+      setuptools is listed in pip's vendor.txt but pip vendors only the
+      pkg_resources shim; pip/_vendor/pkg_resources/ holds __init__.py and
+      LICENSE, and there is no pip/_vendor/setuptools/ at all. The vulnerable
+      code is setuptools/package_index.py (PackageIndex path traversal), which
+      is not present anywhere in the image.
+    expired_at: 2026-11-08
+
+  - id: CVE-2026-59890
+    purls:
+      - "pkg:pypi/setuptools@70.3.0"
+    statement: >-
+      Same vendored-setuptools phantom as CVE-2025-47273. The MANIFEST.in
+      exclusion bypass lives in setuptools' sdist build machinery, which is
+      absent from pip's vendored subset, and nothing in the image builds sdists.
+    expired_at: 2026-11-08

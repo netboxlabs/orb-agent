@@ -146,6 +146,10 @@ ENV DEFAULT_CONFIG_PATH=/usr/local/share/orb-agent/default_config.yaml
 # The runtime pip: used by the entrypoint's INSTALL_DRIVERS_PATH feature and
 # what image scans see. Pinned to a recent release with fewer vulnerabilities;
 # pip's self-upgrade cleanly removes the base image's copy first.
+# Scans also see pip's vendored packages under pip/_vendor, and three of those
+# findings are suppressed in /.trivyignore.yaml by exact PURL. Moving this pin
+# changes those vendored versions, so the entries stop matching and the scan
+# fails until they are re-verified. Update both together.
 RUN python -m pip install --upgrade --no-cache-dir pip==26.2.1 && \
     rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
