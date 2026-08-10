@@ -37,7 +37,7 @@ When a target is a modular chassis and the `discover_modules` policy option is e
 When the `discover_vrfs` policy option is enabled, device-discovery emits a `VRF` entity for each VRF configured on the device and attaches it to the IP addresses and prefixes of the interfaces inside that VRF — see [VRFs](#vrfs) below. Defaults to `false`, so existing operators see zero behaviour change.
 
 ## Configuration
-The `device_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
+The `device_discovery` backend does not require any special configuration, though overriding `host`, `port` and `log_level` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
 
 
 ```yaml
@@ -50,10 +50,51 @@ orb:
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     device_discovery:
-      host: 192.168.5.11 # default 0.0.0.0
+      host: 192.168.5.11 # default localhost
       port: 8857 # default 8072
+      log_level: ERROR # default INFO
 
 ```
+
+| Parameter | Type | Required | Description |
+|:---------:|:----:|:--------:|:-----------:|
+| host | str | no | REST API host (default `localhost`) |
+| port | int | no | REST API port (default `8072`) |
+| log_level | str | no | Log level (default `INFO`) - see [Log level and troubleshooting](#log-level-and-troubleshooting) |
+
+### Log level and troubleshooting
+
+`log_level` accepts `trace`, `debug`, `info`, `warn`/`warning`, `error`/`err`/`exception`
+and `critical`/`fatal`, case-insensitively. The default is `INFO`. An unrecognised value
+falls back to `INFO` and logs a warning rather than failing to start.
+
+Precedence, highest first: an explicit `log_level`, then `debug: true` on the backend,
+then the agent already running at debug (`-d` or `orb.debug.enable`).
+
+**A host that is reachable but not a manageable device logs exactly one record.** When
+a target answers on the scanned port but cannot be logged into, device-discovery emits a
+single WARNING per target per run, with no traceback:
+
+```
+WARNING:device_discovery.policy.runner:Policy my_policy, Hostname 10.0.0.5: Cannot connect to 10.0.0.5
+```
+
+Stable phrases to alert or grep on: `Cannot connect to` and `Authentication to device failed`.
+A sweep over unreachable address space produces one line per host, not one per traceback frame.
+
+Tracebacks for these expected failures are emitted only at DEBUG, on a single line with
+newlines escaped as `\n`. To read one back:
+
+```bash
+printf '%b\n' "<the traceback: value>"
+```
+
+**`log_level: DEBUG` alone is not enough to see debug output.** The agent maps the
+backend's `DEBUG:` lines to its own debug level and its root handler drops them at Info.
+Use `orb.debug.enable` or `-d` as the single troubleshooting switch; use `log_level` only
+to go *quieter* than INFO. Note that DEBUG also raises napalm, netmiko, paramiko and
+ncclient verbosity considerably (ncclient dumps multi-line XML), so point it at one
+target rather than a subnet.
 
 ## Policy
 Device discovery policies are broken down into two subsections: `config` and `scope`. 
@@ -83,6 +124,7 @@ Current supported options:
 | propagate_defaults_to_prefix_scope | bool | When `True` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to `Prefix.scope_site` (the literal placeholder `"undefined"` is skipped) and `defaults.location` cascades to `Prefix.scope_location`. Defaults to `False`. Setting any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale. |
 | discover_vrfs | bool | When `True`, discovers VRFs from the device via the driver's `get_network_instances()` and attaches each VRF to the IP addresses and prefixes of its member interfaces. A discovered VRF takes precedence over the `defaults.*.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for those interfaces; interfaces in the default routing table keep the configured defaults. Defaults to `False`. Only drivers that implement `get_network_instances()` populate VRF data — see the [supported platforms page](./supported_platforms.md#vrfs). See [VRFs](#vrfs) for filtering rules and route-distinguisher handling. |
 | emit_host_prefixes | bool | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. Defaults to `False`: a host prefix only restates the address, which is already emitted as an `IPAddress` entity, so no prefix is derived for them. Set `True` to restore them, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefix](#prefix). |
+| emit_device_name | bool | Emit `Device.name` from the hostname the driver reported. Defaults to `True`. Set `False` to suppress the name on the matched device so continual discovery stops proposing a hostname rename when the discovered hostname differs from the NetBox name. **Only takes effect when the device is matchable another way** — a scope `netbox_id`, or `defaults.device.asset_tag`; otherwise the name is kept and a warning is logged, because `name` is a primary NetBox device matcher and dropping it unguarded would emit a device NetBox cannot resolve. Matching by `serial` alone does **not** qualify (`Device.serial` is not unique in NetBox). On a virtual-chassis stack only the master's name is suppressed; member names come from `stack_member_name_template`. Mirrors the snmp-discovery option of the same name. |
 
 #### Defaults
 Current supported defaults:

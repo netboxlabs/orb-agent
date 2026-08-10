@@ -7,12 +7,13 @@ import os
 
 import yaml
 
+from device_discovery.log_config import configure_default_logging
 from device_discovery.policy.models import Policy, PolicyRequest, PolicyStatus
 from device_discovery.policy.run import RunStore
 from device_discovery.policy.runner import PolicyRunner
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+configure_default_logging()
 logger = logging.getLogger(__name__)
 
 

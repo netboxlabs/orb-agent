@@ -513,6 +513,7 @@ orb:
             # auth_passphrase: "auth-password" # Also supports resolving values from environment variables eg ${SNMP_AUTH_PASSPHRASE}
             # priv_protocol: "AES"
             # priv_passphrase: "priv-password"# Also supports resolving values from environment variables eg ${SNMP_PRIV_PASSPHRASE}
+            # context_name: "mfpdirect" # SNMPv3 context name (snmpwalk -n); required by devices whose MIB data lives in a named context. Rejected for SNMPv1/v2c.
       discover_once: # will run only once
         scope:
           targets:
@@ -536,6 +537,7 @@ orb:
 - `username`
 - `auth_passphrase`
 - `priv_passphrase`
+- `context_name`
 
 ### Device Model Lookup
 The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device ObjectIDs (from querying `.1.3.6.1.2.1.1.2.0`) to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw ObjectID values. This only needs to be set if additional or modified files are being provided beyond the ones bundled with orb-agent (under `orb-discovery/snmp-discovery/data/lookup_extensions`).

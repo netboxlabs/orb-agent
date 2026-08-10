@@ -439,6 +439,41 @@ func TestTargetNetboxID_optional(t *testing.T) {
 	assert.Nil(t, target.NetboxID)
 }
 
+func TestAuthentication_ContextName_ParsesFromScopeAndTarget(t *testing.T) {
+	input := `
+targets:
+  - host: "10.3.2.20"
+    authentication:
+      protocol_version: "3"
+      username: "umsnmp"
+      auth_protocol: "SHA"
+      auth_passphrase: "secret"
+      priv_protocol: "AES"
+      priv_passphrase: "secret"
+      context_name: "mfpdirect"
+authentication:
+  protocol_version: "3"
+  username: "policyuser"
+  context_name: "policycontext"
+`
+	var scope Scope
+	err := yaml.Unmarshal([]byte(input), &scope)
+	require.NoError(t, err)
+
+	assert.Equal(t, "policycontext", scope.Authentication.ContextName)
+	require.Len(t, scope.Targets, 1)
+	require.NotNil(t, scope.Targets[0].Authentication)
+	assert.Equal(t, "mfpdirect", scope.Targets[0].Authentication.ContextName)
+}
+
+func TestAuthentication_ContextName_Optional(t *testing.T) {
+	input := `protocol_version: "3"`
+	var auth Authentication
+	err := yaml.Unmarshal([]byte(input), &auth)
+	require.NoError(t, err)
+	assert.Empty(t, auth.ContextName)
+}
+
 func TestMappingEntry_IndexKind(t *testing.T) {
 	yamlBody := []byte(`
 entries:

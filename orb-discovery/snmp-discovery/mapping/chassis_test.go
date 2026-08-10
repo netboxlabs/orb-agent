@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -757,20 +758,24 @@ func TestTranslateAsStack_OrphanIPFiltered(t *testing.T) {
 	}
 }
 
-func TestTranslateAsStack_ArubaCX_2MemberVSF(t *testing.T) {
+// Every chassis row reports parentRelPos=1 and is named "Chassis", so both
+// primary id signals are useless and the stack collapsed to a single Device
+// before the descendant tier existed. The containment tree numbers
+// the members, so the VC and its member Devices are emitted.
+func TestTranslateAsStack_IndistinctChassisRowsResolvedByDescendants(t *testing.T) {
 	logger := slog.Default()
 	master := &diode.Device{
-		Name: strPtr("aruba-cx-stack"),
+		Name: strPtr("stack-indistinct.example"),
 		Site: &diode.Site{Name: strPtr("dc1")},
 		DeviceType: &diode.DeviceType{
-			Model:        strPtr("Aruba-6300M-48G"),
-			Manufacturer: &diode.Manufacturer{Name: strPtr("HPE Aruba")},
+			Model:        strPtr("switch-48g-4sfp"),
+			Manufacturer: &diode.Manufacturer{Name: strPtr("Example Networks")},
 		},
 	}
 	memberIface := &diode.Interface{Name: strPtr("2/1/24"), Device: master}
 	entities := []diode.Entity{master, memberIface}
 
-	out := TranslateAsStack(entities, fixtureArubaCX2MemberVSF(), nil, nil, logger)
+	out := TranslateAsStack(entities, fixtureIndistinctChassisRowsStack(), nil, nil, logger)
 
 	var members []*diode.Device
 	for _, e := range out {
@@ -779,8 +784,122 @@ func TestTranslateAsStack_ArubaCX_2MemberVSF(t *testing.T) {
 		}
 	}
 	assert.Len(t, members, 1)
-	assert.Equal(t, "SG12346", *members[0].Serial)
-	assert.Equal(t, "aruba-cx-stack-2", *memberIface.Device.Name)
+	assert.Equal(t, "SN0000000201", *members[0].Serial)
+	assert.Equal(t, "SN0000000101", *master.Serial, "master pins to the lowest-index chassis")
+	assert.Equal(t, "stack-indistinct.example-2", *memberIface.Device.Name)
+
+	// Master and members must land on ONE device_type, both taken from their
+	// own chassis row. Guarding only the master would split a stack across two.
+	assert.Equal(t, "SWITCH-48G-4SFP", *master.DeviceType.Model)
+	assert.Equal(t, "SWITCH-48G-4SFP", *members[0].DeviceType.Model)
+	assert.Equal(t, "Example Networks", *master.DeviceType.Manufacturer.Name)
+}
+
+func TestExtractInventory_IndistinctChassisRowsNumberedByDescendants(t *testing.T) {
+	inv := extractInventory(fixtureIndistinctChassisRowsStack(), slog.Default())
+	assert.True(t, inv.IsStack())
+	assert.Len(t, inv.Members, 2)
+	assert.Equal(t, 1, inv.Members[0].ID)
+	assert.Equal(t, 2, inv.Members[1].ID)
+	assert.Empty(t, inv.DroppedIDs, "nothing may be refused once the tier resolves the set")
+}
+
+func TestExtractInventory_SixIndistinctChassisRowsNumberedByDescendants(t *testing.T) {
+	// Scale check on the shape of a real six-member capture: the per-member
+	// partition must stay clean as the tree grows.
+	inv := extractInventory(fixtureIndistinctChassisRowsStackN(6, 6), slog.Default())
+	assert.Len(t, inv.Members, 6)
+	for i, m := range inv.Members {
+		assert.Equal(t, i+1, m.ID)
+	}
+}
+
+func TestExtractInventory_SixMemberStackReportingOneSerialCollapsesToStandalone(t *testing.T) {
+	// As captured: the agent serials only its first chassis. Rows with no
+	// serial are dropped before id derivation, so a six-member stack presents
+	// as a single standalone Device. Pinned because NetBox shows no trace of
+	// it — the five drops are visible only as "chassis row dropped: empty
+	// serial" lines in the agent log.
+	inv := extractInventory(fixtureIndistinctChassisRowsStackN(6, 1), slog.Default())
+	assert.Len(t, inv.Members, 1)
+	assert.False(t, inv.IsStack())
+	assert.Nil(t, inv.Members[0].DescendantIDs, "single-member sets carry no descendant signal")
+}
+
+func TestTranslateAsStack_SingleMemberWrappedStackSetsSerialOnly(t *testing.T) {
+	logger := slog.Default()
+	master := &diode.Device{
+		Name: strPtr("single-member.example"),
+		Site: &diode.Site{Name: strPtr("dc1")},
+	}
+	entities := []diode.Entity{master}
+
+	out := TranslateAsStack(entities, fixtureSingleMemberWrappedStack(), nil, nil, logger)
+
+	assert.Len(t, out, 1, "one chassis row emits no VirtualChassis")
+	assert.Equal(t, "SN0000000101", *master.Serial)
+}
+
+// A stack whose rows cannot be numbered by ANY tier still loses its structure,
+// but must not lose its serial: only the member NUMBERING was ambiguous. The
+// value comes from the lowest entPhysicalIndex — the one ordering independent
+// of the disputed ids, so repeated polls of the same data agree.
+func TestTranslateAsStack_RefusedStackKeepsMasterSerialWithoutVirtualChassis(t *testing.T) {
+	logger := slog.Default()
+	// Duplicate positive prel, uninformative names, and no port descendants
+	// for the tier to read: every row is refused.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.1.5.0": {Value: "refused.example"},
+	}
+	for _, m := range []struct{ idx, serial string }{
+		{"201001", "SN0000000201"},
+		{"101001", "SN0000000101"},
+	} {
+		oids[".1.3.6.1.2.1.47.1.1.1.1.4."+m.idx] = Value{Value: "0"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.5."+m.idx] = Value{Value: "3"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.6."+m.idx] = Value{Value: "1"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.7."+m.idx] = Value{Value: "Chassis"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.11."+m.idx] = Value{Value: m.serial}
+	}
+	master := &diode.Device{Name: strPtr("refused.example"), Site: &diode.Site{Name: strPtr("dc1")}}
+	entities := []diode.Entity{master}
+
+	out := TranslateAsStack(entities, oids, nil, nil, logger)
+
+	assert.Len(t, out, 1, "refused stack emits no VirtualChassis and no member Devices")
+	require.NotNil(t, master.Serial, "the serial was never the ambiguous datum")
+	assert.Equal(t, "SN0000000101", *master.Serial, "lowest entPhysicalIndex wins, as on the resolved path")
+}
+
+func TestTranslateAsStack_NoChassisRowsLeavesDeviceUntouched(t *testing.T) {
+	// The other reason member count reaches zero: not a stack at all. Nothing
+	// may be invented here.
+	master := &diode.Device{Name: strPtr("plain.example"), Site: &diode.Site{Name: strPtr("dc1")}}
+	out := TranslateAsStack([]diode.Entity{master},
+		ObjectIDValueMap{".1.3.6.1.2.1.1.5.0": {Value: "plain.example"}}, nil, nil, slog.Default())
+	assert.Len(t, out, 1)
+	assert.Nil(t, master.Serial)
+}
+
+// Same fixture, but routing driven by entAliasMappingTable instead of ifName
+// parsing: the alias row resolves the port's entPhysicalIndex, and the
+// containedIn chain walks port -> module -> chassis to find the owner.
+func TestTranslateAsStack_IndistinctChassisRowsRouteViaAliasTable(t *testing.T) {
+	logger := slog.Default()
+	master := &diode.Device{
+		Name: strPtr("stack-indistinct.example"),
+		Site: &diode.Site{Name: strPtr("dc1")},
+	}
+	// Name deliberately carries NO member prefix, so a pass would have to come
+	// from the alias table rather than from ParseMemberID.
+	memberIface := &diode.Interface{Name: strPtr("uplink-a"), Device: master}
+	entities := []diode.Entity{master, memberIface}
+
+	out := TranslateAsStack(entities, fixtureIndistinctChassisRowsStack(),
+		map[*diode.Interface]int{memberIface: 101}, nil, logger)
+
+	assert.NotEmpty(t, out)
+	assert.Equal(t, "stack-indistinct.example-2", *memberIface.Device.Name)
 }
 
 func TestTranslateAsStack_JunosQFX_4MemberVC(t *testing.T) {
@@ -1738,4 +1857,345 @@ func TestAssignMemberIDs_OrdinalFallback(t *testing.T) {
 	assignMemberIDs(members, slog.Default())
 	assert.Equal(t, 1, members[0].ID)
 	assert.Equal(t, 2, members[1].ID)
+}
+
+// --- descendant tier ---
+
+func TestAssignMemberIDs_DescendantTierResolvesAmbiguousPrel(t *testing.T) {
+	// The reported shape: duplicate positive prel, no names, but the ports in
+	// each chassis's subtree number their owner. The tier resolves what would
+	// otherwise be refused, so the stack survives instead of collapsing.
+	members := []ChassisMember{
+		{EntPhysicalIndex: "101001", ParentRelPos: 1, EntName: "Chassis", DescendantIDs: []int{1}},
+		{EntPhysicalIndex: "201001", ParentRelPos: 1, EntName: "Chassis", DescendantIDs: []int{2}},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 1, members[0].ID)
+	assert.Equal(t, 2, members[1].ID)
+}
+
+func TestAssignMemberIDs_DescendantTierAcceptsWalkOrderUnrelatedToMemberOrder(t *testing.T) {
+	// An agent may enumerate chassis rows in stack-join order, so the
+	// lowest-index row need not be member 1. extractInventory re-sorts by id,
+	// so this must be numbered, not refused.
+	members := []ChassisMember{
+		{EntPhysicalIndex: "1", ParentRelPos: 1, EntName: "Chassis", DescendantIDs: []int{2}},
+		{EntPhysicalIndex: "1000", ParentRelPos: 1, EntName: "Chassis", DescendantIDs: []int{1}},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 2, members[0].ID)
+	assert.Equal(t, 1, members[1].ID)
+}
+
+func TestAssignMemberIDs_DescendantTierPreemptsOrdinalOnGappedSet(t *testing.T) {
+	// A stack missing member 3. Ordinal would number these 1,2 and silently
+	// mis-name the second device; the containment tree reports 2 and 4.
+	members := []ChassisMember{
+		{EntPhysicalIndex: "201001", ParentRelPos: 0, EntName: "Chassis", DescendantIDs: []int{2}},
+		{EntPhysicalIndex: "401001", ParentRelPos: 0, EntName: "Chassis", DescendantIDs: []int{4}},
+	}
+	assignMemberIDs(members, slog.Default())
+	assert.Equal(t, 2, members[0].ID)
+	assert.Equal(t, 4, members[1].ID)
+}
+
+func TestAssignMemberIDs_DescendantTierDeclineKeepsRefusal(t *testing.T) {
+	// Every decline must leave the pre-existing outcome untouched. With
+	// ambiguous prel that means the colliding ids survive for the caller's
+	// ambiguity dedup — the tier may rescue, never weaken.
+	cases := []struct {
+		name    string
+		members []ChassisMember
+	}{
+		{"member contradicts itself", []ChassisMember{
+			{ParentRelPos: 1, DescendantIDs: []int{1, 2}},
+			{ParentRelPos: 1, DescendantIDs: []int{2}},
+		}},
+		{"two members claim one number", []ChassisMember{
+			{ParentRelPos: 1, DescendantIDs: []int{2}},
+			{ParentRelPos: 1, DescendantIDs: []int{2}},
+		}},
+		{"zero is a slot, not a member", []ChassisMember{
+			{ParentRelPos: 1, DescendantIDs: []int{0}},
+			{ParentRelPos: 1, DescendantIDs: []int{1}},
+		}},
+		{"one member has no numbered ports", []ChassisMember{
+			{ParentRelPos: 1, DescendantIDs: []int{1}},
+			{ParentRelPos: 1},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assignMemberIDs(tc.members, slog.Default())
+			assert.Equal(t, 1, tc.members[0].ID)
+			assert.Equal(t, 1, tc.members[1].ID, "colliding ids must survive for the refusal")
+		})
+	}
+}
+
+func TestAssignMemberIDs_DescendantTierLogsInfoOnSuccessAndWarnOnConflict(t *testing.T) {
+	// A rescue is the device working correctly: Info, matching the name-tier
+	// rescue precedent. A contradictory signal is a discarded PRESENT signal,
+	// so it warns AND names the sets, since a silent decline is the hardest
+	// outcome to diagnose remotely.
+	logs := &strings.Builder{}
+	assignMemberIDs([]ChassisMember{
+		{EntPhysicalIndex: "101001", ParentRelPos: 1, DescendantIDs: []int{1}},
+		{EntPhysicalIndex: "201001", ParentRelPos: 1, DescendantIDs: []int{2}},
+	}, slog.New(slog.NewTextHandler(logs, nil)))
+	assert.Contains(t, logs.String(), "descendant-derived ids")
+	assert.NotContains(t, logs.String(), "level=WARN")
+
+	conflict := &strings.Builder{}
+	assignMemberIDs([]ChassisMember{
+		{EntPhysicalIndex: "101001", ParentRelPos: 1, DescendantIDs: []int{1, 2}},
+		{EntPhysicalIndex: "201001", ParentRelPos: 1, DescendantIDs: []int{2}},
+	}, slog.New(slog.NewTextHandler(conflict, nil)))
+	assert.Contains(t, conflict.String(), "rejected as contradictory")
+	assert.Contains(t, conflict.String(), "101001=[1 2]")
+
+	// Having NO port descendants is the overwhelmingly common case — every
+	// stack resolved by prel or name reaches this code with nil sets — so it
+	// must stay silent, or the tier would warn on healthy devices forever.
+	absent := &strings.Builder{}
+	assignMemberIDs([]ChassisMember{
+		{EntPhysicalIndex: "101001", ParentRelPos: 1},
+		{EntPhysicalIndex: "201001", ParentRelPos: 1},
+	}, slog.New(slog.NewTextHandler(absent, nil)))
+	assert.NotContains(t, absent.String(), "rejected as contradictory")
+
+	// A conflict that still ends in a working stack (ordinal) is Debug, not
+	// Warn: the outcome did not change, so a per-poll Warn is noise.
+	ordinal := &strings.Builder{}
+	assignMemberIDs([]ChassisMember{
+		{EntPhysicalIndex: "101001", ParentRelPos: 0, DescendantIDs: []int{1}},
+		{EntPhysicalIndex: "201001", ParentRelPos: 0, DescendantIDs: []int{1}},
+	}, slog.New(slog.NewTextHandler(ordinal, nil)))
+	assert.NotContains(t, ordinal.String(), "level=WARN")
+}
+
+// --- descendant collection ---
+
+func TestCollectDescendantIDs_TraversesNonPortRowsToReachPorts(t *testing.T) {
+	// The property that decides whether the fix works at all. Ports are NOT
+	// direct children of a chassis — the chain is port -> module -> chassis —
+	// so filtering on class during TRAVERSAL (rather than only when
+	// collecting) returns an empty set for every member and silently declines
+	// the tier on the very devices this exists to fix.
+	oids := fixtureIndistinctChassisRowsStack()
+	members := []ChassisMember{
+		{EntPhysicalIndex: "101001"},
+		{EntPhysicalIndex: "201001"},
+	}
+	collectDescendantIDs(members, oids)
+	assert.Equal(t, []int{1}, members[0].DescendantIDs)
+	assert.Equal(t, []int{2}, members[1].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_StopsAtAnyChassisRowNotOnlyMembers(t *testing.T) {
+	// A class=3 row excluded from the member set (here: no serial) must still
+	// terminate the walk. Descending through it would merge a rejected
+	// sibling's ports into this member and veto an otherwise-clean device.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.47.1.1.1.1.4.100": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.100": {Value: "3"},
+		// Own port -> 1.
+		".1.3.6.1.2.1.47.1.1.1.1.4.110": {Value: "100"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.110": {Value: "10"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.110": {Value: "1/1/1"},
+		// Nested serial-less chassis whose port claims member 9.
+		".1.3.6.1.2.1.47.1.1.1.1.4.150": {Value: "100"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.150": {Value: "3"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.160": {Value: "150"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.160": {Value: "10"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.160": {Value: "9/1/1"},
+		// Second member, so the multi-member gate opens.
+		".1.3.6.1.2.1.47.1.1.1.1.4.200": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.200": {Value: "3"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.210": {Value: "200"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.210": {Value: "10"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.210": {Value: "2/1/1"},
+	}
+	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
+	collectDescendantIDs(members, oids)
+	assert.Equal(t, []int{1}, members[0].DescendantIDs, "9/1/1 lives behind another chassis row")
+	assert.Equal(t, []int{2}, members[1].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_SkipsSingleMemberSets(t *testing.T) {
+	// A lone member trivially satisfies the tier's predicate, so collecting
+	// for it would let a subtree renumber the single surviving chassis of a
+	// partially-reporting stack.
+	oids := fixtureSingleMemberWrappedStack()
+	members := []ChassisMember{{EntPhysicalIndex: "101001"}}
+	collectDescendantIDs(members, oids)
+	assert.Nil(t, members[0].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_StandaloneTargetDoesNotBuildContainmentIndex(t *testing.T) {
+	// The containment index scans the whole oids map, so it must be built only
+	// after the multi-member check — otherwise every plain switch in a fleet
+	// pays for it on every poll. Compare a large standalone inventory against
+	// the same map with the chassis row removed: neither reaches the walk, so
+	// allocations must not scale with the map.
+	big := ObjectIDValueMap{
+		".1.3.6.1.2.1.47.1.1.1.1.4.1":  {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.1":  {Value: "3"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.1":  {Value: "Chassis"},
+		".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SN0000000001"},
+	}
+	for i := 2; i < 2000; i++ {
+		idx := strconv.Itoa(i)
+		big[".1.3.6.1.2.1.47.1.1.1.1.4."+idx] = Value{Value: "1"}
+		big[".1.3.6.1.2.1.47.1.1.1.1.5."+idx] = Value{Value: "10"}
+		big[".1.3.6.1.2.1.47.1.1.1.1.7."+idx] = Value{Value: "1/1/" + idx}
+	}
+	members := []ChassisMember{{EntPhysicalIndex: "1"}}
+	allocs := testing.AllocsPerRun(20, func() { collectDescendantIDs(members, big) })
+	assert.Zero(t, allocs, "a single-member set must not build the containment index")
+	assert.Nil(t, members[0].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_IgnoresDecoratedAndNonPortNames(t *testing.T) {
+	// Sensors and fans carry the member number inside a longer string
+	// ("RPM sensor for fan Tray-2/1/1"); the anchor rejects them, and they are
+	// not ports either. Only the port rows contribute.
+	oids := fixtureIndistinctChassisRowsStack()
+	// A module row named like a port must still not be collected.
+	oids[".1.3.6.1.2.1.47.1.1.1.1.4.199999"] = Value{Value: "101001"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.5.199999"] = Value{Value: "9"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.7.199999"] = Value{Value: "7/1/1"}
+	members := []ChassisMember{{EntPhysicalIndex: "101001"}, {EntPhysicalIndex: "201001"}}
+	collectDescendantIDs(members, oids)
+	assert.Equal(t, []int{1}, members[0].DescendantIDs)
+}
+
+func TestExtractInventory_SlotNumberedPortsDeclineRatherThanBecomeMemberIDs(t *testing.T) {
+	// The leading field of a port name is not always a member number — on a
+	// modular chassis it is a local slot. The distinctness requirement is what
+	// keeps that from being mistaken for a member id: identical chassis each
+	// populated in their own slot 1 both yield {1}, which collides and declines
+	// the tier, leaving the pre-existing outcome (here: refusal) untouched.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.1.5.0": {Value: "modular.example"},
+	}
+	for member := 1; member <= 2; member++ {
+		chassis := fmt.Sprintf("%d0000", member)
+		module := fmt.Sprintf("%d1000", member)
+		set := func(col int, idx, val string) {
+			oids[fmt.Sprintf(".1.3.6.1.2.1.47.1.1.1.1.%d.%s", col, idx)] = Value{Value: val}
+		}
+		set(4, chassis, "0")
+		set(5, chassis, "3")
+		set(6, chassis, "1") // duplicate positive position on both rows
+		set(7, chassis, "Chassis")
+		set(11, chassis, fmt.Sprintf("SN0000000%03d", member))
+		set(4, module, chassis)
+		set(5, module, "9")
+		set(7, module, "1/1") // slot 1 on BOTH chassis
+		for port := 1; port <= 2; port++ {
+			idx := fmt.Sprintf("%d2%03d", member, port)
+			set(4, idx, module)
+			set(5, idx, "10")
+			set(7, idx, fmt.Sprintf("1/1/%d", port)) // slot-prefixed, not member-prefixed
+		}
+	}
+	inv := extractInventory(oids, slog.Default())
+	assert.Empty(t, inv.Members, "slot numbers must not be adopted as member ids")
+	assert.Len(t, inv.DroppedIDs, 1, "the pre-existing ambiguity refusal still fires")
+}
+
+func TestCollectDescendantIDs_LeadingNumberMustBeAnchored(t *testing.T) {
+	// Vendor-style port names embed a slash-number that is NOT a member
+	// ("GigabitEthernet1/0/1"). An unanchored pattern would read 1 out of both
+	// members' ports and either mis-number them or veto a device that should
+	// simply have declined.
+	oids := ObjectIDValueMap{}
+	for _, m := range []struct{ chassis, port, name string }{
+		{"100", "110", "GigabitEthernet1/0/1"},
+		{"200", "210", "GigabitEthernet2/0/1"},
+	} {
+		oids[".1.3.6.1.2.1.47.1.1.1.1.4."+m.chassis] = Value{Value: "0"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.5."+m.chassis] = Value{Value: "3"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.4."+m.port] = Value{Value: m.chassis}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.5."+m.port] = Value{Value: "10"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.7."+m.port] = Value{Value: m.name}
+	}
+	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
+	collectDescendantIDs(members, oids)
+	assert.Nil(t, members[0].DescendantIDs)
+	assert.Nil(t, members[1].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_StopsAtNestedStackRow(t *testing.T) {
+	// The stop covers class 11 as well as class 3. A stack container reported
+	// INSIDE a chassis subtree must not have its ports absorbed by the chassis
+	// that contains it.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.47.1.1.1.1.4.100": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.100": {Value: "3"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.110": {Value: "100"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.110": {Value: "10"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.110": {Value: "1/1/1"},
+		// Nested stack container under member 1, owning a port of its own.
+		".1.3.6.1.2.1.47.1.1.1.1.4.150": {Value: "100"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.150": {Value: "11"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.160": {Value: "150"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.160": {Value: "10"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.160": {Value: "7/1/1"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.200": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.200": {Value: "3"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.210": {Value: "200"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.210": {Value: "10"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.210": {Value: "2/1/1"},
+	}
+	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
+	collectDescendantIDs(members, oids)
+	assert.Equal(t, []int{1}, members[0].DescendantIDs, "7/1/1 lives behind a nested stack row")
+	assert.Equal(t, []int{2}, members[1].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_ToleratesNULPaddedValues(t *testing.T) {
+	// Many agents NUL-pad DisplayStrings. The containment keys and the class
+	// lookups must be sanitized the same way the chassis extractor sanitizes
+	// them, or the parent key never matches and the subtree reads as empty.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.47.1.1.1.1.4.100": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.100": {Value: "3\x00"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.110": {Value: "100\x00"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.110": {Value: "10\x00"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.110": {Value: "1/1/1\x00"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.200": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.200": {Value: "3\x00"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.210": {Value: "200\x00"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.210": {Value: "10\x00"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.210": {Value: "2/1/1\x00"},
+	}
+	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
+	collectDescendantIDs(members, oids)
+	assert.Equal(t, []int{1}, members[0].DescendantIDs)
+	assert.Equal(t, []int{2}, members[1].DescendantIDs)
+}
+
+func TestCollectDescendantIDs_TerminatesOnContainmentCycle(t *testing.T) {
+	// A malformed agent can report a containment cycle. The walk must not spin.
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.47.1.1.1.1.4.100": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.100": {Value: "3"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.110": {Value: "100"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.110": {Value: "9"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.120": {Value: "110"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.120": {Value: "10"},
+		".1.3.6.1.2.1.47.1.1.1.1.7.120": {Value: "1/1/1"},
+		".1.3.6.1.2.1.47.1.1.1.1.4.200": {Value: "0"},
+		".1.3.6.1.2.1.47.1.1.1.1.5.200": {Value: "3"},
+	}
+	// 110's child 130 points back at 110's parent chain.
+	oids[".1.3.6.1.2.1.47.1.1.1.1.4.130"] = Value{Value: "120"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.5.130"] = Value{Value: "9"}
+	children := childIndexFromOIDs(oids)
+	children["130"] = append(children["130"], "110") // cycle
+	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
+	assert.NotPanics(t, func() { collectDescendantIDsFrom(members, oids, children) })
+	assert.Equal(t, []int{1}, members[0].DescendantIDs)
 }

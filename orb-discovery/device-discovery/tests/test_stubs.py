@@ -384,7 +384,9 @@ def test_prune_nested_refs_stubs_interface_module_reference():
     the slot. Without stubbing, a 48-port linecard duplicates that rich
     subtree 48 times in the ingest payload. The stub keeps only the
     fields Diode needs to resolve the module — device, serial, and a
-    positional module_bay shell — so per-interface wire cost is bounded.
+    positional module_bay shell — plus module_type, which NetBox requires
+    if the reference has to be created rather than matched — so
+    per-interface wire cost is bounded.
     """
     rich_dev = pb.Device(name="sw1", serial="FCW123", status="active")
     rich_dev.device_type.CopyFrom(
@@ -398,7 +400,13 @@ def test_prune_nested_refs_stubs_interface_module_reference():
     rich_module.device.CopyFrom(rich_dev)
     rich_module.module_bay.CopyFrom(bay)
     rich_module.module_type.CopyFrom(
-        pb.ModuleType(model="C9400-LC-48U", manufacturer=pb.Manufacturer(name="Cisco")),
+        pb.ModuleType(
+            model="C9400-LC-48U",
+            manufacturer=pb.Manufacturer(name="Cisco", slug="cisco", description="vendor"),
+            part_number="C9400-LC-48U-A",
+            description="48 port UPOE+ line card",
+            comments="rich field a driver may start populating",
+        ),
     )
 
     iface = pb.Interface(name="GigabitEthernet2/0/1", type="1000base-t")
@@ -413,7 +421,17 @@ def test_prune_nested_refs_stubs_interface_module_reference():
     assert pruned_iface.HasField("module")
     assert pruned_iface.module.serial == "JAE2401LC02"
     assert pruned_iface.module.description == ""
-    assert not pruned_iface.module.HasField("module_type")
+    # module_type is retained: a nested ref that fails to match is created
+    # instead, and NetBox rejects a Module without one.
+    assert pruned_iface.module.module_type.model == "C9400-LC-48U"
+    assert pruned_iface.module.module_type.manufacturer.name == "Cisco"
+    # ...but only the (manufacturer, model) matcher pair, so the reference cannot
+    # grow as drivers start populating the richer ModuleType fields.
+    assert pruned_iface.module.module_type.part_number == ""
+    assert pruned_iface.module.module_type.description == ""
+    assert pruned_iface.module.module_type.comments == ""
+    assert pruned_iface.module.module_type.manufacturer.slug == ""
+    assert pruned_iface.module.module_type.manufacturer.description == ""
     # Nested device on the module ref is also a stub.
     assert pruned_iface.module.device.name == "sw1"
     assert pruned_iface.module.device.serial == ""

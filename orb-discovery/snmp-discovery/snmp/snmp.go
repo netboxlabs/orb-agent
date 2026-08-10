@@ -246,6 +246,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Retries:       retries,
 				MsgFlags:      msgFlags,
 				SecurityModel: gosnmp.UserSecurityModel,
+				ContextName:   authentication.ContextName,
 				Logger:        gosnmpLogger,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,

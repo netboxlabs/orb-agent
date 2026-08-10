@@ -88,10 +88,6 @@ FROM netboxlabs/pktvisor:${PKTVISOR_TAG} AS pktvisor
 ########################################################################
 FROM python:3.14-alpine AS python-builder
 
-# Upgrade pip to latest version with fewer vulnerabilities
-RUN python -m pip install --upgrade --no-cache-dir pip==26.1.2 && \
-    rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
-
 # Install the Python backends from in-repo source (was: published PyPI packages
 # netboxlabs-device-discovery / netboxlabs-orb-worker). Console scripts
 # device-discovery and orb-worker land in /usr/local/bin.
@@ -109,7 +105,13 @@ RUN BUILD_COMMIT="${BUILD_COMMIT}" BUILD_TRACK="${BUILD_TRACK}" \
       python /tmp/stamp_version.py "${DEVICE_DISCOVERY_VERSION}" /src/device-discovery/device_discovery/version.py && \
     BUILD_COMMIT="${BUILD_COMMIT}" BUILD_TRACK="${BUILD_TRACK}" \
       python /tmp/stamp_version.py "${WORKER_VERSION}" /src/worker/worker/version.py
-RUN pip3 install --no-cache-dir /src/device-discovery /src/worker
+# Uninstall pip once the packages are installed so the site-packages COPY into
+# the final stage carries application code only. Copying pip across stages
+# merges it file-by-file over the final stage's own pip — two versions with
+# different module layouts produce a broken chimera install (pip3 dies with
+# ImportError on every invocation).
+RUN pip3 install --no-cache-dir /src/device-discovery /src/worker && \
+    pip3 uninstall -y pip
 
 ########################################################################
 # Stage name is referenced by no-cache-filters in the build workflows so
@@ -141,7 +143,15 @@ ENV PATH=/opt/orb/files:$PATH
 ENV PIP_CACHE_DIR=/opt/orb/pip-cache
 ENV DEFAULT_CONFIG_PATH=/usr/local/share/orb-agent/default_config.yaml
 
-# Copy Python site-packages and binaries from builder (includes pip and package executables)
+# The runtime pip: used by the entrypoint's INSTALL_DRIVERS_PATH feature and
+# what image scans see. Pinned to a recent release with fewer vulnerabilities;
+# pip's self-upgrade cleanly removes the base image's copy first.
+RUN python -m pip install --upgrade --no-cache-dir pip==26.2.1 && \
+    rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
+
+# Copy Python site-packages and binaries from builder (application packages and
+# their console scripts; the builder uninstalled pip so it cannot leak into —
+# and version-clash with — this stage's pip above)
 COPY --from=python-builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 COPY --from=python-builder /usr/local/bin /usr/local/bin
 

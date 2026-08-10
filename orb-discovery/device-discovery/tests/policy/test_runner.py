@@ -261,7 +261,7 @@ def test_run_discovered_driver_error(
         patch(
             "device_discovery.policy.runner.discover_device_driver", return_value=None
         ) as mock_discover,
-        patch("device_discovery.policy.runner.logger.error") as mock_logger_error,
+        patch("device_discovery.policy.runner.logger.warning") as mock_logger_warning,
     ):
         # Set up run_store
         policy_runner.run_store = run_store
@@ -271,8 +271,8 @@ def test_run_discovered_driver_error(
         policy_runner.run("test_id", sample_scopes[0], sample_config)
 
         mock_discover.assert_called_once_with(sample_scopes[0], drivers=None)
-        mock_logger_error.assert_called_once()
-        assert "Not able to discover device driver" in mock_logger_error.call_args[0][0]
+        mock_logger_warning.assert_called_once()
+        assert "Not able to discover device driver" in mock_logger_warning.call_args[0][0]
         assert policy_runner.status == Status.FAILED
         failed_run = run_store.get_runs_for_policy(policy_runner.name)[0]
         assert failed_run.driver is None
