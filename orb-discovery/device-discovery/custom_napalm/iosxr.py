@@ -35,6 +35,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -136,10 +137,75 @@ def _iosxr_build_top_bays(rows: list[dict]) -> dict[int, list[_ModuleBay]]:
     return bays_by_rack
 
 
+def _iosxr_collect_all_optics(rows: list[dict]) -> dict[str, _ModuleEntry]:
+    """
+    Index every optic row in inventory by its port name.
+
+    Collected independently of the bay walk so an optic on a slot with no
+    linecard bay is still visible. The bay walk consumes from this map and
+    whatever it leaves behind is promoted to a device-rooted bay.
+    """
+    optics: dict[str, _ModuleEntry] = {}
+    for row in rows:
+        rname = _iosxr_strip_inventory_prefix(
+            (row.get("name") or "").strip().strip('"'),
+        )
+        if not _IOSXR_PORT_RE.match(rname):
+            continue
+        rpid = (row.get("pid") or "").strip()
+        rsn = (row.get("sn") or "").strip()
+        rdescr = (row.get("descr") or "").strip().strip('"')
+        if rpid and rsn and is_optic_pid(rpid):
+            optics[rname] = _ModuleEntry(
+                model=rpid, serial=rsn, type="transceiver", description=rdescr,
+            )
+    return optics
+
+
+def _iosxr_promote_orphan_optics(
+    optics: dict[str, _ModuleEntry],
+    consumed: set[str],
+    vsf: bool,
+    bays_by_rack: dict[int, list[_ModuleBay]],
+    ifaces_by_member: dict[int | None, dict[str, list[str]]],
+) -> None:
+    """
+    Promote optics the bay walk never claimed to device-rooted bays, in place.
+
+    Fixed-port XR platforms report optics with no linecard above them, so
+    there is no parent bay to nest under. The rack is the port name's
+    leading element.
+
+    ``bays_by_rack`` doubles as the rack roster, so a rack seen only on an
+    optic name is minted here. That is the intended fixed-port case when
+    the roster was empty. When the roster is NOT empty the optic's rack
+    must already be in it: a foreign rack would either be dropped
+    silently by the standalone tail (which emits one rack) or warn-dropped
+    by translate as an orphan member, so refuse it here where the reason
+    can be named.
+    """
+    known_racks = set(bays_by_rack)
+    for pname, optic in optics.items():
+        if pname in consumed:
+            continue
+        rack = int(pname.split("/")[0])
+        if known_racks and rack not in known_racks:
+            logger.warning(
+                "iosxr.get_modules: orphan optic %s rack %s not in chassis set",
+                pname, rack,
+            )
+            continue
+        member = rack if vsf else None
+        bays_by_rack.setdefault(rack, []).append(orphan_optic_bay(pname, optic))
+        ifaces_by_member.setdefault(member, {})[pname] = [pname]
+
+
 def _iosxr_attach_sub_bays(
     rows: list[dict],
     bays_by_rack: dict[int, list[_ModuleBay]],
     vsf: bool,
+    optics: dict[str, _ModuleEntry],
+    consumed: set[str],
 ) -> dict[int | None, dict[str, list[str]]]:
     """Second pass: attach optic sub-bays + port-ifname maps to linecard bays."""
     ifaces_by_member: dict[int | None, dict[str, list[str]]] = {}
@@ -151,7 +217,7 @@ def _iosxr_attach_sub_bays(
             slot = bay.name.split("/")[1]  # "0/0/CPU0" -> "0"
             slot_prefix = f"{rack}/{slot}/"
             slot_ifaces, sub_bays = _iosxr_collect_slot_ports(
-                rows, slot_prefix, ifaces_by_member, member,
+                rows, slot_prefix, ifaces_by_member, member, optics, consumed,
             )
             if sub_bays:
                 bay.module.sub_bays.extend(sub_bays)
@@ -165,6 +231,8 @@ def _iosxr_collect_slot_ports(
     slot_prefix: str,
     ifaces_by_member: dict[int | None, dict[str, list[str]]],
     member: int | None,
+    optics: dict[str, _ModuleEntry],
+    consumed: set[str],
 ) -> tuple[list[str], list[_ModuleBay]]:
     """
     Collect ifnames + optic sub-bays under a single linecard's <rack>/<slot>/ prefix.
@@ -172,6 +240,10 @@ def _iosxr_collect_slot_ports(
     Self-routes each optic ifname under its own sub-bay key so translate's
     deepest-match-wins routes the port to the transceiver while non-optic
     ports stay on the parent linecard.
+
+    Optics come from the pre-built ``optics`` index rather than being
+    re-derived here, and every one claimed is recorded in ``consumed`` so
+    the promotion pass can tell which optics still have no parent.
     """
     slot_ifaces: list[str] = []
     sub_bays: list[_ModuleBay] = []
@@ -184,16 +256,10 @@ def _iosxr_collect_slot_ports(
         if not rname.startswith(slot_prefix):
             continue
         slot_ifaces.append(rname)
-        rpid = (row.get("pid") or "").strip()
-        rsn = (row.get("sn") or "").strip()
-        rdescr = (row.get("descr") or "").strip().strip('"')
-        if rpid and rsn and is_optic_pid(rpid):
-            sub_bays.append(_ModuleBay(
-                name=rname, position=rname,
-                module=_ModuleEntry(
-                    model=rpid, serial=rsn, type="transceiver", description=rdescr,
-                ),
-            ))
+        optic = optics.get(rname)
+        if optic is not None:
+            sub_bays.append(_ModuleBay(name=rname, position=rname, module=optic))
+            consumed.add(rname)
             ifaces_by_member.setdefault(member, {})[rname] = [rname]
     return slot_ifaces, sub_bays
 
@@ -205,6 +271,10 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
     Reuses the cisco_nxos show inventory template because XR's block
     layout is identical. nV cluster is auto-detected from rack ids in
     slot NAMEs — no separate cluster RPC is needed.
+
+    Fixed-port XR platforms report optics with no linecard row above them;
+    those become device-rooted bays. Returns None only when neither a slot
+    bay nor an optic was recognized.
     """
     try:
         # pyIOSXR's foundational show-runner; wraps the XR XML-Agent CLI
@@ -225,12 +295,22 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
     if not rows:
         return None
 
+    optics = _iosxr_collect_all_optics(rows)
     bays_by_rack = _iosxr_build_top_bays(rows)
-    if not bays_by_rack:
+    if not bays_by_rack and not optics:
         return None
 
+    # Derived from slot bays only, before promotion: a fixed-port device has
+    # no slot bays at all, so it stays standalone and collapses to the
+    # None-bucket via the tail below rather than becoming a 1-member cluster.
     vsf = len(bays_by_rack) >= 2
-    ifaces_by_member = _iosxr_attach_sub_bays(rows, bays_by_rack, vsf)
+    consumed: set[str] = set()
+    ifaces_by_member = _iosxr_attach_sub_bays(
+        rows, bays_by_rack, vsf, optics, consumed,
+    )
+    _iosxr_promote_orphan_optics(
+        optics, consumed, vsf, bays_by_rack, ifaces_by_member,
+    )
 
     if vsf:
         return _modules_to_payload({
@@ -361,7 +441,12 @@ class IOSXRDriver(_UpstreamIOSXRDriver):
     """Custom IOS-XR driver shim adding get_modules() to the upstream class."""
 
     def get_modules(self) -> dict | None:
-        """Return per-rack module / module-bay inventory or None."""
+        """
+        Return per-rack module / module-bay inventory or None.
+
+        On fixed-port platforms the optics have no linecard parent and are
+        returned as device-rooted bays instead of being dropped.
+        """
         return _iosxr_get_modules_impl(self)
 
     def get_network_instances(self, name: str = "") -> dict:
