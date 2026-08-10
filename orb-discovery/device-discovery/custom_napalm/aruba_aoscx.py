@@ -35,6 +35,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -349,6 +350,7 @@ def _aruba_build_bays(
     """Assemble per-member module bays (with optic sub-bays) from subsystem entries."""
     bays_by_member: dict[int | None, list[_ModuleBay]] = {}
     ifaces_by_member: dict[int | None, dict[str, list[str]]] = {}
+    consumed_optic_slots: set[str] = set()
     for key, entry in subs.items():
         if "," not in key or not isinstance(entry, dict):
             continue
@@ -378,12 +380,39 @@ def _aruba_build_bays(
         for ifname, optic in optics_by_slot.get(addr, []):
             sub_bays.append(_ModuleBay(name=ifname, position=ifname, module=optic))
             ifaces_by_member.setdefault(member, {})[ifname] = [ifname]  # self-route (sub-bay key)
+        if addr in optics_by_slot:
+            consumed_optic_slots.add(addr)
         bay = _ModuleBay(
             name=addr, position=addr,
             module=_ModuleEntry(model=pid, serial=sn, type=mtype, description=descr, sub_bays=sub_bays),
         )
         bays_by_member.setdefault(member, []).append(bay)
+
+    _aruba_promote_orphan_optics(
+        optics_by_slot, consumed_optic_slots, vsf, bays_by_member, ifaces_by_member,
+    )
     return bays_by_member, ifaces_by_member
+
+
+def _aruba_promote_orphan_optics(
+    optics_by_slot: dict[str, list[tuple[str, _ModuleEntry]]],
+    consumed_optic_slots: set[str],
+    vsf: bool,
+    bays_by_member: dict[int | None, list[_ModuleBay]],
+    ifaces_by_member: dict[int | None, dict[str, list[str]]],
+) -> None:
+    """Promote every optic on a slot no bay claimed to a device-rooted bay, in place."""
+    for slot_addr, optics in optics_by_slot.items():
+        if slot_addr in consumed_optic_slots:
+            continue
+        for ifname, optic in optics:
+            # Fixed-port CX switches expose optics on slots with no line
+            # module, so the optic has no parent bay to nest under.
+            member = _aruba_member_of(ifname) if vsf else None
+            bays_by_member.setdefault(member, []).append(
+                orphan_optic_bay(ifname, optic),
+            )
+            ifaces_by_member.setdefault(member, {})[ifname] = [ifname]
 
 
 def _aruba_get_modules_impl(driver) -> dict | None:
