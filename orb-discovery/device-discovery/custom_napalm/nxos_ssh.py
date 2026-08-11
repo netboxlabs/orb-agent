@@ -166,6 +166,25 @@ def _nxos_ssh_xbar_slots(sm_out: str) -> list[str]:
     return slots
 
 
+def _nxos_ssh_module_slot_ids(sm_rows: list[dict]) -> set[str]:
+    """
+    Return every slot id the RAW show-module rows name, before any join.
+
+    ``show module`` is authoritative for slot occupancy: a row appearing
+    here means hardware occupies that slot even when ``show inventory``
+    omits — not merely mis-describes — the matching ``Slot N`` line. Feeds
+    ``claimed_slots`` for the multi-row (unambiguous modular) branch of
+    ``_nxos_ssh_get_modules_impl`` only; the single-row branch decides its
+    own slot's claim via the chassis-PID exemption instead, so this helper
+    is not consulted there.
+    """
+    return {
+        slot
+        for row in sm_rows
+        if (slot := str(row.get("module") or row.get("mod") or row.get("modinf") or "").strip())
+    }
+
+
 def _nxos_ssh_build_slot_bays(
     sm_rows: list[dict], xbar_slots: list[str],
     inv_by_slot: dict[str, dict[str, str]],
@@ -350,6 +369,11 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
             claimed_slots.discard(single_slot)
     else:
         bays_by_slot = _nxos_ssh_build_slot_bays(sm_rows, xbar_slots, inv_by_slot)
+        # show module is authoritative for slot occupancy: union its slot
+        # ids into claimed_slots so a slot show inventory omits ENTIRELY
+        # (not merely describes unusably) still blocks that slot's optic
+        # from promoting to a device-rooted bay — see _nxos_ssh_module_slot_ids.
+        claimed_slots |= _nxos_ssh_module_slot_ids(sm_rows)
     if not bays_by_slot and not transceivers_by_ifname:
         return None
 
