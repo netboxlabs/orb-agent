@@ -7,12 +7,12 @@ package mapping
 // those are the values the logic reads. Optic counts are reduced to three
 // per fixture for readability.
 
-// aristaLaneShapeFixture mirrors a fixed-port switch where each optic is a
+// fixedPortLaneShapeFixture mirrors a fixed-port switch where each optic is a
 // class-5 row carrying the PID and serial with an EMPTY Name, sitting in a
 // per-port class-5 cage. Beneath each optic sit two DOM sensors and one
 // class-9 lane row with no model, no serial and vendorType "0.0". Every
 // class-9 row on this platform is a lane.
-func aristaLaneShapeFixture() []fixtureRow {
+func fixedPortLaneShapeFixture() []fixtureRow {
 	rows := []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "JPE14030001", "DCS-7050SX-64", "64-port switch chassis", ""},
 		{"1100300000", "1", "5", "1", "", "", "", "Xcvr Slot Container", ""},
@@ -37,10 +37,10 @@ func aristaLaneShapeFixture() []fixtureRow {
 	return rows
 }
 
-// aristaHarvestShapeFixture mirrors the same vendor's other capture, where
+// fixedPortHarvestShapeFixture mirrors the same vendor's other capture, where
 // most optics have NO lane child. Such a row has neither a class-9 nor a
 // class-10 child, so it reaches the empty-bay harvest today.
-func aristaHarvestShapeFixture() []fixtureRow {
+func fixedPortHarvestShapeFixture() []fixtureRow {
 	rows := []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "JPE14030002", "DCS-7050SX-64", "64-port switch chassis", ""},
 		{"1100300000", "1", "5", "1", "", "", "", "Xcvr Slot Container", ""},

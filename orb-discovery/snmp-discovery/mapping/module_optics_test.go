@@ -21,7 +21,7 @@ func testOpticLogger() *slog.Logger {
 // typed linecard, no model, no serial, and all sharing the bay position the
 // optic row reports.
 func TestOpticDiscovery_LaneShapeCharacterization(t *testing.T) {
-	inv := extractModuleInventory(buildOIDs(aristaLaneShapeFixture()), testOpticLogger())
+	inv := extractModuleInventory(buildOIDs(fixedPortLaneShapeFixture()), testOpticLogger())
 
 	require.Len(t, inv.Modules, 3, "the three lane rows are emitted as modules")
 	for _, m := range inv.Modules {
@@ -40,7 +40,7 @@ func TestOpticDiscovery_LaneShapeCharacterization(t *testing.T) {
 // it is emitted as a bare bay with its model and serial discarded, and all
 // three share bay position "1".
 func TestOpticDiscovery_HarvestShapeCharacterization(t *testing.T) {
-	inv := extractModuleInventory(buildOIDs(aristaHarvestShapeFixture()), testOpticLogger())
+	inv := extractModuleInventory(buildOIDs(fixedPortHarvestShapeFixture()), testOpticLogger())
 
 	assert.Empty(t, inv.Modules, "no modules at all on this shape today")
 
