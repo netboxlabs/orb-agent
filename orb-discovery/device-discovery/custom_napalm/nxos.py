@@ -167,6 +167,22 @@ def _nxos_parse_inventory(
     return inv_by_slot, transceivers_by_ifname, claimed_slots
 
 
+def _nxos_chassis_pid(inv_rows: list[dict]) -> str | None:
+    """
+    Return the PID of the RAW 'Chassis' inventory row, or None if absent.
+
+    Read from the unfiltered rows (not ``inv_by_slot``, which only keeps
+    slots that already passed the pid/sn usability filter) so the caller
+    can compare it against a single surviving show-module row's slot PID
+    even when that slot's own inventory row happens to be usable.
+    """
+    for row in inv_rows:
+        name = _nxos_unquote(row.get("name"))
+        if name.lower() == "chassis":
+            return _nxos_unquote(row.get("productid")) or None
+    return None
+
+
 def _nxos_xbar_slots(xbar_rows: list[dict]) -> list[str]:
     """
     Extract fabric-module slot numbers from show-module's Xbar table.
@@ -304,6 +320,14 @@ def _nxos_get_modules_impl(driver) -> dict | None:
         inventory.
       - No supervisor / linecard slots survive classification AND no
         transceiver was recognized either.
+
+    A single parsed show-module row is NOT by itself proof of a fixed
+    switch: a card in a transitional state (mid-insertion, mid-reload) can
+    leave a modular chassis's ``TABLE_modinfo`` reporting just one row too,
+    the same gap its CLI-scrape SSH counterpart hits via the textfsm
+    STATUS enum (see ``nxos_ssh.py``). Positive evidence is required
+    before exempting that row's slot from ``claimed_slots`` — see
+    ``_nxos_chassis_pid``.
     """
     try:
         sm_payload = driver.device.show("show module", raw_text=False) or {}
@@ -325,14 +349,21 @@ def _nxos_get_modules_impl(driver) -> dict | None:
     # Fixed switch heuristic: EXACTLY one show-module row is the chassis
     # acting as its own "slot 1", so no slot bays are built. Optics still
     # count — a fixed switch's ports carry them with no linecard above.
-    # That single row's own slot is also exempted from ``claimed_slots``:
-    # on a fixed switch the base-board inventory row names itself (e.g.
-    # "Slot 1"), and its ports are legitimately parentless rather than a
-    # dropped linecard.
+    # That single row's own slot is also exempted from ``claimed_slots`` —
+    # but ONLY when the slot's own inventory PID matches the Chassis row's
+    # PID, the positive signal that this really is a fixed switch reporting
+    # itself rather than a modular chassis whose sibling rows the textfsm
+    # STATUS enum silently dropped (see the docstring above). Absent that
+    # match (or an absent Chassis row), the claim stands and bays_by_slot
+    # stays empty for this row exactly as it already did — a wrong decline
+    # merely omits an optic, while a wrong promotion invents a topology.
     if len(sm_rows) == 1:
         bays_by_slot = {}
         single_slot = _nxos_unquote(sm_rows[0].get("modinf") or sm_rows[0].get("modules"))
-        claimed_slots.discard(single_slot)
+        single_slot_pid = inv_by_slot.get(single_slot, {}).get("pid")
+        chassis_pid = _nxos_chassis_pid(inv_rows)
+        if chassis_pid and single_slot_pid and chassis_pid == single_slot_pid:
+            claimed_slots.discard(single_slot)
     else:
         bays_by_slot = _nxos_build_slot_bays(sm_rows, xbar_rows, inv_by_slot)
     if not bays_by_slot and not transceivers_by_ifname:
