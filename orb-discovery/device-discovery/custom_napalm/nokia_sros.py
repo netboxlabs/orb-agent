@@ -678,26 +678,33 @@ def _nokia_sros_attach_transceiver_sub_bays(
     transceiver_rows: list[dict],
     mda_bays_by_path: dict[str, _ModuleBay],
     bays: list[_ModuleBay],
+    had_card_bays: bool,
 ) -> dict[str, list[str]]:
-    """Route every port to its parent bays; emit transceiver sub-bay only when populated."""
+    """
+    Route every port to its parent bays; emit transceiver sub-bay only when populated.
+
+    ``had_card_bays`` is a snapshot the caller captures BEFORE the
+    promotion loop runs, from the RAW card/MDA rows rather than the
+    already-filtered ``bays`` list — see ``_nokia_sros_get_modules_impl``.
+    `bays` is the very list promotion appends device-rooted optics to, so
+    testing it live (or deriving the snapshot from it) would let either the
+    first promoted optic make `bays` non-empty and wrongly decline every
+    optic that follows on a genuinely fixed platform (no cards at all), or
+    a card row that failed the pid/sn filter make `bays` empty and wrongly
+    promote optics on a modular chassis whose card hierarchy is real.
+    Deriving the snapshot from the raw rows instead makes it immune to
+    that filter while still being captured once, before the loop, so it
+    can't be changed by promotion's own writes to ``bays``.
+
+    This is the deliberate opposite of the ios-xr rack-roster guard
+    (`if bays_by_rack and rack not in bays_by_rack`), which reads its
+    roster live on purpose: ios-xr asks "is this rack already known?",
+    where minting the first rack is legitimate and the guard must see
+    its own additions. Nokia asks "did this chassis have a card hierarchy
+    at all?" — a property of the input that promotion must not be able
+    to change by running.
+    """
     interfaces_by_bay: dict[str, list[str]] = {}
-    # Snapshot whether this chassis had ANY card bay BEFORE the promotion
-    # loop runs. `bays` is the very list promotion appends device-rooted
-    # optics to, so testing it live would let the first promoted optic make
-    # `bays` non-empty and wrongly decline every optic that follows on a
-    # genuinely fixed platform (no cards at all). Capturing the snapshot
-    # once, before the loop, is what lets every fixed-platform optic
-    # promote while still refusing promotion on a modular chassis whose
-    # card hierarchy is real but an MDA row happens to be incomplete.
-    #
-    # This is the deliberate opposite of the ios-xr rack-roster guard
-    # (`if bays_by_rack and rack not in bays_by_rack`), which reads its
-    # roster live on purpose: ios-xr asks "is this rack already known?",
-    # where minting the first rack is legitimate and the guard must see
-    # its own additions. Nokia asks "did this chassis have a card hierarchy
-    # at all?" — a property of the input that promotion must not be able
-    # to change by running.
-    had_card_bays = bool(bays)
     for row in transceiver_rows:
         port_id = row.get("port_id") or ""
         if not port_id:
@@ -782,6 +789,12 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
     if state is None:
         return None
     rows = _nokia_sros_rows_from_state_xml(state)
+    # Captured from the RAW rows, before _nokia_sros_build_card_bays filters
+    # on pid/sn/slot — a card row that exists in hardware but fails that
+    # filter must still count as "this chassis has a card hierarchy" (see
+    # _nokia_sros_attach_transceiver_sub_bays for why deriving this from the
+    # filtered `bays` list instead is wrong).
+    had_card_bays = any(row.get("kind") == "card" for row in rows)
     bays = _nokia_sros_build_card_bays(rows)
     mda_bays_by_path = _nokia_sros_attach_mda_sub_bays(rows, bays)
 
@@ -795,7 +808,7 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
             if tx_state is not None:
                 tx_rows = _nokia_sros_transceiver_rows_from_state_xml(tx_state)
                 interfaces_by_bay = _nokia_sros_attach_transceiver_sub_bays(
-                    tx_rows, mda_bays_by_path, bays,
+                    tx_rows, mda_bays_by_path, bays, had_card_bays,
                 )
     except (NCClientError, etree.XMLSyntaxError) as e:
         # Non-fatal: cards-only payload still ships.

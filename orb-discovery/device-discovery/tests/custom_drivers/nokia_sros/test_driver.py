@@ -58,7 +58,7 @@ def test_attach_transceiver_classic_3_segment_port_id():
     from custom_napalm.nokia_sros import _nokia_sros_attach_transceiver_sub_bays
     mda_map, _ = _build_mda_bay_map()
     rows = [{"port_id": "1/1/1", "model": "SFP-10G-LR", "sn": "OPT1"}]
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [])
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [], False)
     assert ifaces == {"1": ["1/1/1"], "1/1": ["1/1/1"], "1/1/1": ["1/1/1"]}
     assert mda_map["1/1"].module.sub_bays[0].name == "1/1/1"
 
@@ -68,7 +68,7 @@ def test_attach_transceiver_fp4_c_cage_port_id():
     from custom_napalm.nokia_sros import _nokia_sros_attach_transceiver_sub_bays
     mda_map, _ = _build_mda_bay_map()
     rows = [{"port_id": "1/1/c2/1", "model": "QSFP28-SR4", "sn": "OPT2"}]
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [])
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [], False)
     assert ifaces == {"1": ["1/1/c2/1"], "1/1": ["1/1/c2/1"], "1/1/c2/1": ["1/1/c2/1"]}
     assert mda_map["1/1"].module.sub_bays[0].name == "1/1/c2/1"
 
@@ -89,7 +89,7 @@ def test_attach_transceiver_card_slot_key_aggregates_across_mdas():
         {"port_id": "1/1/1", "model": "SFP-10G-LR", "sn": "OPT-A"},
         {"port_id": "1/2/1", "model": "QSFP-100G-SR4", "sn": "OPT-B"},
     ]
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [])
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [], False)
     # Card-slot key "1" aggregates ports from both MDAs — critical for
     # linecards-mode routing which never descends into sub-bays.
     assert ifaces["1"] == ["1/1/1", "1/2/1"]
@@ -103,7 +103,7 @@ def test_attach_transceiver_unknown_mda_path_promotes_orphan_bay():
     mda_map, _ = _build_mda_bay_map()
     bays = []
     rows = [{"port_id": "9/9/1", "model": "SFP-X", "sn": "OPT3"}]
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, bays)
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, bays, False)
     assert ifaces == {"9/9/1": ["9/9/1"]}
     assert mda_map["1/1"].module.sub_bays == []
     assert len(bays) == 1
@@ -120,7 +120,7 @@ def test_attach_transceiver_unknown_mda_path_without_optic_is_noop():
     mda_map, _ = _build_mda_bay_map()
     bays = []
     rows = [{"port_id": "9/9/1", "model": "", "sn": ""}]
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, bays)
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, bays, False)
     assert ifaces == {}
     assert bays == []
     assert mda_map["1/1"].module.sub_bays == []
@@ -143,7 +143,7 @@ def test_attach_transceiver_declines_promotion_on_modular_chassis_with_incomplet
     rows = [{"port_id": "1/1/1", "model": "SFP-10G-LR", "sn": "OPT1"}]
     # mda_bays_by_path is empty: the "1/1" MDA row was incomplete (missing
     # PID/serial, or its parent card never emitted) and never made it in.
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, {}, bays)
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, {}, bays, True)
     assert ifaces == {}
     assert bays == [card_bay]
     assert card_bay.module.sub_bays == []
@@ -166,7 +166,7 @@ def test_attach_transceiver_snapshot_survives_self_mutation_across_multiple_orph
         {"port_id": "1/1/c1", "model": "SFP-10G-LR", "sn": "OPT-A"},
         {"port_id": "1/1/c2", "model": "SFP-10G-LR", "sn": "OPT-B"},
     ]
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, {}, bays)
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, {}, bays, False)
     assert len(bays) == 2
     assert {b.name for b in bays} == {"1/1/c1", "1/1/c2"}
     assert ifaces == {"1/1/c1": ["1/1/c1"], "1/1/c2": ["1/1/c2"]}
@@ -180,7 +180,7 @@ def test_attach_transceiver_routes_optic_less_port_to_parent_bays():
         {"port_id": "1/1/1", "model": "SFP-10G-LR", "sn": "OPT-A"},  # has optic
         {"port_id": "1/1/2", "model": "", "sn": ""},                  # copper / empty cage
     ]
-    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [])
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, mda_map, [], False)
     # Both ports route to card-slot + mda-path; only the optic'd port has
     # a per-port key AND a transceiver sub-bay.
     assert ifaces == {
