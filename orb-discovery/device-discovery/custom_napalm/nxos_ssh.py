@@ -41,6 +41,17 @@ _NXOS_SSH_PORT_RE = re.compile(r"^Ethernet(\d+)(?:/\d+)+$", re.IGNORECASE)
 _NXOS_SSH_SLOT_RE = re.compile(r"^Slot\s+(\d+)$", re.IGNORECASE)
 # K is optional: Nexus 7700 sups are N77-SUP2E/SUP3E (no K), while N9K-/N7K- have it.
 _NXOS_SSH_SUP_PID_RE = re.compile(r"^N\d+K?[-A-Z0-9]*-SUP", re.IGNORECASE)
+# FEX ids start at 100; every Nexus chassis slot (linecard, supervisor, or
+# fabric/xbar) stays well below that. ``_NXOS_SSH_PORT_RE`` matches both the
+# Fabric Extender's three- and four-tuple port forms (e.g. Ethernet101/1/1,
+# Ethernet101/1/0/1) and captures the FEX id as the "slot" — this threshold
+# is what tells those apart from a real chassis slot.
+_NXOS_SSH_FEX_MIN_ID = 100
+
+
+def _nxos_ssh_is_fex_slot(slot: str) -> bool:
+    """Return True when a captured port "slot" is actually a FEX id (>= 100)."""
+    return slot.isdigit() and int(slot) >= _NXOS_SSH_FEX_MIN_ID
 
 
 def classify_module_type_nexus_ssh(pid: str, name: str) -> str:
@@ -172,6 +183,10 @@ def _nxos_ssh_attach_transceivers(
     the translator can route ifnames into the matching bay. Mutates
     ``bays_by_slot`` in place — both the matched entries' parent
     ``module.sub_bays`` and, for orphans, ``bays_by_slot`` itself.
+
+    A FEX-attached optic (slot id >= 100) never gets promoted here even when
+    it has no parent bay on this device — it lives in the FEX, a separate
+    device, not on the parent Nexus.
     """
     interfaces_by_bay: dict[str, list[str]] = {}
     for ifname, optic in transceivers_by_ifname.items():
@@ -181,6 +196,12 @@ def _nxos_ssh_attach_transceivers(
         slot = port_match.group(1)
         parent = bays_by_slot.get(slot)
         if parent is None or parent.module is None:
+            if _nxos_ssh_is_fex_slot(slot):
+                logger.debug(
+                    "nxos_ssh.get_modules: skipping FEX-attached optic %s (fex %s has no bay on this device)",
+                    ifname, slot,
+                )
+                continue
             # Fixed switch, or an optic on a slot with no linecard bay.
             bays_by_slot[ifname] = orphan_optic_bay(ifname, optic)
         else:
