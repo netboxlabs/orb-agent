@@ -105,6 +105,11 @@ _EOS_LINECARD_RE = re.compile(r"^Linecard(\d+)$", re.IGNORECASE)
 _EOS_SUPERVISOR_RE = re.compile(r"^Supervisor(\d+)$", re.IGNORECASE)
 _EOS_FABRIC_RE = re.compile(r"^Fabric(\d+)$", re.IGNORECASE)
 _EOS_PORT_RE = re.compile(r"^Ethernet(\d+)(?:/\d+)*$", re.IGNORECASE)
+# Bare EthernetN (no slash) is Arista's fixed-switch signature: cardSlots is
+# always empty on those devices, and a slashed EthernetN/P name never occurs
+# without cardSlots populated. Distinguishes promotion (bare) from decline
+# (slashed) in _eos_attach_transceivers — matching stays on _EOS_PORT_RE.
+_EOS_BARE_PORT_RE = re.compile(r"^Ethernet\d+$", re.IGNORECASE)
 
 
 def classify_module_type_arista_eos(pid: str, name: str) -> str:
@@ -213,7 +218,11 @@ def _eos_attach_transceivers(
     whose slot has no bay but IS claimed is declined rather than promoted —
     the linecard exists in hardware, just missing from ``lc_bays`` because
     its own row was unusable, so promoting the optic here would invent a
-    chassis-level topology instead of reporting the real modular one.
+    chassis-level topology instead of reporting the real modular one. This
+    is a second line of defence: the primary gate is the bare/slashed name
+    check below, which also catches a ``LinecardN`` slot ``cardSlots``
+    omits entirely (no row at all to claim it) rather than merely names
+    unusably.
     """
     interfaces_by_bay: dict[str, list[str]] = {}
     for ifname, entry in xcvr_slots.items():
@@ -234,6 +243,12 @@ def _eos_attach_transceivers(
             model=pid, serial=sn, type="transceiver", description=descr,
         )
         if parent is None or parent.module is None:
+            if not _EOS_BARE_PORT_RE.match(ifname):
+                logger.debug(
+                    "eos.get_modules: declining promotion of %s (slashed port name implies a modular chassis; only a bare name promotes)",
+                    ifname,
+                )
+                continue
             if slot_num in claimed_linecard_slots:
                 logger.debug(
                     "eos.get_modules: declining promotion of %s onto slot %s (cardSlots claims %s but its row was unusable)",
@@ -267,13 +282,19 @@ def _eos_get_modules_impl(driver) -> dict | None:
     ``"Linecard1"``) and ``position`` is the trailing integer.
 
     Fixed switches report empty ``cardSlots`` with optics listed directly
-    under bare port names in ``xcvrSlots``; those are promoted to
-    device-rooted bays rather than dropped (see
-    ``_eos_attach_transceivers``). An optic whose slot IS named by the raw
-    ``cardSlots`` payload (``claimed_linecard_slots``, from
-    ``_eos_claimed_linecard_slots``) but has no usable bay is declined
-    instead of promoted — that linecard exists in hardware, it just didn't
-    survive ``_eos_extract_card_bays``'s usability filter. Returns None on:
+    under BARE port names in ``xcvrSlots`` (``Ethernet1``, no slash) —
+    Arista is the only vendor that drops the slot element on a fixed
+    switch. Only a bare name promotes to a device-rooted bay (see
+    ``_EOS_BARE_PORT_RE`` in ``_eos_attach_transceivers``); a slashed
+    ``EthernetN/P`` name means a modular chassis and is never promoted,
+    even when the corresponding ``LinecardN`` is entirely absent from
+    ``cardSlots`` — Arista has no ``show module`` equivalent to cross-check
+    slot occupancy against, so the bare/slashed distinction stands in for
+    it. An optic whose slot IS named by the raw ``cardSlots`` payload
+    (``claimed_linecard_slots``, from ``_eos_claimed_linecard_slots``) but
+    has no usable bay is declined as a second line of defence — that
+    linecard exists in hardware, it just didn't survive
+    ``_eos_extract_card_bays``'s usability filter. Returns None on:
       - eAPI call failure.
       - No Supervisor / Linecard / Fabric entries survive classification
         AND no transceiver was recognized either.
