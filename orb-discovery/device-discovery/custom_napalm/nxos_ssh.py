@@ -230,11 +230,14 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     directly. The wrapper handles enable-mode escalation, banner stripping,
     and per-command timeout normalization the raw Netmiko session exposes.
 
-    Fixed switches report 0 or 1 show-module self-rows and no populated
+    Fixed switches report exactly one show-module self-row and no populated
     slot bays; their optics are promoted to device-rooted bays instead of
     being dropped (see ``_nxos_ssh_attach_transceivers``). Returns None
-    when the SSH calls fail, show inventory yields no rows, or no
-    supervisor / linecard slots survive AND no transceiver was recognized.
+    when the SSH calls fail, show inventory yields no rows, show module
+    yields zero rows — unsupported, truncated, or otherwise unparseable
+    text is not proof of a fixed switch, so module discovery is declined
+    rather than promoting a partial inventory — or no supervisor / linecard
+    slots survive AND no transceiver was recognized.
     """
     try:
         sm_out = driver._send_command("show module") or ""
@@ -264,10 +267,13 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     inv_by_slot, transceivers_by_ifname = _nxos_ssh_parse_inventory(inv_rows)
 
     xbar_slots = _nxos_ssh_xbar_slots(sm_out)
-    # Fixed switch heuristic: 0 or 1 show-module rows is the chassis acting
-    # as its own "slot 1", so no slot bays are built. Optics still count —
-    # a fixed switch's ports carry them with no linecard above.
-    if not sm_rows or len(sm_rows) <= 1:
+    if not sm_rows:
+        logger.warning("nxos_ssh.get_modules: show module returned no parseable rows")
+        return None
+    # Fixed switch heuristic: EXACTLY one show-module row is the chassis
+    # acting as its own "slot 1", so no slot bays are built. Optics still
+    # count — a fixed switch's ports carry them with no linecard above.
+    if len(sm_rows) == 1:
         bays_by_slot = {}
     else:
         bays_by_slot = _nxos_ssh_build_slot_bays(sm_rows, xbar_slots, inv_by_slot)

@@ -1,0 +1,9 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 9504 4-slot chassis\"", "productid": "\"N9K-C9504\"", "vendorid": "V01", "serialnum": "\"FOC40001CHA\""},
+      {"name": "\"Slot 3\"", "desc": "\"36-port 100G linecard\"", "productid": "\"N9K-X9736C-FX\"", "vendorid": "V01", "serialnum": "\"FOC40001LC03\""},
+      {"name": "\"Ethernet3/1\"", "desc": "\"QSFP-100G-LR4\"", "productid": "\"QSFP-100G-LR4\"", "vendorid": "V01", "serialnum": "\"OPT40001001\""}
+    ]
+  }
+}
