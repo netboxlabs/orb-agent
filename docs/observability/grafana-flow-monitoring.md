@@ -199,11 +199,11 @@ inventory changes. For ASN, mount a `GeoLite2-ASN.mmdb` and set `geo_asn`.
 
 ## Import the dashboard
 
-In Grafana, import the **Flow Overview** dashboard JSON and select your metrics datasource
+In Grafana, import [`dashboards/flow-overview.json`](dashboards/flow-overview.json) — the
+**Flow Overview** dashboard shipped alongside this guide — and select your metrics datasource
 (Mimir, Grafana Cloud, or Prometheus). Panels: throughput (bytes + packets), protocol mix,
 top source IPs / dest ports / conversations / interfaces — with enriched device/interface
 names.
-
 ## Metrics reference
 
 - **Counters:** `flow_in/out_bytes`, `flow_in/out_packets`, split by TCP/UDP/other-L4 and
