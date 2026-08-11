@@ -101,10 +101,10 @@ func newModuleInventory() ModuleInventory {
 	}
 }
 
-// Optic PID prefixes — pluggable transceivers across Cisco / generic
-// vendors. Matched only when the row sits under a class=9 module
-// parent; PID alone is insufficient (a chassis-level optic-shaped PID
-// is treated as a linecard).
+// opticPIDPrefixes lists PID prefixes that identify a transceiver across
+// vendors. An optic PID is sufficient on its own — a transceiver is a
+// transceiver whether it sits under a linecard or directly in a fixed
+// chassis port.
 var opticPIDPrefixes = []string{"QSFP-", "SFP-", "X2-", "GLC-", "CFP-", "XENPAK-", "XFP-"}
 
 // isOpticPID reports whether a row's effective PID names a transceiver.
@@ -164,10 +164,10 @@ func classifyModule(model, vendorType string, hasModuleParent bool) ModuleType {
 		return ModuleTypeFan
 	}
 
-	// Transceiver requires BOTH a module-class ancestor AND an optic
-	// PID — depth alone catches non-optic sub-modules; PID alone
-	// catches spare optics inventoried at chassis level.
-	if hasModuleParent && isOpticPID(model, vendorType) {
+	// An optic PID identifies a transceiver wherever it sits. Requiring a
+	// class=9 ancestor mistyped every optic on a fixed-port platform as a
+	// linecard, and a wrong type persists: Diode ingest never retracts.
+	if isOpticPID(model, vendorType) {
 		return ModuleTypeTransceiver
 	}
 	if !hasModuleParent && isSupervisorPID(upper) {
@@ -308,30 +308,41 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		return bayIdx, parentModuleIdx, reachedChassis, true
 	}
 
-	// Process class=9 rows in EntIndex-ascending order so dedup
+	// Process module-bay-shaped rows in EntIndex-ascending order so dedup
 	// "first occurrence wins" is deterministic. ENTITY-MIB indexes are
 	// numeric — a lex sort would put "10" before "9" and pick the wrong
 	// dedup winner, so compare as integers with a lex tiebreaker for
 	// any non-numeric edge cases.
-	classNineIdxs := make([]string, 0, len(byIdx))
+	//
+	// Class 9 is the module class, but a transceiver is published as a
+	// container or as a port depending on vendor. Widen to those two
+	// classes for optic-PID rows only — a bare cage or a port row without
+	// an optic PID is not a module bay.
+	moduleIdxs := make([]string, 0, len(byIdx))
 	for _, r := range byIdx {
-		if r.Class != entPhysicalClassModule {
+		switch r.Class {
+		case entPhysicalClassModule:
+			if isOpticSubEntity(r, byIdx) {
+				logger.Debug("module discovery: optic sub-entity skipped",
+					"ent", r.EntIndex,
+					"descr", r.Descr,
+					"reason", "optic_sub_entity")
+				continue
+			}
+		case entPhysicalClassContainer, entPhysicalClassPort:
+			if !isOpticPID(r.Model, r.VendorType) {
+				continue
+			}
+		default:
 			continue
 		}
-		if isOpticSubEntity(r, byIdx) {
-			logger.Debug("module discovery: optic sub-entity skipped",
-				"ent", r.EntIndex,
-				"descr", r.Descr,
-				"reason", "optic_sub_entity")
-			continue
-		}
-		classNineIdxs = append(classNineIdxs, r.EntIndex)
+		moduleIdxs = append(moduleIdxs, r.EntIndex)
 	}
-	sort.Slice(classNineIdxs, func(i, j int) bool {
-		ai, errI := strconv.Atoi(classNineIdxs[i])
-		aj, errJ := strconv.Atoi(classNineIdxs[j])
+	sort.Slice(moduleIdxs, func(i, j int) bool {
+		ai, errI := strconv.Atoi(moduleIdxs[i])
+		aj, errJ := strconv.Atoi(moduleIdxs[j])
 		if errI != nil || errJ != nil || ai == aj {
-			return classNineIdxs[i] < classNineIdxs[j]
+			return moduleIdxs[i] < moduleIdxs[j]
 		}
 		return ai < aj
 	})
@@ -341,7 +352,7 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 	// child — used by the empty-bay harvest below.
 	bayHasChild := make(map[string]bool)
 
-	for _, idx := range classNineIdxs {
+	for _, idx := range moduleIdxs {
 		r := byIdx[idx]
 		bayIdx, parentModuleIdx, reachedChassis, chainOK := walkParents(r)
 		if !chainOK {
