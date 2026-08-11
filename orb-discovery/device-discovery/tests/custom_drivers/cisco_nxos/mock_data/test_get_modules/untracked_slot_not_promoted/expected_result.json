@@ -1,0 +1,31 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "N9K-SUP-A",
+            "serial": "FOC81001SUP1",
+            "description": "Supervisor Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "3",
+          "position": "3",
+          "module": {
+            "model": "N9K-X9736C-FX",
+            "serial": "FOC81001LC03",
+            "description": "36-port 100G linecard",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}
