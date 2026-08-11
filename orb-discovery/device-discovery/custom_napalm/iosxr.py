@@ -78,6 +78,31 @@ def _iosxr_strip_inventory_prefix(name: str) -> str:
     return _IOSXR_NAME_PREFIX_RE.sub("", name or "")
 
 
+# The same NAME patterns _iosxr_build_top_bays uses to recognize a card row
+# (linecard, RP/RSP, fabric/switch) — matched here unconditionally, before
+# the pid/sn usability filter, so a card whose own row is unusable still
+# claims its slot. See _iosxr_claimed_slot_prefix.
+_IOSXR_CARD_ROW_RES = (_IOSXR_LC_RE, _IOSXR_RP_RE, _IOSXR_FAB_RE)
+
+
+def _iosxr_claimed_slot_prefix(name: str) -> str | None:
+    """
+    Return the ``<rack>/<slot>/`` prefix a card-identifying NAME claims, or None.
+
+    Tested against the RAW name, ahead of any pid/sn or classification
+    filter, so a card row that later turns out unusable (blank PID or
+    serial) still claims its slot. Only rows that identify a card by NAME
+    (linecard, RP/RSP, fabric/switch) claim a prefix; port and PSU/fan rows
+    return None.
+    """
+    if not any(pattern.match(name) for pattern in _IOSXR_CARD_ROW_RES):
+        return None
+    parts = name.split("/")
+    if len(parts) < 2:
+        return None
+    return f"{parts[0]}/{parts[1]}/"
+
+
 def classify_module_type_iosxr(pid: str, name: str) -> str:
     """
     Classify an IOS-XR inventory row into a Module type.
@@ -112,13 +137,31 @@ def _iosxr_member_of(name: str) -> int | None:
         return None
 
 
-def _iosxr_build_top_bays(rows: list[dict]) -> dict[int, list[_ModuleBay]]:
-    """First pass: build top-level slot bays keyed by rack id."""
+def _iosxr_build_top_bays(
+    rows: list[dict],
+) -> tuple[dict[int, list[_ModuleBay]], set[str]]:
+    """
+    First pass: build top-level slot bays keyed by rack id.
+
+    Also returns ``claimed_slot_prefixes``: every ``<rack>/<slot>/`` prefix
+    a RAW row claims by NAME alone (see ``_iosxr_claimed_slot_prefix`),
+    collected before the ``pid and sn`` usability filter below and before
+    any type/classification filter. A prefix lands in this set even when
+    its own row turns out unusable (blank PID or serial); the promotion
+    pass must then decline any optic under that prefix, because the slot's
+    parent exists in hardware — this row simply failed to describe it
+    usably. Promoting the optic to a device-rooted bay in that case would
+    invent a chassis-level parent for hardware that already has one.
+    """
     bays_by_rack: dict[int, list[_ModuleBay]] = {}
+    claimed_slot_prefixes: set[str] = set()
     for row in rows:
         name = _iosxr_strip_inventory_prefix(
             (row.get("name") or "").strip().strip('"'),
         )
+        prefix = _iosxr_claimed_slot_prefix(name)
+        if prefix:
+            claimed_slot_prefixes.add(prefix)
         pid = (row.get("pid") or "").strip()
         sn = (row.get("sn") or "").strip()
         descr = (row.get("descr") or "").strip().strip('"')
@@ -134,7 +177,7 @@ def _iosxr_build_top_bays(rows: list[dict]) -> dict[int, list[_ModuleBay]]:
             name=name, position=name,
             module=_ModuleEntry(model=pid, serial=sn, type=mtype, description=descr),
         ))
-    return bays_by_rack
+    return bays_by_rack, claimed_slot_prefixes
 
 
 def _iosxr_collect_all_optics(rows: list[dict]) -> dict[str, _ModuleEntry]:
@@ -168,6 +211,7 @@ def _iosxr_promote_orphan_optics(
     vsf: bool,
     bays_by_rack: dict[int, list[_ModuleBay]],
     ifaces_by_member: dict[int | None, dict[str, list[str]]],
+    claimed_slot_prefixes: set[str],
 ) -> None:
     """
     Promote optics the bay walk never claimed to device-rooted bays, in place.
@@ -186,6 +230,14 @@ def _iosxr_promote_orphan_optics(
     emits one rack) or warn-dropped a layer away by translate as an orphan
     member. Refusing here is what gives the drop a name; nothing incorrect
     reaches NetBox either way.
+
+    ``claimed_slot_prefixes`` (see ``_iosxr_build_top_bays``) names every
+    ``<rack>/<slot>/`` prefix the RAW inventory already accounted for by
+    NAME alone. An optic under a claimed prefix is declined even when its
+    rack is otherwise in the roster (e.g. because a sibling card in the
+    same rack survived) — that slot's own card exists in hardware, it just
+    didn't survive the pid/sn filter, so promoting the optic here would
+    invent a device-rooted parent for a slot that already has one.
     """
     for pname, optic in optics.items():
         if pname in consumed:
@@ -195,6 +247,13 @@ def _iosxr_promote_orphan_optics(
             logger.warning(
                 "iosxr.get_modules: orphan optic %s rack %s not in chassis set",
                 pname, rack,
+            )
+            continue
+        if any(pname.startswith(prefix) for prefix in claimed_slot_prefixes):
+            logger.debug(
+                "iosxr.get_modules: declining promotion of %s (inventory claims its "
+                "slot but the row was unusable)",
+                pname,
             )
             continue
         member = rack if vsf else None
@@ -298,7 +357,7 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
         return None
 
     optics = _iosxr_collect_all_optics(rows)
-    bays_by_rack = _iosxr_build_top_bays(rows)
+    bays_by_rack, claimed_slot_prefixes = _iosxr_build_top_bays(rows)
     if not bays_by_rack and not optics:
         return None
 
@@ -311,7 +370,7 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
         rows, bays_by_rack, vsf, optics, consumed,
     )
     _iosxr_promote_orphan_optics(
-        optics, consumed, vsf, bays_by_rack, ifaces_by_member,
+        optics, consumed, vsf, bays_by_rack, ifaces_by_member, claimed_slot_prefixes,
     )
 
     if vsf:

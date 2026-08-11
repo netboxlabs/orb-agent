@@ -1,0 +1,12 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "0/0/CPU0", "position": "0/0/CPU0", "module": {"model": "A9K-24X10GE-SE", "serial": "FOX9012JKLM", "description": "ASR 9000 24-Port 10GE Line Card, Service Edge Optimized", "type": "linecard", "sub_bays": [
+          {"name": "0/0/0", "position": "0/0/0", "module": {"model": "SFP-10G-LR", "serial": "OPTIC00000001", "description": "Cisco SFP+ 10G LR Optics", "type": "transceiver", "sub_bays": []}}
+        ]}}
+      ],
+      "interfaces_by_bay": {"0/0/CPU0": ["0/0/0"], "0/0/0": ["0/0/0"]}
+    }
+  }
+}
