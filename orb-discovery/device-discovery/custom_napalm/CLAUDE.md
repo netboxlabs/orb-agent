@@ -347,8 +347,19 @@ emission contract, the three modes, and the canonical envelope shape.
 bay in order to emit a transceiver. Fixed-port platforms report optics with nothing
 above them, and optics in the fixed ports of a partly-modular chassis have no parent
 either. Collect optics independently of the bay walk, attach the ones whose parent
-resolves, and promote the rest with `_modules.orphan_optic_bay(ifname, optic)`. Gate
-on "no bays AND no optics", never on "no bays" alone.
+resolves, and promote the rest with `orphan_optic_bay(ifname, optic)` (imported
+directly from `custom_napalm._modules`). Gate on "no bays AND no optics", never on
+"no bays" alone.
+
+**Promote only a row that is already a transceiver with BOTH a model and a serial.**
+This precondition is what keeps promotion safe, and it is not optional. It means the
+change is either a correct fix or a no-op on hardware you cannot sample — never a
+source of invented data. Do not promote a row carrying only a serial (a DOM / cage
+reading with no PID, for instance): `_modules._validate_bay` requires only a serial,
+so such a row would survive validation and land in NetBox as
+`ModuleType(model="Unknown")`, collapsing every unidentified optic across every
+device into one bogus module type. A row the device serialised but did not identify
+should be skipped with a warning naming the interface, not guessed at.
 
 ## Mock fakes for structured-API drivers
 
