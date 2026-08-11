@@ -52,6 +52,10 @@ _IOSXR_PARSE_ERRORS = (TextFSMError, ParsingException)
 _IOSXR_RP_RE = re.compile(r"^(?P<rack>\d+)/(?:RP|RSP)\d+/CPU\d+$")
 _IOSXR_LC_RE = re.compile(r"^(?P<rack>\d+)/\d+/CPU\d+$")
 _IOSXR_FAB_RE = re.compile(r"^(?P<rack>\d+)/(?:FC|SC)\d+$")
+# The chassis's own top-level inventory row, e.g. NAME: "Rack 0". Its PID is
+# the chassis identity an RP/RSP row is compared against for the fixed-port
+# positive-evidence gate (see _iosxr_rack_is_fixed_port).
+_IOSXR_RACK_RE = re.compile(r"^Rack\s+(?P<rack>\d+)$", re.IGNORECASE)
 # Port-slot pattern. Accepts both the 3-tuple form (`0/0/0`) and the 4-tuple
 # form (`0/0/CPU0/2`, `0/0/0/14`) — the latter appears for transceiver
 # positions on many ASR9k releases. Optional `:<sub>` suffix covers breakout
@@ -180,6 +184,109 @@ def _iosxr_build_top_bays(
     return bays_by_rack, claimed_slot_prefixes
 
 
+def _iosxr_rack_chassis_pids(rows: list[dict]) -> dict[int, str]:
+    """
+    Return each rack's own "Rack <n>" row PID, keyed by rack id, from the RAW rows.
+
+    Read unconditionally, ahead of any pid/sn usability filter — this is
+    the chassis identity an RP/RSP row is compared against for
+    ``_iosxr_rack_is_fixed_port`` clause (A), not itself gated by whether
+    the "Rack <n>" row would otherwise be usable.
+    """
+    pids: dict[int, str] = {}
+    for row in rows:
+        name = _iosxr_strip_inventory_prefix((row.get("name") or "").strip().strip('"'))
+        m = _IOSXR_RACK_RE.match(name)
+        if m:
+            pids[int(m.group("rack"))] = (row.get("pid") or "").strip()
+    return pids
+
+
+def _iosxr_rp_pids_by_rack(rows: list[dict]) -> dict[int, list[str]]:
+    """
+    Return every RP/RSP CPU0 row's own PID, grouped by rack id, from the RAW rows.
+
+    Read unconditionally, ahead of any pid/sn usability filter, so a rack
+    whose RP row is present but was never usable still reports one here —
+    ``_iosxr_rack_is_fixed_port`` clause (A) still requires PID equality
+    against the chassis row to actually recognize it, so an unusable RP
+    row with the wrong PID does not falsely grant fixed-port status.
+    """
+    out: dict[int, list[str]] = {}
+    for row in rows:
+        name = _iosxr_strip_inventory_prefix((row.get("name") or "").strip().strip('"'))
+        m = _IOSXR_RP_RE.match(name)
+        if m:
+            out.setdefault(int(m.group("rack")), []).append((row.get("pid") or "").strip())
+    return out
+
+
+def _iosxr_row_pid_by_name(rows: list[dict]) -> dict[str, str]:
+    """
+    Map every RAW row's (prefix-stripped) NAME to its own PID, unfiltered.
+
+    Used only by ``_iosxr_optic_has_mpa_parent``: a modular port adapter
+    (MPA) row's NAME has the same plain ``<rack>/<slot>/<n>`` shape a port
+    uses, so it never matches a card-row pattern and never claims a
+    ``claimed_slot_prefixes`` entry (see ``_iosxr_claimed_slot_prefix``). A
+    row existing at an optic's immediate parent path with a real,
+    non-optic PID is the only positive evidence of that case.
+    """
+    out: dict[str, str] = {}
+    for row in rows:
+        name = _iosxr_strip_inventory_prefix((row.get("name") or "").strip().strip('"'))
+        if name:
+            out[name] = (row.get("pid") or "").strip()
+    return out
+
+
+def _iosxr_optic_has_mpa_parent(pname: str, row_pid_by_name: dict[str, str]) -> bool:
+    """
+    Return True when a raw row names the optic's immediate parent path with a real PID.
+
+    ``pname`` is the optic's own (already prefix-stripped) NAME, e.g.
+    ``0/0/1/2``. Stripping its last element gives the parent path
+    (``0/0/1``) — the slot an MPA would occupy. A blank PID at that path
+    is not treated as positive evidence (it reads the same as no row at
+    all); only a real, non-optic PID counts.
+    """
+    parts = pname.split("/")
+    if len(parts) < 2:
+        return False
+    parent_pid = row_pid_by_name.get("/".join(parts[:-1]), "")
+    return bool(parent_pid) and not is_optic_pid(parent_pid)
+
+
+def _iosxr_rack_is_fixed_port(
+    rack: int,
+    rack_pids: dict[int, str],
+    rp_pids_by_rack: dict[int, list[str]],
+    claimed_slot_prefixes: set[str],
+) -> bool:
+    """
+    Positive-evidence gate: may an orphan optic on RACK be promoted to a device-rooted bay?
+
+    (A) positive: an RP/RSP CPU0 row exists for this rack and its own PID
+    equals that rack's "Rack <n>" row PID — on a fixed-port XR box the
+    route processor IS the chassis, stated directly by the vendor in rows
+    already fetched, not inferred from the absence of a claim.
+
+    (B) narrowed absence: the raw rows claim no card-shaped prefix at all
+    for this rack (see ``claimed_slot_prefixes`` / ``_iosxr_build_top_bays``)
+    — RP/RSP and every linecard/fabric row are missing simultaneously.
+    Both must-promote fixed-port fixtures report no RP row at all, so this
+    clause has to stay; it is deliberately narrower than "this one slot is
+    unclaimed" — a rack with ANY surviving card-shaped row fails it, even
+    when the specific slot underneath the optic was itself never claimed.
+    """
+    chassis_pid = rack_pids.get(rack)
+    if chassis_pid and any(
+        pid == chassis_pid for pid in rp_pids_by_rack.get(rack, []) if pid
+    ):
+        return True
+    return not any(prefix.startswith(f"{rack}/") for prefix in claimed_slot_prefixes)
+
+
 def _iosxr_collect_all_optics(rows: list[dict]) -> dict[str, _ModuleEntry]:
     """
     Index every optic row in inventory by its port name.
@@ -212,6 +319,9 @@ def _iosxr_promote_orphan_optics(
     bays_by_rack: dict[int, list[_ModuleBay]],
     ifaces_by_member: dict[int | None, dict[str, list[str]]],
     claimed_slot_prefixes: set[str],
+    rack_pids: dict[int, str],
+    rp_pids_by_rack: dict[int, list[str]],
+    row_pid_by_name: dict[str, str],
 ) -> None:
     """
     Promote optics the bay walk never claimed to device-rooted bays, in place.
@@ -229,7 +339,9 @@ def _iosxr_promote_orphan_optics(
     minted and then dropped without a word by the standalone tail (which
     emits one rack) or warn-dropped a layer away by translate as an orphan
     member. Refusing here is what gives the drop a name; nothing incorrect
-    reaches NetBox either way.
+    reaches NetBox either way. This is a different question from the two
+    gates below, which ask whether a RACK is fixed-port at all, so it stays
+    live on purpose while they are computed from a pre-loop snapshot.
 
     ``claimed_slot_prefixes`` (see ``_iosxr_build_top_bays``) names every
     ``<rack>/<slot>/`` prefix the RAW inventory already accounted for by
@@ -238,6 +350,17 @@ def _iosxr_promote_orphan_optics(
     same rack survived) — that slot's own card exists in hardware, it just
     didn't survive the pid/sn filter, so promoting the optic here would
     invent a device-rooted parent for a slot that already has one.
+
+    ``_iosxr_optic_has_mpa_parent`` catches the case a slot-prefix claim
+    can't: a modular port adapter's NAME collides with the plain port-slot
+    shape, so it never lands in ``claimed_slot_prefixes`` at all.
+
+    ``_iosxr_rack_is_fixed_port`` (``rack_pids`` / ``rp_pids_by_rack``,
+    also snapshotted before this loop runs — see ``_iosxr_build_top_bays``)
+    is the positive-evidence gate on the rack overall: a rack with a
+    surviving card-shaped row that isn't itself the chassis (clause A)
+    fails it even when the specific slot under this optic was never
+    claimed by any row.
     """
     for pname, optic in optics.items():
         if pname in consumed:
@@ -254,6 +377,20 @@ def _iosxr_promote_orphan_optics(
                 "iosxr.get_modules: declining promotion of %s (inventory claims its "
                 "slot but the row was unusable)",
                 pname,
+            )
+            continue
+        if _iosxr_optic_has_mpa_parent(pname, row_pid_by_name):
+            logger.debug(
+                "iosxr.get_modules: declining promotion of %s (a raw inventory row "
+                "names its parent path with a non-optic PID — a modular port adapter)",
+                pname,
+            )
+            continue
+        if not _iosxr_rack_is_fixed_port(rack, rack_pids, rp_pids_by_rack, claimed_slot_prefixes):
+            logger.debug(
+                "iosxr.get_modules: declining promotion of %s (no positive evidence "
+                "rack %s's own parent is the chassis)",
+                pname, rack,
             )
             continue
         member = rack if vsf else None
@@ -361,6 +498,13 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
     if not bays_by_rack and not optics:
         return None
 
+    # Snapshotted beside claimed_slot_prefixes, from the same raw rows and
+    # before the same pid/sn filter — the positive-evidence inputs for
+    # _iosxr_rack_is_fixed_port / _iosxr_optic_has_mpa_parent below.
+    rack_pids = _iosxr_rack_chassis_pids(rows)
+    rp_pids_by_rack = _iosxr_rp_pids_by_rack(rows)
+    row_pid_by_name = _iosxr_row_pid_by_name(rows)
+
     # Derived from slot bays only, before promotion: a fixed-port device has
     # no slot bays at all, so it stays standalone and collapses to the
     # None-bucket via the tail below rather than becoming a 1-member cluster.
@@ -371,6 +515,7 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
     )
     _iosxr_promote_orphan_optics(
         optics, consumed, vsf, bays_by_rack, ifaces_by_member, claimed_slot_prefixes,
+        rack_pids, rp_pids_by_rack, row_pid_by_name,
     )
     # Re-check after promotion. The gate above runs before the claimed-slot
     # guard can refuse anything, so it cannot see the case where every card row
