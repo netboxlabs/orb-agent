@@ -1,0 +1,147 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "title": "Flow Overview",
+  "uid": "pktvisor-flow",
+  "tags": ["pktvisor", "netflow", "flow"],
+  "timezone": "",
+  "schemaVersion": 39,
+  "version": 2,
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "10s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Flow records ingested",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(flow_records_flows)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Unique conversations (cardinality)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(flow_cardinality_conversations)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Throughput by bytes (in vs out)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "in", "expr": "sum(flow_in_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "legendFormat": "out", "expr": "sum(flow_out_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Throughput by packets (in vs out)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "in", "expr": "sum(flow_in_packets)", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "legendFormat": "out", "expr": "sum(flow_out_packets)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Protocol mix by bytes (TCP / UDP / other L4)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "legendFormat": "TCP", "expr": "sum(flow_in_tcp_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "B", "legendFormat": "UDP", "expr": "sum(flow_in_udp_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "refId": "C", "legendFormat": "other", "expr": "sum(flow_in_other_l4_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Top source IPs by bytes",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 13 },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "format": "table", "instant": true, "expr": "topk(10, flow_top_in_src_ips_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "__name__": true, "handler": true, "policy": true, "tap": true, "job": true, "instance": true },
+          "renameByName": { "device": "Device", "device_interface": "Interface", "ip": "Source IP", "Value": "Bytes", "Value #A": "Bytes" }
+        } }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Top destination ports by bytes",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "format": "table", "instant": true, "expr": "topk(10, flow_top_in_dst_ports_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "__name__": true, "handler": true, "policy": true, "tap": true, "job": true, "instance": true },
+          "renameByName": { "device": "Device", "device_interface": "Interface", "port": "Dst Port", "Value": "Bytes", "Value #A": "Bytes" }
+        } }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Top conversations by bytes",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 22 },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "format": "table", "instant": true, "expr": "topk(10, flow_top_conversations_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "__name__": true, "handler": true, "policy": true, "tap": true, "job": true, "instance": true },
+          "renameByName": { "device": "Device", "device_interface": "Interface", "Value": "Bytes", "Value #A": "Bytes" }
+        } }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "Top input interfaces by bytes — enriched from NetBox",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 25 },
+      "options": { "showHeader": true },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "format": "table", "instant": true, "expr": "topk(10, flow_top_in_interfaces_bytes)", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ],
+      "transformations": [
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "__name__": true, "handler": true, "policy": true, "tap": true, "job": true, "instance": true },
+          "renameByName": { "device": "Device", "device_interface": "Interface", "Value": "Bytes", "Value #A": "Bytes" }
+        } }
+      ]
+    }
+  ]
+}
