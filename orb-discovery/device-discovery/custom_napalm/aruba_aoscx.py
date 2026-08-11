@@ -221,6 +221,18 @@ _ARUBA_NON_BAY_SUBSYSTEM_TYPES = frozenset({
     "chassis", "power_supply", "psu", "fan", "fan_tray", "mm_fan", "temp_sensor",
 })
 
+# Aruba CX platform families known to ship fixed-port only (no line_card /
+# fabric_module subsystems ever exist for them). This is a positive-evidence
+# allowlist, not an inference from a missing subsystem: an unlisted or blank
+# chassis identity refuses promotion rather than assuming fixed (see
+# _aruba_is_known_fixed_family). "6300" also matches "6300M" chassis text,
+# but 6300M is listed too so the allowlist reads as a complete, self-
+# documenting family list rather than relying on that overlap.
+_ARUBA_FIXED_FAMILIES = ("6200", "6300M", "6300", "8100", "8320", "8325", "8360")
+_ARUBA_FAMILY_RE = re.compile(
+    r"\b(?:" + "|".join(_ARUBA_FIXED_FAMILIES) + r")\b", re.IGNORECASE,
+)
+
 
 def classify_module_type_aruba(subsystem_type: str, pid: str) -> str:
     """
@@ -385,6 +397,53 @@ def _aruba_claim_slot(slot_positions: set[str], stype: str, addr: str) -> None:
         )
 
 
+# A better signal than the family allowlist below would be the subsystem
+# `interfaces` collection nested under each `line_card` / `chassis` entry in
+# `system/subsystems` itself (still one GET, no new endpoint) — it would let
+# a slot's own subsystem row state which physical ports it owns directly,
+# closing the gap for an unlisted family without an allowlist at all. Not
+# implemented here: it needs one fixed-6300 and one modular-8400 capture of
+# that collection first to confirm its shape before relying on it.
+def _aruba_chassis_product_by_member(subs: dict) -> dict[int, tuple[str, str]]:
+    """
+    Return each ``chassis,<member>`` subsystem's own (part_number, product_name).
+
+    Read directly from the subsystems payload already fetched — no new
+    endpoint. This is the per-member positive-evidence source for
+    ``_aruba_is_known_fixed_family``: the subsystems and interfaces GETs are
+    non-atomic, so a chassis row is the only thing here guaranteed to
+    describe hardware that still exists, unlike a line_card row that can
+    legitimately be omitted by an OIR removal between the two requests.
+    """
+    out: dict[int, tuple[str, str]] = {}
+    for key, entry in subs.items():
+        if "," not in key or not isinstance(entry, dict):
+            continue
+        stype, addr = key.split(",", 1)
+        if stype.strip().lower() != "chassis":
+            continue
+        member = _aruba_member_of(addr.strip())
+        if member is None:
+            continue
+        pinfo = entry.get("product_info") or {}
+        pid = str(pinfo.get("part_number") or "").strip()
+        name = str(pinfo.get("product_name") or "").strip()
+        out[member] = (pid, name)
+    return out
+
+
+def _aruba_is_known_fixed_family(pid: str, product_name: str) -> bool:
+    """
+    Return True when PID or product name names a platform family known to ship fixed-port only.
+
+    Positive evidence only: an unlisted or blank chassis identity refuses
+    rather than assuming fixed, so a new Aruba family surfaces via the
+    WARNING in ``_aruba_promote_orphan_optics`` instead of silently
+    disabling discovery for it.
+    """
+    return bool(_ARUBA_FAMILY_RE.search(f"{pid} {product_name}"))
+
+
 def _aruba_build_bays(
     subs: dict,
     optics_by_slot: dict[str, list[tuple[str, _ModuleEntry]]],
@@ -397,6 +456,7 @@ def _aruba_build_bays(
     ifaces_by_member: dict[int | None, dict[str, list[str]]] = {}
     consumed_optic_slots: set[str] = set()
     slot_positions: set[str] = set()
+    chassis_product_by_member = _aruba_chassis_product_by_member(subs)
     for key, entry in subs.items():
         if "," not in key or not isinstance(entry, dict):
             continue
@@ -438,7 +498,7 @@ def _aruba_build_bays(
 
     _aruba_promote_orphan_optics(
         optics_by_slot, consumed_optic_slots, slot_positions, members, vsf,
-        bays_by_member, ifaces_by_member,
+        bays_by_member, ifaces_by_member, chassis_product_by_member,
     )
     return bays_by_member, ifaces_by_member
 
@@ -451,6 +511,7 @@ def _aruba_promote_orphan_optics(
     vsf: bool,
     bays_by_member: dict[int | None, list[_ModuleBay]],
     ifaces_by_member: dict[int | None, dict[str, list[str]]],
+    chassis_product_by_member: dict[int, tuple[str, str]],
 ) -> None:
     """
     Promote every optic on a slot no bay claimed to a device-rooted bay, in place.
@@ -462,6 +523,14 @@ def _aruba_promote_orphan_optics(
     declined rather than promoted, because the parent exists in hardware and
     promoting here would invent a chassis-level topology instead of
     reporting the real one.
+
+    A slot that is genuinely unclaimed (e.g. ``line_card,1/3`` omitted
+    entirely from the subsystems payload while ``system/interfaces`` still
+    reports an optic at ``1/3/1``) reaches the per-member family check
+    below instead: ``chassis_product_by_member`` (see
+    ``_aruba_chassis_product_by_member``) is the positive evidence that
+    this member's platform is known to ship fixed-port only. An unlisted
+    or blank chassis identity declines rather than promotes.
     """
     for slot_addr, optics in optics_by_slot.items():
         if slot_addr in consumed_optic_slots:
@@ -476,10 +545,19 @@ def _aruba_promote_orphan_optics(
         for ifname, optic in optics:
             # Fixed-port CX switches expose optics on slots with no line
             # module, so the optic has no parent bay to nest under.
-            member = _aruba_member_of(ifname) if vsf else None
+            member_addr = _aruba_member_of(ifname)
+            member = member_addr if vsf else None
             if vsf and member not in members:
                 logger.warning(
                     "aruba.get_modules: orphan optic %s member %s not in VSF set", ifname, member,
+                )
+                continue
+            pid, product_name = chassis_product_by_member.get(member_addr, ("", ""))
+            if not _aruba_is_known_fixed_family(pid, product_name):
+                logger.warning(
+                    "aruba.get_modules: declining promotion of %s (chassis part number "
+                    "%r is not a known fixed-port family)",
+                    ifname, pid,
                 )
                 continue
             bays_by_member.setdefault(member, []).append(

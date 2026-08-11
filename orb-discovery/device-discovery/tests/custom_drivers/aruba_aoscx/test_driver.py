@@ -71,6 +71,36 @@ class TestAOSCXDriver(BaseDriverTest):
             for r in caplog.records
         ), "declining promotion must name the claimed slot at debug"
 
+    def test_get_modules_unknown_chassis_family_declines_with_warning_naming_part_number(
+        self, caplog,
+    ) -> None:
+        """
+        An unknown chassis family must decline promotion and warn, naming the part number.
+
+        ``system/subsystems`` reports only a chassis row whose family (a
+        fictitious "9300") is not on the fixed-port allowlist, with no
+        line_card subsystem at all — the same shape a genuinely new Aruba
+        fixed-port family would report before its family is added to the
+        allowlist. The optic at ``1/1/1`` must be declined, and the WARNING
+        must name the chassis part number so a new family surfaces in logs
+        rather than silently disabling discovery for it.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "unknown_chassis_family_declined"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.aruba_aoscx"):
+            result = driver.get_modules()
+
+        assert result is None
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert any(
+            "JL999Z" in r.getMessage() and "not a known fixed-port family" in r.getMessage()
+            for r in warnings
+        ), "declining promotion for an unknown chassis family must name its part number"
+
     def test_get_modules_psu_fan_slot_collision_still_promotes_optic(self) -> None:
         """
         A PSU/fan sharing an optic slot's address does not suppress that optic.
