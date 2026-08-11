@@ -1,0 +1,35 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1/4",
+          "position": "1/4",
+          "module": {
+            "model": "JL363A",
+            "serial": "SG20KLC004",
+            "description": "8400X 32p 10G/25G SFP28",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "1/4/1",
+                "position": "1/4/1",
+                "module": {
+                  "model": "SFP-10G-LR",
+                  "serial": "OPTICCASEB02",
+                  "description": "",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1/4": ["1/4/1"],
+        "1/4/1": ["1/4/1"]
+      }
+    }
+  }
+}

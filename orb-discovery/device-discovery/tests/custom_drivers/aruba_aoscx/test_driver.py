@@ -30,6 +30,120 @@ class TestAOSCXDriver(BaseDriverTest):
         assert hasattr(self.driver_cls, "get_modules")
         assert callable(self.driver_cls.get_modules)
 
+    def test_get_modules_declines_promotion_onto_unusable_line_card_slot(self, caplog) -> None:
+        """
+        A claimed-but-unusable ``line_card`` slot is not promoted.
+
+        ``line_card,1/3`` is present (so slot ``1/3`` is claimed by the RAW
+        subsystem inventory) but its own row has a blank serial, so no bay
+        was built for it. The optic at ``1/3/1`` must NOT be promoted to a
+        device-rooted bay — that would invent a chassis-level parent for a
+        line card that genuinely exists in hardware. ``line_card,1/4`` (a
+        usable claim, in the same fixture) still promotes its own optic
+        normally, proving the guard doesn't overreach.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "line_card_row_unusable_not_promoted"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.aruba_aoscx"):
+            result = driver.get_modules()
+
+        assert result is not None
+        member = result["members"][None]
+        bay_names = {bay["name"] for bay in member["bays"]}
+        assert "1/3" not in bay_names
+        assert "1/3/1" not in bay_names
+        all_serials = {bay["module"]["serial"] for bay in member["bays"]} | {
+            sub["module"]["serial"]
+            for bay in member["bays"]
+            for sub in bay["module"]["sub_bays"]
+        }
+        assert "OPTICCASEB01" not in all_serials, (
+            "the optic on the claimed-but-unusable line_card,1/3 slot must not be promoted"
+        )
+        # line_card,1/4's own optic (a normal, usable claim) still promotes.
+        assert "OPTICCASEB02" in all_serials
+
+        assert any(
+            "1/3" in r.getMessage() and "unusable" in r.getMessage()
+            for r in caplog.records
+        ), "declining promotion must name the claimed slot at debug"
+
+    def test_get_modules_psu_fan_slot_collision_still_promotes_optic(self) -> None:
+        """
+        A PSU/fan sharing an optic slot's address does not suppress that optic.
+
+        ``power_supply,1/1`` and ``fan,1/1`` collide in address with a fixed
+        6300M's optic slot ``1/1``. Both are subsystem types positively
+        known to never be a bay, so neither claims the slot — the optic at
+        ``1/1/1`` is still promoted. A shape-only claim (not type-aware)
+        would have suppressed it.
+        """
+        mock_dir = self.mock_data_root / "test_get_modules" / "psu_fan_collision_still_promoted"
+        driver = self._build_driver(mock_dir)
+        result = driver.get_modules()
+        assert result is not None
+        member = result["members"][None]
+        assert len(member["bays"]) == 1
+        assert member["bays"][0]["name"] == "1/1/1"
+        assert member["bays"][0]["module"]["serial"] == "OPTICCOLL001"
+
+
+def test_unrecognised_subsystem_type_claims_slot_and_warns(caplog) -> None:
+    """
+    An unrecognised subsystem type at a two-segment addr claims the slot AND warns.
+
+    A brand-new subsystem kind this driver has never classified must fail
+    safe: claim the slot (so an optic there is declined rather than
+    promoted to a device-rooted bay) and say so at WARNING, naming the
+    type string, rather than silently behaving like a known non-bay type.
+    """
+    import logging
+    from unittest.mock import MagicMock
+
+    from napalm.base.exceptions import CommandErrorException
+
+    from custom_napalm.aruba_aoscx import _aruba_get_modules_impl
+
+    subsystems = {
+        "chassis,1": {
+            "product_info": {"part_number": "JL658A", "serial_number": "SGUNREC0001", "product_name": "6300M 48p"},
+        },
+        "environmental_module,1/2": {
+            "product_info": {"part_number": "", "serial_number": "", "product_name": ""},
+        },
+    }
+    interfaces = {
+        "1/2/1": {
+            "name": "1/2/1",
+            "hw_intf_info": {"product_number": "SFP-10G-LR", "serial_number": "OPTICUNREC01"},
+        },
+    }
+
+    def fake_get(path: str):
+        if path.startswith("system/subsystems"):
+            return subsystems
+        if path.startswith("system/interfaces"):
+            return interfaces
+        raise CommandErrorException(f"REST GET {path!r} returned HTTP 404: Not Found")
+
+    driver = MagicMock()
+    driver._get.side_effect = fake_get
+
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm.aruba_aoscx"):
+        result = _aruba_get_modules_impl(driver)
+
+    # The declined optic leaves nothing else to promote — get_modules
+    # returns None (the chassis row itself never becomes a bay either).
+    assert result is None
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(
+        "environmental_module" in r.message and "1/2" in r.message for r in warnings
+    ), "expected a warning naming the unrecognised subsystem type and its addr"
+
 
 def test_chassis_members_404_logs_debug_not_warning(caplog):
     """

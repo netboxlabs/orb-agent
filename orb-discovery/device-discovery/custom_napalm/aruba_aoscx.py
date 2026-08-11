@@ -210,6 +210,16 @@ _ARUBA_ADDR_RE = re.compile(r"^(\d+)")  # leading int of a subsystem addr "1/3" 
 # default an unrecognized subsystem to linecard.
 _ARUBA_SUPERVISOR_TYPES = frozenset({"management_module"})
 _ARUBA_LINECARD_TYPES = frozenset({"line_card", "fabric_module"})
+_ARUBA_BAY_SUBSYSTEM_TYPES = _ARUBA_SUPERVISOR_TYPES | _ARUBA_LINECARD_TYPES
+
+# Subsystem types positively known to NEVER be a module bay. Excluded from
+# claiming a slot position even though their addr can have the same
+# two-segment <member>/<slot> shape as a real bay — e.g. a power supply at
+# addr "1/1" on a fixed 6300M, which is also that platform's optic slot.
+# Claiming on shape alone would suppress that platform's optics entirely.
+_ARUBA_NON_BAY_SUBSYSTEM_TYPES = frozenset({
+    "chassis", "power_supply", "psu", "fan", "fan_tray", "mm_fan", "temp_sensor",
+})
 
 
 def classify_module_type_aruba(subsystem_type: str, pid: str) -> str:
@@ -340,6 +350,41 @@ def _aruba_ifaces_by_slot(ifaces) -> dict[str, list[str]]:
     return out
 
 
+def _aruba_claim_slot(slot_positions: set[str], stype: str, addr: str) -> None:
+    """
+    Record ``addr`` as a claimed slot position from a RAW subsystem row's type.
+
+    Called before the pid/sn usability filter and the ``mtype == "other"``
+    filter in ``_aruba_build_bays``, so a slot lands here even when its own
+    row is unusable (blank pid/sn) — the physical bay still exists; this is
+    the case this guard exists for: an inventory row that names a real slot
+    but can't describe it usably must still keep an optic in that slot from
+    being promoted to a device-rooted bay.
+
+    Type-aware, not shape-only: only a type positively known to never be a
+    bay is excluded (see ``_ARUBA_NON_BAY_SUBSYSTEM_TYPES``), so a PSU/fan
+    whose addr happens to collide with a real optic slot (e.g. "1/1" on a
+    fixed 6300M) can't suppress it. Anything else, including a type this
+    driver has never seen, claims the slot and — if unrecognised — warns:
+    failing safe (declining promotion) is the right default for an unknown
+    subsystem kind. A single-segment addr (e.g. a chassis's own "1") never
+    claims — only the two-segment ``<member>/<slot>`` shape does.
+    """
+    addr_parts = addr.split("/")
+    if len(addr_parts) != 2 or not all(addr_parts):
+        return
+    type_lower = stype.lower()
+    if type_lower in _ARUBA_BAY_SUBSYSTEM_TYPES:
+        slot_positions.add(addr)
+    elif type_lower not in _ARUBA_NON_BAY_SUBSYSTEM_TYPES:
+        slot_positions.add(addr)
+        logger.warning(
+            "aruba.get_modules: unrecognised subsystem type %r at %s; "
+            "claiming the slot so no optic is falsely promoted there",
+            stype, addr,
+        )
+
+
 def _aruba_build_bays(
     subs: dict,
     optics_by_slot: dict[str, list[tuple[str, _ModuleEntry]]],
@@ -351,12 +396,15 @@ def _aruba_build_bays(
     bays_by_member: dict[int | None, list[_ModuleBay]] = {}
     ifaces_by_member: dict[int | None, dict[str, list[str]]] = {}
     consumed_optic_slots: set[str] = set()
+    slot_positions: set[str] = set()
     for key, entry in subs.items():
         if "," not in key or not isinstance(entry, dict):
             continue
         stype, addr = key.split(",", 1)
         stype = stype.strip()
         addr = addr.strip()
+        _aruba_claim_slot(slot_positions, stype, addr)
+
         pinfo = entry.get("product_info") or {}
         pid = str(pinfo.get("part_number") or "").strip()
         sn = str(pinfo.get("serial_number") or "").strip()
@@ -389,7 +437,8 @@ def _aruba_build_bays(
         bays_by_member.setdefault(member, []).append(bay)
 
     _aruba_promote_orphan_optics(
-        optics_by_slot, consumed_optic_slots, members, vsf, bays_by_member, ifaces_by_member,
+        optics_by_slot, consumed_optic_slots, slot_positions, members, vsf,
+        bays_by_member, ifaces_by_member,
     )
     return bays_by_member, ifaces_by_member
 
@@ -397,14 +446,32 @@ def _aruba_build_bays(
 def _aruba_promote_orphan_optics(
     optics_by_slot: dict[str, list[tuple[str, _ModuleEntry]]],
     consumed_optic_slots: set[str],
+    slot_positions: set[str],
     members: set[int],
     vsf: bool,
     bays_by_member: dict[int | None, list[_ModuleBay]],
     ifaces_by_member: dict[int | None, dict[str, list[str]]],
 ) -> None:
-    """Promote every optic on a slot no bay claimed to a device-rooted bay, in place."""
+    """
+    Promote every optic on a slot no bay claimed to a device-rooted bay, in place.
+
+    ``slot_positions`` (see ``_aruba_build_bays``) names every slot a RAW
+    subsystem entry already claimed. A slot in this set but not in
+    ``consumed_optic_slots`` means the claiming row existed but never became
+    a bay (unusable pid/sn, or filtered by classification) — its optic is
+    declined rather than promoted, because the parent exists in hardware and
+    promoting here would invent a chassis-level topology instead of
+    reporting the real one.
+    """
     for slot_addr, optics in optics_by_slot.items():
         if slot_addr in consumed_optic_slots:
+            continue
+        if slot_addr in slot_positions:
+            logger.debug(
+                "aruba.get_modules: declining promotion at slot %s (subsystem inventory "
+                "claims the slot but its own row was unusable)",
+                slot_addr,
+            )
             continue
         for ifname, optic in optics:
             # Fixed-port CX switches expose optics on slots with no line
