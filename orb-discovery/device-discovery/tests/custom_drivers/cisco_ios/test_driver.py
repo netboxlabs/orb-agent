@@ -366,6 +366,38 @@ class TestIOSDriver(BaseDriverTest):
             {"name": "SwitchPort1/1"},
         ]) == 0
 
+    def test_count_distinct_switch_ids_recognizes_bare_numeric_names(self) -> None:
+        """
+        A bare-digit member NAME (no "Switch" text at all) counts too.
+
+        Some IOS-XE releases identify a stack member's own chassis row with
+        just the digit (``NAME: "1"``) rather than ``Switch 1`` —
+        ``_INVENTORY_CHASSIS_RE`` already accepts this shape for
+        ``get_chassis_members`` (see
+        ``test_get_chassis_members/numeric_inventory_names``). Without this,
+        a real stack that only ever names its members this way is
+        misdetected as a single standalone chassis.
+        """
+        from custom_napalm.ios import _count_distinct_switch_ids
+        assert _count_distinct_switch_ids([
+            {"name": "1"},
+            {"name": "2"},
+        ]) == 2
+        assert _count_distinct_switch_ids([
+            {"name": "1"},
+        ]) == 1
+        # Mixed: one member identified the bare-numeric way, the other via
+        # the standard "Switch N" prefix — still two distinct members.
+        assert _count_distinct_switch_ids([
+            {"name": "1"},
+            {"name": "Switch 2 Slot 1 Supervisor"},
+        ]) == 2
+        # A bare "Chassis" (no digit at all) must not count as a member —
+        # that's the standalone marker, not a VC row.
+        assert _count_distinct_switch_ids([
+            {"name": "Chassis"},
+        ]) == 0
+
     def test_inventory_vc_slot_regex_no_space_form(self) -> None:
         """`Switch1 Slot 2 Linecard` (no space after Switch) is supported too."""
         from custom_napalm.ios import _INVENTORY_VC_FRU_RE, _INVENTORY_VC_SLOT_RE

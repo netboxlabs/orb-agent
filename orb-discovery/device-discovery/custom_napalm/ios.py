@@ -697,12 +697,34 @@ _SWITCH_PREFIX_RE = re.compile(r"^Switch\s*(\d+)\b", re.IGNORECASE)
 
 
 def _count_distinct_switch_ids(inv_rows: list[dict]) -> int:
-    """Return the number of distinct ``Switch N`` member ids in inventory."""
+    """
+    Return the number of distinct member ids named in inventory.
+
+    Recognizes both the ``Switch N ...`` prefix (``_SWITCH_PREFIX_RE``) and
+    the bare-numeric chassis NAME some IOS-XE releases emit instead — the
+    same row shape ``_INVENTORY_CHASSIS_RE`` already accepts and
+    ``get_chassis_members`` already trusts (see
+    ``test_get_chassis_members/numeric_inventory_names``).
+
+    Without the bare-numeric branch, a real stack whose only member signal
+    is a bare-digit NAME never reaches switch-prefixed mode: every ifname's
+    leading integer is actually the member id, but with no ``Switch N`` row
+    anywhere to detect, the driver reads it as if it were the slot id
+    instead. A fixed port and an uplink port on the same member then both
+    resolve to the same (wrong) "slot" and become indistinguishable — see
+    ``_optic_parent_is_baseboard``, which depends on this count being right
+    to tell the two apart at all.
+    """
     member_ids: set[str] = set()
     for row in inv_rows or []:
-        m = _SWITCH_PREFIX_RE.match((row.get("name") or "").strip())
+        name = (row.get("name") or "").strip()
+        m = _SWITCH_PREFIX_RE.match(name)
         if m:
             member_ids.add(m.group(1))
+            continue
+        m = _INVENTORY_CHASSIS_RE.match(name)
+        if m:
+            member_ids.add(m.group(1) or m.group(2))
     return len(member_ids)
 
 
