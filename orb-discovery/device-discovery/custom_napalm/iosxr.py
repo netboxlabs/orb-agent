@@ -372,6 +372,13 @@ def _iosxr_get_modules_impl(driver) -> dict | None:
     _iosxr_promote_orphan_optics(
         optics, consumed, vsf, bays_by_rack, ifaces_by_member, claimed_slot_prefixes,
     )
+    # Re-check after promotion. The gate above runs before the claimed-slot
+    # guard can refuse anything, so it cannot see the case where every card row
+    # is unusable AND every optic beneath one is declined: optics is non-empty
+    # so the gate passes, promotion adds nothing, and the standalone tail below
+    # would call next() on an empty mapping.
+    if not bays_by_rack:
+        return None
 
     if vsf:
         return _modules_to_payload({
