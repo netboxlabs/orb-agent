@@ -107,6 +107,39 @@ func newModuleInventory() ModuleInventory {
 // is treated as a linecard).
 var opticPIDPrefixes = []string{"QSFP-", "SFP-", "X2-", "GLC-", "CFP-", "XENPAK-", "XFP-"}
 
+// isOpticPID reports whether a row's effective PID names a transceiver.
+// Effective PID mirrors classifyModule: trimmed Model, falling back to
+// trimmed VendorType.
+func isOpticPID(model, vendorType string) bool {
+	pid := strings.TrimSpace(model)
+	if pid == "" {
+		pid = strings.TrimSpace(vendorType)
+	}
+	upper := strings.ToUpper(pid)
+	for _, p := range opticPIDPrefixes {
+		if strings.HasPrefix(upper, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOpticSubEntity reports whether a class=9 row describes part of an optic
+// rather than a module. One vendor publishes such a row per lane beneath
+// each transceiver: no model, no serial, an effective PID that is blank or
+// the placeholder "0.0", and a parent that is itself an optic. Emitting
+// these yields one bare module per lane, all sharing the optic's bay.
+func isOpticSubEntity(r row, byIdx map[string]row) bool {
+	if strings.TrimSpace(r.Model) != "" || strings.TrimSpace(r.Serial) != "" {
+		return false
+	}
+	if pid := strings.TrimSpace(r.VendorType); pid != "" && pid != "0.0" {
+		return false
+	}
+	parent, ok := byIdx[r.ContainedIn]
+	return ok && isOpticPID(parent.Model, parent.VendorType)
+}
+
 // classifyModule picks a ModuleType from a row's PID and its location
 // in the containment tree. hasModuleParent is true when an ancestor in
 // the entPhysicalTable chain is itself class=9. Effective PID prefers
@@ -134,13 +167,10 @@ func classifyModule(model, vendorType string, hasModuleParent bool) ModuleType {
 	// Transceiver requires BOTH a module-class ancestor AND an optic
 	// PID — depth alone catches non-optic sub-modules; PID alone
 	// catches spare optics inventoried at chassis level.
-	if hasModuleParent {
-		for _, p := range opticPIDPrefixes {
-			if strings.HasPrefix(upper, p) {
-				return ModuleTypeTransceiver
-			}
-		}
-	} else if isSupervisorPID(upper) {
+	if hasModuleParent && isOpticPID(model, vendorType) {
+		return ModuleTypeTransceiver
+	}
+	if !hasModuleParent && isSupervisorPID(upper) {
 		// Supervisor lives at chassis depth on dual-sup platforms.
 		return ModuleTypeSupervisor
 	}
@@ -152,6 +182,21 @@ func classifyModule(model, vendorType string, hasModuleParent bool) ModuleType {
 	// Safe default — non-optic under a module parent OR no special
 	// pattern at chassis level both land here.
 	return ModuleTypeLinecard
+}
+
+// row is one indexed entPhysical row, keyed by EntIndex in the byIdx map
+// that extractModuleInventory builds. Package-scoped (rather than local to
+// that function) so isOpticSubEntity can also walk it.
+type row struct {
+	EntIndex    string
+	ContainedIn string
+	Class       string
+	ParentRel   string
+	Name        string
+	Serial      string
+	Model       string
+	Descr       string
+	VendorType  string
 }
 
 // extractModuleInventory scans oids for class=9 entPhysical rows and
@@ -167,17 +212,6 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 	inv := newModuleInventory()
 
 	// Index every entPhysical row by EntIndex so we can walk parents.
-	type row struct {
-		EntIndex    string
-		ContainedIn string
-		Class       string
-		ParentRel   string
-		Name        string
-		Serial      string
-		Model       string
-		Descr       string
-		VendorType  string
-	}
 	byIdx := make(map[string]row)
 	// trimSNMPString strips ENTITY-MIB-padded NULs and surrounding
 	// whitespace. Applied to every string field at extraction so dedup
@@ -281,9 +315,17 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 	// any non-numeric edge cases.
 	classNineIdxs := make([]string, 0, len(byIdx))
 	for _, r := range byIdx {
-		if r.Class == entPhysicalClassModule {
-			classNineIdxs = append(classNineIdxs, r.EntIndex)
+		if r.Class != entPhysicalClassModule {
+			continue
 		}
+		if isOpticSubEntity(r, byIdx) {
+			logger.Debug("module discovery: optic sub-entity skipped",
+				"ent", r.EntIndex,
+				"descr", r.Descr,
+				"reason", "optic_sub_entity")
+			continue
+		}
+		classNineIdxs = append(classNineIdxs, r.EntIndex)
 	}
 	sort.Slice(classNineIdxs, func(i, j int) bool {
 		ai, errI := strconv.Atoi(classNineIdxs[i])
@@ -429,6 +471,14 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			continue
 		}
 		r := byIdx[idx]
+		// An optic row is not an empty bay. It is inventory in its own
+		// right, emitted as a module by the scan above; harvesting it as
+		// well emits the same physical part twice, the second time with
+		// its model and serial dropped and its bay named from the optic's
+		// own position — which is identical on every port.
+		if isOpticPID(r.Model, r.VendorType) {
+			continue
+		}
 		parent, exists := byIdx[r.ContainedIn]
 		if !exists {
 			continue

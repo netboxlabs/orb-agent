@@ -8,54 +8,44 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func testOpticLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, nil))
 }
 
-// TestOpticDiscovery_LaneShapeCharacterization records what the extractor
-// does with the lane shape BEFORE this plan's changes. Every class-9 row on
-// that platform is a lane, so the lanes become the entire module inventory:
-// typed linecard, no model, no serial, and all sharing the bay position the
-// optic row reports.
-func TestOpticDiscovery_LaneShapeCharacterization(t *testing.T) {
+// TestOpticDiscovery_LaneRowsNotEmittedAsModules asserts the per-lane
+// sub-entities published beneath each optic are not modules. On this platform
+// every class-9 row is a lane, so before this rule the device's entire module
+// inventory was lanes.
+func TestOpticDiscovery_LaneRowsNotEmittedAsModules(t *testing.T) {
 	inv := extractModuleInventory(buildOIDs(fixedPortLaneShapeFixture()), testOpticLogger())
 
-	require.Len(t, inv.Modules, 3, "the three lane rows are emitted as modules")
-	for _, m := range inv.Modules {
-		assert.Equal(t, ModuleTypeLinecard, m.Type, "lane misclassified as a linecard")
-		assert.Empty(t, m.Model, "lane carries no model")
-		assert.Empty(t, m.Serial, "lane carries no serial")
-		assert.Empty(t, m.BayName, "bay is the optic row, whose Name is empty")
-		assert.Equal(t, "1", m.BayPosition, "so every lane shares bay position 1")
-		assert.NotEqual(t, "SFP-10GLR-31", m.Model, "the real optic is not discovered")
-	}
-	assert.Empty(t, inv.SubModules, "no transceiver is emitted anywhere")
+	assert.Empty(t, inv.Modules, "lane rows must not be emitted as modules")
+	assert.Empty(t, inv.SubModules)
 }
 
-// TestOpticDiscovery_HarvestShapeCharacterization records the second
-// mechanism. An optic with no lane child reaches the empty-bay harvest, so
-// it is emitted as a bare bay with its model and serial discarded, and all
-// three share bay position "1".
-func TestOpticDiscovery_HarvestShapeCharacterization(t *testing.T) {
-	inv := extractModuleInventory(buildOIDs(fixedPortHarvestShapeFixture()), testOpticLogger())
+// TestOpticDiscovery_OpticRowsNeverHarvestedAsEmptyBays asserts an optic row
+// is never emitted as a bare bay. It is inventory in its own right, and the
+// harvest drops the model and serial while naming the bay from the optic's
+// own position — which is identical across every port on these platforms.
+//
+// This must hold on both shapes: one has a lane child beneath every optic,
+// the other beneath almost none, and suppressing lanes is what exposes the
+// first shape to the harvest in the first place.
+func TestOpticDiscovery_OpticRowsNeverHarvestedAsEmptyBays(t *testing.T) {
+	opticIdxs := []string{"100301100", "100302100", "100303100"}
 
-	assert.Empty(t, inv.Modules, "no modules at all on this shape today")
-
-	var optics []ModuleEntry
-	for _, b := range inv.EmptyBays {
-		switch b.EntIndex {
-		case "100301100", "100302100", "100303100":
-			optics = append(optics, b)
-		}
-	}
-	require.Len(t, optics, 3, "all three optics are harvested as empty bays")
-	for _, b := range optics {
-		assert.Equal(t, ModuleTypeUnknown, b.Type)
-		assert.Empty(t, b.Model, "the harvest discards the model")
-		assert.Empty(t, b.Serial, "the harvest discards the serial")
-		assert.Equal(t, "1", b.BayPosition, "all three share bay position 1")
+	for name, fixture := range map[string][]fixtureRow{
+		"lane shape":    fixedPortLaneShapeFixture(),
+		"harvest shape": fixedPortHarvestShapeFixture(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			inv := extractModuleInventory(buildOIDs(fixture), testOpticLogger())
+			for _, b := range inv.EmptyBays {
+				assert.NotContains(t, opticIdxs, b.EntIndex,
+					"optic row %s emitted as an empty bay", b.EntIndex)
+			}
+		})
 	}
 }
