@@ -126,6 +126,52 @@ def test_attach_transceiver_unknown_mda_path_without_optic_is_noop():
     assert mda_map["1/1"].module.sub_bays == []
 
 
+def test_attach_transceiver_declines_promotion_on_modular_chassis_with_incomplete_mda():
+    """
+    Card bays exist but the MDA never reached the bay map — decline promotion.
+
+    A modular chassis whose MDA row was incomplete must not invent a
+    device-rooted bay for the optic beneath it.
+    """
+    from custom_napalm._modules import ModuleBay, ModuleEntry
+    from custom_napalm.nokia_sros import _nokia_sros_attach_transceiver_sub_bays
+    card_bay = ModuleBay(
+        name="1", position="1",
+        module=ModuleEntry(model="IOM", serial="SN-IOM-1", type="linecard"),
+    )
+    bays = [card_bay]
+    rows = [{"port_id": "1/1/1", "model": "SFP-10G-LR", "sn": "OPT1"}]
+    # mda_bays_by_path is empty: the "1/1" MDA row was incomplete (missing
+    # PID/serial, or its parent card never emitted) and never made it in.
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, {}, bays)
+    assert ifaces == {}
+    assert bays == [card_bay]
+    assert card_bay.module.sub_bays == []
+
+
+def test_attach_transceiver_snapshot_survives_self_mutation_across_multiple_orphans():
+    """
+    Promoting the FIRST orphan optic must not cause the SECOND to be declined.
+
+    On a genuinely fixed platform (no card bays at all), ``bays`` starts
+    empty and is the same list promotion appends to. A
+    guard that reads ``bays`` live inside the loop (instead of a snapshot
+    taken once before it starts) would see a non-empty list after the
+    first append and refuse every optic that follows — this test pins the
+    snapshot behavior that avoids that self-mutation trap.
+    """
+    from custom_napalm.nokia_sros import _nokia_sros_attach_transceiver_sub_bays
+    bays = []
+    rows = [
+        {"port_id": "1/1/c1", "model": "SFP-10G-LR", "sn": "OPT-A"},
+        {"port_id": "1/1/c2", "model": "SFP-10G-LR", "sn": "OPT-B"},
+    ]
+    ifaces = _nokia_sros_attach_transceiver_sub_bays(rows, {}, bays)
+    assert len(bays) == 2
+    assert {b.name for b in bays} == {"1/1/c1", "1/1/c2"}
+    assert ifaces == {"1/1/c1": ["1/1/c1"], "1/1/c2": ["1/1/c2"]}
+
+
 def test_attach_transceiver_routes_optic_less_port_to_parent_bays():
     """Copper/empty-cage ports still get parent routing; no transceiver sub-bay."""
     from custom_napalm.nokia_sros import _nokia_sros_attach_transceiver_sub_bays

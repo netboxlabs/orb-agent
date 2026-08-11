@@ -681,6 +681,23 @@ def _nokia_sros_attach_transceiver_sub_bays(
 ) -> dict[str, list[str]]:
     """Route every port to its parent bays; emit transceiver sub-bay only when populated."""
     interfaces_by_bay: dict[str, list[str]] = {}
+    # Snapshot whether this chassis had ANY card bay BEFORE the promotion
+    # loop runs. `bays` is the very list promotion appends device-rooted
+    # optics to, so testing it live would let the first promoted optic make
+    # `bays` non-empty and wrongly decline every optic that follows on a
+    # genuinely fixed platform (no cards at all). Capturing the snapshot
+    # once, before the loop, is what lets every fixed-platform optic
+    # promote while still refusing promotion on a modular chassis whose
+    # card hierarchy is real but an MDA row happens to be incomplete.
+    #
+    # This is the deliberate opposite of the ios-xr rack-roster guard
+    # (`if bays_by_rack and rack not in bays_by_rack`), which reads its
+    # roster live on purpose: ios-xr asks "is this rack already known?",
+    # where minting the first rack is legitimate and the guard must see
+    # its own additions. Nokia asks "did this chassis have a card hierarchy
+    # at all?" — a property of the input that promotion must not be able
+    # to change by running.
+    had_card_bays = bool(bays)
     for row in transceiver_rows:
         port_id = row.get("port_id") or ""
         if not port_id:
@@ -694,6 +711,20 @@ def _nokia_sros_attach_transceiver_sub_bays(
         model = row.get("model") or ""
         sn = row.get("sn") or ""
         if mda_bay is None or mda_bay.module is None:
+            if had_card_bays:
+                # Modular chassis: this MDA row either lacked a PID/serial
+                # or its parent card never made it into the bay map — it is
+                # real hardware that simply didn't reach mda_bays_by_path.
+                # Promoting the optic device-rooted would invent a false
+                # topology (the optic actually sits inside an MDA inside a
+                # card), so decline rather than promote.
+                if model and sn:
+                    logger.debug(
+                        "nokia_sros.get_modules: declining optic on port %s, "
+                        "MDA %s missing from bay map",
+                        port_id, mda_path,
+                    )
+                continue
             # Fixed platforms expose ports with no MDA module above them.
             if model and sn:
                 bays.append(_orphan_optic_bay(port_id, _ModuleEntry(
