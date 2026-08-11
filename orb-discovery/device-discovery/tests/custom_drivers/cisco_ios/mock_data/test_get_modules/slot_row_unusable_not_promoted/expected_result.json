@@ -1,0 +1,39 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9400-LC-48U",
+            "serial": "JAE3001LC01",
+            "description": "48-Port Linecard",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "TenGigabitEthernet1/0/1",
+                "position": "TenGigabitEthernet1/0/1",
+                "module": {
+                  "model": "SFP-10G-LR",
+                  "serial": "OPT3001001",
+                  "description": "SFP-10GBase-LR",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": [
+          "TenGigabitEthernet1/0/1"
+        ],
+        "TenGigabitEthernet1/0/1": [
+          "TenGigabitEthernet1/0/1"
+        ]
+      }
+    }
+  }
+}

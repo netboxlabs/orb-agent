@@ -538,6 +538,94 @@ class TestIOSDriver(BaseDriverTest):
             for r in caplog.records
         ), "the skipped optic must be named in a warning"
 
+    def test_get_modules_declines_promotion_onto_unusable_fru_row(self, caplog) -> None:
+        """
+        A claimed-but-unusable ``Switch N FRU Uplink Module M`` slot is not promoted.
+
+        ``Switch 2 FRU Uplink Module 1`` is present (so the slot is claimed
+        by the RAW inventory) but its own row has a blank serial, so no bay
+        was built for it. The optic on ``Te2/1/1`` must NOT be promoted to a
+        device-rooted bay — that would invent a chassis-level parent for a
+        FRU module that genuinely exists in hardware. Member 1's own FRU +
+        optic (a usable claim) is present in the same fixture and must still
+        promote normally, proving the guard doesn't overreach.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "fru_row_unusable_not_promoted"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
+            result = driver.get_modules()
+
+        assert result is not None
+        # Member 2 never surfaces — its only optic was declined and no bay
+        # was ever built for it.
+        assert 2 not in result["members"]
+        all_serials = {
+            bay["module"]["serial"]
+            for member in result["members"].values()
+            for bay in member["bays"]
+        } | {
+            sub["module"]["serial"]
+            for member in result["members"].values()
+            for bay in member["bays"]
+            for sub in bay["module"]["sub_bays"]
+        }
+        assert "OPT1111211" not in all_serials, (
+            "Te2/1/1 must not be promoted onto the claimed-but-unusable FRU slot"
+        )
+        # Member 1's own FRU + optic (a normal, usable claim) still promotes.
+        assert "OPT1111111" in all_serials
+
+        assert any(
+            "TenGigabitEthernet2/1/1" in r.getMessage() and "slot 1" in r.getMessage()
+            for r in caplog.records
+        ), "declining promotion must name the port and slot at debug"
+
+    def test_get_modules_declines_promotion_onto_unusable_slot_row(self, caplog) -> None:
+        """
+        A claimed-but-unusable plain ``Slot N`` row is not promoted, even though N != 0.
+
+        ``Slot 2 Linecard`` is present (so the slot is claimed) but its own
+        row has a blank serial. The optic on ``Te2/0/1`` must NOT be
+        promoted — its leading integer ("2") collides with a real bay id,
+        so a ``slot == "0"`` heuristic would have missed this case even
+        though it catches the switch-prefixed one. ``Slot 1``'s own optic
+        (a usable claim) is present in the same fixture and must still
+        promote normally.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "slot_row_unusable_not_promoted"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
+            result = driver.get_modules()
+
+        assert result is not None
+        member = result["members"][None]
+        # Slot "2" never surfaces as a bay, and neither does a device-rooted
+        # bay for the declined optic.
+        bay_names = {bay["name"] for bay in member["bays"]}
+        assert "2" not in bay_names
+        assert "TenGigabitEthernet2/0/1" not in bay_names
+        all_serials = {bay["module"]["serial"] for bay in member["bays"]} | {
+            sub["module"]["serial"]
+            for bay in member["bays"]
+            for sub in bay["module"]["sub_bays"]
+        }
+        assert "OPT3002001" not in all_serials, (
+            "Te2/0/1 must not be promoted onto the claimed-but-unusable Slot 2 row"
+        )
+        # Slot 1's own optic (a normal, usable claim) still promotes.
+        assert "OPT3001001" in all_serials
+
+        assert any(
+            "TenGigabitEthernet2/0/1" in r.getMessage() and "slot 2" in r.getMessage()
+            for r in caplog.records
+        ), "declining promotion must name the port and slot at debug"
+
     def _caplog(self, logger, level):
         """Context manager that captures records from a specific logger at ``level``."""
         import logging
