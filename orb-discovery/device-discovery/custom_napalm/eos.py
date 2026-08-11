@@ -174,7 +174,28 @@ def _eos_extract_card_bays(card_slots: dict) -> tuple[dict[str, _ModuleBay], dic
     return sup_bays, lc_bays
 
 
-def _eos_attach_transceivers(xcvr_slots: dict, lc_bays: dict[str, _ModuleBay]) -> dict[str, list[str]]:
+def _eos_claimed_linecard_slots(card_slots: dict) -> set[str]:
+    """
+    Collect every ``LinecardN`` slot number the RAW ``cardSlots`` payload names.
+
+    Reads the keys of the raw payload directly — before ``_eos_extract_card_bays``
+    filters on ``pid and sn`` usability or on type classification — so a
+    linecard slot the device named but whose row was unusable still counts
+    as claimed. Fabric and Supervisor keys are excluded on purpose: ports
+    are named by LINECARD slot number, so e.g. a ``Fabric3`` key must not
+    claim slot 3 for an unrelated linecard.
+    """
+    claimed: set[str] = set()
+    for slot_name in card_slots:
+        match = _EOS_LINECARD_RE.match(slot_name)
+        if match:
+            claimed.add(match.group(1))
+    return claimed
+
+
+def _eos_attach_transceivers(
+    xcvr_slots: dict, lc_bays: dict[str, _ModuleBay], claimed_linecard_slots: set[str],
+) -> dict[str, list[str]]:
     """
     Attach optic sub-bays from ``xcvrSlots`` to their parent linecard.
 
@@ -186,6 +207,13 @@ def _eos_attach_transceivers(xcvr_slots: dict, lc_bays: dict[str, _ModuleBay]) -
     bay instead of being dropped. Mutates ``lc_bays`` in place — both the
     matched entries' ``module.sub_bays`` and, for orphans, ``lc_bays``
     itself — and returns ``interfaces_by_bay``.
+
+    ``claimed_linecard_slots`` (see ``_eos_get_modules_impl``) names every
+    ``LinecardN`` slot the RAW ``cardSlots`` payload already named. An optic
+    whose slot has no bay but IS claimed is declined rather than promoted —
+    the linecard exists in hardware, just missing from ``lc_bays`` because
+    its own row was unusable, so promoting the optic here would invent a
+    chassis-level topology instead of reporting the real modular one.
     """
     interfaces_by_bay: dict[str, list[str]] = {}
     for ifname, entry in xcvr_slots.items():
@@ -206,6 +234,12 @@ def _eos_attach_transceivers(xcvr_slots: dict, lc_bays: dict[str, _ModuleBay]) -
             model=pid, serial=sn, type="transceiver", description=descr,
         )
         if parent is None or parent.module is None:
+            if slot_num in claimed_linecard_slots:
+                logger.debug(
+                    "eos.get_modules: declining promotion of %s onto slot %s (cardSlots claims %s but its row was unusable)",
+                    ifname, slot_num, parent_name,
+                )
+                continue
             # Fixed switches report optics with no linecard above them.
             lc_bays[ifname] = orphan_optic_bay(ifname, optic)
         else:
@@ -235,7 +269,11 @@ def _eos_get_modules_impl(driver) -> dict | None:
     Fixed switches report empty ``cardSlots`` with optics listed directly
     under bare port names in ``xcvrSlots``; those are promoted to
     device-rooted bays rather than dropped (see
-    ``_eos_attach_transceivers``). Returns None on:
+    ``_eos_attach_transceivers``). An optic whose slot IS named by the raw
+    ``cardSlots`` payload (``claimed_linecard_slots``, from
+    ``_eos_claimed_linecard_slots``) but has no usable bay is declined
+    instead of promoted — that linecard exists in hardware, it just didn't
+    survive ``_eos_extract_card_bays``'s usability filter. Returns None on:
       - eAPI call failure.
       - No Supervisor / Linecard / Fabric entries survive classification
         AND no transceiver was recognized either.
@@ -253,8 +291,9 @@ def _eos_get_modules_impl(driver) -> dict | None:
     card_slots = payload.get("cardSlots") or {}
     xcvr_slots = payload.get("xcvrSlots") or {}
 
+    claimed_linecard_slots = _eos_claimed_linecard_slots(card_slots)
     sup_bays, lc_bays = _eos_extract_card_bays(card_slots)
-    interfaces_by_bay = _eos_attach_transceivers(xcvr_slots, lc_bays)
+    interfaces_by_bay = _eos_attach_transceivers(xcvr_slots, lc_bays, claimed_linecard_slots)
     if not (sup_bays or lc_bays):
         return None
 
