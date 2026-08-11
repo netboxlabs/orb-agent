@@ -751,6 +751,96 @@ def _interface_slot(ifname: str, *, depth: int = 1) -> str | None:
     return m.group(1) if m else None
 
 
+_INTERFACE_SEGMENTS_RE = re.compile(r"^[A-Za-z]+(\d+(?:/\d+)*)$")
+
+
+def _interface_segment_count(ifname: str) -> int:
+    """
+    Count the numeric position segments in a canonicalized Cisco ifname.
+
+    ``GigabitEthernet1/0/1`` → 3 (switch/slot/port on a VC member, or
+    slot/sub/port on a standalone modular chassis). ``Gi0/25`` → 2 (classic
+    Catalyst module/port). Returns 0 for a name with no numeric segment at
+    all — this driver's transceiver rows always have at least one ``/``,
+    but the count is used defensively by ``_optic_parent_is_baseboard``,
+    which must not guess when the shape is unrecognized.
+    """
+    m = _INTERFACE_SEGMENTS_RE.match(ifname)
+    if not m:
+        return 0
+    return m.group(1).count("/") + 1
+
+
+# Non-prefixed 3-tuple ifnames (``Te1/0/1``) give no per-port signal that
+# the port's own parent is the chassis baseboard: on a fixed WS-C3850-48XS,
+# "Te1/0/1" and on a modular C9404R, "Te1/0/1" are byte-identical, and
+# ``_interface_slot``'s depth=1 reading already commits to the modular
+# interpretation (leading integer = slot). The only signal left is at the
+# device level: does ANYTHING in the raw inventory look modular at all?
+#
+#   - a ``Slot N`` / ``Subslot`` / ``FRU`` row anywhere (whatever member or
+#     NAME form the platform uses for a card bay), or
+#   - the chassis DESCR itself saying "<N> Slot Chassis".
+#
+# Either one vetoes promotion for every non-prefixed 3-tuple optic on the
+# device. This is absence-grade, not immunity-grade: a modular chassis that
+# omits EVERY card row AND whose chassis DESCR lacks the slot wording still
+# false-promotes. That residual is accepted rather than declining the whole
+# mode outright, which would silently kill fixed-port promotion on every
+# standalone 3850/9300-shaped device — the exact feature this gate exists
+# to protect.
+_MODULAR_VETO_NAME_RE = re.compile(r"Slot\s*\d+|Subslot|FRU", re.IGNORECASE)
+_MODULAR_VETO_DESCR_RE = re.compile(r"\d+\s+Slot\s+Chassis", re.IGNORECASE)
+
+
+def _non_prefixed_modular_veto(inv_rows: list[dict]) -> bool:
+    """Return True when raw inventory shows any sign the chassis is modular."""
+    for row in inv_rows or []:
+        if _MODULAR_VETO_NAME_RE.search(row.get("name") or ""):
+            return True
+        if _MODULAR_VETO_DESCR_RE.search(row.get("descr") or ""):
+            return True
+    return False
+
+
+def _optic_parent_is_baseboard(
+    canonical: str,
+    *,
+    switch_prefixed: bool,
+    non_prefixed_modular_veto: bool,
+) -> bool:
+    """
+    Positive-evidence check: may an unclaimed, parentless optic promote?
+
+    Promotion to a device-rooted bay requires evidence that the port's OWN
+    parent position is the chassis baseboard (module 0) — not merely the
+    absence of a claim on its slot. See ``_attach_transceivers`` for why
+    absence alone stopped being trustworthy (a vendor that omits the
+    parent row defeats it every time).
+
+    - Switch-prefixed ifnames (member/slot/port, or member/slot/sub/port —
+      depth=2 is the slot): module 0 is the switch's own baseboard, every
+      real bay is 1-based. A name with fewer than 3 segments has no
+      reliable slot at depth 2 — refuse rather than read the port number
+      as the slot.
+    - Non-prefixed 2-tuple (module/port, depth=1 is the slot): same
+      baseboard reasoning, one dimension up.
+    - Non-prefixed 3-tuple: no per-port signal exists at all (a fixed
+      WS-C3850-48XS and a modular C9404R report byte-identical names).
+      Promotion is allowed unless a device-level veto fires.
+    """
+    if switch_prefixed:
+        if _interface_segment_count(canonical) < 3:
+            return False
+        return _interface_slot(canonical, depth=2) == "0"
+    segments = _interface_segment_count(canonical)
+    if segments == 2:
+        return _interface_slot(canonical, depth=1) == "0"
+    if segments >= 3:
+        return not non_prefixed_modular_veto
+    return False
+
+
 def _classify_slot_module(pid: str, role_hint: str) -> str:
     """
     Pick a ModuleType for a Slot N inventory row.
@@ -975,6 +1065,7 @@ def _attach_transceivers(
     interfaces_by_member_and_slot: dict[int | None, dict[str, list[str]]],
     switch_prefixed: bool,
     claimed_slots: set[tuple[int | None, str]],
+    non_prefixed_modular_veto: bool,
 ) -> None:
     """
     Attach each transceiver entry as a sub-bay of its member's parent slot.
@@ -993,11 +1084,17 @@ def _attach_transceivers(
     promoted — that slot's parent exists in hardware, it just didn't
     survive ``_parse_inventory_rows``'s usability filter, so promoting the
     optic here would invent a chassis-level topology instead of reporting
-    the real modular one. An optic on an UNCLAIMED slot (no row ever named
-    it — the fixed-port case this function exists for) is still promoted:
-    nothing in IOS inventory ever names slot ``0``, so a fixed switch-
-    prefixed port always lands on an unclaimed slot even on a chassis that
-    also has real, claimed bays elsewhere.
+    the real modular one.
+
+    An optic on an UNCLAIMED slot is no longer promoted on absence alone —
+    a vendor that omits the parent row entirely (rather than reporting it
+    unusably) defeats that check every time. ``_optic_parent_is_baseboard``
+    supplies the positive evidence instead: promotion requires the port's
+    OWN name to say its parent is the chassis baseboard, or (in the one
+    mode with no such signal) the absence of any device-level sign that the
+    chassis is modular at all. See that function's docstring for the
+    per-mode rules, and its module-level veto comment for the residual this
+    still cannot catch.
     """
     slot_depth = 2 if switch_prefixed else 1
     for member_id, transceivers in transceivers_by_member.items():
@@ -1014,6 +1111,18 @@ def _attach_transceivers(
                     logger.debug(
                         "ios.get_modules: declining promotion of %s onto member %s "
                         "slot %s (inventory claims the slot but its row was unusable)",
+                        canonical, member_id, slot,
+                    )
+                    continue
+                if not _optic_parent_is_baseboard(
+                    canonical,
+                    switch_prefixed=switch_prefixed,
+                    non_prefixed_modular_veto=non_prefixed_modular_veto,
+                ):
+                    logger.debug(
+                        "ios.get_modules: declining promotion of %s onto member %s "
+                        "slot %s (no positive evidence its parent is the chassis "
+                        "baseboard)",
                         canonical, member_id, slot,
                     )
                     continue
@@ -1055,6 +1164,10 @@ def _ios_get_modules_impl(driver) -> dict | None:
     # leading switch id) fires whenever inventory has ANY Switch N row —
     # single-chassis 9500 with Switch 1 prefix uses the same format.
     switch_prefixed = distinct_switch_count >= 1
+    # Only consulted by _optic_parent_is_baseboard in non-prefixed mode;
+    # computed unconditionally anyway since scanning the rows once here is
+    # cheap and keeps the veto device-level rather than per-optic.
+    non_prefixed_modular_veto = _non_prefixed_modular_veto(inv_rows)
     bays_by_member, transceivers_by_member, claimed_slots = _parse_inventory_rows(
         inv_rows, vc_mode,
     )
@@ -1066,7 +1179,7 @@ def _ios_get_modules_impl(driver) -> dict | None:
     )
     _attach_transceivers(
         bays_by_member, transceivers_by_member, interfaces_by_member_and_slot,
-        switch_prefixed, claimed_slots,
+        switch_prefixed, claimed_slots, non_prefixed_modular_veto,
     )
 
     return _modules_to_payload({
