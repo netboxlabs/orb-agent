@@ -235,6 +235,68 @@ Drivers that implement `get_modules()` discover the module inventory and emit Ne
 
 **Extreme EXOS (`extreme_exos`).** Module discovery is scoped to the BlackDiamond X8 modular chassis. Other EXOS hardware in the field — the X670 / X870 fixed pizza-boxes, the BD-X8-X32 stackable variant — share the `X8` family token in their model strings but are not modular and must not produce module entries. Family detection scans the **full `show version` output** (not just `System Type:`, which Extreme's command-reference BD-X8 example omits in favour of `Switch :` / `Chassis :` / `Slot-*` / `FM-*` lines) using a regex with a negative-lookahead anchor (`(?:BD-|BLACKDIAMOND\s+)X8(?![-\w])`) rather than a Python `\b` word-boundary, because `\b` fires between the digit `8` and the dash in `BD-X8-32` and would accept the wrong model. For BD-X8 chassis the driver parses `show slot detail` directly — no `extreme_exos_show_slot_detail` ntc-template exists, so a block-per-slot regex walks each `Slot-N information:` / `MSM-A information:` / `FM-1 information:` block (case-insensitive) and extracts the `Hw Module Type` and `Serial number` fields. The serial capture is whitespace-tolerant: real BD-X8 prints two whitespace-separated tokens (`Serial number: 800432-00-09 1534G-01368` — part-number plus unique serial), and the parser collapses internal whitespace runs to a single space so the persisted value is stable. The classifier maps `BDX-MM` (Management Module) to `supervisor` and the I/O / Fabric Module families (`BDXA-FM` / `BDXA-` / `BDXB-`) to `linecard`; Fabric Modules emit as `linecard` because NetBox has no fabric module type today. Any hypothetical `BDXB-FM*` SKU still classifies as linecard via the generic `BDXB-` fallback. Slot header parsing tolerates both `Slot-N` and `Slot N` (space-separator) layouts that EXOS releases interchangeably emit; space variants are normalised to hyphenated bay names (`Slot 1` → `Slot-1`) so bay identifiers stay consistent across releases. Single-member envelope keyed by `None`; EXOS has no stack-of-modular dispatch in v1.
 
+## Device-rooted optic discovery: how a fixed platform is identified
+
+An optic is promoted to a device-rooted `ModuleBay` only when the device's own
+inventory gives positive evidence that the port's parent position is the chassis
+itself. The absence of a parent row is never sufficient: an omitted or unusable
+row would otherwise read as "this optic has no parent", reporting an optic at
+chassis level when it physically sits inside a module.
+
+The evidence differs per driver, because each vendor states it differently.
+
+| Driver | Positive evidence | Grade |
+|---|---|---|
+| `eos` | Port named bare (`Ethernet1`). Arista is the only vendor that drops the slot element on fixed hardware, so a slashed name can never reach promotion | structural |
+| `nxos`, `nxos_ssh` | The port's own `show module` row Model matches the `show inventory` Chassis PID — NX-OS models a fixed switch's baseboard as a module whose model *is* the chassis | structural |
+| `ios` (switch-prefixed, and non-prefixed 2-tuple) | Port derives slot `0`; module 0 is the switch's own baseboard and every nameable bay is 1-based | structural |
+| `ios` (non-prefixed 3-tuple) | No in-band signal exists; vetoed by device-level modularity evidence | guarded |
+| `iosxr` | An `<r>/RP<n>/CPU0` row whose PID equals that rack's `Rack <n>` PID, or no card-shaped row for the rack at all | guarded |
+| `nokia_sros` | No card or SFM row in the raw pre-filter rows, plus a present chassis fingerprint | guarded |
+| `aruba_aoscx` | The `chassis,<member>` product family is in the known-fixed allowlist (6200 / 6300 / 6300M / 8100 / 8320 / 8325 / 8360) | structural for known families |
+
+### Known limitations
+
+Three cases are guarded rather than structurally impossible.
+
+**Cisco IOS, non-prefixed 3-tuple port names.** `TenGigabitEthernet1/0/1` on a
+fixed WS-C3850-48XS, where the optic must be promoted, and on a modular C9404R,
+where it must nest under its linecard, are byte-identical strings, and the
+inventory offers nothing further to separate them. Promotion in this mode is
+refused whenever the inventory contains any `Slot` / `Subslot` / `FRU` row, or the
+chassis DESCR matches `N Slot Chassis`. A modular chassis that omits **every** card
+row **and** whose chassis DESCR lacks that wording will still have its optics
+reported at chassis level. Declining promotion in this mode outright was
+considered and rejected: it would disable optic discovery on the standalone
+3850 / 9300 shape, the common case this feature exists to serve.
+
+**Cisco IOS-XR.** A rack is treated as fixed-port when its route processor's PID
+matches the rack's own PID, or when the inventory contains no card row for that
+rack. If a modular chassis loses its entire card subtree to output truncation,
+the second clause can read it as fixed. Separately, the port pattern does not
+match `0/RP0/CPU0/1`, so an optic hosted directly on a route processor is not
+discovered either way.
+
+**Nokia SR OS.** Promotion requires no card or SFM row in the raw inventory plus a
+present chassis fingerprint. Total loss of the card and SFM subtree while the
+transceiver RPC succeeds would still read as a fixed platform.
+
+### Test-data provenance
+
+Only two drivers have promotion fixtures derived from real device output: `ios`,
+from a reported case, and `arista_eos/fixed_switch`, from a pre-existing capture.
+Every other promotion fixture is hand-authored and says so in its `README.md`. A
+passing suite therefore confirms each driver matches our understanding of the
+vendor's output, not the vendor's actual output. Three captures would raise
+confidence materially: `show module` plus `show inventory` from a Nexus 5548UP or
+6001, to settle whether a baseboard Model matches the chassis PID exactly or
+carries a suffix; `show inventory` from an NCS-55A1, NCS-5501 or N540, to settle
+whether the RP PID equals the Rack PID; and
+`GET system/subsystems?attributes=product_info,interfaces&depth=2` from one fixed
+6300 and one modular 8400, which would let the Aruba driver use the subsystem
+`interfaces` collection instead of a family allowlist.
+
+
 ## VRFs
 
 Drivers that implement the standard NAPALM `get_network_instances()` getter discover the VRFs configured on the device and attach them to the IP addresses and prefixes of each VRF's member interfaces. Emission is gated by the `discover_vrfs` policy option (defaults to `false`); see the [device discovery README](./README.md#vrfs) for the filtering rules, route-distinguisher handling, and precedence over the `defaults.*.vrf` settings.
