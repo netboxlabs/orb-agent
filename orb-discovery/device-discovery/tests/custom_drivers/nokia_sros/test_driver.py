@@ -230,6 +230,59 @@ def test_rows_from_state_xml_includes_sfm_subtree():
     ]
 
 
+def test_chassis_fingerprint_extracts_part_number_when_present():
+    """
+    A present chassis/hardware-data/part-number must be returned, not read as absent.
+
+    Regression pin for the failure mode called out in the promotion gate:
+    getting this backwards makes every SR-1 (which reports zero cards by
+    design) decline every optic instead of promoting them.
+    """
+    from lxml import etree
+
+    from custom_napalm.nokia_sros import _nokia_sros_chassis_fingerprint
+    xml = """\
+<state xmlns="urn:nokia.com:sros:ns:yang:sr:state">
+  <chassis>
+    <hardware-data>
+      <part-number>3HE-SR1-AA</part-number>
+      <serial-number>NS-FP-001</serial-number>
+    </hardware-data>
+  </chassis>
+</state>
+"""
+    root = etree.fromstring(xml.encode("utf-8"))
+    assert _nokia_sros_chassis_fingerprint(root) == "3HE-SR1-AA"
+
+
+def test_chassis_fingerprint_absent_returns_empty():
+    """No chassis/hardware-data/part-number element at all returns ""."""
+    from lxml import etree
+
+    from custom_napalm.nokia_sros import _nokia_sros_chassis_fingerprint
+    xml = """\
+<state xmlns="urn:nokia.com:sros:ns:yang:sr:state">
+  <chassis>
+    <hardware-data>
+      <serial-number>NS-FP-002</serial-number>
+    </hardware-data>
+  </chassis>
+</state>
+"""
+    root = etree.fromstring(xml.encode("utf-8"))
+    assert _nokia_sros_chassis_fingerprint(root) == ""
+
+
+def test_chassis_fingerprint_no_chassis_element_returns_empty():
+    """No <chassis> element at all (truncated state tree) returns ""."""
+    from lxml import etree
+
+    from custom_napalm.nokia_sros import _nokia_sros_chassis_fingerprint
+    xml = '<state xmlns="urn:nokia.com:sros:ns:yang:sr:state"><port><port-id>1/1/1</port-id></port></state>'
+    root = etree.fromstring(xml.encode("utf-8"))
+    assert _nokia_sros_chassis_fingerprint(root) == ""
+
+
 def test_classify_xcm_as_linecard():
     """7950 XRS forwarding cards (XCM) classify as linecard, not 'other'."""
     from custom_napalm.nokia_sros import classify_module_type_nokia_sros

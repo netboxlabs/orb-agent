@@ -758,6 +758,32 @@ def _nokia_sros_attach_transceiver_sub_bays(
     return interfaces_by_bay
 
 
+def _nokia_sros_chassis_fingerprint(state_root: etree._Element) -> str:
+    """
+    Return the chassis's own hardware-data part-number, or "" when absent.
+
+    Already fetched by ``_FILTER_MODULES`` (``chassis/hardware-data/
+    part-number``) but never parsed until this gate needed it. Its
+    presence is the positive evidence that the card RPC's state subtree
+    came back intact: an empty ``<card>`` list alongside a present,
+    non-empty fingerprint is a genuinely fixed platform (nothing to
+    report). An empty ``<card>`` list with the fingerprint ALSO missing
+    cannot be told apart from a truncated or short-circuited response, so
+    that combination must NOT read as fixed.
+
+    A present-but-unparsed fingerprint must never come back as "" here —
+    doing so would make every SR-1 (which reports zero cards by design)
+    read as "cannot confirm fixed" and decline every optic, turning
+    ``fixed_port_transceivers_only``-shaped results into None.
+    """
+    el = state_root.find(
+        "state_ns:chassis/state_ns:hardware-data/state_ns:part-number", _NSMAP,
+    )
+    if el is None or el.text is None:
+        return ""
+    return el.text.strip()
+
+
 def _nokia_sros_get_modules_impl(driver) -> dict | None:
     """
     Module discovery for Nokia SR-OS via NETCONF.
@@ -795,6 +821,16 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
     # _nokia_sros_attach_transceiver_sub_bays for why deriving this from the
     # filtered `bays` list instead is wrong).
     had_card_bays = any(row.get("kind") == "card" for row in rows)
+    # Snapshotted beside had_card_bays, from the same state tree: an empty
+    # card subtree only counts as a genuinely fixed platform when the
+    # chassis fingerprint confirms the state RPC came back intact (see
+    # _nokia_sros_chassis_fingerprint). Folded into the same signal
+    # _nokia_sros_attach_transceiver_sub_bays already takes — "had_card_bays
+    # OR the fingerprint is missing" is "decline the orphan optic" either
+    # way — so the helper's own tested contract (and its 8 direct unit
+    # tests) stays untouched.
+    chassis_fingerprint = _nokia_sros_chassis_fingerprint(state)
+    decline_fixed_port_promotion = had_card_bays or not chassis_fingerprint
     bays = _nokia_sros_build_card_bays(rows)
     mda_bays_by_path = _nokia_sros_attach_mda_sub_bays(rows, bays)
 
@@ -808,7 +844,7 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
             if tx_state is not None:
                 tx_rows = _nokia_sros_transceiver_rows_from_state_xml(tx_state)
                 interfaces_by_bay = _nokia_sros_attach_transceiver_sub_bays(
-                    tx_rows, mda_bays_by_path, bays, had_card_bays,
+                    tx_rows, mda_bays_by_path, bays, decline_fixed_port_promotion,
                 )
     except (NCClientError, etree.XMLSyntaxError) as e:
         # Non-fatal: cards-only payload still ships.
