@@ -108,13 +108,26 @@ type CyberArkManager struct {
 	Schedule      *string `yaml:"schedule,omitempty"`
 }
 
-// SecretsSources represents the configuration for manager sources, including vault, fleet, delinea, doppler and cyberark.
+// DSVManager represents the configuration for the Delinea DevOps Secrets Vault
+// (DSV) secrets manager. DSV is a distinct product from Delinea Secret Server
+// (see DelineaManager).
+type DSVManager struct {
+	Tenant       string  `yaml:"tenant"`
+	ClientID     string  `yaml:"client_id"`
+	ClientSecret string  `yaml:"client_secret"`
+	TLD          string  `yaml:"tld,omitempty"`
+	URLTemplate  string  `yaml:"url_template,omitempty"`
+	Schedule     *string `yaml:"schedule,omitempty"`
+}
+
+// SecretsSources represents the configuration for manager sources, including vault, fleet, delinea, doppler, cyberark and dsv.
 type SecretsSources struct {
 	Vault    VaultManager        `yaml:"vault"`
 	Fleet    FleetSecretsManager `yaml:"fleet"`
 	Delinea  DelineaManager      `yaml:"delinea"`
 	Doppler  DopplerManager      `yaml:"doppler"`
 	CyberArk CyberArkManager     `yaml:"cyberark"`
+	DSV      DSVManager          `yaml:"dsv"`
 }
 
 // ManagerSecrets represents the configuration for the Secrets Manager
