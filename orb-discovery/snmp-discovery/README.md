@@ -422,7 +422,7 @@ policies:
 ### Device Model Lookup
 The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values.
 
-The bundled vendor tables are compiled into the orb-discovery and orb-agent binaries and are always loaded, so this setting is only needed when you want to add OIDs the bundled tables do not cover, or override a name they do. Files in this directory are merged **on top of** the bundled tables rather than replacing them, and where the same OID appears in both, your file wins.
+The bundled vendor tables are compiled into the `snmp-discovery` binary itself, which the orb-agent image ships alongside the agent, so they are always loaded. This setting is only needed when you want to add OIDs the bundled tables do not cover, or override a name they do. Files in this directory are merged **on top of** the bundled tables rather than replacing them, and where the same OID appears in both, your file wins.
 
 #### File Format
 Device lookup files must be in YAML format with a `.yaml` or `.yml` extension. Each file should contain a `devices` section that maps SNMP device OIDs to device names:
@@ -454,7 +454,7 @@ You can create custom device lookup files for your specific hardware or to overr
 2. Creating a YAML file with the format shown above. Ensure that ObjectIDs have a `.` prefix.
 3. Placing the file in your `lookup_extensions_dir` directory
 
-A file containing only the OIDs you care about is enough. You do not need to copy the bundled vendor files into this directory, because they are already compiled into the binary and are loaded regardless:
+A file containing only the OIDs you care about is enough. You do not need to copy the bundled vendor files into this directory, because they are already compiled into the `snmp-discovery` binary and are loaded regardless:
 
 ```yaml
 # /opt/orb/snmp-extensions/custom-cisco.yaml
@@ -467,15 +467,15 @@ Each OID is resolved independently, so a single file can cover as many models as
 
 The startup logs report how many files were read from the directory and the total number of entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
 
-- a file whose `devices:` section cannot be parsed is skipped with a warning, rather than aborting the load, so one bad file does not cost you the others
-- a file that parses but registers nothing, which is what a wrong top-level key or tab indentation produces, is warned about individually
+- a file whose `devices:` section cannot be parsed is skipped with a warning, rather than aborting the load, so one bad file does not cost you the others. Indenting with tabs lands here, because YAML rejects them outright
+- a file that parses but registers nothing, which is what a wrong or missing top-level key produces, is warned about individually
 
 A file that loads cleanly is counted in the totals rather than logged by name, so if you need to confirm one specific file's contribution, put it in the directory on its own and compare the entry total.
 
 #### How It Works
 At startup, snmp-discovery builds a single OID-to-name table:
 
-1. Loads the bundled vendor files, which are compiled into the binary
+1. Loads the bundled vendor files, which are compiled into the `snmp-discovery` binary
 2. If `lookup_extensions_dir` is set, loads every `.yaml` and `.yml` file in it and merges those entries over the bundled ones, so an OID present in both resolves to your value
 
 Then, for each device it scans:
