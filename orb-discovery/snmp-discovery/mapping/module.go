@@ -159,13 +159,17 @@ var opticDescrIfaceRe = regexp.MustCompile(`^Xcvr for (\S+)$`)
 // row names none. An interface reference is positive evidence that the optic
 // is installed in that port — a spare optic inventoried at chassis level
 // does not name one. Absence of a module parent never authorises anything.
-func servedInterface(name, descr string) string {
+// pid is the row's own effective PID (see effectivePID) — passed through to
+// ifaceShaped so a candidate that is really the optic's own part number,
+// not an interface, is rejected on both the descr-derived and the
+// name-derived path.
+func servedInterface(name, descr, pid string) string {
 	if m := opticDescrIfaceRe.FindStringSubmatch(strings.TrimSpace(descr)); m != nil {
-		if ifaceShaped(m[1]) {
+		if ifaceShaped(m[1], pid) {
 			return m[1]
 		}
 	}
-	if n := strings.TrimSpace(name); ifaceShaped(n) {
+	if n := strings.TrimSpace(name); ifaceShaped(n, pid) {
 		return n
 	}
 	return ""
@@ -173,12 +177,35 @@ func servedInterface(name, descr string) string {
 
 // ifaceShaped reports whether a token can be an interface name. A digit is
 // required: one platform names every optic row with the bare word "port",
-// which would otherwise name every bay on the chassis identically.
-func ifaceShaped(tok string) bool {
+// which would otherwise name every bay on the chassis identically. A token
+// equal to pid — the row's own effective PID, compared case-insensitively —
+// is also rejected: a vendor that omits the "Xcvr for <iface>" descr may
+// instead publish a product label such as "SFP-10G-LR" in entPhysicalName,
+// and an interface is never named exactly its own transceiver part number.
+func ifaceShaped(tok, pid string) bool {
 	if tok == "" || strings.ContainsAny(tok, " \t") {
 		return false
 	}
-	return strings.ContainsAny(tok, "0123456789")
+	if !strings.ContainsAny(tok, "0123456789") {
+		return false
+	}
+	if pid != "" && strings.EqualFold(tok, pid) {
+		return false
+	}
+	return true
+}
+
+// effectivePID returns the row's own PID for the "is this token really the
+// optic's part number" check in ifaceShaped: trimmed Model, falling back to
+// trimmed VendorType. Deliberately distinct from isOpticPID/classifyModule's
+// upper-cased copies of the same rule — this one stays case-preserving
+// because ifaceShaped's caller compares case-insensitively itself.
+func effectivePID(model, vendorType string) string {
+	pid := strings.TrimSpace(model)
+	if pid == "" {
+		pid = strings.TrimSpace(vendorType)
+	}
+	return pid
 }
 
 // classifyModule picks a ModuleType from a row's PID and its location
@@ -488,8 +515,9 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		// A fixed-port optic's bay is named for the interface the row
 		// names. A modular optic keeps the derivation from its real cage,
 		// which already identifies the port.
+		pid := effectivePID(r.Model, r.VendorType)
 		if entry.Type == ModuleTypeTransceiver && parentModuleIdx == "" {
-			if iface := servedInterface(r.Name, r.Descr); iface != "" {
+			if iface := servedInterface(r.Name, r.Descr, pid); iface != "" {
 				entry.BayName = iface
 				entry.BayPosition = iface
 			}
@@ -499,7 +527,7 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		// platform publishing dozens of serial-less optics would otherwise
 		// log a line each, every poll.
 		if entry.Type == ModuleTypeTransceiver && strings.TrimSpace(r.Serial) == "" {
-			label := servedInterface(r.Name, r.Descr)
+			label := servedInterface(r.Name, r.Descr, pid)
 			if label == "" {
 				label = r.EntIndex
 			}

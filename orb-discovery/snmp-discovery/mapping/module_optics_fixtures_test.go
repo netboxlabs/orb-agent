@@ -209,3 +209,18 @@ func crossTierDuplicateBayNameOpticFixture() []fixtureRow {
 		{"202", "201", "10", "0", "", "SYNSERSUB1", "SFP-10G-LR", "", ""},
 	}
 }
+
+// opticNameEqualsOwnPIDOpticFixture is synthetic, not transcribed from a
+// capture — no captured device in the corpus has shown entPhysicalName
+// hold a bare product label. It pins Fix 2: without a "Xcvr for <iface>"
+// descr to resolve the served interface, and with entPhysicalName holding
+// the optic's own PID rather than an interface name, the bay must fall
+// back to the cage-derived name rather than adopt the PID itself — an
+// interface is never named exactly its own transceiver part number.
+func opticNameEqualsOwnPIDOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0008", "SYN-CHASSIS8", "Synthetic chassis", ""},
+		{"10", "1", "5", "1", "Te1/0/1 Container", "", "", "", ""},
+		{"11", "10", "10", "0", "SFP-10G-LR", "SYNSERPID1", "SFP-10G-LR", "", ""},
+	}
+}

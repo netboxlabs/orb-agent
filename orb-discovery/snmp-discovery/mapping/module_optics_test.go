@@ -160,9 +160,9 @@ func TestOpticDiscovery_BayNamedForServedInterface(t *testing.T) {
 // descr contains "Xcvr for Ethernet1" as a substring, and an unanchored
 // match would emit one bay per lane for a single physical optic.
 func TestOpticDiscovery_LaneDescrNeverNamesABay(t *testing.T) {
-	assert.Equal(t, "Ethernet1", servedInterface("", "Xcvr for Ethernet1"))
-	assert.Empty(t, servedInterface("", "Lane 0 for Xcvr for Ethernet1"))
-	assert.Empty(t, servedInterface("", "Xcvr Slot 1"))
+	assert.Equal(t, "Ethernet1", servedInterface("", "Xcvr for Ethernet1", ""))
+	assert.Empty(t, servedInterface("", "Lane 0 for Xcvr for Ethernet1", ""))
+	assert.Empty(t, servedInterface("", "Xcvr Slot 1", ""))
 }
 
 // TestOpticDiscovery_NonInterfaceNameRejected pins the digit requirement.
@@ -170,9 +170,20 @@ func TestOpticDiscovery_LaneDescrNeverNamesABay(t *testing.T) {
 // accepting it would name every bay on the chassis identically and merge
 // them into one object.
 func TestOpticDiscovery_NonInterfaceNameRejected(t *testing.T) {
-	assert.Empty(t, servedInterface("port", ""))
-	assert.Empty(t, servedInterface("SFP cage", ""))
-	assert.Equal(t, "Ethernet0", servedInterface("Ethernet0", ""))
+	assert.Empty(t, servedInterface("port", "", ""))
+	assert.Empty(t, servedInterface("SFP cage", "", ""))
+	assert.Equal(t, "Ethernet0", servedInterface("Ethernet0", "", ""))
+}
+
+// TestOpticDiscovery_NameEqualToOwnPIDRejected pins Fix 2: a name-derived
+// candidate that is really the row's own transceiver part number, not an
+// interface, must be rejected — compared case-insensitively, since vendors
+// are not consistent about PID casing.
+func TestOpticDiscovery_NameEqualToOwnPIDRejected(t *testing.T) {
+	assert.Empty(t, servedInterface("SFP-10G-LR", "", "SFP-10G-LR"))
+	assert.Empty(t, servedInterface("sfp-10g-lr", "", "SFP-10G-LR"), "case-insensitive")
+	assert.Equal(t, "Ethernet1", servedInterface("Ethernet1", "", "SFP-10G-LR"),
+		"a real interface name must still be accepted")
 }
 
 // TestOpticDiscovery_StackedMembersKeepDistinctBays asserts that when two
@@ -427,4 +438,19 @@ func TestOpticDiscovery_CrossTierDuplicateBayNameDropped(t *testing.T) {
 	assert.Contains(t, buf.String(), "member=0")
 	assert.Contains(t, buf.String(), "model=SFP-10G-LR")
 	assert.Contains(t, buf.String(), "reason=dup_bay_name")
+}
+
+// TestOpticDiscovery_NameEqualToOwnPIDFallsBackToCageName pins Fix 2 at the
+// extraction level: entPhysicalName equal to the optic's own effective PID
+// must not become an interface-shaped bay name. With the descr naming no
+// interface either, the bay must fall back to the cage-derived name
+// instead of adopting the PID.
+func TestOpticDiscovery_NameEqualToOwnPIDFallsBackToCageName(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(opticNameEqualsOwnPIDOpticFixture()), testOpticLogger())
+
+	require.Len(t, inv.Modules, 1)
+	assert.Equal(t, "Te1/0/1 Container", inv.Modules[0].BayName,
+		"the bay must fall back to the cage-derived name")
+	assert.NotEqual(t, "SFP-10G-LR", inv.Modules[0].BayName,
+		"the optic's own PID must never become the bay name")
 }
