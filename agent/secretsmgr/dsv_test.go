@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -98,7 +99,7 @@ func newTestDSVManager(t *testing.T, srv *fakeDSVServer, mutate func(*config.DSV
 	return d
 }
 
-func TestDSVSolvePolicySecrets_HappyPathAndTokenReuse(t *testing.T) {
+func TestDSVSolvePolicySecrets_HappyPathDropsToken(t *testing.T) {
 	srv := newFakeDSVServer()
 	t.Cleanup(srv.Close)
 	srv.setSecret("servers/prod-db", map[string]any{"password": "s3cr3t"})
@@ -118,9 +119,18 @@ func TestDSVSolvePolicySecrets_HappyPathAndTokenReuse(t *testing.T) {
 	assert.Equal(t, "s3cr3t", data["pw"])
 	assert.Equal(t, "abc123", data["tok"])
 
-	// Two secret fetches, but the token is fetched once and reused via DSV_AT.
-	assert.Equal(t, int32(1), srv.authCalls.Load())
+	// fetch drops the SDK's process-global DSV_AT token cache after every call
+	// so backend subprocesses can't inherit the bearer token. That means each
+	// of the two secret fetches performs its own token handshake rather than
+	// reusing a cached token — the extra auth call is the deliberate cost of
+	// not leaving the token in the environment.
+	assert.Equal(t, int32(2), srv.authCalls.Load())
 	assert.Equal(t, int32(2), srv.secretCalls.Load())
+
+	// The token must not linger in the process environment for later-launched
+	// backend subprocesses to inherit.
+	_, ok := os.LookupEnv("DSV_AT")
+	assert.False(t, ok, "DSV_AT must be unset after resolution so backend subprocesses can't inherit it")
 }
 
 func TestDSVSolvePolicySecrets_CacheHit(t *testing.T) {

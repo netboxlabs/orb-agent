@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/DelineaXPM/dsv-sdk-go/v2/vault"
@@ -45,6 +46,14 @@ func (d *dsvManager) Start(ctx context.Context) error {
 			return fmt.Errorf("resolving dsv %s from environment: %w", f.name, err)
 		}
 		*f.ptr = resolved
+	}
+
+	if d.config.Schedule != nil {
+		resolved, err := config.ResolveEnv(*d.config.Schedule)
+		if err != nil {
+			return fmt.Errorf("resolving dsv schedule from environment: %w", err)
+		}
+		*d.config.Schedule = resolved
 	}
 
 	d.preLogger.Info("starting secrets manager", "active", "dsv", "tenant", d.config.Tenant, "tld", d.config.TLD)
@@ -98,6 +107,10 @@ func (d *dsvManager) Start(ctx context.Context) error {
 // The body is split on its last "/": everything before is the DSV secret path,
 // and the final segment is a key inside the secret's Data map.
 func (d *dsvManager) fetch(body string) (string, error) {
+	// The SDK caches its bearer token in the process-global DSV_AT env var,
+	// which backend subprocesses inherit. Drop it after every call.
+	defer os.Unsetenv("DSV_AT")
+
 	idx := strings.LastIndex(body, "/")
 	if idx <= 0 || idx == len(body)-1 {
 		return "", fmt.Errorf("invalid dsv reference %q: expected '<secret-path>/<field-key>'", body)
