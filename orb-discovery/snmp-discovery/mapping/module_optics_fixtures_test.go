@@ -120,3 +120,21 @@ func serialFreePortOpticFixture() []fixtureRow {
 		{"1000000300", "1", "10", "-1", "Ethernet2", "", "SFP-10GSR-85", "SFP/SFP+/SFP28 for Eth6/3(Port1)", ""},
 	}
 }
+
+// duplicateBayNameOpticFixture is synthetic, not transcribed from a
+// capture — no captured device in the corpus has shown two fixed-port
+// transceivers collide on the same bay name. It exists to exercise the
+// duplicate-bay-name guard: two class-10 optics sit directly under the
+// chassis, each with a blank Name, a Descr that names no interface, and
+// a blank relPos, so both fall all the way through servedInterface and
+// emitModuleBay's fallback chain to the literal placeholder "Unknown" —
+// the same effective bay name, on the same member. Each carries its own
+// serial so neither is dropped by the missing- or duplicate-serial
+// guards before reaching the bay-name check.
+func duplicateBayNameOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0004", "SYN-CHASSIS4", "Synthetic chassis", ""},
+		{"10", "1", "10", "", "", "SYNSER0001A", "SFP-10G-LR", "", ""},
+		{"11", "1", "10", "", "", "SYNSER0001B", "SFP-10G-LR", "", ""},
+	}
+}

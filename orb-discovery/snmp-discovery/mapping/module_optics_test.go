@@ -265,3 +265,43 @@ func TestOpticDiscovery_FullModeEmitsInterfaceNamedBays(t *testing.T) {
 		"expected exactly one bay per optic, named for its served interface")
 	assert.Len(t, serials, 3, "each optic contributes its own serial")
 }
+
+// TestOpticDiscovery_DuplicateBayNameDropped asserts the defensive guard
+// against two module bays merging on one device: dcim.modulebay matches on
+// name+device, so two transceivers landing on the same member with the same
+// effective bay name must not both be emitted. The second is skipped and
+// warned about — never merged, and never given a fabricated disambiguated
+// name, since inventing one would itself become a permanent wrong value.
+func TestOpticDiscovery_DuplicateBayNameDropped(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	oids := buildOIDs(duplicateBayNameOpticFixture())
+	dev := &diode.Device{Name: strPtr("test-switch")}
+	memberDevices := map[int]*diode.Device{0: dev}
+
+	entities, _ := TranslateModules(oids, nil, memberDevices, modeFull(), nil, logger)
+
+	var bayNames []string
+	var serials []string
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.ModuleBay:
+			require.NotNil(t, v.Name)
+			bayNames = append(bayNames, *v.Name)
+		case *diode.Module:
+			if v.Serial != nil {
+				serials = append(serials, *v.Serial)
+			}
+		}
+	}
+
+	assert.Equal(t, []string{"Unknown"}, bayNames, "only the first-seen bay may survive")
+	assert.Equal(t, []string{"SYNSER0001A"}, serials, "the colliding second optic must not be emitted")
+	assert.Contains(t, buf.String(), "duplicate transceiver bay name dropped")
+	assert.Contains(t, buf.String(), "bay=Unknown")
+	assert.Contains(t, buf.String(), "ent=11")
+	assert.Contains(t, buf.String(), "member=0")
+	assert.Contains(t, buf.String(), "model=SFP-10G-LR")
+	assert.Contains(t, buf.String(), "reason=dup_bay_name")
+}

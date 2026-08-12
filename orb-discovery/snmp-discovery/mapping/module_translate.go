@@ -78,6 +78,12 @@ func TranslateModulesWithAlias(
 
 	var entities []diode.Entity
 	emittedModules := make(map[string]*diode.Module, len(inv.Modules))
+	// dcim.modulebay's matcher is name+device: two bays sharing a name on
+	// one member would merge into one NetBox object, taking their modules
+	// with them. Keyed by (MemberID, effective bay name) — MemberID is
+	// only populated by assignMemberID above, which is why this guard
+	// lives here and not in extractModuleInventory.
+	seenTransceiverBays := make(map[transceiverBayKey]string, len(inv.Modules))
 
 	for _, m := range inv.Modules {
 		// PSU / Fan are classified for labelling only — never emitted as
@@ -95,6 +101,24 @@ func TranslateModulesWithAlias(
 		// ancestor isn't in the VC member set. Skip — already warn-logged.
 		if m.MemberID < 0 {
 			continue
+		}
+		// No capture in the corpus has shown two fixed-port transceivers
+		// collide on the same member's bay name, but the merge this
+		// guards against is silent and Diode never retracts a wrong
+		// value, so refuse rather than risk it. Scoped to transceivers —
+		// bay-name collisions among other module types are pre-existing
+		// and out of scope here. Skip and warn rather than invent a
+		// disambiguated name: a fabricated value would itself become a
+		// permanent wrong value.
+		if m.Type == ModuleTypeTransceiver {
+			key := transceiverBayKey{member: m.MemberID, bay: effectiveBayName(m)}
+			if _, dup := seenTransceiverBays[key]; dup {
+				logger.Warn("module discovery: duplicate transceiver bay name dropped",
+					"bay", key.bay, "ent", m.EntIndex, "member", m.MemberID, "model", m.Model,
+					"reason", "dup_bay_name")
+				continue
+			}
+			seenTransceiverBays[key] = m.EntIndex
 		}
 		device := memberDevices[m.MemberID]
 		if device == nil {
@@ -213,20 +237,36 @@ func TranslateModulesWithAlias(
 	return entities, ifaceMap
 }
 
+// transceiverBayKey is the (member, effective bay name) dedup key used
+// by the duplicate-bay-name guard in TranslateModulesWithAlias.
+type transceiverBayKey struct {
+	member int
+	bay    string
+}
+
+// effectiveBayName returns the name a ModuleBay will actually carry —
+// BayName, falling back to BayPosition, falling back to "Unknown". This
+// is the same fallback chain emitModuleBay applies, factored out so the
+// duplicate-bay-name guard compares the value Diode will actually see
+// rather than the raw (possibly blank) ModuleEntry field.
+func effectiveBayName(m ModuleEntry) string {
+	if m.BayName != "" {
+		return m.BayName
+	}
+	if m.BayPosition != "" {
+		return m.BayPosition
+	}
+	return "Unknown"
+}
+
 // emitModuleBay constructs a ModuleBay entity for a top-level
 // (chassis-slot) module. Always carries Device — the chassis device is
 // the matching scope for both ModuleBay and Module per Diode docs.
 func emitModuleBay(device *diode.Device, m ModuleEntry) *diode.ModuleBay {
-	name := m.BayName
-	if name == "" {
-		// Bay rows occasionally arrive without a name; fall back to
-		// position so we never ship an empty-string required field
-		// (Diode rejects "").
-		name = m.BayPosition
-	}
-	if name == "" {
-		name = "Unknown"
-	}
+	// Bay rows occasionally arrive without a name; effectiveBayName
+	// falls back to position, then "Unknown", so we never ship an
+	// empty-string required field (Diode rejects "").
+	name := effectiveBayName(m)
 	bay := &diode.ModuleBay{
 		Device: device,
 		Name:   &name,
