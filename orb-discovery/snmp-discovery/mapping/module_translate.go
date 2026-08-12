@@ -102,6 +102,18 @@ func TranslateModulesWithAlias(
 		if m.MemberID < 0 {
 			continue
 		}
+		// Resolve the device — and skip entries with no device — BEFORE
+		// consulting the duplicate-bay-name guard below. An entry with no
+		// device is never emitted regardless of the guard, so it must not
+		// claim a bay name: doing so would make a later, legitimate optic
+		// with that same effective bay name look like a duplicate and get
+		// dropped, even though nothing was ever emitted under that name.
+		device := memberDevices[m.MemberID]
+		if device == nil {
+			logger.Warn("module discovery: no device for member",
+				"member", m.MemberID, "ent", m.EntIndex, "model", m.Model)
+			continue
+		}
 		// No capture in the corpus has shown two fixed-port transceivers
 		// collide on the same member's bay name, but the merge this
 		// guards against is silent and Diode never retracts a wrong
@@ -119,12 +131,6 @@ func TranslateModulesWithAlias(
 				continue
 			}
 			seenTransceiverBays[key] = m.EntIndex
-		}
-		device := memberDevices[m.MemberID]
-		if device == nil {
-			logger.Warn("module discovery: no device for member",
-				"member", m.MemberID, "ent", m.EntIndex, "model", m.Model)
-			continue
 		}
 		bay := emitModuleBay(device, m)
 		entities = append(entities, bay)
@@ -178,6 +184,16 @@ func TranslateModulesWithAlias(
 			if _, dup := emittedModules[tr.EntIndex]; dup {
 				continue
 			}
+			// Resolve the device — and skip entries with no device —
+			// BEFORE consulting the duplicate-bay-name guard below, same
+			// as the top-level loop above and for the same reason: an
+			// entry that is never emitted must not claim a bay name.
+			device := memberDevices[tr.MemberID]
+			if device == nil {
+				logger.Warn("module discovery: no device for transceiver member",
+					"member", tr.MemberID, "ent", tr.EntIndex, "model", tr.Model)
+				continue
+			}
 			// Same guard as the top-level loop above, against the SAME
 			// seenTransceiverBays map — deliberately shared rather than a
 			// second map. The collision domain is (device, bay name)
@@ -195,12 +211,6 @@ func TranslateModulesWithAlias(
 				continue
 			}
 			seenTransceiverBays[key] = tr.EntIndex
-			device := memberDevices[tr.MemberID]
-			if device == nil {
-				logger.Warn("module discovery: no device for transceiver member",
-					"member", tr.MemberID, "ent", tr.EntIndex, "model", tr.Model)
-				continue
-			}
 			// Sub-bay reconciler workaround (spec §Sub-bay emission
 			// workaround): emit transceiver sub-bays DEVICE-ROOTED
 			// (no Module=parent_linecard link). Linking the sub-bay to

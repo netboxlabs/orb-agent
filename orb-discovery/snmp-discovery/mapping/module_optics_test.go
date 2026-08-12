@@ -342,6 +342,44 @@ func TestOpticDiscovery_DuplicateBayNameDropped(t *testing.T) {
 	assert.Contains(t, buf.String(), "reason=dup_bay_name")
 }
 
+// TestOpticDiscovery_NoDeviceMemberNeverPoisonsBayNameGuard pins the guard
+// ordering fix: the device lookup must run BEFORE the duplicate-bay-name
+// guard, not after. Reuses duplicateBayNameOpticFixture's two same-member,
+// same-effective-bay-name ("Unknown") optics, but with an empty
+// memberDevices map so BOTH lack a device — neither can ever be emitted,
+// with or without the fix, because dcim.modulebay's matcher is
+// (device, bay name) and the guard's key is (member, bay): two entries
+// can only collide in the map if they share a member, and sharing a
+// member means they share the exact same memberDevices[member] lookup, so
+// one cannot have a device while the other does not. What the ordering
+// DOES change is which reason each entry is dropped for. With the guard
+// running first (pre-fix), the first optic still claims the bay-name key
+// before its own nil-device check drops it, so the second optic — which
+// was always going to be dropped for lacking a device too — instead gets
+// misreported as a "duplicate transceiver bay name dropped", burying the
+// real cause and polluting the guard's map with an entry nothing was ever
+// emitted under. With the device check first (post-fix), neither entry
+// ever touches the map, and both are reported for their real, correct
+// reason.
+func TestOpticDiscovery_NoDeviceMemberNeverPoisonsBayNameGuard(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	oids := buildOIDs(duplicateBayNameOpticFixture())
+	memberDevices := map[int]*diode.Device{} // member 0 has no device at all
+
+	entities, _ := TranslateModules(oids, nil, memberDevices, modeFull(), nil, logger)
+
+	assert.Empty(t, entities, "neither optic has a device to emit under")
+	assert.NotContains(t, buf.String(), "duplicate transceiver bay name dropped",
+		"an entry that will never be emitted must not claim the bay name and misreport the next one as a duplicate")
+	assert.NotContains(t, buf.String(), "reason=dup_bay_name")
+	// Both entries must be reported for the real reason instead.
+	assert.Contains(t, buf.String(), "no device for member")
+	assert.Contains(t, buf.String(), "ent=10")
+	assert.Contains(t, buf.String(), "ent=11")
+}
+
 // TestOpticDiscovery_ModularDuplicateBayNameDropped asserts the
 // duplicate-bay-name guard also covers the full-mode-only submodule loop:
 // two modular optics under separate linecards whose port cages happen to
