@@ -757,6 +757,7 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 	// IP entirely.
 	m.dedupIPAddresses(uniqueEntities)
 	m.filterExcludedEntities(uniqueEntities)
+	m.dropUnverifiedInterfaceAssignments(uniqueEntities)
 
 	currentDevice := m.registry.GetOrCreateEntity(DeviceEntityType, CurrentDeviceIndex).(*diode.Device)
 
@@ -1285,6 +1286,37 @@ func (m *ObjectIDMapper) filterExcludedEntities(entities map[diode.Entity]bool) 
 			delete(entities, entity)
 			m.logger.Debug("excluding IP for excluded interface", "interface", *iface.Name)
 		}
+	}
+}
+
+// dropUnverifiedInterfaceAssignments clears an IPAddress's AssignedObject when
+// the interface it points at was never populated by an InterfaceMapper.Map call
+// during the walk. This happens when ipAddressIfIndex (or the legacy
+// ipAdEntIfIndex) references an ifIndex whose ifTable/ifXTable row never came
+// back: GetOrCreateEntity fabricates a placeholder Interface named
+// DefaultInterfaceName with no device and no type. Emitting that placeholder
+// makes Diode auto-vivify a dcim.interface which NetBox rejects (device
+// required, type blank), failing the whole bulk-plan. Leaving the address
+// unassigned mirrors the ipAddressIfIndex=0 handling in the assignedObject
+// mapper and is safe for primary-IP selection, which already requires a
+// verified interface via pickPrimaryIPHit.
+//
+// Runs after dedupIPAddresses so cross-table dedup still sees the original
+// binding state when choosing between the legacy and modern rows.
+func (m *ObjectIDMapper) dropUnverifiedInterfaceAssignments(entities map[diode.Entity]bool) {
+	for entity := range entities {
+		ip, ok := entity.(*diode.IPAddress)
+		if !ok || ip.AssignedObject == nil {
+			continue
+		}
+		if m.registry.hasVerifiedInterface(ip) {
+			continue
+		}
+		if iface, ok := ip.AssignedObject.(*diode.Interface); ok && iface.Name != nil {
+			m.logger.Debug("dropping IP assignment to unwalked interface; leaving address unassigned",
+				"address", derefString(ip.Address), "interface", *iface.Name)
+		}
+		ip.AssignedObject = nil
 	}
 }
 
