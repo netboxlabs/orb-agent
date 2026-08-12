@@ -92,6 +92,22 @@ func stackedPortOpticFixture() []fixtureRow {
 	}
 }
 
+// serialFreeCagedOpticFixture is synthetic, not transcribed from a capture —
+// no captured device has shown this exact shape. It exists to pin an
+// invariant: a class-5 optic with no serial must be dropped as a module, and
+// the class-5 cage it sits in must still be harvested into EmptyBays rather
+// than vanishing along with it, the same way a duplicate-serial drop already
+// leaves its cage harvestable.
+func serialFreeCagedOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0001", "SYN-CHASSIS", "Synthetic chassis", ""},
+		// Cage: class 5, no PID, no serial, directly under the chassis.
+		{"100", "1", "5", "1", "Cage 1", "", "", "Cage Slot 1", ""},
+		// Optic: class 5, PID present, serial ABSENT.
+		{"101", "100", "5", "1", "", "", "SFP-10GLR-31", "Xcvr for Ethernet1", ""},
+	}
+}
+
 // serialFreePortOpticFixture mirrors a platform publishing class-10 optics
 // directly under the chassis with NO serial and relPos -1 on every row.
 // Absent the serial requirement all three would synthesize one bay named

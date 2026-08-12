@@ -181,3 +181,16 @@ func TestOpticDiscovery_SerialFreeOpticsSkippedWithOneWarning(t *testing.T) {
 		"exactly one aggregated warning")
 	assert.Contains(t, buf.String(), "count=3")
 }
+
+// TestOpticDiscovery_SerialFreeOpticLeavesCageHarvestable asserts the two
+// "drop this module" paths agree: a duplicate-serial drop already leaves its
+// bay harvestable as an empty bay, and a missing-serial drop must behave the
+// same way rather than marking the bay as having had a child and burying it
+// along with the dropped optic.
+func TestOpticDiscovery_SerialFreeOpticLeavesCageHarvestable(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(serialFreeCagedOpticFixture()), testOpticLogger())
+
+	assert.Empty(t, inv.Modules, "the serial-free optic must not be emitted as a module")
+	require.Len(t, inv.EmptyBays, 1, "the cage must still be harvested")
+	assert.Equal(t, "100", inv.EmptyBays[0].EntIndex, "the harvested bay is the cage, not the optic")
+}

@@ -440,7 +440,6 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			}
 			seenSerial[key] = struct{}{}
 		}
-		bayHasChild[bayIdx] = true
 		bay := byIdx[bayIdx]
 		// Position is the BAY's parentRelPos (chassis slot), not the
 		// module's own (which is almost always "1" inside its bay).
@@ -492,6 +491,7 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			serialFreeOptics = append(serialFreeOptics, label)
 			continue
 		}
+		bayHasChild[bayIdx] = true
 		if parentModuleIdx == "" {
 			inv.Modules = append(inv.Modules, entry)
 		} else {
