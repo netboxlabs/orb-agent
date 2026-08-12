@@ -116,7 +116,14 @@ func isOpticPID(model, vendorType string) bool {
 	if pid == "" {
 		pid = strings.TrimSpace(vendorType)
 	}
-	upper := strings.ToUpper(pid)
+	return hasOpticPIDPrefix(strings.ToUpper(pid))
+}
+
+// hasOpticPIDPrefix reports whether an already upper-cased effective PID
+// carries a known optic vendor prefix. Shared by isOpticPID and
+// classifyModule (which already has its own upper-cased PID in hand) so
+// the prefix list is only ever walked in one place.
+func hasOpticPIDPrefix(upper string) bool {
 	for _, p := range opticPIDPrefixes {
 		if strings.HasPrefix(upper, p) {
 			return true
@@ -200,7 +207,10 @@ func classifyModule(model, vendorType string, hasModuleParent bool) ModuleType {
 	// An optic PID identifies a transceiver wherever it sits. Requiring a
 	// class=9 ancestor mistyped every optic on a fixed-port platform as a
 	// linecard, and a wrong type persists: Diode ingest never retracts.
-	if isOpticPID(model, vendorType) {
+	// upper is already the effective PID computed above — reuse it
+	// instead of calling isOpticPID, which would recompute it from model
+	// and vendorType from scratch.
+	if hasOpticPIDPrefix(upper) {
 		return ModuleTypeTransceiver
 	}
 	if !hasModuleParent && isSupervisorPID(upper) {
