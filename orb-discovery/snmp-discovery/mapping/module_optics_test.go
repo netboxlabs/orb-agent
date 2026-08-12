@@ -222,6 +222,21 @@ func TestOpticDiscovery_SerialFreeOpticLeavesCageHarvestable(t *testing.T) {
 	assert.Equal(t, "100", inv.EmptyBays[0].EntIndex, "the harvested bay is the cage, not the optic")
 }
 
+// TestOpticDiscovery_SerialFreeCagedPortOpticProducesNoBay pins the other
+// serial-free shape, the one real captures actually show: a class-10 optic
+// inside a class-5 cage. Unlike the class-5-optic shape above, the cage
+// here already has a class-10 child of its own, so containerHasPortChild
+// marks it before the missing-serial drop ever runs — the cage never
+// reaches the empty-bay harvest and produces no bay at all, empty or
+// otherwise. This is the current, deliberately different behaviour for
+// this shape, not a bug: pinning it, not changing it.
+func TestOpticDiscovery_SerialFreeCagedPortOpticProducesNoBay(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(serialFreeCagedPortOpticFixture()), testOpticLogger())
+
+	assert.Empty(t, inv.Modules, "the serial-free optic must not be emitted as a module")
+	assert.Empty(t, inv.EmptyBays, "the cage is suppressed by containerHasPortChild — no bay at all")
+}
+
 // TestOpticDiscovery_LinecardsModeEmitsNoFixedPortOptic asserts a fixed-port
 // optic stays out of linecards mode. A modular optic is already excluded by
 // the full-mode gate because it lives in SubModules; a fixed-port optic is a

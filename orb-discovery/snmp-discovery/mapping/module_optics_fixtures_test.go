@@ -108,6 +108,22 @@ func serialFreeCagedOpticFixture() []fixtureRow {
 	}
 }
 
+// serialFreeCagedPortOpticFixture mirrors the class-10-in-a-cage topology
+// real captures actually show (the same cage+port nesting as
+// modularPortOpticFixture) with the serial field blank. Unlike the class-5
+// shape above, the cage here has a class-10 child of its own, so
+// containerHasPortChild marks it before the missing-serial drop ever runs —
+// the cage is suppressed outright and produces no bay, empty or otherwise.
+func serialFreeCagedPortOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0005", "SYN-CHASSIS5", "Synthetic chassis", ""},
+		// Cage: class 5, no PID, no serial, directly under the chassis.
+		{"110", "1", "5", "1", "Te1/0/1 Container", "", "", "TenGigabitEthernet1/0/1 Container", ""},
+		// Optic: class 10, PID present, serial ABSENT.
+		{"111", "110", "10", "0", "TenGigabitEthernet1/0/1", "", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+	}
+}
+
 // serialFreePortOpticFixture mirrors a platform publishing class-10 optics
 // directly under the chassis with NO serial and relPos -1 on every row.
 // Absent the serial requirement all three would synthesize one bay named
