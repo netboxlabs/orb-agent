@@ -188,8 +188,9 @@ func TranslateModulesWithAlias(
 		}
 	}
 
-	// Empty bays — class=5 rows with no class=9 child. Bare ModuleBay
-	// only; no Module entity.
+	// Empty bays — class=5 rows with no module or port child and no
+	// optic PID of their own (extractModuleInventory's harvest). Bare
+	// ModuleBay only; no Module entity.
 	for _, b := range inv.EmptyBays {
 		if b.MemberID < 0 {
 			continue

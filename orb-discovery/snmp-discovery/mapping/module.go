@@ -65,10 +65,11 @@ const (
 	ModuleTypeUnknown     ModuleType = "unknown"
 )
 
-// ModuleEntry is one class=9 row from entPhysicalTable after
-// classification. BayEntIndex points at the class=5 container that
-// owns this module — the bay is emitted as a separate entity
-// alongside the module installed in it.
+// ModuleEntry is one entPhysical row after classification: a class=9
+// module, or a class=5/class=10 row whose PID identifies it as a
+// transceiver (see isOpticPID). BayEntIndex points at the class=5
+// container that owns this module — the bay is emitted as a separate
+// entity alongside the module installed in it.
 type ModuleEntry struct {
 	EntIndex     string     // own entPhysicalIndex
 	BayEntIndex  string     // parent class=5 container entPhysicalIndex
@@ -87,9 +88,9 @@ type ModuleEntry struct {
 // ModuleInventory is the deduped, classified set for one target.
 // Modules carries top-level (chassis-rooted) modules; SubModules maps
 // each parent EntIndex → its transceiver children. EmptyBays carries
-// class=5 rows with no class=9 child but whose parent resolves to a
-// chassis or container — Aruba CX-style empty slots; emitted only in
-// `full` mode.
+// class=5 rows with no class=9/class=10 child of their own but whose
+// parent resolves to a chassis or container — Aruba CX-style empty
+// slots; emitted only in `full` mode.
 type ModuleInventory struct {
 	Modules    []ModuleEntry
 	SubModules map[string][]ModuleEntry
@@ -242,7 +243,8 @@ type row struct {
 	VendorType  string
 }
 
-// extractModuleInventory scans oids for class=9 entPhysical rows and
+// extractModuleInventory scans oids for class=9 entPhysical rows, plus
+// class=5/class=10 rows whose PID identifies a transceiver, and
 // classifies each one. Drops orphans (broken containedIn chain) and
 // unclassifiable rows (class=1/2). Walks the containedIn chain to
 // determine the owning bay (class=5 ancestor) and whether the module
@@ -392,8 +394,11 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 	seenSerial := make(map[string]struct{})
 	serialFreeOptics := make([]string, 0)
 
-	// bayHasChild tracks class=5 rows that gained at least one class=9
-	// child — used by the empty-bay harvest below.
+	// bayHasChild tracks bay-shaped rows that gained at least one
+	// module child — used by the empty-bay harvest below. Usually keyed
+	// by the class=5 container, but a chassis-rooted module with no
+	// class=5 ancestor synthesizes its own EntIndex as the bay (see
+	// synthesizedBay below), so a key here is not always a class=5 row.
 	bayHasChild := make(map[string]bool)
 
 	for _, idx := range moduleIdxs {
