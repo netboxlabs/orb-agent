@@ -204,6 +204,7 @@ Supported backends (set one in `active`):
 | `delinea` | Delinea Secret Server | `${delinea://...}` | [Delinea](../secretsmgr/delinea.md) |
 | `doppler` | Doppler | `${doppler://...}` | [Doppler](../secretsmgr/doppler.md) |
 | `cyberark` | CyberArk PAM (Central Credential Provider) | `${cyberark://...}` | [CyberArk](../secretsmgr/cyberark.md) |
+| `dsv` | Delinea DevOps Secrets Vault | `${dsv://...}` | [DSV](../secretsmgr/dsv.md) |
 | `fleet` | Fleet (NetBox Labs cloud) | — | — |
 
 ### Vault
@@ -302,6 +303,28 @@ orb:
 ```
 
 See the full [CyberArk secrets manager documentation](../secretsmgr/cyberark.md) for all parameters and authentication options.
+
+### DSV
+
+Delinea DevOps Secrets Vault placeholders reference a secret path plus a key in the secret's data map (split on the last `/`):
+
+```yaml
+password: ${dsv://servers/prod-db/password}
+```
+
+```yaml
+orb:
+  secrets_manager:
+    active: dsv
+    sources:
+      dsv:
+        tenant: acme
+        client_id: ${DSV_CLIENT_ID}
+        client_secret: ${DSV_CLIENT_SECRET}
+        schedule: "*/5 * * * *"
+```
+
+See the full [DSV secrets manager documentation](../secretsmgr/dsv.md) for all parameters and authentication.
 
 Plain `${VAR_NAME}` references are **not** resolved by the secrets manager — those are handled by environment variable substitution as described below.
 
