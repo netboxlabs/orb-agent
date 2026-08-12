@@ -41,6 +41,10 @@ func TestOpticDiscovery_LaneRowsNotEmittedAsModules(t *testing.T) {
 // is never emitted as a bare bay. It is inventory in its own right, and the
 // harvest drops the model and serial while naming the bay from the optic's
 // own position — which is identical across every port on these platforms.
+// On both fixtures every cage and the slot container above it are populated,
+// so the expected outcome is that the harvest produces nothing at all — a
+// stronger statement than "the optic indices specifically are absent", which
+// per-index checks below also confirm.
 //
 // This must hold on both shapes: one has a lane child beneath every optic,
 // the other beneath almost none, and suppressing lanes is what exposes the
@@ -54,6 +58,8 @@ func TestOpticDiscovery_OpticRowsNeverHarvestedAsEmptyBays(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			inv := extractModuleInventory(buildOIDs(fixture), testOpticLogger())
+			assert.Empty(t, inv.EmptyBays,
+				"every cage and its slot container are populated; the harvest should produce nothing")
 			for _, b := range inv.EmptyBays {
 				assert.NotContains(t, opticIdxs, b.EntIndex,
 					"optic row %s emitted as an empty bay", b.EntIndex)
@@ -68,10 +74,14 @@ func TestOpticDiscovery_OpticRowsNeverHarvestedAsEmptyBays(t *testing.T) {
 // as an empty bay when something beneath it was emitted. Without upward
 // propagation, bayHasChild only marks the nearest bay — the cage — so the
 // slot container that holds all three cages would look empty even though
-// every cage beneath it holds a populated, serialed optic.
+// every cage beneath it holds a populated, serialed optic. Every cage on
+// this fixture is populated, so the expected outcome is no empty bays at
+// all, not merely the absence of the slot container specifically.
 func TestOpticDiscovery_ContainerOfContainersNotHarvestedAsEmptyBay(t *testing.T) {
 	inv := extractModuleInventory(buildOIDs(fixedPortLaneShapeFixture()), testOpticLogger())
 
+	assert.Empty(t, inv.EmptyBays,
+		"every cage beneath the slot container is populated; the harvest should produce nothing")
 	for _, b := range inv.EmptyBays {
 		assert.NotEqual(t, "1100300000", b.EntIndex,
 			"the populated slot container must not be harvested as an empty bay")
