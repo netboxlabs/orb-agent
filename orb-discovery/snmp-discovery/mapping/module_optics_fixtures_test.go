@@ -154,3 +154,58 @@ func duplicateBayNameOpticFixture() []fixtureRow {
 		{"11", "1", "10", "", "", "SYNSER0001B", "SFP-10G-LR", "", ""},
 	}
 }
+
+// duplicateModularBayNameOpticFixture is synthetic, not transcribed from a
+// capture — no captured device in the corpus has shown two modular optics
+// resolve to the same cage-derived bay name. It exercises the
+// duplicate-bay-name guard's submodule-loop coverage: two linecards under
+// one chassis each carry a port cage that happens to be named identically
+// ("Te1/0/1 Container"), each holding its own class-10 optic. Both optics
+// land in inv.SubModules — keyed by their own linecard's EntIndex, never
+// in inv.Modules — so this collision is unreachable through the top-level
+// loop alone and would go uncaught without the guard's submodule coverage.
+func duplicateModularBayNameOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0006", "SYN-CHASSIS6", "Synthetic chassis", ""},
+		// Linecard A in slot 1, with a port cage "Te1/0/1 Container".
+		{"10", "1", "5", "1", "Slot 1", "", "", "", ""},
+		{"100", "10", "9", "1", "Linecard A", "SYNLCA0001", "C9400-LC-48U", "", ""},
+		{"101", "100", "5", "1", "Te1/0/1 Container", "", "", "", ""},
+		{"102", "101", "10", "0", "", "SYNSERBAYA", "SFP-10G-LR", "", ""},
+		// Linecard B in slot 2 — its port cage collides on the exact same
+		// name as Linecard A's, even though the two optics sit under
+		// different parent linecards.
+		{"20", "1", "5", "2", "Slot 2", "", "", "", ""},
+		{"200", "20", "9", "2", "Linecard B", "SYNLCB0001", "C9400-LC-48U", "", ""},
+		{"201", "200", "5", "1", "Te1/0/1 Container", "", "", "", ""},
+		{"202", "201", "10", "0", "", "SYNSERBAYB", "SFP-10G-LR", "", ""},
+	}
+}
+
+// crossTierDuplicateBayNameOpticFixture is synthetic, not transcribed from
+// a capture — no captured device in the corpus has shown a top-level
+// fixed-port optic collide with a modular optic on the same device. It
+// exists to prove the duplicate-bay-name guard's design point: the
+// top-level loop and the submodule loop must share ONE seenTransceiverBays
+// map. A fixed-port optic's bay resolves to "Ethernet1" via servedInterface
+// (same shape as fixedPortLaneShapeFixture); a modular optic under a
+// separate linecard sits in a port cage that is itself literally named
+// "Ethernet1". The two are the same effective (device, bay name) pair even
+// though one is device-rooted at the top level and the other nests under
+// a linecard — a second, per-loop map would miss this case entirely.
+func crossTierDuplicateBayNameOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0007", "SYN-CHASSIS7", "Synthetic chassis", ""},
+		// Top-level fixed-port optic: class-5 cage directly under the
+		// chassis, optic names its interface via Descr.
+		{"10", "1", "5", "1", "Xcvr Slot 1", "", "", "", ""},
+		{"11", "10", "5", "1", "", "SYNSERTOP1", "SFP-10G-LR", "Xcvr for Ethernet1", ""},
+		// Modular optic under a linecard: the port cage is itself literally
+		// named "Ethernet1" — the same effective bay name the fixed-port
+		// optic above resolves to via servedInterface.
+		{"20", "1", "5", "2", "Slot 2", "", "", "", ""},
+		{"200", "20", "9", "2", "Linecard", "SYNLC00001", "C9400-LC-48U", "", ""},
+		{"201", "200", "5", "1", "Ethernet1", "", "", "", ""},
+		{"202", "201", "10", "0", "", "SYNSERSUB1", "SFP-10G-LR", "", ""},
+	}
+}

@@ -178,6 +178,23 @@ func TranslateModulesWithAlias(
 			if _, dup := emittedModules[tr.EntIndex]; dup {
 				continue
 			}
+			// Same guard as the top-level loop above, against the SAME
+			// seenTransceiverBays map — deliberately shared rather than a
+			// second map. The collision domain is (device, bay name)
+			// regardless of whether the module is top-level or nested, so
+			// a top-level fixed-port bay and a submodule bay sharing a
+			// name on the same device collide in NetBox exactly as two
+			// submodule bays would; a separate map would miss that
+			// cross-tier case. See the top-level guard's comment for why
+			// this refuses rather than invents a disambiguated name.
+			key := transceiverBayKey{member: tr.MemberID, bay: effectiveBayName(tr)}
+			if _, dup := seenTransceiverBays[key]; dup {
+				logger.Warn("module discovery: duplicate transceiver bay name dropped",
+					"bay", key.bay, "ent", tr.EntIndex, "member", tr.MemberID, "model", tr.Model,
+					"reason", "dup_bay_name")
+				continue
+			}
+			seenTransceiverBays[key] = tr.EntIndex
 			device := memberDevices[tr.MemberID]
 			if device == nil {
 				logger.Warn("module discovery: no device for transceiver member",

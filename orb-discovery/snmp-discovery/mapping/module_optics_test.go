@@ -330,3 +330,101 @@ func TestOpticDiscovery_DuplicateBayNameDropped(t *testing.T) {
 	assert.Contains(t, buf.String(), "model=SFP-10G-LR")
 	assert.Contains(t, buf.String(), "reason=dup_bay_name")
 }
+
+// TestOpticDiscovery_ModularDuplicateBayNameDropped asserts the
+// duplicate-bay-name guard also covers the full-mode-only submodule loop:
+// two modular optics under separate linecards whose port cages happen to
+// share the same name must not both be emitted. Only the first-seen
+// survives; the second is skipped and warned about, exactly like the
+// top-level guard.
+func TestOpticDiscovery_ModularDuplicateBayNameDropped(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	oids := buildOIDs(duplicateModularBayNameOpticFixture())
+	dev := &diode.Device{Name: strPtr("test-switch")}
+	memberDevices := map[int]*diode.Device{0: dev}
+
+	entities, _ := TranslateModules(oids, nil, memberDevices, modeFull(), nil, logger)
+
+	var bayNames []string
+	var serials []string
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.ModuleBay:
+			require.NotNil(t, v.Name)
+			bayNames = append(bayNames, *v.Name)
+		case *diode.Module:
+			if v.Serial != nil {
+				serials = append(serials, *v.Serial)
+			}
+		}
+	}
+
+	var collidingBayCount int
+	for _, n := range bayNames {
+		if n == "Te1/0/1 Container" {
+			collidingBayCount++
+		}
+	}
+	assert.Equal(t, 1, collidingBayCount, "only the first-seen colliding bay may survive")
+	assert.Contains(t, serials, "SYNLCA0001", "linecard A must still be emitted")
+	assert.Contains(t, serials, "SYNLCB0001", "linecard B must still be emitted")
+	assert.Contains(t, serials, "SYNSERBAYA", "the first-seen optic must be emitted")
+	assert.NotContains(t, serials, "SYNSERBAYB", "the colliding second optic must not be emitted")
+	assert.Contains(t, buf.String(), "duplicate transceiver bay name dropped")
+	assert.Contains(t, buf.String(), `bay="Te1/0/1 Container"`)
+	assert.Contains(t, buf.String(), "ent=202")
+	assert.Contains(t, buf.String(), "member=0")
+	assert.Contains(t, buf.String(), "model=SFP-10G-LR")
+	assert.Contains(t, buf.String(), "reason=dup_bay_name")
+}
+
+// TestOpticDiscovery_CrossTierDuplicateBayNameDropped is the design-point
+// test: it only passes because the top-level and submodule loops share ONE
+// seenTransceiverBays map. A top-level fixed-port optic's bay resolves to
+// "Ethernet1" via servedInterface; a modular optic nested under a separate
+// linecard sits in a port cage literally named "Ethernet1". A per-loop map
+// would let both survive as two ModuleBay("Ethernet1") objects on the same
+// device — the exact merge-in-NetBox scenario the guard exists to prevent.
+func TestOpticDiscovery_CrossTierDuplicateBayNameDropped(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	oids := buildOIDs(crossTierDuplicateBayNameOpticFixture())
+	dev := &diode.Device{Name: strPtr("test-switch")}
+	memberDevices := map[int]*diode.Device{0: dev}
+
+	entities, _ := TranslateModules(oids, nil, memberDevices, modeFull(), nil, logger)
+
+	var bayNames []string
+	var serials []string
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.ModuleBay:
+			require.NotNil(t, v.Name)
+			bayNames = append(bayNames, *v.Name)
+		case *diode.Module:
+			if v.Serial != nil {
+				serials = append(serials, *v.Serial)
+			}
+		}
+	}
+
+	var collidingBayCount int
+	for _, n := range bayNames {
+		if n == "Ethernet1" {
+			collidingBayCount++
+		}
+	}
+	assert.Equal(t, 1, collidingBayCount,
+		"only one Ethernet1 bay may survive across the top-level and submodule tiers")
+	assert.Contains(t, serials, "SYNSERTOP1", "the top-level fixed-port optic must win (seen first)")
+	assert.NotContains(t, serials, "SYNSERSUB1", "the colliding modular optic must not be emitted")
+	assert.Contains(t, buf.String(), "duplicate transceiver bay name dropped")
+	assert.Contains(t, buf.String(), "bay=Ethernet1")
+	assert.Contains(t, buf.String(), "ent=202")
+	assert.Contains(t, buf.String(), "member=0")
+	assert.Contains(t, buf.String(), "model=SFP-10G-LR")
+	assert.Contains(t, buf.String(), "reason=dup_bay_name")
+}
