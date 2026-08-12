@@ -66,7 +66,7 @@ policies:
             type: "100gbase-x-qsfp28"
           - match: "^Po\\d+"
             type: "lag"
-      lookup_extensions_dir: "/opt/orb/snmp-extensions" # (Optional) Specifies an override for the directory containing device data yaml files (see below). Defaults to `/etc/snmp-discovery/lookup-extensions
+      lookup_extensions_dir: "/opt/orb/snmp-extensions" # (Optional) Directory of extra device data yaml files, merged over the bundled tables (see below). Unset by default, in which case only the bundled tables are used.
     scope:
       targets:
         - host: "192.168.1.1/24" # subnet support
@@ -420,7 +420,9 @@ policies:
 
 
 ### Device Model Lookup
-The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values. This only needs to be set if additional or modified files are being provided instead of the ones that are included with orb-discovery and orb-agent.
+The `lookup_extensions_dir` specifies a directory containing device data YAML files that map SNMP device OIDs to human-readable device names. This allows snmp-discovery to provide meaningful device identification instead of raw OID values.
+
+The bundled vendor tables are compiled into the orb-discovery and orb-agent binaries and are always loaded, so this setting is only needed when you want to add OIDs the bundled tables do not cover, or override a name they do. Files in this directory are merged **on top of** the bundled tables rather than replacing them, and where the same OID appears in both, your file wins.
 
 #### File Format
 Device lookup files must be in YAML format with a `.yaml` or `.yml` extension. Each file should contain a `devices` section that maps SNMP device OIDs to device names:
@@ -452,22 +454,30 @@ You can create custom device lookup files for your specific hardware or to overr
 2. Creating a YAML file with the format shown above. Ensure that ObjectIDs have a `.` prefix.
 3. Placing the file in your `lookup_extensions_dir` directory
 
-```bash
-# Clone the repository to get device lookup files
-git clone https://github.com/netboxlabs/orb-agent.git
-cd orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/
+A file containing only the OIDs you care about is enough. You do not need to copy the bundled vendor files into this directory, because they are already compiled into the binary and are loaded regardless:
 
-# Copy the files to your lookup extensions directory
-cp *.yaml /opt/orb/snmp-extensions/
+```yaml
+# /opt/orb/snmp-extensions/custom-cisco.yaml
+devices:
+  .1.3.6.1.4.1.9.1.3232: Catalyst 1300-24T-4G
+  .1.3.6.1.4.1.9.1.3233: Catalyst 1300-24P-4G
 ```
 
+Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. If you run the agent in a container, mount this directory into it.
+
+To check that a file was picked up, look at the startup logs: snmp-discovery reports how many entries each file in the directory registered. A file with a wrong top-level key or bad indentation parses without error but registers nothing, and the entry count is what distinguishes that from a file that applied cleanly. A file that fails to parse is skipped with a warning rather than aborting the load, so one bad file does not cost you the others.
+
 #### How It Works
-When snmp-discovery encounters a device during scanning, it:
+At startup, snmp-discovery builds a single OID-to-name table:
+
+1. Loads the bundled vendor files, which are compiled into the binary
+2. If `lookup_extensions_dir` is set, loads every `.yaml` and `.yml` file in it and merges those entries over the bundled ones, so an OID present in both resolves to your value
+
+Then, for each device it scans:
 
 1. Retrieves the device's SNMP system object ID (sysObjectID)
-2. Searches through all YAML files in the `lookup_extensions_dir`
-3. If a match is found, uses the human-readable device name instead of the raw OID
-4. If no match is found, falls back to the original OID value
+2. Looks that OID up in the merged table and uses the name it finds
+3. If no entry matches, falls back to the raw OID value
 
 This provides much more meaningful device identification in your discovery results, making it easier to understand what equipment has been discovered on your network.
 
