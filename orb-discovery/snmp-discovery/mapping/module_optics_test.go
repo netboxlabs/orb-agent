@@ -3,8 +3,10 @@
 package mapping
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -109,4 +111,73 @@ func TestOpticDiscovery_NonOpticContainersStayIgnored(t *testing.T) {
 		assert.NotEqual(t, "Slot 2", m.Name)
 		assert.NotEqual(t, "TenGigabitEthernet2/0/1", m.Name)
 	}
+}
+
+// TestOpticDiscovery_BayNamedForServedInterface asserts a fixed-port optic's
+// bay is named for the interface the row itself names. Without it the bay is
+// the cage's bare position number, which does not identify the port.
+func TestOpticDiscovery_BayNamedForServedInterface(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(fixedPortLaneShapeFixture()), testOpticLogger())
+
+	require.Len(t, inv.Modules, 3)
+	bays := make(map[string]bool, 3)
+	for _, m := range inv.Modules {
+		bays[m.BayName] = true
+	}
+	for _, want := range []string{"Ethernet1", "Ethernet2", "Ethernet3"} {
+		assert.True(t, bays[want], "expected a bay named %s", want)
+	}
+}
+
+// TestOpticDiscovery_LaneDescrNeverNamesABay pins the anchoring. A lane row
+// descr contains "Xcvr for Ethernet1" as a substring, and an unanchored
+// match would emit one bay per lane for a single physical optic.
+func TestOpticDiscovery_LaneDescrNeverNamesABay(t *testing.T) {
+	assert.Equal(t, "Ethernet1", servedInterface("", "Xcvr for Ethernet1"))
+	assert.Empty(t, servedInterface("", "Lane 0 for Xcvr for Ethernet1"))
+	assert.Empty(t, servedInterface("", "Xcvr Slot 1"))
+}
+
+// TestOpticDiscovery_NonInterfaceNameRejected pins the digit requirement.
+// One platform names every optic row with the literal token "port";
+// accepting it would name every bay on the chassis identically and merge
+// them into one object.
+func TestOpticDiscovery_NonInterfaceNameRejected(t *testing.T) {
+	assert.Empty(t, servedInterface("port", ""))
+	assert.Empty(t, servedInterface("SFP cage", ""))
+	assert.Equal(t, "Ethernet0", servedInterface("Ethernet0", ""))
+}
+
+// TestOpticDiscovery_StackedMembersKeepDistinctBays asserts that when two
+// stack members each report an optic at the same position, all four bays
+// survive. They are distinct NetBox objects because each carries its own
+// Device; the extractor must not collapse them, and the literal token
+// "port" must never become a bay name.
+func TestOpticDiscovery_StackedMembersKeepDistinctBays(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(stackedPortOpticFixture()), testOpticLogger())
+
+	var count int
+	for _, subs := range inv.SubModules {
+		for _, m := range subs {
+			count++
+			assert.NotEqual(t, "port", m.BayName, "the literal token must never name a bay")
+		}
+	}
+	assert.Equal(t, 4, count, "two optics on each of two members")
+}
+
+// TestOpticDiscovery_SerialFreeOpticsSkippedWithOneWarning asserts optics
+// without a serial are not emitted and that the warning is aggregated: one
+// captured platform publishes 25 such rows, and a line each would mean 25
+// per poll.
+func TestOpticDiscovery_SerialFreeOpticsSkippedWithOneWarning(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	inv := extractModuleInventory(buildOIDs(serialFreePortOpticFixture()), logger)
+
+	assert.Empty(t, inv.Modules, "an optic with no serial cannot be emitted")
+	assert.Equal(t, 1, strings.Count(buf.String(), "optics skipped for missing serial"),
+		"exactly one aggregated warning")
+	assert.Contains(t, buf.String(), "count=3")
 }

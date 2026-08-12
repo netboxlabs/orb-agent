@@ -8,6 +8,7 @@ package mapping
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -138,6 +139,38 @@ func isOpticSubEntity(r row, byIdx map[string]row) bool {
 	}
 	parent, ok := byIdx[r.ContainedIn]
 	return ok && isOpticPID(parent.Model, parent.VendorType)
+}
+
+// opticDescrIfaceRe matches a transceiver row's descr where the vendor names
+// the interface the optic serves. Anchored on purpose: the same platform
+// publishes "Lane 0 for Xcvr for Ethernet1" beneath each optic, and an
+// unanchored match would emit one bay per lane.
+var opticDescrIfaceRe = regexp.MustCompile(`^Xcvr for (\S+)$`)
+
+// servedInterface returns the interface an optic row names, or "" when the
+// row names none. An interface reference is positive evidence that the optic
+// is installed in that port — a spare optic inventoried at chassis level
+// does not name one. Absence of a module parent never authorises anything.
+func servedInterface(name, descr string) string {
+	if m := opticDescrIfaceRe.FindStringSubmatch(strings.TrimSpace(descr)); m != nil {
+		if ifaceShaped(m[1]) {
+			return m[1]
+		}
+	}
+	if n := strings.TrimSpace(name); ifaceShaped(n) {
+		return n
+	}
+	return ""
+}
+
+// ifaceShaped reports whether a token can be an interface name. A digit is
+// required: one platform names every optic row with the bare word "port",
+// which would otherwise name every bay on the chassis identically.
+func ifaceShaped(tok string) bool {
+	if tok == "" || strings.ContainsAny(tok, " \t") {
+		return false
+	}
+	return strings.ContainsAny(tok, "0123456789")
 }
 
 // classifyModule picks a ModuleType from a row's PID and its location
@@ -347,6 +380,7 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		return ai < aj
 	})
 	seenSerial := make(map[string]struct{})
+	serialFreeOptics := make([]string, 0)
 
 	// bayHasChild tracks class=5 rows that gained at least one class=9
 	// child — used by the empty-bay harvest below.
@@ -437,11 +471,40 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			Type:         classifyModule(r.Model, r.VendorType, parentModuleIdx != ""),
 			ParentEntIdx: parentModuleIdx,
 		}
+		// A fixed-port optic's bay is named for the interface the row
+		// names. A modular optic keeps the derivation from its real cage,
+		// which already identifies the port.
+		if entry.Type == ModuleTypeTransceiver && parentModuleIdx == "" {
+			if iface := servedInterface(r.Name, r.Descr); iface != "" {
+				entry.BayName = iface
+				entry.BayPosition = iface
+			}
+		}
+		// A module bay requires a serial downstream, so an optic without
+		// one cannot be emitted. Collected and reported once per device: a
+		// platform publishing dozens of serial-less optics would otherwise
+		// log a line each, every poll.
+		if entry.Type == ModuleTypeTransceiver && strings.TrimSpace(r.Serial) == "" {
+			label := servedInterface(r.Name, r.Descr)
+			if label == "" {
+				label = r.EntIndex
+			}
+			serialFreeOptics = append(serialFreeOptics, label)
+			continue
+		}
 		if parentModuleIdx == "" {
 			inv.Modules = append(inv.Modules, entry)
 		} else {
 			inv.SubModules[parentModuleIdx] = append(inv.SubModules[parentModuleIdx], entry)
 		}
+	}
+
+	if len(serialFreeOptics) > 0 {
+		sort.Strings(serialFreeOptics)
+		logger.Warn("module discovery: optics skipped for missing serial",
+			"count", len(serialFreeOptics),
+			"interfaces", strings.Join(serialFreeOptics, ","),
+			"reason", "missing_serial")
 	}
 
 	// Deterministic emission order for top-level modules.
