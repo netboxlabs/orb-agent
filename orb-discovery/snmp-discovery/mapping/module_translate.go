@@ -85,6 +85,12 @@ func TranslateModulesWithAlias(
 		if m.Type == ModuleTypePSU || m.Type == ModuleTypeFan {
 			continue
 		}
+		// A transceiver is full-mode-only. Modular optics are already
+		// excluded by the mode gate below because they live in SubModules;
+		// a fixed-port optic is a top-level module and needs this.
+		if m.Type == ModuleTypeTransceiver && mode != config.DiscoverModulesFull {
+			continue
+		}
 		// assignMemberID stamps MemberID=-1 on entries whose chassis
 		// ancestor isn't in the VC member set. Skip — already warn-logged.
 		if m.MemberID < 0 {

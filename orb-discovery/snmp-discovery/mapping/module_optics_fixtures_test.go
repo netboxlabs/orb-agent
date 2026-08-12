@@ -15,7 +15,7 @@ package mapping
 func fixedPortLaneShapeFixture() []fixtureRow {
 	rows := []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "JPE14030001", "DCS-7050SX-64", "64-port switch chassis", ""},
-		{"1100300000", "1", "5", "1", "", "", "", "Xcvr Slot Container", ""},
+		{"1100300000", "1", "5", "3", "", "", "", "Xcvr Slot Container", ""},
 	}
 	for _, p := range []struct{ n, cage, optic, lane, sensor1, sensor2, serial string }{
 		{"1", "100301000", "100301100", "100301210", "100301201", "100301202", "G1904016438"},
@@ -43,7 +43,7 @@ func fixedPortLaneShapeFixture() []fixtureRow {
 func fixedPortHarvestShapeFixture() []fixtureRow {
 	rows := []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "JPE14030002", "DCS-7050SX-64", "64-port switch chassis", ""},
-		{"1100300000", "1", "5", "1", "", "", "", "Xcvr Slot Container", ""},
+		{"1100300000", "1", "5", "3", "", "", "", "Xcvr Slot Container", ""},
 	}
 	for _, p := range []struct{ n, cage, optic, serial string }{
 		{"1", "100301000", "100301100", "XMD1447522PK"},

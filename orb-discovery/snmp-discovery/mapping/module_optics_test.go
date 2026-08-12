@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +59,22 @@ func TestOpticDiscovery_OpticRowsNeverHarvestedAsEmptyBays(t *testing.T) {
 					"optic row %s emitted as an empty bay", b.EntIndex)
 			}
 		})
+	}
+}
+
+// TestOpticDiscovery_ContainerOfContainersNotHarvestedAsEmptyBay asserts a
+// class-5 container whose own children are themselves class-5 containers
+// (the per-port cages, never a class-9/10 leaf directly) is not harvested
+// as an empty bay when something beneath it was emitted. Without upward
+// propagation, bayHasChild only marks the nearest bay — the cage — so the
+// slot container that holds all three cages would look empty even though
+// every cage beneath it holds a populated, serialed optic.
+func TestOpticDiscovery_ContainerOfContainersNotHarvestedAsEmptyBay(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(fixedPortLaneShapeFixture()), testOpticLogger())
+
+	for _, b := range inv.EmptyBays {
+		assert.NotEqual(t, "1100300000", b.EntIndex,
+			"the populated slot container must not be harvested as an empty bay")
 	}
 }
 
@@ -193,4 +210,58 @@ func TestOpticDiscovery_SerialFreeOpticLeavesCageHarvestable(t *testing.T) {
 	assert.Empty(t, inv.Modules, "the serial-free optic must not be emitted as a module")
 	require.Len(t, inv.EmptyBays, 1, "the cage must still be harvested")
 	assert.Equal(t, "100", inv.EmptyBays[0].EntIndex, "the harvested bay is the cage, not the optic")
+}
+
+// TestOpticDiscovery_LinecardsModeEmitsNoFixedPortOptic asserts a fixed-port
+// optic stays out of linecards mode. A modular optic is already excluded by
+// the full-mode gate because it lives in SubModules; a fixed-port optic is a
+// top-level module and needs its own exclusion.
+func TestOpticDiscovery_LinecardsModeEmitsNoFixedPortOptic(t *testing.T) {
+	oids := buildOIDs(fixedPortLaneShapeFixture())
+	dev := &diode.Device{Name: strPtr("test-switch")}
+	memberDevices := map[int]*diode.Device{0: dev}
+
+	entities, _ := TranslateModules(oids, nil, memberDevices, modeLinecards(), nil, testOpticLogger())
+
+	for _, e := range entities {
+		mod, ok := e.(*diode.Module)
+		if !ok || mod.ModuleType == nil || mod.ModuleType.Model == nil {
+			continue
+		}
+		assert.NotEqual(t, "SFP-10GLR-31", *mod.ModuleType.Model,
+			"linecards mode must not emit a transceiver")
+	}
+}
+
+// TestOpticDiscovery_FullModeEmitsInterfaceNamedBays asserts the emitted
+// payload carries exactly one bay per optic, named for the interface it
+// serves, each with its own serial. Asserting the exact set — rather than
+// each wanted name plus a denylist of broken values — pins the whole
+// outcome in one assertion: no container bay, no bare-number bay, no
+// "Unknown" placeholder, regardless of what position value the container
+// happens to report.
+func TestOpticDiscovery_FullModeEmitsInterfaceNamedBays(t *testing.T) {
+	oids := buildOIDs(fixedPortLaneShapeFixture())
+	dev := &diode.Device{Name: strPtr("test-switch")}
+	memberDevices := map[int]*diode.Device{0: dev}
+
+	entities, _ := TranslateModules(oids, nil, memberDevices, modeFull(), nil, testOpticLogger())
+
+	var bayNames []string
+	serials := make(map[string]bool)
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.ModuleBay:
+			require.NotNil(t, v.Name)
+			bayNames = append(bayNames, *v.Name)
+		case *diode.Module:
+			if v.Serial != nil && *v.Serial != "" {
+				serials[*v.Serial] = true
+			}
+		}
+	}
+
+	assert.ElementsMatch(t, []string{"Ethernet1", "Ethernet2", "Ethernet3"}, bayNames,
+		"expected exactly one bay per optic, named for its served interface")
+	assert.Len(t, serials, 3, "each optic contributes its own serial")
 }

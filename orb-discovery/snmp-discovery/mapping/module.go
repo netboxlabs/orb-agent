@@ -512,6 +512,55 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		return inv.Modules[i].EntIndex < inv.Modules[j].EntIndex
 	})
 
+	// bayHasChild above only marks a module's own (nearest) class=5 bay.
+	// A container whose children are themselves containers — never a
+	// class=9/10 leaf directly — stays unmarked even when a module several
+	// containers below it is fully populated, and the empty-bay harvest
+	// below would then wrongly harvest it as empty. Propagate "has a
+	// child" upward through every container ancestor so the harvest's
+	// invariant holds: a container is an empty bay only if nothing
+	// beneath it was emitted.
+	//
+	// Snapshot the already-marked keys first — ranging a map while adding
+	// new keys to it is undefined for the keys added during the range.
+	markedBays := make([]string, 0, len(bayHasChild))
+	for idx := range bayHasChild {
+		markedBays = append(markedBays, idx)
+	}
+	// Generous bound on how many container levels to climb — real
+	// ENTITY-MIB trees are a handful of levels deep at most; this only
+	// guards against a pathological/malformed capture.
+	const maxContainmentWalkDepth = 64
+	for _, idx := range markedBays {
+		cur := byIdx[idx].ContainedIn
+		seen := make(map[string]struct{})
+		for depth := 0; cur != "" && cur != "0" && depth < maxContainmentWalkDepth; depth++ {
+			if _, dup := seen[cur]; dup {
+				logger.Debug("module: containment cycle detected during bay propagation",
+					"from", idx, "at", cur)
+				break
+			}
+			seen[cur] = struct{}{}
+			parent, exists := byIdx[cur]
+			if !exists || parent.Class != entPhysicalClassContainer {
+				// Stop at the first non-container ancestor. A class=5 row
+				// that directly hosts an emitted class=9 module is
+				// already marked by the normal path above (that module's
+				// bay IS this row); the only gap this closes is a
+				// container whose children are all containers.
+				break
+			}
+			if bayHasChild[cur] {
+				// Already marked — its own ancestors were marked on an
+				// earlier pass through this same loop, so stop rather
+				// than re-walking ground already covered.
+				break
+			}
+			bayHasChild[cur] = true
+			cur = parent.ContainedIn
+		}
+	}
+
 	// Empty-bay harvest. A class=5 row whose parent is a chassis or
 	// another container and which has no class=9 child is an empty
 	// slot — emitted as a bare bay in `full` mode (Aruba CX quirk).
