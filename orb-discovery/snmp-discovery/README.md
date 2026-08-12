@@ -465,7 +465,12 @@ devices:
 
 Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. If you run the agent in a container, mount this directory into it.
 
-To check that a file was picked up, look at the startup logs: snmp-discovery reports how many entries each file in the directory registered. A file with a wrong top-level key or bad indentation parses without error but registers nothing, and the entry count is what distinguishes that from a file that applied cleanly. A file that fails to parse is skipped with a warning rather than aborting the load, so one bad file does not cost you the others.
+The startup logs report how many files were read from the directory and the total number of entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
+
+- a file whose `devices:` section cannot be parsed is skipped with a warning, rather than aborting the load, so one bad file does not cost you the others
+- a file that parses but registers nothing, which is what a wrong top-level key or tab indentation produces, is warned about individually
+
+A file that loads cleanly is counted in the totals rather than logged by name, so if you need to confirm one specific file's contribution, put it in the directory on its own and compare the entry total.
 
 #### How It Works
 At startup, snmp-discovery builds a single OID-to-name table:
