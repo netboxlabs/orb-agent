@@ -1,4 +1,4 @@
-# CyberArk Secrets Manager (beta)
+# CyberArk Secrets Manager
 
 The Orb Agent can integrate with [CyberArk Privileged Access Manager (PAM)](https://www.cyberark.com/products/privileged-access-manager/) via the Central Credential Provider (CCP) to retrieve secrets at runtime. This feature allows you to reference accounts stored in CyberArk directly in your policy configurations without hardcoding sensitive values.
 

@@ -52,9 +52,9 @@ orb:
 Supported secrets managers:
 - [HashiCorp Vault](./docs/secretsmgr/vault.md)
 - [Doppler](./docs/secretsmgr/doppler.md)
-- [CyberArk (CCP)](./docs/secretsmgr/cyberark.md) (beta)
-- [Delinea Secret Server](./docs/secretsmgr/delinea.md) (beta)
-- [Delinea DevOps Secrets Vault (DSV)](./docs/secretsmgr/dsv.md) (beta)
+- [CyberArk (CCP)](./docs/secretsmgr/cyberark.md)
+- [Delinea Secret Server](./docs/secretsmgr/delinea.md)
+- [Delinea DevOps Secrets Vault (DSV)](./docs/secretsmgr/dsv.md)
 
 The secrets manager to use, and its connection settings, can also be selected and configured entirely via environment variables — independently of the config manager and without editing the YAML file. See [Environment-Driven Configuration](./docs/advanced_config/env_config.md).
 
@@ -73,12 +73,12 @@ orb:
 ```
 
 #### Discovery Backends
-Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and `gnmi_discovery` (beta) backends are currently supported. They do not require any special configuration.
+Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and `gnmi_discovery` backends are currently supported. They do not require any special configuration.
 - [Device Discovery](./docs/backends/device_discovery/README.md) ([supported platforms](./docs/backends/device_discovery/supported_platforms.md))
 - [Network Discovery](./docs/backends/network_discovery.md)
 - [Worker](./docs/backends/worker.md)
 - [SNMP Discovery](./docs/backends/snmp_discovery/README.md) ([supported platforms](./docs/backends/snmp_discovery/supported_platforms.md))
-- [gNMI Discovery](./docs/backends/gnmi_discovery.md) (beta)
+- [gNMI Discovery](./docs/backends/gnmi_discovery.md)
 
 #### Observability Backends
 Observability backends focus on collecting and exporting rich telemetry from network traffic or probes so you can feed metrics into your monitoring stack.

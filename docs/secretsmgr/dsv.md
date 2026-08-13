@@ -1,4 +1,4 @@
-# Delinea DevOps Secrets Vault (DSV) Secrets Manager (beta)
+# Delinea DevOps Secrets Vault (DSV) Secrets Manager
 
 The Orb Agent can integrate with [Delinea DevOps Secrets Vault (DSV)](https://delinea.com/products/devops-secrets-management-vault) to resolve sensitive values — passwords, tokens, API keys — referenced from your policy and config values, without hardcoding them.
 
