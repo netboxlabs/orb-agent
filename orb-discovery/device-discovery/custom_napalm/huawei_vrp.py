@@ -49,7 +49,7 @@ def _huawei_row_to_switchport_info(row: dict) -> SwitchportInfo:
     """
     Map an ntc-templates ``display port vlan`` row to a SwitchportInfo.
 
-    LINK_TYPE values from VRP: access, trunk, hybrid, desirable, auto.
+    LINK_TYPE values from : access, trunk, hybrid, desirable, auto.
     Hybrid collapses to trunk (native + tagged set). LNP-negotiated link
     types (``auto`` / ``desirable``) still carry VLAN state — mode is
     inferred from membership shape (any trunk VLAN list ⇒ trunk;
@@ -138,7 +138,7 @@ _YEAR_SECONDS = 365 * _DAY_SECONDS
 
 
 def _parse_uptime(uptime_str: str) -> int:
-    """Convert a Huawei VRP uptime string to total seconds."""
+    """Convert a Huawei  uptime string to total seconds."""
     seconds = 0
 
     for pattern, factor in (
@@ -175,7 +175,7 @@ def _separate_section(separator: str, content: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Stack discovery — Huawei VRP iStack
+# Stack discovery — Huawei  iStack
 # ---------------------------------------------------------------------------
 #
 # `display stack` on a VRP iStack-mode chassis emits a settings-block followed
@@ -213,9 +213,9 @@ def _separate_section(separator: str, content: str) -> list[str]:
 _VRP_STACK_ROW_RE = re.compile(
     r"""
     ^\s*
-    (?P<id>\d+)\s+                                                   # Slot
+    \+?(?P<id>\d+)\s+                                                # Slot
     (?P<role>[A-Za-z]+)\s+                                           # Role
-    (?P<mac>[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4})\s+          # MAC
+    (?P<mac>[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4})\s+         # MAC
     (?P<priority>\d+)\s+                                             # Priority
     (?P<model>\S+(?:\s+\S+)*?)                                       # Device Type — non-greedy
                                                                      #   so the optional trailing
