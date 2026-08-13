@@ -107,7 +107,6 @@ func (d *dsvManager) Start(ctx context.Context) error {
 // The body is split on its last "/": everything before is the DSV secret path,
 // and the final segment is a key inside the secret's Data map.
 func (d *dsvManager) fetch(body string) (string, error) {
-
 	idx := strings.LastIndex(body, "/")
 	if idx <= 0 || idx == len(body)-1 {
 		return "", fmt.Errorf("invalid dsv reference %q: expected '<secret-path>/<field-key>'", body)
