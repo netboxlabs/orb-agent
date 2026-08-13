@@ -128,6 +128,11 @@ func TranslateModulesWithAlias(
 				logger.Warn("module discovery: duplicate transceiver bay name dropped",
 					"bay", key.bay, "ent", m.EntIndex, "member", m.MemberID, "model", m.Model,
 					"reason", "dup_bay_name")
+				if c := metrics.GetModulesDropped(); c != nil {
+					c.Add(context.Background(), 1, metric.WithAttributes(
+						attribute.String("reason", "dup_bay_name"),
+					))
+				}
 				continue
 			}
 			seenTransceiverBays[key] = m.EntIndex
@@ -208,6 +213,11 @@ func TranslateModulesWithAlias(
 				logger.Warn("module discovery: duplicate transceiver bay name dropped",
 					"bay", key.bay, "ent", tr.EntIndex, "member", tr.MemberID, "model", tr.Model,
 					"reason", "dup_bay_name")
+				if c := metrics.GetModulesDropped(); c != nil {
+					c.Add(context.Background(), 1, metric.WithAttributes(
+						attribute.String("reason", "dup_bay_name"),
+					))
+				}
 				continue
 			}
 			seenTransceiverBays[key] = tr.EntIndex

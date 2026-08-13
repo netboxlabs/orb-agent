@@ -539,6 +539,11 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 				label = r.EntIndex
 			}
 			serialFreeOptics = append(serialFreeOptics, label)
+			if c := metrics.GetModulesDropped(); c != nil {
+				c.Add(context.Background(), 1, metric.WithAttributes(
+					attribute.String("reason", "missing_serial"),
+				))
+			}
 			continue
 		}
 		bayHasChild[bayIdx] = true
