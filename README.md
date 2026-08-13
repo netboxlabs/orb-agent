@@ -31,7 +31,7 @@ Currently, only the `local` and `git` sources are supported for config manager.
 - [Git](./docs/configs/git.md)
 
 ### Secrets Manager
-The `secrets_manager` section specifies how Orb agent should retrieve and inject secrets into policies. The secrets manager can reference external secret stores like HashiCorp Vault, Doppler, CyberArk, or Delinea Secret Server to retrieve sensitive information such as credentials without hardcoding them in configuration files.
+The `secrets_manager` section specifies how Orb agent should retrieve and inject secrets into policies. The secrets manager can reference external secret stores like HashiCorp Vault, Doppler, CyberArk, Delinea Secret Server, or Delinea DevOps Secrets Vault to retrieve sensitive information such as credentials without hardcoding them in configuration files.
 
 ```yaml
 orb:
@@ -54,6 +54,7 @@ Supported secrets managers:
 - [Doppler](./docs/secretsmgr/doppler.md)
 - [CyberArk (CCP)](./docs/secretsmgr/cyberark.md) (beta)
 - [Delinea Secret Server](./docs/secretsmgr/delinea.md) (beta)
+- [Delinea DevOps Secrets Vault (DSV)](./docs/secretsmgr/dsv.md) (beta)
 
 The secrets manager to use, and its connection settings, can also be selected and configured entirely via environment variables — independently of the config manager and without editing the YAML file. See [Environment-Driven Configuration](./docs/advanced_config/env_config.md).
 
