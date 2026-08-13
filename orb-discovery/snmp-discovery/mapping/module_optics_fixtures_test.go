@@ -137,6 +137,27 @@ func serialFreePortOpticFixture() []fixtureRow {
 	}
 }
 
+// serialFreeModuleOpticFixture is modeled on a confirmed regression rather
+// than transcribed byte-for-byte from a capture: a real device in the
+// corpus publishes a class-9 optic beneath a linecard with a blank
+// entPhysicalSerialNum. That row was discoverable before the widened
+// container/port scan — classified as a transceiver, nested under its
+// linecard, and emitted with Serial left unset (emitModule already
+// tolerates a blank Serial). The missing-serial gate must not touch this
+// shape; it exists only for the container/port classes the widened scan
+// added.
+func serialFreeModuleOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0009", "SYN-CHASSIS9", "Synthetic chassis", ""},
+		{"10", "1", "5", "1", "Slot 1", "", "", "", ""},
+		{"100", "10", "9", "1", "Linecard", "SYNLC00002", "C9400-LC-48U", "", ""},
+		// Port cage under the linecard.
+		{"101", "100", "5", "1", "Te1/0/1 Container", "", "", "", ""},
+		// Optic: class 9 (module-shaped), PID present, serial ABSENT.
+		{"102", "101", "9", "1", "Te1/0/1 Transceiver", "", "GLC-LH-SMD", "", ""},
+	}
+}
+
 // duplicateBayNameOpticFixture is synthetic, not transcribed from a
 // capture — no captured device in the corpus has shown two fixed-port
 // transceivers collide on the same bay name. It exists to exercise the

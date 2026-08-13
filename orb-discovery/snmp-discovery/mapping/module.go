@@ -522,11 +522,18 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 				entry.BayPosition = iface
 			}
 		}
-		// A module bay requires a serial downstream, so an optic without
-		// one cannot be emitted. Collected and reported once per device: a
-		// platform publishing dozens of serial-less optics would otherwise
-		// log a line each, every poll.
-		if entry.Type == ModuleTypeTransceiver && strings.TrimSpace(r.Serial) == "" {
+		// A module bay requires a serial downstream, so a container/port
+		// optic without one cannot be emitted. Scoped to the classes the
+		// widened scan added (container/port) — a class=9 module-shaped
+		// optic was already discoverable, with a blank serial, before that
+		// widening: emitModule already tolerates a blank Serial (leaves it
+		// unset rather than erroring or dropping the Module), so gating it
+		// here would be a regression, not hardening. Collected and
+		// reported once per device: a platform publishing dozens of
+		// serial-less optics would otherwise log a line each, every poll.
+		if entry.Type == ModuleTypeTransceiver &&
+			(r.Class == entPhysicalClassContainer || r.Class == entPhysicalClassPort) &&
+			strings.TrimSpace(r.Serial) == "" {
 			label := servedInterface(r.Name, r.Descr, pid)
 			if label == "" {
 				label = r.EntIndex

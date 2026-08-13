@@ -248,6 +248,42 @@ func TestOpticDiscovery_SerialFreeCagedPortOpticProducesNoBay(t *testing.T) {
 	assert.Empty(t, inv.EmptyBays, "the cage is suppressed by containerHasPortChild — no bay at all")
 }
 
+// TestOpticDiscovery_ClassNineSerialFreeOpticStillEmitted is the regression
+// pin for the missing-serial gate's scope: a class-9 optic beneath a
+// linecard with a blank serial was already discoverable before the widened
+// container/port scan — emitModule already tolerates a blank Serial rather
+// than erroring or dropping the Module, so the gate must not touch a
+// class-9 row. Asserts full emission (not merely absence-of-skip): the
+// transceiver must surface as a submodule ModuleBay + Module with Serial
+// left unset, and the aggregated missing-serial warning must never fire
+// for it.
+func TestOpticDiscovery_ClassNineSerialFreeOpticStillEmitted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	oids := buildOIDs(serialFreeModuleOpticFixture())
+	dev := &diode.Device{Name: strPtr("test-router")}
+	memberDevices := map[int]*diode.Device{0: dev}
+
+	entities, _ := TranslateModules(oids, nil, memberDevices, modeFull(), nil, logger)
+
+	var transceiverMod *diode.Module
+	for _, e := range entities {
+		m, ok := e.(*diode.Module)
+		if !ok || m.ModuleType == nil || m.ModuleType.Model == nil {
+			continue
+		}
+		if *m.ModuleType.Model == "GLC-LH-SMD" {
+			transceiverMod = m
+		}
+	}
+	require.NotNil(t, transceiverMod, "the class-9 serial-free optic must still be emitted")
+	require.NotNil(t, transceiverMod.ModuleBay, "the transceiver must carry its submodule bay")
+	assert.Nil(t, transceiverMod.Serial, "serial stays unset, matching emitModule's existing tolerance")
+	assert.NotContains(t, buf.String(), "optics skipped for missing serial",
+		"a class-9 row must never be counted by the missing-serial gate")
+}
+
 // TestOpticDiscovery_LinecardsModeEmitsNoFixedPortOptic asserts a fixed-port
 // optic stays out of linecards mode. A modular optic is already excluded by
 // the full-mode gate because it lives in SubModules; a fixed-port optic is a
