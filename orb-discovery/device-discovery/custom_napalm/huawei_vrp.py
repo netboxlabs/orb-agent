@@ -138,7 +138,7 @@ _YEAR_SECONDS = 365 * _DAY_SECONDS
 
 
 def _parse_uptime(uptime_str: str) -> int:
-    """Convert a Huawei  uptime string to total seconds."""
+    """Convert a Huawei uptime string to total seconds."""
     seconds = 0
 
     for pattern, factor in (
