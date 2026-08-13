@@ -49,7 +49,7 @@ def _huawei_row_to_switchport_info(row: dict) -> SwitchportInfo:
     """
     Map an ntc-templates ``display port vlan`` row to a SwitchportInfo.
 
-    LINK_TYPE values from : access, trunk, hybrid, desirable, auto.
+    LINK_TYPE values from: access, trunk, hybrid, desirable, auto.
     Hybrid collapses to trunk (native + tagged set). LNP-negotiated link
     types (``auto`` / ``desirable``) still carry VLAN state — mode is
     inferred from membership shape (any trunk VLAN list ⇒ trunk;
@@ -175,7 +175,7 @@ def _separate_section(separator: str, content: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Stack discovery — Huawei  iStack
+# Stack discovery — Huawei iStack
 # ---------------------------------------------------------------------------
 #
 # `display stack` on a VRP iStack-mode chassis emits a settings-block followed
