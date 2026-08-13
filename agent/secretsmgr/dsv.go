@@ -107,9 +107,6 @@ func (d *dsvManager) Start(ctx context.Context) error {
 // The body is split on its last "/": everything before is the DSV secret path,
 // and the final segment is a key inside the secret's Data map.
 func (d *dsvManager) fetch(body string) (string, error) {
-	// The SDK caches its bearer token in the process-global DSV_AT env var,
-	// which backend subprocesses inherit. Drop it after every call.
-	defer os.Unsetenv("DSV_AT")
 
 	idx := strings.LastIndex(body, "/")
 	if idx <= 0 || idx == len(body)-1 {
@@ -119,6 +116,10 @@ func (d *dsvManager) fetch(body string) (string, error) {
 	field := body[idx+1:]
 
 	secret, err := d.client.Secret(path)
+	// The SDK caches its bearer token in the process-global DSV_AT env var,
+	// which backend subprocesses inherit. Drop it after every call.
+	_ = os.Unsetenv("DSV_AT")
+
 	if err != nil {
 		return "", fmt.Errorf("dsv: get secret path=%q: %w", path, err)
 	}
