@@ -677,3 +677,38 @@ func TestOpticDiscovery_ProductLabelNameRejected(t *testing.T) {
 			"%s is a port name and must be accepted", iface)
 	}
 }
+
+// TestOpticDiscovery_UnnameableCagelessOpticNeverTakesTheLinecardBay pins the
+// gap the duplicate-bay guard cannot cover. The guard is scoped to transceivers,
+// so a linecard's own bay is never registered in it; an optic that inherited
+// that bay name would be emitted into it and contest the linecard's module,
+// with only later optics dropped. A cageless optic that names no interface must
+// therefore never keep the inherited name.
+func TestOpticDiscovery_UnnameableCagelessOpticNeverTakesTheLinecardBay(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(unnameableCagelessOpticFixture()), testOpticLogger())
+
+	var lcBay string
+	for _, m := range inv.Modules {
+		if m.Type == ModuleTypeLinecard {
+			lcBay = m.BayName
+		}
+	}
+	require.Equal(t, "Slot 2", lcBay, "the linecard keeps its slot bay")
+
+	subs := inv.SubModules["201"]
+	require.Len(t, subs, 2, "both optics survive; neither is dropped")
+
+	seen := make(map[string]string, len(subs))
+	for _, m := range subs {
+		assert.Equal(t, ModuleTypeTransceiver, m.Type)
+		assert.NotEqual(t, lcBay, m.BayName,
+			"an optic must never be emitted into its linecard's bay")
+		assert.Equal(t, m.EntIndex, m.BayName,
+			"with no interface to name it, the optic's own index identifies the bay")
+		if prev, dup := seen[m.BayName]; dup {
+			t.Fatalf("bay %q shared by ent %s and ent %s", m.BayName, prev, m.EntIndex)
+		}
+		seen[m.BayName] = m.EntIndex
+	}
+	assert.Len(t, seen, 2, "two optics, two distinct bays")
+}

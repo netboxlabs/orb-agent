@@ -282,3 +282,20 @@ func chassisRootedModuleOpticsFixture() []fixtureRow {
 		{"158", "1", "10", "-1", "Ethernet3", "SYNOPT003", "SFP-10G-LR", "SFP-10G-LR", ""},
 	}
 }
+
+// unnameableCagelessOpticFixture is synthetic: it crosses two shapes that each
+// occur separately but never together in any capture. The containment is the
+// cageless-under-a-slotted-linecard shape of cagelessLinecardOpticsFixture; the
+// naming is the literal token "port" with a descr that only repeats the PID,
+// which stackedPortOpticFixture transcribes from a real device. Crossed, the
+// optic is cageless and names no interface, so without a fallback it would
+// inherit the linecard's own slot bay and contest the linecard's module for it.
+func unnameableCagelessOpticFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SYN0021", "SYN-CHASSIS", "Modular chassis", ""},
+		{"200", "1", "5", "2", "Slot 2", "", "", "Slot 2 Container", ""},
+		{"201", "200", "9", "1", "Linecard 2", "SYNLC0021", "C9400-LC-48U", "48-port line card", ""},
+		{"300", "201", "10", "1", "port", "SYNOPT021", "SFP-10G-LR", "SFP-10G-LR", ""},
+		{"301", "201", "10", "2", "port", "SYNOPT022", "SFP-10G-LR", "SFP-10G-LR", ""},
+	}
+}

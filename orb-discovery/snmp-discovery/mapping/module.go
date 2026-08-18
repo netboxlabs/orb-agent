@@ -584,9 +584,26 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		if entry.Type == ModuleTypeTransceiver &&
 			(parentModuleIdx == "" || synthesizedBay ||
 				!bayBelowModule(bayIdx, parentModuleIdx)) {
-			if iface := servedInterface(r.Name, r.Descr, pid); iface != "" {
+			switch iface := servedInterface(r.Name, r.Descr, pid); {
+			case iface != "":
 				entry.BayName = iface
 				entry.BayPosition = iface
+			case parentModuleIdx != "" && !synthesizedBay:
+				// Inside a module, no cage of its own, and the row names no
+				// interface. The bay resolved here is the enclosing module's
+				// own slot, so keeping its name would put this optic in that
+				// module's bay and contest the module already installed there
+				// — invisible to the duplicate-bay guard, which is scoped to
+				// transceivers. Fall back to the optic's own index: stable
+				// across polls and unique on the device, where the inherited
+				// name is neither.
+				//
+				// Deliberately narrow. A fixed-port optic's container is its
+				// own cage and names the port correctly, and a synthesized bay
+				// is already derived from this row; neither is inherited from
+				// anything, so both keep what they have.
+				entry.BayName = r.EntIndex
+				entry.BayPosition = r.EntIndex
 			}
 		}
 		// A blank serial is not a reason to drop an optic. dcim.module is
