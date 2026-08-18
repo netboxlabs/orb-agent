@@ -672,6 +672,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		vrfEntities, vrfByIfIndex := mapping.TranslateVrfs(oids, targetDefaults, r.logger)
 		if len(vrfEntities) > 0 {
 			vrfByAddress = mapping.AttachVrfs(entitiesForTarget, vrfByIfIndex, ifIndexByIface, r.logger)
+			// Addresses whose interface was never walked had their assignment
+			// cleared during mapping, so AttachVrfs cannot reach them by
+			// interface pointer. Recover their VRF from the ifIndex recorded
+			// before the clear, or the discovered VRF would be lost for exactly
+			// the addresses this backend already had to degrade.
+			mapping.AttachVrfsToUnverified(
+				mapper.UnverifiedAssignmentIfIndexes(), vrfByIfIndex, vrfByAddress, r.logger,
+			)
 			entitiesForTarget = append(entitiesForTarget, vrfEntities...)
 		}
 	}

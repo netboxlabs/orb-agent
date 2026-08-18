@@ -217,6 +217,59 @@ func AttachVrfs(
 	return vrfByAddress
 }
 
+// AttachVrfsToUnverified attaches discovered VRFs to addresses whose interface
+// assignment was cleared because the interface was never walked (see
+// ObjectIDMapper.UnverifiedAssignmentIfIndexes). AttachVrfs cannot reach these:
+// it resolves an address's ifIndex through the interface pointer held in
+// AssignedObject, and that ref is gone by then. The ifIndex recorded before
+// clearing is the only surviving link, so this pass takes it directly.
+//
+// Attachments are added to vrfByAddress (the caller's map, shared with prefix
+// derivation) so the derived Prefix carries the same VRF as the address —
+// without that the address and its container would disagree, and NetBox, whose
+// IP identity is address+vrf, can end up with duplicate rows.
+//
+// Snapshot re-sync is deliberately not repeated here: primary-IP snapshots only
+// ever hold addresses on verified interfaces (pickPrimaryIPHit requires one), so
+// no snapshot can reference an address in this set. No-op on empty input.
+func AttachVrfsToUnverified(
+	ifIndexByIP map[*diode.IPAddress]int,
+	vrfByIfIndex map[int]*diode.VRF,
+	vrfByAddress map[string]*diode.VRF,
+	logger *slog.Logger,
+) {
+	if len(ifIndexByIP) == 0 || len(vrfByIfIndex) == 0 {
+		return
+	}
+	for ip, idx := range ifIndexByIP {
+		if ip == nil {
+			continue
+		}
+		vrf, hit := vrfByIfIndex[idx]
+		if !hit {
+			continue
+		}
+		ip.Vrf = vrf
+		if logger != nil {
+			logger.Debug("vrf: reattached discovered VRF to an address whose interface was never walked",
+				"address", strVal(ip.Address), "if_index", idx, "vrf", strVal(vrf.Name))
+		}
+		if ip.Address == nil || vrfByAddress == nil {
+			continue
+		}
+		// First-wins, mirroring AttachVrfs, so a synthetic duplicate can never
+		// silently rewrite an attachment the main pass already recorded.
+		if existing, dup := vrfByAddress[*ip.Address]; dup {
+			if existing != vrf && logger != nil {
+				logger.Warn("vrf: unassigned address already attached in another VRF; keeping the first",
+					"address", *ip.Address, "kept", strVal(existing.Name), "dropped", strVal(vrf.Name))
+			}
+			continue
+		}
+		vrfByAddress[*ip.Address] = vrf
+	}
+}
+
 // strVal dereferences a string pointer for logging, tolerating nil.
 func strVal(s *string) string {
 	if s == nil {

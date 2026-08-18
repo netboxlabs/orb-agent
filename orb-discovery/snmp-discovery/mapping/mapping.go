@@ -329,6 +329,12 @@ type ObjectIDMapper struct {
 	// that only the cycle-closer IPAddress entity's nested device stub
 	// retains a primary IP; every other nested device stub is stripped.
 	primaryHits map[*diode.IPAddress]bool
+	// unverifiedIfIndexByIP records, per IPAddress whose assignment was
+	// cleared by dropUnverifiedInterfaceAssignments, the ifIndex it had been
+	// bound to. Clearing the ref destroys the interface pointer that
+	// ifIndex-keyed passes rely on, so this preserves the association for
+	// AttachVrfsToUnverified. Nil unless an assignment was cleared.
+	unverifiedIfIndexByIP map[*diode.IPAddress]int
 }
 
 // SetContext stores the scan's context on the mapper. If set, the primary-IP
@@ -757,6 +763,7 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 	// IP entirely.
 	m.dedupIPAddresses(uniqueEntities)
 	m.filterExcludedEntities(uniqueEntities)
+	m.dropUnverifiedInterfaceAssignments(uniqueEntities)
 
 	currentDevice := m.registry.GetOrCreateEntity(DeviceEntityType, CurrentDeviceIndex).(*diode.Device)
 
@@ -1286,6 +1293,72 @@ func (m *ObjectIDMapper) filterExcludedEntities(entities map[diode.Entity]bool) 
 			m.logger.Debug("excluding IP for excluded interface", "interface", *iface.Name)
 		}
 	}
+}
+
+// dropUnverifiedInterfaceAssignments clears an IPAddress's AssignedObject when
+// the interface it points at was never populated by an InterfaceMapper.Map call
+// during the walk. This happens when ipAddressIfIndex (or the legacy
+// ipAdEntIfIndex) references an ifIndex whose ifTable/ifXTable row never came
+// back: GetOrCreateEntity fabricates a placeholder Interface named
+// DefaultInterfaceName with no device and no type. Emitting that placeholder
+// makes Diode auto-vivify a dcim.interface which NetBox rejects (device
+// required, type blank), failing the whole bulk-plan. Leaving the address
+// unassigned produces the same outcome as the ipAddressIfIndex=0 handling in
+// the assignedObject mapper, though the semantics differ: ifIndex=0 is the
+// device affirmatively declaring no binding, so unassigned there is faithful,
+// whereas here a real binding exists that we could not resolve, so unassigned
+// is the least-wrong representation. It is safe for primary-IP selection, which
+// already requires a verified interface via pickPrimaryIPHit.
+//
+// The assignment is the only pointer AttachVrfs can key on (it maps interface
+// pointer -> ifIndex), so the placeholder's ifIndex is recorded before clearing
+// and AttachVrfsToUnverified reattaches any VRF discovered for it. Without that
+// the discovered VRF would be silently forfeited, which also risks a duplicate
+// NetBox row: IP identity is address+vrf, so dropping the VRF can route the
+// address to the global matcher instead of the VRF-scoped one.
+//
+// Runs after dedupIPAddresses so cross-table dedup still sees the original
+// binding state when choosing between the legacy and modern rows.
+func (m *ObjectIDMapper) dropUnverifiedInterfaceAssignments(entities map[diode.Entity]bool) {
+	var ifIndexByIface map[*diode.Interface]int
+	for entity := range entities {
+		ip, ok := entity.(*diode.IPAddress)
+		if !ok || ip.AssignedObject == nil {
+			continue
+		}
+		if m.registry.hasVerifiedInterface(ip) {
+			continue
+		}
+		if iface, ok := ip.AssignedObject.(*diode.Interface); ok && iface != nil {
+			// Resolve lazily: the map is only built when there is at least one
+			// unverified assignment, which is the rare case.
+			if ifIndexByIface == nil {
+				ifIndexByIface = m.InterfacesByIfIndex()
+			}
+			if idx, found := ifIndexByIface[iface]; found {
+				if m.unverifiedIfIndexByIP == nil {
+					m.unverifiedIfIndexByIP = make(map[*diode.IPAddress]int)
+				}
+				m.unverifiedIfIndexByIP[ip] = idx
+			}
+			m.logger.Debug("dropping IP assignment to unwalked interface; leaving address unassigned",
+				"address", derefString(ip.Address), "interface", derefString(iface.Name))
+		}
+		// Must be the untyped nil literal. A typed nil (*diode.Interface)(nil)
+		// still satisfies the SDK's non-nil check and serializes to
+		// "assigned_object_interface": {}, which the Diode NetBox plugin treats
+		// as an explicit clear of the generic FK — that would unassign a
+		// correct IP rather than leaving it untouched.
+		ip.AssignedObject = nil
+	}
+}
+
+// UnverifiedAssignmentIfIndexes returns the ifIndex each unassigned IPAddress
+// was bound to before dropUnverifiedInterfaceAssignments cleared the ref, for
+// callers that still need to resolve ifIndex-keyed device state (VRF
+// membership) for those addresses. Nil when no assignment was cleared.
+func (m *ObjectIDMapper) UnverifiedAssignmentIfIndexes() map[*diode.IPAddress]int {
+	return m.unverifiedIfIndexByIP
 }
 
 func (*ObjectIDMapper) getAssignedInterfaces(uniqueEntities map[diode.Entity]bool) map[diode.Entity]bool {

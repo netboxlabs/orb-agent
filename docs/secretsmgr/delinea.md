@@ -1,4 +1,4 @@
-# Delinea Secret Server Secrets Manager (beta)
+# Delinea Secret Server Secrets Manager
 
 The Orb Agent can integrate with [Delinea Secret Server](https://delinea.com/products/secret-server/) (both Secret Server Cloud and on-prem / Platform) to securely manage sensitive information such as passwords and API keys. This feature allows you to reference secrets stored in Delinea directly in your policy configurations without hardcoding sensitive values.
 

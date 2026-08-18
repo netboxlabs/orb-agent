@@ -30,11 +30,13 @@ func New(logger *slog.Logger, c config.ManagerSecrets) (Manager, error) {
 		return &dopplerManager{preLogger: logger, config: c.Sources.Doppler}, nil
 	case "cyberark":
 		return &cyberarkManager{preLogger: logger, config: c.Sources.CyberArk}, nil
+	case "dsv":
+		return &dsvManager{preLogger: logger, config: c.Sources.DSV}, nil
 	case "":
 		logger.Info("no secrets manager specified, skipping")
 		return &dummyManager{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported secrets manager type %q (supported: vault, fleet, delinea, doppler, cyberark)", c.Active)
+		return nil, fmt.Errorf("unsupported secrets manager type %q (supported: vault, fleet, delinea, doppler, cyberark, dsv)", c.Active)
 	}
 }
 
