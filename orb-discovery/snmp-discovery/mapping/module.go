@@ -460,7 +460,6 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		return ai < aj
 	})
 	seenSerial := make(map[string]struct{})
-	serialFreeOptics := make([]string, 0)
 
 	// bayHasChild tracks bay-shaped rows that gained at least one
 	// module child — used by the empty-bay harvest below. Usually keyed
@@ -570,44 +569,20 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 				entry.BayPosition = iface
 			}
 		}
-		// A module bay requires a serial downstream, so a container/port
-		// optic without one cannot be emitted. Scoped to the classes the
-		// widened scan added (container/port) — a class=9 module-shaped
-		// optic was already discoverable, with a blank serial, before that
-		// widening: emitModule already tolerates a blank Serial (leaves it
-		// unset rather than erroring or dropping the Module), so gating it
-		// here would be a regression, not hardening. Collected and
-		// reported once per device: a platform publishing dozens of
-		// serial-less optics would otherwise log a line each, every poll.
-		if entry.Type == ModuleTypeTransceiver &&
-			(r.Class == entPhysicalClassContainer || r.Class == entPhysicalClassPort) &&
-			strings.TrimSpace(r.Serial) == "" {
-			label := servedInterface(r.Name, r.Descr, pid)
-			if label == "" {
-				label = r.EntIndex
-			}
-			serialFreeOptics = append(serialFreeOptics, label)
-			if c := metrics.GetModulesDropped(); c != nil {
-				c.Add(context.Background(), 1, metric.WithAttributes(
-					attribute.String("reason", "missing_serial"),
-				))
-			}
-			continue
-		}
+		// A blank serial is not a reason to drop an optic. dcim.module is
+		// matched on its module bay (unique_module_bay) and has no serial
+		// matcher, NetBox leaves dcim.Module.serial blank-able and in no
+		// constraint, and emitModule omits the field entirely when blank so
+		// a repoll updates the same object rather than creating another.
+		// See the ModuleBay note in stubs.go. Vendors that publish optics
+		// without a serial are common rather than exceptional, so gating on
+		// one would discard inventory that reconciles perfectly well.
 		bayHasChild[bayIdx] = true
 		if parentModuleIdx == "" {
 			inv.Modules = append(inv.Modules, entry)
 		} else {
 			inv.SubModules[parentModuleIdx] = append(inv.SubModules[parentModuleIdx], entry)
 		}
-	}
-
-	if len(serialFreeOptics) > 0 {
-		sort.Strings(serialFreeOptics)
-		logger.Warn("module discovery: optics skipped for missing serial",
-			"count", len(serialFreeOptics),
-			"interfaces", strings.Join(serialFreeOptics, ","),
-			"reason", "missing_serial")
 	}
 
 	// Deterministic emission order for top-level modules.

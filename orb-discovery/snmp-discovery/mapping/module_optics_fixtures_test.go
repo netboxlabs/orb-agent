@@ -93,11 +93,10 @@ func stackedPortOpticFixture() []fixtureRow {
 }
 
 // serialFreeCagedOpticFixture is synthetic, not transcribed from a capture —
-// no captured device has shown this exact shape. It exists to pin an
-// invariant: a class-5 optic with no serial must be dropped as a module, and
-// the class-5 cage it sits in must still be harvested into EmptyBays rather
-// than vanishing along with it, the same way a duplicate-serial drop already
-// leaves its cage harvestable.
+// no captured device has shown this exact shape. It pins that a class-5 optic
+// with no serial is still emitted, named for the interface its descr states,
+// and that it claims its cage: the cage holds a module now, so it must not
+// also surface as an empty bay.
 func serialFreeCagedOpticFixture() []fixtureRow {
 	return []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "SYN0001", "SYN-CHASSIS", "Synthetic chassis", ""},
@@ -110,10 +109,9 @@ func serialFreeCagedOpticFixture() []fixtureRow {
 
 // serialFreeCagedPortOpticFixture mirrors the class-10-in-a-cage topology
 // real captures actually show (the same cage+port nesting as
-// modularPortOpticFixture) with the serial field blank. Unlike the class-5
-// shape above, the cage here has a class-10 child of its own, so
-// containerHasPortChild marks it before the missing-serial drop ever runs —
-// the cage is suppressed outright and produces no bay, empty or otherwise.
+// modularPortOpticFixture) with the serial field blank. The optic is emitted
+// and named for its interface; the cage produces no separate bay because
+// containerHasPortChild suppresses a container whose child is a port row.
 func serialFreeCagedPortOpticFixture() []fixtureRow {
 	return []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "SYN0005", "SYN-CHASSIS5", "Synthetic chassis", ""},
@@ -125,9 +123,11 @@ func serialFreeCagedPortOpticFixture() []fixtureRow {
 }
 
 // serialFreePortOpticFixture mirrors a platform publishing class-10 optics
-// directly under the chassis with NO serial and relPos -1 on every row.
-// Absent the serial requirement all three would synthesize one bay named
-// "Slot -1" and merge into a single object.
+// directly under the chassis with NO serial and relPos -1 on every row —
+// transcribed from a capture that publishes 25 of them. relPos alone would
+// name every bay "Slot -1", but each row carries its own interface name and
+// the transceiver bay-naming rule runs before emission, so the bays come out
+// distinct. A blank serial does not prevent any of that.
 func serialFreePortOpticFixture() []fixtureRow {
 	return []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "EC2140004", "DCS203", "Fixed-port switch chassis", ""},
@@ -143,9 +143,8 @@ func serialFreePortOpticFixture() []fixtureRow {
 // entPhysicalSerialNum. That row was discoverable before the widened
 // container/port scan — classified as a transceiver, nested under its
 // linecard, and emitted with Serial left unset (emitModule already
-// tolerates a blank Serial). The missing-serial gate must not touch this
-// shape; it exists only for the container/port classes the widened scan
-// added.
+// tolerates a blank Serial). Blank-serial optics are emitted in every class,
+// and this is the shape that proves the oldest of them still is.
 func serialFreeModuleOpticFixture() []fixtureRow {
 	return []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "SYN0009", "SYN-CHASSIS9", "Synthetic chassis", ""},

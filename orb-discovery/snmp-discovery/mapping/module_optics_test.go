@@ -204,62 +204,68 @@ func TestOpticDiscovery_StackedMembersKeepDistinctBays(t *testing.T) {
 	assert.Equal(t, 4, count, "two optics on each of two members")
 }
 
-// TestOpticDiscovery_SerialFreeOpticsSkippedWithOneWarning asserts optics
-// without a serial are not emitted and that the warning is aggregated: one
-// captured platform publishes 25 such rows, and a line each would mean 25
-// per poll.
-func TestOpticDiscovery_SerialFreeOpticsSkippedWithOneWarning(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+// TestOpticDiscovery_SerialFreeOpticsEmittedWithDistinctBays covers the shape
+// a real capture publishes 25 times: class-10 optics directly under the
+// chassis, no serial, relPos -1 on every row. A blank serial is no reason to
+// drop them — dcim.module matches on its bay, not on serial. relPos would name
+// every bay "Slot -1", but the bay-naming rule runs first and each row names
+// its own interface, so the bays are distinct and nothing collides.
+func TestOpticDiscovery_SerialFreeOpticsEmittedWithDistinctBays(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(serialFreePortOpticFixture()), testOpticLogger())
 
-	inv := extractModuleInventory(buildOIDs(serialFreePortOpticFixture()), logger)
+	require.Len(t, inv.Modules, 3, "a blank serial must not cost an optic its module")
 
-	assert.Empty(t, inv.Modules, "an optic with no serial cannot be emitted")
-	assert.Equal(t, 1, strings.Count(buf.String(), "optics skipped for missing serial"),
-		"exactly one aggregated warning")
-	assert.Contains(t, buf.String(), "count=3")
+	seen := make(map[string]string, len(inv.Modules))
+	for _, m := range inv.Modules {
+		assert.Equal(t, ModuleTypeTransceiver, m.Type)
+		assert.Empty(t, m.Serial, "the serial really is absent in this capture")
+		assert.Equal(t, m.Name, m.BayName, "named for the interface the row names")
+		assert.NotEqual(t, "Slot -1", m.BayName, "relPos must not name the bay here")
+		if prev, dup := seen[m.BayName]; dup {
+			t.Fatalf("bay %q shared by ent %s and ent %s", m.BayName, prev, m.EntIndex)
+		}
+		seen[m.BayName] = m.EntIndex
+	}
+	assert.Len(t, seen, 3, "three optics, three distinct bays")
 }
 
-// TestOpticDiscovery_SerialFreeOpticLeavesCageHarvestable asserts the two
-// "drop this module" paths agree: a duplicate-serial drop already leaves its
-// bay harvestable as an empty bay, and a missing-serial drop must behave the
-// same way rather than marking the bay as having had a child and burying it
-// along with the dropped optic.
-func TestOpticDiscovery_SerialFreeOpticLeavesCageHarvestable(t *testing.T) {
+// TestOpticDiscovery_SerialFreeCagedOpticClaimsItsCage asserts a class-5 optic
+// with no serial is emitted and takes its cage with it. The cage holds a module
+// once the optic is emitted, so it must not also surface as an empty bay — that
+// would double-count one physical slot.
+func TestOpticDiscovery_SerialFreeCagedOpticClaimsItsCage(t *testing.T) {
 	inv := extractModuleInventory(buildOIDs(serialFreeCagedOpticFixture()), testOpticLogger())
 
-	assert.Empty(t, inv.Modules, "the serial-free optic must not be emitted as a module")
-	require.Len(t, inv.EmptyBays, 1, "the cage must still be harvested")
-	assert.Equal(t, "100", inv.EmptyBays[0].EntIndex, "the harvested bay is the cage, not the optic")
+	require.Len(t, inv.Modules, 1, "the serial-free optic is emitted")
+	assert.Equal(t, ModuleTypeTransceiver, inv.Modules[0].Type)
+	assert.Equal(t, "Ethernet1", inv.Modules[0].BayName, "named from the descr's served interface")
+	assert.Empty(t, inv.Modules[0].Serial)
+	assert.Empty(t, inv.EmptyBays, "the cage now holds a module, so it is not an empty bay")
 }
 
-// TestOpticDiscovery_SerialFreeCagedPortOpticProducesNoBay pins the other
-// serial-free shape, the one real captures actually show: a class-10 optic
-// inside a class-5 cage. Unlike the class-5-optic shape above, the cage
-// here already has a class-10 child of its own, so containerHasPortChild
-// marks it before the missing-serial drop ever runs — the cage never
-// reaches the empty-bay harvest and produces no bay at all, empty or
-// otherwise. This is the current, deliberately different behaviour for
-// this shape, not a bug: pinning it, not changing it.
-func TestOpticDiscovery_SerialFreeCagedPortOpticProducesNoBay(t *testing.T) {
+// TestOpticDiscovery_SerialFreeCagedPortOpticEmitted covers the class-10-in-a-
+// cage shape real captures show, with the serial blank. The optic is emitted and
+// named for its interface. The cage produces no bay of its own, empty or
+// otherwise, because containerHasPortChild suppresses a container whose child is
+// a port row — that suppression is unrelated to the serial.
+func TestOpticDiscovery_SerialFreeCagedPortOpticEmitted(t *testing.T) {
 	inv := extractModuleInventory(buildOIDs(serialFreeCagedPortOpticFixture()), testOpticLogger())
 
-	assert.Empty(t, inv.Modules, "the serial-free optic must not be emitted as a module")
-	assert.Empty(t, inv.EmptyBays, "the cage is suppressed by containerHasPortChild — no bay at all")
+	require.Len(t, inv.Modules, 1, "the serial-free optic is emitted")
+	assert.Equal(t, ModuleTypeTransceiver, inv.Modules[0].Type)
+	assert.Equal(t, "TenGigabitEthernet1/0/1", inv.Modules[0].BayName)
+	assert.Empty(t, inv.Modules[0].Serial)
+	assert.Empty(t, inv.EmptyBays, "containerHasPortChild suppresses the cage")
 }
 
-// TestOpticDiscovery_ClassNineSerialFreeOpticStillEmitted is the regression
-// pin for the missing-serial gate's scope: a class-9 optic beneath a
-// linecard with a blank serial was already discoverable before the widened
-// container/port scan — emitModule already tolerates a blank Serial rather
-// than erroring or dropping the Module, so the gate must not touch a
-// class-9 row. Asserts full emission (not merely absence-of-skip): the
-// transceiver must surface as a submodule ModuleBay + Module with Serial
-// left unset, and the aggregated missing-serial warning must never fire
-// for it.
+// TestOpticDiscovery_ClassNineSerialFreeOpticStillEmitted pins the oldest of
+// the blank-serial shapes: a class-9 optic beneath a linecard, discoverable
+// since before the container/port scan was widened. It asserts full emission
+// rather than mere absence-of-drop — the transceiver surfaces as a submodule
+// ModuleBay + Module with Serial left unset, which is what emitModule's
+// tolerance of a blank Serial is for.
 func TestOpticDiscovery_ClassNineSerialFreeOpticStillEmitted(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	logger := testOpticLogger()
 
 	oids := buildOIDs(serialFreeModuleOpticFixture())
 	dev := &diode.Device{Name: strPtr("test-router")}
@@ -280,8 +286,6 @@ func TestOpticDiscovery_ClassNineSerialFreeOpticStillEmitted(t *testing.T) {
 	require.NotNil(t, transceiverMod, "the class-9 serial-free optic must still be emitted")
 	require.NotNil(t, transceiverMod.ModuleBay, "the transceiver must carry its submodule bay")
 	assert.Nil(t, transceiverMod.Serial, "serial stays unset, matching emitModule's existing tolerance")
-	assert.NotContains(t, buf.String(), "optics skipped for missing serial",
-		"a class-9 row must never be counted by the missing-serial gate")
 }
 
 // TestOpticDiscovery_LinecardsModeEmitsNoFixedPortOptic asserts a fixed-port
