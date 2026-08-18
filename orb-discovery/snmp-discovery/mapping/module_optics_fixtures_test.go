@@ -245,3 +245,22 @@ func opticNameEqualsOwnPIDOpticFixture() []fixtureRow {
 		{"11", "10", "10", "0", "SFP-10G-LR", "SYNSERPID1", "SFP-10G-LR", "", ""},
 	}
 }
+
+// cagelessLinecardOpticsFixture is synthetic, not transcribed from a capture —
+// no captured device has shown this exact shape, and a corpus scan of the
+// ENTITY-MIB recordings found none. It exists to pin an invariant that the
+// class-5/10 widening otherwise leaves exposed: optics published directly
+// under a slotted linecard, with no cage container between them, must not all
+// resolve to the linecard's own slot. The real modular shape puts a class-5
+// cage under the card (see modularPortOpticFixture); this one omits it, which
+// is what makes the nearest container the card's slot instead.
+func cagelessLinecardOpticsFixture() []fixtureRow {
+	return []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "FXS2130Q0MZ", "C9404R", "4-slot chassis", ""},
+		{"6", "1", "5", "2", "Slot 2", "", "", "Slot 2 Container", ""},
+		{"2000", "6", "9", "2", "Slot 2 Linecard", "JAE23140BJH", "C9400-LC-48UX", "48-port line card", ""},
+		{"2072", "2000", "10", "1", "TenGigabitEthernet2/0/1", "A1111111111-A", "SFP-10G-LR", "10G LR", ""},
+		{"2073", "2000", "10", "2", "TenGigabitEthernet2/0/2", "A2222222222-A", "SFP-10G-LR", "10G LR", ""},
+		{"2074", "2000", "10", "3", "TenGigabitEthernet2/0/3", "A3333333333-A", "SFP-10G-LR", "10G LR", ""},
+	}
+}

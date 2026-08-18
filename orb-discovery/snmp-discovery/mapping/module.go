@@ -380,6 +380,34 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		return bayIdx, parentModuleIdx, reachedChassis, true
 	}
 
+	// bayBelowModule reports whether the resolved bay sits beneath the given
+	// module. walkParents takes the nearest container and the nearest module
+	// independently, so a bay it returns may be the module's own slot rather
+	// than a cage inside the module. That distinction decides whether the bay
+	// already identifies a port. The same cycle guard as walkParents applies:
+	// a malformed containedIn chain must not loop.
+	bayBelowModule := func(bayIdx, moduleIdx string) bool {
+		if bayIdx == "" || moduleIdx == "" {
+			return false
+		}
+		seen := make(map[string]struct{})
+		for cur := bayIdx; cur != "" && cur != "0"; {
+			if cur == moduleIdx {
+				return true
+			}
+			if _, dup := seen[cur]; dup {
+				return false
+			}
+			seen[cur] = struct{}{}
+			parent, exists := byIdx[cur]
+			if !exists {
+				return false
+			}
+			cur = parent.ContainedIn
+		}
+		return false
+	}
+
 	// Process module-bay-shaped rows in EntIndex-ascending order so dedup
 	// "first occurrence wins" is deterministic. ENTITY-MIB indexes are
 	// numeric — a lex sort would put "10" before "9" and pick the wrong
@@ -514,9 +542,16 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		}
 		// A fixed-port optic's bay is named for the interface the row
 		// names. A modular optic keeps the derivation from its real cage,
-		// which already identifies the port.
+		// which already identifies the port — but only when that cage is
+		// genuinely inside its module. An optic published directly under a
+		// linecard has no cage, and the nearest container is then the
+		// linecard's own slot: every optic on the card would resolve to
+		// that one bay name, colliding with the linecard's bay and losing
+		// all but the first to the duplicate-bay guard. Name those for the
+		// interface too.
 		pid := effectivePID(r.Model, r.VendorType)
-		if entry.Type == ModuleTypeTransceiver && parentModuleIdx == "" {
+		if entry.Type == ModuleTypeTransceiver &&
+			(parentModuleIdx == "" || !bayBelowModule(bayIdx, parentModuleIdx)) {
 			if iface := servedInterface(r.Name, r.Descr, pid); iface != "" {
 				entry.BayName = iface
 				entry.BayPosition = iface

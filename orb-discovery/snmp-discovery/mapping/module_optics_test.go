@@ -528,3 +528,39 @@ func TestOpticDiscovery_NameEqualToOwnPIDFallsBackToCageName(t *testing.T) {
 	assert.NotEqual(t, "SFP-10G-LR", inv.Modules[0].BayName,
 		"the optic's own PID must never become the bay name")
 }
+
+// TestOpticDiscovery_CagelessLinecardOpticsGetDistinctBays pins the boundary
+// between an optic's own cage and its module's slot. walkParents takes the
+// nearest container and the nearest module independently, so for an optic with
+// no cage it returns the container above the module — the linecard's slot.
+// Naming every optic on the card after that one slot collides with the
+// linecard's own bay and loses all but the first to the duplicate-bay guard.
+func TestOpticDiscovery_CagelessLinecardOpticsGetDistinctBays(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(cagelessLinecardOpticsFixture()), testOpticLogger())
+
+	subs := inv.SubModules["2000"]
+	require.Len(t, subs, 3, "all three cageless optics nest under the linecard")
+
+	var lcBay string
+	for _, m := range inv.Modules {
+		if m.Type == ModuleTypeLinecard {
+			lcBay = m.BayName
+		}
+	}
+	require.Equal(t, "Slot 2", lcBay, "the linecard keeps its slot-derived bay")
+
+	seen := make(map[string]string, len(subs))
+	for _, m := range subs {
+		assert.Equal(t, ModuleTypeTransceiver, m.Type)
+		assert.Equal(t, m.Name, m.BayName,
+			"a cageless optic is named for the interface its row names")
+		assert.NotEqual(t, lcBay, m.BayName,
+			"an optic must never borrow its linecard's bay")
+		if prev, dup := seen[m.BayName]; dup {
+			t.Fatalf("bay %q shared by ent %s and ent %s: the duplicate-bay guard would drop one",
+				m.BayName, prev, m.EntIndex)
+		}
+		seen[m.BayName] = m.EntIndex
+	}
+	assert.Len(t, seen, 3, "three optics, three distinct bays")
+}
