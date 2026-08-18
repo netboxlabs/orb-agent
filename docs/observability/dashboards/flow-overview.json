@@ -296,12 +296,7 @@
       "options": {
         "showHeader": true
       },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "bytes"
-        },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": {}, "overrides": [{ "matcher": { "id": "byName", "options": "Bytes" }, "properties": [{ "id": "unit", "value": "bytes" }] }, { "matcher": { "id": "byName", "options": "Dst Port" }, "properties": [{ "id": "unit", "value": "none" }] }] },
       "targets": [
         {
           "refId": "A",
