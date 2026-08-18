@@ -198,11 +198,16 @@ func servedInterface(name, descr, pid string) string {
 
 // ifaceShaped reports whether a token can be an interface name. A digit is
 // required: one platform names every optic row with the bare word "port",
-// which would otherwise name every bay on the chassis identically. A token
-// equal to pid — the row's own effective PID, compared case-insensitively —
-// is also rejected: a vendor that omits the "Xcvr for <iface>" descr may
-// instead publish a product label such as "SFP-10G-LR" in entPhysicalName,
-// and an interface is never named exactly its own transceiver part number.
+// which would otherwise name every bay on the chassis identically.
+//
+// A token that names a transceiver rather than a port is rejected two ways. It
+// cannot equal pid, the row's own effective PID. It also cannot begin with a
+// transceiver designator: a vendor that omits the "Xcvr for <iface>" descr may
+// publish a generic product label such as "SFP-10G-LR" in entPhysicalName while
+// entPhysicalModelName carries the specific part number, so equality alone would
+// let the label through and give every optic of that type the same bay name. No
+// interface is named for a transceiver designator, so the prefix test is safe as
+// well as necessary.
 func ifaceShaped(tok, pid string) bool {
 	if tok == "" || strings.ContainsAny(tok, " \t") {
 		return false
@@ -213,7 +218,7 @@ func ifaceShaped(tok, pid string) bool {
 	if pid != "" && strings.EqualFold(tok, pid) {
 		return false
 	}
-	return true
+	return !hasOpticPIDPrefix(strings.ToUpper(tok))
 }
 
 // effectivePID returns the row's own PID for the "is this token really the

@@ -647,3 +647,33 @@ func TestOpticDiscovery_ChassisRootedModuleOpticsGetDistinctBays(t *testing.T) {
 	}
 	assert.Len(t, seen, 3, "three optics, three distinct bays")
 }
+
+// TestOpticDiscovery_ProductLabelNameRejected pins the near-miss of the
+// exact-PID rule. A vendor may put a generic product label in entPhysicalName
+// while entPhysicalModelName carries the specific part number, so the label
+// does not equal the effective PID and equality alone lets it through. Every
+// optic of that type would then take the same bay name and all but one would be
+// lost to the duplicate-bay guard.
+func TestOpticDiscovery_ProductLabelNameRejected(t *testing.T) {
+	// Generic label in Name, specific part number in Model: not equal, so only
+	// the designator prefix distinguishes them.
+	assert.Equal(t, "", servedInterface("SFP-10G-LR", "", "SFP-10GLR-31"),
+		"a transceiver product label must not be taken for an interface")
+
+	for _, label := range []string{
+		"SFP-10G-LR", "QSFP28-100G-SR4", "QDD-400G-DR4-S", "CVR-QSFP-SFP10G",
+		"GLC-LH-SMD", "XFP-10G-MM-SR", "OSFP-800G-DR8",
+	} {
+		assert.False(t, ifaceShaped(label, "SOME-OTHER-PID"),
+			"%s names a transceiver, not a port", label)
+	}
+
+	// Real interface names must survive: none begins with a designator.
+	for _, iface := range []string{
+		"Ethernet1", "TenGigabitEthernet2/0/1", "Te1/0/1", "xe-0/0/0",
+		"FourHundredGigE1/0/31", "1/1/c2/1", "Port1", "HundredGigE2/3/0/6-qsa",
+	} {
+		assert.True(t, ifaceShaped(iface, "SFP-10G-LR"),
+			"%s is a port name and must be accepted", iface)
+	}
+}
