@@ -36,6 +36,7 @@ jobs:
           scanners: vuln,secret
           severity: CRITICAL,HIGH,MEDIUM,LOW
           ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
           exit-code: "0"
 
       - name: Build rescan summary
