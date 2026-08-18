@@ -107,7 +107,20 @@ func newModuleInventory() ModuleInventory {
 // vendors. An optic PID is sufficient on its own — a transceiver is a
 // transceiver whether it sits under a linecard or directly in a fixed
 // chassis port.
-var opticPIDPrefixes = []string{"QSFP-", "SFP-", "X2-", "GLC-", "CFP-", "XENPAK-", "XFP-"}
+//
+// These designators are MSA/SFF standardized, so the same set applies to every
+// vendor and to every backend. Kept deliberately in step with
+// device-discovery's _OPTIC_PREFIXES in custom_napalm/_modules.py: an optic
+// recognised by one backend and not the other would make a device's inventory
+// depend on how it happened to be discovered. QSFP-DD appears in that list but
+// is omitted here because QSFP- already subsumes it; every other entry can
+// match something QSFP-/SFP- cannot.
+var opticPIDPrefixes = []string{
+	"SFP-", "SFP+", "SFP28-", "SFP56-",
+	"QSFP-", "QSFP+", "QSFP28", "QSFP56-",
+	"QDD-", "OSFP-",
+	"GLC-", "X2-", "CFP-", "CFP2-", "XENPAK-", "XFP-", "CVR-",
+}
 
 // isOpticPID reports whether a row's effective PID names a transceiver.
 // Effective PID mirrors classifyModule: trimmed Model, falling back to

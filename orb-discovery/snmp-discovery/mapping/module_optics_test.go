@@ -564,3 +564,54 @@ func TestOpticDiscovery_CagelessLinecardOpticsGetDistinctBays(t *testing.T) {
 	}
 	assert.Len(t, seen, 3, "three optics, three distinct bays")
 }
+
+// TestOpticDiscovery_PIDPrefixesMatchDeviceDiscovery pins the optic PID
+// designators. The set is MSA/SFF standardized, so it is shared with
+// device-discovery's _OPTIC_PREFIXES; an optic recognised by one backend and
+// not the other would make a device's inventory depend on which backend
+// discovered it. Asserting the set explicitly means widening or narrowing it
+// is a deliberate edit here, not a silent drift from the other backend.
+func TestOpticDiscovery_PIDPrefixesMatchDeviceDiscovery(t *testing.T) {
+	want := []string{
+		"SFP-", "SFP+", "SFP28-", "SFP56-",
+		"QSFP-", "QSFP+", "QSFP28", "QSFP56-",
+		"QDD-", "OSFP-",
+		"GLC-", "X2-", "CFP-", "CFP2-", "XENPAK-", "XFP-", "CVR-",
+	}
+	assert.ElementsMatch(t, want, opticPIDPrefixes,
+		"keep in step with device-discovery custom_napalm/_modules.py _OPTIC_PREFIXES; "+
+			"QSFP-DD is intentionally absent because QSFP- subsumes it")
+}
+
+func TestOpticDiscovery_OpticPIDRecognition(t *testing.T) {
+	optics := []string{
+		// Transcribed from captures that the previous seven-prefix set missed:
+		// iosxe_c9400x-svl and iosxe_c9500x-svl, the StackWise Virtual pairs
+		// this discovery path exists to serve.
+		"QDD-400G-CU1M",
+		"CVR-QSFP-SFP10G",
+		// One per newly added designator.
+		"SFP+10G-LR", "SFP28-25G-SR", "SFP56-50G-SR",
+		"QSFP+40G-SR4", "QSFP28-100G-LR4", "QSFP56-200G-SR4",
+		"OSFP-800G-DR8", "CFP2-100G-LR4",
+		// Already recognised before; kept so a reordering cannot lose them.
+		"SFP-10G-LR", "QSFP-100G-SR4", "GLC-LH-SMD",
+		"X2-10GB-LR", "CFP-100G-LR4", "XENPAK-10GB-LR", "XFP-10G-MM-SR",
+	}
+	for _, pid := range optics {
+		assert.True(t, isOpticPID(pid, ""), "%s should be recognised as an optic", pid)
+		// vendorType carries the PID when model is blank.
+		assert.True(t, isOpticPID("", pid), "%s should be recognised via vendorType", pid)
+		assert.True(t, isOpticPID(strings.ToLower(pid), ""), "%s should match case-insensitively", pid)
+	}
+
+	notOptics := []string{
+		"C9400-LC-48UX", "C9400-SUP-1", "C9404R", "PWR-C4-950WAC-R",
+		"FAN-T1-R", "OS6350-P24", "STACK-T1-50CM", "",
+		// Near-misses: a shared leading substring must not be enough.
+		"SFPX-99", "QSFPX-99", "GLCX-1", "CVRX-1",
+	}
+	for _, pid := range notOptics {
+		assert.False(t, isOpticPID(pid, ""), "%q must not be taken for an optic", pid)
+	}
+}
