@@ -169,9 +169,17 @@ func isOpticSubEntity(r row, byIdx map[string]row) bool {
 var opticDescrIfaceRe = regexp.MustCompile(`^Xcvr for (\S+)$`)
 
 // servedInterface returns the interface an optic row names, or "" when the
-// row names none. An interface reference is positive evidence that the optic
-// is installed in that port — a spare optic inventoried at chassis level
-// does not name one. Absence of a module parent never authorises anything.
+// row names none. The result is a bay label: a row that identifies its port
+// gives the most accurate name available for the bay the optic sits in.
+//
+// Absence is not evidence that the optic is uninstalled, and must not be read
+// as such. Captures publish installed optics whose name is the literal token
+// "port" and whose descr merely repeats the PID (see stackedPortOpticFixture),
+// so a row naming no interface falls back to its containment-derived bay rather
+// than being withheld. entPhysicalTable lists entities that are physically
+// present, so withholding one because its label is unparseable would discard
+// hardware that is there. Absence of a module parent likewise authorises
+// nothing on its own.
 // pid is the row's own effective PID (see effectivePID) — passed through to
 // ifaceShaped so a candidate that is really the optic's own part number,
 // not an interface, is rejected on both the descr-derived and the
