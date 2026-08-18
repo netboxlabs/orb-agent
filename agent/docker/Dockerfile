@@ -1,6 +1,6 @@
 ARG PKTVISOR_TAG=develop-alpine
 ARG OTEL_TAG=develop
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.26.6
 
 ########################################################################
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS builder

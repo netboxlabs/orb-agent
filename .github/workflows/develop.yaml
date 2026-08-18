@@ -48,7 +48,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract Go version from go.mod
-        run: echo "GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}' | cut -d. -f1,2)" >> $GITHUB_ENV
+        run: echo "GO_VERSION=$(grep '^go ' go.mod | awk '{print $2}')" >> $GITHUB_ENV
 
       - name: Set build info
         run: |
