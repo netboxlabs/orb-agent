@@ -562,16 +562,23 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		}
 		// A fixed-port optic's bay is named for the interface the row
 		// names. A modular optic keeps the derivation from its real cage,
-		// which already identifies the port — but only when that cage is
-		// genuinely inside its module. An optic published directly under a
-		// linecard has no cage, and the nearest container is then the
-		// linecard's own slot: every optic on the card would resolve to
-		// that one bay name, colliding with the linecard's bay and losing
-		// all but the first to the duplicate-bay guard. Name those for the
-		// interface too.
+		// which already identifies the port — but only when a real cage is
+		// what it got.
+		//
+		// Two shapes have no cage. An optic under a linecard that sits in a
+		// slot resolves to the linecard's own slot, so every optic on the
+		// card would share that bay name, collide with the linecard's bay,
+		// and lose all but the first to the duplicate-bay guard. An optic
+		// under a chassis-rooted module has no container above it at all, so
+		// the bay was synthesized from the optic's own row; bayBelowModule
+		// answers true for it only because the optic is trivially beneath
+		// its own parent, not because a cage exists, and the synthesized
+		// name is the row's ParentRel, which some platforms report
+		// non-positionally (-1) for every child. Name both for the interface.
 		pid := effectivePID(r.Model, r.VendorType)
 		if entry.Type == ModuleTypeTransceiver &&
-			(parentModuleIdx == "" || !bayBelowModule(bayIdx, parentModuleIdx)) {
+			(parentModuleIdx == "" || synthesizedBay ||
+				!bayBelowModule(bayIdx, parentModuleIdx)) {
 			if iface := servedInterface(r.Name, r.Descr, pid); iface != "" {
 				entry.BayName = iface
 				entry.BayPosition = iface

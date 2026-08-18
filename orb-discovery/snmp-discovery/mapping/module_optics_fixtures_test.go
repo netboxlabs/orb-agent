@@ -263,3 +263,22 @@ func cagelessLinecardOpticsFixture() []fixtureRow {
 		{"2074", "2000", "10", "3", "TenGigabitEthernet2/0/3", "A3333333333-A", "SFP-10G-LR", "10G LR", ""},
 	}
 }
+
+// chassisRootedModuleOpticsFixture is synthetic. The containment shape is real —
+// aos6 publishes class-10 optics directly under a chassis-rooted class-9 module,
+// with no container anywhere above them — but that capture reports a distinct
+// entPhysicalParentRelPos per optic, so its bays never collide. This fixture
+// keeps the shape and replaces relPos with the non-positional -1 that some
+// platforms report for every child, which is what turns the synthesized bay name
+// into a collision. Names are interface-shaped so the bay has something better
+// to be called.
+func chassisRootedModuleOpticsFixture() []fixtureRow {
+	return []fixtureRow{
+		{"569", "0", "3", "1", "Chassis", "SYN0011", "SYN-FIXED-48", "Fixed-port chassis", ""},
+		// Module hangs straight off the chassis: no container above the optics.
+		{"1", "569", "9", "1", "NI-1", "SYN0011", "SYN-FIXED-48", "Network interface module 1", ""},
+		{"156", "1", "10", "-1", "Ethernet1", "SYNOPT001", "SFP-10G-LR", "SFP-10G-LR", ""},
+		{"157", "1", "10", "-1", "Ethernet2", "SYNOPT002", "SFP-10G-LR", "SFP-10G-LR", ""},
+		{"158", "1", "10", "-1", "Ethernet3", "SYNOPT003", "SFP-10G-LR", "SFP-10G-LR", ""},
+	}
+}

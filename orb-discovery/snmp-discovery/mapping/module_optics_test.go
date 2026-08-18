@@ -619,3 +619,31 @@ func TestOpticDiscovery_OpticPIDRecognition(t *testing.T) {
 		assert.False(t, isOpticPID(pid, ""), "%q must not be taken for an optic", pid)
 	}
 }
+
+// TestOpticDiscovery_ChassisRootedModuleOpticsGetDistinctBays covers the second
+// cageless shape. An optic under a chassis-rooted module has no container above
+// it, so its bay is synthesized from its own row and named for ParentRel.
+// bayBelowModule answers true for that bay — but only because the optic is
+// trivially beneath its own parent, not because a cage exists — so the interface
+// name has to be applied on the strength of the bay being synthesized. Platforms
+// that report a non-positional ParentRel for every child would otherwise give
+// every optic the same bay name and lose all but one to the duplicate-bay guard.
+func TestOpticDiscovery_ChassisRootedModuleOpticsGetDistinctBays(t *testing.T) {
+	inv := extractModuleInventory(buildOIDs(chassisRootedModuleOpticsFixture()), testOpticLogger())
+
+	subs := inv.SubModules["1"]
+	require.Len(t, subs, 3, "all three optics nest under the chassis-rooted module")
+
+	seen := make(map[string]string, len(subs))
+	for _, m := range subs {
+		assert.Equal(t, ModuleTypeTransceiver, m.Type)
+		assert.Equal(t, m.Name, m.BayName, "named for the interface the row names")
+		assert.NotEqual(t, "Slot -1", m.BayName, "a non-positional ParentRel must not name the bay")
+		if prev, dup := seen[m.BayName]; dup {
+			t.Fatalf("bay %q shared by ent %s and ent %s: the duplicate-bay guard would drop one",
+				m.BayName, prev, m.EntIndex)
+		}
+		seen[m.BayName] = m.EntIndex
+	}
+	assert.Len(t, seen, 3, "three optics, three distinct bays")
+}
