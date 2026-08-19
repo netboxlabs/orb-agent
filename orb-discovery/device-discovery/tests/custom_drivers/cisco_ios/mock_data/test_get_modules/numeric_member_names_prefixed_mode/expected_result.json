@@ -1,0 +1,44 @@
+{
+  "members": {
+    "1": {
+      "bays": [
+        {
+          "name": "GigabitEthernet1/0/1",
+          "position": "GigabitEthernet1/0/1",
+          "module": {
+            "model": "GLC-LH-SMD",
+            "serial": "OPT5555501",
+            "description": "1000BaseLX SFP",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "GigabitEthernet1/0/1": [
+          "GigabitEthernet1/0/1"
+        ]
+      }
+    },
+    "2": {
+      "bays": [
+        {
+          "name": "GigabitEthernet2/0/1",
+          "position": "GigabitEthernet2/0/1",
+          "module": {
+            "model": "GLC-LH-SMD",
+            "serial": "OPT5555502",
+            "description": "1000BaseLX SFP",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "GigabitEthernet2/0/1": [
+          "GigabitEthernet2/0/1"
+        ]
+      }
+    }
+  }
+}

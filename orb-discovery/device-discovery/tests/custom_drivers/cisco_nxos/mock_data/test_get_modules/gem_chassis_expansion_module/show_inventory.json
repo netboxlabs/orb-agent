@@ -1,0 +1,9 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 9396PX fixed chassis\"", "productid": "\"N9K-C9396PX\"", "vendorid": "V01", "serialnum": "\"FOC80101CHA\""},
+      {"name": "\"Ethernet1/1\"", "desc": "\"QSFP-100G-SR4\"", "productid": "\"QSFP-100G-SR4\"", "vendorid": "V02", "serialnum": "\"OPT80101001\""},
+      {"name": "\"Ethernet2/1\"", "desc": "\"QSFP-40G-SR4\"", "productid": "\"QSFP-40G-SR4\"", "vendorid": "V02", "serialnum": "\"OPT80101002\""}
+    ]
+  }
+}

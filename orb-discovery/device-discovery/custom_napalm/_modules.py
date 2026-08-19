@@ -78,6 +78,23 @@ class ModuleBay:
     module: ModuleEntry | None
 
 
+def orphan_optic_bay(ifname: str, optic: ModuleEntry) -> ModuleBay:
+    """
+    A transceiver with no parent module, as a device-rooted bay.
+
+    Fixed-port platforms report optics with no slot, linecard or FRU module
+    above them. A bay rooted on the device is the accurate representation
+    there rather than a workaround, because no parent module exists to nest
+    under. The emitted result is identical to an optic sub-bay: translate
+    emits sub-bays device-rooted too, stripping the parent link.
+
+    Callers own their own bay container and their own interface self-route;
+    the containers differ too much between drivers to share. This exists so
+    the contract is stated once and every promotion site is greppable.
+    """
+    return ModuleBay(name=ifname, position=ifname, module=optic)
+
+
 @dataclass
 class MemberModules:
     """Per-member bundle: the bays installed in this member and how to route ifnames into them."""

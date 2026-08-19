@@ -1,0 +1,14 @@
+NAME: "Chassis", DESCR: "Cisco Catalyst 9400 Series 4 Slot Chassis"
+PID: C9404R            , VID: V01 , SN: FXS3001L0A1
+
+NAME: "Slot 1 Linecard", DESCR: "48-Port Linecard"
+PID: C9400-LC-48U      , VID: V01 , SN: JAE3001LC01
+
+NAME: "Te1/0/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02 , SN: OPT3001001
+
+NAME: "Slot 2 Linecard", DESCR: "48-Port Linecard"
+PID: C9400-LC-48U      , VID: V01 , SN:
+
+NAME: "Te2/0/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02 , SN: OPT3002001

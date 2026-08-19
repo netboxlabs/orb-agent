@@ -1,0 +1,5 @@
+{
+  "chassis,1": {"product_info": {"part_number": "JL658A", "serial_number": "SG6300COLL1", "product_name": "6300M 48p"}},
+  "power_supply,1/1": {"product_info": {"part_number": "JL086A", "serial_number": "SG6300PSU01", "product_name": "6300M Power Supply"}},
+  "fan,1/1": {"product_info": {"part_number": "JL087A", "serial_number": "SG6300FAN01", "product_name": "6300M Fan"}}
+}

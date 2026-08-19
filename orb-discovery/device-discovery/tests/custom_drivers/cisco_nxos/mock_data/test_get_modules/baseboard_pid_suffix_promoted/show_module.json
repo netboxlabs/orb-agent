@@ -1,0 +1,10 @@
+{
+  "TABLE_modinfo": {
+    "ROW_modinfo": {
+      "modinf": "\"1\"", "modules": "\"1\"", "ports": "32", "type": "\"32x10G + 4x1/10G Module\"", "model": "\"N5K-C5548UP-SUP\"", "status": "active *"
+    }
+  },
+  "TABLE_modwwninfo": {
+    "ROW_modwwninfo": {"modwwn": "1", "sn": "FOC82001FIX"}
+  }
+}

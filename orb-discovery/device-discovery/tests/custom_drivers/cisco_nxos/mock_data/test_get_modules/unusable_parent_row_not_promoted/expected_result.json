@@ -1,0 +1,20 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "N9K-SUP-A",
+            "serial": "FOC60001SUP1",
+            "description": "Supervisor Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

@@ -35,6 +35,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -209,6 +210,28 @@ _ARUBA_ADDR_RE = re.compile(r"^(\d+)")  # leading int of a subsystem addr "1/3" 
 # default an unrecognized subsystem to linecard.
 _ARUBA_SUPERVISOR_TYPES = frozenset({"management_module"})
 _ARUBA_LINECARD_TYPES = frozenset({"line_card", "fabric_module"})
+_ARUBA_BAY_SUBSYSTEM_TYPES = _ARUBA_SUPERVISOR_TYPES | _ARUBA_LINECARD_TYPES
+
+# Subsystem types positively known to NEVER be a module bay. Excluded from
+# claiming a slot position even though their addr can have the same
+# two-segment <member>/<slot> shape as a real bay — e.g. a power supply at
+# addr "1/1" on a fixed 6300M, which is also that platform's optic slot.
+# Claiming on shape alone would suppress that platform's optics entirely.
+_ARUBA_NON_BAY_SUBSYSTEM_TYPES = frozenset({
+    "chassis", "power_supply", "psu", "fan", "fan_tray", "mm_fan", "temp_sensor",
+})
+
+# Aruba CX platform families known to ship fixed-port only (no line_card /
+# fabric_module subsystems ever exist for them). This is a positive-evidence
+# allowlist, not an inference from a missing subsystem: an unlisted or blank
+# chassis identity refuses promotion rather than assuming fixed (see
+# _aruba_is_known_fixed_family). "6300" also matches "6300M" chassis text,
+# but 6300M is listed too so the allowlist reads as a complete, self-
+# documenting family list rather than relying on that overlap.
+_ARUBA_FIXED_FAMILIES = ("6100", "6200", "6300M", "6300", "8100", "8320", "8325", "8360")
+_ARUBA_FAMILY_RE = re.compile(
+    r"\b(?:" + "|".join(_ARUBA_FIXED_FAMILIES) + r")\b", re.IGNORECASE,
+)
 
 
 def classify_module_type_aruba(subsystem_type: str, pid: str) -> str:
@@ -339,6 +362,88 @@ def _aruba_ifaces_by_slot(ifaces) -> dict[str, list[str]]:
     return out
 
 
+def _aruba_claim_slot(slot_positions: set[str], stype: str, addr: str) -> None:
+    """
+    Record ``addr`` as a claimed slot position from a RAW subsystem row's type.
+
+    Called before the pid/sn usability filter and the ``mtype == "other"``
+    filter in ``_aruba_build_bays``, so a slot lands here even when its own
+    row is unusable (blank pid/sn) — the physical bay still exists; this is
+    the case this guard exists for: an inventory row that names a real slot
+    but can't describe it usably must still keep an optic in that slot from
+    being promoted to a device-rooted bay.
+
+    Type-aware, not shape-only: only a type positively known to never be a
+    bay is excluded (see ``_ARUBA_NON_BAY_SUBSYSTEM_TYPES``), so a PSU/fan
+    whose addr happens to collide with a real optic slot (e.g. "1/1" on a
+    fixed 6300M) can't suppress it. Anything else, including a type this
+    driver has never seen, claims the slot and — if unrecognised — warns:
+    failing safe (declining promotion) is the right default for an unknown
+    subsystem kind. A single-segment addr (e.g. a chassis's own "1") never
+    claims — only the two-segment ``<member>/<slot>`` shape does.
+    """
+    addr_parts = addr.split("/")
+    if len(addr_parts) != 2 or not all(addr_parts):
+        return
+    type_lower = stype.lower()
+    if type_lower in _ARUBA_BAY_SUBSYSTEM_TYPES:
+        slot_positions.add(addr)
+    elif type_lower not in _ARUBA_NON_BAY_SUBSYSTEM_TYPES:
+        slot_positions.add(addr)
+        logger.warning(
+            "aruba.get_modules: unrecognised subsystem type %r at %s; "
+            "claiming the slot so no optic is falsely promoted there",
+            stype, addr,
+        )
+
+
+# A better signal than the family allowlist below would be the subsystem
+# `interfaces` collection nested under each `line_card` / `chassis` entry in
+# `system/subsystems` itself (still one GET, no new endpoint) — it would let
+# a slot's own subsystem row state which physical ports it owns directly,
+# closing the gap for an unlisted family without an allowlist at all. Not
+# implemented here: it needs one fixed-6300 and one modular-8400 capture of
+# that collection first to confirm its shape before relying on it.
+def _aruba_chassis_product_by_member(subs: dict) -> dict[int, tuple[str, str]]:
+    """
+    Return each ``chassis,<member>`` subsystem's own (part_number, product_name).
+
+    Read directly from the subsystems payload already fetched — no new
+    endpoint. This is the per-member positive-evidence source for
+    ``_aruba_is_known_fixed_family``: the subsystems and interfaces GETs are
+    non-atomic, so a chassis row is the only thing here guaranteed to
+    describe hardware that still exists, unlike a line_card row that can
+    legitimately be omitted by an OIR removal between the two requests.
+    """
+    out: dict[int, tuple[str, str]] = {}
+    for key, entry in subs.items():
+        if "," not in key or not isinstance(entry, dict):
+            continue
+        stype, addr = key.split(",", 1)
+        if stype.strip().lower() != "chassis":
+            continue
+        member = _aruba_member_of(addr.strip())
+        if member is None:
+            continue
+        pinfo = entry.get("product_info") or {}
+        pid = str(pinfo.get("part_number") or "").strip()
+        name = str(pinfo.get("product_name") or "").strip()
+        out[member] = (pid, name)
+    return out
+
+
+def _aruba_is_known_fixed_family(pid: str, product_name: str) -> bool:
+    """
+    Return True when PID or product name names a platform family known to ship fixed-port only.
+
+    Positive evidence only: an unlisted or blank chassis identity refuses
+    rather than assuming fixed, so a new Aruba family surfaces via the
+    WARNING in ``_aruba_promote_orphan_optics`` instead of silently
+    disabling discovery for it.
+    """
+    return bool(_ARUBA_FAMILY_RE.search(f"{pid} {product_name}"))
+
+
 def _aruba_build_bays(
     subs: dict,
     optics_by_slot: dict[str, list[tuple[str, _ModuleEntry]]],
@@ -349,12 +454,17 @@ def _aruba_build_bays(
     """Assemble per-member module bays (with optic sub-bays) from subsystem entries."""
     bays_by_member: dict[int | None, list[_ModuleBay]] = {}
     ifaces_by_member: dict[int | None, dict[str, list[str]]] = {}
+    consumed_optic_slots: set[str] = set()
+    slot_positions: set[str] = set()
+    chassis_product_by_member = _aruba_chassis_product_by_member(subs)
     for key, entry in subs.items():
         if "," not in key or not isinstance(entry, dict):
             continue
         stype, addr = key.split(",", 1)
         stype = stype.strip()
         addr = addr.strip()
+        _aruba_claim_slot(slot_positions, stype, addr)
+
         pinfo = entry.get("product_info") or {}
         pid = str(pinfo.get("part_number") or "").strip()
         sn = str(pinfo.get("serial_number") or "").strip()
@@ -378,12 +488,82 @@ def _aruba_build_bays(
         for ifname, optic in optics_by_slot.get(addr, []):
             sub_bays.append(_ModuleBay(name=ifname, position=ifname, module=optic))
             ifaces_by_member.setdefault(member, {})[ifname] = [ifname]  # self-route (sub-bay key)
+        if addr in optics_by_slot:
+            consumed_optic_slots.add(addr)
         bay = _ModuleBay(
             name=addr, position=addr,
             module=_ModuleEntry(model=pid, serial=sn, type=mtype, description=descr, sub_bays=sub_bays),
         )
         bays_by_member.setdefault(member, []).append(bay)
+
+    _aruba_promote_orphan_optics(
+        optics_by_slot, consumed_optic_slots, slot_positions, members, vsf,
+        bays_by_member, ifaces_by_member, chassis_product_by_member,
+    )
     return bays_by_member, ifaces_by_member
+
+
+def _aruba_promote_orphan_optics(
+    optics_by_slot: dict[str, list[tuple[str, _ModuleEntry]]],
+    consumed_optic_slots: set[str],
+    slot_positions: set[str],
+    members: set[int],
+    vsf: bool,
+    bays_by_member: dict[int | None, list[_ModuleBay]],
+    ifaces_by_member: dict[int | None, dict[str, list[str]]],
+    chassis_product_by_member: dict[int, tuple[str, str]],
+) -> None:
+    """
+    Promote every optic on a slot no bay claimed to a device-rooted bay, in place.
+
+    ``slot_positions`` (see ``_aruba_build_bays``) names every slot a RAW
+    subsystem entry already claimed. A slot in this set but not in
+    ``consumed_optic_slots`` means the claiming row existed but never became
+    a bay (unusable pid/sn, or filtered by classification) — its optic is
+    declined rather than promoted, because the parent exists in hardware and
+    promoting here would invent a chassis-level topology instead of
+    reporting the real one.
+
+    A slot that is genuinely unclaimed (e.g. ``line_card,1/3`` omitted
+    entirely from the subsystems payload while ``system/interfaces`` still
+    reports an optic at ``1/3/1``) reaches the per-member family check
+    below instead: ``chassis_product_by_member`` (see
+    ``_aruba_chassis_product_by_member``) is the positive evidence that
+    this member's platform is known to ship fixed-port only. An unlisted
+    or blank chassis identity declines rather than promotes.
+    """
+    for slot_addr, optics in optics_by_slot.items():
+        if slot_addr in consumed_optic_slots:
+            continue
+        if slot_addr in slot_positions:
+            logger.debug(
+                "aruba.get_modules: declining promotion at slot %s (subsystem inventory "
+                "claims the slot but its own row was unusable)",
+                slot_addr,
+            )
+            continue
+        for ifname, optic in optics:
+            # Fixed-port CX switches expose optics on slots with no line
+            # module, so the optic has no parent bay to nest under.
+            member_addr = _aruba_member_of(ifname)
+            member = member_addr if vsf else None
+            if vsf and member not in members:
+                logger.warning(
+                    "aruba.get_modules: orphan optic %s member %s not in VSF set", ifname, member,
+                )
+                continue
+            pid, product_name = chassis_product_by_member.get(member_addr, ("", ""))
+            if not _aruba_is_known_fixed_family(pid, product_name):
+                logger.warning(
+                    "aruba.get_modules: declining promotion of %s (chassis part number "
+                    "%r / product name %r is not a known fixed-port family)",
+                    ifname, pid, product_name,
+                )
+                continue
+            bays_by_member.setdefault(member, []).append(
+                orphan_optic_bay(ifname, optic),
+            )
+            ifaces_by_member.setdefault(member, {})[ifname] = [ifname]
 
 
 def _aruba_get_modules_impl(driver) -> dict | None:

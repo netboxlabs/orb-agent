@@ -8,6 +8,7 @@ from custom_napalm._modules import (
     MemberModules,
     ModuleBay,
     ModuleEntry,
+    orphan_optic_bay,
     to_payload,
 )
 
@@ -302,3 +303,27 @@ def test_normalize_null_member_keys_handles_nested_list_of_dicts():
     deep_subbay = out["members"][None]["bays"][0]["module"]["sub_bays"][0]
     assert "null" in deep_subbay
     assert None not in deep_subbay
+
+
+def test_orphan_optic_bay_is_named_and_positioned_by_interface():
+    """A parentless optic becomes a bay keyed by its interface name."""
+    optic = ModuleEntry(
+        model="SFP-10G-LR", serial="OPT0000001", type="transceiver",
+        description="SFP-10GBase-LR",
+    )
+
+    bay = orphan_optic_bay("TenGigabitEthernet1/0/1", optic)
+
+    assert bay.name == "TenGigabitEthernet1/0/1"
+    assert bay.position == "TenGigabitEthernet1/0/1"
+    assert bay.module is optic
+
+
+def test_orphan_optic_bay_has_no_sub_bays():
+    """A transceiver is a leaf: nothing installs inside an optic."""
+    optic = ModuleEntry(model="SFP-10G-SR", serial="OPT0000002", type="transceiver")
+
+    bay = orphan_optic_bay("Ethernet1", optic)
+
+    assert bay.module is not None
+    assert bay.module.sub_bays == []

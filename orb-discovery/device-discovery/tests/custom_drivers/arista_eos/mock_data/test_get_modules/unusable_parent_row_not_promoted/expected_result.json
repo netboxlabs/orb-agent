@@ -1,0 +1,46 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "Linecard1",
+          "position": "1",
+          "module": {
+            "model": "7500R-36CQ-LC",
+            "serial": "JPE70001002",
+            "description": "36x100GbE QSFP100 linecard",
+            "type": "linecard",
+            "sub_bays": [
+              {
+                "name": "Ethernet1/1",
+                "position": "Ethernet1/1",
+                "module": {
+                  "model": "QSFP-100G-LR4",
+                  "serial": "XCV70001001",
+                  "description": "QSFP-100G-LR4",
+                  "type": "transceiver",
+                  "sub_bays": []
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "Fabric3",
+          "position": "3",
+          "module": {
+            "model": "7500R-Fabric",
+            "serial": "JPE70001004",
+            "description": "Fabric module 3",
+            "type": "linecard",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "Linecard1": ["Ethernet1/1"],
+        "Ethernet1/1": ["Ethernet1/1"]
+      }
+    }
+  }
+}

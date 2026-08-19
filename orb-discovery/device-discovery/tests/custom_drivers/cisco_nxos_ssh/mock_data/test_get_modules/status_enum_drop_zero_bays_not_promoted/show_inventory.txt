@@ -1,0 +1,11 @@
+NAME: Chassis, DESCR: Nexus 9504 4-slot chassis
+PID: N9K-C9504        , VID: V01, SN: FOC70001CHA
+
+NAME: Slot 1, DESCR: Supervisor Module
+PID: N9K-SUP-A        , VID: V01, SN: FOC70001SUP1
+
+NAME: Slot 3, DESCR: 36-port 100G linecard
+PID: N9K-X9736C-FX    , VID: V01, SN: FOC70001LC03
+
+NAME: Ethernet3/1, DESCR: QSFP-100G-LR4
+PID: QSFP-100G-LR4    , VID: V01, SN: OPT70001001

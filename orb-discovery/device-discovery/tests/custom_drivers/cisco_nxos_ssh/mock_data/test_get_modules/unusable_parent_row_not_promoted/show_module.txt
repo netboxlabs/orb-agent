@@ -1,0 +1,11 @@
+Mod Ports             Module-Type                      Model           Status
+--- ----- ------------------------------------- ---------------------- ---------
+1   0     Supervisor Module-3                   N9K-SUP-A              active *
+3   36    36x100GbE QSFP Module                 N9K-X9736C-FX          ok
+4   36    36x100GbE QSFP Module                 N9K-X9736C-FX          ok
+
+Mod  MAC-Address(es)                         Serial-Num
+---  --------------------------------------  ----------
+1    00:11:22:33:00:01 to 00:11:22:33:00:0f  FOC60001SUP1
+3    00:11:22:33:00:20 to 00:11:22:33:00:2f  FOC60001LC03
+4    00:11:22:33:00:30 to 00:11:22:33:00:3f  FOC60001LC04

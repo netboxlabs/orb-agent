@@ -233,6 +233,44 @@ def test_linecards_mode_skips_top_level_transceiver_bay() -> None:
     assert iface_module_map == {}
 
 
+def test_linecards_mode_emits_nothing_for_device_rooted_optics() -> None:
+    """
+    A fixed-port device has only transceiver bays, so linecards mode is silent.
+
+    Fixed-port platforms (and the fixed ports of a chassis whose only module
+    is an uplink) have no slot/linecard/FRU parent for their optics, so the
+    driver promotes each one to a device-rooted bay named after its
+    interface — the same shape a sub-bay collapses to once a parent link is
+    stripped. Mode filtering doesn't care where the bay is rooted, only that
+    its module classifies as a transceiver, so this is shared by every
+    driver that implements get_modules() and one test covers all of them.
+    """
+    entities: list = []
+    data = {
+        "modules": _standalone(
+            bays=[
+                {
+                    "name": "Ethernet1",
+                    "position": "Ethernet1",
+                    "module": {
+                        "model": "QSFP-40G-SR4",
+                        "serial": "OPT0000001",
+                        "type": "transceiver",
+                        "description": "",
+                        "sub_bays": [],
+                    },
+                },
+            ],
+            interfaces_by_bay={"Ethernet1": ["Ethernet1"]},
+        ),
+    }
+    iface_module_map = emit_modules_if_requested(
+        data, Options(discover_modules="linecards"), _devices(), entities,
+    )
+    assert entities == [], "linecards mode must not emit a device-rooted transceiver bay"
+    assert iface_module_map == {}
+
+
 # ---- full mode -----------------------------------------------------------
 
 

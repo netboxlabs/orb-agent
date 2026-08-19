@@ -366,6 +366,38 @@ class TestIOSDriver(BaseDriverTest):
             {"name": "SwitchPort1/1"},
         ]) == 0
 
+    def test_count_distinct_switch_ids_recognizes_bare_numeric_names(self) -> None:
+        """
+        A bare-digit member NAME (no "Switch" text at all) counts too.
+
+        Some IOS-XE releases identify a stack member's own chassis row with
+        just the digit (``NAME: "1"``) rather than ``Switch 1`` —
+        ``_INVENTORY_CHASSIS_RE`` already accepts this shape for
+        ``get_chassis_members`` (see
+        ``test_get_chassis_members/numeric_inventory_names``). Without this,
+        a real stack that only ever names its members this way is
+        misdetected as a single standalone chassis.
+        """
+        from custom_napalm.ios import _count_distinct_switch_ids
+        assert _count_distinct_switch_ids([
+            {"name": "1"},
+            {"name": "2"},
+        ]) == 2
+        assert _count_distinct_switch_ids([
+            {"name": "1"},
+        ]) == 1
+        # Mixed: one member identified the bare-numeric way, the other via
+        # the standard "Switch N" prefix — still two distinct members.
+        assert _count_distinct_switch_ids([
+            {"name": "1"},
+            {"name": "Switch 2 Slot 1 Supervisor"},
+        ]) == 2
+        # A bare "Chassis" (no digit at all) must not count as a member —
+        # that's the standalone marker, not a VC row.
+        assert _count_distinct_switch_ids([
+            {"name": "Chassis"},
+        ]) == 0
+
     def test_inventory_vc_slot_regex_no_space_form(self) -> None:
         """`Switch1 Slot 2 Linecard` (no space after Switch) is supported too."""
         from custom_napalm.ios import _INVENTORY_VC_FRU_RE, _INVENTORY_VC_SLOT_RE
@@ -522,6 +554,228 @@ class TestIOSDriver(BaseDriverTest):
         # And member 2 slot 1 carries its supervisor's port too.
         m2_slot1 = result["members"][2]["interfaces_by_bay"].get("1", [])
         assert "HundredGigabitEthernet2/1/0/1" in m2_slot1
+
+    def test_get_modules_warns_on_transceiver_with_no_pid(self, caplog) -> None:
+        """An unidentified optic is skipped, but says so."""
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "transceiver_missing_pid"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.WARNING):
+            driver.get_modules()
+
+        assert any(
+            "Te1/0/7" in r.getMessage() and "no PID" in r.getMessage()
+            for r in caplog.records
+        ), "the skipped optic must be named in a warning"
+
+    def test_get_modules_declines_promotion_onto_unusable_fru_row(self, caplog) -> None:
+        """
+        A claimed-but-unusable ``Switch N FRU Uplink Module M`` slot is not promoted.
+
+        ``Switch 2 FRU Uplink Module 1`` is present (so the slot is claimed
+        by the RAW inventory) but its own row has a blank serial, so no bay
+        was built for it. The optic on ``Te2/1/1`` must NOT be promoted to a
+        device-rooted bay — that would invent a chassis-level parent for a
+        FRU module that genuinely exists in hardware. Member 1's own FRU +
+        optic (a usable claim) is present in the same fixture and must still
+        promote normally, proving the guard doesn't overreach.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "fru_row_unusable_not_promoted"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
+            result = driver.get_modules()
+
+        assert result is not None
+        # Member 2 never surfaces — its only optic was declined and no bay
+        # was ever built for it.
+        assert 2 not in result["members"]
+        all_serials = {
+            bay["module"]["serial"]
+            for member in result["members"].values()
+            for bay in member["bays"]
+        } | {
+            sub["module"]["serial"]
+            for member in result["members"].values()
+            for bay in member["bays"]
+            for sub in bay["module"]["sub_bays"]
+        }
+        assert "OPT1111211" not in all_serials, (
+            "Te2/1/1 must not be promoted onto the claimed-but-unusable FRU slot"
+        )
+        # Member 1's own FRU + optic (a normal, usable claim) still promotes.
+        assert "OPT1111111" in all_serials
+
+        assert any(
+            "TenGigabitEthernet2/1/1" in r.getMessage() and "slot 1" in r.getMessage()
+            for r in caplog.records
+        ), "declining promotion must name the port and slot at debug"
+
+    def test_get_modules_declines_promotion_onto_unusable_slot_row(self, caplog) -> None:
+        """
+        A claimed-but-unusable plain ``Slot N`` row is not promoted, even though N != 0.
+
+        ``Slot 2 Linecard`` is present (so the slot is claimed) but its own
+        row has a blank serial. The optic on ``Te2/0/1`` must NOT be
+        promoted — its leading integer ("2") collides with a real bay id,
+        so a ``slot == "0"`` heuristic would have missed this case even
+        though it catches the switch-prefixed one. ``Slot 1``'s own optic
+        (a usable claim) is present in the same fixture and must still
+        promote normally.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "slot_row_unusable_not_promoted"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
+            result = driver.get_modules()
+
+        assert result is not None
+        member = result["members"][None]
+        # Slot "2" never surfaces as a bay, and neither does a device-rooted
+        # bay for the declined optic.
+        bay_names = {bay["name"] for bay in member["bays"]}
+        assert "2" not in bay_names
+        assert "TenGigabitEthernet2/0/1" not in bay_names
+        all_serials = {bay["module"]["serial"] for bay in member["bays"]} | {
+            sub["module"]["serial"]
+            for bay in member["bays"]
+            for sub in bay["module"]["sub_bays"]
+        }
+        assert "OPT3002001" not in all_serials, (
+            "Te2/0/1 must not be promoted onto the claimed-but-unusable Slot 2 row"
+        )
+        # Slot 1's own optic (a normal, usable claim) still promotes.
+        assert "OPT3001001" in all_serials
+
+        assert any(
+            "TenGigabitEthernet2/0/1" in r.getMessage() and "slot 2" in r.getMessage()
+            for r in caplog.records
+        ), "declining promotion must name the port and slot at debug"
+
+    def test_get_modules_declines_promotion_when_fru_row_entirely_omitted(
+        self, caplog,
+    ) -> None:
+        """
+        A switch-prefixed optic whose slot is UNCLAIMED must still not promote.
+
+        ``Switch 2 FRU Uplink Module 1`` is not present anywhere in this
+        inventory — not even an unusable row claiming the slot. Absence of a
+        claim used to be read as "no parent exists, promote it"; that is
+        exactly the false positive this gate exists to close. ``Te2/1/1``'s
+        own second segment is "1", not "0", so it is not a baseboard port and
+        must not promote even though nothing claims its slot. The fixed port
+        ``Gi2/0/1`` on the same member has second segment "0" and must still
+        promote normally.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "fru_row_omitted_not_promoted"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
+            result = driver.get_modules()
+
+        assert result is not None
+        member = result["members"][None]
+        all_serials = {bay["module"]["serial"] for bay in member["bays"]}
+        assert "OPT4444411" not in all_serials, (
+            "Te2/1/1 must not be promoted — its own slot is 1, not the baseboard 0"
+        )
+        assert "OPT4444401" in all_serials, "Gi2/0/1 (slot 0) must still promote"
+
+        assert any(
+            "TenGigabitEthernet2/1/1" in r.getMessage() and "slot 1" in r.getMessage()
+            for r in caplog.records
+        ), "declining promotion must name the port and slot at debug"
+
+    def test_get_modules_numeric_member_names_enter_prefixed_mode(self) -> None:
+        """
+        Bare-numeric member NAME rows must still trigger switch-prefixed mode.
+
+        Both members here are named "1" / "2" (no "Switch" text anywhere).
+        Without ``_count_distinct_switch_ids`` recognizing that shape, this
+        inventory looks standalone: every ifname's leading integer (the
+        member id) would be misread as the slot id at depth=1, and a fixed
+        port and an uplink-shaped port on the same member would derive the
+        same "slot" — indistinguishable. With the fix, the driver reads
+        depth=2 instead: ``Gi1/0/1`` (slot 0) promotes, ``Gi2/0/1`` (slot 0)
+        promotes onto its own separate member, and ``Te1/1/1`` (slot 1, no
+        modeled parent bay in this fixture) is correctly declined rather than
+        false-promoted.
+        """
+        mock_dir = self.mock_data_root / "test_get_modules" / "numeric_member_names_prefixed_mode"
+        driver = self._build_driver(mock_dir)
+        result = driver.get_modules()
+
+        assert result is not None
+        # Two distinct members, not one collapsed standalone bucket.
+        assert set(result["members"]) == {1, 2}
+
+        member1_serials = {bay["module"]["serial"] for bay in result["members"][1]["bays"]}
+        member2_serials = {bay["module"]["serial"] for bay in result["members"][2]["bays"]}
+        assert "OPT5555501" in member1_serials, "Gi1/0/1 (slot 0) must promote onto member 1"
+        assert "OPT5555502" in member2_serials, "Gi2/0/1 (slot 0) must promote onto member 2"
+        assert "OPT5555511" not in member1_serials and "OPT5555511" not in member2_serials, (
+            "Te1/1/1 (slot 1) must not promote — it is not a baseboard port"
+        )
+
+    def test_get_modules_non_prefixed_veto_by_omitted_slot_row(self, caplog) -> None:
+        """
+        A 3-tuple optic on a device that shows Slot rows elsewhere is vetoed.
+
+        ``Slot 2 Linecard`` is entirely omitted (not merely unusable) — the
+        exact hole positive evidence closes: there is no signal that
+        ``Te2/0/1``'s slot is claimed at all, only a device-level clue
+        (``Slot 1 Supervisor`` exists) that this chassis is modular. That is
+        enough to veto every non-prefixed 3-tuple optic on the device, since
+        depth=1 gives no reliable per-port signal here.
+        """
+        import logging
+
+        mock_dir = self.mock_data_root / "test_get_modules" / "modular_veto_by_slot_row"
+        driver = self._build_driver(mock_dir)
+
+        with caplog.at_level(logging.DEBUG, logger="custom_napalm.ios"):
+            result = driver.get_modules()
+
+        assert result is not None
+        member = result["members"][None]
+        bay_names = {bay["name"] for bay in member["bays"]}
+        assert "TenGigabitEthernet2/0/1" not in bay_names
+        all_serials = {bay["module"]["serial"] for bay in member["bays"]}
+        assert "OPT6666601" not in all_serials, (
+            "Te2/0/1 must not be promoted on a device with any Slot row present"
+        )
+
+        assert any(
+            "TenGigabitEthernet2/0/1" in r.getMessage() and "slot 2" in r.getMessage()
+            for r in caplog.records
+        ), "declining promotion must name the port and slot at debug"
+
+    def test_get_modules_non_prefixed_veto_by_chassis_descr(self) -> None:
+        """
+        A 3-tuple optic is vetoed by chassis DESCR even with zero Slot rows.
+
+        This is the omit-everything case: no Slot / Subslot / FRU row
+        survives anywhere in inventory, so the only remaining signal that
+        the chassis is modular is its own DESCR ("4 Slot Chassis"). Without
+        this second veto, a modular chassis that dropped every card row
+        would false-promote every fixed-looking port — the exact failure
+        mode a Slot-row-only veto would still miss.
+        """
+        mock_dir = self.mock_data_root / "test_get_modules" / "modular_veto_by_chassis_descr"
+        driver = self._build_driver(mock_dir)
+        result = driver.get_modules()
+
+        # No bays survive at all: the only inventory row besides the
+        # chassis itself is the vetoed optic.
+        assert result is None
 
     def _caplog(self, logger, level):
         """Context manager that captures records from a specific logger at ``level``."""

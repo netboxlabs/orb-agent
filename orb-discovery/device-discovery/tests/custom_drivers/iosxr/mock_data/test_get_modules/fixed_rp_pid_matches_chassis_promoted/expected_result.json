@@ -1,0 +1,11 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "0/RP0/CPU0", "position": "0/RP0/CPU0", "module": {"model": "NCS-55A1-36H-S", "serial": "FOXRPEQRP000", "description": "NCS-55A1 Integrated Route Processor", "type": "supervisor", "sub_bays": []}},
+        {"name": "0/0/0/1", "position": "0/0/0/1", "module": {"model": "QSFP-100G-SR4", "serial": "OPTICRPEQ001", "description": "Cisco QSFP-28 100G SR4 Optics", "type": "transceiver", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {"0/0/0/1": ["0/0/0/1"]}
+    }
+  }
+}

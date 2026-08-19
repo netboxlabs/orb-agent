@@ -1,0 +1,9 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 5548UP fixed chassis\"", "productid": "\"N5K-C5548UP\"", "vendorid": "V01", "serialnum": "\"FOC82001CHA\""},
+      {"name": "\"Slot 1\"", "desc": "\"Nexus 5548UP fixed base board\"", "productid": "\"N5K-C5548UP-SUP\"", "vendorid": "V01", "serialnum": "\"FOC82001CHA\""},
+      {"name": "\"Ethernet1/1\"", "desc": "\"SFP-10G-SR\"", "productid": "\"SFP-10G-SR\"", "vendorid": "V02", "serialnum": "\"OPT82001001\""}
+    ]
+  }
+}

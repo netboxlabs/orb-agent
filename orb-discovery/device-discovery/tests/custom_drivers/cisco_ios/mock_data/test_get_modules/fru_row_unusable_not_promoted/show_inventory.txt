@@ -1,0 +1,17 @@
+NAME: "Switch 1", DESCR: "Cisco Catalyst 9300L-48T-4X Switch"
+PID: C9300L-48T-4X     , VID: V01 , SN: FCW1111101
+
+NAME: "Switch 1 FRU Uplink Module 1", DESCR: "8x10GE Network Module"
+PID: C9300L-NM-8X      , VID: V01 , SN: FRU1111101
+
+NAME: "Te1/1/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02 , SN: OPT1111111
+
+NAME: "Switch 2", DESCR: "Cisco Catalyst 9300L-48T-4X Switch"
+PID: C9300L-48T-4X     , VID: V01 , SN: FCW1111102
+
+NAME: "Switch 2 FRU Uplink Module 1", DESCR: "8x10GE Network Module"
+PID: C9300L-NM-8X      , VID: V01 , SN:
+
+NAME: "Te2/1/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02 , SN: OPT1111211

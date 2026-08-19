@@ -1,0 +1,31 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "Ethernet1",
+          "position": "Ethernet1",
+          "module": {
+            "model": "QSFP-40G-SR4",
+            "serial": "XCV80001001",
+            "description": "QSFP-40G-SR4",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "Ethernet2",
+          "position": "Ethernet2",
+          "module": {
+            "model": "QSFP-40G-LR4",
+            "serial": "XCV80001002",
+            "description": "QSFP-40G-LR4",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {"Ethernet1": ["Ethernet1"], "Ethernet2": ["Ethernet2"]}
+    }
+  }
+}

@@ -1,0 +1,5 @@
+Interface              IP-Address      OK? Method Status                Protocol
+TenGigabitEthernet1/0/1  unassigned      YES unset  up                    up
+TenGigabitEthernet1/0/3  unassigned      YES unset  up                    up
+TenGigabitEthernet2/0/1  unassigned      YES unset  up                    up
+TenGigabitEthernet2/0/14 unassigned      YES unset  up                    up

@@ -40,6 +40,9 @@ from custom_napalm._modules import (
     ModuleEntry as _ModuleEntry,
 )
 from custom_napalm._modules import (
+    orphan_optic_bay as _orphan_optic_bay,
+)
+from custom_napalm._modules import (
     to_payload as _modules_to_payload,
 )
 
@@ -674,8 +677,33 @@ def _nokia_sros_attach_mda_sub_bays(
 def _nokia_sros_attach_transceiver_sub_bays(
     transceiver_rows: list[dict],
     mda_bays_by_path: dict[str, _ModuleBay],
+    bays: list[_ModuleBay],
+    had_card_bays: bool,
 ) -> dict[str, list[str]]:
-    """Route every port to its parent bays; emit transceiver sub-bay only when populated."""
+    """
+    Route every port to its parent bays; emit transceiver sub-bay only when populated.
+
+    ``had_card_bays`` is a snapshot the caller captures BEFORE the
+    promotion loop runs, from the RAW card/MDA rows rather than the
+    already-filtered ``bays`` list — see ``_nokia_sros_get_modules_impl``.
+    `bays` is the very list promotion appends device-rooted optics to, so
+    testing it live (or deriving the snapshot from it) would let either the
+    first promoted optic make `bays` non-empty and wrongly decline every
+    optic that follows on a genuinely fixed platform (no cards at all), or
+    a card row that failed the pid/sn filter make `bays` empty and wrongly
+    promote optics on a modular chassis whose card hierarchy is real.
+    Deriving the snapshot from the raw rows instead makes it immune to
+    that filter while still being captured once, before the loop, so it
+    can't be changed by promotion's own writes to ``bays``.
+
+    This is the deliberate opposite of the ios-xr rack-roster guard
+    (`if bays_by_rack and rack not in bays_by_rack`), which reads its
+    roster live on purpose: ios-xr asks "is this rack already known?",
+    where minting the first rack is legitimate and the guard must see
+    its own additions. Nokia asks "did this chassis have a card hierarchy
+    at all?" — a property of the input that promotion must not be able
+    to change by running.
+    """
     interfaces_by_bay: dict[str, list[str]] = {}
     for row in transceiver_rows:
         port_id = row.get("port_id") or ""
@@ -686,7 +714,30 @@ def _nokia_sros_attach_transceiver_sub_bays(
             continue
         mda_path = f"{parts[0]}/{parts[1]}"
         mda_bay = mda_bays_by_path.get(mda_path)
+        card_slot = parts[0]
+        model = row.get("model") or ""
+        sn = row.get("sn") or ""
         if mda_bay is None or mda_bay.module is None:
+            if had_card_bays:
+                # Modular chassis: this MDA row either lacked a PID/serial
+                # or its parent card never made it into the bay map — it is
+                # real hardware that simply didn't reach mda_bays_by_path.
+                # Promoting the optic device-rooted would invent a false
+                # topology (the optic actually sits inside an MDA inside a
+                # card), so decline rather than promote.
+                if model and sn:
+                    logger.debug(
+                        "nokia_sros.get_modules: declining optic on port %s, "
+                        "MDA %s missing from bay map",
+                        port_id, mda_path,
+                    )
+                continue
+            # Fixed platforms expose ports with no MDA module above them.
+            if model and sn:
+                bays.append(_orphan_optic_bay(port_id, _ModuleEntry(
+                    model=model, serial=sn, type="transceiver", description="",
+                )))
+                interfaces_by_bay[port_id] = [port_id]
             continue
         # Routing layers are emitted for EVERY discovered port (copper,
         # empty cage, optic-without-data, …) — get_interfaces() emits the
@@ -694,13 +745,10 @@ def _nokia_sros_attach_transceiver_sub_bays(
         # on in both linecards and full modes:
         #   - card-slot key   -> linecards mode routing
         #   - mda-path key    -> full mode at MDA depth
-        card_slot = parts[0]
         interfaces_by_bay.setdefault(card_slot, []).append(port_id)
         interfaces_by_bay.setdefault(mda_path, []).append(port_id)
         # Transceiver sub-bay (and its per-port deepest-wins routing key)
         # only emit when the optic exposes both model and serial.
-        model = row.get("model") or ""
-        sn = row.get("sn") or ""
         if model and sn:
             mda_bay.module.sub_bays.append(_ModuleBay(
                 name=port_id, position=port_id,
@@ -710,13 +758,42 @@ def _nokia_sros_attach_transceiver_sub_bays(
     return interfaces_by_bay
 
 
+def _nokia_sros_chassis_fingerprint(state_root: etree._Element) -> str:
+    """
+    Return the chassis's own hardware-data part-number, or "" when absent.
+
+    Already fetched by ``_FILTER_MODULES`` (``chassis/hardware-data/
+    part-number``) but never parsed until this gate needed it. Its
+    presence is the positive evidence that the card RPC's state subtree
+    came back intact: an empty ``<card>`` list alongside a present,
+    non-empty fingerprint is a genuinely fixed platform (nothing to
+    report). An empty ``<card>`` list with the fingerprint ALSO missing
+    cannot be told apart from a truncated or short-circuited response, so
+    that combination must NOT read as fixed.
+
+    A present-but-unparsed fingerprint must never come back as "" here —
+    doing so would make every SR-1 (which reports zero cards by design)
+    read as "cannot confirm fixed" and decline every optic, turning
+    ``fixed_port_transceivers_only``-shaped results into None.
+    """
+    el = state_root.find(
+        "state_ns:chassis/state_ns:hardware-data/state_ns:part-number", _NSMAP,
+    )
+    if el is None or el.text is None:
+        return ""
+    return el.text.strip()
+
+
 def _nokia_sros_get_modules_impl(driver) -> dict | None:
     """
     Module discovery for Nokia SR-OS via NETCONF.
 
     Two RPCs: first the card+MDA tree, then a best-effort transceiver pass.
-    Returns None if no card survives validation; the transceiver pass is
-    non-fatal — a card-only envelope still ships if the second RPC fails.
+    A fixed-port platform has no cards at all, so the "nothing found" gate
+    runs after the transceiver pass: an orphan optic promoted to a
+    device-rooted bay (no MDA parent) can carry the result on its own.
+    The transceiver pass itself is non-fatal — a card-only envelope still
+    ships if the second RPC fails.
     """
     # Narrow except scope: ncclient transport / RPC errors and lxml parse
     # errors are recoverable (return None / log + continue). Programming
@@ -738,9 +815,30 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
     if state is None:
         return None
     rows = _nokia_sros_rows_from_state_xml(state)
+    # Captured from the RAW rows, before _nokia_sros_build_card_bays filters
+    # on pid/sn/slot — a card row that exists in hardware but fails that
+    # filter must still count as "this chassis has a card hierarchy" (see
+    # _nokia_sros_attach_transceiver_sub_bays for why deriving this from the
+    # filtered `bays` list instead is wrong).
+    # Read from the state tree, not `rows`: _nokia_sros_rows_from_state_xml
+    # drops a <card>/<sfm> whose slot number is missing or blank, so a card
+    # hierarchy that exists in the reply would otherwise read as absent and
+    # let a modular optic promote to the device root.
+    had_card_bays = (
+        state.find("state_ns:card", _NSMAP) is not None
+        or state.find("state_ns:sfm", _NSMAP) is not None
+    )
+    # Snapshotted beside had_card_bays, from the same state tree: an empty
+    # card subtree only counts as a genuinely fixed platform when the
+    # chassis fingerprint confirms the state RPC came back intact (see
+    # _nokia_sros_chassis_fingerprint). Folded into the same signal
+    # _nokia_sros_attach_transceiver_sub_bays already takes — "had_card_bays
+    # OR the fingerprint is missing" is "decline the orphan optic" either
+    # way — so the helper's own tested contract (and its 8 direct unit
+    # tests) stays untouched.
+    chassis_fingerprint = _nokia_sros_chassis_fingerprint(state)
+    decline_fixed_port_promotion = had_card_bays or not chassis_fingerprint
     bays = _nokia_sros_build_card_bays(rows)
-    if not bays:
-        return None
     mda_bays_by_path = _nokia_sros_attach_mda_sub_bays(rows, bays)
 
     interfaces_by_bay: dict[str, list[str]] = {}
@@ -753,11 +851,14 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
             if tx_state is not None:
                 tx_rows = _nokia_sros_transceiver_rows_from_state_xml(tx_state)
                 interfaces_by_bay = _nokia_sros_attach_transceiver_sub_bays(
-                    tx_rows, mda_bays_by_path,
+                    tx_rows, mda_bays_by_path, bays, decline_fixed_port_promotion,
                 )
     except (NCClientError, etree.XMLSyntaxError) as e:
         # Non-fatal: cards-only payload still ships.
         logger.warning("nokia_sros.get_modules: transceiver RPC failed: %s", e)
+
+    if not bays:
+        return None
 
     return _modules_to_payload({
         None: _MemberModules(bays=bays, interfaces_by_bay=interfaces_by_bay),
