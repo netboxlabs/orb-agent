@@ -92,8 +92,9 @@ func TestClassifyModule(t *testing.T) {
 		// Edge: under module parent but non-optic → linecard (depth alone insufficient).
 		{"non-optic under module parent", "WS-X45-FOO", "", true, ModuleTypeLinecard},
 
-		// Edge: optic-shaped PID at chassis level → linecard (PID alone insufficient).
-		{"optic PID at chassis depth", "QSFP-100G-SR4", "", false, ModuleTypeLinecard},
+		// An optic PID is sufficient on its own: a fixed-port chassis holds
+		// its transceivers directly, with no intervening module.
+		{"optic PID at chassis depth", "QSFP-100G-SR4", "", false, ModuleTypeTransceiver},
 
 		// VendorType fallback when Model is blank.
 		{"vendortype fallback optic", "", "QSFP-100G-LR4", true, ModuleTypeTransceiver},
