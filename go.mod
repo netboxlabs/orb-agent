@@ -1,6 +1,6 @@
 module github.com/netboxlabs/orb-agent
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/DelineaXPM/dsv-sdk-go/v2 v2.2.0

@@ -1,0 +1,50 @@
+# Accepted findings for the container scan in build.yaml and container-rescan.yaml.
+#
+# Every entry is time-boxed. When an entry expires the finding reappears and
+# blocks the build again, which is deliberate: an accepted risk should be
+# re-argued periodically, not inherited silently.
+#
+# How to re-check an entry before extending it:
+#   1. Is there a newer pip whose _vendor/vendor.txt raises the pinned version?
+#        curl -s https://pypi.org/pypi/pip/json | python3 -c \
+#          "import sys,json;print(json.load(sys.stdin)['info']['version'])"
+#      then read _vendor/vendor.txt from that release's wheel.
+#   2. Is the vulnerable code actually shipped, or is vendor.txt the only trace?
+#        docker run --rm --entrypoint sh netboxlabs/orb-agent:<tag> -c \
+#          "ls /usr/local/lib/python3.14/site-packages/pip/_vendor/"
+#   If either answer changed, fix it rather than extending the entry.
+
+vulnerabilities:
+  # pip vendors its own dependency set under pip/_vendor and records it in
+  # pip/_vendor/vendor.txt, which the image scanner reads as if each entry were
+  # an independently installed distribution. They are not: they have no
+  # dist-info of their own, and the SBOM records them in pip's own layer with no
+  # file path, unlike every genuinely installed package.
+  #
+  # pip is in the image only to serve the documented INSTALL_DRIVERS_PATH and
+  # INSTALL_WORKERS_PATH options (see docs/config_samples.md). It is invoked by
+  # the entrypoint solely when an operator sets one of those, and never during
+  # normal agent operation.
+
+  - id: CVE-2025-47273
+    statement: >-
+      setuptools reported at 70.3.0 from pip 26.2.1's vendor.txt. The vulnerable
+      code is not in the image: pip no longer ships _vendor/setuptools at all,
+      only _vendor/pkg_resources, so PackageIndex, the component this path
+      traversal affects, is absent. The finding is vendor.txt metadata rather
+      than reachable code. pip 26.2.1 is the current latest release and still
+      pins this version, so there is no upgrade that clears it.
+    expired_at: 2026-11-18
+
+  - id: GHSA-6v7p-g79w-8964
+    statement: >-
+      msgpack reported at 1.1.2 from pip 26.2.1's vendor.txt. Unlike the
+      setuptools entry, the code is present, under pip/_vendor/msgpack, where pip
+      uses it through CacheControl to serialise its own HTTP cache. Reaching the
+      out-of-bounds read requires pip to unpack attacker-influenced cache data
+      during a pip invocation, and pip only runs here when an operator opts into
+      installing extra drivers or workers from their own requirements file. pip
+      26.2.1 is the current latest release and still pins this version, so there
+      is no upgrade that clears it; removing runtime pip would, at the cost of
+      those two documented options.
+    expired_at: 2026-11-18
