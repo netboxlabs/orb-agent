@@ -8,9 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The accept table is the measured distribution of SVI naming across a
-// 1877-device corpus, most common first. The reject table is the set of
-// look-alikes a trailing-integer parser gets wrong.
+// The accept table is the SVI naming this resolver recognizes, drawn from a
+// 1877-device corpus, most common first. It is not a claim that every entry was
+// observed there: any form added without a device behind it belongs in the
+// reject table until one turns up. The reject table is the set of look-alikes a
+// trailing-integer parser gets wrong.
 func TestSviVlanID(t *testing.T) {
 	accept := map[string]int{
 		"Vlan100":          100,
@@ -24,7 +26,6 @@ func TestSviVlanID(t *testing.T) {
 		"VLAN ID 0051":     51,
 		"Vl52":             52,
 		"Interface vlan30": 30,
-		"BDI100":           100,
 		"svi9":             9,
 		"vlan1":            1,
 		"vlan4094":         4094,
@@ -46,6 +47,9 @@ func TestSviVlanID(t *testing.T) {
 		"vlan0", "vlan4095", "vlan99999",
 		// Tokens whose integer is a bridge-group or operator label, not a VID.
 		"ve55", "Bvi1", "br0", "v190", "vgi1", "rvi7",
+		// A bridge-domain id is not a VLAN id: BDI100 can route a service
+		// instance whose encapsulation is dot1q 10.
+		"BDI100", "Bdi100", "bdi7",
 		// Real VID is the middle number, so a trailing parse is wrong.
 		"vlan307-v0",
 		// SVI-ish but carries no number.

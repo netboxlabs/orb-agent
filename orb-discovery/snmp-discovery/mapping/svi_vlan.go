@@ -16,12 +16,18 @@ import (
 // picks, while this gate selected 234 of 1621 IP-bearing interfaces across 301
 // operating-system families with no false positives.
 //
-// Deliberately absent: br, v, vgi, bvi, ve, irb and rvi. Those are SVI-shaped
-// but their integer is a bridge-group id, a virtual-interface id or an operator
-// label, and a device whose VLAN table happens to contain the same number would
-// corroborate the wrong association rather than catch it.
+// Deliberately absent: br, v, vgi, bvi, bdi, ve, irb and rvi. Those are
+// SVI-shaped but their integer is a bridge-group id, a bridge-domain id, a
+// virtual-interface id or an operator label, and a device whose VLAN table
+// happens to contain the same number would corroborate the wrong association
+// rather than catch it.
+//
+// bdi is the sharpest of those. A Cisco bridge domain carries whatever
+// encapsulation its service instances declare, so BDI100 can route
+// `encapsulation dot1q 10`. Typing a BDI as a virtual interface is correct and
+// unaffected; reading its number as a VLAN ID is not.
 var sviVlanNameRe = regexp.MustCompile(
-	`(?i)^(?:interface[\s_-]+)?(?:vlan-interface|vlan[\s_-]?id|vlanif|vlan|svi|bdi|vl)[\s_-]*0*(\d{1,5})$`,
+	`(?i)^(?:interface[\s_-]+)?(?:vlan-interface|vlan[\s_-]?id|vlanif|vlan|svi|vl)[\s_-]*0*(\d{1,5})$`,
 )
 
 // sviVlanID parses the VLAN ID from an SVI-style interface name. Returns false
