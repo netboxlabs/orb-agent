@@ -279,8 +279,23 @@ class FakeNetconfConn:
         """Return empty capabilities — driver treats this as a modern (non-R19) device."""
         return []
 
+    # Drivers that issue more than one subtree filter can answer each one from
+    # its own file, so a scenario proves which filter supplied which fields. A
+    # scenario that does not split its replies keeps using response.xml.
+    _FILTER_REPLIES = (
+        ("<card>", "modules_response.xml"),
+        ("<transceiver>", "ports_transceiver_response.xml"),
+    )
+
     def get(self, filter=None, with_defaults=None, **kwargs) -> "_Response":
-        """Return ``response.xml`` from the mock directory."""
+        """Return this filter's own reply when the scenario splits them, else ``response.xml``."""
+        filter_text = str(filter or "")
+        for marker, filename in self._FILTER_REPLIES:
+            if marker in filter_text:
+                path = self._mock_dir / filename
+                if path.exists():
+                    return self._Response(path.read_text(encoding="utf-8"))
+                break
         path = self._mock_dir / "response.xml"
         xml = path.read_text(encoding="utf-8") if path.exists() else "<data/>"
         return self._Response(xml)
