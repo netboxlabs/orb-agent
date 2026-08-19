@@ -556,8 +556,8 @@ def _aruba_promote_orphan_optics(
             if not _aruba_is_known_fixed_family(pid, product_name):
                 logger.warning(
                     "aruba.get_modules: declining promotion of %s (chassis part number "
-                    "%r is not a known fixed-port family)",
-                    ifname, pid,
+                    "%r / product name %r is not a known fixed-port family)",
+                    ifname, pid, product_name,
                 )
                 continue
             bays_by_member.setdefault(member, []).append(

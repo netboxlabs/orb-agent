@@ -253,11 +253,12 @@ The evidence differs per driver, because each vendor states it differently.
 | `ios` (non-prefixed 3-tuple) | No in-band signal exists; vetoed by device-level modularity evidence | guarded |
 | `iosxr` | An `<r>/RP<n>/CPU0` row whose PID equals that rack's `Rack <n>` PID, or no card-shaped row for the rack at all | guarded |
 | `nokia_sros` | No card or SFM row in the raw pre-filter rows, plus a present chassis fingerprint | guarded |
-| `aruba_aoscx` | The `chassis,<member>` product family is in the known-fixed allowlist (6200 / 6300 / 6300M / 8100 / 8320 / 8325 / 8360) | structural for known families |
+| `aruba_aoscx` | The `chassis,<member>` product family is in the known-fixed allowlist (6100 / 6200 / 6300 / 6300M / 8100 / 8320 / 8325 / 8360) | structural for known families |
 
 ### Known limitations
 
-Three cases are guarded rather than structurally impossible.
+Three cases are guarded rather than structurally impossible, and one is bounded
+by which platforms are listed rather than by the evidence itself.
 
 **Cisco IOS, non-prefixed 3-tuple port names.** `TenGigabitEthernet1/0/1` on a
 fixed WS-C3850-48XS, where the optic must be promoted, and on a modular C9404R,
@@ -280,6 +281,17 @@ discovered either way.
 **Nokia SR OS.** Promotion requires no card or SFM row in the raw inventory plus a
 present chassis fingerprint. Total loss of the card and SFM subtree while the
 transceiver RPC succeeds would still read as a fixed platform.
+
+**Aruba AOS-CX.** The evidence is the chassis product family, so it is only as
+complete as the list above. A fixed-port family that is absent from it, such as
+the 6000, 9300 or 10000, has its optics declined rather than assumed fixed, and
+because those platforms have no line card to nest under, the optic is not
+reported at all. This is deliberate: guessing fixed from a missing line-card row
+would attach a modular chassis's optics to the device itself. Each such platform
+logs a WARNING naming the chassis part number and product name, so an operator
+seeing no optics on a fixed AOS-CX switch should search the agent log for
+`is not a known fixed-port family` and open an issue quoting the identity it
+names; adding a family is a one-line change.
 
 ### Test-data provenance
 
