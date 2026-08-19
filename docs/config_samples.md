@@ -108,6 +108,48 @@ docker run \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
+### GitHub App authentication (github.com)
+
+Create a GitHub App with `Contents: Read` on the policy repository, install it on the account that
+owns the repo, and download its private key. See [GitHub App Authentication](configs/git.md#github-app-authentication)
+for the full walkthrough.
+
+```yaml
+orb:
+  labels:
+    region: EU
+    pop: ams02
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "https://github.com/myorg/policyrepo"
+        auth: github_app
+        github_app:
+          app_id: "Iv23liAbCdEfGhIjKlMn"
+          installation_id: "78901234"
+          private_key: "/opt/orb/github-app.pem"
+        schedule: "* * * * *"
+  backends:
+    network_discovery:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent01
+```
+
+Run command — note the private key is mounted read-only:
+```bash
+docker run \
+  -v /local/orb:/opt/orb \
+  -v /local/orb/github-app.pem:/opt/orb/github-app.pem:ro \
+  -e DIODE_CLIENT_ID=${DIODE_CLIENT_ID} \
+  -e DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET} \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
 ## Device-discovery backend
 This sample configuration file demonstrates the device discovery backend connecting to a Cisco router at 192.168.0.5. It retrieves device, interface, and IP information, then sends the data to a [diode](https://github.com/netboxlabs/diode) server running at 192.168.0.100.
 

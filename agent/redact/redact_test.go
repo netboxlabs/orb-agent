@@ -130,6 +130,41 @@ func TestSensitiveData_GitManager(t *testing.T) {
 	}
 }
 
+// TestSensitiveData_GitHubApp tests that the nested github_app block has its
+// private key masked while the non-sensitive identifiers stay readable.
+func TestSensitiveData_GitHubApp(t *testing.T) {
+	original := config.GitManager{
+		URL:  "https://github.com/myorg/policyrepo",
+		Auth: "github_app",
+		GitHubApp: config.GitHubAppAuth{
+			AppID:          "Iv23liAbCdEfGhIjKlMn",
+			InstallationID: "78901234",
+			PrivateKey:     "-----BEGIN RSA PRIVATE KEY-----",
+		},
+	}
+
+	redacted := SensitiveData(original)
+
+	redactedMap := redacted.(map[string]any)
+	githubApp, ok := redactedMap["github_app"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected github_app to be a nested map, got %T", redactedMap["github_app"])
+	}
+
+	if githubApp["private_key"] != MaskedSecret {
+		t.Errorf("Expected github_app.private_key to be masked, got %v", githubApp["private_key"])
+	}
+
+	// app_id and installation_id are not secrets; keeping them readable is what
+	// makes a misconfiguration diagnosable from the logs.
+	if githubApp["app_id"] != "Iv23liAbCdEfGhIjKlMn" {
+		t.Errorf("Expected github_app.app_id to be preserved, got %v", githubApp["app_id"])
+	}
+	if githubApp["installation_id"] != "78901234" {
+		t.Errorf("Expected github_app.installation_id to be preserved, got %v", githubApp["installation_id"])
+	}
+}
+
 // TestSensitiveData_BackendCommons tests BackendCommons with Diode config
 func TestSensitiveData_BackendCommons(t *testing.T) {
 	original := config.BackendCommons{}
