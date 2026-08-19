@@ -1097,3 +1097,64 @@ def test_prefix_vlan_skips_stub_named_vlan():
         vlan_cache={10: _named_vlan(10, "")},
     )
     assert all(not p.HasField("vlan") for p in _prefixes(ents))
+
+
+@pytest.mark.parametrize(
+    "if_name",
+    [
+        "BDI100",
+        "Bdi100",
+        "BVI10",
+        "Vlanif100",
+        "vlanif100",
+        "Vlan-interface100",
+        "nve1",
+        "Nve1",
+        "Vxlan1",
+        "Virtual-Template1",
+        "Virtual-Access2",
+        "Dialer1",
+        "Null0",
+        "tunnel-ip1",
+        "tunnel-te200",
+        "tunnel-mte5",
+    ],
+)
+def test_translate_interface_software_interface_is_virtual_despite_speed(
+    if_name, sample_device_info, sample_defaults
+):
+    """
+    A software-implemented interface is virtual even when the device reports a speed.
+
+    Speed-based detection sits below the built-in patterns, so a missing pattern
+    silently turns one of these into an Ethernet type: a BDI reporting 1000 Mbps
+    was emitted as 1000base-t, which is what netboxlabs/orb-agent#522 reported.
+    Each name is passed with a speed to keep that ordering pinned.
+    """
+    device = translate_device(sample_device_info, sample_defaults)
+
+    interface = translate_interface(
+        device,
+        if_name,
+        {"is_enabled": True, "speed": 1000},
+        sample_defaults,
+    )
+
+    assert interface.type == "virtual", f"{if_name} must not be typed from its speed"
+
+
+def test_translate_interface_physical_still_typed_from_its_name(
+    sample_device_info, sample_defaults
+):
+    """The added virtual patterns must not capture physical interfaces."""
+    device = translate_device(sample_device_info, sample_defaults)
+
+    for if_name, expected in (
+        ("GigabitEthernet0/1", "1000base-t"),
+        ("TenGigabitEthernet1/0/1", "10gbase-x-sfpp"),
+        ("Port-channel1", "lag"),
+    ):
+        interface = translate_interface(
+            device, if_name, {"is_enabled": True, "speed": 1000}, sample_defaults
+        )
+        assert interface.type == expected, if_name
