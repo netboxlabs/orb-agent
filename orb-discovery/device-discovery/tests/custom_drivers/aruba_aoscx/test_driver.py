@@ -77,8 +77,8 @@ class TestAOSCXDriver(BaseDriverTest):
         """
         An unknown chassis family must decline promotion and warn, naming the part number.
 
-        ``system/subsystems`` reports only a chassis row whose family (a
-        fictitious "9300") is not on the fixed-port allowlist, with no
+        ``system/subsystems`` reports only a chassis row whose family is
+        named by nothing on the fixed-port allowlist, with no
         line_card subsystem at all — the same shape a genuinely new Aruba
         fixed-port family would report before its family is added to the
         allowlist. The optic at ``1/1/1`` must be declined, and the WARNING

@@ -228,7 +228,7 @@ _ARUBA_NON_BAY_SUBSYSTEM_TYPES = frozenset({
 # _aruba_is_known_fixed_family). "6300" also matches "6300M" chassis text,
 # but 6300M is listed too so the allowlist reads as a complete, self-
 # documenting family list rather than relying on that overlap.
-_ARUBA_FIXED_FAMILIES = ("6200", "6300M", "6300", "8100", "8320", "8325", "8360")
+_ARUBA_FIXED_FAMILIES = ("6100", "6200", "6300M", "6300", "8100", "8320", "8325", "8360")
 _ARUBA_FAMILY_RE = re.compile(
     r"\b(?:" + "|".join(_ARUBA_FIXED_FAMILIES) + r")\b", re.IGNORECASE,
 )
