@@ -21,6 +21,15 @@ jobs:
       TRIVY_DISABLE_VEX_NOTICE: "true"
 
     steps:
+      # The scan needs .trivyignore.yaml from the repo. Nothing else here does,
+      # since the image is pulled rather than built.
+      - name: Check out the ignore file
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          sparse-checkout: .trivyignore.yaml
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Pull image
         env:
           IMAGE_REF: ${{ env.IMAGE_REF }}
