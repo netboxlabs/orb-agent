@@ -4,16 +4,25 @@
 
 import re
 
-# Whitelisted tokens whose trailing integer is documented to BE the VLAN ID.
+# Whitelisted tokens whose trailing integer is the 802.1Q VLAN ID on the
+# platforms that use them.
 # Kept byte-identical in intent to the Go twin in
 # orb-discovery/snmp-discovery/mapping/svi_vlan.go; the shared accept/reject
 # tables in the tests are what keep the two from drifting.
 #
-# Deliberately absent: br, v, vgi, bvi, ve, irb, rvi. Those integers are
-# bridge-group ids, virtual-interface ids or operator labels.
+# Deliberately absent: br, v, vgi, bvi, bdi, ve, irb, rvi. Those integers are
+# bridge-group ids, bridge-domain ids, virtual-interface ids or operator
+# labels.
+#
+# bdi is the sharpest of those. A Cisco bridge domain carries whatever
+# encapsulation its service instances declare, so BDI100 can route
+# `encapsulation dot1q 10`, and requiring the VLAN table to contain VLAN 100
+# does not catch it: a device that happens to have VLAN 100 corroborates the
+# wrong association instead. Typing a BDI as a virtual interface is correct and
+# unaffected; reading its number as a VLAN ID is not.
 _SVI_RE = re.compile(
     r"^(?:interface[\s_-]+)?"
-    r"(?:vlan-interface|vlan[\s_-]?id|vlanif|vlan|svi|bdi|vl)"
+    r"(?:vlan-interface|vlan[\s_-]?id|vlanif|vlan|svi|vl)"
     r"[\s_-]*0*(\d{1,5})$",
     re.IGNORECASE,
 )

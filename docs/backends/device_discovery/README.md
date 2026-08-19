@@ -508,7 +508,7 @@ rather than erroring, so a typo disables the feature instead of writing a guess 
 NetBox.
 
 **Which interface names qualify.** Case-insensitively: an optional leading `interface`,
-one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`, `bdi`, `vl`, an optional
+one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`, `vl`, an optional
 separator, and a VLAN ID in 1-4094 with leading zeros stripped. So `Vlan10`,
 `VLAN ID 0051` and `Interface vlan30` all qualify. Any name containing a dot is
 rejected, because the number after the dot is a subinterface index rather than reliably
