@@ -820,7 +820,14 @@ def _nokia_sros_get_modules_impl(driver) -> dict | None:
     # filter must still count as "this chassis has a card hierarchy" (see
     # _nokia_sros_attach_transceiver_sub_bays for why deriving this from the
     # filtered `bays` list instead is wrong).
-    had_card_bays = any(row.get("kind") == "card" for row in rows)
+    # Read from the state tree, not `rows`: _nokia_sros_rows_from_state_xml
+    # drops a <card>/<sfm> whose slot number is missing or blank, so a card
+    # hierarchy that exists in the reply would otherwise read as absent and
+    # let a modular optic promote to the device root.
+    had_card_bays = (
+        state.find("state_ns:card", _NSMAP) is not None
+        or state.find("state_ns:sfm", _NSMAP) is not None
+    )
     # Snapshotted beside had_card_bays, from the same state tree: an empty
     # card subtree only counts as a genuinely fixed platform when the
     # chassis fingerprint confirms the state RPC came back intact (see

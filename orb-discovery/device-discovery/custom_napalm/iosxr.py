@@ -246,15 +246,22 @@ def _iosxr_optic_has_mpa_parent(pname: str, row_pid_by_name: dict[str, str]) -> 
 
     ``pname`` is the optic's own (already prefix-stripped) NAME, e.g.
     ``0/0/1/2``. Stripping its last element gives the parent path
-    (``0/0/1``) — the slot an MPA would occupy. A blank PID at that path
-    is not treated as positive evidence (it reads the same as no row at
-    all); only a real, non-optic PID counts.
+    (``0/0/1``) — the slot an MPA would occupy. The row EXISTING at that
+    path is the evidence, not its PID being usable: the inventory template
+    yields an empty PID for a row whose ``PID:`` field is blank, and such a
+    row still states that hardware occupies the optic's parent slot. Only a
+    row that is itself an optic is discounted, since an optic is not a
+    parent. This matches ``_iosxr_claimed_slot_prefix``, which likewise
+    claims a slot ahead of any pid/sn filter.
     """
     parts = pname.split("/")
     if len(parts) < 2:
         return False
-    parent_pid = row_pid_by_name.get("/".join(parts[:-1]), "")
-    return bool(parent_pid) and not is_optic_pid(parent_pid)
+    parent = "/".join(parts[:-1])
+    if parent not in row_pid_by_name:
+        return False
+    parent_pid = row_pid_by_name[parent]
+    return not (parent_pid and is_optic_pid(parent_pid))
 
 
 def _iosxr_rack_is_fixed_port(
