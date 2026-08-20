@@ -2283,6 +2283,21 @@ func TestVtpWalkGating(t *testing.T) {
 	}
 	assert.Contains(t, on.VendorObjectIDs("cisco"), vtpNameOID,
 		"the VTP VLAN name column must be walked with emit_prefix_vlan svi-name")
+
+	// With prefix emission off there is no prefix to associate, so the option
+	// is inert. emitVLANs reads these same rows for VLAN names, so walking them
+	// anyway would let an option that cannot function change the target's
+	// emitted VLAN inventory.
+	noPrefixes := false
+	inert, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil,
+		config.Options{EmitPrefixVlan: &sviName, EmitPrefixes: &noPrefixes})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	assert.NotContains(t, inert.VendorObjectIDs("cisco"), vtpNameOID,
+		"the VTP VLAN name column must not be walked when no prefixes are emitted")
+	assert.Contains(t, inert.VendorObjectIDs("cisco"), vmMembershipOID,
+		"the unrelated Cisco access-VLAN overlay must still be walked")
 }
 
 // TestMapObjectIDsToEntity_VLANIndexCollision is a regression test for the
