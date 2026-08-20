@@ -556,8 +556,9 @@ func TestRequireGitHubHTTPSURL(t *testing.T) {
 	}{
 		{url: "https://github.com/org/repo"},
 		{url: "https://github.com/org/repo.git"},
-		{url: "https://www.github.com/org/repo"},
 		{url: "HTTPS://GitHub.com/org/repo"},
+		{url: "https://www.github.com/org/repo", wantErr: `must be github.com, not "www.github.com"`},
+		{url: "https://WWW.GitHub.com/org/repo", wantErr: `must be github.com, not "www.github.com"`},
 		{url: "git@github.com:org/repo.git", wantErr: "scp-style and ssh URLs"},
 		{url: "ssh://git@github.com/org/repo.git", wantErr: `scheme "ssh"`},
 		{url: "http://github.com/org/repo", wantErr: `scheme "http"`},
@@ -655,7 +656,7 @@ func TestGitStartGitHubAppValidation(t *testing.T) {
 					ClientID: "Iv23li", InstallationID: "78901234", PrivateKey: validKey,
 				},
 			},
-			wantErr: "must be github.com, not www.github.com",
+			wantErr: `must be github.com, not "www.github.com"`,
 		},
 	}
 
