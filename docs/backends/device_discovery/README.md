@@ -507,10 +507,11 @@ unrecognized value, including a bare `on` or `true`, resolves to `off` with a wa
 rather than erroring, so a typo disables the feature instead of writing a guess into
 NetBox.
 
-**Which interface names qualify.** Case-insensitively: an optional leading `interface`,
-one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`, `vl`, an optional
-separator, and a VLAN ID in 1-4094 with leading zeros stripped. So `Vlan10`,
-`VLAN ID 0051` and `Interface vlan30` all qualify. Any name containing a dot is
+**Which interface names qualify.** Case-insensitively: an optional leading `interface`
+*followed by a separator*, one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`,
+`vl`, then an optional separator before a VLAN ID in 1-4094 with leading zeros stripped.
+So `Vlan10`, `VLAN ID 0051` and `Interface vlan30` qualify, while the run-together
+`InterfaceVlan30` does not. Any name containing a dot is
 rejected, because the number after the dot is a subinterface index rather than reliably
 a VLAN ID.
 

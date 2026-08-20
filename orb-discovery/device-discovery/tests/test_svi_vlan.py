@@ -29,6 +29,9 @@ REJECT = [
     # instance whose encapsulation is dot1q 10.
     "BDI100", "Bdi100", "bdi7",
     "vlan307-v0",
+    # A leading "interface" needs a separator after it. No device has been seen
+    # emitting the run-together form; add it with a capture behind it.
+    "InterfaceVlan30", "interfacevlan30",
     "802.1Q VLAN", "L3IPVLAN Interface", "vlan", "vlanMgmt", "bridge",
     "", "   ",
 ]
