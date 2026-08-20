@@ -119,19 +119,31 @@ func ResolveSviVlans(
 
 	out := map[int]*diode.VLAN{}
 	for idx, names := range namesByIfIndex {
+		// ifName and ifDescr can both name one interface. Taking whichever
+		// parses first would let collection order pick the VLAN, so require the
+		// sources that do parse to agree: two different VLAN ids mean the
+		// device's own columns disagree about what this interface is, and there
+		// is nothing left to corroborate. This is the same unanimity the
+		// aggregate association applies across interfaces, one level down.
+		vids := map[int]struct{}{}
 		for _, name := range names {
-			vid, ok := sviVlanID(name)
-			if !ok {
-				continue
+			if vid, ok := sviVlanID(name); ok {
+				vids[vid] = struct{}{}
 			}
+		}
+		if len(vids) > 1 {
+			logger.Warn("svi vlan: interface names disagree on the vlan id; not associating",
+				"ifIndex", idx, "interfaces", names)
+			continue
+		}
+		for vid := range vids {
 			vlan, known := named[vid]
 			if !known {
 				logger.Debug("svi vlan: parsed vid absent from the device VLAN database; not associating",
-					"ifIndex", idx, "interface", name, "vid", vid)
+					"ifIndex", idx, "interfaces", names, "vid", vid)
 				continue
 			}
 			out[idx] = vlan
-			break
 		}
 	}
 	return out

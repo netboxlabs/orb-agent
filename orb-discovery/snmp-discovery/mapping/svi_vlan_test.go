@@ -167,3 +167,35 @@ func TestResolveSviVlans_SkipsAVlanTheDeviceDidNotName(t *testing.T) {
 		assert.Same(t, named, got[1])
 	})
 }
+
+// ifName and ifDescr can each name the interface. When both parse to a VLAN id
+// and the ids differ, collection order must not decide the answer: the device's
+// own columns disagree, so there is nothing to corroborate. Both VLANs are in
+// the device's VLAN database here, so the corroboration check alone would have
+// accepted whichever came first.
+func TestResolveSviVlans_RefusesWhenTheNameColumnsDisagree(t *testing.T) {
+	vlan10 := &diode.VLAN{Vid: int64Ptr(10), Name: strPtr("office")}
+	vlan20 := &diode.VLAN{Vid: int64Ptr(20), Name: strPtr("voice")}
+	entities := []diode.Entity{vlan10, vlan20}
+
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10": {Value: "office"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.20": {Value: "voice"},
+		// ifIndex 1: the two columns name different VLANs.
+		".1.3.6.1.2.1.31.1.1.1.1.1": {Value: "Vlan10"},
+		".1.3.6.1.2.1.2.2.1.2.1":    {Value: "Vlan20"},
+		// ifIndex 2: the two columns agree by different spellings.
+		".1.3.6.1.2.1.31.1.1.1.1.2": {Value: "Vl20"},
+		".1.3.6.1.2.1.2.2.1.2.2":    {Value: "Vlan20"},
+		// ifIndex 3: one column is an SVI, the other is not a VLAN name at all.
+		".1.3.6.1.2.1.31.1.1.1.1.3": {Value: "Vlan10"},
+		".1.3.6.1.2.1.2.2.1.2.3":    {Value: "802.1Q VLAN"},
+	}
+
+	got := ResolveSviVlans(oids, entities, slog.Default())
+
+	assert.NotContains(t, got, 1, "disagreeing name columns must not resolve")
+	assert.Same(t, vlan20, got[2], "agreement through different spellings must resolve")
+	assert.Same(t, vlan10, got[3], "an unparseable second column is not a disagreement")
+	assert.Len(t, got, 2)
+}
