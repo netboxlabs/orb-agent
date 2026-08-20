@@ -168,10 +168,10 @@ func TestDerivePrefixes_NamelessPrefixVrfDropsWithoutPanic(t *testing.T) {
 }
 
 func TestDerivePrefixes_AttachesVlanOnlyWhenUnanimous(t *testing.T) {
-	corroborated := "corroborated"
+	sviName := "svi-name"
 	vlan10 := &diode.VLAN{Vid: int64Ptr(10), Name: strPtr("office")}
 	vlan20 := &diode.VLAN{Vid: int64Ptr(20), Name: strPtr("voice")}
-	opts := &config.Options{EmitPrefixVlan: &corroborated}
+	opts := &config.Options{EmitPrefixVlan: &sviName}
 
 	mk := func(addr string, iface *diode.Interface) *diode.IPAddress {
 		a := addr
@@ -218,8 +218,8 @@ func TestDerivePrefixes_AttachesVlanOnlyWhenUnanimous(t *testing.T) {
 // least one contributing address proposed a VID and the association was
 // still withheld is a genuine partial attribution worth a warning.
 func TestDerivePrefixes_WarnsOnlyWhenAVlanWasActuallyProposed(t *testing.T) {
-	corroborated := "corroborated"
-	opts := &config.Options{EmitPrefixVlan: &corroborated}
+	sviName := "svi-name"
+	opts := &config.Options{EmitPrefixVlan: &sviName}
 	vlan10 := &diode.VLAN{Vid: int64Ptr(10), Name: strPtr("office")}
 
 	mk := func(addr string, iface *diode.Interface) *diode.IPAddress {

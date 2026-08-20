@@ -33,7 +33,7 @@ import (
 // The prefix VLAN is corroborated rather than derived: sviVlanByIfIndex
 // (produced by ResolveSviVlans, keyed by ifIndex) and ifIndexByIface
 // (mapper.InterfacesByIfIndex) are only consulted when
-// options.PrefixVlanMode is "corroborated", and even then a prefix is
+// options.PrefixVlanMode is "svi-name", and even then a prefix is
 // only tagged when every contributing address resolves to the SAME
 // VLAN. Any disagreement, or any contributing address with no VLAN,
 // leaves the prefix untagged — see the vote accumulation below for why
@@ -71,7 +71,7 @@ func DerivePrefixes(
 		proposed int
 	}
 	votes := make(map[string]*vlanVote)
-	corroborateVlan := options.PrefixVlanMode() == "corroborated" && len(sviVlanByIfIndex) > 0
+	corroborateVlan := options.PrefixVlanMode() == "svi-name" && len(sviVlanByIfIndex) > 0
 	warnedNamelessVrf := false
 	for _, e := range entities {
 		ip, ok := e.(*diode.IPAddress)

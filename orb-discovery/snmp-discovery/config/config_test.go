@@ -913,16 +913,22 @@ func TestDeviceNameEmissionEnabled(t *testing.T) {
 func TestPrefixVlanMode(t *testing.T) {
 	assert.Equal(t, "off", (*Options)(nil).PrefixVlanMode())
 	assert.Equal(t, "off", (&Options{}).PrefixVlanMode())
-	corr := "corroborated"
-	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &corr}).PrefixVlanMode())
-	upper := "CORROBORATED"
-	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &upper}).PrefixVlanMode())
-	withSpace := "  corroborated  "
-	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &withSpace}).PrefixVlanMode(),
+	sviName := "svi-name"
+	assert.Equal(t, "svi-name", (&Options{EmitPrefixVlan: &sviName}).PrefixVlanMode())
+	upper := "SVI-NAME"
+	assert.Equal(t, "svi-name", (&Options{EmitPrefixVlan: &upper}).PrefixVlanMode())
+	withSpace := "  svi-name  "
+	assert.Equal(t, "svi-name", (&Options{EmitPrefixVlan: &withSpace}).PrefixVlanMode(),
 		"must trim surrounding whitespace")
-	withSpaceAndUpper := " CORROBORATED "
-	assert.Equal(t, "corroborated", (&Options{EmitPrefixVlan: &withSpaceAndUpper}).PrefixVlanMode(),
+	withSpaceAndUpper := " SVI-Name "
+	assert.Equal(t, "svi-name", (&Options{EmitPrefixVlan: &withSpaceAndUpper}).PrefixVlanMode(),
 		"must handle both whitespace and case normalization together")
+	// The mode was called `corroborated` while this was in review. It never
+	// shipped, so the old spelling is not a mode: it fails closed like any
+	// other unrecognised value rather than keeping its old meaning.
+	oldName := "corroborated"
+	assert.Equal(t, "off", (&Options{EmitPrefixVlan: &oldName}).PrefixVlanMode(),
+		"the pre-review spelling must not still enable the feature")
 	nonsense := "nonsense"
 	assert.Equal(t, "off", (&Options{EmitPrefixVlan: &nonsense}).PrefixVlanMode(),
 		"an unrecognised value must fail closed, never guess")

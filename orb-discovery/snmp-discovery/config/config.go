@@ -530,7 +530,7 @@ type Options struct {
 	InterfaceNameSource *string `yaml:"interface_name_source,omitempty"`
 
 	// Associates a derived prefix with the VLAN of the SVI-style interface
-	// its address lives on. "off" (default) or "corroborated", which emits
+	// its address lives on. "off" (default) or "svi-name", which emits
 	// only when the parsed VLAN exists in the device's own VLAN database.
 	//
 	// Off by default because the association cannot be retracted: the
@@ -568,8 +568,8 @@ func (o *Options) PrefixVlanMode() string {
 		return "off"
 	}
 	switch strings.ToLower(strings.TrimSpace(*o.EmitPrefixVlan)) {
-	case "corroborated":
-		return "corroborated"
+	case "svi-name":
+		return "svi-name"
 	default:
 		return "off"
 	}

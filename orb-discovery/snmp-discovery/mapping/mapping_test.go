@@ -2275,14 +2275,14 @@ func TestVtpWalkGating(t *testing.T) {
 	assert.Contains(t, vendorOff, vmMembershipOID,
 		"the unrelated Cisco access-VLAN overlay must still be walked")
 
-	corroborated := "corroborated"
+	sviName := "svi-name"
 	on, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil,
-		config.Options{EmitPrefixVlan: &corroborated})
+		config.Options{EmitPrefixVlan: &sviName})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
 	assert.Contains(t, on.VendorObjectIDs("cisco"), vtpNameOID,
-		"the VTP VLAN name column must be walked with emit_prefix_vlan corroborated")
+		"the VTP VLAN name column must be walked with emit_prefix_vlan svi-name")
 }
 
 // TestMapObjectIDsToEntity_VLANIndexCollision is a regression test for the
