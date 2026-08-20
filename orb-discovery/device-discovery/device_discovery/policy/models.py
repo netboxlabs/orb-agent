@@ -317,10 +317,16 @@ class Options(BaseModel):
         a typo disables the feature instead of writing a guess into NetBox.
 
         YAML 1.1 reads a bare ``off`` as the boolean False and ``on``/``yes``
-        as True, so both arrive here as booleans. Neither may raise: the Go
-        twin's decoder hands it the *string* and resolves anything
-        unrecognized to 'off', so erroring on one of these would make a single
-        policy text valid for one backend and fatal for the other.
+        as True, so both arrive here as booleans. Neither may raise, and nor
+        may any other scalar: the Go twin decodes into a string field, and
+        gopkg.in/yaml.v3 coerces an int or float scalar into it, so
+        ``emit_prefix_vlan: 1`` resolves to 'off' there. Erroring on it here
+        would make one policy text valid for one backend and fatal for the
+        other.
+
+        A sequence or mapping is different: yaml.v3 refuses to decode either
+        into a string, so the policy is rejected on both sides and this raises
+        to match.
         """
         if v is None:
             return "off"
@@ -331,6 +337,15 @@ class Options(BaseModel):
                     "bare on/yes/true that way. It names no mode, so the "
                     "feature stays off; quote 'corroborated' to enable it."
                 )
+            return "off"
+        if isinstance(v, (int, float)):
+            # bool is handled above; this is an int or float scalar, which the
+            # Go twin's decoder coerces into its string field and then resolves
+            # to 'off'. Match it rather than reject a policy it accepts.
+            logger.warning(
+                "emit_prefix_vlan %r is not a mode name; the feature stays off. "
+                "Quote 'corroborated' to enable it.", v
+            )
             return "off"
         if not isinstance(v, str):
             raise ValueError(

@@ -124,7 +124,7 @@ Current supported options:
 | propagate_defaults_to_prefix_scope | bool | When `True` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to `Prefix.scope_site` (the literal placeholder `"undefined"` is skipped) and `defaults.location` cascades to `Prefix.scope_location`. Defaults to `False`. Setting any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale. |
 | discover_vrfs | bool | When `True`, discovers VRFs from the device via the driver's `get_network_instances()` and attaches each VRF to the IP addresses and prefixes of its member interfaces. A discovered VRF takes precedence over the `defaults.*.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for those interfaces; interfaces in the default routing table keep the configured defaults. Defaults to `False`. Only drivers that implement `get_network_instances()` populate VRF data — see the [supported platforms page](./supported_platforms.md#vrfs). See [VRFs](#vrfs) for filtering rules and route-distinguisher handling. |
 | emit_host_prefixes | bool | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. Defaults to `False`: a host prefix only restates the address, which is already emitted as an `IPAddress` entity, so no prefix is derived for them. Set `True` to restore them, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefix](#prefix). |
-| emit_prefix_vlan | str | Associate a derived `Prefix` with the VLAN of the SVI-style interface the contributing address lives on. One of `off` (default) or `corroborated`. Any other value, including a bare `on` or `true`, resolves to `off` with a warning rather than erroring. See [Prefix](#prefix). |
+| emit_prefix_vlan | str | Associate a derived `Prefix` with the VLAN of the SVI-style interface the contributing address lives on. One of `off` (default) or `corroborated`. Any other scalar, including a bare `on` or `true`, resolves to `off` with a warning rather than erroring; a list or mapping is a policy error, as it is for snmp-discovery. See [Prefix](#prefix). |
 | emit_device_name | bool | Emit `Device.name` from the hostname the driver reported. Defaults to `True`. Set `False` to suppress the name on the matched device so continual discovery stops proposing a hostname rename when the discovered hostname differs from the NetBox name. **Only takes effect when the device is matchable another way** — a scope `netbox_id`, or `defaults.device.asset_tag`; otherwise the name is kept and a warning is logged, because `name` is a primary NetBox device matcher and dropping it unguarded would emit a device NetBox cannot resolve. Matching by `serial` alone does **not** qualify (`Device.serial` is not unique in NetBox). On a virtual-chassis stack only the master's name is suppressed; member names come from `stack_member_name_template`. Mirrors the snmp-discovery option of the same name. |
 
 #### Defaults
@@ -503,9 +503,10 @@ Prefix scope is a `oneof` — a Prefix carries one of `scope_site` or `scope_loc
 **VLAN association (`emit_prefix_vlan`).** When set to `corroborated`, a derived prefix
 carries the VLAN of the SVI-style interface the contributing address lives on, so an
 address on `Vlan10` associates its prefix with VLAN 10. Defaults to `off`. Any
-unrecognized value, including a bare `on` or `true`, resolves to `off` with a warning
+unrecognized scalar, including a bare `on` or `true`, resolves to `off` with a warning
 rather than erroring, so a typo disables the feature instead of writing a guess into
-NetBox.
+NetBox. A list or mapping is rejected, matching what the snmp-discovery decoder does
+with one.
 
 **Which interface names qualify.** Case-insensitively: an optional leading `interface`
 *followed by a separator*, one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`,

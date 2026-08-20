@@ -1202,3 +1202,48 @@ def test_prefix_vlan_kept_when_vrfs_are_genuinely_different_records():
     _reconcile_prefix_vlans(entities)
 
     assert entities[0].prefix.vlan.vid == 10, "a separate VRF record must not reconcile"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("corroborated", "corroborated"),
+        ("Corroborated ", "corroborated"),
+        ("off", "off"),
+        (False, "off"),      # YAML 1.1 reads a bare `off` as this
+        (True, "off"),       # and a bare `on` / `yes` as this
+        (None, "off"),
+        ("typo", "off"),
+        (1, "off"),          # yaml.v3 coerces an int scalar into the Go string field
+        (1.5, "off"),
+    ],
+)
+def test_emit_prefix_vlan_scalars_never_reject_a_policy(value, expected):
+    """
+    Every scalar resolves to a mode, matching what the snmp-discovery twin does.
+
+    The Go option is a *string field decoded by gopkg.in/yaml.v3, which coerces
+    an int or float scalar into it and then resolves anything unrecognized to
+    'off'. Raising here for those would make one policy text valid for
+    snmp-discovery and fatal for device-discovery.
+    """
+    from device_discovery.policy.models import Config
+
+    assert Config(options={"emit_prefix_vlan": value}).options.emit_prefix_vlan == expected
+
+
+@pytest.mark.parametrize("value", [["corroborated"], {"mode": "corroborated"}])
+def test_emit_prefix_vlan_collections_are_a_policy_error(value):
+    """
+    A sequence or mapping is rejected, which is also what the Go decoder does.
+
+    yaml.v3 refuses to decode either into a string field, so the policy fails on
+    the snmp side too. Accepting it here would be the same cross-backend
+    divergence in the other direction.
+    """
+    from pydantic import ValidationError
+
+    from device_discovery.policy.models import Config
+
+    with pytest.raises(ValidationError):
+        Config(options={"emit_prefix_vlan": value})
