@@ -14,6 +14,7 @@ from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
 from device_discovery.interface_types import VALID_INTERFACE_TYPES
 from device_discovery.policy.models import Defaults, Options
 from device_discovery.proto_presence import blank_to_none
+from device_discovery.stubs import vrf_match_key
 from device_discovery.svi_vlan import svi_vlan_id
 
 logger = logging.getLogger(__name__)
@@ -678,12 +679,19 @@ def _reconcile_prefix_vlans(entities: list[Entity]) -> None:
     and the option defaults to off), so this never logs or mutates unless
     ``emit_prefix_vlan`` actually put a candidate on at least one entity.
     """
-    groups: dict[tuple[str, bytes], list[pb.Prefix]] = {}
+    # Group by what Diode will resolve these to, which is the prefix plus the
+    # VRF's matcher identity. Serializing the whole VRF message splits two
+    # contributors that differ only in a non-matcher field, such as one
+    # interface carrying a discovered VRF while another falls back to
+    # defaults.prefix.vrf under the same name: each group would then be
+    # unanimous by itself, the SVI candidate would survive an abstention it
+    # should have lost to, and Diode would still resolve both to one Prefix.
+    groups: dict[tuple[str, tuple[str, str]], list[pb.Prefix]] = {}
     for entity in entities:
         if not entity.HasField("prefix"):
             continue
         prefix = entity.prefix
-        key = (prefix.prefix, prefix.vrf.SerializeToString())
+        key = (prefix.prefix, vrf_match_key(prefix.vrf))
         groups.setdefault(key, []).append(prefix)
 
     for (prefix_str, _vrf_key), prefixes in groups.items():

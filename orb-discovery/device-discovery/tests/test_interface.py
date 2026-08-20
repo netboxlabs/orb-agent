@@ -1158,3 +1158,47 @@ def test_translate_interface_physical_still_typed_from_its_name(
             device, if_name, {"is_enabled": True, "speed": 1000}, sample_defaults
         )
         assert interface.type == expected, if_name
+
+
+def test_prefix_vlan_withheld_when_vrfs_differ_only_outside_the_matcher():
+    """
+    Contributors whose VRFs resolve to one NetBox record are reconciled together.
+
+    The ipam.vrf matchers key on name and rd, so two VRF messages differing only
+    in a description denote the same record. Grouping on the serialized message
+    put them in separate groups, each unanimous by itself, and the SVI kept a
+    VLAN the abstaining contributor should have taken from it, while Diode still
+    resolved both prefixes to one object.
+    """
+    from netboxlabs.diode.sdk.ingester import VRF, Entity, Prefix
+
+    from device_discovery.interface import _reconcile_prefix_vlans
+
+    # A discovered VRF carries a description; the other contributor fell back to
+    # defaults.prefix.vrf under the same name.
+    svi = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST", description="from device"))
+    svi.vlan.CopyFrom(VLAN(vid=10, name="office"))
+    routed = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST"))
+
+    entities = [Entity(prefix=svi), Entity(prefix=routed)]
+    _reconcile_prefix_vlans(entities)
+
+    assert not entities[0].prefix.HasField("vlan"), (
+        "an abstaining contributor to the same NetBox prefix must strip the VLAN"
+    )
+
+
+def test_prefix_vlan_kept_when_vrfs_are_genuinely_different_records():
+    """A different rd is a different NetBox VRF, so those prefixes do not reconcile."""
+    from netboxlabs.diode.sdk.ingester import VRF, Entity, Prefix
+
+    from device_discovery.interface import _reconcile_prefix_vlans
+
+    svi = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST", rd="65000:1"))
+    svi.vlan.CopyFrom(VLAN(vid=10, name="office"))
+    other = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST", rd="65000:2"))
+
+    entities = [Entity(prefix=svi), Entity(prefix=other)]
+    _reconcile_prefix_vlans(entities)
+
+    assert entities[0].prefix.vlan.vid == 10, "a separate VRF record must not reconcile"

@@ -19,6 +19,18 @@ from device_discovery.proto_presence import copy_scalar_if_set
 logger = logging.getLogger(__name__)
 
 
+def vrf_match_key(vrf: pb.VRF) -> tuple[str, str]:
+    """
+    Return the (name, rd) identity the ipam.vrf matchers key on.
+
+    The same identity _vrf_match_stub puts on the wire, as a comparable value.
+    Anything that asks "do these two messages denote one NetBox VRF" has to use
+    this rather than the serialized message: two VRFs can carry different
+    descriptions or tags and still resolve to the same record.
+    """
+    return (vrf.name, vrf.rd if vrf.rd else "")
+
+
 def _vrf_match_stub(vrf: pb.VRF) -> pb.VRF:
     """
     Return a VRF carrying only matcher identifiers (name, rd).
