@@ -93,11 +93,14 @@ orb:
 | `url` | string | Yes | Git repository URL |
 | `branch` | string | No | Branch to use (default: repository default branch) |
 | `schedule` | cron | No | How often to poll for changes. If omitted, policies are fetched once at startup |
-| `auth` | string | No | `basic` (password or token) or `ssh`. Omit for public repositories |
+| `auth` | string | No | `basic` (password or token), `ssh`, or `github_app`. Omit for public repositories |
 | `username` | string | No | Username for basic auth |
 | `password` | string | No | Password or token for basic auth; passphrase for SSH keys |
 | `private_key` | string | No | Path to SSH private key file |
 | `skip_tls` | bool | No | Skip TLS certificate verification (default: `false`) |
+| `github_app.client_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
+| `github_app.installation_id` | string | With `github_app` | Numeric id of the app's installation on the repo owner |
+| `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the PEM content itself |
 
 ---
 

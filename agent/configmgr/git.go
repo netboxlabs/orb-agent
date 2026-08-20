@@ -39,7 +39,38 @@ type gitConfigManager struct {
 	version          int32
 	matchPolicyPaths []string
 	namespace        uuid.UUID
-	tempDir          string // non-empty when using system git fallback (Azure DevOps)
+	tempDir          string         // non-empty when using system git fallback (Azure DevOps)
+	githubApp        *githubAppAuth // non-nil when auth is github_app; also stored in authMethod
+}
+
+// GitAuthMode is the authentication method the Git ConfigManager uses against
+// the policy repository, taken verbatim from config_manager.sources.git.auth.
+type GitAuthMode string
+
+// Supported values of GitAuthMode. Anything else is a typo and is rejected at
+// startup rather than silently falling back to unauthenticated access.
+const (
+	// GitAuthNone is the zero value: no auth, for public repositories.
+	GitAuthNone GitAuthMode = ""
+	// GitAuthBasic is HTTPS with a username and a password or token.
+	GitAuthBasic GitAuthMode = "basic"
+	// GitAuthSSH is an SSH private key, or the SSH agent when no key is set.
+	GitAuthSSH GitAuthMode = "ssh"
+	// GitAuthGitHubApp mints short-lived GitHub App installation tokens.
+	GitAuthGitHubApp GitAuthMode = "github_app"
+)
+
+// annotateAuthError attaches the last GitHub App token failure to a go-git
+// error. When SetAuth cannot mint, go-git only ever reports
+// transport.ErrAuthenticationRequired, which does not say why.
+func (gc *gitConfigManager) annotateAuthError(err error) error {
+	if err == nil || gc.githubApp == nil {
+		return err
+	}
+	if mintErr := gc.githubApp.lastError(); mintErr != nil {
+		return fmt.Errorf("%w (github_app token refresh also failed: %v)", err, mintErr)
+	}
+	return err
 }
 
 type (
@@ -231,7 +262,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 			RefSpecs:        []gitconfig.RefSpec{"refs/heads/*:refs/heads/*"},
 		})
 		if err != nil && err != gitv5.NoErrAlreadyUpToDate {
-			gc.logger.Error("Failed to fetch latest changes", "error", err)
+			gc.logger.Error("Failed to fetch latest changes", "error", gc.annotateAuthError(err))
 			return
 		}
 	}
@@ -348,7 +379,7 @@ func (gc *gitConfigManager) schedule(cfg config.Config, backends map[string]back
 	}
 }
 
-func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends map[string]backend.Backend) error {
+func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backends map[string]backend.Backend) error {
 	var err error
 	var startOK bool
 	gc.version = 1
@@ -362,8 +393,9 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 		return err
 	}
 
-	switch gc.config.Auth {
-	case "basic":
+	switch GitAuthMode(gc.config.Auth) {
+	case GitAuthNone:
+	case GitAuthBasic:
 		if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 			return err
 		}
@@ -371,7 +403,7 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 			Username: gc.config.Username,
 			Password: gc.config.Password,
 		}
-	case "ssh":
+	case GitAuthSSH:
 		if gc.config.PrivateKey != "" {
 			if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 				return err
@@ -380,6 +412,25 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 		} else {
 			gc.authMethod, err = ssh.NewSSHAgentAuth("git")
 		}
+	case GitAuthGitHubApp:
+		if err = requireGitHubHTTPSURL(gc.config.URL); err != nil {
+			return err
+		}
+		if gc.githubApp, err = newGitHubAppAuth(gc.logger, gc.config.GitHubApp, gc.config.SkipTLS); err != nil {
+			return err
+		}
+		// Mint once now so a bad key, app id or installation id fails startup with
+		// a specific error, the same way basic and ssh fail fast. SetAuth returns
+		// no error, so this is the only place those problems can be surfaced.
+		if _, err = gc.githubApp.token(ctx); err != nil {
+			return err
+		}
+		gc.authMethod = gc.githubApp
+	default:
+		return fmt.Errorf(
+			"unsupported git auth mode %q; expected basic, ssh, github_app, or empty",
+			gc.config.Auth,
+		)
 	}
 
 	if err != nil {
@@ -435,7 +486,7 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 			Auth:            gc.authMethod,
 			InsecureSkipTLS: gc.config.SkipTLS,
 		}); err != nil && err != gitv5.NoErrAlreadyUpToDate {
-			return err
+			return gc.annotateAuthError(err)
 		}
 
 		// Get the remote reference list
@@ -446,7 +497,7 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 
 		refs, err := remote.List(&gitv5.ListOptions{Auth: gc.authMethod, InsecureSkipTLS: gc.config.SkipTLS})
 		if err != nil {
-			return err
+			return gc.annotateAuthError(err)
 		}
 
 		// Find the default branch
@@ -476,7 +527,7 @@ func (gc *gitConfigManager) Start(_ context.Context, cfg config.Config, backends
 			InsecureSkipTLS: gc.config.SkipTLS,
 		})
 		if err != nil {
-			return err
+			return gc.annotateAuthError(err)
 		}
 	}
 
