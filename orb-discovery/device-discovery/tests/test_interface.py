@@ -2,7 +2,10 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Interface Unit Tests."""
 
+import datetime
+
 import pytest
+from netboxlabs.diode.sdk.ingester import VLAN
 
 from device_discovery.interface import (
     build_interface_entities,
@@ -15,6 +18,7 @@ from device_discovery.policy.models import (
     InterfacePattern,
     IpamParameters,
     ObjectParameters,
+    Options,
     PrefixParameters,
     VlanParameters,
 )
@@ -995,3 +999,318 @@ def test_builtin_patterns_only_emit_valid_netbox_types():
 
     for p in DEFAULT_INTERFACE_PATTERNS:
         assert p.type in VALID_INTERFACE_TYPES, f"pattern {p.match!r} -> {p.type!r} invalid"
+
+
+# Unit Tests for emit_prefix_vlan (SVI VLAN attachment on derived prefixes)
+
+
+def _named_vlan(vid, name):
+    """Build a pb.VLAN with both fields set, mirroring _build_vlan_cache's output."""
+    return VLAN(vid=vid, name=name)
+
+
+def _prefixes(entities):
+    return [e.prefix for e in entities if e.HasField("prefix")]
+
+
+TWO_SVIS = {
+    "Vlan10": {"is_up": True, "is_enabled": True, "mtu": 1500, "speed": 1000},
+    "Vlan20": {"is_up": True, "is_enabled": True, "mtu": 1500, "speed": 1000},
+}
+TWO_SVIS_IP = {
+    "Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}},
+    "Vlan20": {"ipv4": {"10.0.0.2": {"prefix_length": 24}}},
+}
+
+
+def test_prefix_vlan_attaches_when_unanimous():
+    """A prefix derived from a single agreed-upon VLAN carries that VLAN."""
+    # Both addresses reach 10.0.0.0/24 through VLAN 10, so nothing is contested.
+    ents = build_interface_entities(
+        device="sw1",
+        interfaces={"Vlan10": TWO_SVIS["Vlan10"]},
+        interfaces_ip={
+            "Vlan10": {
+                "ipv4": {
+                    "10.0.0.1": {"prefix_length": 24},
+                    "10.0.0.2": {"prefix_length": 24},
+                }
+            }
+        },
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={10: _named_vlan(10, "office")},
+    )
+    got = [p for p in _prefixes(ents) if p.prefix == "10.0.0.0/24"]
+    assert got, "a prefix must still be derived"
+    assert all(p.vlan.vid == 10 for p in got)
+
+
+def test_prefix_vlan_withheld_when_contested():
+    """A prefix reached through two disagreeing VLANs carries neither."""
+    # One network reached through two different VLANs. Emitting both would put
+    # conflicting values on one object and fail the whole changeset.
+    ents = build_interface_entities(
+        device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={10: _named_vlan(10, "office"), 20: _named_vlan(20, "voice")},
+    )
+    for p in _prefixes(ents):
+        if p.prefix == "10.0.0.0/24":
+            assert not p.HasField("vlan"), "a contested VLAN must not be written"
+
+
+def test_prefix_vlan_withheld_when_partially_resolved():
+    """A prefix with one unresolved contributor carries no VLAN."""
+    # VLAN 20 is absent from the device database, so one contributor resolves
+    # and the other does not. Silence beats a half-attributed prefix.
+    ents = build_interface_entities(
+        device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={10: _named_vlan(10, "office")},
+    )
+    for p in _prefixes(ents):
+        if p.prefix == "10.0.0.0/24":
+            assert not p.HasField("vlan")
+
+
+def test_prefix_vlan_off_by_default():
+    """With emit_prefix_vlan left at its default, no prefix carries a VLAN."""
+    ents = build_interface_entities(
+        device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
+        defaults=Defaults(site="dc1"), options=Options(),
+        vlan_cache={10: _named_vlan(10, "office")},
+    )
+    assert all(not p.HasField("vlan") for p in _prefixes(ents))
+
+
+def test_prefix_vlan_skips_stub_named_vlan():
+    """A nameless VLAN cache entry is never used as a prefix's VLAN candidate."""
+    # A VLAN with no name is a stub; referencing it would rename the
+    # operator's VLAN, because a matched reference is applied as an update.
+    ents = build_interface_entities(
+        device="sw1",
+        interfaces={"Vlan10": TWO_SVIS["Vlan10"]},
+        interfaces_ip={"Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}}},
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={10: _named_vlan(10, "")},
+    )
+    assert all(not p.HasField("vlan") for p in _prefixes(ents))
+
+
+@pytest.mark.parametrize(
+    "if_name",
+    [
+        "BDI100",
+        "Bdi100",
+        "BVI10",
+        "Vlanif100",
+        "vlanif100",
+        "Vlan-interface100",
+        "nve1",
+        "Nve1",
+        "Vxlan1",
+        "Virtual-Template1",
+        "Virtual-Access2",
+        "Dialer1",
+        "Null0",
+        "tunnel-ip1",
+        "tunnel-te200",
+        "tunnel-mte5",
+    ],
+)
+def test_translate_interface_software_interface_is_virtual_despite_speed(
+    if_name, sample_device_info, sample_defaults
+):
+    """
+    A software-implemented interface is virtual even when the device reports a speed.
+
+    Speed-based detection sits below the built-in patterns, so a missing pattern
+    silently turns one of these into an Ethernet type: a BDI reporting 1000 Mbps
+    was emitted as 1000base-t, which is what netboxlabs/orb-agent#522 reported.
+    Each name is passed with a speed to keep that ordering pinned.
+    """
+    device = translate_device(sample_device_info, sample_defaults)
+
+    interface = translate_interface(
+        device,
+        if_name,
+        {"is_enabled": True, "speed": 1000},
+        sample_defaults,
+    )
+
+    assert interface.type == "virtual", f"{if_name} must not be typed from its speed"
+
+
+def test_translate_interface_physical_still_typed_from_its_name(
+    sample_device_info, sample_defaults
+):
+    """The added virtual patterns must not capture physical interfaces."""
+    device = translate_device(sample_device_info, sample_defaults)
+
+    for if_name, expected in (
+        ("GigabitEthernet0/1", "1000base-t"),
+        ("TenGigabitEthernet1/0/1", "10gbase-x-sfpp"),
+        ("Port-channel1", "lag"),
+    ):
+        interface = translate_interface(
+            device, if_name, {"is_enabled": True, "speed": 1000}, sample_defaults
+        )
+        assert interface.type == expected, if_name
+
+
+def test_prefix_vlan_withheld_when_vrfs_differ_only_outside_the_matcher():
+    """
+    Contributors whose VRFs resolve to one NetBox record are reconciled together.
+
+    The ipam.vrf matchers key on name and rd, so two VRF messages differing only
+    in a description denote the same record. Grouping on the serialized message
+    put them in separate groups, each unanimous by itself, and the SVI kept a
+    VLAN the abstaining contributor should have taken from it, while Diode still
+    resolved both prefixes to one object.
+    """
+    from netboxlabs.diode.sdk.ingester import VRF, Entity, Prefix
+
+    from device_discovery.interface import _reconcile_prefix_vlans
+
+    # A discovered VRF carries a description; the other contributor fell back to
+    # defaults.prefix.vrf under the same name.
+    svi = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST", description="from device"))
+    svi.vlan.CopyFrom(VLAN(vid=10, name="office"))
+    routed = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST"))
+
+    entities = [Entity(prefix=svi), Entity(prefix=routed)]
+    _reconcile_prefix_vlans(entities)
+
+    assert not entities[0].prefix.HasField("vlan"), (
+        "an abstaining contributor to the same NetBox prefix must strip the VLAN"
+    )
+
+
+def test_prefix_vlan_kept_when_vrfs_are_genuinely_different_records():
+    """A different rd is a different NetBox VRF, so those prefixes do not reconcile."""
+    from netboxlabs.diode.sdk.ingester import VRF, Entity, Prefix
+
+    from device_discovery.interface import _reconcile_prefix_vlans
+
+    svi = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST", rd="65000:1"))
+    svi.vlan.CopyFrom(VLAN(vid=10, name="office"))
+    other = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUST", rd="65000:2"))
+
+    entities = [Entity(prefix=svi), Entity(prefix=other)]
+    _reconcile_prefix_vlans(entities)
+
+    assert entities[0].prefix.vlan.vid == 10, "a separate VRF record must not reconcile"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("svi-name", "svi-name"),
+        ("SVI-Name ", "svi-name"),          # case and whitespace normalised
+        ("off", "off"),
+        (False, "off"),      # YAML 1.1 reads a bare `off` as this
+        (True, "off"),       # and a bare `on` / `yes` as this
+        (None, "off"),
+        ("typo", "off"),
+        (1, "off"),          # yaml.v3 coerces an int scalar into the Go string field
+        (1.5, "off"),
+        # A YAML timestamp. safe_load produces date / datetime; the Go decoder
+        # hands its string field the raw text, and resolves it to off.
+        (datetime.date(2026, 8, 20), "off"),
+        (datetime.datetime(2026, 8, 20, 10, 0, tzinfo=datetime.timezone.utc), "off"),
+        # A !!binary scalar. yaml.v3 gives the Go string field the decoded
+        # bytes, so its text is what decides the mode there too.
+        (b"svi-name", "svi-name"),
+        (b"nonsense", "off"),
+        (b"\xff\xfe", "off"),   # not decodable text at all
+    ],
+)
+def test_emit_prefix_vlan_scalars_never_reject_a_policy(value, expected):
+    """
+    Every scalar resolves to a mode, matching what the snmp-discovery twin does.
+
+    The Go option is a *string field decoded by gopkg.in/yaml.v3, which coerces
+    an int or float scalar into it and then resolves anything unrecognized to
+    'off'. Raising here for those would make one policy text valid for
+    snmp-discovery and fatal for device-discovery.
+    """
+    from device_discovery.policy.models import Config
+
+    assert Config(options={"emit_prefix_vlan": value}).options.emit_prefix_vlan == expected
+
+
+@pytest.mark.parametrize("value", [["svi-name"], {"mode": "svi-name"}])
+def test_emit_prefix_vlan_collections_are_a_policy_error(value):
+    """
+    A sequence or mapping is rejected, which is also what the Go decoder does.
+
+    yaml.v3 refuses to decode either into a string field, so the policy fails on
+    the snmp side too. Accepting it here would be the same cross-backend
+    divergence in the other direction.
+    """
+    from pydantic import ValidationError
+
+    from device_discovery.policy.models import Config
+
+    with pytest.raises(ValidationError):
+        Config(options={"emit_prefix_vlan": value})
+
+
+def test_prefix_vlan_reconciles_vrfs_with_one_rd_and_different_names():
+    """
+    An rd-bearing VRF is resolved by its rd alone, so the names may differ.
+
+    The plugin's two name matchers for ipam.vrf are conditional on rd being
+    NULL; unique_rd handles the rest. Two VRFs carrying one rd under different
+    names are therefore the same record, and keying on the pair treated them as
+    two: each group was unanimous by itself and the SVI kept a VLAN the
+    abstaining contributor should have taken from it.
+    """
+    from netboxlabs.diode.sdk.ingester import VRF, Entity, Prefix
+
+    from device_discovery.interface import _reconcile_prefix_vlans
+
+    svi = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUSTOMER-OLD", rd="65000:100"))
+    svi.vlan.CopyFrom(VLAN(vid=10, name="office"))
+    routed = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUSTOMER-NEW", rd="65000:100"))
+
+    entities = [Entity(prefix=svi), Entity(prefix=routed)]
+    _reconcile_prefix_vlans(entities)
+
+    assert not entities[0].prefix.HasField("vlan"), (
+        "one rd is one VRF, whatever the names say"
+    )
+
+
+@pytest.mark.parametrize(
+    "if_name",
+    [
+        "vlan100", "VLAN100", "vlan 100", "VLAN ID 100",
+        "Vl100", "vl100", "svi100", "SVI100", "Interface vlan100",
+    ],
+)
+def test_svi_named_interface_is_virtual_by_the_same_predicate(
+    if_name, sample_device_info, sample_defaults
+):
+    """
+    Any name the prefix-VLAN resolver accepts is typed virtual.
+
+    These nine spellings were trusted enough to associate a VLAN with a prefix
+    while still being typed from their reported speed, because the accepted SVI
+    spellings were listed twice: once in the resolver and once in the built-in
+    type patterns. Typing now reuses the resolver, so the two cannot disagree.
+    """
+    from device_discovery.svi_vlan import svi_vlan_id
+
+    assert svi_vlan_id(if_name) is not None, "fixture must be a name the resolver accepts"
+
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device, if_name, {"is_enabled": True, "speed": 1000}, sample_defaults
+    )
+
+    assert interface.type == "virtual", f"{if_name} must not be typed from its speed"

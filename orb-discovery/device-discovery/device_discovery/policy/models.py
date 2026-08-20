@@ -296,6 +296,80 @@ class Options(BaseModel):
             "Default False preserves the no-cascade behavior."
         ),
     )
+    emit_prefix_vlan: Literal["off", "svi-name"] = Field(
+        default="off",
+        description=(
+            "Associate a derived prefix with the VLAN of the SVI-style "
+            "interface its address lives on. 'off' or 'svi-name'. Off by "
+            "default because the association cannot be retracted once sent. "
+            "The value is trimmed and lowercased; an unrecognized value "
+            "resolves to 'off' rather than erroring."
+        ),
+    )
+
+    @field_validator("emit_prefix_vlan", mode="before")
+    @classmethod
+    def _normalize_emit_prefix_vlan(cls, v: object) -> str:
+        """
+        Normalize the mode string the way the snmp-discovery twin does.
+
+        Trim, lowercase, then fall back to 'off' for anything unrecognized so
+        a typo disables the feature instead of writing a guess into NetBox.
+
+        YAML 1.1 reads a bare ``off`` as the boolean False and ``on``/``yes``
+        as True, so both arrive here as booleans. Neither may raise, and nor
+        may any other scalar: the Go twin decodes into a string field, and
+        gopkg.in/yaml.v3 coerces an int or float scalar into it, so
+        ``emit_prefix_vlan: 1`` resolves to 'off' there. Erroring on it here
+        would make one policy text valid for one backend and fatal for the
+        other.
+
+        A sequence or mapping is different: yaml.v3 refuses to decode either
+        into a string, so the policy is rejected on both sides and this raises
+        to match.
+        """
+        if v is None:
+            return "off"
+        if isinstance(v, bool):
+            if v:
+                logger.warning(
+                    "emit_prefix_vlan was read as a boolean — YAML treats a "
+                    "bare on/yes/true that way. It names no mode, so the "
+                    "feature stays off; quote 'svi-name' to enable it."
+                )
+            return "off"
+        if isinstance(v, (list, tuple, set, dict)):
+            # yaml.v3 refuses to decode a sequence or mapping into the Go
+            # twin's string field, so the policy fails there too.
+            raise ValueError(
+                f"emit_prefix_vlan must be 'off' or 'svi-name', "
+                f"got {type(v).__name__}"
+            )
+        if isinstance(v, str):
+            text = v
+        elif isinstance(v, bytes):
+            # A !!binary scalar. yaml.v3 hands the decoded bytes to the string
+            # field, so the Go twin reads its text; do the same rather than
+            # diverge on it.
+            try:
+                text = v.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning("emit_prefix_vlan is not decodable text; using 'off'")
+                return "off"
+        else:
+            # Every remaining scalar: int, float, and the date / datetime a
+            # YAML timestamp produces. The Go decoder coerces each into its
+            # string field, so read the same text instead of rejecting a
+            # policy the other backend accepts.
+            text = str(v)
+        normalized = text.strip().lower()
+        if normalized == "svi-name":
+            return "svi-name"
+        if normalized not in ("off", ""):
+            logger.warning(
+                "unrecognized emit_prefix_vlan %r; using 'off'", v
+            )
+        return "off"
     discover_vrfs: bool = Field(
         default=False,
         description=(

@@ -2289,3 +2289,62 @@ def test_emit_host_prefixes_keeps_real_subnets_untouched(
     )
 
     assert sorted(prefixes) == ["10.0.0.1/32", "172.24.0.0/24"]
+
+
+def test_translate_data_emits_prefix_vlan_from_the_raw_vlan_database(sample_device_info):
+    """
+    The whole path: raw NAPALM VLAN data to a Prefix carrying that VLAN.
+
+    Every other test for this feature hands the interface builder a VLAN cache
+    that the test itself constructed, so the wiring from ``data["vlan"]`` through
+    the cache into the emitted Prefix was never exercised. Since the association
+    cannot be cleared by a later run, that wiring is worth pinning directly.
+    """
+    data = {
+        "device": sample_device_info,
+        "interface": {"Vlan120": {"is_up": True, "is_enabled": True, "speed": 1000}},
+        "interface_ip": {"Vlan120": {"ipv4": {"10.0.120.1": {"prefix_length": 24}}}},
+        "vlan": {"120": {"name": "Users"}},
+        "driver": "ios",
+        "defaults": Defaults(site="dc1"),
+        "options": Options(emit_prefix_vlan="svi-name"),
+    }
+
+    entities = list(translate_data(data))
+
+    prefixes = [
+        e.prefix for e in entities
+        if e.WhichOneof("entity") == "prefix" and e.prefix.prefix == "10.0.120.0/24"
+    ]
+    assert prefixes, "the derived prefix must be emitted"
+    assert all(p.vlan.vid == 120 for p in prefixes), (
+        "the VLAN must reach the prefix from the raw VLAN database"
+    )
+    assert all(p.vlan.name == "Users" for p in prefixes)
+
+    vlans = [e.vlan for e in entities if e.WhichOneof("entity") == "vlan"]
+    assert any(v.vid == 120 and v.name == "Users" for v in vlans), (
+        "the VLAN the prefix references must itself be emitted"
+    )
+
+    # The interface is an SVI, so it must not be typed from its reported speed.
+    ifaces = [e.interface for e in entities if e.WhichOneof("entity") == "interface"]
+    assert any(i.name == "Vlan120" and i.type == "virtual" for i in ifaces)
+
+
+def test_translate_data_withholds_prefix_vlan_when_the_option_is_off(sample_device_info):
+    """The same input emits no prefix VLAN with the option left at its default."""
+    data = {
+        "device": sample_device_info,
+        "interface": {"Vlan120": {"is_up": True, "is_enabled": True, "speed": 1000}},
+        "interface_ip": {"Vlan120": {"ipv4": {"10.0.120.1": {"prefix_length": 24}}}},
+        "vlan": {"120": {"name": "Users"}},
+        "driver": "ios",
+        "defaults": Defaults(site="dc1"),
+    }
+
+    entities = list(translate_data(data))
+
+    for e in entities:
+        if e.WhichOneof("entity") == "prefix":
+            assert not e.prefix.HasField("vlan")
