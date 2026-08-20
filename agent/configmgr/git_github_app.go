@@ -82,7 +82,7 @@ type githubAppAuth struct {
 	logger *slog.Logger
 
 	// Immutable after construction; read without the mutex.
-	appID          string
+	clientID       string
 	installationID string
 	privateKey     *rsa.PrivateKey
 	apiBase        string // overridden in tests
@@ -106,9 +106,9 @@ var _ githttp.AuthMethod = (*githubAppAuth)(nil)
 // newGitHubAppAuth validates the configuration and loads the private key. It
 // performs no network I/O; call token() to mint eagerly.
 func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS bool) (*githubAppAuth, error) {
-	appID, err := config.ResolveEnv(cfg.AppID)
+	clientID, err := config.ResolveEnv(cfg.ClientID)
 	if err != nil {
-		return nil, fmt.Errorf("github_app: app_id: %w", err)
+		return nil, fmt.Errorf("github_app: client_id: %w", err)
 	}
 	installationID, err := config.ResolveEnv(cfg.InstallationID)
 	if err != nil {
@@ -120,8 +120,8 @@ func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS boo
 	}
 
 	switch {
-	case appID == "":
-		return nil, errors.New("github_app: app_id is required when auth is github_app")
+	case clientID == "":
+		return nil, errors.New("github_app: client_id is required when auth is github_app")
 	case installationID == "":
 		return nil, errors.New("github_app: installation_id is required when auth is github_app")
 	case keyRef == "":
@@ -144,7 +144,7 @@ func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS boo
 
 	return &githubAppAuth{
 		logger:         logger,
-		appID:          appID,
+		clientID:       clientID,
 		installationID: installationID,
 		privateKey:     key,
 		apiBase:        githubAPIBase,
@@ -252,7 +252,7 @@ func (a *githubAppAuth) Name() string { return "http-github-app-auth" }
 // immutable fields and therefore takes no lock - a locking String() would
 // deadlock if go-git logged the auth method from inside a locked section.
 func (a *githubAppAuth) String() string {
-	return fmt.Sprintf("%s - app_id: %s, installation_id: %s", a.Name(), a.appID, a.installationID)
+	return fmt.Sprintf("%s - client_id: %s, installation_id: %s", a.Name(), a.clientID, a.installationID)
 }
 
 // appJWT signs the short-lived RS256 assertion that authenticates the app itself
@@ -270,7 +270,7 @@ func (a *githubAppAuth) appJWT() (string, error) {
 
 	now := a.now()
 	assertion, err := jwt.Signed(signer).Claims(jwt.Claims{
-		Issuer:   a.appID,
+		Issuer:   a.clientID,
 		IssuedAt: jwt.NewNumericDate(now.Add(-githubAppJWTBackdate)),
 		Expiry:   jwt.NewNumericDate(now.Add(githubAppJWTTTL)),
 	}).Serialize()
@@ -375,7 +375,7 @@ func (a *githubAppAuth) tokenStatusError(resp *http.Response, body []byte) error
 		// GitHub's Date header next to ours.
 		return fmt.Errorf("github_app: GitHub rejected the app JWT (HTTP 401: %s); check that app_id %q "+
 			"matches the private key, and check the host clock (GitHub time: %q, agent time: %q)",
-			detail, a.appID, resp.Header.Get("Date"), a.now().UTC().Format(http.TimeFormat))
+			detail, a.clientID, resp.Header.Get("Date"), a.now().UTC().Format(http.TimeFormat))
 	case http.StatusForbidden:
 		return fmt.Errorf("github_app: GitHub refused the token request (HTTP 403: %s); the app may be "+
 			"suspended, blocked by an org policy, or rate limited", detail)
@@ -399,7 +399,7 @@ func loadGitHubAppKey(ref string) (*rsa.PrivateKey, error) {
 	}
 	data, err := os.ReadFile(ref)
 	if err != nil {
-		return nil, fmt.Errorf("github_app: failed to read private_key %q: %w", ref, err)
+		return nil, fmt.Errorf("github_app: failed to read private_key: %w", err)
 	}
 	return parseGitHubAppKey(data, ref)
 }

@@ -25,11 +25,11 @@ type LocalManager struct {
 // ConfigManager. Only github.com is supported (including GitHub Enterprise
 // Cloud, which is served from github.com / api.github.com).
 type GitHubAppAuth struct {
-	// AppID is the JWT issuer. Prefer the app's Client ID (Iv23li...), which is
+	// ClientID is the JWT issuer. Prefer the app's Client ID (Iv23li...), which is
 	// what the GitHub API documentation now specifies; the numeric App ID from
 	// the app's settings page is still accepted, but is the legacy form and may
 	// be dropped in a future API version.
-	AppID string `yaml:"app_id"`
+	ClientID string `yaml:"client_id"`
 	// InstallationID identifies the installation of the app on the account that
 	// owns the repository. It is the numeric id in the URL of the installation's
 	// settings page - not the App ID.

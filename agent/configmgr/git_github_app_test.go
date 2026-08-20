@@ -83,7 +83,7 @@ func (c *fakeClock) Advance(d time.Duration) {
 func newTestGitHubApp(t *testing.T, apiBase string, clock *fakeClock) *githubAppAuth {
 	t.Helper()
 	auth, err := newGitHubAppAuth(testLogger(), config.GitHubAppAuth{
-		AppID:          "Iv23liTestClientID",
+		ClientID:       "Iv23liTestClientID",
 		InstallationID: "78901234",
 		PrivateKey:     string(pkcs1PEM(t, testAppKey())),
 	}, false)
@@ -499,39 +499,39 @@ func TestNewGitHubAppAuthValidation(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:    "missing app_id",
+			name:    "missing client_id",
 			cfg:     config.GitHubAppAuth{InstallationID: "78901234", PrivateKey: validKey},
-			wantErr: "app_id is required",
+			wantErr: "client_id is required",
 		},
 		{
 			name:    "missing installation_id",
-			cfg:     config.GitHubAppAuth{AppID: "Iv23li", PrivateKey: validKey},
+			cfg:     config.GitHubAppAuth{ClientID: "Iv23li", PrivateKey: validKey},
 			wantErr: "installation_id is required",
 		},
 		{
 			name:    "missing private_key",
-			cfg:     config.GitHubAppAuth{AppID: "Iv23li", InstallationID: "78901234"},
+			cfg:     config.GitHubAppAuth{ClientID: "Iv23li", InstallationID: "78901234"},
 			wantErr: "private_key is required",
 		},
 		{
 			name:    "non-numeric installation_id",
-			cfg:     config.GitHubAppAuth{AppID: "Iv23li", InstallationID: "Iv23li", PrivateKey: validKey},
+			cfg:     config.GitHubAppAuth{ClientID: "Iv23li", InstallationID: "Iv23li", PrivateKey: validKey},
 			wantErr: "is not numeric",
 		},
 		{
 			name:    "unresolvable env var",
-			cfg:     config.GitHubAppAuth{AppID: "${ORB_TEST_UNSET_APP_ID}", InstallationID: "1", PrivateKey: validKey},
-			wantErr: "github_app: app_id",
+			cfg:     config.GitHubAppAuth{ClientID: "${ORB_TEST_UNSET_CLIENT_ID}", InstallationID: "1", PrivateKey: validKey},
+			wantErr: "github_app: client_id",
 		},
 		{
 			name:    "bad key",
-			cfg:     config.GitHubAppAuth{AppID: "Iv23li", InstallationID: "78901234", PrivateKey: "/nonexistent.pem"},
+			cfg:     config.GitHubAppAuth{ClientID: "Iv23li", InstallationID: "78901234", PrivateKey: "/nonexistent.pem"},
 			wantErr: "failed to read private_key",
 		},
 		{
-			// A numeric App ID is still accepted; the client id is only preferred.
-			name: "numeric app_id is accepted",
-			cfg:  config.GitHubAppAuth{AppID: "123456", InstallationID: "78901234", PrivateKey: validKey},
+			// A numeric Client ID is still accepted; the client id is only preferred.
+			name: "numeric client_id is accepted",
+			cfg:  config.GitHubAppAuth{ClientID: "123456", InstallationID: "78901234", PrivateKey: validKey},
 		},
 	}
 
@@ -599,7 +599,7 @@ func TestGitStartGitHubAppValidation(t *testing.T) {
 				URL:  "file:///tmp/repo",
 				Auth: "github_app",
 				GitHubApp: config.GitHubAppAuth{
-					AppID: "Iv23li", InstallationID: "78901234", PrivateKey: validKey,
+					ClientID: "Iv23li", InstallationID: "78901234", PrivateKey: validKey,
 				},
 			},
 			wantErr: `scheme "file"`,
@@ -610,27 +610,27 @@ func TestGitStartGitHubAppValidation(t *testing.T) {
 				URL:  "git@github.com:org/repo.git",
 				Auth: "github_app",
 				GitHubApp: config.GitHubAppAuth{
-					AppID: "Iv23li", InstallationID: "78901234", PrivateKey: validKey,
+					ClientID: "Iv23li", InstallationID: "78901234", PrivateKey: validKey,
 				},
 			},
 			wantErr: "scp-style and ssh URLs",
 		},
 		{
-			name: "missing app_id",
+			name: "missing client_id",
 			git: config.GitManager{
 				URL:       "https://github.com/org/repo",
 				Auth:      "github_app",
 				GitHubApp: config.GitHubAppAuth{InstallationID: "78901234", PrivateKey: validKey},
 			},
-			wantErr: "app_id is required",
+			wantErr: "client_id is required",
 		},
 		{
-			name: "app id in installation_id",
+			name: "client id in installation_id",
 			git: config.GitManager{
 				URL:  "https://github.com/org/repo",
 				Auth: "github_app",
 				GitHubApp: config.GitHubAppAuth{
-					AppID: "Iv23li", InstallationID: "Iv23li", PrivateKey: validKey,
+					ClientID: "Iv23li", InstallationID: "Iv23li", PrivateKey: validKey,
 				},
 			},
 			wantErr: "is not numeric",
@@ -641,7 +641,7 @@ func TestGitStartGitHubAppValidation(t *testing.T) {
 				URL:  "https://github.com/org/repo",
 				Auth: "github_app",
 				GitHubApp: config.GitHubAppAuth{
-					AppID: "Iv23li", InstallationID: "78901234", PrivateKey: "/nonexistent.pem",
+					ClientID: "Iv23li", InstallationID: "78901234", PrivateKey: "/nonexistent.pem",
 				},
 			},
 			wantErr: "failed to read private_key",

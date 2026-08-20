@@ -137,7 +137,7 @@ func TestSensitiveData_GitHubApp(t *testing.T) {
 		URL:  "https://github.com/myorg/policyrepo",
 		Auth: "github_app",
 		GitHubApp: config.GitHubAppAuth{
-			AppID:          "Iv23liAbCdEfGhIjKlMn",
+			ClientID:       "Iv23liAbCdEfGhIjKlMn",
 			InstallationID: "78901234",
 			PrivateKey:     "-----BEGIN RSA PRIVATE KEY-----",
 		},

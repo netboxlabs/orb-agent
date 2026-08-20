@@ -43,6 +43,15 @@ type gitConfigManager struct {
 	githubApp        *githubAppAuth // non-nil when auth is github_app; also stored in authMethod
 }
 
+type GitAuthMode string
+
+const (
+	GitAuthNone      GitAuthMode = ""
+	GitAuthBasic     GitAuthMode = "basic"
+	GitAuthSSH       GitAuthMode = "ssh"
+	GitAuthGitHubApp GitAuthMode = "github_app"
+)
+
 // annotateAuthError attaches the last GitHub App token failure to a go-git
 // error. When SetAuth cannot mint, go-git only ever reports
 // transport.ErrAuthenticationRequired, which does not say why.
@@ -376,8 +385,10 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 		return err
 	}
 
-	switch gc.config.Auth {
-	case "basic":
+	// switch gc.config.Auth {
+	switch GitAuthMode(gc.config.Auth) {
+	case GitAuthNone:
+	case GitAuthBasic:
 		if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 			return err
 		}
@@ -385,7 +396,7 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 			Username: gc.config.Username,
 			Password: gc.config.Password,
 		}
-	case "ssh":
+	case GitAuthSSH:
 		if gc.config.PrivateKey != "" {
 			if gc.config.Password, err = config.ResolveEnv(gc.config.Password); err != nil {
 				return err
@@ -394,7 +405,7 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 		} else {
 			gc.authMethod, err = ssh.NewSSHAgentAuth("git")
 		}
-	case "github_app":
+	case GitAuthGitHubApp:
 		if err = requireGitHubHTTPSURL(gc.config.URL); err != nil {
 			return err
 		}
@@ -408,6 +419,11 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 			return err
 		}
 		gc.authMethod = gc.githubApp
+	default:
+		return fmt.Errorf(
+			"unsupported git auth mode %q; expected basic, ssh, github_app, or empty",
+			gc.config.Auth,
+		)
 	}
 
 	if err != nil {
