@@ -646,6 +646,17 @@ func TestGitStartGitHubAppValidation(t *testing.T) {
 			},
 			wantErr: "failed to read private_key",
 		},
+		{
+			name: "invalid www url",
+			git: config.GitManager{
+				URL:  "https://www.github.com/org/repo",
+				Auth: "github_app",
+				GitHubApp: config.GitHubAppAuth{
+					ClientID: "Iv23li", InstallationID: "78901234", PrivateKey: validKey,
+				},
+			},
+			wantErr: "must be github.com, not www.github.com",
+		},
 	}
 
 	for _, tt := range tests {

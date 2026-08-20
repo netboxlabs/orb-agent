@@ -470,9 +470,12 @@ func requireGitHubHTTPSURL(rawURL string) error {
 	if !strings.EqualFold(u.Scheme, "https") {
 		return fmt.Errorf("github_app: url uses scheme %q; github_app auth requires https", u.Scheme)
 	}
-	if host := strings.ToLower(u.Hostname()); host != "github.com" && host != "www.github.com" {
+	if host := strings.ToLower(u.Hostname()); host != "github.com" {
 		return fmt.Errorf("github_app: url host %q is not github.com; github_app auth supports github.com "+
 			"only (for GitHub Enterprise Server use auth: basic with a personal access token)", host)
+	}
+	if host := strings.ToLower(u.Hostname()); host == "www.github.com" {
+		return fmt.Errorf("github_app: url host must be github.com, not %q; credentials do not survive GitHub's www redirect", host)
 	}
 	return nil
 }
