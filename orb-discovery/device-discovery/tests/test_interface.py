@@ -2,6 +2,8 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Interface Unit Tests."""
 
+import datetime
+
 import pytest
 from netboxlabs.diode.sdk.ingester import VLAN
 
@@ -1216,6 +1218,15 @@ def test_prefix_vlan_kept_when_vrfs_are_genuinely_different_records():
         ("typo", "off"),
         (1, "off"),          # yaml.v3 coerces an int scalar into the Go string field
         (1.5, "off"),
+        # A YAML timestamp. safe_load produces date / datetime; the Go decoder
+        # hands its string field the raw text, and resolves it to off.
+        (datetime.date(2026, 8, 20), "off"),
+        (datetime.datetime(2026, 8, 20, 10, 0, tzinfo=datetime.timezone.utc), "off"),
+        # A !!binary scalar. yaml.v3 gives the Go string field the decoded
+        # bytes, so its text is what decides the mode there too.
+        (b"corroborated", "corroborated"),
+        (b"nonsense", "off"),
+        (b"\xff\xfe", "off"),   # not decodable text at all
     ],
 )
 def test_emit_prefix_vlan_scalars_never_reject_a_policy(value, expected):

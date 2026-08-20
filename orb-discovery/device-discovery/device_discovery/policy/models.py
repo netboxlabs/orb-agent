@@ -338,21 +338,31 @@ class Options(BaseModel):
                     "feature stays off; quote 'corroborated' to enable it."
                 )
             return "off"
-        if isinstance(v, (int, float)):
-            # bool is handled above; this is an int or float scalar, which the
-            # Go twin's decoder coerces into its string field and then resolves
-            # to 'off'. Match it rather than reject a policy it accepts.
-            logger.warning(
-                "emit_prefix_vlan %r is not a mode name; the feature stays off. "
-                "Quote 'corroborated' to enable it.", v
-            )
-            return "off"
-        if not isinstance(v, str):
+        if isinstance(v, (list, tuple, set, dict)):
+            # yaml.v3 refuses to decode a sequence or mapping into the Go
+            # twin's string field, so the policy fails there too.
             raise ValueError(
                 f"emit_prefix_vlan must be 'off' or 'corroborated', "
                 f"got {type(v).__name__}"
             )
-        normalized = v.strip().lower()
+        if isinstance(v, str):
+            text = v
+        elif isinstance(v, bytes):
+            # A !!binary scalar. yaml.v3 hands the decoded bytes to the string
+            # field, so the Go twin reads its text; do the same rather than
+            # diverge on it.
+            try:
+                text = v.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning("emit_prefix_vlan is not decodable text; using 'off'")
+                return "off"
+        else:
+            # Every remaining scalar: int, float, and the date / datetime a
+            # YAML timestamp produces. The Go decoder coerces each into its
+            # string field, so read the same text instead of rejecting a
+            # policy the other backend accepts.
+            text = str(v)
+        normalized = text.strip().lower()
         if normalized == "corroborated":
             return "corroborated"
         if normalized not in ("off", ""):
