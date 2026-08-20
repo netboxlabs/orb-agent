@@ -13,14 +13,24 @@ import (
 
 // OID prefixes for VlanMapper input.
 const (
-	oidDot1dBasePortIfIndex         = ".1.3.6.1.2.1.17.1.4.1.2."
-	oidDot1qPvid                    = ".1.3.6.1.2.1.17.7.1.4.5.1.1."
-	oidDot1qVlanStaticName          = ".1.3.6.1.2.1.17.7.1.4.3.1.1."
+	oidDot1dBasePortIfIndex = ".1.3.6.1.2.1.17.1.4.1.2."
+	oidDot1qPvid            = ".1.3.6.1.2.1.17.7.1.4.5.1.1."
+	oidDot1qVlanStaticName  = ".1.3.6.1.2.1.17.7.1.4.3.1.1."
+	// CISCO-VTP-MIB vtpVlanName. Cisco IOS and IOS-XE do not implement
+	// dot1qVlanStaticName in the default SNMP context, so this is the only
+	// place their VLAN database is readable. Indexed by
+	// (managementDomainIndex, vlanIndex), so the VID is the LAST element.
+	oidCiscoVtpVlanName             = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
 	oidDot1qVlanStaticEgressPorts   = ".1.3.6.1.2.1.17.7.1.4.3.1.2."
 	oidDot1qVlanStaticUntaggedPorts = ".1.3.6.1.2.1.17.7.1.4.3.1.4."
 	oidDot1qVlanStaticRowStatus     = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
 	oidIfAdminStatus                = ".1.3.6.1.2.1.2.2.1.7."
 	oidIfType                       = ".1.3.6.1.2.1.2.2.1.3."
+	// ifDescr / ifName, consulted by ResolveSviVlans (svi_vlan.go). Both are
+	// already walked for the interface-name resolver; SVI resolution reuses
+	// them rather than requiring a separate walk.
+	oidIfDescr = ".1.3.6.1.2.1.2.2.1.2."
+	oidIfName  = ".1.3.6.1.2.1.31.1.1.1.1."
 	// Cisco overlay
 	oidCiscoVMVlan        = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
 	oidCiscoVMVoiceVlanID = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
@@ -387,6 +397,140 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 	return rows
 }
 
+// vlanNameRow is one VLAN-name PDU: the OID it arrived on plus its raw
+// value. Collecting rows before resolving them is what keeps the outcome
+// independent of Go's map iteration order — see mergeVLANNames.
+type vlanNameRow struct {
+	oid   string
+	value string
+}
+
+// vlanNamesByVid returns the VLAN names the DEVICE reported, keyed by VID.
+// It is a pure read of the walked OIDs: it never stubs, and never invents
+// a name.
+//
+// A VID present with an empty name had a name row whose value was empty
+// (or NUL padding). Callers that require a device-supplied name must treat
+// that as no name at all; emitVLANs is the one caller that instead applies
+// its VLAN<vid> default.
+func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
+	var rows []vlanNameRow
+	for oid, v := range all {
+		if strings.HasPrefix(oid, oidDot1qVlanStaticName) ||
+			strings.HasPrefix(oid, oidCiscoVtpVlanName) {
+			rows = append(rows, vlanNameRow{oid: oid, value: v.Value})
+		}
+	}
+	return mergeVLANNames(rows)
+}
+
+// mergeVLANNames resolves one name per VID from the collected name rows.
+//
+// dot1qVlanStaticName is authoritative and the Cisco VTP catalog is the
+// fallback for the devices that do not populate it. Precedence is applied
+// once, after every row has been read, rather than as each row arrives:
+// resolving it in arrival order let an empty dot1q name erase a VTP name
+// (or not) depending on which OID the map yielded first, so the emitted
+// name flapped between polls and the VLAN was rewritten on every ingest.
+//
+// Values are stripped of the NUL padding and whitespace many vendor agents
+// append; NetBox/PostgreSQL rejects NUL bytes in text fields, and a
+// NUL-only name must collapse to "" so it counts as no name.
+func mergeVLANNames(rows []vlanNameRow) map[int]string {
+	dot1q := map[int]string{}
+	vtp := map[int]string{}
+	vtpOID := map[int]string{}
+	for _, r := range rows {
+		name := trimSNMPString(r.value)
+		switch {
+		case strings.HasPrefix(r.oid, oidDot1qVlanStaticName):
+			// dot1qVlanStaticTable is indexed by the VID alone, so at most
+			// one row per VID reaches this branch.
+			if vid, ok := atoi(strings.TrimPrefix(r.oid, oidDot1qVlanStaticName)); ok {
+				dot1q[vid] = name
+			}
+		case strings.HasPrefix(r.oid, oidCiscoVtpVlanName):
+			vid, ok := vtpVidFromOID(r.oid)
+			if !ok {
+				continue
+			}
+			if held, seen := vtp[vid]; !seen || preferVtpRow(held, vtpOID[vid], name, r.oid) {
+				vtp[vid], vtpOID[vid] = name, r.oid
+			}
+		}
+	}
+	out := make(map[int]string, len(dot1q)+len(vtp))
+	for vid, name := range vtp {
+		out[vid] = name
+	}
+	for vid, name := range dot1q {
+		// A named VID never loses its name to an empty row of the other
+		// column, whichever column that is.
+		if name == "" && out[vid] != "" {
+			continue
+		}
+		out[vid] = name
+	}
+	return out
+}
+
+// vtpVidFromOID pulls the VID out of a vtpVlanName OID. The index is
+// domain.vlan, so the VID is the trailing element.
+func vtpVidFromOID(oid string) (int, bool) {
+	suffix := strings.TrimPrefix(oid, oidCiscoVtpVlanName)
+	last := suffix
+	if i := strings.LastIndex(suffix, "."); i >= 0 {
+		last = suffix[i+1:]
+	}
+	return atoi(last)
+}
+
+// vlanNameConflicts reports VIDs whose VTP rows carry different non-empty
+// names. One VID can appear under more than one VTP management domain, and
+// those are different Layer 2 domains: NetBox itself permits one VID in
+// several VLAN groups.
+//
+// Emission still needs a single name per VID and picks one deterministically,
+// which is fine for a display name. Corroboration cannot: an SVI that names
+// that VID does not say which domain it means, the agent emits one VLAN entity
+// for the VID either way, and the association it would produce cannot be
+// retracted. So a conflicting VID is treated as uncorroborated.
+func vlanNameConflicts(all ObjectIDValueMap) map[int]bool {
+	names := map[int]string{}
+	conflicts := map[int]bool{}
+	for oid, v := range all {
+		if !strings.HasPrefix(oid, oidCiscoVtpVlanName) {
+			continue
+		}
+		vid, ok := vtpVidFromOID(oid)
+		if !ok {
+			continue
+		}
+		name := trimSNMPString(v.Value)
+		if name == "" {
+			continue
+		}
+		if held, seen := names[vid]; seen && held != name {
+			conflicts[vid] = true
+			continue
+		}
+		names[vid] = name
+	}
+	return conflicts
+}
+
+// preferVtpRow reports whether a candidate VTP row should replace the one
+// already held for a VID. One VID can appear under more than one VTP
+// management domain: a populated name wins, and ties break on the lowest
+// OID so the winner is the same on every poll rather than whichever row
+// the map happened to yield first.
+func preferVtpRow(heldName, heldOID, name, oid string) bool {
+	if (heldName == "") != (name == "") {
+		return heldName == ""
+	}
+	return oid < heldOID
+}
+
 // emitVLANs scans dot1qVlanStaticName / RowStatus and constructs one
 // *diode.VLAN per discovered VID. Names default to "VLAN<vid>" when the
 // SNMP value is empty (matches device-discovery behavior). Status comes
@@ -406,39 +550,27 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 		rowStatus int
 	}
 	byVid := map[int]*pending{}
+	for vid, name := range vlanNamesByVid(all) {
+		byVid[vid] = &pending{name: name}
+	}
 	for oid, v := range all {
-		switch {
-		case strings.HasPrefix(oid, oidDot1qVlanStaticName):
-			vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticName))
-			if !ok {
-				continue
-			}
-			p, exists := byVid[vid]
-			if !exists {
-				p = &pending{}
-				byVid[vid] = p
-			}
-			// Strip NUL padding/whitespace many vendor agents (e.g. FS
-			// switches) append to dot1qVlanStaticName. NetBox/PostgreSQL
-			// rejects NUL bytes in text fields, and a NUL-only name must
-			// collapse to "" so the VLAN<vid> default applies below.
-			p.name = trimSNMPString(v.Value)
-		case strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus):
-			vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus))
-			if !ok {
-				continue
-			}
-			st, ok2 := atoi(v.Value)
-			if !ok2 {
-				continue
-			}
-			p, exists := byVid[vid]
-			if !exists {
-				p = &pending{}
-				byVid[vid] = p
-			}
-			p.rowStatus = st
+		if !strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus) {
+			continue
 		}
+		vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus))
+		if !ok {
+			continue
+		}
+		st, ok2 := atoi(v.Value)
+		if !ok2 {
+			continue
+		}
+		p, exists := byVid[vid]
+		if !exists {
+			p = &pending{}
+			byVid[vid] = p
+		}
+		p.rowStatus = st
 	}
 	out := make([]diode.Entity, 0, len(byVid))
 	for vid, p := range byVid {
@@ -499,6 +631,7 @@ func atoi(s string) (int, bool) {
 func hasVLANSignal(all ObjectIDValueMap) bool {
 	prefixes := [...]string{
 		oidDot1qVlanStaticName,
+		oidCiscoVtpVlanName,
 		oidDot1qVlanStaticEgressPorts,
 		oidDot1qVlanStaticUntaggedPorts,
 		oidDot1qVlanStaticRowStatus,

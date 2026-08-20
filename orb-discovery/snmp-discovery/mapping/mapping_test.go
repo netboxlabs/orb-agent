@@ -2202,6 +2202,104 @@ func TestMappingYAML_CiscoOverlayEntriesPresent(t *testing.T) {
 	}
 }
 
+// CISCO-VTP-MIB is the only place Cisco IOS/IOS-XE devices expose a VLAN
+// name, since they don't implement dot1qVlanStaticName. Walking it
+// unconditionally (no vendor gate) would cost every non-Cisco host in a
+// fleet a pointless GETNEXT round-trip per scan, so it must live under
+// the same cisco vendor gate as the other CISCO-SMI-arc VLAN overlays.
+func TestMappingYAML_VtpEntryPresent(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	const vtpEntryOID = ".1.3.6.1.4.1.9.9.46.1.3.1.1"  // vtpVlanEntry
+	const vtpNameOID = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4" // vtpVlanName column
+	found := false
+	for _, e := range doc.Entries {
+		if e.OID != vtpEntryOID {
+			continue
+		}
+		found = true
+		if e.Vendor != "cisco" {
+			t.Errorf("%s: vendor = %q, want cisco (IOS/IOS-XE report sysObjectIDs under ciscoProducts)", e.OID, e.Vendor)
+		}
+		gotName := false
+		for _, c := range e.MappingEntries {
+			if c.OID == vtpNameOID {
+				gotName = true
+			}
+		}
+		if !gotName {
+			t.Errorf("%s: missing child mapping entry for vtpVlanName column %s", e.OID, vtpNameOID)
+		}
+	}
+	if !found {
+		t.Errorf("mapping.yaml missing cisco-scoped OID %s", vtpEntryOID)
+	}
+}
+
+// The VTP VLAN catalog exists to corroborate SVI-derived prefix VLANs, so
+// with emit_prefix_vlan off it must not be walked at all: a stock Cisco
+// switch has to emit exactly the VLAN entities it emitted before the
+// option existed, reserved VIDs 1002-1005 included. The sibling
+// Cisco-overlay tables are unrelated and must keep being walked either way.
+func TestVtpWalkGating(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+
+	const (
+		vtpNameOID      = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
+		vmMembershipOID = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2"
+	)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+	off, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil, config.Options{})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	vendorOff := off.VendorObjectIDs("cisco")
+	assert.NotContains(t, vendorOff, vtpNameOID,
+		"the VTP VLAN name column must not be walked with emit_prefix_vlan off")
+	assert.NotContains(t, off.ObjectIDs(), vtpNameOID,
+		"the VTP VLAN name column must be absent from the full walk plan too")
+	assert.Contains(t, vendorOff, vmMembershipOID,
+		"the unrelated Cisco access-VLAN overlay must still be walked")
+
+	sviName := "svi-name"
+	on, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil,
+		config.Options{EmitPrefixVlan: &sviName})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	assert.Contains(t, on.VendorObjectIDs("cisco"), vtpNameOID,
+		"the VTP VLAN name column must be walked with emit_prefix_vlan svi-name")
+
+	// With prefix emission off there is no prefix to associate, so the option
+	// is inert. emitVLANs reads these same rows for VLAN names, so walking them
+	// anyway would let an option that cannot function change the target's
+	// emitted VLAN inventory.
+	noPrefixes := false
+	inert, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil,
+		config.Options{EmitPrefixVlan: &sviName, EmitPrefixes: &noPrefixes})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	assert.NotContains(t, inert.VendorObjectIDs("cisco"), vtpNameOID,
+		"the VTP VLAN name column must not be walked when no prefixes are emitted")
+	assert.Contains(t, inert.VendorObjectIDs("cisco"), vmMembershipOID,
+		"the unrelated Cisco access-VLAN overlay must still be walked")
+}
+
 // TestMapObjectIDsToEntity_VLANIndexCollision is a regression test for the
 // case where an ifIndex value and a VLAN VID share the same numeric form
 // (e.g., ifIndex=10 + dot1qVlanStaticName.10). The pre-fix
