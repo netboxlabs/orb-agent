@@ -1038,7 +1038,7 @@ def test_prefix_vlan_attaches_when_unanimous():
             }
         },
         defaults=Defaults(site="dc1"),
-        options=Options(emit_prefix_vlan="corroborated"),
+        options=Options(emit_prefix_vlan="svi-name"),
         vlan_cache={10: _named_vlan(10, "office")},
     )
     got = [p for p in _prefixes(ents) if p.prefix == "10.0.0.0/24"]
@@ -1053,7 +1053,7 @@ def test_prefix_vlan_withheld_when_contested():
     ents = build_interface_entities(
         device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
         defaults=Defaults(site="dc1"),
-        options=Options(emit_prefix_vlan="corroborated"),
+        options=Options(emit_prefix_vlan="svi-name"),
         vlan_cache={10: _named_vlan(10, "office"), 20: _named_vlan(20, "voice")},
     )
     for p in _prefixes(ents):
@@ -1068,7 +1068,7 @@ def test_prefix_vlan_withheld_when_partially_resolved():
     ents = build_interface_entities(
         device="sw1", interfaces=TWO_SVIS, interfaces_ip=TWO_SVIS_IP,
         defaults=Defaults(site="dc1"),
-        options=Options(emit_prefix_vlan="corroborated"),
+        options=Options(emit_prefix_vlan="svi-name"),
         vlan_cache={10: _named_vlan(10, "office")},
     )
     for p in _prefixes(ents):
@@ -1095,7 +1095,7 @@ def test_prefix_vlan_skips_stub_named_vlan():
         interfaces={"Vlan10": TWO_SVIS["Vlan10"]},
         interfaces_ip={"Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}}},
         defaults=Defaults(site="dc1"),
-        options=Options(emit_prefix_vlan="corroborated"),
+        options=Options(emit_prefix_vlan="svi-name"),
         vlan_cache={10: _named_vlan(10, "")},
     )
     assert all(not p.HasField("vlan") for p in _prefixes(ents))
@@ -1209,8 +1209,8 @@ def test_prefix_vlan_kept_when_vrfs_are_genuinely_different_records():
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("corroborated", "corroborated"),
-        ("Corroborated ", "corroborated"),
+        ("svi-name", "svi-name"),
+        ("SVI-Name ", "svi-name"),          # case and whitespace normalised
         ("off", "off"),
         (False, "off"),      # YAML 1.1 reads a bare `off` as this
         (True, "off"),       # and a bare `on` / `yes` as this
@@ -1224,7 +1224,7 @@ def test_prefix_vlan_kept_when_vrfs_are_genuinely_different_records():
         (datetime.datetime(2026, 8, 20, 10, 0, tzinfo=datetime.timezone.utc), "off"),
         # A !!binary scalar. yaml.v3 gives the Go string field the decoded
         # bytes, so its text is what decides the mode there too.
-        (b"corroborated", "corroborated"),
+        (b"svi-name", "svi-name"),
         (b"nonsense", "off"),
         (b"\xff\xfe", "off"),   # not decodable text at all
     ],
@@ -1243,7 +1243,7 @@ def test_emit_prefix_vlan_scalars_never_reject_a_policy(value, expected):
     assert Config(options={"emit_prefix_vlan": value}).options.emit_prefix_vlan == expected
 
 
-@pytest.mark.parametrize("value", [["corroborated"], {"mode": "corroborated"}])
+@pytest.mark.parametrize("value", [["svi-name"], {"mode": "svi-name"}])
 def test_emit_prefix_vlan_collections_are_a_policy_error(value):
     """
     A sequence or mapping is rejected, which is also what the Go decoder does.

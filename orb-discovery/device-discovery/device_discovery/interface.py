@@ -475,7 +475,7 @@ def translate_interface_ips(
             vrf / vrf_ipv4 / vrf_ipv6 for both IPAddress and Prefix.
         vlan_cache (dict[int, pb.VLAN] | None): vid → pb.VLAN cache (see
             ``translate._build_vlan_cache``), consulted only when
-            ``options.emit_prefix_vlan == "corroborated"``. Each emitted
+            ``options.emit_prefix_vlan == "svi-name"``. Each emitted
             Prefix carries the interface's resolved candidate VLAN
             (``_resolve_prefix_vlan_candidate``); this is provisional and
             the same object's contributing addresses are reconciled to
@@ -550,7 +550,7 @@ def translate_interface_ips(
     # provisional — build_interface_entities reconciles it against every
     # other contributor to the same (prefix, vrf) before it can survive.
     prefix_vlan_candidate = None
-    if options and options.emit_prefix_vlan == "corroborated":
+    if options and options.emit_prefix_vlan == "svi-name":
         prefix_vlan_candidate = _resolve_prefix_vlan_candidate(
             interface.name, vlan_cache
         )
@@ -733,7 +733,7 @@ def build_interface_entities(
     ``vrf.build_discovered_vrfs``), IP addresses and prefixes on a mapped
     interface carry that discovered VRF instead of the configured defaults.
 
-    When ``options.emit_prefix_vlan == "corroborated"``, each derived Prefix
+    When ``options.emit_prefix_vlan == "svi-name"``, each derived Prefix
     carries the VLAN of the SVI-style interface its address lives on
     (resolved against ``vlan_cache``) — but only once every interface
     contributing to that same (prefix, vrf) agrees; see

@@ -661,7 +661,7 @@ def _stack_vlan_inputs():
             2: {"Ethernet2/0/1": {"ipv4": {"10.0.0.2": {"prefix_length": 24}}}},
         },
         "defaults": Defaults(site="dc1"),
-        "options": Options(emit_prefix_vlan="corroborated"),
+        "options": Options(emit_prefix_vlan="svi-name"),
         "vlan_cache": {10: VLAN(vid=10, name="office")},
     }
 

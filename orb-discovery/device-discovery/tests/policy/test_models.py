@@ -138,12 +138,16 @@ def test_options_emit_prefix_vlan_defaults_off():
         # bare `off` as the boolean False, so the option must survive that.
         ("emit_prefix_vlan: off", "off"),
         ("emit_prefix_vlan: 'off'", "off"),
-        ("emit_prefix_vlan: corroborated", "corroborated"),
+        ("emit_prefix_vlan: svi-name", "svi-name"),
         # Case and surrounding whitespace are normalised at the model
         # boundary, exactly as the snmp-discovery twin does.
-        ("emit_prefix_vlan: Corroborated", "corroborated"),
-        ("emit_prefix_vlan: CORROBORATED", "corroborated"),
-        ("emit_prefix_vlan: '  corroborated  '", "corroborated"),
+        ("emit_prefix_vlan: SVI-Name", "svi-name"),
+        ("emit_prefix_vlan: SVI-NAME", "svi-name"),
+        ("emit_prefix_vlan: '  svi-name  '", "svi-name"),
+        # The mode was called `corroborated` while this was in review. It never
+        # shipped, so the old spelling is simply not a mode: it disables the
+        # feature with a warning rather than silently keeping the old meaning.
+        ("emit_prefix_vlan: corroborated", "off"),
         ("emit_prefix_vlan: Off", "off"),
         # An explicit null is the same as omitting the option.
         ("emit_prefix_vlan:", "off"),

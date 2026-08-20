@@ -296,11 +296,11 @@ class Options(BaseModel):
             "Default False preserves the no-cascade behavior."
         ),
     )
-    emit_prefix_vlan: Literal["off", "corroborated"] = Field(
+    emit_prefix_vlan: Literal["off", "svi-name"] = Field(
         default="off",
         description=(
             "Associate a derived prefix with the VLAN of the SVI-style "
-            "interface its address lives on. 'off' or 'corroborated'. Off by "
+            "interface its address lives on. 'off' or 'svi-name'. Off by "
             "default because the association cannot be retracted once sent. "
             "The value is trimmed and lowercased; an unrecognized value "
             "resolves to 'off' rather than erroring."
@@ -335,14 +335,14 @@ class Options(BaseModel):
                 logger.warning(
                     "emit_prefix_vlan was read as a boolean — YAML treats a "
                     "bare on/yes/true that way. It names no mode, so the "
-                    "feature stays off; quote 'corroborated' to enable it."
+                    "feature stays off; quote 'svi-name' to enable it."
                 )
             return "off"
         if isinstance(v, (list, tuple, set, dict)):
             # yaml.v3 refuses to decode a sequence or mapping into the Go
             # twin's string field, so the policy fails there too.
             raise ValueError(
-                f"emit_prefix_vlan must be 'off' or 'corroborated', "
+                f"emit_prefix_vlan must be 'off' or 'svi-name', "
                 f"got {type(v).__name__}"
             )
         if isinstance(v, str):
@@ -363,8 +363,8 @@ class Options(BaseModel):
             # policy the other backend accepts.
             text = str(v)
         normalized = text.strip().lower()
-        if normalized == "corroborated":
-            return "corroborated"
+        if normalized == "svi-name":
+            return "svi-name"
         if normalized not in ("off", ""):
             logger.warning(
                 "unrecognized emit_prefix_vlan %r; using 'off'", v
