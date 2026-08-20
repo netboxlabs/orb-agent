@@ -114,7 +114,7 @@ backend1:
 					Git: config.GitManager{
 						URL:      repoURL,
 						Branch:   "",        // let it detect default branch
-						Auth:     "none",    // no auth for file:// protocol
+						Auth:     "",        // no auth for file:// protocol
 						Schedule: &schedule, // every minute
 					},
 				},
@@ -198,7 +198,7 @@ backend1:
 				Sources: config.Sources{
 					Git: config.GitManager{
 						URL:  repoURL,
-						Auth: "none",
+						Auth: "", // no auth for file:// protocol
 					},
 				},
 			},
@@ -216,6 +216,38 @@ backend1:
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no policies match the selector")
 	pMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
+}
+
+// TestGitStartUnsupportedAuthMode verifies that a misspelled auth mode fails
+// startup instead of silently falling back to unauthenticated access. Auth is
+// resolved before any network I/O, so no repository is needed.
+func TestGitStartUnsupportedAuthMode(t *testing.T) {
+	for _, auth := range []string{"none", "bacsic", "github-app"} {
+		t.Run(auth, func(t *testing.T) {
+			pMgr := new(mockPolicyManager)
+			cfg := config.Config{
+				OrbAgent: config.OrbAgent{
+					ConfigManager: config.ManagerConfig{
+						Active: "git",
+						Sources: config.Sources{
+							Git: config.GitManager{
+								URL:  "https://example.com/org/policyrepo.git",
+								Auth: auth,
+							},
+						},
+					},
+				},
+			}
+
+			logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+			gc := configmgr.New(logger, pMgr, cfg.OrbAgent.ConfigManager.Active, &mockBackendState{}, nil)
+
+			err := gc.Start(context.Background(), cfg, map[string]backend.Backend{})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "unsupported git auth mode")
+			pMgr.AssertNotCalled(t, "ManagePolicy", mock.Anything)
+		})
+	}
 }
 
 // TestGitStartAzureDevOpsURLFallback verifies that an Azure DevOps URL triggers
@@ -300,7 +332,7 @@ backend1:
 					Git: config.GitManager{
 						URL:    adoURL,
 						Branch: "", // auto-detect
-						Auth:   "none",
+						Auth:   "", // no auth for file:// protocol
 					},
 				},
 			},

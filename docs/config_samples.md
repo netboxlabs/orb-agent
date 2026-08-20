@@ -126,7 +126,7 @@ orb:
         url: "https://github.com/myorg/policyrepo"
         auth: github_app
         github_app:
-          app_id: "Iv23liAbCdEfGhIjKlMn"
+          client_id: "Iv23liAbCdEfGhIjKlMn"
           installation_id: "78901234"
           private_key: "/opt/orb/github-app.pem"
         schedule: "* * * * *"

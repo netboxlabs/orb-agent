@@ -69,7 +69,7 @@ orb:
         branch: develop
         auth: github_app
         github_app:
-          app_id: "Iv23liAbCdEfGhIjKlMn"
+          client_id: "Iv23liAbCdEfGhIjKlMn"
           installation_id: "78901234"
           private_key: /opt/orb/github-app.pem
 ```
@@ -85,7 +85,7 @@ See [GitHub App Authentication](#github-app-authentication) below for how to cre
 | password | string | no | the password used for authentication. If the auth method is 'basic' it should contain the password or auth token. If the method is 'ssh' it should contain the passphrase for the private key file (leave empty for unprotected keys) |
 | private_key | string | no | the path to the SSH private key file |
 | skip_tls | bool | no | skip TLS certificate verification when connecting to the repository (default: false). Useful for self-signed or private CA certificates |
-| github_app.app_id | string | yes, when auth is 'github_app' | the GitHub App's Client ID (preferred) or its numeric App ID |
+| github_app.client_id | string | yes, when auth is 'github_app' | the GitHub App's Client ID (preferred) or its numeric App ID |
 | github_app.installation_id | string | yes, when auth is 'github_app' | the numeric id of the app's installation on the account that owns the repository |
 | github_app.private_key | string | yes, when auth is 'github_app' | the path to the app's `.pem` private key, or the PEM content itself |
 
@@ -157,7 +157,7 @@ residency (`*.ghe.com`) — use `auth: basic` with a personal access token for t
 
 ### Finding the IDs
 
-- **`app_id`** — use the app's **Client ID** (`Iv23li…`), shown on the app's settings page. This is
+- **`client_id`** — use the app's **Client ID** (`Iv23li…`), shown on the app's settings page. This is
   the form the GitHub API documentation specifies, and the numeric App ID looks likely to be dropped
   in a future API version. The numeric App ID still works today.
 - **`installation_id`** — the number at the end of the URL of the *installation's* settings page,
@@ -181,7 +181,7 @@ environment variable or a secrets manager without ever being written to disk:
 
 ```yaml
         github_app:
-          app_id: "Iv23liAbCdEfGhIjKlMn"
+          client_id: "Iv23liAbCdEfGhIjKlMn"
           installation_id: "78901234"
           private_key: ${GITHUB_APP_KEY}          # PEM content in an env var
           # private_key: ${vault://secret/github-app#pem}
@@ -203,7 +203,7 @@ automatically once fewer than five minutes of validity remain. There is nothing 
 
 | Symptom | Likely cause |
 |---------|--------------|
-| `GitHub rejected the app JWT (HTTP 401…)` | Host clock skew, or `app_id` does not match the private key. The error prints GitHub's time next to the agent's — compare them. |
+| `GitHub rejected the app JWT (HTTP 401…)` | Host clock skew, or `client_id` does not match the private key. The error prints GitHub's time next to the agent's — compare them. |
 | `installation … was not found (HTTP 404…)` | `installation_id` holds the App ID, or the app was uninstalled. |
 | `GitHub refused the token request (HTTP 403…)` | The app is suspended, blocked by an org policy, or rate limited. |
 | Clone fails with 404 after a successful token mint | The app is installed on the account but the policy repo was not selected during installation. |

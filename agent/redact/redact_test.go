@@ -155,10 +155,10 @@ func TestSensitiveData_GitHubApp(t *testing.T) {
 		t.Errorf("Expected github_app.private_key to be masked, got %v", githubApp["private_key"])
 	}
 
-	// app_id and installation_id are not secrets; keeping them readable is what
-	// makes a misconfiguration diagnosable from the logs.
-	if githubApp["app_id"] != "Iv23liAbCdEfGhIjKlMn" {
-		t.Errorf("Expected github_app.app_id to be preserved, got %v", githubApp["app_id"])
+	// client_id and installation_id are not secrets; keeping them readable is
+	// what makes a misconfiguration diagnosable from the logs.
+	if githubApp["client_id"] != "Iv23liAbCdEfGhIjKlMn" {
+		t.Errorf("Expected github_app.client_id to be preserved, got %v", githubApp["client_id"])
 	}
 	if githubApp["installation_id"] != "78901234" {
 		t.Errorf("Expected github_app.installation_id to be preserved, got %v", githubApp["installation_id"])

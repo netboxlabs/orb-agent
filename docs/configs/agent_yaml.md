@@ -98,7 +98,7 @@ orb:
 | `password` | string | No | Password or token for basic auth; passphrase for SSH keys |
 | `private_key` | string | No | Path to SSH private key file |
 | `skip_tls` | bool | No | Skip TLS certificate verification (default: `false`) |
-| `github_app.app_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
+| `github_app.client_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
 | `github_app.installation_id` | string | With `github_app` | Numeric id of the app's installation on the repo owner |
 | `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the PEM content itself |
 

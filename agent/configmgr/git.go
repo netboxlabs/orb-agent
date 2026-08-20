@@ -43,12 +43,20 @@ type gitConfigManager struct {
 	githubApp        *githubAppAuth // non-nil when auth is github_app; also stored in authMethod
 }
 
+// GitAuthMode is the authentication method the Git ConfigManager uses against
+// the policy repository, taken verbatim from config_manager.sources.git.auth.
 type GitAuthMode string
 
+// Supported values of GitAuthMode. Anything else is a typo and is rejected at
+// startup rather than silently falling back to unauthenticated access.
 const (
-	GitAuthNone      GitAuthMode = ""
-	GitAuthBasic     GitAuthMode = "basic"
-	GitAuthSSH       GitAuthMode = "ssh"
+	// GitAuthNone is the zero value: no auth, for public repositories.
+	GitAuthNone GitAuthMode = ""
+	// GitAuthBasic is HTTPS with a username and a password or token.
+	GitAuthBasic GitAuthMode = "basic"
+	// GitAuthSSH is an SSH private key, or the SSH agent when no key is set.
+	GitAuthSSH GitAuthMode = "ssh"
+	// GitAuthGitHubApp mints short-lived GitHub App installation tokens.
 	GitAuthGitHubApp GitAuthMode = "github_app"
 )
 
@@ -385,7 +393,6 @@ func (gc *gitConfigManager) Start(ctx context.Context, cfg config.Config, backen
 		return err
 	}
 
-	// switch gc.config.Auth {
 	switch GitAuthMode(gc.config.Auth) {
 	case GitAuthNone:
 	case GitAuthBasic:

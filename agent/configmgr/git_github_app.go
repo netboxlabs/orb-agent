@@ -130,8 +130,8 @@ func newGitHubAppAuth(logger *slog.Logger, cfg config.GitHubAppAuth, skipTLS boo
 
 	// installation_id is interpolated into an API path, and confusing it with the
 	// app id is the most common misconfiguration. Requiring digits both prevents
-	// path injection and catches a client id pasted into the wrong key. app_id is
-	// deliberately not checked: the preferred value is a client id (Iv23li...).
+	// path injection and catches a client id pasted into the wrong key. client_id
+	// is deliberately not checked: the preferred value is a client id (Iv23li...).
 	if _, err := strconv.ParseUint(installationID, 10, 64); err != nil {
 		return nil, fmt.Errorf("github_app: installation_id %q is not numeric; it is the id in the URL of "+
 			"the app's installation settings page, not the app id or client id", installationID)
@@ -373,7 +373,7 @@ func (a *githubAppAuth) tokenStatusError(resp *http.Response, body []byte) error
 	case http.StatusUnauthorized:
 		// Clock skew is the most common cause and the hardest to guess, so echo
 		// GitHub's Date header next to ours.
-		return fmt.Errorf("github_app: GitHub rejected the app JWT (HTTP 401: %s); check that app_id %q "+
+		return fmt.Errorf("github_app: GitHub rejected the app JWT (HTTP 401: %s); check that client_id %q "+
 			"matches the private key, and check the host clock (GitHub time: %q, agent time: %q)",
 			detail, a.clientID, resp.Header.Get("Date"), a.now().UTC().Format(http.TimeFormat))
 	case http.StatusForbidden:
