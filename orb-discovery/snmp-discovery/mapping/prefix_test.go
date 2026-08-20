@@ -441,3 +441,60 @@ func TestDerivePrefixes_WideMaskIPv4LinkLocalStillDerived(t *testing.T) {
 	require.Len(t, prefixes, 1)
 	assert.Equal(t, "169.254.0.0/16", *(prefixes[0].(*diode.Prefix)).Prefix)
 }
+
+// An rd-bearing VRF is resolved by its rd alone, since the plugin's two
+// name matchers for ipam.vrf are conditional on rd being NULL. Two VRFs
+// carrying one rd under different names are therefore one record, and keying
+// the prefix on the name+rd pair split them: two Prefix entities were emitted
+// for a single object, and the VLAN vote was split so each half could be
+// unanimous on its own.
+func TestDerivePrefixes_OneRdIsOneVrfWhateverTheNames(t *testing.T) {
+	sviName := "svi-name"
+	vlan10 := &diode.VLAN{Vid: int64Ptr(10), Name: strPtr("office")}
+	opts := &config.Options{EmitPrefixVlan: &sviName}
+
+	mk := func(addr string, iface *diode.Interface) *diode.IPAddress {
+		a := addr
+		return &diode.IPAddress{Address: &a, AssignedObject: iface}
+	}
+	svi := &diode.Interface{Name: strPtr("Vlan10")}
+	routed := &diode.Interface{Name: strPtr("GigabitEthernet0/1")}
+	idx := map[*diode.Interface]int{svi: 1, routed: 2}
+
+	rd := "65000:100"
+	vrfOld := &diode.VRF{Name: strPtr("CUSTOMER-OLD"), Rd: &rd}
+	vrfNew := &diode.VRF{Name: strPtr("CUSTOMER-NEW"), Rd: &rd}
+	byAddress := map[string]*diode.VRF{
+		"10.0.0.1/24": vrfOld,
+		"10.0.0.2/24": vrfNew,
+	}
+
+	ents := []diode.Entity{mk("10.0.0.1/24", svi), mk("10.0.0.2/24", routed)}
+	out := DerivePrefixes(
+		ents, byAddress, map[int]*diode.VLAN{1: vlan10}, idx, nil, opts, slog.Default(),
+	)
+
+	require.Len(t, out, 1, "one rd is one VRF, so one prefix")
+	assert.Nil(t, out[0].(*diode.Prefix).Vlan,
+		"the routed contributor abstained, so no VLAN may be written")
+}
+
+// Different rds are different records, so they stay apart.
+func TestDerivePrefixes_DifferentRdsStayApart(t *testing.T) {
+	mk := func(addr string) *diode.IPAddress {
+		a := addr
+		return &diode.IPAddress{Address: &a}
+	}
+	rdA, rdB := "65000:1", "65000:2"
+	byAddress := map[string]*diode.VRF{
+		"10.0.0.1/24": {Name: strPtr("CUST"), Rd: &rdA},
+		"10.0.0.2/24": {Name: strPtr("CUST"), Rd: &rdB},
+	}
+
+	out := DerivePrefixes(
+		[]diode.Entity{mk("10.0.0.1/24"), mk("10.0.0.2/24")},
+		byAddress, nil, nil, nil, &config.Options{}, slog.Default(),
+	)
+
+	assert.Len(t, out, 2, "two rds are two VRFs, so two prefixes")
+}

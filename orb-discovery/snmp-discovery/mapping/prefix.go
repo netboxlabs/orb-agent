@@ -252,18 +252,33 @@ func prefixDefaultsVrf(d *config.PrefixDefaults, family string) (*diode.VRF, boo
 	return vrf, false
 }
 
-// vrfKey returns a stable dedupe key component for a VRF reference. The
-// NUL delimiter cannot appear in decoded VRF names (the index decoder
-// rejects control characters), so names can't collide with name+rd pairs.
+// vrfKey returns a stable dedupe key component for a VRF reference, keyed the
+// way the plugin resolves the VRF. Its matchers for ipam.vrf are, in precedence
+// order:
+//
+//	logical_vrf_name_no_tenant      name          rd IS NULL, tenant IS NULL
+//	logical_vrf_name_within_tenant  name, tenant  rd IS NULL, tenant NOT NULL
+//	unique_rd                       rd            always
+//
+// Both name matchers are conditional on rd being NULL, so an rd-bearing VRF is
+// resolved by its rd alone: two VRFs carrying one rd under different names are
+// one record. Keying on the name+rd pair split them, which emitted two Prefix
+// entities for a single object and, worse, split the VLAN vote so each half
+// could be unanimous on its own while the object ended up with one of them.
+//
+// A VRF tenant would join the no-rd branch, but the config exposes only name
+// and rd on a prefix VRF, so nothing can set one today.
+//
+// The "rd" / "name" tag keeps the two key spaces apart. NUL cannot appear in a
+// decoded VRF name, since the index decoder rejects control characters.
 func vrfKey(vrf *diode.VRF) string {
 	if vrf == nil || vrf.Name == nil {
 		return ""
 	}
-	key := *vrf.Name
-	if vrf.Rd != nil {
-		key += "\x00" + *vrf.Rd
+	if vrf.Rd != nil && *vrf.Rd != "" {
+		return "rd\x00" + *vrf.Rd
 	}
-	return key
+	return "name\x00" + *vrf.Name
 }
 
 // applyPrefixDefaults applies the defaults.prefix block plus the scope
