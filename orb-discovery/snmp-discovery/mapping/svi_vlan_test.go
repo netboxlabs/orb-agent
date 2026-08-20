@@ -199,3 +199,31 @@ func TestResolveSviVlans_RefusesWhenTheNameColumnsDisagree(t *testing.T) {
 	assert.Same(t, vlan10, got[3], "an unparseable second column is not a disagreement")
 	assert.Len(t, got, 2)
 }
+
+// One VID can appear under more than one VTP management domain. Those are
+// different Layer 2 domains, and NetBox permits one VID in several VLAN groups,
+// so an SVI naming that VID does not say which domain it means. Emission still
+// picks one name deterministically for display; corroboration must abstain.
+func TestResolveSviVlans_RefusesAVidNamedDifferentlyAcrossVtpDomains(t *testing.T) {
+	vlan20 := &diode.VLAN{Vid: int64Ptr(20), Name: strPtr("voice")}
+	vlan30 := &diode.VLAN{Vid: int64Ptr(30), Name: strPtr("mgmt")}
+	entities := []diode.Entity{vlan20, vlan30}
+
+	oids := ObjectIDValueMap{
+		// VID 20 under two domains with different names: ambiguous.
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.20": {Value: "voice"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.2.20": {Value: "voice-legacy"},
+		// VID 30 under two domains with the same name: not ambiguous.
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.30": {Value: "mgmt"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.2.30": {Value: "mgmt"},
+		// SVIs naming each of them.
+		".1.3.6.1.2.1.31.1.1.1.1.1": {Value: "Vlan20"},
+		".1.3.6.1.2.1.31.1.1.1.1.2": {Value: "Vlan30"},
+	}
+
+	got := ResolveSviVlans(oids, entities, slog.Default())
+
+	assert.NotContains(t, got, 1, "a vid named differently across domains must not resolve")
+	assert.Same(t, vlan30, got[2], "domains agreeing on the name still resolve")
+	assert.Len(t, got, 1)
+}

@@ -450,13 +450,7 @@ func mergeVLANNames(rows []vlanNameRow) map[int]string {
 				dot1q[vid] = name
 			}
 		case strings.HasPrefix(r.oid, oidCiscoVtpVlanName):
-			// Index is domain.vlan, so the VID is the trailing element.
-			suffix := strings.TrimPrefix(r.oid, oidCiscoVtpVlanName)
-			last := suffix
-			if i := strings.LastIndex(suffix, "."); i >= 0 {
-				last = suffix[i+1:]
-			}
-			vid, ok := atoi(last)
+			vid, ok := vtpVidFromOID(r.oid)
 			if !ok {
 				continue
 			}
@@ -478,6 +472,51 @@ func mergeVLANNames(rows []vlanNameRow) map[int]string {
 		out[vid] = name
 	}
 	return out
+}
+
+// vtpVidFromOID pulls the VID out of a vtpVlanName OID. The index is
+// domain.vlan, so the VID is the trailing element.
+func vtpVidFromOID(oid string) (int, bool) {
+	suffix := strings.TrimPrefix(oid, oidCiscoVtpVlanName)
+	last := suffix
+	if i := strings.LastIndex(suffix, "."); i >= 0 {
+		last = suffix[i+1:]
+	}
+	return atoi(last)
+}
+
+// vlanNameConflicts reports VIDs whose VTP rows carry different non-empty
+// names. One VID can appear under more than one VTP management domain, and
+// those are different Layer 2 domains: NetBox itself permits one VID in
+// several VLAN groups.
+//
+// Emission still needs a single name per VID and picks one deterministically,
+// which is fine for a display name. Corroboration cannot: an SVI that names
+// that VID does not say which domain it means, the agent emits one VLAN entity
+// for the VID either way, and the association it would produce cannot be
+// retracted. So a conflicting VID is treated as uncorroborated.
+func vlanNameConflicts(all ObjectIDValueMap) map[int]bool {
+	names := map[int]string{}
+	conflicts := map[int]bool{}
+	for oid, v := range all {
+		if !strings.HasPrefix(oid, oidCiscoVtpVlanName) {
+			continue
+		}
+		vid, ok := vtpVidFromOID(oid)
+		if !ok {
+			continue
+		}
+		name := trimSNMPString(v.Value)
+		if name == "" {
+			continue
+		}
+		if held, seen := names[vid]; seen && held != name {
+			conflicts[vid] = true
+			continue
+		}
+		names[vid] = name
+	}
+	return conflicts
 }
 
 // preferVtpRow reports whether a candidate VTP row should replace the one

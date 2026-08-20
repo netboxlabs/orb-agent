@@ -83,6 +83,7 @@ func ResolveSviVlans(
 	logger *slog.Logger,
 ) map[int]*diode.VLAN {
 	deviceNames := vlanNamesByVid(oids)
+	nameConflicts := vlanNameConflicts(oids)
 	named := map[int]*diode.VLAN{}
 	for _, e := range entities {
 		v, ok := e.(*diode.VLAN)
@@ -91,6 +92,11 @@ func ResolveSviVlans(
 		}
 		vid := int(*v.Vid)
 		if deviceNames[vid] == "" {
+			continue
+		}
+		if nameConflicts[vid] {
+			logger.Warn("svi vlan: vid named differently across vtp domains; not associating",
+				"vid", vid)
 			continue
 		}
 		named[vid] = v
