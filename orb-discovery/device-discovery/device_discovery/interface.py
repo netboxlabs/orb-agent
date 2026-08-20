@@ -215,6 +215,14 @@ def _resolve_non_subinterface_type(
     if matched:
         return matched
 
+    # Tier 4b: an SVI name, by the same predicate the prefix-VLAN resolver uses.
+    # Keeping a second list of SVI spellings in DEFAULT_INTERFACE_PATTERNS let
+    # the two drift: a name could be trusted enough to associate a VLAN with a
+    # prefix while still being typed from its speed. Reuse the one definition,
+    # so an interface whose name yields a VLAN id is virtual by construction.
+    if svi_vlan_id(if_name) is not None:
+        return "virtual"
+
     # Tier 5: speed-based detection
     speed = interface_info.get("speed")
     if speed and speed > 0:
@@ -686,7 +694,7 @@ def _reconcile_prefix_vlans(entities: list[Entity]) -> None:
     # defaults.prefix.vrf under the same name: each group would then be
     # unanimous by itself, the SVI candidate would survive an abstention it
     # should have lost to, and Diode would still resolve both to one Prefix.
-    groups: dict[tuple[str, tuple[str, str]], list[pb.Prefix]] = {}
+    groups: dict[tuple[str, tuple[str, ...]], list[pb.Prefix]] = {}
     for entity in entities:
         if not entity.HasField("prefix"):
             continue

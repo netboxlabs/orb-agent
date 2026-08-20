@@ -1258,3 +1258,59 @@ def test_emit_prefix_vlan_collections_are_a_policy_error(value):
 
     with pytest.raises(ValidationError):
         Config(options={"emit_prefix_vlan": value})
+
+
+def test_prefix_vlan_reconciles_vrfs_with_one_rd_and_different_names():
+    """
+    An rd-bearing VRF is resolved by its rd alone, so the names may differ.
+
+    The plugin's two name matchers for ipam.vrf are conditional on rd being
+    NULL; unique_rd handles the rest. Two VRFs carrying one rd under different
+    names are therefore the same record, and keying on the pair treated them as
+    two: each group was unanimous by itself and the SVI kept a VLAN the
+    abstaining contributor should have taken from it.
+    """
+    from netboxlabs.diode.sdk.ingester import VRF, Entity, Prefix
+
+    from device_discovery.interface import _reconcile_prefix_vlans
+
+    svi = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUSTOMER-OLD", rd="65000:100"))
+    svi.vlan.CopyFrom(VLAN(vid=10, name="office"))
+    routed = Prefix(prefix="10.0.0.0/24", vrf=VRF(name="CUSTOMER-NEW", rd="65000:100"))
+
+    entities = [Entity(prefix=svi), Entity(prefix=routed)]
+    _reconcile_prefix_vlans(entities)
+
+    assert not entities[0].prefix.HasField("vlan"), (
+        "one rd is one VRF, whatever the names say"
+    )
+
+
+@pytest.mark.parametrize(
+    "if_name",
+    [
+        "vlan100", "VLAN100", "vlan 100", "VLAN ID 100",
+        "Vl100", "vl100", "svi100", "SVI100", "Interface vlan100",
+    ],
+)
+def test_svi_named_interface_is_virtual_by_the_same_predicate(
+    if_name, sample_device_info, sample_defaults
+):
+    """
+    Any name the prefix-VLAN resolver accepts is typed virtual.
+
+    These nine spellings were trusted enough to associate a VLAN with a prefix
+    while still being typed from their reported speed, because the accepted SVI
+    spellings were listed twice: once in the resolver and once in the built-in
+    type patterns. Typing now reuses the resolver, so the two cannot disagree.
+    """
+    from device_discovery.svi_vlan import svi_vlan_id
+
+    assert svi_vlan_id(if_name) is not None, "fixture must be a name the resolver accepts"
+
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device, if_name, {"is_enabled": True, "speed": 1000}, sample_defaults
+    )
+
+    assert interface.type == "virtual", f"{if_name} must not be typed from its speed"
