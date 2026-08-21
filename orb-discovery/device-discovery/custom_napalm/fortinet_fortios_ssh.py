@@ -128,56 +128,80 @@ def _normalise_speed(value: str) -> str:
     return match.group(1) if match else ""
 
 
-def _parse_physical(raw: str | None) -> tuple[list[dict[str, str]], int]:  # noqa: C901 - one flat state machine reads clearer than split helpers
+def _close_physical_block(
+    block: dict[str, str] | None, rows: list[dict[str, str]]
+) -> int:
+    """
+    Emit BLOCK into ROWS if usable, and report the anomalies it contributes.
+
+    A block is emitted only when it scanned both ``status`` and ``speed``, the two
+    fields ``get_interfaces`` consumes. A block closed without them is discarded and
+    counted: a half-read block reaching NetBox as an up port reported down with no
+    speed is a wrong value, where dropping it is merely an absent one.
+    """
+    if block is None:
+        return 0
+    if "status" in block and "speed" in block:
+        rows.append(block)
+        return 0
+    return 1
+
+
+def _absorb_physical_fields(
+    block: dict[str, str], line: str, seen: set[str]
+) -> tuple[bool, int]:
+    """
+    Fold LINE's fields into BLOCK, reporting whether the line was readable.
+
+    Every field found is taken, rather than requiring exactly one, so a future
+    release that puts two pairs on one line is absorbed instead of treated as damage.
+    """
+    fields, anomalies = _scan_fields(line)
+    _log_unknown_keys(fields, seen)
+    if not fields:
+        return False, anomalies
+    if "speed" in fields:
+        fields["speed"] = _normalise_speed(fields["speed"])
+    block.update(fields)
+    return True, anomalies
+
+
+def _parse_physical(raw: str | None) -> tuple[list[dict[str, str]], int]:
     """
     Parse ``get system interface physical`` into rows, plus an anomaly count.
 
-    Unknown fields are kept and ignored; that tolerance is the point. A block is
-    emitted only when it scanned both ``status`` and ``speed``, the two fields
-    ``get_interfaces`` consumes, so a half-read block is absent rather than reported
-    as down with no speed. End of input closes the open block, which is load-bearing:
-    every capture under tests/.../corpus/ ends on a field line.
+    Unknown fields are kept and ignored; that tolerance is the point. An unreadable
+    line closes the open block, so an unrecognised header cannot let its fields land
+    on the interface above it. End of input closes the block too, which is
+    load-bearing rather than tidiness: every capture under tests/.../corpus/ ends on
+    a field line, so without it the last interface of every device is lost.
     """
     rows: list[dict[str, str]] = []
     anomalies = 0
     seen: set[str] = set()
     block: dict[str, str] | None = None
 
-    def close() -> None:
-        nonlocal block, anomalies
-        if block is None:
-            return
-        if "status" in block and "speed" in block:
-            rows.append(block)
-        else:
-            anomalies += 1
-        block = None
-
     for line in (raw or "").splitlines():
         if not line.strip():
             continue
         header = _PHYS_HEADER_RE.match(line.strip())
         if header:
-            close()
+            anomalies += _close_physical_block(block, rows)
             # An indented header names an interface; a non-indented one is a group
             # header such as `== [onboard]`, which is normal output, not an anomaly.
-            if line[:1].isspace():
-                block = {"name": header.group(1)}
+            block = {"name": header.group(1)} if line[:1].isspace() else None
             continue
         if block is not None:
-            fields, duplicates = _scan_fields(line)
-            anomalies += duplicates
-            _log_unknown_keys(fields, seen)
-            if fields:
-                if "speed" in fields:
-                    fields["speed"] = _normalise_speed(fields["speed"])
-                block.update(fields)
+            readable, extra = _absorb_physical_fields(block, line, seen)
+            anomalies += extra
+            if readable:
                 continue
-        close()
-        anomalies += 1
+        anomalies += _close_physical_block(block, rows) + 1
+        block = None
 
-    close()
+    anomalies += _close_physical_block(block, rows)
     return rows, anomalies
+
 
 
 _QUAD_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
