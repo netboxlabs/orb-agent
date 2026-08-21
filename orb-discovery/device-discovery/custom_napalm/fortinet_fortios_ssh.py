@@ -5,8 +5,22 @@ Custom FortiOS SSH NAPALM driver.
 Implements only the methods used by device-discovery:
   get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
 
-Uses ntc-templates 9.x for structured parsing where templates exist;
-falls back to regex parsing where they do not (uptime).
+This driver parses ``get system interface`` and ``get system interface physical``
+itself rather than through ntc-templates. Both templates end in ``^. -> Error``, so
+one unknown field aborts the parse and the device reports no interfaces
+(netboxlabs/orb-agent#537). ``get system status`` was already parsed locally for the
+same reason. ``_parse_output_resilient`` from cisco_asa_ssh is deliberately not
+reused: on the flat listing it strips every interface line and returns zero rows
+without raising, and it gives up after 25 stripped lines.
+
+Fields the local parsers drop relative to the templates: ``duplex``,
+``ipv6_address`` and ``ipv6netmask``, and the physical ``ip`` value is left unsplit.
+Every vendored capture reports ``ipv6: ::/0``, and the getter that would use an
+address reads the flat listing, which emits no ``ipv6:`` at all.
+
+``is_enabled`` is unconditionally True on FortiOS: all 175 observed status values
+are ``up`` or ``down`` and ``disabled`` never appears. Deliberate, not an oversight;
+it cannot be omitted because the test harness requires the key.
 """
 
 import logging
@@ -16,7 +30,6 @@ import napalm.base as _napalm_base
 from napalm.base import models
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
-from ntc_templates.parse import parse_output
 
 logger = logging.getLogger(__name__)
 
@@ -281,7 +294,7 @@ def _netmask_to_prefix(netmask: str) -> int:
 
 
 class FortiOSSSHDriver(_napalm_base.NetworkDriver):
-    """FortiOS NAPALM driver using SSH CLI + ntc-templates (read-only subset for device-discovery)."""
+    """FortiOS NAPALM driver over the SSH CLI (read-only subset for device-discovery)."""
 
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
         """Initialize the driver."""
@@ -343,12 +356,13 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
         intf_raw = self.device.send_command("get system interface physical")
         interface_list: list[str] = []
         try:
-            intf_parsed = parse_output(
-                platform="fortinet", command="get system interface physical", data=intf_raw
-            )
-            interface_list = sorted(r["name"] for r in intf_parsed if r.get("name"))
+            intf_rows, _ = _parse_physical(intf_raw)
+            interface_list = sorted(r["name"] for r in intf_rows if r.get("name"))
         except Exception:
-            logger.debug("Failed to parse 'get system interface physical' output", exc_info=True)
+            logger.warning(
+                "fortinet.get_facts: parsing 'get system interface physical' failed",
+                exc_info=True,
+            )
 
         return {
             "hostname": hostname,
@@ -375,12 +389,25 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
         """
         raw = self.device.send_command("get system interface physical")
         try:
-            parsed = parse_output(
-                platform="fortinet", command="get system interface physical", data=raw
-            )
+            parsed, anomalies = _parse_physical(raw)
         except Exception:
-            logger.debug("Failed to parse 'get system interface physical' output", exc_info=True)
+            logger.warning(
+                "fortinet.get_interfaces: parsing 'get system interface physical' failed",
+                exc_info=True,
+            )
             return {}
+
+        if (raw or "").strip() and not parsed:
+            logger.warning(
+                "fortinet.get_interfaces: 'get system interface physical' returned output "
+                "but no interfaces could be parsed from it"
+            )
+        elif anomalies:
+            logger.warning(
+                "fortinet.get_interfaces: %d problem(s) reading 'get system interface "
+                "physical'; some interfaces may be missing",
+                anomalies,
+            )
 
         mac_by_intf = _parse_fnsysctl_mac_addresses(
             self.device.send_command("fnsysctl ifconfig")
@@ -415,10 +442,25 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
         """Return IP addresses per interface."""
         raw = self.device.send_command("get system interface")
         try:
-            parsed = parse_output(platform="fortinet", command="get system interface", data=raw)
+            parsed, anomalies = _parse_flat(raw)
         except Exception:
-            logger.debug("Failed to parse 'get system interface' output", exc_info=True)
+            logger.warning(
+                "fortinet.get_interfaces_ip: parsing 'get system interface' failed",
+                exc_info=True,
+            )
             return {}
+
+        if (raw or "").strip() and not parsed:
+            logger.warning(
+                "fortinet.get_interfaces_ip: 'get system interface' returned output but "
+                "no interfaces could be parsed from it"
+            )
+        elif anomalies:
+            logger.warning(
+                "fortinet.get_interfaces_ip: %d problem(s) reading 'get system interface'; "
+                "some addresses may be missing",
+                anomalies,
+            )
 
         interfaces_ip: dict = {}
         for row in parsed:
@@ -434,6 +476,25 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
                 }
             except (ValueError, AttributeError):
                 continue
+
+        # Signal 3, keyed on address SHAPE rather than on the `ip_address` name. The
+        # two failures it catches are FortiOS renaming `ip:` and a regression in the
+        # rename inside _parse_flat, and in both cases `ip_address` is absent, so a
+        # name-keyed check cannot see either. Management keys are excluded or a box
+        # whose interfaces are all unnumbered but which reports a management address
+        # warns on every poll.
+        addressable = any(
+            _valid_quad(token) and token != "0.0.0.0"
+            for row in parsed
+            for key, value in row.items()
+            if key not in _SIGNAL_THREE_IGNORED_KEYS
+            for token in value.split()
+        )
+        if addressable and not interfaces_ip:
+            logger.warning(
+                "fortinet.get_interfaces_ip: interfaces reported addresses but none "
+                "were emitted"
+            )
 
         return interfaces_ip
 
