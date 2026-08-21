@@ -26,6 +26,38 @@ _SET_FIELDS_RE = re.compile(
 )
 _ENC_RE = re.compile(r"(\bENC\b)\s+\S+")
 
+# A field marker is `key:` anchored on both sides: preceded by start-of-line or
+# whitespace, followed by whitespace or end-of-line. Both anchors are load-bearing.
+# Without the left one, `(Duplex:` in `speed: 1000Mbps (Duplex: full)` reads as a key
+# on every up interface, 27 of the 73 blocks in tests/.../corpus/. Without the right
+# one, a colon inside free text such as `description: site-a:core` splits the value.
+# The cost is that `status:up` with no space is not a field; it is counted as an
+# anomaly rather than guessed at.
+_FIELD_MARKER_RE = re.compile(r"(?:^|(?<=\s))([A-Za-z][A-Za-z0-9_.-]*):(?=\s|$)")
+
+
+def _scan_fields(line: str) -> tuple[dict[str, str], int]:
+    """
+    Return the ``key: value`` pairs on one line, plus an anomaly count.
+
+    Keys are lowercased and keep their hyphens, so this yields ``netbios-forward``
+    where the replaced ntc-template yielded ``netbios_forward``. A key's first
+    occurrence wins; a repeat is counted rather than silently resolved, because
+    first-wins and last-wins are both defensible and would report different
+    interfaces to NetBox.
+    """
+    marks = list(_FIELD_MARKER_RE.finditer(line))
+    fields: dict[str, str] = {}
+    anomalies = 0
+    for index, mark in enumerate(marks):
+        key = mark.group(1).lower()
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(line)
+        if key in fields:
+            anomalies += 1
+            continue
+        fields[key] = line[mark.end():end].strip()
+    return fields, anomalies
+
 
 def _sanitize_config(text: str) -> str:
     text = _SET_FIELDS_RE.sub(r"\1 <redacted>", text)
