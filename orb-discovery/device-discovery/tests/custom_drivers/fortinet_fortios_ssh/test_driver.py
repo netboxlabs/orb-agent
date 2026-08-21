@@ -457,3 +457,70 @@ def test_getters_tolerate_a_none_command_result(getter, caplog):
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         assert getattr(driver, getter)() == {}
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+# ---------------------------------------------------------------------------
+# Unknown-field drift logging
+# ---------------------------------------------------------------------------
+
+
+def test_unknown_field_is_logged_once_at_debug(caplog):
+    """The drift sensor that replaces the template's `^. -> Error`."""
+    raw = (
+        "== [onboard]\n    ==[port1]\n        medium: n/a\n        status: up\n"
+        "        speed: 1000Mbps (Duplex: full)\n    ==[port2]\n        medium: n/a\n"
+        "        status: up\n        speed: 1000Mbps (Duplex: full)\n"
+    )
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        rows, anomalies = _parse_physical(raw)
+    assert len(rows) == 2 and anomalies == 0
+    medium_logs = [r for r in caplog.records if "medium" in r.getMessage()]
+    assert len(medium_logs) == 1, "log once per distinct unknown key per parse"
+
+
+def test_known_fields_are_not_logged(caplog):
+    """Real captures must log nothing, or the one line that matters is buried."""
+    raw = (
+        "== [onboard]\n    ==[port1]\n        mode: static\n        ip: 0.0.0.0 0.0.0.0\n"
+        "        ipv6: ::/0\n        status: up\n        speed: n/a\n        FEC: none\n"
+    )
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        _parse_physical(raw)
+    assert [r for r in caplog.records if "unknown field" in r.getMessage()] == []
+
+
+def test_parse_flat_logs_an_unknown_field_once_per_parse(caplog):
+    """The flat path carries the reporter's trunk:/switch:/aggregate:."""
+    raw = (
+        "name: port1 ip: 10.0.0.1 255.255.255.0 status: up trunk: disable\n"
+        "name: port2 ip: 10.0.0.2 255.255.255.0 status: up trunk: disable\n"
+    )
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        rows, anomalies = _parse_flat(raw)
+    assert len(rows) == 2 and anomalies == 0
+    assert len([r for r in caplog.records if "trunk" in r.getMessage()]) == 1
+
+
+def test_parse_flat_does_not_log_known_fields(caplog):
+    """A real flat line must produce no drift noise."""
+    raw = (
+        "name: port1 mode: static ip: 10.0.0.1 255.255.255.0 status: up "
+        "netbios-forward: disable type: physical ring-rx: 0 ring-tx: 0\n"
+    )
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        _parse_flat(raw)
+    assert [r for r in caplog.records if "unknown field" in r.getMessage()] == []
+
+
+def test_7412_flat_scenario_does_not_warn_about_addresses(caplog):
+    """port1 is unnumbered, so signal 3 must stay silent on this scenario."""
+    mock_dir = Path(__file__).parent / "mock_data" / "test_get_interfaces_ip" / "7412"
+    driver = object.__new__(FortiOSSSHDriver)
+    driver.hostname = driver.username = driver.password = "x"
+    driver.timeout = 60
+    driver.device = FakeCLIDevice(mock_dir)
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces_ip() == {
+            "port2": {"ipv4": {"10.10.10.1": {"prefix_length": 24}}}
+        }
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []

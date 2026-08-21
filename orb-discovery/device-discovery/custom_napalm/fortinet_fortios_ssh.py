@@ -72,6 +72,37 @@ def _scan_fields(line: str) -> tuple[dict[str, str], int]:
     return fields, anomalies
 
 
+# Every field key the vendored captures emit, derived from them rather than
+# transcribed. Membership must be the OBSERVED keys, not the six the driver
+# consumes: with only the consumed keys one real capture logs 299 debug lines per
+# poll, burying the new field that matters. tests/.../test_corpus_parity.py asserts
+# no capture logs anything, so a key dropped from here fails CI.
+_KNOWN_FIELD_KEYS = frozenset({
+    "drop-fragment", "drop-overlapped-fragment", "explicit-ftp-proxy",
+    "explicit-web-proxy", "fec", "fec_cap", "ip", "ipv6", "management-ip", "mode",
+    "mtu-override", "name", "netbios-forward", "netflow-sampler",
+    "proxy-captive-portal", "ring-rx", "ring-tx", "scan-botnet-connections",
+    "sflow-sampler", "speed", "src-check", "status", "switch-controller-feature",
+    "type", "wccp",
+})
+
+
+def _log_unknown_keys(keys, seen: set[str]) -> None:
+    """
+    Log each unfamiliar field key once per parse, at debug.
+
+    This is the drift sensor that dropping the template's ``^. -> Error`` gives up:
+    a new FortiOS field is now ignored on purpose, and this is what makes it visible
+    so it can be sent upstream. Once per distinct key per parse, because a device
+    with the same new field on forty interfaces should log one line, not forty.
+    """
+    for key in keys:
+        if key in _KNOWN_FIELD_KEYS or key in seen:
+            continue
+        seen.add(key)
+        logger.debug("fortinet: unknown field %r in interface output", key)
+
+
 # Interface headers are matched against the stripped line, as a FULL match. The
 # trailing anchor is what makes `==[port2] (SFP+)` an unreadable line rather than a
 # header with trailing text, which is what stops its fields landing on the interface
@@ -109,6 +140,7 @@ def _parse_physical(raw: str | None) -> tuple[list[dict[str, str]], int]:  # noq
     """
     rows: list[dict[str, str]] = []
     anomalies = 0
+    seen: set[str] = set()
     block: dict[str, str] | None = None
 
     def close() -> None:
@@ -135,6 +167,7 @@ def _parse_physical(raw: str | None) -> tuple[list[dict[str, str]], int]:  # noq
         if block is not None:
             fields, duplicates = _scan_fields(line)
             anomalies += duplicates
+            _log_unknown_keys(fields, seen)
             if fields:
                 if "speed" in fields:
                     fields["speed"] = _normalise_speed(fields["speed"])
@@ -183,6 +216,7 @@ def _parse_flat(raw: str | None) -> tuple[list[dict[str, str]], int]:
     """
     rows: list[dict[str, str]] = []
     anomalies = 0
+    seen: set[str] = set()
 
     for line in (raw or "").splitlines():
         if not line.strip():
@@ -191,6 +225,7 @@ def _parse_flat(raw: str | None) -> tuple[list[dict[str, str]], int]:
             continue
         fields, duplicates = _scan_fields(line)
         anomalies += duplicates
+        _log_unknown_keys(fields, seen)
         if not fields.get("name"):
             # Any non-blank, non-header line that yields no usable name: a stray
             # line, or a `name:` whose value is empty. Emitting a nameless row would
