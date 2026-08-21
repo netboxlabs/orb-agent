@@ -134,6 +134,70 @@ def _parse_physical(raw: str | None) -> tuple[list[dict[str, str]], int]:  # noq
     return rows, anomalies
 
 
+_QUAD_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+# Keys signal 3 must not read when hunting an address-shaped token: a netmask is
+# address-shaped, and a management address on an otherwise unnumbered box must not
+# make that signal fire on every poll.
+_SIGNAL_THREE_IGNORED_KEYS = frozenset(
+    {"netmask", "management-ip", "management_ip", "management_netmask"}
+)
+# `ip:` and `management-ip:` each carry "<address> <netmask>". The pair is emitted only
+# when both are real dotted quads, restoring what Value IP_ADDRESS/NETMASK enforced:
+# _netmask_to_prefix silently accepts garbage (255.2 -> 9), so a bad mask would reach
+# NetBox as a prefix, and a prefix above 32 raises inside an unguarded ip_interface()
+# call downstream that aborts the whole device's ingest.
+_FLAT_ADDRESS_KEYS = (
+    ("ip", "ip_address", "netmask"),
+    ("management-ip", "management_ip", "management_netmask"),
+)
+
+
+def _valid_quad(value: str) -> bool:
+    """Return True when VALUE is four dot-separated decimal octets in 0-255."""
+    if not _QUAD_RE.match(value):
+        return False
+    return all(int(part) <= 255 for part in value.split("."))
+
+
+def _parse_flat(raw: str | None) -> tuple[list[dict[str, str]], int]:
+    """
+    Parse ``get system interface`` into rows, plus an anomaly count.
+
+    Dispatch is on ``name:``. Nothing is derived from the ``== [ x ]`` header, not
+    even as a fallback: headers are 1:1 with rows in every vendored capture, but one
+    of them has ``== [ VPN-TUN ]`` above ``name: VPN-LAB``, so a header can disagree
+    with the interface it precedes.
+    """
+    rows: list[dict[str, str]] = []
+    anomalies = 0
+
+    for line in (raw or "").splitlines():
+        if not line.strip():
+            continue
+        if line.strip().startswith("=="):
+            continue
+        fields, duplicates = _scan_fields(line)
+        anomalies += duplicates
+        if not fields.get("name"):
+            # Any non-blank, non-header line that yields no usable name: a stray
+            # line, or a `name:` whose value is empty. Emitting a nameless row would
+            # make len(rows) non-zero and silence the nothing-parsed warning.
+            anomalies += 1
+            continue
+        for source, address_key, netmask_key in _FLAT_ADDRESS_KEYS:
+            value = fields.pop(source, None)
+            if value is None:
+                continue
+            parts = value.split()
+            if len(parts) == 2 and _valid_quad(parts[0]) and _valid_quad(parts[1]):
+                fields[address_key], fields[netmask_key] = parts
+            else:
+                anomalies += 1
+        rows.append(fields)
+
+    return rows, anomalies
+
+
 def _sanitize_config(text: str) -> str:
     text = _SET_FIELDS_RE.sub(r"\1 <redacted>", text)
     text = _ENC_RE.sub(r"\1 <redacted>", text)

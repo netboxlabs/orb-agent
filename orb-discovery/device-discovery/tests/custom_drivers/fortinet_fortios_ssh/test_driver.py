@@ -7,9 +7,11 @@ import pytest
 from custom_napalm.fortinet_fortios_ssh import (
     FortiOSSSHDriver,
     _normalise_speed,
+    _parse_flat,
     _parse_fnsysctl_mac_addresses,
     _parse_physical,
     _scan_fields,
+    _valid_quad,
 )
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
@@ -246,3 +248,101 @@ def test_parse_physical_ignores_unknown_fields():
 def test_parse_physical_empty_input(raw):
     """Empty or missing output is zero rows, never an exception."""
     assert _parse_physical(raw) == ([], 0)
+
+
+# ---------------------------------------------------------------------------
+# _valid_quad / _parse_flat
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("255.255.255.0", True),
+        ("0.0.0.0", True),
+        ("255.2", False),
+        ("255.255.255.255.255", False),
+        ("255.255.255.256", False),
+        ("", False),
+    ],
+)
+def test_valid_quad(value, expected):
+    """Four dotted decimal octets in 0-255, restoring what the template enforced."""
+    assert _valid_quad(value) is expected
+
+
+FLAT_TWO_ROWS = """\
+== [ port1 ]
+name: port1 mode: static ip: 10.0.0.1 255.255.255.0 status: up type: physical
+== [ mgmt ]
+name: mgmt management-ip: 10.99.99.1 255.255.255.0 ip: 0.0.0.0 0.0.0.0 status: up
+"""
+
+
+def test_parse_flat_splits_ip_and_keeps_management_ip_distinct():
+    """The two-token ip becomes ip_address + netmask, under the names the getter reads."""
+    rows, anomalies = _parse_flat(FLAT_TWO_ROWS)
+    assert anomalies == 0
+    assert [(r["name"], r["ip_address"], r["netmask"]) for r in rows] == [
+        ("port1", "10.0.0.1", "255.255.255.0"),
+        ("mgmt", "0.0.0.0", "0.0.0.0"),
+    ]
+    assert rows[1]["management_ip"] == "10.99.99.1"
+    assert rows[1]["management_netmask"] == "255.255.255.0"
+    assert "ip" not in rows[0] and "management-ip" not in rows[1]
+
+
+def test_parse_flat_ignores_headers_without_counting_them():
+    """Headers are 1:1 with rows, so counting them would warn on every device."""
+    rows, anomalies = _parse_flat(FLAT_TWO_ROWS)
+    assert len(rows) == 2
+    assert anomalies == 0
+
+
+def test_parse_flat_derives_nothing_from_the_header():
+    """One real capture has `== [ VPN-TUN ]` above `name: VPN-LAB`."""
+    raw = "== [ VPN-TUN ]\nname: VPN-LAB ip: 10.1.1.1 255.255.255.0 status: up\n"
+    rows, _ = _parse_flat(raw)
+    assert [r["name"] for r in rows] == ["VPN-LAB"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "10.20.30.40",                      # truncated: one token
+        "10.20.30.40 255.2",                # malformed mask
+        "10.20.30.40 255.255.255.256",      # octet out of range
+        "10.20.30.40 255.255.255.0 extra",  # three tokens: pins `== 2`, not `>= 2`
+    ],
+)
+def test_parse_flat_drops_an_unusable_address_pair(value):
+    """Anything but two valid dotted quads yields no address, and is counted."""
+    rows, anomalies = _parse_flat(f"name: port1 ip: {value} status: up\n")
+    assert rows[0]["name"] == "port1"
+    assert "ip_address" not in rows[0] and "netmask" not in rows[0]
+    assert anomalies == 1
+
+
+def test_parse_flat_empty_name_is_not_a_row():
+    """A nameless row would make len(rows) non-zero and silence signal 1."""
+    rows, anomalies = _parse_flat("name:  status: up\n")
+    assert rows == []
+    assert anomalies == 1
+
+
+def test_parse_flat_ignores_unknown_fields():
+    """trunk:/switch:/aggregate: from 7.4.12 change nothing."""
+    raw = (
+        "name: port1 ip: 10.0.0.1 255.255.255.0 status: up "
+        "trunk: disable switch: sw0 aggregate: agg1\n"
+    )
+    rows, anomalies = _parse_flat(raw)
+    assert (rows[0]["name"], rows[0]["ip_address"]) == ("port1", "10.0.0.1")
+    assert rows[0]["trunk"] == "disable"
+    assert anomalies == 0
+
+
+@pytest.mark.parametrize("raw", [None, "", "   \n\n"])
+def test_parse_flat_empty_input(raw):
+    """Empty or missing output is zero rows, never an exception."""
+    assert _parse_flat(raw) == ([], 0)
