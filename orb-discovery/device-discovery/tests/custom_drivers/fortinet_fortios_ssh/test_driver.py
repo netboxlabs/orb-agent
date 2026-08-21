@@ -1,5 +1,6 @@
 """Unit tests for custom_napalm.fortinet_fortios_ssh.FortiOSSSHDriver."""
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -346,3 +347,113 @@ def test_parse_flat_ignores_unknown_fields():
 def test_parse_flat_empty_input(raw):
     """Empty or missing output is zero rows, never an exception."""
     assert _parse_flat(raw) == ([], 0)
+
+
+# ---------------------------------------------------------------------------
+# Parse signals
+# ---------------------------------------------------------------------------
+
+_LOGGER_NAME = "custom_napalm.fortinet_fortios_ssh"
+
+
+def _driver_with(responses: dict[str, str | None]) -> FortiOSSSHDriver:
+    """Build a driver whose device returns canned text per command."""
+
+    class _Device:
+        def send_command(self, command, **_kwargs):
+            return responses.get(command, "")
+
+    driver = object.__new__(FortiOSSSHDriver)
+    driver.hostname, driver.username, driver.password = "h", "u", "p"
+    driver.timeout = 60
+    driver.device = _Device()
+    return driver
+
+
+def test_signal_one_warns_when_output_parsed_to_nothing(caplog):
+    """Non-empty output and zero rows is the state the reporter hit."""
+    driver = _driver_with({"get system interface physical": "Command fail. Return code -61\n"})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces() == {}
+    assert any("no interfaces could be parsed" in r.getMessage() for r in caplog.records)
+
+
+def test_signal_one_is_silent_on_empty_output(caplog):
+    """An empty answer is not evidence of a parsing defect."""
+    driver = _driver_with({"get system interface physical": ""})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces() == {}
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+def test_signal_two_warns_on_unreadable_lines(caplog):
+    """Rows parsed, but something in the output could not be read."""
+    raw = (
+        "== [onboard]\n    ==[port1]\n        status: up\n"
+        "        speed: 1000Mbps (Duplex: full)\n    ==[port2] (SFP+)\n        status: up\n"
+    )
+    driver = _driver_with({"get system interface physical": raw})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        interfaces = driver.get_interfaces()
+    assert "port1" in interfaces and "port2" not in interfaces
+    assert any("problem(s) reading" in r.getMessage() for r in caplog.records)
+
+
+def test_flat_signal_one_warns_when_output_parsed_to_nothing(caplog):
+    """The flat command's counterpart of signal 1."""
+    driver = _driver_with({"get system interface": "Command fail. Return code -61\n"})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces_ip() == {}
+    assert any("no interfaces could be parsed" in r.getMessage() for r in caplog.records)
+
+
+def test_flat_signal_two_warns_on_unreadable_lines(caplog):
+    """One row parsed, its address dropped: the anomaly must surface."""
+    driver = _driver_with(
+        {"get system interface": "name: port1 ip: 10.20.30.40 255.2 status: up\n"}
+    )
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces_ip() == {}
+    assert any("problem(s) reading" in r.getMessage() for r in caplog.records)
+
+
+def test_signal_three_warns_when_addresses_were_present_but_none_emitted(caplog):
+    """Catches a future rename of ip: silently emptying every address."""
+    raw = "name: port1 ipaddr: 10.0.0.1 255.255.255.0 status: up\n"
+    driver = _driver_with({"get system interface": raw})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces_ip() == {}
+    assert any("were emitted" in r.getMessage() for r in caplog.records)
+
+
+def test_signal_three_silent_when_every_address_is_unnumbered(caplog):
+    """45 of 102 real rows are 0.0.0.0; an all-DHCP box must not warn forever."""
+    raw = "name: port1 ip: 0.0.0.0 0.0.0.0 status: up\n"
+    driver = _driver_with({"get system interface": raw})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces_ip() == {}
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+def test_signal_three_silent_when_only_a_management_address_is_present(caplog):
+    """A management address on an unnumbered box must not warn on every poll."""
+    raw = (
+        "name: port1 management-ip: 10.99.99.1 255.255.255.0 "
+        "ip: 0.0.0.0 0.0.0.0 status: up\n"
+    )
+    driver = _driver_with({"get system interface": raw})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert driver.get_interfaces_ip() == {}
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+@pytest.mark.parametrize("getter", ["get_interfaces", "get_interfaces_ip"])
+def test_getters_tolerate_a_none_command_result(getter, caplog):
+    """policy/runner.py has no handler of its own, so nothing may escape these."""
+    command = (
+        "get system interface physical" if getter == "get_interfaces" else "get system interface"
+    )
+    driver = _driver_with({command: None})
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        assert getattr(driver, getter)() == {}
+    assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
