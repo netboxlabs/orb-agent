@@ -524,3 +524,44 @@ def test_7412_flat_scenario_does_not_warn_about_addresses(caplog):
             "port2": {"ipv4": {"10.10.10.1": {"prefix_length": 24}}}
         }
     assert [r for r in caplog.records if r.levelno == logging.WARNING] == []
+
+
+@pytest.mark.parametrize("name", ["1-P20/1", "amc-sw1/1", "port1", "npu0_vlink0", "l2t.root"])
+def test_parse_physical_accepts_any_non_bracket_interface_name(name):
+    """
+    The replaced template matched any non-whitespace name, so slashes must keep working.
+
+    FortiGate AMC and 7000-series split ports are named amc-sw1/1 and 1-P20/1. A
+    hand-listed alphabet omitted the slash, and the whole interface was dropped from
+    get_facts and get_interfaces while the template it replaced parsed it fine.
+    """
+    raw = (
+        f"== [onboard]\n    ==[{name}]\n        mode: static\n"
+        "        status: up\n        speed: 25000Mbps (Duplex: full)\n"
+    )
+    rows, anomalies = _parse_physical(raw)
+    assert rows == [
+        {"name": name, "mode": "static", "status": "up", "speed": "25000"}
+    ]
+    assert anomalies == 0
+
+
+def test_parse_physical_counts_a_speed_it_cannot_read():
+    """An unreadable rate is reported, not passed off as a missing one."""
+    raw = (
+        "== [onboard]\n    ==[port1]\n        status: up\n        speed: 10Gbps (Duplex: full)\n"
+    )
+    rows, anomalies = _parse_physical(raw)
+    assert [(r["name"], r["status"], r["speed"]) for r in rows] == [("port1", "up", "")]
+    assert anomalies == 1, "a present but unreadable speed must surface"
+
+
+def test_parse_physical_discards_a_block_whose_status_is_empty():
+    """An empty status would reach NetBox as is_up=False, which is a wrong value."""
+    raw = (
+        "== [onboard]\n    ==[port1]\n        status: \n        speed: n/a\n"
+        "    ==[port2]\n        status: up\n        speed: n/a\n"
+    )
+    rows, anomalies = _parse_physical(raw)
+    assert [r["name"] for r in rows] == ["port2"]
+    assert anomalies == 1

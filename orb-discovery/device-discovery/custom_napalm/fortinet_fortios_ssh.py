@@ -106,9 +106,14 @@ def _log_unknown_keys(keys, seen: set[str]) -> None:
 # Interface headers are matched against the stripped line, as a FULL match. The
 # trailing anchor is what makes `==[port2] (SFP+)` an unreadable line rather than a
 # header with trailing text, which is what stops its fields landing on the interface
-# above it. The `:` in the name class is untested insurance; `.` is exercised by
-# names such as l2t.root in the sibling command.
-_PHYS_HEADER_RE = re.compile(r"^==\s*\[\s*([A-Za-z0-9][A-Za-z0-9_.:-]*)\s*\]$")
+# above it.
+#
+# The name is any run of non-whitespace, non-bracket characters, keeping the `\S+`
+# contract of the template this replaces. Narrowing it to a hand-listed alphabet
+# looked tidier and silently dropped real hardware: FortiGate AMC and 7000-series
+# split ports are named `amc-sw1/1` and `1-P20/1`, and the slash is not in any such
+# list until someone remembers it.
+_PHYS_HEADER_RE = re.compile(r"^==\s*\[\s*([^\]\s]+)\s*\]$")
 _SPEED_RE = re.compile(r"^(\d+)\s*Mbps\b")
 
 
@@ -141,7 +146,11 @@ def _close_physical_block(
     """
     if block is None:
         return 0
-    if "status" in block and "speed" in block:
+    # status must have a value, not merely be present: an empty one would reach
+    # NetBox as is_up=False, which is a wrong value rather than an absent one. speed
+    # need only be present, because an unreadable rate normalises to empty on
+    # purpose and is counted where it is read.
+    if block.get("status") and "speed" in block:
         rows.append(block)
         return 0
     return 1
@@ -161,7 +170,15 @@ def _absorb_physical_fields(
     if not fields:
         return False, anomalies
     if "speed" in fields:
-        fields["speed"] = _normalise_speed(fields["speed"])
+        normalised = _normalise_speed(fields["speed"])
+        # A value that was present but unreadable, such as a unit that is not Mbps,
+        # is counted. The row is still emitted: the interface and its up/down state
+        # are known, only the rate is not, so dropping it would lose more than it
+        # protects. Without this the interface reaches NetBox with no speed and no
+        # warning, which is the silence this change exists to remove.
+        if fields["speed"] and not normalised:
+            anomalies += 1
+        fields["speed"] = normalised
     block.update(fields)
     return True, anomalies
 
