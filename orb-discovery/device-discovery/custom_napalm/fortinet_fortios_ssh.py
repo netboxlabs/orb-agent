@@ -59,6 +59,81 @@ def _scan_fields(line: str) -> tuple[dict[str, str], int]:
     return fields, anomalies
 
 
+# Interface headers are matched against the stripped line, as a FULL match. The
+# trailing anchor is what makes `==[port2] (SFP+)` an unreadable line rather than a
+# header with trailing text, which is what stops its fields landing on the interface
+# above it. The `:` in the name class is untested insurance; `.` is exercised by
+# names such as l2t.root in the sibling command.
+_PHYS_HEADER_RE = re.compile(r"^==\s*\[\s*([A-Za-z0-9][A-Za-z0-9_.:-]*)\s*\]$")
+_SPEED_RE = re.compile(r"^(\d+)\s*Mbps\b")
+
+
+def _normalise_speed(value: str) -> str:
+    """
+    Return the digits of an Mbps speed, the ``n/a`` sentinel, or an empty string.
+
+    ``get_interfaces`` tests for the literal ``n/a`` and then calls ``float()``, so
+    both forms the replaced template produced are preserved. A unit that is not Mbps
+    yields empty rather than its digits: ``10Gbps`` read as ``10`` would reach NetBox
+    as 10 Mbps on a 10G port.
+    """
+    value = value.strip()
+    if value.lower().startswith("n/a"):
+        return "n/a"
+    match = _SPEED_RE.match(value)
+    return match.group(1) if match else ""
+
+
+def _parse_physical(raw: str | None) -> tuple[list[dict[str, str]], int]:  # noqa: C901 - one flat state machine reads clearer than split helpers
+    """
+    Parse ``get system interface physical`` into rows, plus an anomaly count.
+
+    Unknown fields are kept and ignored; that tolerance is the point. A block is
+    emitted only when it scanned both ``status`` and ``speed``, the two fields
+    ``get_interfaces`` consumes, so a half-read block is absent rather than reported
+    as down with no speed. End of input closes the open block, which is load-bearing:
+    every capture under tests/.../corpus/ ends on a field line.
+    """
+    rows: list[dict[str, str]] = []
+    anomalies = 0
+    block: dict[str, str] | None = None
+
+    def close() -> None:
+        nonlocal block, anomalies
+        if block is None:
+            return
+        if "status" in block and "speed" in block:
+            rows.append(block)
+        else:
+            anomalies += 1
+        block = None
+
+    for line in (raw or "").splitlines():
+        if not line.strip():
+            continue
+        header = _PHYS_HEADER_RE.match(line.strip())
+        if header:
+            close()
+            # An indented header names an interface; a non-indented one is a group
+            # header such as `== [onboard]`, which is normal output, not an anomaly.
+            if line[:1].isspace():
+                block = {"name": header.group(1)}
+            continue
+        if block is not None:
+            fields, duplicates = _scan_fields(line)
+            anomalies += duplicates
+            if fields:
+                if "speed" in fields:
+                    fields["speed"] = _normalise_speed(fields["speed"])
+                block.update(fields)
+                continue
+        close()
+        anomalies += 1
+
+    close()
+    return rows, anomalies
+
+
 def _sanitize_config(text: str) -> str:
     text = _SET_FIELDS_RE.sub(r"\1 <redacted>", text)
     text = _ENC_RE.sub(r"\1 <redacted>", text)
