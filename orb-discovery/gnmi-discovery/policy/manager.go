@@ -62,6 +62,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	if err := yaml.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
+	config.WarnUnknownPolicyKeys(data, m.logger)
 	if len(payload.Policies) == 0 {
 		return nil, errors.New("no policies found in the request")
 	}
