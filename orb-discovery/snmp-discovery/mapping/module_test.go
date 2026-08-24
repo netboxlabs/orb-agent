@@ -182,17 +182,22 @@ func TestExtractModuleInventory_UnclassifiableClassSkipped(t *testing.T) {
 	assert.Empty(t, inv.Modules)
 }
 
-// TestExtractModuleInventory_DuplicateSerialDedup — two class=9 rows
-// sharing a serial; first occurrence (sorted ascending by EntIndex)
-// wins, second is dropped.
+// TestExtractModuleInventory_DuplicateSerialDedup — two class=9 rows sharing a
+// serial AND a location; first occurrence (sorted ascending by EntIndex) wins,
+// second is dropped.
+//
+// Both rows sit in the same bay at the same position, because that is what makes
+// them the same physical FRU reported twice. This originally placed them in
+// different slots, which cannot describe one part: see
+// TestExtractModuleInventory_InheritedSerialAcrossBaysKeepsBoth for why that
+// shape must now keep both.
 func TestExtractModuleInventory_DuplicateSerialDedup(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	rows := []fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "FOO", "C9404R", "Chassis", ""},
 		{"100", "1", "5", "1", "Slot 1", "", "", "Slot 1", ""},
 		{"101", "100", "9", "1", "Linecard A", "DUPSERIAL01", "C9400-LC-48U", "", ""},
-		{"200", "1", "5", "2", "Slot 2", "", "", "Slot 2", ""},
-		{"201", "200", "9", "1", "Linecard B (dup)", "DUPSERIAL01", "C9400-LC-48U", "", ""},
+		{"102", "100", "9", "1", "Linecard A (dup)", "DUPSERIAL01", "C9400-LC-48U", "", ""},
 	}
 	inv := extractModuleInventory(buildOIDs(rows), logger)
 	require.Len(t, inv.Modules, 1, "duplicate-serial second occurrence must be dropped")
@@ -326,10 +331,12 @@ func TestExtractModuleInventory_DedupUsesNumericEntIndexOrder(t *testing.T) {
 		{"1", "0", "3", "1", "Chassis", "CHSER01", "C9404R", "Chassis", ""},
 		{"100", "1", "5", "1", "Slot 1", "", "", "Slot 1", ""},
 		{"200", "1", "5", "2", "Slot 2", "", "", "Slot 2", ""},
+		// Same bay and position, so the rows describe one FRU and the dedup
+		// fires; the assertion is about WHICH of them wins.
 		// EntIndex 9 — should win in numeric order.
 		{"9", "100", "9", "1", "Linecard 9", "DUPE-SER-01", "C9400-LC-48U", "First card", ""},
 		// EntIndex 10 — same serial; should lose in numeric order.
-		{"10", "200", "9", "1", "Linecard 10", "DUPE-SER-01", "C9400-LC-48U", "Second card", ""},
+		{"10", "100", "9", "1", "Linecard 10", "DUPE-SER-01", "C9400-LC-48U", "Second card", ""},
 	}
 	inv := extractModuleInventory(buildOIDs(rows), logger)
 	require.Len(t, inv.Modules, 1, "duplicate serial collapsed")
@@ -412,4 +419,24 @@ func TestBuildIfaceModuleMap_TransceiverWinsOverContainingModule(t *testing.T) {
 	got := buildIfaceModuleMap(inv, aliasMap, emitted)
 	require.Contains(t, got, "7")
 	assert.Same(t, optic, got["7"], "the transceiver is the more specific FRU for the port")
+}
+
+// TestExtractModuleInventory_InheritedSerialAcrossBaysKeepsBoth — a chassis that
+// stamps its serial onto modules in SEPARATE bay containers. Each module's own
+// parentRelPos is 1, because that is its position inside its own bay, so serial
+// plus position alone cannot separate them: the containment parent has to be
+// part of the location too.
+func TestExtractModuleInventory_InheritedSerialAcrossBaysKeepsBoth(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	rows := []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SN0000000101", "SW-CHASSIS", "Chassis", ""},
+		{"100", "1", "5", "1", "Slot 1", "", "", "Slot 1", ""},
+		{"101", "100", "9", "1", "Module 1", "SN0000000101", "SW-LC-48", "Line Module", ""},
+		{"200", "1", "5", "2", "Slot 2", "", "", "Slot 2", ""},
+		{"201", "200", "9", "1", "Module 2", "SN0000000101", "SW-LC-48", "Line Module", ""},
+	}
+	inv := extractModuleInventory(buildOIDs(rows), logger)
+	require.Len(t, inv.Modules, 2, "modules in different bays are distinct even with one serial")
+	assert.ElementsMatch(t, []string{"101", "201"},
+		[]string{inv.Modules[0].EntIndex, inv.Modules[1].EntIndex})
 }

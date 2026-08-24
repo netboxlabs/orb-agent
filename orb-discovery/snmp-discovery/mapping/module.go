@@ -525,20 +525,26 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			synthesizedBay = true
 		}
 		if r.Serial != "" {
-			// Keyed by serial AND position, not serial alone. A serial
-			// identifies a physical part; parentRelPos identifies a
-			// position within the parent. Same serial at the same
-			// position is one FRU reported twice. Same serial at
-			// different positions is a platform stamping the chassis
-			// serial onto its sub-FRUs, where every FRU after the first
-			// would otherwise be dropped -- including the line module
-			// the access ports hang off.
-			key := strings.ToLower(strings.TrimSpace(r.Serial)) + "\x00" + r.ParentRel
+			// Keyed by serial AND physical location, not serial alone.
+			// A serial identifies a physical part; the location is
+			// (containment parent, position within that parent). One
+			// part cannot occupy two locations, so two rows agreeing on
+			// serial AND location are the same FRU reported twice --
+			// the case this guard exists for. Rows that agree only on
+			// serial are a platform stamping the chassis serial onto
+			// its sub-FRUs, and dropping those loses real hardware:
+			// sibling FRUs in one chassis (differing parentRelPos, as
+			// on a fixed-port stack whose access ports hang off the
+			// line module) and modules in separate bays (differing
+			// containedIn, each at position 1 inside its own bay).
+			key := strings.ToLower(strings.TrimSpace(r.Serial)) +
+				"\x00" + r.ContainedIn + "\x00" + r.ParentRel
 			if _, dup := seenSerial[key]; dup {
 				logger.Warn("module discovery: duplicate-serial module dropped",
 					"ent", r.EntIndex,
 					"serial", r.Serial,
 					"model", r.Model,
+					"contained_in", r.ContainedIn,
 					"parent_rel", r.ParentRel,
 					"reason", "dup_serial")
 				if c := metrics.GetModulesDropped(); c != nil {
