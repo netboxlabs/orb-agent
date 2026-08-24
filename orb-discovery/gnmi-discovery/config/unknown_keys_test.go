@@ -3,8 +3,10 @@ package config
 import (
 	"bytes"
 	"log/slog"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func captureWarnings(t *testing.T, yamlText string) string {
@@ -17,8 +19,8 @@ func captureWarnings(t *testing.T, yamlText string) string {
 
 // A key written at config level instead of config.options is reported with the
 // path it belongs at. This is the shape that made a real report unreproducible:
-// the key is dropped, module discovery stays off, and the emitted entity count
-// is identical with and without it.
+// the key is dropped, the option stays off, and the emitted entity count is
+// identical with and without it.
 func TestMisplacedOptionNamesTheCorrectPath(t *testing.T) {
 	out := captureWarnings(t, `
 policies:
@@ -31,12 +33,8 @@ policies:
       targets:
         - host: 10.0.0.1
 `)
-	if !strings.Contains(out, "capture_config") {
-		t.Fatalf("key not reported: %s", out)
-	}
-	if !strings.Contains(out, "options.capture_config") {
-		t.Fatalf("expected the correct path in the warning, got: %s", out)
-	}
+	require.Contains(t, out, "capture_config")
+	require.Contains(t, out, "options.capture_config", "the warning must name the path the key belongs at")
 }
 
 func TestUnknownKeyReportedWithoutSuggestion(t *testing.T) {
@@ -49,12 +47,8 @@ policies:
       targets:
         - host: 10.0.0.1
 `)
-	if !strings.Contains(out, "totally_made_up_key") {
-		t.Fatalf("key not reported: %s", out)
-	}
-	if strings.Contains(out, "did_you_mean") {
-		t.Fatalf("should not invent a suggestion: %s", out)
-	}
+	require.Contains(t, out, "totally_made_up_key")
+	assert.NotContains(t, out, "did_you_mean", "a key matching nothing must not get an invented suggestion")
 }
 
 func TestUnknownKeyInsideOptionsIsReported(t *testing.T) {
@@ -69,9 +63,23 @@ policies:
       targets:
         - host: 10.0.0.1
 `)
-	if !strings.Contains(out, "nope_option") {
-		t.Fatalf("key not reported: %s", out)
-	}
+	require.Contains(t, out, "nope_option")
+}
+
+// `capture config: true` is a valid YAML mapping key, and yaml.v3 reports it
+// with the space intact. Requiring a single non-whitespace token skipped the
+// entry, hiding the very mistake this warning exists to surface.
+func TestKeyContainingWhitespaceIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      bogus key: 1
+    scope:
+      targets:
+        - host: 10.0.0.1
+`)
+	require.Contains(t, out, "bogus key")
 }
 
 // Only the config and options blocks are checked. Warning on blocks that carry
@@ -88,9 +96,7 @@ policies:
         - host: 10.0.0.1
           stray_target: 1
 `)
-	if out != "" {
-		t.Fatalf("expected silence outside config/options, got: %s", out)
-	}
+	assert.Empty(t, out, "expected silence outside config and options")
 }
 
 func TestValidPolicyIsSilent(t *testing.T) {
@@ -107,36 +113,16 @@ policies:
       targets:
         - host: 10.0.0.1
 `)
-	if out != "" {
-		t.Fatalf("valid policy must not warn, got: %s", out)
-	}
+	assert.Empty(t, out, "a valid policy must not warn")
 }
 
 func TestMalformedYamlIsLeftToThePermissiveDecode(t *testing.T) {
 	out := captureWarnings(t, "policies: [this is not a map")
-	if out != "" {
-		t.Fatalf("syntax errors are reported by the real decode, got: %s", out)
-	}
+	assert.Empty(t, out, "syntax errors are reported by the real decode")
 }
 
-func TestNilLoggerIsSafe(_ *testing.T) {
-	WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
-}
-
-// `bogus key: 1` is a valid YAML mapping key, and yaml.v3 reports it with the
-// space intact. Requiring a single non-whitespace token skipped the entry,
-// hiding the very mistake this warning exists to surface.
-func TestKeyContainingWhitespaceIsReported(t *testing.T) {
-	out := captureWarnings(t, `
-policies:
-  p1:
-    config:
-      bogus key: 1
-    scope:
-      targets:
-        - host: 10.0.0.1
-`)
-	if !strings.Contains(out, "bogus key") {
-		t.Fatalf("whitespace key not reported: %s", out)
-	}
+func TestNilLoggerIsSafe(t *testing.T) {
+	assert.NotPanics(t, func() {
+		WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
+	})
 }
