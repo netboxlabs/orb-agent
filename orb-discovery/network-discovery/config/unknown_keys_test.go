@@ -3,8 +3,10 @@ package config
 import (
 	"bytes"
 	"log/slog"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func captureWarnings(t *testing.T, yamlText string) string {
@@ -28,12 +30,8 @@ policies:
       targets:
         - 192.0.2.0/24
 `)
-	if !strings.Contains(out, "fast_mode") {
-		t.Fatalf("key not reported: %s", out)
-	}
-	if !strings.Contains(out, "scope.fast_mode") {
-		t.Fatalf("expected the correct block in the warning, got: %s", out)
-	}
+	require.Contains(t, out, "fast_mode")
+	require.Contains(t, out, "scope.fast_mode", "the warning must name the block the key belongs to")
 }
 
 func TestDefaultsKeyWrittenOnConfigNamesDefaults(t *testing.T) {
@@ -46,9 +44,7 @@ policies:
       targets:
         - 192.0.2.0/24
 `)
-	if !strings.Contains(out, "defaults.network_mask") {
-		t.Fatalf("expected the defaults block named, got: %s", out)
-	}
+	require.Contains(t, out, "defaults.network_mask")
 }
 
 func TestUnknownKeyReportedWithoutSuggestion(t *testing.T) {
@@ -61,12 +57,24 @@ policies:
       targets:
         - 192.0.2.0/24
 `)
-	if !strings.Contains(out, "totally_made_up_key") {
-		t.Fatalf("key not reported: %s", out)
-	}
-	if strings.Contains(out, "did_you_mean") {
-		t.Fatalf("should not invent a suggestion: %s", out)
-	}
+	require.Contains(t, out, "totally_made_up_key")
+	assert.NotContains(t, out, "did_you_mean", "a key matching nothing must not get an invented suggestion")
+}
+
+// `fast mode: true` is a valid YAML mapping key, and yaml.v3 reports it with
+// the space intact. Requiring a single non-whitespace token skipped the entry,
+// hiding the very mistake this warning exists to surface.
+func TestKeyContainingWhitespaceIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      fast mode: true
+    scope:
+      targets:
+        - 192.0.2.0/24
+`)
+	require.Contains(t, out, "fast mode")
 }
 
 // Only the config block is checked. Warning on blocks that carry
@@ -83,9 +91,7 @@ policies:
         - 192.0.2.0/24
       stray_scope_key: 1
 `)
-	if out != "" {
-		t.Fatalf("expected silence outside config, got: %s", out)
-	}
+	assert.Empty(t, out, "expected silence outside config")
 }
 
 func TestValidPolicyIsSilent(t *testing.T) {
@@ -101,36 +107,16 @@ policies:
         - 192.0.2.0/24
       fast_mode: true
 `)
-	if out != "" {
-		t.Fatalf("valid policy must not warn, got: %s", out)
-	}
+	assert.Empty(t, out, "a valid policy must not warn")
 }
 
 func TestMalformedYamlIsLeftToThePermissiveDecode(t *testing.T) {
 	out := captureWarnings(t, "policies: [this is not a map")
-	if out != "" {
-		t.Fatalf("syntax errors are reported by the real decode, got: %s", out)
-	}
+	assert.Empty(t, out, "syntax errors are reported by the real decode")
 }
 
-func TestNilLoggerIsSafe(_ *testing.T) {
-	WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
-}
-
-// `fast mode: true` is a valid YAML mapping key, and yaml.v3 reports it with
-// the space intact. Requiring a single non-whitespace token skipped the entry,
-// hiding the very mistake this warning exists to surface.
-func TestKeyContainingWhitespaceIsReported(t *testing.T) {
-	out := captureWarnings(t, `
-policies:
-  p1:
-    config:
-      fast mode: true
-    scope:
-      targets:
-        - 192.0.2.0/24
-`)
-	if !strings.Contains(out, "fast mode") {
-		t.Fatalf("whitespace key not reported: %s", out)
-	}
+func TestNilLoggerIsSafe(t *testing.T) {
+	assert.NotPanics(t, func() {
+		WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
+	})
 }
