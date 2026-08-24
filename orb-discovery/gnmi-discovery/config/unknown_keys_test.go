@@ -122,3 +122,21 @@ func TestMalformedYamlIsLeftToThePermissiveDecode(t *testing.T) {
 func TestNilLoggerIsSafe(_ *testing.T) {
 	WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
 }
+
+// `bogus key: 1` is a valid YAML mapping key, and yaml.v3 reports it with the
+// space intact. Requiring a single non-whitespace token skipped the entry,
+// hiding the very mistake this warning exists to surface.
+func TestKeyContainingWhitespaceIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      bogus key: 1
+    scope:
+      targets:
+        - host: 10.0.0.1
+`)
+	if !strings.Contains(out, "bogus key") {
+		t.Fatalf("whitespace key not reported: %s", out)
+	}
+}
