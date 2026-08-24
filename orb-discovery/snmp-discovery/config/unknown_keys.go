@@ -19,7 +19,10 @@ import (
 
 // unknownFieldRe pulls the key and the type out of a yaml.TypeError entry,
 // which reads: `line 5: field discover_modules not found in type config.Options`.
-var unknownFieldRe = regexp.MustCompile(`field (\S+) not found in type (\S+)$`)
+// The key capture allows whitespace: `discover modules: full` is a valid YAML
+// mapping key, and skipping it would hide the very mistake this warning exists
+// to surface.
+var unknownFieldRe = regexp.MustCompile(`field (.+) not found in type (\S+)$`)
 
 // narrowedTypes are the blocks whose keys are a closed, documented set. The
 // policy map, scope entries and surrounding YAML carry operator-chosen keys

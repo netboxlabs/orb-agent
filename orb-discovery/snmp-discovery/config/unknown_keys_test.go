@@ -122,3 +122,21 @@ func TestMalformedYamlIsLeftToThePermissiveDecode(t *testing.T) {
 func TestNilLoggerIsSafe(_ *testing.T) {
 	WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
 }
+
+// `discover modules: full` is a valid YAML mapping key, and yaml.v3 reports it
+// with the space intact. Requiring a single non-whitespace token skipped the
+// entry, hiding the very mistake this warning exists to surface.
+func TestKeyContainingWhitespaceIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      discover modules: full
+    scope:
+      targets:
+        - host: 10.0.0.1
+`)
+	if !strings.Contains(out, "discover modules") {
+		t.Fatalf("whitespace key not reported: %s", out)
+	}
+}
