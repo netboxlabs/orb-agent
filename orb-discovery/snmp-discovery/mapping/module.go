@@ -95,11 +95,17 @@ type ModuleInventory struct {
 	Modules    []ModuleEntry
 	SubModules map[string][]ModuleEntry
 	EmptyBays  []ModuleEntry // bare bays — BayEntIndex == EntIndex; Serial/Model empty
+	// ContainedIn is entPhysicalIndex -> entPhysicalContainedIn for EVERY
+	// row in the walk, not just the ones that became modules. Interface
+	// attachment needs it to climb from a port to the module holding it,
+	// and a port is not itself a module.
+	ContainedIn map[string]string
 }
 
 func newModuleInventory() ModuleInventory {
 	return ModuleInventory{
-		SubModules: make(map[string][]ModuleEntry),
+		SubModules:  make(map[string][]ModuleEntry),
+		ContainedIn: make(map[string]string),
 	}
 }
 
@@ -519,12 +525,27 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			synthesizedBay = true
 		}
 		if r.Serial != "" {
-			key := strings.ToLower(strings.TrimSpace(r.Serial))
+			// Keyed by serial AND physical location, not serial alone.
+			// A serial identifies a physical part; the location is
+			// (containment parent, position within that parent). One
+			// part cannot occupy two locations, so two rows agreeing on
+			// serial AND location are the same FRU reported twice --
+			// the case this guard exists for. Rows that agree only on
+			// serial are a platform stamping the chassis serial onto
+			// its sub-FRUs, and dropping those loses real hardware:
+			// sibling FRUs in one chassis (differing parentRelPos, as
+			// on a fixed-port stack whose access ports hang off the
+			// line module) and modules in separate bays (differing
+			// containedIn, each at position 1 inside its own bay).
+			key := strings.ToLower(strings.TrimSpace(r.Serial)) +
+				"\x00" + r.ContainedIn + "\x00" + r.ParentRel
 			if _, dup := seenSerial[key]; dup {
 				logger.Warn("module discovery: duplicate-serial module dropped",
 					"ent", r.EntIndex,
 					"serial", r.Serial,
 					"model", r.Model,
+					"contained_in", r.ContainedIn,
+					"parent_rel", r.ParentRel,
 					"reason", "dup_serial")
 				if c := metrics.GetModulesDropped(); c != nil {
 					c.Add(context.Background(), 1, metric.WithAttributes(
@@ -736,6 +757,11 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			BayPosition: r.ParentRel,
 			Type:        ModuleTypeUnknown,
 		})
+	}
+	for idx, r := range byIdx {
+		if r.ContainedIn != "" {
+			inv.ContainedIn[idx] = r.ContainedIn
+		}
 	}
 	return inv
 }

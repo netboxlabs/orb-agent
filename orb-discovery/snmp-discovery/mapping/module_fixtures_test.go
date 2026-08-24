@@ -57,3 +57,24 @@ func chassis9404RWithTransceiversFixture() []fixtureRow {
 		{"203", "202", "9", "1", "TenGigabitEthernet2/0/1 Transceiver", "FNS24010TR1", "SFP-10G-LR", "SFP-10GBase-LR", ""},
 	}
 }
+
+// chassisSerialStampedOnTwoFRUsFixture builds a chassis whose sub-FRUs all
+// report the CHASSIS serial rather than their own, and whose model and name
+// are identical too, so the only fields separating the two modules are
+// entPhysicalIndex and entPhysicalParentRelPos.
+//
+// Transcribed in shape from a real 4-member stack capture where each member
+// carries a management module at parentRelPos 1 and a line module at 2. The
+// access ports hang off the line module, so dropping it leaves every port
+// with nothing to attach to.
+func chassisSerialStampedOnTwoFRUsFixture() []fixtureRow {
+	return []fixtureRow{
+		{"101001", "0", "3", "1", "Chassis", "SN0000000101", "SWITCH-48G-4SFP", "48G Class 4 PoE 4SFP+ Switch", ""},
+		// Management module: same serial, model and name as the chassis below.
+		{"110001", "101001", "9", "1", "1/1", "SN0000000101", "SWITCH-48G-4SFP", "Switch Management Module", ""},
+		// Line module: identical except for index and parentRelPos.
+		{"112001", "101001", "9", "2", "1/1", "SN0000000101", "SWITCH-48G-4SFP", "Switch Line Module", ""},
+		// An access port contained in the line module, not the chassis.
+		{"120010", "112001", "10", "1", "1/1/1", "", "", "", ""},
+	}
+}
