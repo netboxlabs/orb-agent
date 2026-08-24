@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -334,4 +335,81 @@ func TestExtractModuleInventory_DedupUsesNumericEntIndexOrder(t *testing.T) {
 	require.Len(t, inv.Modules, 1, "duplicate serial collapsed")
 	assert.Equal(t, "9", inv.Modules[0].EntIndex,
 		"EntIndex 9 wins under numeric sort (lex would pick 10)")
+}
+
+// TestExtractModuleInventory_SerialStampedOnSubFRUsKeepsBoth — a platform that
+// reports the chassis serial on every sub-FRU must not lose the sub-FRUs after
+// the first. Serial, model and name are all identical here; only the index and
+// parentRelPos differ, so position is what separates them.
+func TestExtractModuleInventory_SerialStampedOnSubFRUsKeepsBoth(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	inv := extractModuleInventory(buildOIDs(chassisSerialStampedOnTwoFRUsFixture()), logger)
+
+	require.Len(t, inv.Modules, 2, "both sub-FRUs must survive a shared chassis serial")
+	got := []string{inv.Modules[0].EntIndex, inv.Modules[1].EntIndex}
+	assert.ElementsMatch(t, []string{"110001", "112001"}, got,
+		"the management module and the line module are distinct FRUs")
+}
+
+// TestExtractModuleInventory_SharedSerialSamePositionStillDeduped — the guard
+// still collapses a row that is indistinguishable in both serial and position,
+// which is the case it exists for.
+func TestExtractModuleInventory_SharedSerialSamePositionStillDeduped(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	rows := []fixtureRow{
+		{"101001", "0", "3", "1", "Chassis", "SN0000000101", "SWITCH-48G-4SFP", "Switch", ""},
+		{"110001", "101001", "9", "1", "1/1", "SN0000000101", "SWITCH-48G-4SFP", "Switch Management Module", ""},
+		// Same serial AND same parentRelPos: the same FRU reported twice.
+		{"111001", "101001", "9", "1", "1/1", "SN0000000101", "SWITCH-48G-4SFP", "Switch Management Module", ""},
+	}
+	inv := extractModuleInventory(buildOIDs(rows), logger)
+	require.Len(t, inv.Modules, 1, "same serial at the same position is one FRU")
+	assert.Equal(t, "110001", inv.Modules[0].EntIndex, "lowest index wins")
+}
+
+// TestBuildIfaceModuleMap_PortAttachesToContainingModule — an access port whose
+// entPhysicalContainedIn is a line module (not a transceiver cage) attaches to
+// that module. Fixed-port stacks put every access port under the line module,
+// so transceiver-only attachment leaves them all with no module reference.
+func TestBuildIfaceModuleMap_PortAttachesToContainingModule(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	inv := extractModuleInventory(buildOIDs(chassisSerialStampedOnTwoFRUsFixture()), logger)
+
+	// The access port 120010 is contained in the line module 112001.
+	aliasMap := map[string]string{"120010": "1"}
+	emitted := map[string]*diode.Module{}
+	for i, m := range inv.Modules {
+		emitted[m.EntIndex] = &diode.Module{Serial: &inv.Modules[i].Serial}
+	}
+	require.Contains(t, emitted, "112001", "the line module must be emitted to attach to")
+
+	got := buildIfaceModuleMap(inv, aliasMap, emitted)
+	require.Contains(t, got, "1", "ifIndex 1 must resolve to the module containing its port")
+	assert.Same(t, emitted["112001"], got["1"],
+		"the port attaches to the line module that contains it")
+}
+
+// TestBuildIfaceModuleMap_TransceiverWinsOverContainingModule — when a port
+// holds a transceiver AND sits inside a line module, the interface attaches to
+// the transceiver. It is the more specific FRU for that port, and it is what
+// the attachment meant before containment was considered at all.
+func TestBuildIfaceModuleMap_TransceiverWinsOverContainingModule(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	rows := []fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SN0000000101", "SWITCH-48G-4SFP", "Switch", ""},
+		{"100", "1", "9", "1", "1/1", "SN0000000101", "SWITCH-48G-4SFP", "Line Module", ""},
+		{"110", "100", "5", "1", "1/1/1", "", "", "", ""},
+		{"111", "110", "9", "1", "1/1/1 Transceiver", "OPT000000001", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+	}
+	inv := extractModuleInventory(buildOIDs(rows), logger)
+
+	// Both the transceiver and the port carry an alias row to the same ifIndex.
+	aliasMap := map[string]string{"111": "7", "110": "7"}
+	lineMod := &diode.Module{}
+	optic := &diode.Module{}
+	emitted := map[string]*diode.Module{"100": lineMod, "111": optic}
+
+	got := buildIfaceModuleMap(inv, aliasMap, emitted)
+	require.Contains(t, got, "7")
+	assert.Same(t, optic, got["7"], "the transceiver is the more specific FRU for the port")
 }
