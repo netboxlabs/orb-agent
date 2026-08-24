@@ -12,6 +12,7 @@ from typing import Any, Literal
 from croniter import CroniterBadCronError, croniter
 from pydantic import BaseModel, Field, field_validator
 
+from device_discovery.policy.unknown_keys import WarnUnknownKeys
 from device_discovery.stack_naming import (
     DEFAULT_STACK_MEMBER_TEMPLATE,
     stack_template_problem,
@@ -237,7 +238,7 @@ class Defaults(BaseModel):
         return v
 
 
-class Options(BaseModel):
+class Options(WarnUnknownKeys):
     """Model for discovery options."""
 
     platform_omit_version: bool | None = Field(
@@ -409,7 +410,7 @@ class Options(BaseModel):
     )
 
 
-class Config(BaseModel):
+class Config(WarnUnknownKeys):
     """Model for discovery configuration."""
 
     schedule: str | None = Field(default=None, description="cron interval, optional")
