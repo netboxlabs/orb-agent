@@ -548,3 +548,60 @@ def test_a_generic_address_with_no_role_is_not_collected():
         "</vrrp-interface></vrrp-information>"
     )
     assert _virtual_addresses_from_reply(reply) == {}
+
+
+FLAT_ROWS = """
+<vrrp-information><vrrp-interface>
+  <interface>ae0.100</interface><group>1</group>
+  <address-type>{first_type}</address-type><address>{first_addr}</address>
+  <address-type>{second_type}</address-type><address>{second_addr}</address>
+  <address-type>{third_type}</address-type><address>{third_addr}</address>
+</vrrp-interface></vrrp-information>
+"""
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ("lcl", "192.0.2.3", "mas", "192.0.2.2", "vip", "192.0.2.1"),
+        ("vip", "192.0.2.1", "lcl", "192.0.2.3", "mas", "192.0.2.2"),
+        ("mas", "192.0.2.2", "vip", "192.0.2.1", "lcl", "192.0.2.3"),
+    ],
+)
+def test_flat_typed_rows_pair_each_address_with_its_own_role(order):
+    """
+    A flat run of type/address pairs must pair positionally.
+
+    Taking any role found among the siblings makes every address inherit
+    whichever came first: with lcl first the virtual address is missed, and with
+    vip first the interface's own address and the master's are suppressed too,
+    which deletes real addresses. The role that applies is the one declared
+    immediately before the address, whatever the ordering.
+    """
+    reply = etree.fromstring(
+        FLAT_ROWS.format(
+            first_type=order[0], first_addr=order[1],
+            second_type=order[2], second_addr=order[3],
+            third_type=order[4], third_addr=order[5],
+        )
+    )
+    assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
+
+
+def test_an_address_with_no_role_before_it_is_left_alone():
+    """
+    Only label-before-value is supported, and the fallback is to suppress nothing.
+
+    A run of type/address pairs cannot be read in both directions at once, and
+    the output this was derived from puts the label first. An address with no
+    role declared before it is therefore not collected, which is the safe
+    direction: nothing is suppressed and the deviation stays visible. Guessing
+    the other ordering would attach a virtual role to a real address.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<address>192.0.2.1</address><address-type>vip</address-type>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {}

@@ -769,38 +769,59 @@ def _is_address_tag(name: str) -> bool:
     return "addr" in name
 
 
-def _row_role(el) -> str:
-    """
-    Return the address role declared beside ``el``, lowercased, or "".
-
-    Junos can carry the role as a sibling *value* rather than in the element
-    name, so a typed row looks like a generic address element next to an
-    element whose text is vip, lcl or mas. Reading the role from the row is the
-    only way to tell a virtual address from the interface's own on that shape.
-    """
-    parent = el.getparent()
-    if parent is None:
-        return ""
-    for sibling in parent:
-        if not isinstance(sibling.tag, str) or sibling is el:
-            continue
-        text = _text(sibling).strip().lower()
-        if text == _VIRTUAL_ROLE or text in _REAL_ADDRESS_ROLES:
-            return text
+def _role_value(el) -> str:
+    """Return the address role this element declares, lowercased, or ""."""
+    text = _text(el).strip().lower()
+    if text == _VIRTUAL_ROLE or text in _REAL_ADDRESS_ROLES:
+        return text
     return ""
 
 
-def _carries_virtual_address(el, name: str) -> bool:
+def _roles_by_element(entry) -> dict:
     """
-    Decide whether ``el`` holds a virtual address, by name or by declared role.
+    Map each element under ``entry`` to the address role that applies to it.
+
+    Junos can carry the role as a value rather than in the element name. That
+    can be one row per container, or a flat run of repeated type/address pairs
+    under a single parent. A role therefore has to be paired with the address it
+    precedes, not with any role found somewhere among the siblings: on a flat
+    run every address would otherwise inherit whichever role appeared first,
+    which either misses the virtual address entirely or suppresses the
+    interface's own address along with it.
+
+    Document order carries the association, so each element takes the role most
+    recently declared before it within its own parent. Only that direction is
+    supported: the label precedes the value in the output this was derived from
+    ("lcl <addr> / vip <addr>"), and a run of pairs cannot be read both ways at
+    once. An address with no role declared before it is left unroled, so it is
+    not suppressed. Guessing the other direction is the dangerous one, since it
+    would attach a virtual role to a real address.
+    """
+    roles: dict = {}
+    for parent in entry.iter():
+        if not isinstance(parent.tag, str):
+            continue
+        current = ""
+        for child in parent:
+            if not isinstance(child.tag, str):
+                continue
+            role = _role_value(child)
+            if role:
+                current = role
+                continue
+            roles[child] = current
+    return roles
+
+
+def _carries_virtual_address(name: str, role: str) -> bool:
+    """
+    Decide whether an element holds a virtual address, by name or by role.
 
     Two reply shapes are supported because which one Junos emits is not
-    established: the role in the element name, and the role as a sibling value
-    beside a generically named address element. An explicit lcl or mas role
-    wins over a name match, so a row that declares itself real is never
-    collected.
+    established: the role in the element name, and the role as a value paired
+    with a generically named address element. An explicit lcl or mas role wins
+    over a name match, so a row that declares itself real is never collected.
     """
-    role = _row_role(el)
     if role in _REAL_ADDRESS_ROLES:
         return False
     if _is_virtual_address_tag(name):
@@ -900,11 +921,14 @@ def _virtual_addresses_from_reply(reply) -> dict[tuple[str, str], str]:
         ifname = _vrrp_interface_name(entry)
         if not ifname:
             continue
+        roles = _roles_by_element(entry)
         for el in entry.iter():
             if not isinstance(el.tag, str):
                 continue
             name = _localname(el)
-            if not _carries_virtual_address(el, name) or not _owned_by(el, entry):
+            if not _carries_virtual_address(name, roles.get(el, "")):
+                continue
+            if not _owned_by(el, entry):
                 continue
             address = _normalise_ip(_text(el))
             try:
