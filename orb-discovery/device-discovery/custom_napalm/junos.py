@@ -37,6 +37,7 @@ XML parsing notes
 
 import logging
 import re
+from ipaddress import ip_address
 
 from jnpr.junos.exception import RpcError
 from lxml import etree
@@ -64,7 +65,17 @@ logger = logging.getLogger(__name__)
 
 
 def _localname(elem) -> str:
-    """Return the namespace-stripped local name of an element."""
+    """
+    Return the namespace-stripped local name of an element, or "" if it has none.
+
+    Comments and processing instructions carry a callable tag rather than a
+    string, and QName raises on those. They reach us because ncclient's Junos
+    reply transform copies them through, so every lookup built on this would
+    otherwise raise on a reply that merely carries a comment. Returning "" makes
+    them simply not match any name.
+    """
+    if not isinstance(elem.tag, str):
+        return ""
     return etree.QName(elem.tag).localname
 
 
@@ -706,6 +717,282 @@ def _junos_get_modules_impl(driver) -> dict | None:
     return _junos_modules_from_standalone(driver, rpc_root)
 
 
+_EXPECTED_VIRTUAL_TAG = "virtual-ip-address"
+
+# Element names already reported, so an unrecognised spelling is logged once per
+# process rather than once per address per cycle. The expected name is not
+# corroborated by any published source, so on a device using a different one an
+# unbounded line would be permanent noise.
+_UNEXPECTED_TAGS_SEEN: set[str] = set()
+
+
+def _note_unexpected_tag(ifname: str, address: str, name: str) -> None:
+    """
+    Log once per element name that is not the expected one.
+
+    The element carrying a virtual address is matched by shape rather than by a
+    verified name. The case worth surfacing is a match on an address the driver
+    never reported as an interface address: nothing is suppressed then, so no
+    other line is emitted and a wrong match would leave no trace.
+    """
+    if name == _EXPECTED_VIRTUAL_TAG or name in _UNEXPECTED_TAGS_SEEN:
+        return
+    _UNEXPECTED_TAGS_SEEN.add(name)
+    logger.info(
+        "%s: matched virtual address %s via unexpected element <%s>",
+        ifname,
+        address,
+        name,
+    )
+
+
+def _normalise_ip(value: str) -> str:
+    """Return the address without any mask, compressed, or the input unchanged."""
+    bare = (value or "").split("/", 1)[0].strip()
+    try:
+        return ip_address(bare).compressed
+    except ValueError:
+        return value
+
+
+# The three address roles VRRP output distinguishes: the virtual address, the
+# local (this router's own) address, and the master's address. Only the first
+# may be suppressed; collecting either of the others would remove a real
+# interface address.
+_VIRTUAL_ROLE = "vip"
+_REAL_ADDRESS_ROLES = frozenset({"lcl", "mas"})
+
+
+def _is_virtual_address_tag(name: str) -> bool:
+    """
+    Recognise a virtual address carried by the element's own name.
+
+    No published source corroborates the exact element name, so match local
+    names that contain "virtual" and end in "address", plus the bare "vip"
+    form.
+    """
+    return name == _VIRTUAL_ROLE or ("virtual" in name and name.endswith("address"))
+
+
+# Element names that may take a role from an adjacent type value. Deliberately
+# exact and deliberately tiny: a substring test matched names like
+# local-interface-address, so a vip role leaked onto the interface's own
+# address and suppressed it. Add a name here only once a real capture shows it.
+_ROLE_VALUE_TAGS = frozenset({"address"})
+
+
+def _role_value(el) -> str:
+    """Return the address role this element declares, lowercased, or ""."""
+    text = _text(el).strip().lower()
+    if text == _VIRTUAL_ROLE or text in _REAL_ADDRESS_ROLES:
+        return text
+    return ""
+
+
+def _roles_by_element(entry) -> tuple[dict, set]:
+    """
+    Map elements under ``entry`` to their address role, and mark real pairings.
+
+    Returns the role that applies to each element, used to veto anything a
+    reply declares as lcl or mas, and the set of elements that actually
+    consumed a role. A role pairs with one recognised value element and is then
+    spent, so a later element cannot inherit it.
+
+    Junos can carry the role as a value rather than in the element name. That
+    can be one row per container, or a flat run of repeated type/address pairs
+    under a single parent. A role therefore has to be paired with the address it
+    precedes, not with any role found somewhere among the siblings: on a flat
+    run every address would otherwise inherit whichever role appeared first,
+    which either misses the virtual address entirely or suppresses the
+    interface's own address along with it.
+
+    Document order carries the association, so each element takes the role most
+    recently declared before it within its own parent. Only that direction is
+    supported: the label precedes the value in the output this was derived from
+    ("lcl <addr> / vip <addr>"), and a run of pairs cannot be read both ways at
+    once. An address with no role declared before it is left unroled, so it is
+    not suppressed. Guessing the other direction is the dangerous one, since it
+    would attach a virtual role to a real address.
+    """
+    roles: dict = {}
+    paired: set = set()
+    for parent in entry.iter():
+        if not isinstance(parent.tag, str):
+            continue
+        in_effect = ""
+        for child in parent:
+            if not isinstance(child.tag, str):
+                continue
+            role = _role_value(child)
+            if role:
+                in_effect = role
+                continue
+            roles[child] = in_effect
+            if in_effect and _localname(child) in _ROLE_VALUE_TAGS:
+                # The row is complete once its value is taken. Clearing here
+                # keeps a spent role from vetoing a later name-based virtual
+                # address in a reply that mixes both shapes.
+                paired.add(child)
+                in_effect = ""
+    return roles, paired
+
+
+def _carries_virtual_address(name: str, role: str, paired: bool) -> bool:
+    """
+    Decide whether an element holds a virtual address, by name or by role.
+
+    Two reply shapes are supported because which one Junos emits is not
+    established: the role in the element name, and the role as a value paired
+    with a generically named address element.
+
+    An explicit lcl or mas role wins over a name match, so a row that declares
+    itself real is never collected whatever it is called. The role path in turn
+    requires an actual pairing: a role applies to one recognised value element
+    and is then spent, so an unrecognised element that merely follows a vip row
+    is left alone rather than inheriting it.
+    """
+    if role in _REAL_ADDRESS_ROLES:
+        return False
+    if _is_virtual_address_tag(name):
+        return True
+    return paired and role == _VIRTUAL_ROLE
+
+
+def _iter_localname(root, name: str):
+    """Yield root and every descendant element whose local name matches."""
+    for el in root.iter():
+        if isinstance(el.tag, str) and _localname(el) == name:
+            yield el
+
+
+def _owned_by(el, entry) -> bool:
+    """
+    True when the innermost ``vrrp-interface`` enclosing ``el`` is ``entry``.
+
+    A nested entry owns its own addresses; letting the outer one absorb them
+    would suppress an address on the wrong interface. Skipping per element
+    rather than breaking out of the walk matters because ``iter()`` is
+    document-order depth-first, so a break would also abandon any of the outer
+    entry's own addresses that appear after the nested one.
+
+    Requires lxml's ``getparent()``, as does ``_group_for``. PyEZ and the test
+    double both produce lxml trees.
+    """
+    if el is entry:
+        return True
+    node = el.getparent()
+    while node is not None:
+        if _localname(node) == "vrrp-interface":
+            return node is entry
+        node = node.getparent()
+    return True
+
+
+def _group_for(matched, entry) -> str:
+    """
+    Return the group id nearest the matched element, walking up to ``entry``.
+
+    A per-group container would put the group above the address rather than
+    beside the interface, so a direct-child lookup on ``entry`` alone would
+    report every group as unknown.
+    """
+    node = matched
+    while node is not None:
+        group = _text(_find_child(node, "group"))
+        if group:
+            return group
+        if node is entry:
+            break
+        node = node.getparent()
+    return ""
+
+
+def _vrrp_interface_name(entry) -> str:
+    """
+    Return the logical interface name, joining a separate unit when present.
+
+    VRRP output can report the physical interface and its unit as two fields,
+    which would otherwise produce a name that cannot match the interface keys
+    upstream returns.
+    """
+    for tag in ("interface", "interface-name"):
+        name = _text(_find_child(entry, tag))
+        if not name:
+            continue
+        if "." not in name:
+            unit = _text(_find_child(entry, "unit"))
+            if unit:
+                return f"{name}.{unit}"
+        return name
+    return ""
+
+
+def _virtual_addresses_from_reply(reply) -> dict[tuple[str, str], str]:
+    """
+    Map (ifl, virtual address) to the VRRP group that declares it.
+
+    Returns an empty mapping for anything that is not an element: a device with
+    no VRRP configured answers with a warning that PyEZ turns into the boolean
+    True, which is the common case rather than an error.
+
+    Walks every descendant, so a multi-routing-engine-results wrapper needs no
+    special handling. Comments and processing instructions are skipped because
+    their tag is a callable and ncclient copies them through from real devices.
+
+    Anything that does not yield both an interface and an address is skipped
+    rather than raising, so an unanticipated reply shape degrades to
+    "suppress nothing".
+    """
+    out: dict[tuple[str, str], str] = {}
+    if reply is None or not hasattr(reply, "tag"):
+        return out
+    for entry in _iter_localname(reply, "vrrp-interface"):
+        ifname = _vrrp_interface_name(entry)
+        if not ifname:
+            continue
+        roles, paired = _roles_by_element(entry)
+        for el in entry.iter():
+            if not isinstance(el.tag, str):
+                continue
+            name = _localname(el)
+            if not _carries_virtual_address(name, roles.get(el, ""), el in paired):
+                continue
+            if not _owned_by(el, entry):
+                continue
+            address = _normalise_ip(_text(el))
+            try:
+                ip_address(address)
+            except ValueError:
+                continue
+            _note_unexpected_tag(ifname, address, name)
+            out[(ifname, address)] = _group_for(el, entry)
+    return out
+
+
+def _suppress_virtual(
+    interfaces_ip: dict,
+    virtual: dict[tuple[str, str], str],
+) -> tuple[dict, list[tuple[str, str, str]]]:
+    """
+    Remove addresses the device reports as first-hop-redundancy virtual addresses.
+
+    Only address entries are removed. Family and interface keys are left in
+    place because an interface may be known only through this mapping.
+    """
+    dropped: list[tuple[str, str, str]] = []
+    if not virtual:
+        return interfaces_ip, dropped
+    for ifname, families in interfaces_ip.items():
+        for addresses in families.values():
+            for ip in list(addresses):
+                group = virtual.get((ifname, _normalise_ip(ip)))
+                if group is None:
+                    continue
+                del addresses[ip]
+                dropped.append((ifname, ip, group))
+    return interfaces_ip, dropped
+
+
 class JunOSDriver(NapalmJunOSDriver):
     """
     Juniper Junos NAPALM driver.
@@ -739,6 +1026,45 @@ class JunOSDriver(NapalmJunOSDriver):
         None — the existing single-Device path is unchanged.
         """
         return _junos_get_modules_impl(self)
+
+    def _virtual_addresses(self) -> dict[tuple[str, str], str]:
+        """Ask the device which of its addresses are VRRP virtual addresses."""
+        reply = self.device.rpc.get_vrrp_information(
+            ignore_warning=["vrrp subsystem not running"],
+        )
+        return _virtual_addresses_from_reply(reply)
+
+    def get_interfaces_ip(self) -> dict:
+        """
+        Return interface addresses, minus VRRP virtual addresses.
+
+        Junos reports a virtual address as an interface address, without a mask,
+        and upstream NAPALM fills that gap with a host length. Emitting it
+        overwrites an operator's own record with a value the device never
+        reported, and moves an address held against a redundancy group onto the
+        interface. The device is asked which addresses are virtual, and those
+        are left out.
+
+        Best-effort throughout: any failure returns what upstream parsed, since
+        this method is called without a guard and an escaping exception would
+        cost the device its whole discovery cycle. A failure part-way through
+        keeps the suppressions already made, which is strictly better than
+        losing the device.
+        """
+        interfaces_ip = super().get_interfaces_ip()
+        try:
+            virtual = self._virtual_addresses()
+            interfaces_ip, dropped = _suppress_virtual(interfaces_ip, virtual)
+            for ifname, address, group in dropped:
+                logger.info(
+                    "%s: not emitting %s, reported as a virtual address of group %s",
+                    ifname,
+                    address,
+                    group or "unknown",
+                )
+        except Exception:
+            logger.debug("Junos virtual-address suppression failed", exc_info=True)
+        return interfaces_ip
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """

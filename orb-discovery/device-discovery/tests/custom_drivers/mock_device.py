@@ -458,6 +458,13 @@ class FakePyEZDevice:
             → get-ethernet-switching-interface-information.xml
     """
 
+    # PyEZ Table construction reads both of these off the device before it
+    # touches the RPC: Table.__init__ reads _use_filter, and the SAX-parser
+    # decorator reads and writes transform. Upstream getters that go through a
+    # Table (get_interfaces_ip) cannot run against this fake without them.
+    _use_filter = False
+    transform = None
+
     def __init__(self, mock_dir: Path) -> None:
         """Store the directory and create the RPC proxy."""
         self._mock_dir = mock_dir
