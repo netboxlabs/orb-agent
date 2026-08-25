@@ -469,3 +469,82 @@ def test_probe_passes_ignore_warning_for_a_device_without_vrrp():
     driver.device = FakeDevice()
     assert driver._virtual_addresses() == {}
     assert "ignore_warning" in seen
+
+
+def test_a_typed_row_carries_the_virtual_address():
+    """
+    The role can be a sibling value beside a generic address element.
+
+    Junos output distinguishes vip, lcl and mas as row types, and in XML that
+    can be a value rather than the element name. On this shape a name-only
+    match collects nothing and the virtual address keeps being emitted.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<vrrp-address-info>"
+        "<address-type>vip</address-type><address>192.0.2.1</address>"
+        "</vrrp-address-info>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
+
+
+def test_typed_rows_for_local_and_master_are_not_collected():
+    """
+    Only the vip row may be suppressed.
+
+    The lcl row is this router's own interface address and the mas row is the
+    peer's. Collecting either would delete a real address from NetBox.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<vrrp-address-info>"
+        "<address-type>lcl</address-type><address>192.0.2.3</address>"
+        "</vrrp-address-info>"
+        "<vrrp-address-info>"
+        "<address-type>mas</address-type><address>192.0.2.2</address>"
+        "</vrrp-address-info>"
+        "<vrrp-address-info>"
+        "<address-type>vip</address-type><address>192.0.2.1</address>"
+        "</vrrp-address-info>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
+
+
+def test_an_explicit_real_role_beats_a_matching_element_name():
+    """
+    A row declaring itself lcl is never collected, whatever it is called.
+
+    Belt and braces: if a reply both names the element like a virtual address
+    and declares the role as local, the declared role wins, because collecting
+    it would remove a real address.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<vrrp-address-info>"
+        "<address-type>lcl</address-type>"
+        "<virtual-ip-address>192.0.2.3</virtual-ip-address>"
+        "</vrrp-address-info>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {}
+
+
+def test_a_generic_address_with_no_role_is_not_collected():
+    """
+    Without a role or a matching name there is no evidence it is virtual.
+
+    An interface-address element on its own must not be suppressed; guessing
+    here is what would delete real addresses.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<interface-address>192.0.2.3</interface-address>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {}

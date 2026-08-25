@@ -745,17 +745,67 @@ def _normalise_ip(value: str) -> str:
         return value
 
 
+# The three address roles VRRP output distinguishes: the virtual address, the
+# local (this router's own) address, and the master's address. Only the first
+# may be suppressed; collecting either of the others would remove a real
+# interface address.
+_VIRTUAL_ROLE = "vip"
+_REAL_ADDRESS_ROLES = frozenset({"lcl", "mas"})
+
+
 def _is_virtual_address_tag(name: str) -> bool:
     """
-    Recognise the element carrying a virtual address by shape, not by name.
+    Recognise a virtual address carried by the element's own name.
 
     No published source corroborates the exact element name, so match local
     names that contain "virtual" and end in "address", plus the bare "vip"
-    form. This cannot match the lcl (local) or mas (master) addresses that
-    appear in the same reply, either of which would suppress a real interface
-    address.
+    form.
     """
-    return name == "vip" or ("virtual" in name and name.endswith("address"))
+    return name == _VIRTUAL_ROLE or ("virtual" in name and name.endswith("address"))
+
+
+def _is_address_tag(name: str) -> bool:
+    """Recognise a generically named address element, whatever its role."""
+    return "addr" in name
+
+
+def _row_role(el) -> str:
+    """
+    Return the address role declared beside ``el``, lowercased, or "".
+
+    Junos can carry the role as a sibling *value* rather than in the element
+    name, so a typed row looks like a generic address element next to an
+    element whose text is vip, lcl or mas. Reading the role from the row is the
+    only way to tell a virtual address from the interface's own on that shape.
+    """
+    parent = el.getparent()
+    if parent is None:
+        return ""
+    for sibling in parent:
+        if not isinstance(sibling.tag, str) or sibling is el:
+            continue
+        text = _text(sibling).strip().lower()
+        if text == _VIRTUAL_ROLE or text in _REAL_ADDRESS_ROLES:
+            return text
+    return ""
+
+
+def _carries_virtual_address(el, name: str) -> bool:
+    """
+    Decide whether ``el`` holds a virtual address, by name or by declared role.
+
+    Two reply shapes are supported because which one Junos emits is not
+    established: the role in the element name, and the role as a sibling value
+    beside a generically named address element. An explicit lcl or mas role
+    wins over a name match, so a row that declares itself real is never
+    collected.
+    """
+    role = _row_role(el)
+    if role in _REAL_ADDRESS_ROLES:
+        return False
+    if _is_virtual_address_tag(name):
+        return True
+    return role == _VIRTUAL_ROLE and _is_address_tag(name)
 
 
 def _iter_localname(root, name: str):
@@ -854,7 +904,7 @@ def _virtual_addresses_from_reply(reply) -> dict[tuple[str, str], str]:
             if not isinstance(el.tag, str):
                 continue
             name = _localname(el)
-            if not _is_virtual_address_tag(name) or not _owned_by(el, entry):
+            if not _carries_virtual_address(el, name) or not _owned_by(el, entry):
                 continue
             address = _normalise_ip(_text(el))
             try:
