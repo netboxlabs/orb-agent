@@ -94,7 +94,7 @@ func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []s
 
 		reader, err := file.Reader()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read %s: %w", path, err)
 		}
 		defer func() {
 			if err := reader.Close(); err != nil {
@@ -104,12 +104,12 @@ func (gc *gitConfigManager) readPolicies(tree *object.Tree, matchingPolicies []s
 
 		data, err := io.ReadAll(reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read %s: %w", path, err)
 		}
 
 		var policies map[string]map[string]any
 		if err = yaml.Unmarshal(data, &policies); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse %s: %w", path, err)
 		}
 
 		for beName, policy := range policies {
@@ -184,7 +184,7 @@ func (gc *gitConfigManager) applyPolicies(policies policyData, backends map[stri
 func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config) ([]string, error) {
 	reader, err := file.Reader()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read %s: %w", file.Name, err)
 	}
 	defer func() {
 		if err := reader.Close(); err != nil {
@@ -194,7 +194,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read %s: %w", file.Name, err)
 	}
 
 	var selectors map[string]struct {
@@ -205,7 +205,7 @@ func (gc *gitConfigManager) processSelector(file *object.File, cfg config.Config
 		} `yaml:"policies"`
 	}
 	if err = yaml.Unmarshal(data, &selectors); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to parse %s: %w", file.Name, err)
 	}
 
 	// Use a set (map) to store unique policy paths
