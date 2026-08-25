@@ -88,7 +88,7 @@ class TestJunOSDriver(BaseDriverTest):
         mock_dir = self.mock_data_root / "test_get_interfaces_ip" / scenario
         driver = self._build_driver(mock_dir)
         result = driver.get_interfaces_ip()
-        assert result["ae0.501"]["ipv4"] == {"100.64.12.3": {"prefix_length": 22}}, (
+        assert result["ae0.100"]["ipv4"] == {"192.0.2.3": {"prefix_length": 24}}, (
             "the virtual address must be gone and the real one untouched"
         )
         assert result["lo0.0"]["ipv4"] == {"192.0.2.4": {"prefix_length": 32}}, (
