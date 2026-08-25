@@ -670,3 +670,22 @@ def test_an_unrecognised_element_cannot_consume_the_role():
         "</vrrp-interface></vrrp-information>"
     )
     assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
+
+
+def test_a_spent_role_does_not_veto_a_later_name_based_address():
+    """
+    A completed row must not carry its role forward.
+
+    In a reply mixing both shapes, an earlier lcl row would otherwise veto a
+    later virtual-ip-address and the virtual address would keep being emitted.
+    That direction is only a missed suppression rather than lost data, but the
+    row is genuinely finished once its value is taken.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<address-type>lcl</address-type><address>192.0.2.3</address>"
+        "<virtual-ip-address>192.0.2.1</virtual-ip-address>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}

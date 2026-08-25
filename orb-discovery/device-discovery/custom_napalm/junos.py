@@ -809,19 +809,21 @@ def _roles_by_element(entry) -> tuple[dict, set]:
     for parent in entry.iter():
         if not isinstance(parent.tag, str):
             continue
-        current = ""
-        pending = ""
+        in_effect = ""
         for child in parent:
             if not isinstance(child.tag, str):
                 continue
             role = _role_value(child)
             if role:
-                current = pending = role
+                in_effect = role
                 continue
-            roles[child] = current
-            if pending and _localname(child) in _ROLE_VALUE_TAGS:
+            roles[child] = in_effect
+            if in_effect and _localname(child) in _ROLE_VALUE_TAGS:
+                # The row is complete once its value is taken. Clearing here
+                # keeps a spent role from vetoing a later name-based virtual
+                # address in a reply that mixes both shapes.
                 paired.add(child)
-                pending = ""
+                in_effect = ""
     return roles, paired
 
 

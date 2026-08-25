@@ -1,8 +1,13 @@
-<vrrp-information>
+<vrrp-information style="brief">
   <vrrp-interface>
     <interface>ae0.100</interface>
+    <interface-state>up</interface-state>
     <group>1</group>
-    <vrrp-state>master</vrrp-state>
+    <vrrp-state>MASTER</vrrp-state>
+    <vrrp-mode>Active</vrrp-mode>
+    <timer-name>A</timer-name>
+    <timer-value>2.071</timer-value>
+    <local-interface-address>192.0.2.3</local-interface-address>
     <virtual-ip-address>192.0.2.1</virtual-ip-address>
   </vrrp-interface>
 </vrrp-information>
