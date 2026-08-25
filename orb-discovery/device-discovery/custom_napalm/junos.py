@@ -65,7 +65,17 @@ logger = logging.getLogger(__name__)
 
 
 def _localname(elem) -> str:
-    """Return the namespace-stripped local name of an element."""
+    """
+    Return the namespace-stripped local name of an element, or "" if it has none.
+
+    Comments and processing instructions carry a callable tag rather than a
+    string, and QName raises on those. They reach us because ncclient's Junos
+    reply transform copies them through, so every lookup built on this would
+    otherwise raise on a reply that merely carries a comment. Returning "" makes
+    them simply not match any name.
+    """
+    if not isinstance(elem.tag, str):
+        return ""
     return etree.QName(elem.tag).localname
 
 

@@ -689,3 +689,37 @@ def test_a_spent_role_does_not_veto_a_later_name_based_address():
         "</vrrp-interface></vrrp-information>"
     )
     assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
+
+
+@pytest.mark.parametrize(
+    "reply_xml",
+    [
+        # Before <interface>: breaks the interface-name lookup.
+        "<vrrp-information><vrrp-interface><!-- c -->"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<virtual-ip-address>192.0.2.1</virtual-ip-address>"
+        "</vrrp-interface></vrrp-information>",
+        # Between <interface> and <group>: breaks the group lookup.
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><!-- c --><group>1</group>"
+        "<virtual-ip-address>192.0.2.1</virtual-ip-address>"
+        "</vrrp-interface></vrrp-information>",
+        # Around the unit, which is only consulted when the name has no dot.
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0</interface><!-- c --><unit>100</unit><group>1</group>"
+        "<virtual-ip-address>192.0.2.1</virtual-ip-address>"
+        "</vrrp-interface></vrrp-information>",
+    ],
+)
+def test_a_comment_before_the_metadata_does_not_break_the_parse(reply_xml):
+    """
+    The name and group lookups must tolerate comments too, not just the walks.
+
+    A comment ahead of the element being looked up made the shared child lookup
+    raise, the outer handler swallowed it, and the virtual address was emitted
+    again. Comments only after the matched element never reached that path,
+    which is why the earlier test missed it.
+    """
+    assert _virtual_addresses_from_reply(etree.fromstring(reply_xml)) == {
+        ("ae0.100", "192.0.2.1"): "1"
+    }
