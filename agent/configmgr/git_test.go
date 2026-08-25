@@ -354,3 +354,91 @@ backend1:
 	require.NoError(t, err, "Start() via system git fallback should succeed")
 	pMgr.AssertCalled(t, "ManagePolicy", mock.Anything)
 }
+
+// writeGitRepo creates a one-commit repository containing files and returns its file:// URL.
+func writeGitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "cfgmgr-parse-error")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(dir))
+	})
+
+	repo, err := gitv5.PlainInit(dir, false)
+	require.NoError(t, err)
+	worktree, err := repo.Worktree()
+	require.NoError(t, err)
+
+	for path, content := range files {
+		full := filepath.Join(dir, path)
+		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
+		require.NoError(t, os.WriteFile(full, []byte(content), 0o644))
+		_, err = worktree.Add(path)
+		require.NoError(t, err)
+	}
+
+	_, err = worktree.Commit("initial commit", &gitv5.CommitOptions{
+		Author: &object.Signature{Name: "tester", Email: "tester@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	return "file://" + dir
+}
+
+// startWithRepo runs the git config manager against repoURL and returns the startup error.
+func startWithRepo(t *testing.T, repoURL string) error {
+	t.Helper()
+
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Labels: map[string]string{"env": "test"},
+			ConfigManager: config.ManagerConfig{
+				Active:  "git",
+				Sources: config.Sources{Git: config.GitManager{URL: repoURL}},
+			},
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	gc := configmgr.New(logger, new(mockPolicyManager), cfg.OrbAgent.ConfigManager.Active,
+		&mockBackendState{}, nil)
+
+	return gc.Start(context.Background(), cfg, map[string]backend.Backend{
+		"backend1": &mockBackend{name: "backend1"},
+	})
+}
+
+// TestGitStartNamesTheSelectorFileOnParseError pins that a malformed selector.yaml reports its own
+// name. Without it the bare parser error reads as a failure of the clone that precedes it.
+func TestGitStartNamesTheSelectorFileOnParseError(t *testing.T) {
+	repoURL := writeGitRepo(t, map[string]string{
+		"selector.yaml": "test_selector:\n  selector:\n    env: test\n   broken: value\n",
+	})
+
+	err := startWithRepo(t, repoURL)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "selector.yaml",
+		"a parse error must name the file it came from, or an operator cannot tell what to fix")
+}
+
+// TestGitStartNamesThePolicyFileOnParseError pins the same for a selected policy file, which is the
+// harder case: a selector may point at many policies and the error named none of them.
+func TestGitStartNamesThePolicyFileOnParseError(t *testing.T) {
+	repoURL := writeGitRepo(t, map[string]string{
+		"selector.yaml": "test_selector:\n" +
+			"  selector:\n" +
+			"    env: test\n" +
+			"  policies:\n" +
+			"    test_policy:\n" +
+			"      enabled: true\n" +
+			"      path: \"policies/broken.yaml\"\n",
+		"policies/broken.yaml": "backend1:\n  test_policy:\n    key: value\n   broken: value\n",
+	})
+
+	err := startWithRepo(t, repoURL)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "policies/broken.yaml",
+		"a parse error must name the policy file it came from")
+}
