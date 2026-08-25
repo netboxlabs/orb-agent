@@ -764,9 +764,11 @@ def _is_virtual_address_tag(name: str) -> bool:
     return name == _VIRTUAL_ROLE or ("virtual" in name and name.endswith("address"))
 
 
-def _is_address_tag(name: str) -> bool:
-    """Recognise a generically named address element, whatever its role."""
-    return "addr" in name
+# Element names that may take a role from an adjacent type value. Deliberately
+# exact and deliberately tiny: a substring test matched names like
+# local-interface-address, so a vip role leaked onto the interface's own
+# address and suppressed it. Add a name here only once a real capture shows it.
+_ROLE_VALUE_TAGS = frozenset({"address"})
 
 
 def _role_value(el) -> str:
@@ -777,9 +779,14 @@ def _role_value(el) -> str:
     return ""
 
 
-def _roles_by_element(entry) -> dict:
+def _roles_by_element(entry) -> tuple[dict, set]:
     """
-    Map each element under ``entry`` to the address role that applies to it.
+    Map elements under ``entry`` to their address role, and mark real pairings.
+
+    Returns the role that applies to each element, used to veto anything a
+    reply declares as lcl or mas, and the set of elements that actually
+    consumed a role. A role pairs with one recognised value element and is then
+    spent, so a later element cannot inherit it.
 
     Junos can carry the role as a value rather than in the element name. That
     can be one row per container, or a flat run of repeated type/address pairs
@@ -798,35 +805,45 @@ def _roles_by_element(entry) -> dict:
     would attach a virtual role to a real address.
     """
     roles: dict = {}
+    paired: set = set()
     for parent in entry.iter():
         if not isinstance(parent.tag, str):
             continue
         current = ""
+        pending = ""
         for child in parent:
             if not isinstance(child.tag, str):
                 continue
             role = _role_value(child)
             if role:
-                current = role
+                current = pending = role
                 continue
             roles[child] = current
-    return roles
+            if pending and _localname(child) in _ROLE_VALUE_TAGS:
+                paired.add(child)
+                pending = ""
+    return roles, paired
 
 
-def _carries_virtual_address(name: str, role: str) -> bool:
+def _carries_virtual_address(name: str, role: str, paired: bool) -> bool:
     """
     Decide whether an element holds a virtual address, by name or by role.
 
     Two reply shapes are supported because which one Junos emits is not
     established: the role in the element name, and the role as a value paired
-    with a generically named address element. An explicit lcl or mas role wins
-    over a name match, so a row that declares itself real is never collected.
+    with a generically named address element.
+
+    An explicit lcl or mas role wins over a name match, so a row that declares
+    itself real is never collected whatever it is called. The role path in turn
+    requires an actual pairing: a role applies to one recognised value element
+    and is then spent, so an unrecognised element that merely follows a vip row
+    is left alone rather than inheriting it.
     """
     if role in _REAL_ADDRESS_ROLES:
         return False
     if _is_virtual_address_tag(name):
         return True
-    return role == _VIRTUAL_ROLE and _is_address_tag(name)
+    return paired and role == _VIRTUAL_ROLE
 
 
 def _iter_localname(root, name: str):
@@ -921,12 +938,12 @@ def _virtual_addresses_from_reply(reply) -> dict[tuple[str, str], str]:
         ifname = _vrrp_interface_name(entry)
         if not ifname:
             continue
-        roles = _roles_by_element(entry)
+        roles, paired = _roles_by_element(entry)
         for el in entry.iter():
             if not isinstance(el.tag, str):
                 continue
             name = _localname(el)
-            if not _carries_virtual_address(name, roles.get(el, "")):
+            if not _carries_virtual_address(name, roles.get(el, ""), el in paired):
                 continue
             if not _owned_by(el, entry):
                 continue

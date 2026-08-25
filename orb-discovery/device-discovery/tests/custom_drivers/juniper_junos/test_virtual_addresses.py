@@ -605,3 +605,68 @@ def test_an_address_with_no_role_before_it_is_left_alone():
         "</vrrp-interface></vrrp-information>"
     )
     assert _virtual_addresses_from_reply(reply) == {}
+
+
+@pytest.mark.parametrize(
+    "trailing",
+    [
+        "<local-interface-address>192.0.2.3</local-interface-address>",
+        "<master-router-address>192.0.2.2</master-router-address>",
+        "<vrrp-interface-address>192.0.2.3</vrrp-interface-address>",
+    ],
+)
+def test_an_unrecognised_element_after_a_vip_row_does_not_inherit_the_role(trailing):
+    """
+    A role pairs with one recognised element and is then spent.
+
+    Otherwise an element merely following a vip row inherits the role, and a
+    substring test on the name made that concrete: local-interface-address
+    matched, so the interface's own address was suppressed. A name not on the
+    allowlist is left alone even directly after a vip pair.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<address-type>vip</address-type><address>192.0.2.1</address>"
+        f"{trailing}"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
+
+
+def test_a_second_address_after_one_pair_is_left_alone():
+    """
+    The role is spent by the first value, so a second address is not collected.
+
+    A group can legitimately carry several virtual addresses, and this makes
+    that a false negative rather than a guess. Failing closed is the right
+    direction here: the deviation stays visible, and no real address is removed.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<address-type>vip</address-type>"
+        "<address>192.0.2.1</address><address>192.0.2.9</address>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
+
+
+def test_an_unrecognised_element_cannot_consume_the_role():
+    """
+    Only an allowlisted name may take a role, not anything address-shaped.
+
+    Ordering is what makes this distinct from spending the role: here the
+    unrecognised element sits between the role and the real address. A
+    substring test on the name would let it consume the vip role, suppressing
+    the interface's own address and leaving the actual virtual address unroled.
+    """
+    reply = etree.fromstring(
+        "<vrrp-information><vrrp-interface>"
+        "<interface>ae0.100</interface><group>1</group>"
+        "<address-type>vip</address-type>"
+        "<local-interface-address>192.0.2.3</local-interface-address>"
+        "<address>192.0.2.1</address>"
+        "</vrrp-interface></vrrp-information>"
+    )
+    assert _virtual_addresses_from_reply(reply) == {("ae0.100", "192.0.2.1"): "1"}
