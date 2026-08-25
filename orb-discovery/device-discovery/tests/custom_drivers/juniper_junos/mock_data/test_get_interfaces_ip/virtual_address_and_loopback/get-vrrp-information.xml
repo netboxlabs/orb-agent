@@ -1,0 +1,8 @@
+<vrrp-information>
+  <vrrp-interface>
+    <interface>ae0.501</interface>
+    <group>1</group>
+    <vrrp-state>master</vrrp-state>
+    <virtual-ip-address>100.64.12.1</virtual-ip-address>
+  </vrrp-interface>
+</vrrp-information>

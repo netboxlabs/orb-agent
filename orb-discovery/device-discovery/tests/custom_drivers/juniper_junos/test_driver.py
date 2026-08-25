@@ -77,8 +77,23 @@ class TestJunOSDriver(BaseDriverTest):
         pytest.skip("inherited from napalm.junos.junos.JunOSDriver")
 
     def test_get_interfaces_ip(self, scenario):
-        """Skip: inherited from napalm.junos.junos.JunOSDriver."""
-        pytest.skip("inherited from napalm.junos.junos.JunOSDriver")
+        """
+        The override drops a virtual address and keeps everything else.
+
+        No longer inherited: this driver overrides get_interfaces_ip to leave
+        out the addresses the device reports as VRRP virtual addresses. Upstream
+        still does the parsing, including turning the maskless virtual address
+        into a host length, so this exercises the real chain rather than a stub.
+        """
+        mock_dir = self.mock_data_root / "test_get_interfaces_ip" / scenario
+        driver = self._build_driver(mock_dir)
+        result = driver.get_interfaces_ip()
+        assert result["ae0.501"]["ipv4"] == {"100.64.12.3": {"prefix_length": 22}}, (
+            "the virtual address must be gone and the real one untouched"
+        )
+        assert result["lo0.0"]["ipv4"] == {"192.0.2.4": {"prefix_length": 32}}, (
+            "a loopback is reported maskless too, and must survive"
+        )
 
     def test_get_config(self, scenario):
         """Skip: inherited from napalm.junos.junos.JunOSDriver."""

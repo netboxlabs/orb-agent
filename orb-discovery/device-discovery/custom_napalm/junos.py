@@ -37,6 +37,7 @@ XML parsing notes
 
 import logging
 import re
+from ipaddress import ip_address
 
 from jnpr.junos.exception import RpcError
 from lxml import etree
@@ -706,6 +707,189 @@ def _junos_get_modules_impl(driver) -> dict | None:
     return _junos_modules_from_standalone(driver, rpc_root)
 
 
+_EXPECTED_VIRTUAL_TAG = "virtual-ip-address"
+
+# Element names already reported, so an unrecognised spelling is logged once per
+# process rather than once per address per cycle. The expected name is not
+# corroborated by any published source, so on a device using a different one an
+# unbounded line would be permanent noise.
+_UNEXPECTED_TAGS_SEEN: set[str] = set()
+
+
+def _note_unexpected_tag(ifname: str, address: str, name: str) -> None:
+    """
+    Log once per element name that is not the expected one.
+
+    The element carrying a virtual address is matched by shape rather than by a
+    verified name. The case worth surfacing is a match on an address the driver
+    never reported as an interface address: nothing is suppressed then, so no
+    other line is emitted and a wrong match would leave no trace.
+    """
+    if name == _EXPECTED_VIRTUAL_TAG or name in _UNEXPECTED_TAGS_SEEN:
+        return
+    _UNEXPECTED_TAGS_SEEN.add(name)
+    logger.info(
+        "%s: matched virtual address %s via unexpected element <%s>",
+        ifname,
+        address,
+        name,
+    )
+
+
+def _normalise_ip(value: str) -> str:
+    """Return the address without any mask, compressed, or the input unchanged."""
+    bare = (value or "").split("/", 1)[0].strip()
+    try:
+        return ip_address(bare).compressed
+    except ValueError:
+        return value
+
+
+def _is_virtual_address_tag(name: str) -> bool:
+    """
+    Recognise the element carrying a virtual address by shape, not by name.
+
+    No published source corroborates the exact element name, so match local
+    names that contain "virtual" and end in "address", plus the bare "vip"
+    form. This cannot match the lcl (local) or mas (master) addresses that
+    appear in the same reply, either of which would suppress a real interface
+    address.
+    """
+    return name == "vip" or ("virtual" in name and name.endswith("address"))
+
+
+def _iter_localname(root, name: str):
+    """Yield root and every descendant element whose local name matches."""
+    for el in root.iter():
+        if isinstance(el.tag, str) and _localname(el) == name:
+            yield el
+
+
+def _owned_by(el, entry) -> bool:
+    """
+    True when the innermost ``vrrp-interface`` enclosing ``el`` is ``entry``.
+
+    A nested entry owns its own addresses; letting the outer one absorb them
+    would suppress an address on the wrong interface. Skipping per element
+    rather than breaking out of the walk matters because ``iter()`` is
+    document-order depth-first, so a break would also abandon any of the outer
+    entry's own addresses that appear after the nested one.
+
+    Requires lxml's ``getparent()``, as does ``_group_for``. PyEZ and the test
+    double both produce lxml trees.
+    """
+    if el is entry:
+        return True
+    node = el.getparent()
+    while node is not None:
+        if _localname(node) == "vrrp-interface":
+            return node is entry
+        node = node.getparent()
+    return True
+
+
+def _group_for(matched, entry) -> str:
+    """
+    Return the group id nearest the matched element, walking up to ``entry``.
+
+    A per-group container would put the group above the address rather than
+    beside the interface, so a direct-child lookup on ``entry`` alone would
+    report every group as unknown.
+    """
+    node = matched
+    while node is not None:
+        group = _text(_find_child(node, "group"))
+        if group:
+            return group
+        if node is entry:
+            break
+        node = node.getparent()
+    return ""
+
+
+def _vrrp_interface_name(entry) -> str:
+    """
+    Return the logical interface name, joining a separate unit when present.
+
+    VRRP output can report the physical interface and its unit as two fields,
+    which would otherwise produce a name that cannot match the interface keys
+    upstream returns.
+    """
+    for tag in ("interface", "interface-name"):
+        name = _text(_find_child(entry, tag))
+        if not name:
+            continue
+        if "." not in name:
+            unit = _text(_find_child(entry, "unit"))
+            if unit:
+                return f"{name}.{unit}"
+        return name
+    return ""
+
+
+def _virtual_addresses_from_reply(reply) -> dict[tuple[str, str], str]:
+    """
+    Map (ifl, virtual address) to the VRRP group that declares it.
+
+    Returns an empty mapping for anything that is not an element: a device with
+    no VRRP configured answers with a warning that PyEZ turns into the boolean
+    True, which is the common case rather than an error.
+
+    Walks every descendant, so a multi-routing-engine-results wrapper needs no
+    special handling. Comments and processing instructions are skipped because
+    their tag is a callable and ncclient copies them through from real devices.
+
+    Anything that does not yield both an interface and an address is skipped
+    rather than raising, so an unanticipated reply shape degrades to
+    "suppress nothing".
+    """
+    out: dict[tuple[str, str], str] = {}
+    if reply is None or not hasattr(reply, "tag"):
+        return out
+    for entry in _iter_localname(reply, "vrrp-interface"):
+        ifname = _vrrp_interface_name(entry)
+        if not ifname:
+            continue
+        for el in entry.iter():
+            if not isinstance(el.tag, str):
+                continue
+            name = _localname(el)
+            if not _is_virtual_address_tag(name) or not _owned_by(el, entry):
+                continue
+            address = _normalise_ip(_text(el))
+            try:
+                ip_address(address)
+            except ValueError:
+                continue
+            _note_unexpected_tag(ifname, address, name)
+            out[(ifname, address)] = _group_for(el, entry)
+    return out
+
+
+def _suppress_virtual(
+    interfaces_ip: dict,
+    virtual: dict[tuple[str, str], str],
+) -> tuple[dict, list[tuple[str, str, str]]]:
+    """
+    Remove addresses the device reports as first-hop-redundancy virtual addresses.
+
+    Only address entries are removed. Family and interface keys are left in
+    place because an interface may be known only through this mapping.
+    """
+    dropped: list[tuple[str, str, str]] = []
+    if not virtual:
+        return interfaces_ip, dropped
+    for ifname, families in interfaces_ip.items():
+        for addresses in families.values():
+            for ip in list(addresses):
+                group = virtual.get((ifname, _normalise_ip(ip)))
+                if group is None:
+                    continue
+                del addresses[ip]
+                dropped.append((ifname, ip, group))
+    return interfaces_ip, dropped
+
+
 class JunOSDriver(NapalmJunOSDriver):
     """
     Juniper Junos NAPALM driver.
@@ -739,6 +923,45 @@ class JunOSDriver(NapalmJunOSDriver):
         None — the existing single-Device path is unchanged.
         """
         return _junos_get_modules_impl(self)
+
+    def _virtual_addresses(self) -> dict[tuple[str, str], str]:
+        """Ask the device which of its addresses are VRRP virtual addresses."""
+        reply = self.device.rpc.get_vrrp_information(
+            ignore_warning=["vrrp subsystem not running"],
+        )
+        return _virtual_addresses_from_reply(reply)
+
+    def get_interfaces_ip(self) -> dict:
+        """
+        Return interface addresses, minus VRRP virtual addresses.
+
+        Junos reports a virtual address as an interface address, without a mask,
+        and upstream NAPALM fills that gap with a host length. Emitting it
+        overwrites an operator's own record with a value the device never
+        reported, and moves an address held against a redundancy group onto the
+        interface. The device is asked which addresses are virtual, and those
+        are left out.
+
+        Best-effort throughout: any failure returns what upstream parsed, since
+        this method is called without a guard and an escaping exception would
+        cost the device its whole discovery cycle. A failure part-way through
+        keeps the suppressions already made, which is strictly better than
+        losing the device.
+        """
+        interfaces_ip = super().get_interfaces_ip()
+        try:
+            virtual = self._virtual_addresses()
+            interfaces_ip, dropped = _suppress_virtual(interfaces_ip, virtual)
+            for ifname, address, group in dropped:
+                logger.info(
+                    "%s: not emitting %s, reported as a virtual address of group %s",
+                    ifname,
+                    address,
+                    group or "unknown",
+                )
+        except Exception:
+            logger.debug("Junos virtual-address suppression failed", exc_info=True)
+        return interfaces_ip
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """
