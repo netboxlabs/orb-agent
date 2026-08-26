@@ -6,7 +6,7 @@
           "name": "1",
           "position": "1",
           "module": {
-            "model": "C9300L-NM-8X",
+            "model": "C9300-NM-8X",
             "serial": "FRU0000101",
             "description": "8x10GE Network Module",
             "type": "linecard",
