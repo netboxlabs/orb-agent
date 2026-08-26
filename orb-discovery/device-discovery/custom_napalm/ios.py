@@ -800,12 +800,18 @@ _MODULAR_VETO_DESCR_RE = re.compile(r"\d+\s+Slot\s+Chassis", re.IGNORECASE)
 # PID is the only signal, so recognition is an explicit allowlist rather than a
 # heuristic.
 #
-# Membership criterion: every SKU in the family has non-removable uplinks. The
-# Catalyst 9200L qualifies — its -4G, -4X and -2Y uplinks are all fixed (e.g.
-# C9200L-24PXG-4X, C9200L-48PXG-2Y). The plain Catalyst 9200 does NOT: it takes
-# a removable C9200-NM-* uplink module, which inventory then reports as its own
-# FRU row.
-_IOS_FIXED_UPLINK_PID_RE = re.compile(r"^C9200L-", re.IGNORECASE)
+# Membership criterion: every SKU in the family has non-removable uplinks, and
+# a device capture confirms the resulting inventory shape. Two families qualify:
+#
+#   - Catalyst 9200L — its -4G, -4X and -2Y uplinks are all fixed (e.g.
+#     C9200L-24PXG-4X, C9200L-48PXG-2Y). The plain Catalyst 9200 does NOT: it
+#     takes a removable C9200-NM-* uplink module.
+#   - Catalyst 9300L — fixed SFP uplinks, no network-module slot. The plain
+#     C9300 and the C9300X both DO take a removable C9300-NM-* module.
+#
+# A removable module is reported as its own FRU row, which claims the slot and
+# is matched before this gate is consulted.
+_IOS_FIXED_UPLINK_PID_RE = re.compile(r"^(?:C9200L|C9300L)-", re.IGNORECASE)
 
 
 def _ios_chassis_is_fixed_uplink(inv_rows: list[dict]) -> bool:
