@@ -801,8 +801,10 @@ _MODULAR_VETO_DESCR_RE = re.compile(r"\d+\s+Slot\s+Chassis", re.IGNORECASE)
 # heuristic.
 #
 # Membership criterion: every SKU in the family has non-removable uplinks. The
-# Catalyst 9200L qualifies (-4G/-4X/-2Y/-2Q are all fixed); the plain Catalyst
-# 9200 does NOT, because it takes a removable uplink module.
+# Catalyst 9200L qualifies — its -4G, -4X and -2Y uplinks are all fixed (e.g.
+# C9200L-24PXG-4X, C9200L-48PXG-2Y). The plain Catalyst 9200 does NOT: it takes
+# a removable C9200-NM-* uplink module, which inventory then reports as its own
+# FRU row.
 _IOS_FIXED_UPLINK_PID_RE = re.compile(r"^C9200L-", re.IGNORECASE)
 
 

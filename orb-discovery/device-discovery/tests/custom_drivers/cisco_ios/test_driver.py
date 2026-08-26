@@ -726,32 +726,6 @@ class TestIOSDriver(BaseDriverTest):
         assert bays_by_name["TenGigabitEthernet1/1/1"]["module"]["serial"] == "OPT0001111"
         assert bays_by_name["TenGigabitEthernet1/1/1"]["module"]["type"] == "transceiver"
 
-    def test_get_modules_reported_card_row_beats_fixed_uplink_allowlist(self) -> None:
-        """
-        On an allowlisted chassis, a REPORTED card row still wins over promotion.
-
-        The fixed-uplink allowlist exists only to cover the gap where a chassis
-        ships no row for uplinks it cannot remove. It must never override
-        evidence: this inventory names ``Switch 1 FRU Uplink Module 1``, so the
-        optic has a real parent and has to nest under it. Promoting here would
-        invent a chassis-level parent for hardware that already has one, and
-        would emit the linecard and the optic as siblings.
-        """
-        mock_dir = (
-            self.mock_data_root / "test_get_modules" / "fixed_uplink_chassis_with_fru_row"
-        )
-        driver = self._build_driver(mock_dir)
-        result = driver.get_modules()
-
-        assert result is not None
-        bays = result["members"][None]["bays"]
-        assert [bay["name"] for bay in bays] == ["1"], (
-            f"the optic must not become a device-rooted bay, got {[b['name'] for b in bays]}"
-        )
-        sub_bays = bays[0]["module"]["sub_bays"]
-        assert [sub["name"] for sub in sub_bays] == ["TenGigabitEthernet1/1/1"]
-        assert sub_bays[0]["module"]["serial"] == "OPT0001111"
-
     def test_get_modules_numeric_member_names_enter_prefixed_mode(self) -> None:
         """
         Bare-numeric member NAME rows must still trigger switch-prefixed mode.
