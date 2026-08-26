@@ -694,6 +694,70 @@ class TestIOSDriver(BaseDriverTest):
             for r in caplog.records
         ), "declining promotion must name the port and slot at debug"
 
+    def test_get_modules_promotes_fixed_uplinks_on_known_fixed_chassis(self) -> None:
+        """
+        A fixed-uplink chassis promotes its module-1 optics despite no FRU row.
+
+        A C9200L-24PXG-4X has FIXED 10G
+        uplinks: Cisco numbers them ``Te1/1/x`` (second segment 1, not the
+        baseboard 0) but ships no ``FRU Uplink Module`` row, because there is
+        no removable module to report. The baseboard-only rule declines every
+        such optic, so ``discover_modules: full`` emitted nothing at all on
+        this platform.
+
+        Distinguishing this from ``fru_row_omitted_not_promoted`` -- byte
+        identical in ifname shape and equally lacking a FRU row, but on a
+        chassis whose uplink module IS removable -- is only possible from the
+        chassis PID, which is why promotion here is gated on a known
+        fixed-uplink family rather than on the slot number.
+        """
+        mock_dir = (
+            self.mock_data_root / "test_get_modules" / "fixed_uplink_chassis_no_fru_row"
+        )
+        driver = self._build_driver(mock_dir)
+        result = driver.get_modules()
+
+        assert result is not None, "a fixed-uplink chassis must not return an empty payload"
+        member = result["members"][None]
+        bays_by_name = {bay["name"]: bay for bay in member["bays"]}
+        assert "TenGigabitEthernet1/1/1" in bays_by_name, (
+            f"Te1/1/1 must promote to a device-rooted bay, got {sorted(bays_by_name)}"
+        )
+        assert "TenGigabitEthernet1/1/2" in bays_by_name
+        assert bays_by_name["TenGigabitEthernet1/1/1"]["module"]["serial"] == "OPT0001111"
+        assert bays_by_name["TenGigabitEthernet1/1/1"]["module"]["type"] == "transceiver"
+
+    def test_get_modules_promotes_fixed_uplinks_on_9300l(self) -> None:
+        """
+        The C9300L is the second family on the fixed-uplink allowlist.
+
+        Same shape as the C9200L above -- fixed SFP uplinks numbered
+        ``Te1/1/x``, no ``FRU Uplink Module`` row -- on the family that Cisco
+        distinguishes from the C9300/C9300X precisely by not having a
+        network-module slot. All four uplinks must promote.
+
+        The fixture also carries the ``StackAdapter1/x`` rows a real capture
+        includes. They are not interface-shaped, so they must contribute no
+        bays: promotion keys off the optic's ifname, not off any row that
+        happens to end in a slash-separated pair.
+        """
+        mock_dir = (
+            self.mock_data_root / "test_get_modules" / "fixed_uplink_9300l_no_fru_row"
+        )
+        driver = self._build_driver(mock_dir)
+        result = driver.get_modules()
+
+        assert result is not None, "a C9300L must not return an empty payload"
+        member = result["members"][None]
+        bays_by_name = {bay["name"]: bay for bay in member["bays"]}
+        assert sorted(bays_by_name) == [
+            f"TenGigabitEthernet1/1/{port}" for port in range(1, 5)
+        ], f"all four fixed uplinks must promote, got {sorted(bays_by_name)}"
+        assert bays_by_name["TenGigabitEthernet1/1/1"]["module"]["serial"] == "OPT0002001"
+        assert all(
+            bay["module"]["type"] == "transceiver" for bay in member["bays"]
+        )
+
     def test_get_modules_numeric_member_names_enter_prefixed_mode(self) -> None:
         """
         Bare-numeric member NAME rows must still trigger switch-prefixed mode.

@@ -1,5 +1,5 @@
-NAME: "Switch 2", DESCR: "Cisco Catalyst 9300L-48T-4X Switch"
-PID: C9300L-48T-4X     , VID: V01 , SN: FCW4444402
+NAME: "Switch 2", DESCR: "Cisco Catalyst 9300-48T Switch"
+PID: C9300-48T         , VID: V01 , SN: FCW4444402
 
 NAME: "Gi2/0/1", DESCR: "1000BaseLX SFP"
 PID: GLC-LH-SMD        , VID: V01 , SN: OPT4444401
