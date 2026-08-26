@@ -792,6 +792,27 @@ def _interface_segment_count(ifname: str) -> int:
 _MODULAR_VETO_NAME_RE = re.compile(r"Slot\s*\d+|Subslot|FRU", re.IGNORECASE)
 _MODULAR_VETO_DESCR_RE = re.compile(r"\d+\s+Slot\s+Chassis", re.IGNORECASE)
 
+# Chassis families whose uplink ports are FIXED but are still numbered on a
+# non-zero module (``Te1/1/x``). They ship no FRU row for those ports because
+# there is no removable module to report, so the baseboard rule below cannot
+# tell them apart from a modular chassis whose card row the vendor omitted —
+# the two are byte-identical in both ifname shape and inventory. The chassis
+# PID is the only signal, so recognition is an explicit allowlist rather than a
+# heuristic.
+#
+# Membership criterion: every SKU in the family has non-removable uplinks. The
+# Catalyst 9200L qualifies (-4G/-4X/-2Y/-2Q are all fixed); the plain Catalyst
+# 9200 does NOT, because it takes a removable uplink module.
+_IOS_FIXED_UPLINK_PID_RE = re.compile(r"^C9200L-", re.IGNORECASE)
+
+
+def _ios_chassis_is_fixed_uplink(inv_rows: list[dict]) -> bool:
+    """Return True when raw inventory names a known fixed-uplink chassis PID."""
+    for row in inv_rows or []:
+        if _IOS_FIXED_UPLINK_PID_RE.match((row.get("pid") or "").strip()):
+            return True
+    return False
+
 
 def _non_prefixed_modular_veto(inv_rows: list[dict]) -> bool:
     """Return True when raw inventory shows any sign the chassis is modular."""
@@ -808,6 +829,7 @@ def _optic_parent_is_baseboard(
     *,
     switch_prefixed: bool,
     non_prefixed_modular_veto: bool,
+    fixed_uplink_chassis: bool = False,
 ) -> bool:
     """
     Positive-evidence check: may an unclaimed, parentless optic promote?
@@ -822,7 +844,10 @@ def _optic_parent_is_baseboard(
       depth=2 is the slot): module 0 is the switch's own baseboard, every
       real bay is 1-based. A name with fewer than 3 segments has no
       reliable slot at depth 2 — refuse rather than read the port number
-      as the slot.
+      as the slot. A non-zero module promotes only on a chassis whose PID
+      says its uplinks are fixed (``fixed_uplink_chassis``); nothing in the
+      ifname distinguishes that case from a modular chassis whose card row
+      the vendor omitted.
     - Non-prefixed 2-tuple (module/port, depth=1 is the slot): same
       baseboard reasoning, one dimension up.
     - Non-prefixed 3-tuple: no per-port signal exists at all (a fixed
@@ -832,7 +857,13 @@ def _optic_parent_is_baseboard(
     if switch_prefixed:
         if _interface_segment_count(canonical) < 3:
             return False
-        return _interface_slot(canonical, depth=2) == "0"
+        if _interface_slot(canonical, depth=2) == "0":
+            return True
+        # Non-zero module on a chassis whose uplinks are known to be fixed:
+        # the port has no removable parent to nest under, which is why no FRU
+        # row claimed its slot. Reached only after the claimed-slot check, so
+        # a fixed-uplink chassis that DOES report a card row still nests.
+        return fixed_uplink_chassis
     segments = _interface_segment_count(canonical)
     if segments == 2:
         return _interface_slot(canonical, depth=1) == "0"
@@ -1066,6 +1097,7 @@ def _attach_transceivers(
     switch_prefixed: bool,
     claimed_slots: set[tuple[int | None, str]],
     non_prefixed_modular_veto: bool,
+    fixed_uplink_chassis: bool = False,
 ) -> None:
     """
     Attach each transceiver entry as a sub-bay of its member's parent slot.
@@ -1118,6 +1150,7 @@ def _attach_transceivers(
                     canonical,
                     switch_prefixed=switch_prefixed,
                     non_prefixed_modular_veto=non_prefixed_modular_veto,
+                    fixed_uplink_chassis=fixed_uplink_chassis,
                 ):
                     logger.debug(
                         "ios.get_modules: declining promotion of %s onto member %s "
@@ -1168,6 +1201,7 @@ def _ios_get_modules_impl(driver) -> dict | None:
     # computed unconditionally anyway since scanning the rows once here is
     # cheap and keeps the veto device-level rather than per-optic.
     non_prefixed_modular_veto = _non_prefixed_modular_veto(inv_rows)
+    fixed_uplink_chassis = _ios_chassis_is_fixed_uplink(inv_rows)
     bays_by_member, transceivers_by_member, claimed_slots = _parse_inventory_rows(
         inv_rows, vc_mode,
     )
@@ -1180,6 +1214,7 @@ def _ios_get_modules_impl(driver) -> dict | None:
     _attach_transceivers(
         bays_by_member, transceivers_by_member, interfaces_by_member_and_slot,
         switch_prefixed, claimed_slots, non_prefixed_modular_veto,
+        fixed_uplink_chassis,
     )
 
     return _modules_to_payload({

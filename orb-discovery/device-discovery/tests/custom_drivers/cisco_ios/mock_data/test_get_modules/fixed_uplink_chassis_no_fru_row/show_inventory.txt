@@ -1,0 +1,14 @@
+NAME: "c92xx Stack", DESCR: "c92xx Stack"
+PID: C9200L-24PXG-4X   , VID: V01  , SN: FCW0000STK
+
+NAME: "Switch 1", DESCR: "C9200L-24PXG-4X"
+PID: C9200L-24PXG-4X   , VID: V01  , SN: FCW0000001
+
+NAME: "Switch 1 - Power Supply A", DESCR: "Switch 1 - Power Supply A"
+PID: PWR-C5-600WAC     , VID: V01  , SN: PSU0000001
+
+NAME: "Te1/1/1", DESCR: "SFP-10GBase-SR"
+PID: SFP-10G-SR        , VID: V03  , SN: OPT0001111
+
+NAME: "Te1/1/2", DESCR: "SFP-10GBase-SR"
+PID: SFP-10G-SR        , VID: V03  , SN: OPT0001112

@@ -1,0 +1,8 @@
+NAME: "Switch 1", DESCR: "C9200L-24PXG-4X"
+PID: C9200L-24PXG-4X   , VID: V01  , SN: FCW0000001
+
+NAME: "Switch 1 FRU Uplink Module 1", DESCR: "4x10GE Network Module"
+PID: C9200-NM-4X       , VID: V01  , SN: FRU0000001
+
+NAME: "Te1/1/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02  , SN: OPT0001111
