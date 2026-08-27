@@ -248,23 +248,23 @@ journalctl --user -u orb-agent -f
 
 `%h` expands to the user's home directory, so the same file works for any user.
 
-On Podman versions without Quadlet, generate the unit from an already-running container instead. `--files` only writes `container-orb-agent.service` into the current directory, so it still has to be installed and enabled:
+On Podman versions without Quadlet, generate the unit from an already-running container instead. `--files` only writes `container-orb-agent.service` into the current directory, so it still has to be installed and enabled.
 
-```sh
-podman generate systemd --new --name orb-agent --files
-```
+Run the generate step in the same context that owns the container. Rootful and rootless Podman keep separate container stores, so an unprivileged `podman generate systemd` cannot see a container started with `sudo podman`, and vice versa.
 
 Rootful:
 
 ```sh
+sudo podman generate systemd --new --name orb-agent --files
 sudo install -m 644 container-orb-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now container-orb-agent.service
 ```
 
-Rootless, run as the user that owns the container:
+Rootless, as the user that owns the container:
 
 ```sh
+podman generate systemd --new --name orb-agent --files
 mkdir -p ~/.config/systemd/user
 install -m 644 container-orb-agent.service ~/.config/systemd/user/
 systemctl --user daemon-reload
