@@ -33,7 +33,7 @@ systemctl --user enable --now podman-restart.service
 sudo loginctl enable-linger "$USER"
 ```
 
-`podman-restart.service` honors both `always` and `unless-stopped`, and a container explicitly stopped with `podman stop` before the reboot stays down under `unless-stopped`.
+> **Podman treats `unless-stopped` as a synonym for `always`.** Every released Podman version documents the policy that way, so unlike Docker, a container stopped by hand before a reboot is started again by `podman-restart.service`. To take the agent down for maintenance on Podman, disable the restart path rather than relying on the policy, or use the [Quadlet](#podman-quadlet) approach where systemd owns the lifecycle. Podman's development documentation has since changed this, so check `podman run --help` for the version in use.
 
 Alternatively, skip this unit entirely and use the [Quadlet](#podman-quadlet) approach below, where systemd starts the container directly. That section has both a rootful and a rootless variant; the rootless one still needs lingering enabled.
 
@@ -64,7 +64,7 @@ Raising the timeout gives the sequence room to complete. 60 seconds covers any c
 
 | Policy | Restarts after a crash | Restarts after a host reboot | Notes |
 |--------|------------------------|------------------------------|-------|
-| `unless-stopped` | Yes | Yes, unless it was stopped manually | Recommended. A container taken down for maintenance stays down across a reboot. |
+| `unless-stopped` | Yes | Yes, unless it was stopped manually | Recommended. A container taken down for maintenance stays down across a reboot. On Podman this policy behaves like `always`; see [Podman](#podman) above. |
 | `always` | Yes | Yes, always | Use when the agent must come back even if someone stopped it by hand. |
 | `on-failure` | Only on a non-zero exit | No | Not recommended here: the agent will not survive a reboot. |
 
@@ -248,7 +248,29 @@ journalctl --user -u orb-agent -f
 
 `%h` expands to the user's home directory, so the same file works for any user.
 
-On older Podman versions, `podman generate systemd --new --name orb-agent --files` writes an equivalent unit for an already-running container; run it as the same user that owns the container.
+On Podman versions without Quadlet, generate the unit from an already-running container instead. `--files` only writes `container-orb-agent.service` into the current directory, so it still has to be installed and enabled:
+
+```sh
+podman generate systemd --new --name orb-agent --files
+```
+
+Rootful:
+
+```sh
+sudo install -m 644 container-orb-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now container-orb-agent.service
+```
+
+Rootless, run as the user that owns the container:
+
+```sh
+mkdir -p ~/.config/systemd/user
+install -m 644 container-orb-agent.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now container-orb-agent.service
+sudo loginctl enable-linger "$USER"
+```
 
 Rootless Podman has additional constraints for network discovery; see the [Network Discovery backend documentation](../backends/network_discovery.md#rootless-podman-deployment).
 
