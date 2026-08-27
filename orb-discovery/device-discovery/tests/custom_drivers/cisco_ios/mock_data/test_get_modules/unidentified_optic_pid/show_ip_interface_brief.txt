@@ -1,0 +1,2 @@
+Interface              IP-Address      OK? Method Status                Protocol
+GigabitEthernet1/0/25   unassigned      YES unset  up                    up

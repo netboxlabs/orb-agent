@@ -1,0 +1,5 @@
+NAME: "1", DESCR: "WS-C2960S-24PD-L"
+PID: WS-C2960S-24PD-L  , VID: V03  , SN: SN0081001
+
+NAME: "GigabitEthernet1/0/25", DESCR: "1000BaseSX SFP"
+PID: Unspecified       , VID:      , SN: OPT0081025
