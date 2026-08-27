@@ -157,6 +157,10 @@ orb:
 
 ## Running the agent
 
+Orb Agent is a long-running process: it stays resident and executes each policy on the `schedule` defined for it, rather than exiting after a single discovery run.
+
+The commands below run the agent in the foreground, which is useful for validating a new `agent.yaml` while watching the logs. For an ongoing deployment, see [Running as a service](#running-as-a-service) below.
+
 To run `orb-agent`, use the following command from the directory where your created your `agent.yaml` file:
 
 ```sh
@@ -178,6 +182,22 @@ podman run -d --privileged --net=host \
 ```
 
 **Note for rootless podman users:** If running podman without root/sudo privileges, network discovery requires specific configuration to avoid raw socket limitations. The command above requires `sudo` for full NMAP functionality. For rootless operation, see the [Network Discovery backend documentation](./docs/backends/network_discovery.md#rootless-podman-deployment) for TCP connect scan configuration.
+
+### Running as a service
+
+So that the agent survives a logout, a crash, or a host reboot without an interactive session being left open, start it detached with a restart policy:
+
+```sh
+docker run -d --name orb-agent --restart unless-stopped \
+  --net=host \
+  -v /local/orb:/opt/orb/ \
+  --env-file /local/orb/.env \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+The restart policy is enforced by the container runtime, so the runtime itself must also be enabled at boot (`sudo systemctl enable --now docker`). From there, `docker logs -f orb-agent` tails the agent, `docker restart orb-agent` applies a change to `agent.yaml`, and `docker stop orb-agent` takes it down.
+
+For Docker Compose and systemd unit examples, Podman Quadlet, log rotation, and credential handling, see the [Running as a Service](./docs/advanced_config/run_as_service.md) guide.
 
 ### Outbound proxy
 If the agent must send outbound traffic to your Diode target through a corporate forward proxy, see the [Outbound Proxy Support](./docs/advanced_config/outbound_proxy.md) guide for the supported proxy environment variables and examples.
