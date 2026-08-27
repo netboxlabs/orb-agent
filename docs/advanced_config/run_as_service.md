@@ -35,7 +35,7 @@ sudo loginctl enable-linger "$USER"
 
 `podman-restart.service` honors both `always` and `unless-stopped`, and a container explicitly stopped with `podman stop` before the reboot stays down under `unless-stopped`.
 
-Alternatively, skip this unit entirely and use the [Quadlet](#podman-quadlet) approach below, where systemd starts the container directly.
+Alternatively, skip this unit entirely and use the [Quadlet](#podman-quadlet) approach below, where systemd starts the container directly. That section has both a rootful and a rootless variant; the rootless one still needs lingering enabled.
 
 ## Option 1: Detached container with a restart policy
 
@@ -168,9 +168,13 @@ sudo journalctl -u orb-agent -f
 
 ### Podman (Quadlet)
 
-Podman can generate the unit rather than having it written by hand.
+Podman can generate the unit rather than having it written by hand. On Podman 4.4 and later, use [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html): drop a `.container` file in a directory systemd reads, and the service is generated at boot.
 
-On Podman 4.4 and later, use [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html): create `/etc/containers/systemd/orb-agent.container` and let systemd generate the service at boot.
+Where that file goes, and which systemd instance manages it, differs between rootful and rootless Podman. Using the rootful path as a rootless user creates a system-level container owned by root, not the user's own.
+
+#### Rootful
+
+Create `/etc/containers/systemd/orb-agent.container`:
 
 ```ini
 [Unit]
@@ -197,9 +201,49 @@ WantedBy=multi-user.target
 ```sh
 sudo systemctl daemon-reload
 sudo systemctl start orb-agent
+sudo systemctl status orb-agent
+sudo journalctl -u orb-agent -f
 ```
 
-On older Podman versions, `podman generate systemd --new --name orb-agent --files` writes an equivalent unit for an already-running container.
+#### Rootless
+
+Create `~/.config/containers/systemd/orb-agent.container` (that is `$XDG_CONFIG_HOME/containers/systemd/`). The unit is the same except for the install target, which is the user manager's `default.target`, and the paths, which must be readable by the user rather than root:
+
+```ini
+[Unit]
+Description=NetBox Labs Orb Agent
+
+[Container]
+Image=docker.io/netboxlabs/orb-agent:latest
+ContainerName=orb-agent
+Network=host
+Volume=%h/orb:/opt/orb:Z
+EnvironmentFile=%h/orb/.env
+StopTimeout=60
+Exec=run -c /opt/orb/agent.yaml
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target
+```
+
+Manage it with the user instance of systemd, and enable lingering so it starts at boot without the user being logged in:
+
+```sh
+sudo loginctl enable-linger "$USER"
+systemctl --user daemon-reload
+systemctl --user start orb-agent
+systemctl --user status orb-agent
+journalctl --user -u orb-agent -f
+```
+
+`%h` expands to the user's home directory, so the same file works for any user.
+
+On older Podman versions, `podman generate systemd --new --name orb-agent --files` writes an equivalent unit for an already-running container; run it as the same user that owns the container.
 
 Rootless Podman has additional constraints for network discovery; see the [Network Discovery backend documentation](../backends/network_discovery.md#rootless-podman-deployment).
 
