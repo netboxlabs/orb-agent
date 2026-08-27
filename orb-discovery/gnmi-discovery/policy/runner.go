@@ -181,10 +181,11 @@ func (r *Runner) targetLoop(t config.Target) {
 // permanently demotes the target. Explicit on_change/sample modes never
 // auto-downgrade; they return the error to reconnect at the same mode.
 func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debouncer, retry *time.Timer) error {
+	tls := t.ResolvedTLS()
 	sess, err := r.dialer.Dial(r.ctx, gnmi.TargetSpec{
 		Host: t.Host, Username: t.Username, Password: t.Password,
-		SkipVerify: t.TLS.SkipVerify, Insecure: t.TLS.Insecure, Origin: t.ResolvedOrigin(),
-		CAFile: t.TLS.CAFile, CertFile: t.TLS.CertFile, KeyFile: t.TLS.KeyFile,
+		SkipVerify: tls.SkipVerify, Insecure: tls.Insecure, Origin: t.ResolvedOrigin(),
+		CAFile: tls.CAFile, CertFile: tls.CertFile, KeyFile: tls.KeyFile,
 	})
 	if err != nil {
 		return err

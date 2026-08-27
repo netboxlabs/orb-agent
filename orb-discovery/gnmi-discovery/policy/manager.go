@@ -217,10 +217,16 @@ func (m *Manager) resolveEnv(policy *config.Policy) error {
 		t := &policy.Scope.Targets[i]
 		// Resolve every string field a user is likely to source from env: host,
 		// credentials, and TLS material paths.
-		for _, f := range []*string{
-			&t.Host, &t.Username, &t.Password,
-			&t.TLS.CAFile, &t.TLS.CertFile, &t.TLS.KeyFile,
-		} {
+		fields := []*string{&t.Host, &t.Username, &t.Password}
+		// TLS is a pointer, and taking the address of a field through a nil one
+		// panics rather than failing to compile. No tls block is the common
+		// case, so this guard is on the hot path, not an edge case. ResolvedTLS
+		// cannot serve here: it returns a copy, so writing through it would not
+		// propagate.
+		if t.TLS != nil {
+			fields = append(fields, &t.TLS.CAFile, &t.TLS.CertFile, &t.TLS.KeyFile)
+		}
+		for _, f := range fields {
 			resolved, err := env.ResolveEnv(*f)
 			if err != nil {
 				return err

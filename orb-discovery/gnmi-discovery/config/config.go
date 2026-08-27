@@ -43,20 +43,44 @@ type TLSConfig struct {
 
 // Target is one gNMI endpoint.
 type Target struct {
-	Host             string    `yaml:"host"`
-	Username         string    `yaml:"username,omitempty"`
-	Password         string    `yaml:"password,omitempty"`
-	TLS              TLSConfig `yaml:"tls,omitempty"`
-	Mode             string    `yaml:"mode,omitempty"`    // overrides PolicyConfig.Mode
-	Profile          string    `yaml:"profile,omitempty"` // pins a profile; else auto-detect
-	OverrideDefaults *Defaults `yaml:"override_defaults,omitempty"`
-	NetboxID         *int      `yaml:"netbox_id,omitempty"`
+	Host     string `yaml:"host"`
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	// Port is the gNMI port. An inline "host:port" suffix wins over this field,
+	// which in turn wins over the scope's; unset everywhere means
+	// DefaultGNMIPort. A CIDR or range cannot carry an inline port, which is
+	// why this field exists.
+	Port uint16 `yaml:"port,omitempty"`
+	// TLS is a pointer so that "absent" is distinguishable from "present and
+	// zero": nil inherits the scope's block, a present block replaces it
+	// wholesale. Read it through ResolvedTLS, never directly — a nil
+	// dereference here compiles cleanly and panics at runtime.
+	TLS              *TLSConfig `yaml:"tls,omitempty"`
+	Mode             string     `yaml:"mode,omitempty"`    // overrides PolicyConfig.Mode
+	Profile          string     `yaml:"profile,omitempty"` // pins a profile; else auto-detect
+	OverrideDefaults *Defaults  `yaml:"override_defaults,omitempty"`
+	NetboxID         *int       `yaml:"netbox_id,omitempty"`
 	// Origin is the gNMI path origin sent on Subscribe/Get requests. Unset (nil)
 	// defaults to "openconfig" — the canonical OpenConfig origin, required by
 	// strict targets like Nokia SR Linux (which otherwise resolves an origin-less
 	// path against its native schema and rejects it). Set it explicitly to ""
 	// for a target that needs origin-less paths, or to a vendor-specific origin.
 	Origin *string `yaml:"origin,omitempty"`
+}
+
+// ResolvedTLS returns this target's TLS settings, or the zero value when no
+// block is set.
+//
+// Every read of Target.TLS goes through here. Go auto-dereferences a pointer
+// field selector, so `t.TLS.SkipVerify` on a nil TLS compiles without complaint
+// and panics at runtime — and nil is the common case, since most policies set no
+// tls block at all. The zero value is the secure default (TLS with the system
+// root CAs), which is what the field meant before it became a pointer.
+func (t Target) ResolvedTLS() TLSConfig {
+	if t.TLS == nil {
+		return TLSConfig{}
+	}
+	return *t.TLS
 }
 
 // ResolvedOrigin returns the gNMI request-path origin for this target: the
@@ -68,9 +92,24 @@ func (t Target) ResolvedOrigin() string {
 	return "openconfig"
 }
 
-// Scope holds the targets for a policy.
+// Scope holds a policy's targets and the settings they inherit.
+//
+// The scope block carries five of Target's fields. It deliberately does not
+// carry mode, override_defaults or profile: the first two duplicate
+// policy-level knobs (PolicyConfig.Mode and PolicyConfig.Defaults), and a
+// scope-level profile would pin one vendor profile across a whole range,
+// bypassing capability auto-detection — which defeats the point of scanning a
+// subnet whose contents are unknown.
+//
+// host and netbox_id are per-target by nature: host is the thing being
+// enumerated, and one NetBox device id cannot describe a range.
 type Scope struct {
-	Targets []Target `yaml:"targets"`
+	Username string     `yaml:"username,omitempty"`
+	Password string     `yaml:"password,omitempty"`
+	Port     uint16     `yaml:"port,omitempty"`
+	Origin   *string    `yaml:"origin,omitempty"`
+	TLS      *TLSConfig `yaml:"tls,omitempty"`
+	Targets  []Target   `yaml:"targets"`
 }
 
 // DeviceDefaults mirrors snmp-discovery's device defaults subset.
