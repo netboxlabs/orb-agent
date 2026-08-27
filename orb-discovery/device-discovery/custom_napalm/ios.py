@@ -1027,12 +1027,22 @@ def _parse_inventory_rows(
         if _INVENTORY_IFNAME_RE.match(name):
             # Transceiver row keyed by ifname. Second-gate by PID class:
             # only rows whose PID classifies as transceiver actually
-            # become transceiver sub-bays. This drops paranoid edge
-            # cases where a non-transceiver Cisco-prefix row (e.g. a
-            # rare stack-hardware row that happens to use a real port
-            # prefix) sneaks past the narrow ifname regex.
+            # become transceiver sub-bays. That drops two kinds of row:
+            # a non-transceiver Cisco-prefix row (e.g. a rare
+            # stack-hardware row that happens to use a real port prefix)
+            # that sneaked past the narrow ifname regex, and a placeholder
+            # the device substitutes for an optic it cannot identify (a
+            # 2960S reports "Unspecified"). Skipping both is right, since
+            # neither yields a model to emit, but from the outside a
+            # placeholder is indistinguishable from a bug -- so name the
+            # row and its PID rather than dropping it silently.
             module_type = classify_module_type_cisco_ios(pid)
             if module_type != "transceiver":
+                logger.warning(
+                    "ios.get_modules: %s reports PID %r, which is not a "
+                    "recognized transceiver model; skipping (no model to emit)",
+                    name, pid,
+                )
                 continue
             # In VC mode the leading integer of the ifname is the
             # member id; in standalone there is no member dimension
@@ -1195,6 +1205,13 @@ def _ios_get_modules_impl(driver) -> dict | None:
         logger.warning("ios.get_modules: show inventory failed: %s", e)
         return None
     if not inv_rows:
+        # Every Cisco chassis reports at least its own row, so zero parsed rows
+        # means the command was rejected or its output did not parse -- a
+        # different failure from "no modules on this device".
+        logger.warning(
+            "ios.get_modules: show inventory returned no parseable rows; "
+            "emitting no modules",
+        )
         return None
 
     distinct_switch_count = _count_distinct_switch_ids(inv_rows)
@@ -1214,21 +1231,41 @@ def _ios_get_modules_impl(driver) -> dict | None:
         inv_rows, vc_mode,
     )
     if not bays_by_member and not transceivers_by_member:
+        # No aggregate warning here on purpose. A switch with no optics and no
+        # cards reaches this line every cycle, and that is the correct answer,
+        # not a diagnostic event. The rows that WERE candidates and got
+        # rejected are each warned about individually in
+        # _parse_inventory_rows, which is where the reason actually lives.
         return None
 
     interfaces_by_member_and_slot = _collect_interfaces_by_member_and_slot(
         driver, bays_by_member, vc_mode, switch_prefixed,
     )
+    # Counted before the attach consumes them, so the warning below can say
+    # how many optics the device actually reported.
+    optics_found = sum(len(t) for t in transceivers_by_member.values())
     _attach_transceivers(
         bays_by_member, transceivers_by_member, interfaces_by_member_and_slot,
         switch_prefixed, claimed_slots, non_prefixed_modular_veto,
         fixed_uplink_chassis,
     )
 
-    return _modules_to_payload({
+    payload = _modules_to_payload({
         member_id: _MemberModules(
             bays=list(bays.values()),
             interfaces_by_bay=interfaces_by_member_and_slot.get(member_id, {}),
         )
         for member_id, bays in bays_by_member.items()
     })
+    if payload is None and optics_found:
+        # The device reported optics and not one of them survived. Declining is
+        # the right call when a parent bay may exist unreported, but staying
+        # silent about it makes the option look broken rather than deliberate.
+        # The per-port reason stays at debug.
+        logger.warning(
+            "ios.get_modules: found %d transceiver(s) but declined every one "
+            "(no modeled parent bay); emitting no modules. Enable debug "
+            "logging on custom_napalm.ios for the per-port reason.",
+            optics_found,
+        )
+    return payload
