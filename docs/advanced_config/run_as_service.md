@@ -54,9 +54,11 @@ The same flags work with `podman run`.
 
 ### Why `--stop-timeout`
 
-The agent stops its backends one at a time, allowing each up to 5 seconds to exit after `SIGTERM` before escalating to `SIGKILL`. Only once every backend is down does it finalize in-flight policy runs and stop the config manager. With several backends enabled, that teardown can take longer than Docker's default 10 second stop timeout, and the agent is killed partway through, leaving policy runs unfinalized.
+The agent stops its backends one at a time. Only once every backend is down does it finalize in-flight policy runs and stop the config manager. The discovery backends (`network_discovery`, `snmp_discovery`, `device_discovery`, `gnmi_discovery`) and `worker` each allow their process 5 seconds to exit after `SIGTERM` before escalating to `SIGKILL`, so with several of them enabled the teardown can take longer than Docker's default 10 second stop timeout. The agent is then killed partway through, leaving policy runs unfinalized.
 
-Raising the timeout gives the sequence room to complete. 60 seconds is comfortable for any supported backend count; the agent exits as soon as it is done, so a generous value costs nothing in the common case.
+Raising the timeout gives the sequence room to complete. 60 seconds covers any combination of those backends, and the agent exits as soon as it is done, so a generous value costs nothing in the common case.
+
+> **The `pktvisor` and `opentelemetry_infinity` backends are not bounded this way.** Their stop path waits for the process to exit without a timeout of its own. If one of those processes does not exit on `SIGTERM`, no `--stop-timeout` value will produce a clean shutdown: the runtime's timer expires and the container is killed with policy runs unfinalized. Raising the timeout is still worthwhile, but treat clean shutdown as best effort when either backend is enabled.
 
 ### Choosing a restart policy
 
@@ -149,6 +151,7 @@ TimeoutStartSec=0
 TimeoutStopSec=90
 ExecStartPre=-/usr/bin/docker rm -f orb-agent
 ExecStart=/usr/bin/docker run --rm --name orb-agent \
+  --log-opt max-size=10m --log-opt max-file=3 \
   --net=host \
   -v /local/orb:/opt/orb/ \
   --env-file /local/orb/.env \
@@ -165,6 +168,8 @@ sudo systemctl enable --now orb-agent
 sudo systemctl status orb-agent
 sudo journalctl -u orb-agent -f
 ```
+
+Note that the agent's output is stored twice here: systemd captures the attached output into the journal, and the Docker daemon separately writes it through its default `json-file` driver, which does not rotate on its own. The `--log-opt` flags above cap the second copy. To keep only the journal's copy, add `--log-driver none` instead, at the cost of `docker logs` no longer working for this container.
 
 ### Podman (Quadlet)
 
