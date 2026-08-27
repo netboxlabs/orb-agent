@@ -196,7 +196,23 @@ docker run -d --name orb-agent --restart unless-stopped \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
-The restart policy is enforced by the container runtime, so the runtime itself must also be set up to act on it at boot: `sudo systemctl enable --now docker`, or `podman-restart.service` for Podman, which also treats `unless-stopped` as a synonym for `always`. `--stop-timeout` matters because the agent shuts its backends down one at a time before finalizing in-flight policy runs, which can outrun Docker's 10 second default.
+The restart policy is enforced by the container runtime, so the runtime itself must also be set up to act on it at boot. Docker needs its daemon enabled; Podman has no daemon and applies restart policies at boot through a separate unit:
+
+```sh
+sudo systemctl enable --now docker                    # Docker
+sudo systemctl enable --now podman-restart.service    # Podman, rootful
+```
+
+For rootless Podman, enable that unit for the user and allow their services to run without an active login session:
+
+```sh
+systemctl --user enable --now podman-restart.service
+sudo loginctl enable-linger "$USER"
+```
+
+Note that Podman treats `unless-stopped` as a synonym for `always`, so a container stopped by hand still comes back after a reboot.
+
+`--stop-timeout` matters because the agent shuts its backends down one at a time before finalizing in-flight policy runs, which can outrun Docker's 10 second default.
 
 From there, `docker logs -f orb-agent` tails the agent, `docker restart orb-agent` applies a change to `agent.yaml`, and `docker stop orb-agent` takes it down. To update the image, stop the container rather than using `docker rm -f`, which sends `SIGKILL` immediately:
 
