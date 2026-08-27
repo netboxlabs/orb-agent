@@ -6,20 +6,36 @@ The `docker run` commands in the [README](../../README.md#running-the-agent) and
 
 This guide covers three ways to do that. They are alternatives, not steps: pick one.
 
-## Prerequisite: the container runtime must start at boot
+## Prerequisite: the container runtime must restart containers at boot
 
-A container restart policy is enforced by the container runtime, so the runtime's own service has to be enabled. Without this the agent will not come back after a reboot no matter which option below is used.
+A container restart policy is enforced by the container runtime, so the runtime has to be configured to act on it at boot. Without this the agent will not come back after a reboot no matter which option below is used.
+
+### Docker
+
+Enabling the Docker daemon is sufficient; it restarts containers according to their restart policy when it starts.
 
 ```sh
 sudo systemctl enable --now docker
 ```
 
-For rootless Podman, enable the user socket and allow the user's services to run without an active login session:
+### Podman
+
+Podman has no long-running daemon, so restart policies are applied at boot by a separate unit, `podman-restart.service`. Enabling `podman.socket` does **not** do this: that socket only provides the Podman API.
 
 ```sh
-systemctl --user enable --now podman.socket
+sudo systemctl enable --now podman-restart.service
+```
+
+For rootless Podman, enable the unit for the user and allow the user's services to run without an active login session:
+
+```sh
+systemctl --user enable --now podman-restart.service
 sudo loginctl enable-linger "$USER"
 ```
+
+`podman-restart.service` honors both `always` and `unless-stopped`, and a container explicitly stopped with `podman stop` before the reboot stays down under `unless-stopped`.
+
+Alternatively, skip this unit entirely and use the [Quadlet](#podman-quadlet) approach below, where systemd starts the container directly.
 
 ## Option 1: Detached container with a restart policy
 
@@ -27,6 +43,7 @@ The smallest change to the foreground command: add `-d` to detach and `--restart
 
 ```sh
 docker run -d --name orb-agent --restart unless-stopped \
+  --stop-timeout 60 \
   --net=host \
   -v /local/orb:/opt/orb/ \
   --env-file /local/orb/.env \
@@ -34,6 +51,12 @@ docker run -d --name orb-agent --restart unless-stopped \
 ```
 
 The same flags work with `podman run`.
+
+### Why `--stop-timeout`
+
+The agent stops its backends one at a time, allowing each up to 5 seconds to exit after `SIGTERM` before escalating to `SIGKILL`. Only once every backend is down does it finalize in-flight policy runs and stop the config manager. With several backends enabled, that teardown can take longer than Docker's default 10 second stop timeout, and the agent is killed partway through, leaving policy runs unfinalized.
+
+Raising the timeout gives the sequence room to complete. 60 seconds is comfortable for any supported backend count; the agent exits as soon as it is done, so a generous value costs nothing in the common case.
 
 ### Choosing a restart policy
 
@@ -66,6 +89,7 @@ A long-running container accumulates logs indefinitely under Docker's default JS
 
 ```sh
 docker run -d --name orb-agent --restart unless-stopped \
+  --stop-timeout 60 \
   --log-opt max-size=10m --log-opt max-file=3 \
   --net=host \
   -v /local/orb:/opt/orb/ \
@@ -83,6 +107,7 @@ services:
     image: netboxlabs/orb-agent:latest
     container_name: orb-agent
     restart: unless-stopped
+    stop_grace_period: 60s
     network_mode: host
     volumes:
       - /local/orb:/opt/orb
@@ -121,13 +146,14 @@ Requires=docker.service
 Restart=always
 RestartSec=10
 TimeoutStartSec=0
+TimeoutStopSec=90
 ExecStartPre=-/usr/bin/docker rm -f orb-agent
 ExecStart=/usr/bin/docker run --rm --name orb-agent \
   --net=host \
   -v /local/orb:/opt/orb/ \
   --env-file /local/orb/.env \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
-ExecStop=/usr/bin/docker stop orb-agent
+ExecStop=/usr/bin/docker stop -t 60 orb-agent
 
 [Install]
 WantedBy=multi-user.target
@@ -140,7 +166,7 @@ sudo systemctl status orb-agent
 sudo journalctl -u orb-agent -f
 ```
 
-### Podman
+### Podman (Quadlet)
 
 Podman can generate the unit rather than having it written by hand.
 
@@ -156,11 +182,13 @@ ContainerName=orb-agent
 Network=host
 Volume=/local/orb:/opt/orb:Z
 EnvironmentFile=/local/orb/.env
+StopTimeout=60
 Exec=run -c /opt/orb/agent.yaml
 
 [Service]
 Restart=always
 RestartSec=10
+TimeoutStopSec=90
 
 [Install]
 WantedBy=multi-user.target

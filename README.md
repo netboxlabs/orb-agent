@@ -189,13 +189,14 @@ So that the agent survives a logout, a crash, or a host reboot without an intera
 
 ```sh
 docker run -d --name orb-agent --restart unless-stopped \
+  --stop-timeout 60 \
   --net=host \
   -v /local/orb:/opt/orb/ \
   --env-file /local/orb/.env \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
-The restart policy is enforced by the container runtime, so the runtime itself must also be enabled at boot (`sudo systemctl enable --now docker`). From there, `docker logs -f orb-agent` tails the agent, `docker restart orb-agent` applies a change to `agent.yaml`, and `docker stop orb-agent` takes it down.
+The restart policy is enforced by the container runtime, so the runtime itself must also be set up to act on it at boot (`sudo systemctl enable --now docker`; Podman needs `podman-restart.service` instead). `--stop-timeout` gives the agent room to shut its backends down in order before it is killed. From there, `docker logs -f orb-agent` tails the agent, `docker restart orb-agent` applies a change to `agent.yaml`, and `docker stop orb-agent` takes it down.
 
 For Docker Compose and systemd unit examples, Podman Quadlet, log rotation, and credential handling, see the [Running as a Service](./docs/advanced_config/run_as_service.md) guide.
 
