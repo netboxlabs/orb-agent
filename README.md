@@ -157,6 +157,10 @@ orb:
 
 ## Running the agent
 
+Orb Agent is a long-running process: it stays resident and executes each policy on the `schedule` defined for it, rather than exiting after a single discovery run.
+
+The commands below run the agent in the foreground, which is useful for validating a new `agent.yaml` while watching the logs. For an ongoing deployment, see [Running as a service](#running-as-a-service) below.
+
 To run `orb-agent`, use the following command from the directory where your created your `agent.yaml` file:
 
 ```sh
@@ -170,7 +174,7 @@ The container needs sufficient permissions, to send `icmp` and `tcp` packets. Th
 
 Or if using podman
 ```sh
-podman run -d --privileged --net=host \
+podman run --privileged --net=host \
   -v ${PWD}:/opt/orb/ \
   -e DIODE_CLIENT_ID \
   -e DIODE_CLIENT_SECRET \
@@ -178,6 +182,48 @@ podman run -d --privileged --net=host \
 ```
 
 **Note for rootless podman users:** If running podman without root/sudo privileges, network discovery requires specific configuration to avoid raw socket limitations. The command above requires `sudo` for full NMAP functionality. For rootless operation, see the [Network Discovery backend documentation](./docs/backends/network_discovery.md#rootless-podman-deployment) for TCP connect scan configuration.
+
+### Running as a service
+
+So that the agent survives a logout, a crash, or a host reboot without an interactive session being left open, start it detached with a restart policy:
+
+```sh
+docker run -d --name orb-agent --restart unless-stopped \
+  --stop-timeout 60 \
+  --log-driver local \
+  --net=host \
+  -v /local/orb:/opt/orb/ \
+  --env-file /local/orb/.env \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+The restart policy is enforced by the container runtime, so the runtime itself must also be set up to act on it at boot. Docker needs its daemon enabled; Podman has no daemon and applies restart policies at boot through a separate unit:
+
+```sh
+sudo systemctl enable --now docker                    # Docker
+sudo systemctl enable --now podman-restart.service    # Podman, rootful
+```
+
+For rootless Podman, enable that unit for the user and allow their services to run without an active login session:
+
+```sh
+systemctl --user enable --now podman-restart.service
+sudo loginctl enable-linger "$USER"
+```
+
+Note that Podman treats `unless-stopped` as a synonym for `always`, so a container stopped by hand still comes back after a reboot.
+
+`--stop-timeout` matters because the agent shuts its backends down one at a time before finalizing in-flight policy runs, which can outrun Docker's 10 second default. `--log-driver local` bounds log growth: the default `json-file` driver never rotates, so a permanently running agent can fill the host's disk, while `local` keeps 5 compressed files of 20MB each.
+
+From there, `docker logs -f orb-agent` tails the agent, `docker restart orb-agent` applies a change to `agent.yaml`, and `docker stop orb-agent` takes it down. To update the image, stop the container rather than using `docker rm -f`, which sends `SIGKILL` immediately:
+
+```sh
+docker pull netboxlabs/orb-agent:latest
+docker stop orb-agent && docker rm orb-agent
+# re-run the docker run command above
+```
+
+The same approach works through Docker Compose (`restart: unless-stopped` with `stop_grace_period: 60s`) or a systemd unit wrapping the container, if either fits your environment better.
 
 ### Outbound proxy
 If the agent must send outbound traffic to your Diode target through a corporate forward proxy, see the [Outbound Proxy Support](./docs/advanced_config/outbound_proxy.md) guide for the supported proxy environment variables and examples.
