@@ -174,7 +174,7 @@ The container needs sufficient permissions, to send `icmp` and `tcp` packets. Th
 
 Or if using podman
 ```sh
-podman run -d --privileged --net=host \
+podman run --privileged --net=host \
   -v ${PWD}:/opt/orb/ \
   -e DIODE_CLIENT_ID \
   -e DIODE_CLIENT_SECRET \
