@@ -81,9 +81,12 @@ To update to a newer image, pull and recreate the container:
 
 ```sh
 docker pull netboxlabs/orb-agent:latest
-docker rm -f orb-agent
+docker stop orb-agent
+docker rm orb-agent
 # re-run the docker run command above
 ```
+
+Use `docker stop` rather than `docker rm -f`: the latter sends `SIGKILL` immediately, bypassing the stop timeout and leaving any in-flight policy runs unfinalized.
 
 ### Log rotation
 
