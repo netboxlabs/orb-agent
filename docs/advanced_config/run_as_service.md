@@ -50,7 +50,7 @@ docker run -d --name orb-agent --restart unless-stopped \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
 
-The same flags work with `podman run`.
+The same flags work with `podman run`, with one addition: on SELinux-enforcing hosts such as Fedora and RHEL, append `:Z` to the bind mount (`-v /local/orb:/opt/orb/:Z`) so the content is relabeled for the container. Without it the agent can be denied access to `agent.yaml` and fail at startup.
 
 ### Why `--stop-timeout`
 
@@ -90,12 +90,14 @@ Use `docker stop` rather than `docker rm -f`: the latter sends `SIGKILL` immedia
 
 ### Log rotation
 
-A long-running container accumulates logs indefinitely under Docker's default JSON file driver. Cap them so the agent cannot fill the host's disk:
+A long-running container accumulates logs indefinitely under the `json-file` driver, which does not rotate on its own. Cap them so the agent cannot fill the host's disk.
+
+`--log-driver` is named explicitly here because `--log-opt max-size` and `max-file` are options of that driver: on a host whose daemon default has been changed to `journald` or `syslog`, passing them alone fails with an unknown log option error instead of starting the agent.
 
 ```sh
 docker run -d --name orb-agent --restart unless-stopped \
   --stop-timeout 60 \
-  --log-opt max-size=10m --log-opt max-file=3 \
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
   --net=host \
   -v /local/orb:/opt/orb/ \
   --env-file /local/orb/.env \
@@ -154,7 +156,7 @@ TimeoutStartSec=0
 TimeoutStopSec=90
 ExecStartPre=-/usr/bin/docker rm -f orb-agent
 ExecStart=/usr/bin/docker run --rm --name orb-agent \
-  --log-opt max-size=10m --log-opt max-file=3 \
+  --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 \
   --net=host \
   -v /local/orb:/opt/orb/ \
   --env-file /local/orb/.env \
@@ -172,7 +174,7 @@ sudo systemctl status orb-agent
 sudo journalctl -u orb-agent -f
 ```
 
-Note that the agent's output is stored twice here: systemd captures the attached output into the journal, and the Docker daemon separately writes it through its default `json-file` driver, which does not rotate on its own. The `--log-opt` flags above cap the second copy. To keep only the journal's copy, add `--log-driver none` instead, at the cost of `docker logs` no longer working for this container.
+Note that the agent's output is stored twice here: systemd captures the attached output into the journal, and the Docker daemon separately writes its own copy through the `json-file` driver, which does not rotate on its own. The `--log-driver` and `--log-opt` flags above cap that second copy. To keep only the journal's copy, add `--log-driver none` instead, at the cost of `docker logs` no longer working for this container.
 
 ### Podman (Quadlet)
 
