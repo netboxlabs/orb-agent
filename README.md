@@ -190,6 +190,7 @@ So that the agent survives a logout, a crash, or a host reboot without an intera
 ```sh
 docker run -d --name orb-agent --restart unless-stopped \
   --stop-timeout 60 \
+  --log-driver local \
   --net=host \
   -v /local/orb:/opt/orb/ \
   --env-file /local/orb/.env \
@@ -212,7 +213,7 @@ sudo loginctl enable-linger "$USER"
 
 Note that Podman treats `unless-stopped` as a synonym for `always`, so a container stopped by hand still comes back after a reboot.
 
-`--stop-timeout` matters because the agent shuts its backends down one at a time before finalizing in-flight policy runs, which can outrun Docker's 10 second default.
+`--stop-timeout` matters because the agent shuts its backends down one at a time before finalizing in-flight policy runs, which can outrun Docker's 10 second default. `--log-driver local` bounds log growth: the default `json-file` driver never rotates, so a permanently running agent can fill the host's disk, while `local` keeps 5 compressed files of 20MB each.
 
 From there, `docker logs -f orb-agent` tails the agent, `docker restart orb-agent` applies a change to `agent.yaml`, and `docker stop orb-agent` takes it down. To update the image, stop the container rather than using `docker rm -f`, which sends `SIGKILL` immediately:
 
