@@ -1,0 +1,32 @@
+# This profile matches on the generic Linux SysOID
+# https://oidref.com/1.3.6.1.4.1.8072.3.2.10
+---
+extends:
+  - host-resources-mib.yml
+  - if-mib.yml
+  - system-mib.yml
+  - ucd-mib.yml
+  - dell-poweredge.yml
+
+provider: kentik-net-snmp
+
+# disable the SNMP bulk walk operation for these devices
+no_use_bulkwalkall: true
+
+# If the sysDesc matches these regexes, use the corresponding profile.
+# Regex is run on _lower case_ version of the sysDesc string.
+matches:
+  "^pfsense": pf_sense.yml
+  "barracuda email security gateway": barracuda-email-gateway.yml
+  "barracuda web application firewall": barracuda-waf.yml
+  "^uap-ac-inwall": unifi-access-point.yml
+  "root@sensey": opnsense-protectli.yml
+  "poweriq": power-iq.yml
+  "solidfire": netapp-hci.yml
+  "avamar": dell-avamar.yml
+  # "#1 smp": sonicwall-sma.yml      # This match proved to be too generic for most purposes
+  "^linux ubnt": unifi-switch.yml    # This may need to be removed later for being too generic
+  "^Linux npa-publisher": netskope-appliance.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.8072.*

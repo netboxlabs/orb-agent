@@ -1,0 +1,187 @@
+# Profile is intended to be used in an extends block
+# Alternative MIB for host-resources-mib used on some devices
+# https://mibs.observium.org/mib/UCD-SNMP-MIB/
+# https://mibs.observium.org/mib/UCD-DISKIO-MIB/
+---
+
+metrics:
+  # The 1 minute load averages as an integer. This is computed by taking the floating point loadaverage value and multiplying by 100, then converting the value to an integer.
+  # Polled at 60s to support anomaly detection
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: laLoadInt1Min
+      OID: 1.3.6.1.4.1.2021.10.1.5.1
+      poll_time_sec: 60
+      tag: CPU
+
+  # The total amount of real/physical memory installed on this host.
+  # Polled at 60s to support anomaly detection
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalReal
+      OID: 1.3.6.1.4.1.2021.4.5.0
+      poll_time_sec: 60
+      tag: MemoryTotal
+
+  # The amount of real/physical memory currently unused or available.
+  # Polled at 60s to support anomaly detection
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memAvailReal
+      OID: 1.3.6.1.4.1.2021.4.6.0
+      poll_time_sec: 60
+      tag: MemoryFree
+
+  # The total amount of swap space configured for this host.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalSwap
+      OID: 1.3.6.1.4.1.2021.4.3.0
+
+  # The amount of swap space currently unused or available.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memAvailSwap
+      OID: 1.3.6.1.4.1.2021.4.4.0
+
+  # The total amount of memory free or available for use on this host. This value typically covers both real memory and swap space or virtual memory.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalFree
+      OID: 1.3.6.1.4.1.2021.4.11.0
+
+  # The minimum amount of swap space expected to be kept free or available during normal operation of this host.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memMinimumSwap
+      OID: 1.3.6.1.4.1.2021.4.12.0
+
+  # The total amount of real or virtual memory currently allocated for use as shared memory.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memShared
+      OID: 1.3.6.1.4.1.2021.4.13.0
+
+  # The total amount of real or virtual memory currently allocated for use as memory buffers.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memBuffer
+      OID: 1.3.6.1.4.1.2021.4.14.0
+
+  # The total amount of real or virtual memory currently allocated for use as cached memory.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memCached
+      OID: 1.3.6.1.4.1.2021.4.15.0
+
+  # Disk watching information. Partions to be watched are configured by the snmpd.conf file of the agent.
+  - MIB: UCD-SNMP-MIB
+    table:
+      OID: 1.3.6.1.4.1.2021.9
+      name: dskTable
+    symbols:
+      # Total size of the disk/partion (kBytes). For large disks (>2Tb), this value will latch at INT32_MAX (2147483647).
+      - name: dskTotal
+        OID: 1.3.6.1.4.1.2021.9.1.6
+      # Available space on the disk. For large lightly-used disks (>2Tb), this value will latch at INT32_MAX (2147483647).
+      - name: dskAvail
+        OID: 1.3.6.1.4.1.2021.9.1.7
+      # Used space on the disk. For large heavily-used disks (>2Tb), this value will latch at INT32_MAX (2147483647).
+      - name: dskUsed
+        OID: 1.3.6.1.4.1.2021.9.1.8
+      # Percentage of space used on disk.
+      - name: dskPercent
+        OID: 1.3.6.1.4.1.2021.9.1.9
+      # Percentage of inodes used on disk.
+      - name: dskPercentNode
+        OID: 1.3.6.1.4.1.2021.9.1.10
+      # Error flag signaling that the disk or partition is under the minimum required space configured for it.
+      - name: dskErrorFlag
+        OID: 1.3.6.1.4.1.2021.9.1.100
+        tag: dsk_error_flag
+        enum:
+          noError: 0
+          error: 1
+      # A text description providing a warning and the space left on the disk.
+      - name: dskErrorMsg
+        OID: 1.3.6.1.4.1.2021.9.1.101
+        tag: dsk_error_msg
+        conversion: to_one
+    metric_tags:
+      # Path where the disk is mounted.
+      - tag: dsk_path
+        column:
+          OID: 1.3.6.1.4.1.2021.9.1.2
+          name: dskPath
+      # Path of the device for the partition
+      - tag: dsk_device
+        column:
+          OID: 1.3.6.1.4.1.2021.9.1.3
+          name: dskDevice
+
+  # Table of IO devices and how much data they have read/written.
+  - MIB: UCD-DISKIO-MIB
+    table:
+      OID: 1.3.6.1.4.1.2021.13.15.1
+      name: diskIOTable
+    symbols:
+      # The number of read accesses from this device since boot.
+      - name: diskIOReads
+        OID: 1.3.6.1.4.1.2021.13.15.1.1.5
+      # The number of write accesses to this device since boot.
+      - name: diskIOWrites
+        OID: 1.3.6.1.4.1.2021.13.15.1.1.6
+      # The 1 minute average load of disk (%)
+      - name: diskIOLA1
+        OID: 1.3.6.1.4.1.2021.13.15.1.1.9
+      # The 5 minute average load of disk (%)
+      - name: diskIOLA5
+        OID: 1.3.6.1.4.1.2021.13.15.1.1.10
+      # The 15 minute average load of disk (%)
+      - name: diskIOLA15
+        OID: 1.3.6.1.4.1.2021.13.15.1.1.11
+      # The number of bytes read from this device since boot. (64-bit counter)
+      - name: diskIONReadX
+        OID: 1.3.6.1.4.1.2021.13.15.1.1.12
+      # The number of bytes written to this device since boot. (64-bit counter)
+      - name: diskIONWrittenX
+        OID: 1.3.6.1.4.1.2021.13.15.1.1.13
+    metric_tags:
+      # The name of the device we are counting/checking.
+      - tag: diskIO_device
+        column:
+          name: diskIODevice
+          OID: 1.3.6.1.4.1.2021.13.15.1.1.2
+
+  - MIB: UCD-SNMP-MIB
+    symbols:
+      # The percentage of CPU time spent processing user-level code, calculated over the last minute. This object has been deprecated in favour of 'ssCpuRawUser(50)', which can be used to calculate the same metric, but over any desired time period. (Deprecated)
+      - name: ssCpuUser
+        OID: 1.3.6.1.4.1.2021.11.9.0
+      # The percentage of CPU time spent processing system-level code, calculated over the last minute. This object has been deprecated in favour of 'ssCpuRawSystem(52)', which can be used to calculate the same metric, but over any desired time period. (Deprecated)
+      - name: ssCpuSystem
+        OID: 1.3.6.1.4.1.2021.11.10.0
+      # The percentage of processor time spent idle, calculated over the last minute. This object has been deprecated in favour of 'ssCpuRawIdle(53)', which can be used to calculate the same metric, but over any desired time period. (Deprecated)
+      - name: ssCpuIdle
+        OID: 1.3.6.1.4.1.2021.11.11.0
+      # The number of 'ticks' (typically 1/100s) spent processing user-level code. On a multi-processor system, the 'ssCpuRaw*' counters are cumulative over all CPUs, so their sum will typically be N*100 (for N processors).
+      - name: ssCpuRawUser
+        OID: 1.3.6.1.4.1.2021.11.50.0
+      # The number of 'ticks' (typically 1/100s) spent processing reduced-priority code. This object will not be implemented on hosts where the underlying operating system does not measure this particular CPU metric. On a multi-processor system, the 'ssCpuRaw*' counters are cumulative over all CPUs, so their sum will typically be N*100 (for N processors).
+      - name: ssCpuRawNice
+        OID: 1.3.6.1.4.1.2021.11.51.0
+      # The number of 'ticks' (typically 1/100s) spent processing system-level code. On a multi-processor system, the 'ssCpuRaw*' counters are cumulative over all CPUs, so their sum will typically be N*100 (for N processors). This object may sometimes be implemented as the combination of the 'ssCpuRawWait(54)' and 'ssCpuRawKernel(55)' counters, so care must be taken when summing the overall raw counters.
+      - name: ssCpuRawSystem
+        OID: 1.3.6.1.4.1.2021.11.52.0
+      # The number of 'ticks' (typically 1/100s) spent idle. On a multi-processor system, the 'ssCpuRaw*' counters are cumulative over all CPUs, so their sum will typically be N*100 (for N processors).
+      - name: ssCpuRawIdle
+        OID: 1.3.6.1.4.1.2021.11.53.0
+      # The number of 'ticks' (typically 1/100s) spent waiting for IO. This object will not be implemented on hosts where the underlying operating system does not measure this particular CPU metric. This time may also be included within the 'ssCpuRawSystem(52)' counter. On a multi-processor system, the 'ssCpuRaw*' counters are cumulative over all CPUs, so their sum will typically be N*100 (for N processors).
+      - name: ssCpuRawWait
+        OID: 1.3.6.1.4.1.2021.11.54.0
+      # The number of 'ticks' (typically 1/100s) spent processing kernel-level code. This object will not be implemented on hosts where the underlying operating system does not measure this particular CPU metric. This time may also be included within the 'ssCpuRawSystem(52)' counter. On a multi-processor system, the 'ssCpuRaw*' counters are cumulative over all CPUs, so their sum will typically be N*100 (for N processors).
+      - name: ssCpuRawKernel
+        OID: 1.3.6.1.4.1.2021.11.55.0
+      # The number of 'ticks' (typically 1/100s) spent processing hardware interrupts. This object will not be implemented on hosts where the underlying operating system does not measure this particular CPU metric. On a multi-processor system, the 'ssCpuRaw*' counters are cumulative over all CPUs, so their sum will typically be N*100 (for N processors).
+      - name: ssCpuRawInterrupt
+        OID: 1.3.6.1.4.1.2021.11.56.0

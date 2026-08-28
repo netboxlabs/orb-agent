@@ -1,0 +1,229 @@
+# This profile needs to be manually applied in the device config.
+# Device uses generic Net-SNMP sysobjectid for Linux and has no identifying data in sysDescr.
+# Ex:
+# 1.3.6.1.2.1.1.1.0 = STRING: Linux <device_name> 4.18.0-305.12.1.el8.ibm.1.x86_64 #1 SMP Wed Aug 18 07:10:24 CDT 2021 x86_64
+# 1.3.6.1.2.1.1.2.0 = OID: .1.3.6.1.4.1.8072.3.2.10
+# https://mibs.observium.org/mib/SNWL-COMMON-MIB/
+# https://mibs.observium.org/mib/SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB/
+# https://mibs.observium.org/mib/SONICWALL-SMA-APPLIANCE-SERVICE-HEALTH-MIB/
+# https://mibs.observium.org/mib/SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB/
+# https://mibs.observium.org/mib/SONICWALL-SMA-APPLIANCE-TUNNEL-SERVER-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - host-resources-mib.yml
+
+provider: kentik-firewall
+
+sysobjectid:
+  - 1.3.6.1.4.1.8072.3.2.10.sonicwall-sma
+
+metrics:
+  # Number of currently authenticated active user sessions.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: currentlyLoggedIn
+      OID: 1.3.6.1.4.1.8741.8.1.2.1.1.0
+  # The maximum number of authenticated active user sessions since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: peakLoggedIn
+      OID: 1.3.6.1.4.1.8741.8.1.2.1.2.0
+  # The maximum number of active user sessions the appliance (or cluster of appliances) is licensed for.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: maximumLicensedUsers
+      OID: 1.3.6.1.4.1.8741.8.1.2.1.3.0
+  # Sessions Total - polled at 60s to support anomaly detection
+  # The number of connections currently being serviced by the appliance ( or cluster of appliances).
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: currentConnections
+      OID: 1.3.6.1.4.1.8741.8.1.2.2.1.0
+      poll_time_sec: 60
+  # The maximum number of concurrent appliance connections since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: peakConnections
+      OID: 1.3.6.1.4.1.8741.8.1.2.2.2.0
+  # CPU Utilization - polled at 60s to support anomaly detection.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: cpuUtilization
+      OID: 1.3.6.1.4.1.8741.8.1.2.3.0
+      poll_time_sec: 60
+      tag: CPU
+  # Memory Utilization - polled at 60s to support anomaly detection.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: ramUtilization
+      OID: 1.3.6.1.4.1.8741.8.1.2.4.1.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  # The current virtual memory (Swap) percentage  being utilized.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: swapUtilization
+      OID: 1.3.6.1.4.1.8741.8.1.2.4.2.0
+  # The current SSL VPN throughput (Mbps) on the internal interface since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: internalInterfaceCurrentThroughput
+      OID: 1.3.6.1.4.1.8741.8.1.2.5.1.0
+  # The peak SSL VPN throughput (Mbps) on the internal interface since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: internalInterfacePeakThroughput
+      OID: 1.3.6.1.4.1.8741.8.1.2.5.2.0
+  # The current SSL VPN throughput (Mbps) on the external interface since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: externalInterfaceCurrentThroughput
+      OID: 1.3.6.1.4.1.8741.8.1.2.5.3.0
+  # The peak SSL VPN throughput (Mbps) on the external interface since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: externalInterfacePeakThroughput
+      OID: 1.3.6.1.4.1.8741.8.1.2.5.4.0
+  # The current SSL VPN throughput (Mbps) on the cluster interface since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: clusterInterfaceCurrentThroughput
+      OID: 1.3.6.1.4.1.8741.8.1.2.5.5.0
+  # The peak SSL VPN throughput (Mbps) on the cluster interface since the last reset; where reset interval is 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: clusterInterfacePeakThroughput
+      OID: 1.3.6.1.4.1.8741.8.1.2.5.6.0
+  # Percent of log file partition being utilized.
+  - MIB: SONICWALL-SMA-APPLIANCE-SYSTEM-HEALTH-MIB
+    symbol:
+      name: logUtilization
+      OID: 1.3.6.1.4.1.8741.8.1.2.9.0
+  # Table of service health info
+  - MIB: SONICWALL-SMA-APPLIANCE-SERVICE-HEALTH-MIB
+    table:
+      name: serviceTable
+      OID: 1.3.6.1.4.1.8741.8.1.3.1
+    symbols:
+      # This oid conveys service state as active(1), down(2) or crashed(6).
+      - name: serviceState
+        OID: 1.3.6.1.4.1.8741.8.1.3.1.1.3
+        enum:
+          active: 1
+          down: 2
+          crashed: 6
+    metric_tags:
+      # Name of the ASAP service.
+      - column:
+          name: serviceDescription
+          OID: 1.3.6.1.4.1.8741.8.1.3.1.1.2
+  # The number of login denials in the last 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB
+    symbol:
+      name: numOfLoginDenials
+      OID: 1.3.6.1.4.1.8741.8.1.4.1.0
+  # The last user who was denied authentication, shown in the format user@realm.
+  - MIB: SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB
+    symbol:
+      name: lastLoginDeniedUser
+      OID: 1.3.6.1.4.1.8741.8.1.4.2.1.0
+      conversion: to_one
+  # The time when the last user was denied authentication.
+  - MIB: SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB
+    symbol:
+      name: lastLoginDeniedTime
+      OID: 1.3.6.1.4.1.8741.8.1.4.2.2.0
+      conversion: to_one
+  # The number of access denials in the last 24 hours.
+  - MIB: SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB
+    symbol:
+      name: numOfAccessDenials
+      OID: 1.3.6.1.4.1.8741.8.1.4.3.0
+  # The last user who was denied access, shown in the format user@realm.
+  - MIB: SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB
+    symbol:
+      name: lastAccessDeniedUser
+      OID: 1.3.6.1.4.1.8741.8.1.4.4.1.0
+      conversion: to_one
+  # The resource which can be URL, host:port or host to which access was denied.
+  - MIB: SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB
+    symbol:
+      name: lastAccessDeniedResource
+      OID: 1.3.6.1.4.1.8741.8.1.4.4.2.0
+      conversion: to_one
+  # The time when the last user was denied access.
+  - MIB: SONICWALL-SMA-APPLIANCE-SECURITY-HISTORY-MIB
+    symbol:
+      name: lastAccessDeniedTime
+      OID: 1.3.6.1.4.1.8741.8.1.4.4.3.0
+      conversion: to_one
+  # This oid conveys tunnel service state as ACTIVE, DOWN or CRASHED.
+  - MIB: SONICWALL-SMA-APPLIANCE-TUNNEL-SERVER-MIB
+    symbol:
+      name: tunnelServerState
+      OID: 1.3.6.1.4.1.8741.8.1.5.1.0
+      conversion: to_one
+  # The number of Client Addr Pool assigned
+  - MIB: SONICWALL-SMA-APPLIANCE-TUNNEL-SERVER-MIB
+    symbol:
+      name: numOfTunnelServiceClientAddrPool
+      OID: 1.3.6.1.4.1.8741.8.1.5.2.0
+  # This table provides information about how many address pools are currently active in a appliance & what are their ranges.
+  - MIB: SONICWALL-SMA-APPLIANCE-TUNNEL-SERVER-MIB
+    table:
+      name: tunnelServiceClientAddrPoolRangesTable
+      OID: 1.3.6.1.4.1.8741.8.1.5.3
+    symbols:
+      # Percentages of total how many VIPs are issued from this client address pools.
+      - name: tunnelServiceClientAddrPoolUtilization
+        OID: 1.3.6.1.4.1.8741.8.1.5.3.1.2
+    metric_tags:
+      # IP address in dot notation stating start range of client Address Pool Utilization.
+      - column:
+          name: tunnelServiceStartRangeOfClientAddrPool
+          OID: 1.3.6.1.4.1.8741.8.1.5.3.1.3
+      # IP address in dot notation stating end range of client Address Pool Utilization.
+      - column:
+          name: tunnelServiceEndRangeOfClientAddrPool
+          OID: 1.3.6.1.4.1.8741.8.1.5.3.1.4
+  # Total number how many tunnels existing on this appliance
+  - MIB: SONICWALL-SMA-APPLIANCE-TUNNEL-SERVER-MIB
+    symbol:
+      name: numberOfTunnelServiceSslTunnels
+      OID: 1.3.6.1.4.1.8741.8.1.5.4.0
+  # The tunnel Server tunnels statistics.
+  - MIB: SONICWALL-SMA-APPLIANCE-TUNNEL-SERVER-MIB
+    table:
+      name: tunnelServiceSslTunnelTable
+      OID: 1.3.6.1.4.1.8741.8.1.5.5
+    symbols:
+      # Username associated with this tunnel service SSL Tunnel.
+      - name: tunnelServiceSslTunnelUser
+        OID: 1.3.6.1.4.1.8741.8.1.5.5.1.2
+        conversion: to_one
+      # Virtual IP address associated with this tunnel service SSL tunnel.
+      - name: tunnelServiceSslTunnelVIP
+        OID: 1.3.6.1.4.1.8741.8.1.5.5.1.3
+        conversion: to_one
+      # Number of flows per this tunnel service SSL tunnel.
+      - name: numOfTunnelServiceFlowsPerTunnel
+        OID: 1.3.6.1.4.1.8741.8.1.5.5.1.4
+      # Uptime statistics for this tunnel service SSL tunnel. (timeticks)
+      - name: tunnelServiceSslTunnelUpTime
+        OID: 1.3.6.1.4.1.8741.8.1.5.5.1.5
+
+metric_tags:
+  # System model name and number
+  - column:
+      name: snwlSysModel
+      OID: 1.3.6.1.4.1.8741.2.1.1.1.0
+  # System serial number for this device
+  - column:
+      name: snwlSysSerialNumber
+      OID: 1.3.6.1.4.1.8741.2.1.1.2.0
+  # Current system firmware version
+  - column:
+      name: snwlSysFirmwareVersion
+      OID: 1.3.6.1.4.1.8741.2.1.1.3.0

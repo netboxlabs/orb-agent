@@ -1,0 +1,452 @@
+# This profile was built from a provided SNMP walk on a Nasuni Filer
+# and validated against the NASUNI-FILER-MIB provided by the requester on the GitHub issue
+# https://github.com/kentik/snmp-profiles/issues/73
+---
+extends: 
+  - if-mib.yml
+  - system-mib.yml
+  - ucd-mib.yml
+
+provider: kentik-nas
+
+sysobjectid:
+  - 1.3.6.1.4.1.42040.1.1.0
+
+metrics:
+  # Filer Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.5.0
+      name: filerUpdateAvailable
+      # Blank if no updates available, otherwise the version of the update
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.6.0
+      name: filerTotalUnprotectedData
+      # Total data not yet protected
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.7.0
+      name: filerPushesCompleted
+      # Total number of pushes to the cloud
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.8.0
+      name: filerTotalPushed
+      # Total compressed bytes pushed to the cloud
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.9.0
+      name: filerTotalRead
+      # Total bytes read from the cloud
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.10.0
+      name: filerOpensForRead
+      # Total number of opens for read
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.11.0
+      name: filerOpensForWrite
+      # Total number of opens for write
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.12.0
+      name: filerMergeConflicts
+      # Total number of merge conflicts
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.13.0
+      name: filerReadHits
+      # Total read cache hits
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.14.0
+      name: filerReadMisses
+      # Total read cache misses
+  # Cache Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.100.1.0
+      name: filerCacheTotal
+      # Total available disk cache
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.100.2.0
+      name: filerCacheUsed
+      # Current used disk cache
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.100.3.0
+      name: filerCacheFree
+      # Current free disk cache
+  # CIFS Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.103.1.0
+      name: filerTotalShares
+      # Total number of shares available on this Filer
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.103.2.0
+      name: filerTotalShareLocks
+      # Total number shares locks on this Filer
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.103.3.0
+      name: filerTotalShareClients
+      # Total number share clients connected to this Filer
+  # NFS Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.104.1.0
+      name: filerTotalExports
+      # Total number of exports available on this Filer
+  # ISCSI Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.105.1.0
+      name: filerTotalIscsiTargets
+      # Total number of ISCSI targets available on this Filer
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.105.2.0
+      name: filerTotalIscsiClients
+      # Total number of ISCSI clients connected to this Filer
+  # FTP Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.109.1.0
+      name: filerTotalFtpdirs
+      # Total number of ftp directories available on this Filer
+  # Mobile License Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.106.1.0
+      name: filerTotalMobileLicenses
+      # Total number of mobile clients registered on the Filer
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.106.2.0
+      name: filerNumIOSLicenses
+      # Total number of iOS mobile clients registered on the Filer
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.106.3.0
+      name: filerNumAndroidLicenses
+      # Total number of Android mobile clients registered on the Filer
+  # Network Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.1.0
+      name: filerCloudOut
+      # Cloud transmit bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.2.0
+      name: filerCloudIn
+      # Cloud receive bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.3.0
+      name: filerMobileOut
+      # Mobile transmit bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.4.0
+      name: filerMobileIn
+      # Mobile receive bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.5.0
+      name: filerUIOut
+      # User Interface transmit bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.6.0
+      name: filerUIIn
+      # User Interface receive bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.7.0
+      name: filerClientsOut
+      # Clients transmit bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.8.0
+      name: filerClientsIn
+      # Clients receive bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.9.0
+      name: filerMigrationOut
+      # Migration transmit bits/second for the last 1 minute
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.108.10.0
+      name: filerMigrationIn
+      # Migration receive bits/second for the last 1 minute
+  # Account License Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.3.1.0
+      name: accountLicensedCapacity
+      # Available licensed capacity
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.3.2.0
+      name: accountUsedCapacity
+      # Used licensed capacity
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.3.3.0
+      name: accountPercentUsedCapacity
+      # Percent used licensed capacity
+  # Health Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.1.0
+      name: filerAmbientTemp
+      # Filer ambient temperature in degrees celsius (0 if not available)
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.2.0
+      name: filerInletTemp
+      # Filer inlet temperature in degrees celsius (0 if not available)
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.3.0
+      name: filerExhaustTemp
+      # Filer exhaust temperature in degrees celsius (0 if not available)
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.4.0
+      name: filerNumPowerSupplies
+      # Number of power supplies detected
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.5.0
+      name: filerPowerSupplyErrors
+      # Number of power supply errors detected
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.6.0
+      name: filerNumRaidArrays
+      # Number of RAID arrays detected
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.7.0
+      name: filerRaidArrayErrors
+      # Number of RAID array errors detected
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.8.0
+      name: filerNumRaidDisks
+      # Number of RAID disks detected
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.1.102.9.0
+      name: filerRaidDiskErrors
+      # Number of RAID disk errors detected
+  # Volumes Stats
+  - MIB: NASUNI-FILER-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.42040.2.1.0
+      name: volumeCount
+      # Number of entries in VolumeTable
+  - MIB: NASUNI-FILER-MIB
+    table:
+      OID: 1.3.6.1.4.1.42040.2.2
+      name: volumeTable
+    symbols:
+      - OID: 1.3.6.1.4.1.42040.2.2.1.5
+        name: volumeTableStatus
+        conversion: to_one
+        # Volume status string
+      - OID: 1.3.6.1.4.1.42040.2.2.1.6
+        name: volumeTableAccessibleData
+        # Volume accessible data (bytes)
+      - OID: 1.3.6.1.4.1.42040.2.2.1.7
+        name: volumeTableUnprotectedData
+        # Volume data not yet protected (bytes)
+      - OID: 1.3.6.1.4.1.42040.2.2.1.10
+        name: volumeTableLastSnapshotDuration
+        # Duration of the last snapshot (seconds)
+      - OID: 1.3.6.1.4.1.42040.2.2.1.11
+        name: volumeTableLastSnapshotVersion
+        # Last snapshot version number
+      - OID: 1.3.6.1.4.1.42040.2.2.1.19
+        name: volumeTableQuota
+        # Volume Quota (0 for disiabled quota)
+      - OID: 1.3.6.1.4.1.42040.2.2.1.20
+        name: volumeTableNumAVViolations
+        # Number of antivirus violations found
+      - OID: 1.3.6.1.4.1.42040.2.2.1.21
+        name: volumeTableNumFileAlerts
+        # Number of file locks
+      - OID: 1.3.6.1.4.1.42040.2.2.1.22
+        name: volumeTableNumExports
+        # Number of volume exports
+      - OID: 1.3.6.1.4.1.42040.2.2.1.23
+        name: volumeTableNumShares
+        # Number of volume shares
+      - OID: 1.3.6.1.4.1.42040.2.2.1.24
+        name: volumeTableNumFtpdirs
+        # Number of volume FTP directories
+    # Attributes decorated on volumeTable metrics
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.2
+          name: volumeTableDescription
+          # Volume description
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.3
+          name: volumeTableProvider
+          # Volume provider
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.4
+          name: volumeTableProtocol
+          # Volume protocol
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.8
+          name: volumeTableLastSnapshotStart
+          # Date and time the last snapshot started (YYYY-MM-DD HH:MM:SS)
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.9
+          name: volumeTableLastSnapshotEnd
+          # Date and time the last snapshot ended (YYYY-MM-DD HH:MM:SS)
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.12
+          name: volumeTableIsActive
+          # True if volume is active
+          enum:
+            false: 0
+            true: 1
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.13
+          name: volumeTableIsShared
+          # True if volume is shared
+          enum:
+            false: 0
+            true: 1
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.14
+          name: volumeTableIsReadOnly
+          # True if volume is read-only
+          enum:
+            false: 0
+            true: 1
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.15
+          name: volumeTableIsPinned
+          # True if volume is pinned
+          enum:
+            false: 0
+            true: 1
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.16
+          name: volumeTableIsRemote
+          # True if volume is remote
+          enum:
+            false: 0
+            true: 1
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.17
+          name: volumeTableAvEnabled
+          # True if antivirus is enabled
+          enum:
+            false: 0
+            true: 1
+      - column:
+          OID: 1.3.6.1.4.1.42040.2.2.1.18
+          name: volumeTableRemoteAccessEnabled
+          # True if remote access is enabled
+          enum:
+            false: 0
+            true: 1
+# Global attributes for scalar metrics
+metric_tags:
+  # Filer Stats
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.1.0
+      name: filerIdentifier
+      # Identity of this management system
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.2.0
+      name: filerVersion
+      # Current Filer version
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.3.0
+      name: filerSerialNumber
+      # Serial number of the filer
+  # Platform Stats
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.1.0
+      name: filerPlatformName
+      # Filer platform name
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.2.0
+      name: filerPlatformType
+      # Filer platform type
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.3.0
+      name: filerPackageFormat
+      # Filer package format
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.4.0
+      name: filerBiosVersion
+      # Current bios version
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.5.0
+      name: filerCpuModel
+      # CPU model long description
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.6.0
+      name: filerPhysCpuCount
+      # Number of physical CPUs in the Filer
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.7.0
+      name: filerCoreCount
+      # Number of cores per physical CPU
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.8.0
+      name: filerCpuArch
+      # CPU architecture
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.9.0
+      name: filerCpuFreq
+      # CPU frequency (hertz)
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.10.0
+      name: filerDiskCount
+      # Number of disks in the Filer
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.101.11.0
+      name: filerTotalMemory
+      # Total amount of memory in the Filer (bytes)
+  # Services Stats
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.107.1.0
+      name: filerSupportServiceEnabled
+      # True if support service is enabled
+      enum:
+        false: 0
+        true: 1
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.107.2.0
+      name: filerSupportServiceConnected
+      # True if a service rep is connect to the support portal
+      enum:
+        false: 0
+        true: 1
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.107.3.0
+      name: filerSupportServiceRunning
+      # True if support service is running
+      enum:
+        false: 0
+        true: 1
+  - column:
+      OID: 1.3.6.1.4.1.42040.1.107.4.0
+      name: filerSupportServiceTimeout
+      # Timeout until the support service will be disabled (0 = unlimted)

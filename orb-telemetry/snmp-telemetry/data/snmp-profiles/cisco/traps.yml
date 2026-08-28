@@ -1,0 +1,241 @@
+# Cisco SNMP traps
+---
+
+traps:
+  # Generic SNMP traps
+  # https://oidref.com/static/circitor/SNMPv2-MIB.mib
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.6.3.1.1.5.1
+    trap_name: coldStart
+    drop_undefined: false
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.6.3.1.1.5.2
+    trap_name: warmStart
+    drop_undefined: false
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.6.3.1.1.5.3
+    trap_name: linkDown
+    drop_undefined: false
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.6.3.1.1.5.4
+    trap_name: linkUp
+    drop_undefined: false
+  - trap_oid: 1.3.6.1.6.3.1.1.5.5
+    trap_name: authenticationFailure
+    drop_undefined: false
+    events:
+      - name: cExtSnmpTargetAuthInetType
+        OID: 1.3.6.1.4.1.9.9.412.1.1.1.0
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          dns: 16
+      - name: cExtSnmpTargetAuthInetAddr
+        OID: 1.3.6.1.4.1.9.9.412.1.1.2.0
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.6.3.1.1.5.6
+    trap_name: authenticationFailure
+    drop_undefined: false
+
+  # https://mibs.observium.org/mib/CISCO-SYSLOG-MIB/
+  - trap_oid: 1.3.6.1.4.1.9.9.41.2.0.1
+    trap_name: clogMessageGenerated
+    drop_undefined: false
+    events:
+      - name: clogHistFacility
+        OID: 1.3.6.1.4.1.9.9.41.1.2.3.1.2.*
+      - name: clogHistSeverity
+        OID: 1.3.6.1.4.1.9.9.41.1.2.3.1.3.*
+      - name: clogHistMsgName 	
+        OID: 1.3.6.1.4.1.9.9.41.1.2.3.1.4.*
+      - name: clogHistMsgText
+        OID: 1.3.6.1.4.1.9.9.41.1.2.3.1.5.*
+      - name: clogHistTimestamp
+        OID: 1.3.6.1.4.1.9.9.41.1.2.3.1.6.*
+
+  # https://oidref.com/static/circitor/CISCO-CONFIG-MAN-MIB.mib
+  - trap_oid: 1.3.6.1.4.1.9.9.43.2.0.1
+    trap_name: ciscoConfigManEvent
+    drop_undefined: false
+    events:
+      # The source of the command that instigated the event.
+      - name: ccmHistoryEventCommandSource
+        OID: 1.3.6.1.4.1.9.9.43.1.1.6.1.3.*
+        enum:
+          commandLine: 1
+          snmp: 2
+      # The configuration data source for the event.
+      - name: ccmHistoryEventConfigSource
+        OID: 1.3.6.1.4.1.9.9.43.1.1.6.1.4.*
+        enum:
+          erase: 1
+          commandSource: 2
+          running: 3
+          startup: 4
+          local: 5
+          networkTftp: 6
+          networkRcp: 7
+          networkFtp: 8
+          networkScp: 9
+      # 	The configuration data destination for the event.
+      - name: ccmHistoryEventConfigDestination
+        OID: 1.3.6.1.4.1.9.9.43.1.1.6.1.5.*
+        enum:
+          erase: 1
+          commandSource: 2
+          running: 3
+          startup: 4
+          local: 5
+          networkTftp: 6
+          networkRcp: 7
+          networkFtp: 8
+          networkScp: 9
+      # If ccmHistoryEventCommandSource is 'commandLine', the name of the logged in user. The length is zero if not available or not applicable.
+      - name: ccmHistoryEventTerminalUser
+        OID: 1.3.6.1.4.1.9.9.43.1.1.6.1.8.*
+
+  # https://oidref.com/static/circitor/CISCO-CONFIG-MAN-MIB.mib
+  - trap_oid: 1.3.6.1.4.1.9.9.43.2.0.2
+    trap_name: ccmCLIRunningConfigChanged
+    drop_undefined: false
+    events:
+      # The value of sysUpTime when the running configuration was last changed.
+      - name: ccmHistoryRunningLastChanged
+        OID: 1.3.6.1.4.1.9.9.43.1.1.1.0
+      # If ccmHistoryEventCommandSource is 'commandLine', the terminal type, otherwise 'notApplicable'.
+      - name: ccmHistoryEventTerminalType
+        OID: 1.3.6.1.4.1.9.9.43.1.1.6.1.6.*
+        enum:
+          notApplicable: 1
+          unknown: 2
+          console: 3
+          terminal: 4
+          virtual: 5
+          auxiliary: 6
+      # If ccmHistoryEventCommandSource is 'commandLine', the name of the logged in user. The length is zero if not available or not applicable.
+      - name: ccmHistoryEventTerminalUser
+        OID: 1.3.6.1.4.1.9.9.43.1.1.6.1.8.*
+
+  # https://oidref.com/static/circitor/CISCO-CONFIG-MAN-MIB.mib
+  # A tty trap signifies that a TCP connection, previously established with the sending protocol entity for the purposes of a tty session, has been terminated.
+  - trap_oid: 1.3.6.1.4.1.9.0.1
+    trap_name: tcpConnectionClose
+    drop_undefined: false
+    events:
+      # The state of this TCP connection.
+      - name: tcpConnState
+        OID: 1.3.6.1.2.1.6.13.1.1.*
+        enum:
+          closed: 1
+          listen: 2
+          synSent: 3
+          synReceived: 4
+          established: 5
+          finWait1: 6
+          finWait2: 7
+          closeWait: 8
+          lastAck: 9
+          closing: 10
+          timeWait: 11
+          deleteTCB: 12
+      # Bytes input for this TCP connection
+      - name: loctcpConnInBytes
+        OID: 1.3.6.1.4.1.9.2.6.1.1.1.*
+      # Bytes output for this TCP connection
+      - name: loctcpConnOutBytes
+        OID: 1.3.6.1.4.1.9.2.6.1.1.2.*
+      # How long this TCP connection has been established
+      - name: loctcpConnElapsed
+        OID: 1.3.6.1.4.1.9.2.6.1.1.5.*
+      # Type of session
+      - name: tslineSesType
+        OID: 1.3.6.1.4.1.9.2.9.3.1.1.*
+        enum:
+          unknown: 1
+          pad: 2
+          stream: 3
+          rlogin: 4
+          telnet: 5
+          tcp: 6
+          lat: 7
+          mop: 8
+          slip: 9
+          xremote: 10
+          rshell: 11
+
+  # https://circitor.fr/Mibs/Html/C/CISCO-ENTITY-FRU-CONTROL-MIB.php
+  # This notification is generated when the value of cefcModuleOperStatus changes.
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.4.1.9.9.117.2.0.1
+    trap_name: cefcModuleStatusChange
+    drop_undefined: false
+  # The cefcFRUPowerStatusChange notification indicates that the power status of a FRU has changed.
+  - trap_oid: 1.3.6.1.4.1.9.9.117.2.0.2
+    trap_name: cefcPowerStatusChange
+    drop_undefined: false
+    events:
+      # Administratively desired FRU power state.
+      - name: cefcFRUPowerAdminStatus
+        OID: 1.3.6.1.4.1.9.9.117.1.1.2.1.1.*
+        enum:
+          on: 1
+          off: 2
+          inlineAuto: 3
+          inlineOn: 4
+          powerCycle: 5
+      # Operational FRU power state.
+      - name: cefcFRUPowerOperStatus
+        OID: 1.3.6.1.4.1.9.9.117.1.1.2.1.2.*
+        enum:
+          offEnvOther: 1
+          on: 2
+          offAdmin: 3
+          offDenied: 4
+          offEnvPower: 5
+          offEnvTemp: 6
+          offEnvFan: 7
+          failed: 8
+          onButFanFail: 9
+          offCooling: 10
+          offConnectorRating: 11
+          onButInlinePowerFail: 12
+      # A textual description of physical entity.
+      - name: entPhysicalDescr
+        OID: 1.3.6.1.2.1.47.1.1.1.1.2.*
+      # The textual name of the physical entity.
+      - name: entPhysicalName
+        OID: 1.3.6.1.2.1.47.1.1.1.1.7.*
+  # The cecfFRUInserted notification indicates that a FRU was inserted.
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.4.1.9.9.117.2.0.3
+    trap_name: cefcFRUInserted
+    drop_undefined: false
+  # The cefcFRURemoved notification indicates that a FRU was removed.
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.4.1.9.9.117.2.0.4
+    trap_name: cefcFRURemoved
+    drop_undefined: false
+  # The cefcUnrecognizedFRU notification indicates that a FRU was inserted whose product ID is not supported.
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.4.1.9.9.117.2.0.5
+    trap_name: cefcUnrecognizedFRU
+    drop_undefined: false
+  # This notification is generated when the value of cefcFanTrayOperStatus changes.
+  - trap_oid: 1.3.6.1.4.1.9.9.117.2.0.6
+    trap_name: cefcFanTrayStatusChange
+    drop_undefined: false
+    events:
+      # 
+      - name: cefcFanTrayOperStatus
+        OID: 1.3.6.1.4.1.9.9.117.1.4.1.1.1.*
+        enum:
+          unknown: 1
+          up: 2
+          down: 3
+          warning: 4
+  # The notification indicates that the power supply's output capacity has changed.
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.4.1.9.9.117.2.0.7
+    trap_name: cefcPowerSupplyOutputChange
+    drop_undefined: false

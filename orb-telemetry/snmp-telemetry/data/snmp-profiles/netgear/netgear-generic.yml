@@ -1,0 +1,7 @@
+# http://oid-info.com/get/1.3.6.1.4.1.4526.
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+sysobjectid: 1.3.6.1.4.1.4526.*

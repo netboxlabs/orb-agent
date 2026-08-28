@@ -1,0 +1,10 @@
+# This is a cloud managed device and polling the WAP directly only provides minimal data
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-wap
+
+sysobjectid:
+  - 1.3.6.1.4.1.4526.100.7.*     # Netgear Access Point

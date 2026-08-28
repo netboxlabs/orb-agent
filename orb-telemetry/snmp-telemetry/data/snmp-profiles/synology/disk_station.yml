@@ -1,0 +1,292 @@
+# http://oid-info.com/get/1.3.6.1.4.1.6574.1
+# https://global.download.synology.com/download/Document/Software/DeveloperGuide/Firmware/DSM/All/enu/Synology_DiskStation_MIB_Guide.pdf
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-nas
+
+sysobjectid: 1.3.6.1.4.1.6574.*   # DSM
+
+metrics:
+  # The 1 minute load averages as an integer. 
+  # This is computed by taking the floating point loadaverage value and multiplying by 100.
+  # Polled at 60s to support anomaly detection
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: laLoadInt1Min
+      OID: 1.3.6.1.4.1.2021.10.1.5.1
+      poll_time_sec: 60
+      tag: CPU
+  # Memory Total
+  # Polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.1
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # Memory Buffers
+  # Polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.6
+      poll_time_sec: 60
+      tag: MemoryBuffer
+  # Memory Cache
+  # Polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.7
+      poll_time_sec: 60
+      tag: MemoryCache
+  # System partition status
+  - MIB: SYNOLOGY-SYSTEM-MIB
+    symbol:
+      name: systemStatus
+      OID: 1.3.6.1.4.1.6574.1.1.0
+      enum:
+        normal: 1
+        failed: 2
+  # Temperature of this NAS (C)
+  - MIB: SYNOLOGY-SYSTEM-MIB
+    symbol:
+      name: temperature
+      OID: 1.3.6.1.4.1.6574.1.2.0
+  # Returns error if power supplies fail
+  - MIB: SYNOLOGY-SYSTEM-MIB
+    symbol:
+      name: powerStatus
+      OID: 1.3.6.1.4.1.6574.1.3.0
+      enum:
+        normal: 1
+        failed: 2
+  # Returns error if system fan fails
+  - MIB: SYNOLOGY-SYSTEM-MIB
+    symbol:
+      name: systemFanStatus
+      OID: 1.3.6.1.4.1.6574.1.4.1.0
+      enum:
+        normal: 1
+        failed: 2
+  # Returns error if CPU fan fails
+  - MIB: SYNOLOGY-SYSTEM-MIB
+    symbol:
+      name: cpuFanStatus
+      OID: 1.3.6.1.4.1.6574.1.4.2.0
+      enum:
+        normal: 1
+        failed: 2
+  # Checks whether a new version or update of DSM is available
+  - MIB: SYNOLOGY-SYSTEM-MIB
+    symbol:
+      name: upgradeAvailable
+      OID: 1.3.6.1.4.1.6574.1.5.4.0
+      enum:
+        available: 1
+        unavailable: 2
+        connecting: 3
+        disconnected: 4
+        others: 5
+  # Table of hard drive details
+  - MIB: SYNOLOGY-DISK-MIB
+    table:
+      name: diskTable
+      OID: 1.3.6.1.4.1.6574.2.1
+    symbols:
+      # Synology disk status
+      - name: diskStatus
+        OID: 1.3.6.1.4.1.6574.2.1.1.5
+        enum:
+          normal: 1
+          initialized: 2
+          notInitialized: 3
+          systemPartitionFailed: 4
+          crashed: 5
+      # Synology disk temperature (C)
+      - name: diskTemperature
+        OID: 1.3.6.1.4.1.6574.2.1.1.6
+    metric_tags:
+      # Synology disk ID
+      - column:
+          name: diskID
+          OID: 1.3.6.1.4.1.6574.2.1.1.2
+      # Synology disk model name
+      - column:
+          name: diskModel
+          OID: 1.3.6.1.4.1.6574.2.1.1.3
+      # Synology disk type
+      - column:
+          name: diskType
+          OID: 1.3.6.1.4.1.6574.2.1.1.4
+  # Table of RAID details
+  - MIB: SYNOLOGY-RAID-MIB
+    table:
+      name: raidTable
+      OID: 1.3.6.1.4.1.6574.3.1
+    symbols:
+      # Synology RAID status
+      - name: raidStatus
+        OID: 1.3.6.1.4.1.6574.3.1.1.3
+        enum:
+          normal: 1
+          repairing: 2
+          migrating: 3
+          expanding: 4
+          deleting: 5
+          creating: 6
+          raidSyncing: 7
+          raidParityChecking: 8
+          raidAssembling: 9
+          canceling: 10
+          degrade: 11
+          crashed: 12
+          dataScrubbing: 13
+          raidDeploying: 14
+          raidUnDeploying: 15
+          raidMountCache: 16
+          raidUnmountCache: 17
+          raidExpandingUnfinishedSHR: 18
+          raidConvertSHRToPool: 19
+          raidMigrateSHR1ToSHR2: 20
+          raidUnknownStatus: 21
+      # Synology RAID free size (bytes)
+      - name: raidFreeSize
+        OID: 1.3.6.1.4.1.6574.3.1.1.4
+      # Synology RAID total size (bytes)
+      - name: raidTotalSize
+        OID: 1.3.6.1.4.1.6574.3.1.1.5
+    metric_tags:
+      # Synology RAID name
+      - column:
+          name: raidName
+          OID: 1.3.6.1.4.1.6574.3.1.1.2
+  # Table of disk SMART details
+  - MIB: SYNOLOGY-SMART-MIB
+    table:
+      name: diskSMARTTable
+      OID: 1.3.6.1.4.1.6574.5.1
+    symbols:
+      # SMART attribute current value
+      - name: diskSMARTAttrCurrent
+        OID: 1.3.6.1.4.1.6574.5.1.1.5
+      # SMART attribute threshold value
+      - name: diskSMARTAttrThreshold
+        OID: 1.3.6.1.4.1.6574.5.1.1.7
+      # SMART attribute status
+      - name: diskSMARTAttrStatus
+        OID: 1.3.6.1.4.1.6574.5.1.1.9
+        conversion: to_one
+    metric_tags:
+      # SMART info device name
+      - column:
+          name: diskSMARTInfoDevName
+          OID: 1.3.6.1.4.1.6574.5.1.1.2
+      # SMART attribute name
+      - column:
+          name: diskSMARTAttrName
+          OID: 1.3.6.1.4.1.6574.5.1.1.3
+      # SMART attribute ID
+      - column:
+          name: diskSMARTAttrId
+          OID: 1.3.6.1.4.1.6574.5.1.1.4
+  # Table of services details
+  - MIB: SYNOLOGY-SERVICES-MIB
+    table:
+      name: serviceTable
+      OID: 1.3.6.1.4.1.6574.6.1
+    symbols:
+      # Number of users using this service
+      - name: serviceUsers
+        OID: 1.3.6.1.4.1.6574.6.1.1.3
+    metric_tags:
+      # Service name
+      - column:
+          name: serviceName
+          OID: 1.3.6.1.4.1.6574.6.1.1.2
+  # Table of IO devices and how much data they have read/written.
+  - MIB: SYNOLOGY-STORAGEIO-MIB
+    table:
+      name: 
+      OID: 1.3.6.1.4.1.6574.101.1
+    symbols:
+      # The number of read accesses from this device since boot.
+      - name: storageIOReads
+        OID: 1.3.6.1.4.1.6574.101.1.1.5
+      # The number of write accesses to this device since boot.
+      - name: storageIOWrites
+        OID: 1.3.6.1.4.1.6574.101.1.1.6
+      # The load of disk (%)
+      - name: storageIOLA
+        OID: 1.3.6.1.4.1.6574.101.1.1.8
+      # The number of bytes read from this device since boot.
+      - name: storageIONReadX
+        OID: 1.3.6.1.4.1.6574.101.1.1.12
+      # The number of bytes written to this device since boot.
+      - name: storageIONWrittenX
+        OID: 1.3.6.1.4.1.6574.101.1.1.13
+    metric_tags:
+      # The name of the device we are counting/checking.
+      - column:
+          name: storageIODevice
+          OID: 1.3.6.1.4.1.6574.101.1.1.2
+  # Table of IO volumes and how much data they have read/written.
+  - MIB: SYNOLOGY-SPACEIO-MIB
+    table:
+      name: 
+      OID: 1.3.6.1.4.1.6574.102.1
+    symbols:
+      # The number of read accesses from this volume since boot.
+      - name: spaceIOReads
+        OID: 1.3.6.1.4.1.6574.102.1.1.5
+      # The number of write accesses to this volume since boot.
+      - name: spaceIOWrites
+        OID: 1.3.6.1.4.1.6574.102.1.1.6
+      # The load of volume (%)
+      - name: spaceIOLA
+        OID: 1.3.6.1.4.1.6574.102.1.1.8
+      # The number of bytes read from this volume since boot.
+      - name: spaceIONReadX
+        OID: 1.3.6.1.4.1.6574.102.1.1.12
+      # The number of bytes written to this volume since boot.
+      - name: spaceIONWrittenX
+        OID: 1.3.6.1.4.1.6574.102.1.1.13
+    metric_tags:
+      # The name of the volume we are counting/checking.
+      - column:
+          name: spaceIODevice
+          OID: 1.3.6.1.4.1.6574.102.1.1.2
+  # Synology GPU supported
+  - MIB: SYNOLOGY-GPUINFO-MIB
+    symbol:
+      name: gpuInfoSupported
+      OID: 1.3.6.1.4.1.6574.108.1.0
+      enum:
+        supported: 0
+        unsupported: 1
+  # Synology GPU utilization %
+  - MIB: SYNOLOGY-GPUINFO-MIB
+    symbol:
+      name: gpuUtilization
+      OID: 1.3.6.1.4.1.6574.108.2.0
+  # Synology GPU memory utilization %
+  - MIB: SYNOLOGY-GPUINFO-MIB
+    symbol:
+      name: gpuMemoryUtilization
+      OID: 1.3.6.1.4.1.6574.108.3.0
+metric_tags:
+  # The Model name of this NAS
+  - column:
+      name: modelName
+      OID: 1.3.6.1.4.1.6574.1.5.1.0
+  # The serial number of this NAS
+  - column:
+      name: serialNumber
+      OID: 1.3.6.1.4.1.6574.1.5.2.0
+  # The version of this DSM
+  - column:
+      name: version
+      OID: 1.3.6.1.4.1.6574.1.5.3.0

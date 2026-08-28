@@ -1,0 +1,354 @@
+package policy
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/env"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/profiles"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
+)
+
+const (
+	// SNMPDefaultPort is the default SNMP port
+	SNMPDefaultPort = 161
+)
+
+// Status represents the status of a policy
+type Status struct {
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	LastError   *string    `json:"last_error,omitempty"`
+	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
+}
+
+// Manager manages snmp-telemetry policy runners
+type Manager struct {
+	policies           map[string]*Runner
+	logger             *slog.Logger
+	ctx                context.Context
+	defaultProfilesDir string
+
+	collectorsMu    sync.Mutex
+	collectorsByDir map[string]*collector.MetricsCollector
+}
+
+// NewManager returns a new policy manager
+func NewManager(ctx context.Context, logger *slog.Logger, defaultProfilesDir string) *Manager {
+	return &Manager{
+		ctx:                ctx,
+		logger:             logger,
+		policies:           make(map[string]*Runner),
+		defaultProfilesDir: defaultProfilesDir,
+		collectorsByDir:    make(map[string]*collector.MetricsCollector),
+	}
+}
+
+// getOrCreateCollector returns the shared MetricsCollector for the given profiles directory,
+// creating it (and loading profiles) on first use. Subsequent calls for the same dir return
+// the cached instance without re-loading. Thread-safe.
+func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCollector, error) {
+	m.collectorsMu.Lock()
+	defer m.collectorsMu.Unlock()
+	if c, ok := m.collectorsByDir[profilesDir]; ok {
+		return c, nil
+	}
+	if _, err := os.Stat(profilesDir); err != nil {
+		return nil, fmt.Errorf("SNMP profiles directory not found: %s", profilesDir)
+	}
+	loader, err := profiles.NewLoader(profilesDir, m.logger)
+	if err != nil {
+		return nil, fmt.Errorf("loading SNMP profiles from %s: %w", profilesDir, err)
+	}
+	resolved, err := loader.AllResolved()
+	if err != nil {
+		return nil, fmt.Errorf("resolving SNMP profiles: %w", err)
+	}
+	matcher := profiles.NewMatcher(resolved)
+	clientFactory := func(host string, port uint16, retries int, timeout time.Duration, auth *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
+		return snmp.NewClient(host, port, retries, timeout, auth, logger)
+	}
+	c := collector.NewMetricsCollector(clientFactory, matcher, m.logger, defaultSNMPTimeout, 0)
+	m.collectorsByDir[profilesDir] = c
+	m.logger.Info("loaded SNMP profiles", "dir", profilesDir, "count", loader.Count())
+	return c, nil
+}
+
+// ParsePolicies parses and validates policies from a YAML request body
+func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
+	var payload config.Policies
+	if err := yaml.Unmarshal(data, &payload); err != nil {
+		return nil, err
+	}
+
+	if len(payload.Policies) == 0 {
+		return nil, errors.New("no policies found in the request")
+	}
+
+	for name, policy := range payload.Policies {
+		normalizeAuthProtocolVersions(&policy)
+		payload.Policies[name] = policy
+		if err := m.validatePolicy(policy); err != nil {
+			return nil, fmt.Errorf("%s: invalid policy: %w", name, err)
+		}
+	}
+
+	for name := range payload.Policies {
+		updated := payload.Policies[name]
+		if err := m.resolveAuthenticationEnvVars(&updated); err != nil {
+			return nil, fmt.Errorf("%s: failed to resolve environment variables: %w", name, err)
+		}
+		m.applyDefaults(&updated)
+		payload.Policies[name] = updated
+	}
+
+	return payload.Policies, nil
+}
+
+// HasPolicy checks if the policy exists
+func (m *Manager) HasPolicy(name string) bool {
+	_, ok := m.policies[name]
+	return ok
+}
+
+// StartPolicy starts a single named policy
+func (m *Manager) StartPolicy(name string, policy config.Policy) error {
+	if m.HasPolicy(name) {
+		return fmt.Errorf("policy %s already exists", name)
+	}
+
+	profilesDir := policy.Config.ProfilesDir
+	if profilesDir == "" {
+		profilesDir = m.defaultProfilesDir
+	}
+	if profilesDir == "" {
+		profilesDir = defaultProfilesDir
+	}
+
+	sharedCollector, err := m.getOrCreateCollector(profilesDir)
+	if err != nil {
+		return err
+	}
+
+	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector)
+	if err != nil {
+		return err
+	}
+
+	r.Start()
+	m.policies[name] = r
+	m.logger.Info("started policy", "policy", name)
+	return nil
+}
+
+// StopPolicy stops a single named policy
+func (m *Manager) StopPolicy(name string) error {
+	r, ok := m.policies[name]
+	if !ok {
+		return nil
+	}
+	if err := r.Stop(); err != nil {
+		return fmt.Errorf("stopping policy %s: %w", name, err)
+	}
+	delete(m.policies, name)
+	return nil
+}
+
+// Stop stops all running policies
+func (m *Manager) Stop() error {
+	for name := range m.policies {
+		if err := m.StopPolicy(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetCapabilities returns the capabilities of snmp-telemetry
+func (m *Manager) GetCapabilities() []string {
+	return []string{"targets"}
+}
+
+// GetPolicyStatuses returns the status of all known policies
+func (m *Manager) GetPolicyStatuses() []Status {
+	statuses := make([]Status, 0, len(m.policies))
+	for name, runner := range m.policies {
+		s := Status{Name: name, Status: "running"}
+		if at, err := runner.GetLastError(); err != nil {
+			msg := err.Error()
+			s.Status = "running_with_errors"
+			s.LastError = &msg
+			s.LastErrorAt = &at
+		}
+		statuses = append(statuses, s)
+	}
+	return statuses
+}
+
+// applyDefaults applies the default values to the policy
+func (m *Manager) applyDefaults(policy *config.Policy) {
+	for i, target := range policy.Scope.Targets {
+		if target.Port == 0 {
+			policy.Scope.Targets[i].Port = SNMPDefaultPort
+		}
+	}
+}
+
+// normalizeProtocolVersion canonicalises common shorthand aliases to the expected form.
+// "2c", "v2c", "2" → "SNMPv2c"; "1", "v1" → "SNMPv1"; "3", "v3" → "SNMPv3".
+func normalizeProtocolVersion(v string) string {
+	switch strings.ToLower(v) {
+	case "1", "v1":
+		return "SNMPv1"
+	case "2", "v2", "2c", "v2c":
+		return "SNMPv2c"
+	case "3", "v3":
+		return "SNMPv3"
+	default:
+		return v
+	}
+}
+
+// normalizeAuthProtocolVersions normalises protocol_version aliases across all
+// authentication blocks in the policy (scope-level and per-target overrides).
+func normalizeAuthProtocolVersions(policy *config.Policy) {
+	policy.Scope.Authentication.ProtocolVersion = normalizeProtocolVersion(policy.Scope.Authentication.ProtocolVersion)
+	for i := range policy.Scope.Targets {
+		if policy.Scope.Targets[i].Authentication != nil {
+			policy.Scope.Targets[i].Authentication.ProtocolVersion = normalizeProtocolVersion(policy.Scope.Targets[i].Authentication.ProtocolVersion)
+		}
+	}
+}
+
+// validateAuthentication validates a single authentication configuration
+func (m *Manager) validateAuthentication(auth *config.Authentication, context string) error {
+	if auth == nil {
+		return fmt.Errorf("%s: authentication is nil", context)
+	}
+
+	if auth.ProtocolVersion == "" {
+		return fmt.Errorf("%s: missing protocol version", context)
+	}
+
+	if auth.ProtocolVersion != "SNMPv1" && auth.ProtocolVersion != "SNMPv2c" && auth.ProtocolVersion != "SNMPv3" {
+		return fmt.Errorf("%s: unsupported protocol version", context)
+	}
+
+	if auth.ProtocolVersion == "SNMPv2c" || auth.ProtocolVersion == "SNMPv1" {
+		if auth.Community == "" {
+			return fmt.Errorf("%s: missing community", context)
+		}
+	}
+
+	if auth.ProtocolVersion == "SNMPv3" {
+		if auth.SecurityLevel != "noAuthNoPriv" &&
+			auth.SecurityLevel != "authNoPriv" &&
+			auth.SecurityLevel != "authPriv" {
+			return fmt.Errorf("%s: invalid security level %s", context, auth.SecurityLevel)
+		}
+		if auth.SecurityLevel == "authNoPriv" || auth.SecurityLevel == "authPriv" {
+			if auth.Username == "" {
+				return fmt.Errorf("%s: missing username", context)
+			}
+			if auth.AuthPassphrase == "" {
+				return fmt.Errorf("%s: missing auth passphrase", context)
+			}
+			if auth.AuthProtocol == "" {
+				return fmt.Errorf("%s: missing auth protocol", context)
+			}
+		}
+		if auth.SecurityLevel == "authPriv" {
+			if auth.PrivPassphrase == "" {
+				return fmt.Errorf("%s: missing priv passphrase", context)
+			}
+			if auth.PrivProtocol == "" {
+				return fmt.Errorf("%s: missing priv protocol", context)
+			}
+		}
+	}
+
+	return nil
+}
+
+// validatePolicy validates the policy
+func (m *Manager) validatePolicy(policy config.Policy) error {
+	hasPolicyAuth := policy.Scope.Authentication.ProtocolVersion != ""
+
+	if hasPolicyAuth {
+		if err := m.validateAuthentication(&policy.Scope.Authentication, "policy-level"); err != nil {
+			return err
+		}
+	}
+
+	for _, target := range policy.Scope.Targets {
+		if target.Authentication != nil {
+			context := fmt.Sprintf("target %s", target.Host)
+			if err := m.validateAuthentication(target.Authentication, context); err != nil {
+				return err
+			}
+		} else if !hasPolicyAuth {
+			return fmt.Errorf("target %s: no authentication configured and no policy-level fallback available", target.Host)
+		}
+	}
+
+	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
+		return fmt.Errorf("metrics_interval must be a positive integer")
+	}
+
+	return nil
+}
+
+// resolveAuthenticationEnvVarsForAuth resolves environment variables for a single Authentication
+func (m *Manager) resolveAuthenticationEnvVarsForAuth(auth *config.Authentication, context string) error {
+	if auth == nil {
+		return nil
+	}
+
+	fields := []struct {
+		field *string
+		label string
+	}{
+		{&auth.Community, "community"},
+		{&auth.Username, "username"},
+		{&auth.AuthPassphrase, "auth_passphrase"},
+		{&auth.PrivPassphrase, "priv_passphrase"},
+	}
+
+	for _, f := range fields {
+		resolved, err := env.ResolveEnv(*f.field)
+		if err != nil {
+			return fmt.Errorf("%s: failed to resolve %s environment variable: %w", context, f.label, err)
+		}
+		*f.field = resolved
+	}
+
+	return nil
+}
+
+// resolveAuthenticationEnvVars resolves environment variables in authentication configuration
+func (m *Manager) resolveAuthenticationEnvVars(policy *config.Policy) error {
+	if err := m.resolveAuthenticationEnvVarsForAuth(&policy.Scope.Authentication, "policy-level"); err != nil {
+		return err
+	}
+
+	for i := range policy.Scope.Targets {
+		if policy.Scope.Targets[i].Authentication != nil {
+			context := fmt.Sprintf("target %s", policy.Scope.Targets[i].Host)
+			if err := m.resolveAuthenticationEnvVarsForAuth(policy.Scope.Targets[i].Authentication, context); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}

@@ -1,0 +1,29 @@
+# VMware vendor traps definition
+# https://mibs.observium.org/mib/VMWARE-VC-EVENT-MIB/
+---
+
+traps:
+  - trap_oid: 1.3.6.1.4.1.6876.4.3
+    trap_name: vmwVCNotifications
+    drop_undefined: true
+    events:
+      - name: vmwVpxdOldStatus
+        OID: 1.3.6.1.4.1.6876.4.3.304.0
+        tag: old_status
+      - name: vmwVpxdNewStatus
+        OID: 1.3.6.1.4.1.6876.4.3.305.0
+        tag: new_status
+      - name: vmwVpxdObjValue
+        OID: 1.3.6.1.4.1.6876.4.3.306.0
+        tag: object_value
+      - name: vmwVpxdTargetObj
+        OID: 1.3.6.1.4.1.6876.4.3.307.0
+        tag: object_name
+      - name: vmwVpxdTargetObjType
+        OID: 1.3.6.1.4.1.6876.4.3.308.0
+        enum:
+          unknown: 1
+          host: 2
+          vm: 3
+          other: 4
+        tag: object_type

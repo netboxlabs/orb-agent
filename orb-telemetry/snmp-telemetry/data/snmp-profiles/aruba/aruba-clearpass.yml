@@ -1,0 +1,300 @@
+# https://www.arubanetworks.com/techdocs/ClearPass/6.9/PolicyManager/Content/CPPM_UserGuide/SNMP_MIB_Events_Errors/SNMP_private_MIB.htm
+# 1.3.6.1.2.1.1.2.0
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-clearpass
+
+sysobjectid:
+  - 1.3.6.1.4.1.14823.1.6.1    # C2000V
+
+metrics:
+  # CPU Utilization %
+  # Polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrProcessorLoadCombined
+      OID: 1.3.6.1.2.1.25.3.3.1.2.196608
+      poll_time_sec: 60
+      tag: CPU
+
+  # The total amount of real/physical memory installed on this host.
+  # Polled at 60s to support anomaly detection
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalReal
+      OID: 1.3.6.1.4.1.2021.4.5.0
+      poll_time_sec: 60
+      tag: MemoryTotal
+
+  # The amount of real/physical memory currently unused or available.
+  # Polled at 60s to support anomaly detection
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memAvailReal
+      OID: 1.3.6.1.4.1.2021.4.6.0
+      poll_time_sec: 60
+      tag: MemoryFree
+
+  # This table lists CPPM System attributes.
+  - MIB: CPPM-MIB
+    table:
+      name: cppmSystemTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1
+    # These may need hextoint conversion
+    symbols:
+      # Total amount of memory available (bytes) in the ClearPass server
+      - name: cppmSystemMemoryTotal
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.12
+      # Amount of free memory (bytes) in the ClearPass server
+      - name: cppmSystemMemoryFree
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.13
+      # Total amount of disk space available (bytes) in the ClearPass server
+      - name: cppmSystemDiskSpaceTotal
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.14
+      # Amount of free disk space (bytes) in the ClearPass server
+      - name: cppmSystemDiskSpaceFree
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.15
+
+  # This table lists the RADIUS global counters in CPPM.
+  - MIB: CPPM-MIB
+    table:
+      name: radiusServerTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.2.1
+    symbols:
+      # Total time taken (ms) for policy evaluation from RADIUS server perspective.
+      - name: radPolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.1.1.1
+      # Total time taken (ms) for RADIUS request end-to-end.
+      - name: radAuthRequestTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.1.1.2
+      # Successful RADIUS request count.
+      - name: radServerCounterSuccess
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.1.1.3
+      # Failed RADIUS request count.
+      - name: radServerCounterFailure
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.1.1.4
+      # Total RADIUS request count.
+      - name: radServerCounterCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.1.1.5
+
+  # This table lists the authentication sources in CPPM.
+  - MIB: CPPM-MIB
+    table:
+      name: radiusServerAuthTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.2.2
+    symbols:
+      # Total number of successful RADIUS authentications.
+      - name: radAuthCounterSuccess
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.2.1.3
+      # Total number of failed RADIUS authentications.
+      - name: radAuthCounterFailure
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.2.1.4
+      # Total number of RADIUS authentications.
+      - name: radAuthCounterCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.2.1.5
+      # Time taken (ms) to authenticate against an authentication source.
+      - name: radAuthCounterTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.2.1.6
+    metric_tags:
+      # Name of the authentication source used for RADIUS authentication
+      - column:
+          name: radAuthSourceName
+          OID: 1.3.6.1.4.1.14823.1.6.1.1.2.2.1.2
+
+  # This table lists the Policy Server global counters in CPPM.
+  - MIB: CPPM-MIB
+    table:
+      name: policyServerTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3
+    symbols:
+      # Total number of service policies evaluated.
+      - name: psServicePolicyEvalCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.1
+      # Total number of role mapping policies evaluated.
+      - name: psRolemappingPolicyEvalCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.2
+      # Total number of posture policies evaluated.
+      - name: psPosturePolicyEvalCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.3
+      # Total number of audit policies evaluated.
+      - name: psAuditPolicyEvalCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.4
+      # Total number of restriction policies evaluated.
+      - name: psRestrictionPolicyEvalCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.5
+      # Total number of enforcement policies evaluated.
+      - name: psEnforcementPolicyEvalCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.6
+      # Time taken (ms) for the evaluation of service policies.
+      - name: psServicePolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.7
+      # Time taken (ms) for the evaluation of role mapping policies.
+      - name: psRolemappingPolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.8
+      # Time taken (ms) for the evaluation of posture policies.
+      - name: psPosturePolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.9
+      # Time taken (ms) for the evaluation of audit policies.
+      - name: psAuditPolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.10
+      # Time taken (ms) for the evaluation of restriction policies.
+      - name: psRestrictionPolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.11
+      # Time taken (ms) for the evaluation of enforcement policies.
+      - name: psEnforcementPolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.12
+      # Time taken (ms) for session logging.
+      - name: psSessionlogTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.13
+      # Total number of successful authentications computed on the Policy Server.
+      - name: psAuthCounterSuccess
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.14
+      # Total number of failed authentications computed on the Policy Server.
+      - name: psAuthCounterFailure
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.15
+      # Total number of authentications computed on the Policy Server.
+      - name: psAuthCounterTotal
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.16
+      # Total number of successful authentications computed over 24 hours.
+      - name: dailySuccessAuthCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.17
+      # Total number of failed authentications computed over 24 hours.
+      - name: dailyFailedAuthCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.18
+      # Total number of authentications computed over 24 hours.
+      - name: dailyTotalAuthCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.3.1.19
+
+  # This table lists the authorization sources in CPPM.
+  - MIB: CPPM-MIB
+    table:
+      name: policyServerAutzTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.2.5
+    symbols:
+      # Total number of successful Policy authorizations.
+      - name: psAutzCounterSuccess
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.5.1.3
+      # Total number of failed Policy authorizations.
+      - name: psAutzCounterFailure
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.5.1.4
+      # Total number of Policy authorizations.
+      - name: psAutzCounterCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.5.1.5
+      # Time taken (ms) for Policy authorizations.
+      - name: psAutzCounterTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.5.1.6
+    metric_tags:
+      # Name of the authorization source used for Policy authorizations.
+      - column:
+          name: psAutzSourceName
+          OID: 1.3.6.1.4.1.14823.1.6.1.1.2.5.1.2
+
+  # This table lists the TACACS+ authentication details in CPPM.
+  - MIB: CPPM-MIB
+    table:
+      name: tacacsAuthTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7
+    symbols:
+      # Total number of successful TACACS+ authentications.
+      - name: tacAuthCounterSuccess
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7.1.1
+      # Total number of failed TACACS+ authentications.
+      - name: tacAuthCounterFailure
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7.1.2
+      # Total number of TACACS+ authentications.
+      - name: tacAuthCounterCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7.1.3
+      # Total time taken (ms) to perform TACACS+ authentications end-to-end.
+      - name: tacAuthCounterTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7.1.4
+      # Time taken (ms) for TACACS+ authentications.
+      - name: tacAuthCounterAuthTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7.1.5
+      # Time taken (ms) for TACACS+ service policy evaluation.
+      - name: tacServicePolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7.1.6
+      # Time taken (ms) for TACACS+ policy evaluation.
+      - name: tacPolicyEvalTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.7.1.7
+
+  # This table lists the TACACS+ authorization details in CPPM.
+  - MIB: CPPM-MIB
+    table:
+      name: tacacsAutzTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.2.8
+    symbols:
+      # Total number of successful TACACS+ authorizations.
+      - name: tacAutzCounterSuccess
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.8.1.1
+      # Total number of failed TACACS+ authorizations.
+      - name: tacAutzCounterFailure
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.8.1.2
+      # Total number of TACACS+ authorizations.
+      - name: tacAutzCounterCount
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.8.1.3
+      # Total time taken (ms) to perform TACACS+ authorization end-to-end.
+      - name: tacAutzCounterTime
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.2.8.1.4
+
+  # This table lists the Network Traffic details in CPPM.
+  - MIB: CPPM-MIB
+    table:
+      name: networkTrafficTable
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.3.1
+    symbols:
+      # Network application port number.
+      - name: nwAppPort
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.3.1.1.3
+      # Total network traffic in bytes.
+      - name: nwTrafficTotal
+        OID: 1.3.6.1.4.1.14823.1.6.1.1.3.1.1.4
+    metric_tags:
+      # Network application name.
+      - column:
+          name: nwAppName
+          OID: 1.3.6.1.4.1.14823.1.6.1.1.3.1.1.2
+
+metric_tags:
+  # ClearPass server product version
+  - column:
+      name: cppmSystemVersion
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.3.0
+  # ClearPass cluster node type
+  - column:
+      name: cppmClusterNodeType
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.5.0
+  # ClearPass zone name
+  - column:
+      name: cppmZoneName
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.6.0
+  # Total number of nodes in the ClearPass cluster
+  - column:
+      name: cppmNumClusterNodes
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.7.0
+  # ClearPass server management port IP Address
+  - column:
+      name: cppmNwMgmtPortIPAddress
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.8.0
+      conversion: hextoip
+  # ClearPass server management port MAC Address
+  - column:
+      name: cppmNwMgmtPortMACAddress
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.9.0
+      conversion: hwaddr
+  # ClearPass server data port IP Address
+  - column:
+      name: cppmNwDataPortIPAddress
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.10.0
+      conversion: hextoip
+  # ClearPass server data port MAC Address
+  - column:
+      name: cppmNwDataPortMACAddress
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.11.0
+      conversion: hwaddr
+  # Total number of CPUs in the ClearPass server
+  - column:
+      name: cppmSystemNumCPUs
+      OID: 1.3.6.1.4.1.14823.1.6.1.1.1.1.1.16.0

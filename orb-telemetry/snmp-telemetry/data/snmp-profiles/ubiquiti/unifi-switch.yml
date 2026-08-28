@@ -1,0 +1,47 @@
+# This profile may need to be manually applied in the device config.
+# Some Unifi switches uses generic Net-SNMP sysobjectid for Linux and has no identifying data in sysDescr.
+# Ex:
+# 1.3.6.1.2.1.1.1.0 = STRING: Linux <device_name> 4.18.0-305.12.1.el8.ibm.1.x86_64 #1 SMP Wed Aug 18 07:10:24 CDT 2021 x86_64
+# 1.3.6.1.2.1.1.2.0 = OID: .1.3.6.1.4.1.8072.3.2.10
+# https://mibs.observium.org/mib/EdgeSwitch-SWITCHING-MIB/
+# This profile collects CPU and Memory from both the EdgeSwitch MIB and UCD MIB (via the net-snmp.yml profile) to cover various devices
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.4413                    # Broadcom
+
+metrics:
+  # The total memory free for utilization in KBytes.
+  # Polled at 60s to support anomaly detection
+  - MIB: EdgeSwitch-SWITCHING-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.4413.1.1.1.1.4.1.0
+      name: agentSwitchCpuProcessMemFree
+      poll_time_sec: 60
+      allow_duplicate: true
+      tag: MemoryFree
+
+  # The total memory available in KBytes.
+  # Polled at 60s to support anomaly detection
+  - MIB: EdgeSwitch-SWITCHING-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.4413.1.1.1.1.4.2.0
+      name: agentSwitchCpuProcessMemAvailable
+      poll_time_sec: 60
+      allow_duplicate: true
+      tag: MemoryTotal
+
+  # Total CPU utilization
+  # Polled at 60s to support anomaly detection
+  - MIB: EdgeSwitch-SWITCHING-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.4413.1.1.1.1.4.9.0
+      name: agentSwitchCpuProcessTotalUtilization
+      poll_time_sec: 60
+      allow_duplicate: true
+      tag: CPU

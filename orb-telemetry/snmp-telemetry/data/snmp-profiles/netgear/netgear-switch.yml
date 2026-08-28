@@ -1,0 +1,45 @@
+# https://github.com/librenms/librenms/blob/master/mibs/netgear/NETGEAR-SWITCHING-MIB
+---
+
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.4526.100.1.28    # M4300-12X12F ProSAFE 12-port
+  - 1.3.6.1.4.1.4526.100.1.31    # M4300-52G ProSAFE 48-port
+
+provider: kentik-switch
+
+metrics:
+  # The total memory free for utilization in KBytes.
+  - MIB: NETGEAR-SWITCHING-MIB
+    symbol:
+      name: agentSwitchCpuProcessMemFree
+      OID: 1.3.6.1.4.1.4526.10.1.1.4.1.0
+      poll_time_sec: 60
+      tag: MemoryFree
+  # The total memory available in KBytes.
+  - MIB: NETGEAR-SWITCHING-MIB
+    symbol:
+      name: agentSwitchCpuProcessMemAvailable
+      OID: 1.3.6.1.4.1.4526.10.1.1.4.2.0
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # Total CPU utilization over a period of 5, 60, 300 seconds.
+  - MIB: NETGEAR-SWITCHING-MIB
+    symbol:
+      name: agentSwitchCpuProcessTotalUtilization
+      OID: 1.3.6.1.4.1.4526.10.1.1.4.9.0
+      poll_time_sec: 60
+      tag: CPU
+      conversion: "regexp:60 Secs.*?(\\d+)"
+metric_tags:
+  # The switch's Machine Model.
+  - column:
+      name: agentInventoryMachineModel
+      OID: 1.3.6.1.4.1.4526.10.1.1.1.3.0
+  # Lists the version of software loaded on this unit.
+  - column:
+      name: agentInventorySoftwareVersion
+      OID: 1.3.6.1.4.1.4526.10.1.1.1.13.0

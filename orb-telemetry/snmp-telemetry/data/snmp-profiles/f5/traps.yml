@@ -1,0 +1,1290 @@
+# F5 traps definition
+# https://www.circitor.fr/Mibs/Mib/F/F5-BIGIP-COMMON-MIB.mib
+---
+
+traps:
+  # An indication that the agent has started running.
+  - trap_name: bigipAgentStart
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.1
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # An indication that the agent is in the process of being shut down.
+  - trap_name: bigipAgentShutdown
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.2
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # An indication that the agent has been restarted. (eg. It happens when a SIGHUP is received.)
+  # This does not imply anything about whether the configuration has changed (unlike the standard coldStart or warmStart traps)
+  - trap_name: bigipAgentRestart
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.3
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # CPU temperature is too high.
+  - trap_name: bigipCpuTempHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.4
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # CPU fan speed is too low.
+  - trap_name: bigipCpuFanSpeedLow
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.5
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # CPU fan speed signal not received.
+  - trap_name: bigipCpuFanSpeedBad
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.6
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Chassis temperature is too high.
+  - trap_name: bigipChassisTempHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.7
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Chassis fan status is bad.
+  - trap_name: bigipChassisFanBad
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.8
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Chassis power supply status is bad.
+  - trap_name: bigipChassisPowerSupplyBad
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.9
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A service is detected DOWN.
+  - trap_name: bigipServiceDown
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.10
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+      - name: bigipNotifyObjNode
+        OID: 1.3.6.1.4.1.3375.2.4.1.2
+        tag: node_name
+      - name: bigipNotifyObjPort
+        OID: 1.3.6.1.4.1.3375.2.4.1.3
+        tag: service_port
+  # A service is detected UP.
+  - trap_name: bigipServiceUp
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.11
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+      - name: bigipNotifyObjNode
+        OID: 1.3.6.1.4.1.3375.2.4.1.2
+        tag: node_name
+      - name: bigipNotifyObjPort
+        OID: 1.3.6.1.4.1.3375.2.4.1.3
+        tag: service_port
+  # A node is detected DOWN.
+  - trap_name: bigipNodeDown
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.12
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+      - name: bigipNotifyObjNode
+        OID: 1.3.6.1.4.1.3375.2.4.1.2
+        tag: node_name
+  # A node is detected UP.
+  - trap_name: bigipNodeUp
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.13
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+      - name: bigipNotifyObjNode
+        OID: 1.3.6.1.4.1.3375.2.4.1.2
+        tag: node_name
+  # The system is going into standby mode.
+  - trap_name: bigipStandby
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.14
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The system is going into active mode.
+  - trap_name: bigipActive
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.15
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The system is going into active-active mode.
+  - trap_name: bigipActiveActive
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.16
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A high availability feature triggered action failed.
+  - trap_name: bigipFeatureFailed
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.17
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A high availability feature is now responding.
+  - trap_name: bigipFeatureOnline
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.18
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The license validation failed.
+  - trap_name: bigipLicenseFailed
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.19
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The license has expired.
+  - trap_name: bigipLicenseExpired
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.20
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Too many authentication failures (> 60) in 1 second to TMM (Traffic Management Module).
+  - trap_name: bigipTamdAlert
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.21
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The aggressive reaper state changed.
+  # Aggressive reaper state changes indicate the system is moving into distress-mode for DOS prevention.
+  - trap_name: bigipAggrReaperStateChange
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.22
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # There is an ARP conflict.
+  - trap_name: bigipARPConflict
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.23
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # An internal interface link is down. This is for L1 and L2.
+  # These are internal links within the box connecting the CPU and Switch subsystems which should never lose link.
+  # If they do it indicates a serious problem.
+  - trap_name: bigipNetLinkDown
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.24
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The disk partition free space is very limited which is less than a specified limit.
+  # By default the limit is set to 30% of total disk space.
+  - trap_name: bigipDiskPartitionWarn
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.25
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The disk partition exceeds the specified growth limit.
+  # By default the limit is set to 5% of the total disk space.
+  # The growth is difference of two consecutive monitoring data.
+  - trap_name: bigipDiskPartitionGrowth
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.26
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The login/sshd authentication has failed.
+  - trap_name: bigipAuthFailed
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.27
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Deprecated! The component which created this event has been deprecated.
+  # The configuration was loaded.
+  - trap_name: bigipConfigLoaded
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.28
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The system is in an unusable situation.
+  - trap_name: bigipLogEmerg
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.29
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Action must be taken immediately for the system to work properly.
+  - trap_name: bigipLogAlert
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.30
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The system is in a critical condition.
+  - trap_name: bigipLogCrit
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.31
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The system has some error conditions.
+  - trap_name: bigipLogErr
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.32
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The system is experiencing some warning conditions.
+  - trap_name: bigipLogWarning
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.33
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The packets are rejected.
+  - trap_name: bigipPacketRejected
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.34
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The compression license limit is exceeded.
+  - trap_name: bigipCompLimitExceeded
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.35
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The SSL license limits are exceeded either for TPS (Transactions Per Second) or for MPS (Megabits Per Second).
+  - trap_name: bigipSslLimitExceeded
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.36
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # For a fixed port this is an occurrence when network cables are connected or removed and the network is reconfigured;
+  # for a pluggable port (such as a SFP or XFP port) this happens when the pluggable unit is plugged in or unplugged
+  # or when a cable is connected or removed from a plugged port.
+  # The possible values are UP; DOWN; or UNPOPULATED.
+  - trap_name: bigipExternalLinkChange
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.37
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The HTTP request was blocked because it issued (at least one) violation(s) which is
+  # marked as blocking at the current active policy in Application Security Module.
+  - trap_name: bigipAsmRequestBlocked
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.38
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The HTTP request issued a violation to the current active policy. This violation is
+  # marked as an alerting violation in that policy in Application Security Module.
+  - trap_name: bigipAsmRequestViolation
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.39
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool is becoming available in global traffic management module.
+  - trap_name: bigipGtmPoolAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.40
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool is becoming unavailable in global traffic management module.
+  - trap_name: bigipGtmPoolNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.41
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool is disabled in global traffic management module.
+  - trap_name: bigipGtmPoolDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.42
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool is enabled in global traffic management module.
+  - trap_name: bigipGtmPoolEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.43
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A link is becoming available in global traffic management module.
+  - trap_name: bigipGtmLinkAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.44
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A link is becoming unavailable in global traffic management module.
+  - trap_name: bigipGtmLinkNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.45
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A link is disabled in global traffic management module.
+  - trap_name: bigipGtmLinkDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.46
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A link is enabled in global traffic management module.
+  - trap_name: bigipGtmLinkEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.47
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A wide IP is becoming available in global traffic management module.
+  - trap_name: bigipGtmWideIpAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.48
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A wide IP is becoming unavailable in global traffic management module.
+  - trap_name: bigipGtmWideIpNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.49
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A wide IP is disabled in global traffic management module.
+  - trap_name: bigipGtmWideIpDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.50
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A wide IP is enabled in global traffic management module.
+  - trap_name: bigipGtmWideIpEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.51
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool member is becoming available in global traffic management module.
+  - trap_name: bigipGtmPoolMbrAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.52
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool member is becoming unavailable in global traffic management module.
+  - trap_name: bigipGtmPoolMbrNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.53
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool member is disabled in global traffic management module.
+  - trap_name: bigipGtmPoolMbrDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.54
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool member is enabled in global traffic management module.
+  - trap_name: bigipGtmPoolMbrEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.55
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A server is becoming available in global traffic management module.
+  - trap_name: bigipGtmServerAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.56
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A server is becoming unavailable in global traffic management module.
+  - trap_name: bigipGtmServerNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.57
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A server is disabled in global traffic management module.
+  - trap_name: bigipGtmServerDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.58
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A server is enabled in global traffic management module.
+  - trap_name: bigipGtmServerEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.59
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual server is becoming available in global traffic management module.
+  - trap_name: bigipGtmVsAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.60
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual server is becoming unavailable in global traffic management module.
+  - trap_name: bigipGtmVsNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.61
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual server is disabled in global traffic management module.
+  - trap_name: bigipGtmVsDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.62
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual server is enabled in global traffic management module.
+  - trap_name: bigipGtmVsEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.63
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A data center is becoming available in global traffic management module.
+  - trap_name: bigipGtmDcAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.64
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A data center is becoming unavailable in global traffic management module.
+  - trap_name: bigipGtmDcNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.65
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A data center is disabled in global traffic management module.
+  - trap_name: bigipGtmDcDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.66
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A data center is enabled in global traffic management module.
+  - trap_name: bigipGtmDcEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.67
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Deprecated!  This object has been eliminated. The hard disk is failing.
+  - trap_name: bigipHardDiskFailure
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.68
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # An application object is becoming available in global management module.
+  - trap_name: bigipGtmAppObjAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.69
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # An application object is becoming unavailable in global management module.
+  - trap_name: bigipGtmAppObjNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.70
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # An application is becoming available in global management module.
+  - trap_name: bigipGtmAppAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.71
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # An application is becoming unavailable in global management module.
+  - trap_name: bigipGtmAppNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.72
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # BIG-IP GTM joined sync group.
+  - trap_name: bigipGtmJoinedGroup
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.73
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # BIG-IP GTM left sync group.
+  - trap_name: bigipGtmLeftGroup
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.74
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # In failover condition this standby will not be able to go active.
+  - trap_name: bigipStandByFail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.75
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The TMM has run out of source ports and cannot open new communications channels with other machines.
+  - trap_name: bigipInetPortExhaustion
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.76
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A gtm machine (which equates to an iquery connect to a gtm machine) has gone UP
+  - trap_name: bigipGtmBoxAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.77
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A gtm machine (which equates to an iquery connect to a gtm machine) has gone DOWN
+  - trap_name: bigipGtmBoxNotAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.78
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The FTP request was blocked because it issued (at least one) violation(s) which is
+  # marked as blocking at the current active policy in Application Security Module.
+  - trap_name: bigipAsmFtpRequestBlocked
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.79
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The FTP request issued a violation to the current active policy. This violation is
+  # marked as an alerting violation in that policy in Application Security Module.
+  - trap_name: bigipAsmFtpRequestViolation
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.80
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # BIG-IP GTM BIG3D SSL Cert has expired.
+  - trap_name: bigipGtmBig3dSslCertExpired
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.81
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # BIG-IP GTM BIG3D SSL Cert will expire.
+  - trap_name: bigipGtmBig3dSslCertWillExpire
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.82
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # BIG-IP GTM SSL Cert has expired.
+  - trap_name: bigipGtmSslCertExpired
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.83
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # BIG-IP GTM SSL Cert will expire.
+  - trap_name: bigipGtmSslCertWillExpire
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.84
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The SMTP request was blocked because it issued (at least one) violation(s) which is
+  # marked as blocking at the current active policy in Application Security Module.
+  - trap_name: bigipAsmSmtpRequestBlocked
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.85
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The SMTP request issued a violation to the current active policy. This violation is
+  # marked as an alerting violation in that policy in Application Security Module.
+  - trap_name: bigipAsmSmtpRequestViolation
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.86
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Blade temperature is too high.
+  - trap_name: bigipBladeTempHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.87
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A blade lost power. The blade may be pulled out
+  - trap_name: bigipBladeNoPower
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.88
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The cluster daemon failed to respond for 10 or more seconds.
+  - trap_name: bigipClusterdNoResponse
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.89
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A blade has failed - offline.
+  - trap_name: bigipBladeOffline
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.90
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # DoS attack detected by Application Security Module.
+  - trap_name: bigipAsmDosAttackDetected
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.91
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Brute force attack detected by Application Security Module.
+  - trap_name: bigipAsmBruteForceAttackDetected
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.92
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # AOM reports the air temperature near the host CPU too high.
+  - trap_name: bigipAomCpuTempTooHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.93
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # DNSSEC Key generation has rolled over.
+  - trap_name: bigipGtmKeyGenerationRollover
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.94
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # DNSSEC Key generation has expired.
+  - trap_name: bigipGtmKeyGenerationExpiration
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.95
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Disk failure in a RAID disk array.
+  - trap_name: bigipRaidDiskFailure
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.96
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Status Change.
+  - trap_name: bigipGtmProberPoolStatusChange
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.97
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Status Change Reason.
+  - trap_name: bigipGtmProberPoolStatusChangeReason
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.98
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Disabled.
+  - trap_name: bigipGtmProberPoolDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.99
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Enabled.
+  - trap_name: bigipGtmProberPoolEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.100
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Member Status Change.
+  - trap_name: bigipGtmProberPoolMbrStatusChange
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.101
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Member Status Change Reason.
+  - trap_name: bigipGtmProberPoolMbrStatusChangeReason
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.102
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Member Disabled.
+  - trap_name: bigipGtmProberPoolMbrDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.103
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Prober Pool Member Enabled.
+  - trap_name: bigipGtmProberPoolMbrEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.104
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # AVR alert metric state changed - notification for SNMP.
+  - trap_name: bigipAvrAlertsMetricSnmp
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.105
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Deprecated! AVR alert metric state changed - notification for SMTP (based on SNMP).
+  - trap_name: bigipAvrAlertsMetricSmtp
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.106
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A VCMP guest is powered on from a suspended or powered off state.
+  - trap_name: bigipVcmpAlertsVcmpPowerOn
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.107
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A VCMP guest is powered off.
+  - trap_name: bigipVcmpAlertsVcmpPowerOff
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.108
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A VCMP guest heartbeat is lost.
+  - trap_name: bigipVcmpAlertsVcmpHBLost
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.109
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A VCMP guest heartbeat is detected or regained.
+  - trap_name: bigipVcmpAlertsVcmpHBDetected
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.110
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # SSD disk wear-out indicator is near its threshold.
+  - trap_name: bigipSsdMwiNearThreshold
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.111
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # SSD disk wear-out indicator has reached its threshold.
+  - trap_name: bigipSsdMwiReachedThreshold
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.112
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Temperature is too high.
+  - trap_name: bigipSystemCheckAlertTempHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.113
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Voltage is too high.
+  - trap_name: bigipSystemCheckAlertVoltageHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.114
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Fan speed is too low.
+  - trap_name: bigipSystemCheckAlertFanSpeedLow
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.115
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # SSD physical disk was removed.
+  - trap_name: bigipLibhalSsdPhysicalDiskRemoved
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.116
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # SSD logical disk was removed.
+  - trap_name: bigipLibhalSsdLogicalDiskRemoved
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.117
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Disk sled was removed from a bay.
+  - trap_name: bigipLibhalDiskBayRemoved
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.118
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Blade is about to be powered off.
+  - trap_name: bigipLibhalBladePoweredOff
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.119
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Blade hardware sensor indicated critical alarm.
+  - trap_name: bigipLibhalSensorAlarmCritical
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.120
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Chassis fan tray is bad or removed.
+  - trap_name: bigipChmandAlertFanTrayBad
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.121
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+
+
+  # The DNS cache object received unsolicited query replies exceeding a configured threshold.
+  - trap_name: bigipUnsolicitedRepliesExceededThreshold
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.122
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Voltage is too low.
+  - trap_name: bigipSystemCheckAlertVoltageLow
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.123
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Milli-Voltage is too high.
+  - trap_name: bigipSystemCheckAlertMilliVoltageHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.124
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Current is too high.
+  - trap_name: bigipSystemCheckAlertCurrentHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.125
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Power is too high.
+  - trap_name: bigipSystemCheckAlertPowerHigh
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.126
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Milli-Voltage is too low.
+  - trap_name: bigipSystemCheckAlertMilliVoltageLow
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.127
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Current is too low.
+  - trap_name: bigipSystemCheckAlertCurrentLow
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.128
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Power is too low.
+  - trap_name: bigipSystemCheckAlertPowerLow
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.129
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A node has exceeded the allowed rate.
+  - trap_name: bigipNodeRate
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.130
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A pool member has exceeded the allowed rate.
+  - trap_name: bigipMemberRate
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.131
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual has exceeded the allowed rate.
+  - trap_name: bigipVirtualRate
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.132
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A DOS attack start was detected.
+  - trap_name: bigipDosAttackStart
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.133
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A DOS attack stop was detected.
+  - trap_name: bigipDosAttackStop
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.134
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual has become available.
+  - trap_name: bigipLtmVsAvail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.135
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual has become unavailable.
+  - trap_name: bigipLtmVsUnavail
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.136
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual has become enabled.
+  - trap_name: bigipLtmVsEnabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.137
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A virtual has become disabled.
+  - trap_name: bigipLtmVsDisabled
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.138
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The DNS Services request rate limiter has been engaged.
+  - trap_name: bigipDnsRequestRateLimiterEngaged
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.139
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The GTM request rate limiter has been engaged.
+  - trap_name: bigipGtmRequestRateLimiterEngaged
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.140
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A traffic group is going into standby mode on the system.
+  - trap_name: bigipTrafficGroupStandby
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.141
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A traffic group is going into active mode on the system.
+  - trap_name: bigipTrafficGroupActive
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.142
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A traffic group is going into offline mode on the system.
+  - trap_name: bigipTrafficGroupOffline
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.143
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A traffic group is going into forced offline mode on the system.
+  - trap_name: bigipTrafficGroupForcedOffline
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.144
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A traffic group is being deactivated on the system.
+  - trap_name: bigipTrafficGroupDeactivate
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.145
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # A traffic group is being activated on the system.
+  - trap_name: bigipTrafficGroupActivate
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.146
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Power supply unit has powered on.
+  - trap_name: bigipPsPowerOn
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.147
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Power supply unit has powered off.
+  - trap_name: bigipPsPowerOff
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.148
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Power supply unit is absent.
+  - trap_name: bigipPsAbsent
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.149
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The primary blade has been changed in the cluster system.
+  - trap_name: bigipClusterPrimaryChanged
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.150
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The system is shutting down.
+  - trap_name: bigipSystemShutdown
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.151
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Encountered error in the FIPS card operation.
+  - trap_name: bigipFipsDeviceError
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.152
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # There is a high priority software update available.
+  - trap_name: bigipUpdatePriority
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.153
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # Unable to connect to the F5 Update Check server.
+  - trap_name: bigipUpdateServer
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.154
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # There was an error checking for updates.
+  - trap_name: bigipUpdateError
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.155
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message
+  # The FIPS card is currently in faulty state.
+  - trap_name: bigipFipsFault
+    trap_oid: 1.3.6.1.4.1.3375.2.4.0.156
+    drop_undefined: true
+    events:
+      - name: bigipNotifyObjMsg
+        OID: 1.3.6.1.4.1.3375.2.4.1.1
+        tag: message

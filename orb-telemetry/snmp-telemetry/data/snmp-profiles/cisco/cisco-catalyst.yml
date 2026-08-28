@@ -1,0 +1,433 @@
+# http://oid-info.com/get/1.3.6.1.4.1.9.9.91.1.1.1
+# http://oid-info.com/get/1.3.6.1.4.1.9.9.276.1.1.1
+---
+extends:
+  - cisco-all-devices.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.111     # Catalyst 3500
+  - 1.3.6.1.4.1.9.1.170     # Catalyst 2908xl
+  - 1.3.6.1.4.1.9.1.171     # Catalyst 2916mxl
+  - 1.3.6.1.4.1.9.1.175     # Catalyst 1912C
+  - 1.3.6.1.4.1.9.1.183     # Catalyst 2924XL
+  - 1.3.6.1.4.1.9.1.184     # Catalyst 2924CXL
+  - 1.3.6.1.4.1.9.1.197     # Catalyst 9006
+  - 1.3.6.1.4.1.9.1.198     # Catalyst 9009
+  - 1.3.6.1.4.1.9.1.202     # Catalyst 8540msr
+  - 1.3.6.1.4.1.9.1.203     # Catalyst 8540csr
+  - 1.3.6.1.4.1.9.1.217     # Catalyst 2924XLv
+  - 1.3.6.1.4.1.9.1.218     # Catalyst 2924CXLv
+  - 1.3.6.1.4.1.9.1.219     # Catalyst 2912XL
+  - 1.3.6.1.4.1.9.1.220     # Catalyst 2924MXL
+  - 1.3.6.1.4.1.9.1.221     # Catalyst 2912MfXL
+  - 1.3.6.1.4.1.9.1.230     # Catalyst 8510msr
+  - 1.3.6.1.4.1.9.1.231     # Catalyst 8515msr
+  - 1.3.6.1.4.1.9.1.241     # Catalyst 6000
+  - 1.3.6.1.4.1.9.1.246     # Catalyst 3508GXL
+  - 1.3.6.1.4.1.9.1.247     # Catalyst 3512XL
+  - 1.3.6.1.4.1.9.1.248     # Catalyst 3524XL
+  - 1.3.6.1.4.1.9.1.256     # Catalyst WSX6302Msm
+  - 1.3.6.1.4.1.9.1.257     # Catalyst 5kRsfc
+  - 1.3.6.1.4.1.9.1.258     # Catalyst 6kMsfc
+  - 1.3.6.1.4.1.9.1.275     # Catalyst 2948gL3
+  - 1.3.6.1.4.1.9.1.278     # Catalyst 3548XL
+  - 1.3.6.1.4.1.9.1.280     # Catalyst 6006
+  - 1.3.6.1.4.1.9.1.281     # Catalyst 6009
+  - 1.3.6.1.4.1.9.1.282     # Catalyst 6506
+  - 1.3.6.1.4.1.9.1.283     # Catalyst 6509
+  - 1.3.6.1.4.1.9.1.287     # Catalyst 3524tXLEn
+  - 1.3.6.1.4.1.9.1.298     # Catalyst 4908gL3
+  - 1.3.6.1.4.1.9.1.300     # Catalyst 4232L3
+  - 1.3.6.1.4.1.9.1.301     # Catalyst 6kMsfc2
+  - 1.3.6.1.4.1.9.1.312     # Catalyst 4840gL3
+  - 1.3.6.1.4.1.9.1.318     # Catalyst 4kGateway
+  - 1.3.6.1.4.1.9.1.323     # Catalyst 295012
+  - 1.3.6.1.4.1.9.1.324     # Catalyst 295024
+  - 1.3.6.1.4.1.9.1.325     # Catalyst 295024C
+  - 1.3.6.1.4.1.9.1.359     # Catalyst 2950t24
+  - 1.3.6.1.4.1.9.1.366     # Catalyst 355024
+  - 1.3.6.1.4.1.9.1.367     # Catalyst 355048
+  - 1.3.6.1.4.1.9.1.368     # Catalyst 355012T
+  - 1.3.6.1.4.1.9.1.369     # Catalyst 2924LREXL
+  - 1.3.6.1.4.1.9.1.370     # Catalyst 2912LREXL
+  - 1.3.6.1.4.1.9.1.400     # Catalyst WSC6513
+  - 1.3.6.1.4.1.9.1.427     # Catalyst 295012G
+  - 1.3.6.1.4.1.9.1.428     # Catalyst 295024G
+  - 1.3.6.1.4.1.9.1.429     # Catalyst 295048G
+  - 1.3.6.1.4.1.9.1.430     # Catalyst 295024S
+  - 1.3.6.1.4.1.9.1.431     # Catalyst 355012G
+  - 1.3.6.1.4.1.9.1.445     # Catalyst 4000Sup3
+  - 1.3.6.1.4.1.9.1.448     # Catalyst 4006
+  - 1.3.6.1.4.1.9.1.449     # Catalyst WSC6503
+  - 1.3.6.1.4.1.9.1.452     # Catalyst 355024Dc
+  - 1.3.6.1.4.1.9.1.453     # Catalyst 355024Mmf
+  - 1.3.6.1.4.1.9.1.472     # Catalyst 295024GDC
+  - 1.3.6.1.4.1.9.1.480     # Catalyst 295024SX
+  - 1.3.6.1.4.1.9.1.482     # Catalyst 295024LRESt
+  - 1.3.6.1.4.1.9.1.483     # Catalyst 29508LRESt
+  - 1.3.6.1.4.1.9.1.484     # Catalyst 295024LREG
+  - 1.3.6.1.4.1.9.1.485     # Catalyst 355024PWR
+  - 1.3.6.1.4.1.9.1.488     # Catalyst 2955T12
+  - 1.3.6.1.4.1.9.1.489     # Catalyst 2955C12
+  - 1.3.6.1.4.1.9.1.501     # Catalyst 4507
+  - 1.3.6.1.4.1.9.1.502     # Catalyst 4506
+  - 1.3.6.1.4.1.9.1.503     # Catalyst 4503
+  - 1.3.6.1.4.1.9.1.508     # Catalyst 2955S12
+  - 1.3.6.1.4.1.9.1.510     # Catalyst WSC65509
+  - 1.3.6.1.4.1.9.1.511     # Catalyst 375024
+  - 1.3.6.1.4.1.9.1.512     # Catalyst 375048
+  - 1.3.6.1.4.1.9.1.513     # Catalyst 375024TS
+  - 1.3.6.1.4.1.9.1.514     # Catalyst 375024T
+  - 1.3.6.1.4.1.9.1.516     # Catalyst 37xxStack
+  - 1.3.6.1.4.1.9.1.522     # Catalyst 6500FirewallSm
+  - 1.3.6.1.4.1.9.1.527     # Catalyst 297024
+  - 1.3.6.1.4.1.9.1.530     # Catalyst 3750Ge12Sfp
+  - 1.3.6.1.4.1.9.1.534     # Catalyst WSC6509neba
+  - 1.3.6.1.4.1.9.1.535     # Catalyst 375048PS
+  - 1.3.6.1.4.1.9.1.536     # Catalyst 375024PS
+  - 1.3.6.1.4.1.9.1.537     # Catalyst 4510
+  - 1.3.6.1.4.1.9.1.540     # Catalyst 29408TT
+  - 1.3.6.1.4.1.9.1.542     # Catalyst 29408TF
+  - 1.3.6.1.4.1.9.1.551     # Catalyst 2950St24LRE997
+  - 1.3.6.1.4.1.9.1.554     # Catalyst 6500SslSm
+  - 1.3.6.1.4.1.9.1.557     # Catalyst 6kSup720
+  - 1.3.6.1.4.1.9.1.559     # Catalyst 295048T
+  - 1.3.6.1.4.1.9.1.560     # Catalyst 295048SX
+  - 1.3.6.1.4.1.9.1.561     # Catalyst 297024TS
+  - 1.3.6.1.4.1.9.1.563     # Catalyst 356024PS
+  - 1.3.6.1.4.1.9.1.564     # Catalyst 356048PS
+  - 1.3.6.1.4.1.9.1.573     # Catalyst 6kGateway
+  - 1.3.6.1.4.1.9.1.574     # Catalyst 375024ME
+  - 1.3.6.1.4.1.9.1.575     # Catalyst 4000NAM
+  - 1.3.6.1.4.1.9.1.591     # Catalyst 3750G16TD
+  - 1.3.6.1.4.1.9.1.602     # Catalyst 3750G24PS
+  - 1.3.6.1.4.1.9.1.603     # Catalyst 3750G48PS
+  - 1.3.6.1.4.1.9.1.604     # Catalyst 3750G48TS
+  - 1.3.6.1.4.1.9.1.614     # Catalyst 3560G24PS
+  - 1.3.6.1.4.1.9.1.615     # Catalyst 3560G24TS
+  - 1.3.6.1.4.1.9.1.616     # Catalyst 3560G48PS
+  - 1.3.6.1.4.1.9.1.617     # Catalyst 3560G48TS
+  - 1.3.6.1.4.1.9.1.624     # Catalyst 3750G24TS1U
+  - 1.3.6.1.4.1.9.1.626     # Catalyst 4948
+  - 1.3.6.1.4.1.9.1.633     # Catalyst 356024TS
+  - 1.3.6.1.4.1.9.1.634     # Catalyst 356048TS
+  - 1.3.6.1.4.1.9.1.656     # Catalyst 375024FS
+  - 1.3.6.1.4.1.9.1.657     # Catalyst WSC6504E
+  - 1.3.6.1.4.1.9.1.659     # Catalyst 494810GE
+  - 1.3.6.1.4.1.9.1.674     # Catalyst 6500 Firewall Services Module
+  - 1.3.6.1.4.1.9.1.688     # Catalyst 3750Ge12SfpDc
+  - 1.3.6.1.4.1.9.1.694     # Catalyst 296024
+  - 1.3.6.1.4.1.9.1.695     # Catalyst 296048
+  - 1.3.6.1.4.1.9.1.696     # Catalyst 2960G24
+  - 1.3.6.1.4.1.9.1.697     # Catalyst 2960G48
+  - 1.3.6.1.4.1.9.1.698     # Catalyst 45503
+  - 1.3.6.1.4.1.9.1.699     # Catalyst 45506
+  - 1.3.6.1.4.1.9.1.700     # Catalyst 45507
+  - 1.3.6.1.4.1.9.1.701     # Catalyst 455010
+  - 1.3.6.1.4.1.9.1.706     # Catalyst 6kMsfc2a
+  - 1.3.6.1.4.1.9.1.716     # Catalyst 296024TT
+  - 1.3.6.1.4.1.9.1.717     # Catalyst 296048TT
+  - 1.3.6.1.4.1.9.1.724     # Catalyst sExpress50024TT
+  - 1.3.6.1.4.1.9.1.725     # Catalyst sExpress50024LC
+  - 1.3.6.1.4.1.9.1.726     # Catalyst sExpress50024PC
+  - 1.3.6.1.4.1.9.1.727     # Catalyst sExpress50012TC
+  - 1.3.6.1.4.1.9.1.748     # Catalyst Ws3020Hpq
+  - 1.3.6.1.4.1.9.1.749     # Catalyst Ws3030Del
+  - 1.3.6.1.4.1.9.1.751     # Catalyst 6k Enhanced Gateway
+  - 1.3.6.1.4.1.9.1.755     # Catalyst 6500 AON Module
+  - 1.3.6.1.4.1.9.1.767     # Catalyst WsSvcFwm1sy
+  - 1.3.6.1.4.1.9.1.778     # Catalyst 3750G24WS25
+  - 1.3.6.1.4.1.9.1.779     # Catalyst 3750G24WS50
+  - 1.3.6.1.4.1.9.1.784     # Catalyst WsCBS3040FSC
+  - 1.3.6.1.4.1.9.1.789     # Catalyst 3750E24TD
+  - 1.3.6.1.4.1.9.1.790     # Catalyst 3750E48TD
+  - 1.3.6.1.4.1.9.1.791     # Catalyst 3750E48PD
+  - 1.3.6.1.4.1.9.1.792     # Catalyst 3750E24PD
+  - 1.3.6.1.4.1.9.1.793     # Catalyst 3560E24TD
+  - 1.3.6.1.4.1.9.1.794     # Catalyst 3560E48TD
+  - 1.3.6.1.4.1.9.1.795     # Catalyst 3560E24PD
+  - 1.3.6.1.4.1.9.1.796     # Catalyst 3560E48PD
+  - 1.3.6.1.4.1.9.1.797     # Catalyst 35608PC
+  - 1.3.6.1.4.1.9.1.798     # Catalyst 29608TC
+  - 1.3.6.1.4.1.9.1.799     # Catalyst 2960G8TC
+  - 1.3.6.1.4.1.9.1.832     # Catalyst WSC6509ve
+  - 1.3.6.1.4.1.9.1.874     # Catalyst 4503e
+  - 1.3.6.1.4.1.9.1.875     # Catalyst 4506e
+  - 1.3.6.1.4.1.9.1.876     # Catalyst 4507re
+  - 1.3.6.1.4.1.9.1.877     # Catalyst 4510re
+  - 1.3.6.1.4.1.9.1.896     # Catalyst 65xx Virtual Switch
+  - 1.3.6.1.4.1.9.1.897     # Catalyst Express5208PC
+  - 1.3.6.1.4.1.9.1.909     # Catalyst WsCbs3110gS
+  - 1.3.6.1.4.1.9.1.910     # Catalyst WsCbs3110gSt
+  - 1.3.6.1.4.1.9.1.911     # Catalyst WsCbs3110xS
+  - 1.3.6.1.4.1.9.1.912     # Catalyst WsCbs3110xSt
+  - 1.3.6.1.4.1.9.1.917     # Catalyst 4900M
+  - 1.3.6.1.4.1.9.1.918     # Catalyst WsCbs3120gS
+  - 1.3.6.1.4.1.9.1.919     # Catalyst WsCbs3120xS
+  - 1.3.6.1.4.1.9.1.920     # Catalyst WsCbs3032Del
+  - 1.3.6.1.4.1.9.1.921     # Catalyst WsCbs3130gS
+  - 1.3.6.1.4.1.9.1.922     # Catalyst WsCbs3130xS
+  - 1.3.6.1.4.1.9.1.927     # Catalyst 296048TCS
+  - 1.3.6.1.4.1.9.1.928     # Catalyst 296024TCS
+  - 1.3.6.1.4.1.9.1.929     # Catalyst 296024S
+  - 1.3.6.1.4.1.9.1.930     # Catalyst 3560e12d
+  - 1.3.6.1.4.1.9.1.932     # Catalyst Express52024TT
+  - 1.3.6.1.4.1.9.1.933     # Catalyst Express52024LC
+  - 1.3.6.1.4.1.9.1.934     # Catalyst Express52024PC
+  - 1.3.6.1.4.1.9.1.935     # Catalyst Express520G24TC
+  - 1.3.6.1.4.1.9.1.948     # Cisco CBS3120
+  - 1.3.6.1.4.1.9.1.950     # Catalyst 296024PC
+  - 1.3.6.1.4.1.9.1.951     # Catalyst 296024LT
+  - 1.3.6.1.4.1.9.1.952     # Catalyst 2960PD8TT
+  - 1.3.6.1.4.1.9.1.956     # Catalyst 3560E12SD
+  - 1.3.6.1.4.1.9.1.965     # Catalyst 291824TT
+  - 1.3.6.1.4.1.9.1.966     # Catalyst 291824TC
+  - 1.3.6.1.4.1.9.1.967     # Catalyst 291848TT
+  - 1.3.6.1.4.1.9.1.968     # Catalyst 291848TC
+  - 1.3.6.1.4.1.9.1.999     # Catalyst WsCbs3012Ibm
+  - 1.3.6.1.4.1.9.1.1000    # Catalyst 3012
+  - 1.3.6.1.4.1.9.1.1001    # Catalyst 3125gS
+  - 1.3.6.1.4.1.9.1.1002    # Catalyst 3125xS
+  - 1.3.6.1.4.1.9.1.1004    # Catalyst 492810GE
+  - 1.3.6.1.4.1.9.1.1005    # Catalyst 296048TTS
+  - 1.3.6.1.4.1.9.1.1006    # Catalyst 29608TCS
+  - 1.3.6.1.4.1.9.1.1015    # Catalyst 356012PCS
+  - 1.3.6.1.4.1.9.1.1016    # Catalyst 296048PSTL
+  - 1.3.6.1.4.1.9.1.1019    # Catalyst 3560v224tsD
+  - 1.3.6.1.4.1.9.1.1020    # Catalyst 3560v224ts
+  - 1.3.6.1.4.1.9.1.1021    # Catalyst 3560v224ps
+  - 1.3.6.1.4.1.9.1.1022    # Catalyst 3750v224ts
+  - 1.3.6.1.4.1.9.1.1023    # Catalyst 3750v224ps
+  - 1.3.6.1.4.1.9.1.1024    # Catalyst 3560v248ts
+  - 1.3.6.1.4.1.9.1.1025    # Catalyst 3560v248ps
+  - 1.3.6.1.4.1.9.1.1026    # Catalyst 3750v248ts
+  - 1.3.6.1.4.1.9.1.1027    # Catalyst 3750v248ps
+  - 1.3.6.1.4.1.9.1.1067    # Catalyst WSC2975GS48PSL
+  - 1.3.6.1.4.1.9.1.1068    # Catalyst C2975Stack
+  - 1.3.6.1.4.1.9.1.1087    # Catalyst WSCBS3140XS
+  - 1.3.6.1.4.1.9.1.1088    # Catalyst WSCBS3140GS
+  - 1.3.6.1.4.1.9.1.1089    # Catalyst WSCBS3042FSC
+  - 1.3.6.1.4.1.9.1.1090    # Catalyst WSCBS3150XS
+  - 1.3.6.1.4.1.9.1.1091    # Catalyst WSCBS3150GS
+  - 1.3.6.1.4.1.9.1.1092    # Catalyst WSCBS3052NEC
+  - 1.3.6.1.4.1.9.1.1104    # Catalyst WSC235048TD
+  - 1.3.6.1.4.1.9.1.1146    # Catalyst 296024LCS
+  - 1.3.6.1.4.1.9.1.1147    # Catalyst 296024PCS
+  - 1.3.6.1.4.1.9.1.1148    # Catalyst 296048PSTS
+  - 1.3.6.1.4.1.9.1.1178    # Catalyst 4948e10GE
+  - 1.3.6.1.4.1.9.1.1179    # Catalyst 2960x48tsS
+  - 1.3.6.1.4.1.9.1.1180    # Catalyst 2960x24tsS
+  - 1.3.6.1.4.1.9.1.1181    # Catalyst 2960xs48fpdL
+  - 1.3.6.1.4.1.9.1.1182    # Catalyst 2960xs48lpdL
+  - 1.3.6.1.4.1.9.1.1183    # Catalyst 2960xs48ltdL
+  - 1.3.6.1.4.1.9.1.1184    # Catalyst 2960xs24pdL
+  - 1.3.6.1.4.1.9.1.1185    # Catalyst 2960xs24tdL
+  - 1.3.6.1.4.1.9.1.1186    # Catalyst 2960xs48fpsL
+  - 1.3.6.1.4.1.9.1.1187    # Catalyst 2960xs48lpsL
+  - 1.3.6.1.4.1.9.1.1188    # Catalyst 2960xs24psL
+  - 1.3.6.1.4.1.9.1.1190    # Catalyst 2960xs24tsL
+  - 1.3.6.1.4.1.9.1.1208    # Catalyst 29xxStack
+  - 1.3.6.1.4.1.9.1.1222    # Catalyst 3750x24
+  - 1.3.6.1.4.1.9.1.1223    # Catalyst 3750x48
+  - 1.3.6.1.4.1.9.1.1224    # Catalyst 3750x24P
+  - 1.3.6.1.4.1.9.1.1225    # Catalyst 3750x48P
+  - 1.3.6.1.4.1.9.1.1226    # Catalyst 3560x24
+  - 1.3.6.1.4.1.9.1.1227    # Catalyst 3560x48
+  - 1.3.6.1.4.1.9.1.1228    # Catalyst 3560x24P
+  - 1.3.6.1.4.1.9.1.1229    # Catalyst 3560x48P
+  - 1.3.6.1.4.1.9.1.1256    # Catalyst WsC2960s48tsS
+  - 1.3.6.1.4.1.9.1.1257    # Catalyst WsC2960s24tsS
+  - 1.3.6.1.4.1.9.1.1258    # Catalyst WsC2960s48fpdL
+  - 1.3.6.1.4.1.9.1.1259    # Catalyst WsC2960s48ldpL
+  - 1.3.6.1.4.1.9.1.1260    # Catalyst WsC2960s48tdL
+  - 1.3.6.1.4.1.9.1.1261    # Catalyst WsC2960s24pdL
+  - 1.3.6.1.4.1.9.1.1262    # Catalyst WsC2960s24tdL
+  - 1.3.6.1.4.1.9.1.1263    # Catalyst WsC2960s48fpsL
+  - 1.3.6.1.4.1.9.1.1264    # Catalyst WsC2960s48lpsL
+  - 1.3.6.1.4.1.9.1.1265    # Catalyst WsC2960s24psL
+  - 1.3.6.1.4.1.9.1.1266    # Catalyst WsC2960s48tsL
+  - 1.3.6.1.4.1.9.1.1267    # Catalyst WsC2960s24tsL
+  - 1.3.6.1.4.1.9.1.1286    # Catalyst 4507rpluse
+  - 1.3.6.1.4.1.9.1.1287    # Catalyst 4510rpluse
+  - 1.3.6.1.4.1.9.1.1292    # Catalyst WSC236048tdS
+  - 1.3.6.1.4.1.9.1.1300    # Catalyst WsC3750v224fsS
+  - 1.3.6.1.4.1.9.1.1315    # Catalyst 2960cPD8PT
+  - 1.3.6.1.4.1.9.1.1316    # Catalyst 2960cG8TC
+  - 1.3.6.1.4.1.9.1.1317    # Catalyst 3560cG8PC
+  - 1.3.6.1.4.1.9.1.1318    # Catalyst 3560cG8TC
+  - 1.3.6.1.4.1.9.1.1327    # Catalyst 4948ef10GE
+  - 1.3.6.1.4.1.9.1.1328    # Catalyst 292824TCC
+  - 1.3.6.1.4.1.9.1.1329    # Catalyst 292848TCC
+  - 1.3.6.1.4.1.9.1.1330    # Catalyst 292824LTC
+  - 1.3.6.1.4.1.9.1.1364    # Catalyst wsC2960C8tcS
+  - 1.3.6.1.4.1.9.1.1365    # Catalyst wsC2960C8tcL
+  - 1.3.6.1.4.1.9.1.1366    # Catalyst wsC2960C8pcL
+  - 1.3.6.1.4.1.9.1.1367    # Catalyst wsC2960C12pcL
+  - 1.3.6.1.4.1.9.1.1368    # Catalyst wsC3560CPD8ptS
+  - 1.3.6.1.4.1.9.1.1404    # Catalyst 3750x24s
+  - 1.3.6.1.4.1.9.1.1405    # Catalyst 3750x12s
+  - 1.3.6.1.4.1.9.1.1465    # Catalyst wsC3560C12pcS
+  - 1.3.6.1.4.1.9.1.1466    # Catalyst wsC3560C8pcS
+  - 1.3.6.1.4.1.9.1.1529    # Catalyst 6500 Network Analysis Module
+  - 1.3.6.1.4.1.9.1.1605    # Catalyst 4500X16
+  - 1.3.6.1.4.1.9.1.1606    # Catalyst 4500X32
+  - 1.3.6.1.4.1.9.1.1641    # Catalyst 385048P
+  - 1.3.6.1.4.1.9.1.1642    # Catalyst 385024P
+  - 1.3.6.1.4.1.9.1.1643    # Catalyst 385048
+  - 1.3.6.1.4.1.9.1.1644    # Catalyst 385024
+  - 1.3.6.1.4.1.9.1.1690    # Catalyst WsC2960x48fpdL
+  - 1.3.6.1.4.1.9.1.1691    # Catalyst WsC2960x48lpdL
+  - 1.3.6.1.4.1.9.1.1692    # Catalyst WsC2960x48tdL
+  - 1.3.6.1.4.1.9.1.1693    # Catalyst WsC2960x24pdL
+  - 1.3.6.1.4.1.9.1.1694    # Catalyst WsC2960x24tdL
+  - 1.3.6.1.4.1.9.1.1695    # Catalyst WsC2960x48fpsL
+  - 1.3.6.1.4.1.9.1.1696    # Catalyst WsC2960x48lpsL
+  - 1.3.6.1.4.1.9.1.1697    # Catalyst WsC2960x24psL
+  - 1.3.6.1.4.1.9.1.1698    # Catalyst WsC2960x48tsL
+  - 1.3.6.1.4.1.9.1.1699    # Catalyst WsC2960x24tsL
+  - 1.3.6.1.4.1.9.1.1700    # Catalyst WsC2960x24psqL
+  - 1.3.6.1.4.1.9.1.1701    # Catalyst WsC2960x48lpsS
+  - 1.3.6.1.4.1.9.1.1702    # Catalyst WsC2960x24psS
+  - 1.3.6.1.4.1.9.1.1703    # Catalyst WsC2960x48tsLL
+  - 1.3.6.1.4.1.9.1.1704    # Catalyst WsC2960x24tsLL
+  - 1.3.6.1.4.1.9.1.1710    # Catalyst 3560x48U
+  - 1.3.6.1.4.1.9.1.1711    # Catalyst 3560x24U
+  - 1.3.6.1.4.1.9.1.1712    # Catalyst 3750x48U
+  - 1.3.6.1.4.1.9.1.1713    # Catalyst 3750x24U
+  - 1.3.6.1.4.1.9.1.1732    # Catalyst 4xxxVirtualSwitch
+  - 1.3.6.1.4.1.9.1.1745    # Catalyst 38xx Stack
+  - 1.3.6.1.4.1.9.1.1748    # Catalyst 2960-Plus
+  - 1.3.6.1.4.1.9.1.1750    # Catalyst C2960P24LcL
+  - 1.3.6.1.4.1.9.1.1751    # Catalyst C2960P48TcL
+  - 1.3.6.1.4.1.9.1.1752    # Catalyst C2960P24TcL
+  - 1.3.6.1.4.1.9.1.1753    # Catalyst C2960P48PstS
+  - 1.3.6.1.4.1.9.1.1754    # Catalyst C2960P24PcS
+  - 1.3.6.1.4.1.9.1.1755    # Catalyst C2960P24LcS
+  - 1.3.6.1.4.1.9.1.1756    # Catalyst C2960P48TcS
+  - 1.3.6.1.4.1.9.1.1757    # Catalyst C2960P24TcS
+  - 1.3.6.1.4.1.9.1.1765    # Catalyst C6807xl
+  - 1.3.6.1.4.1.9.1.1767    # Catalyst 385024U
+  - 1.3.6.1.4.1.9.1.1768    # Catalyst 385048U
+  - 1.3.6.1.4.1.9.1.1784    # Catalyst C6880xle
+  - 1.3.6.1.4.1.9.1.1796    # Catalyst 45Sup8e
+  - 1.3.6.1.4.1.9.1.1797    # Catalyst WsC2960XR48FpdI
+  - 1.3.6.1.4.1.9.1.1798    # Catalyst WsC2960XR48LpdI
+  - 1.3.6.1.4.1.9.1.1799    # Catalyst WsC2960XR48TdI
+  - 1.3.6.1.4.1.9.1.1800    # Catalyst WsC2960XR24PdI
+  - 1.3.6.1.4.1.9.1.1801    # Catalyst WsC2960XR24TdI
+  - 1.3.6.1.4.1.9.1.1802    # Catalyst WsC2960XR48FpsI
+  - 1.3.6.1.4.1.9.1.1803    # Catalyst WsC2960XR48LpsI
+  - 1.3.6.1.4.1.9.1.1804    # Catalyst WsC2960XR48TsI
+  - 1.3.6.1.4.1.9.1.1805    # Catalyst WsC2960XR24PsI
+  - 1.3.6.1.4.1.9.1.1806    # Catalyst WsC2960XR24TsI
+  - 1.3.6.1.4.1.9.1.1823    # Catalyst C365024TS
+  - 1.3.6.1.4.1.9.1.1824    # Catalyst C365048TS
+  - 1.3.6.1.4.1.9.1.1825    # Catalyst C365024PS
+  - 1.3.6.1.4.1.9.1.1826    # Catalyst C365048PS
+  - 1.3.6.1.4.1.9.1.1827    # Catalyst C365024TD
+  - 1.3.6.1.4.1.9.1.1828    # Catalyst C365048TD
+  - 1.3.6.1.4.1.9.1.1829    # Catalyst C365024PD
+  - 1.3.6.1.4.1.9.1.1830    # Catalyst C365048PD
+  - 1.3.6.1.4.1.9.1.1866    # Catalyst C6800ia48fpdL
+  - 1.3.6.1.4.1.9.1.1867    # Catalyst C6800ia48tdL
+  - 1.3.6.1.4.1.9.1.1879    # Catalyst C385024S
+  - 1.3.6.1.4.1.9.1.1880    # Catalyst C385012S
+  - 1.3.6.1.4.1.9.1.1881    # Catalyst C365048PQ
+  - 1.3.6.1.4.1.9.1.1882    # Catalyst C365048TQ
+  - 1.3.6.1.4.1.9.1.1934    # Catalyst C68xxVirtualSwitch
+  - 1.3.6.1.4.1.9.1.1936    # Catalyst C6880x
+  - 1.3.6.1.4.1.9.1.2026    # Catalyst 5700 Series Wireless Controller
+  - 1.3.6.1.4.1.9.1.2066    # Catalyst 3650-24PS-L
+  - 1.3.6.1.4.1.9.1.2079    # Cisco IE40008GT8GP4GE
+  - 1.3.6.1.4.1.9.1.2130    # Catalyst wsC3560CX8ptS
+  - 1.3.6.1.4.1.9.1.2131    # Catalyst wsC3560CX8XpdS
+  - 1.3.6.1.4.1.9.1.2132    # Catalyst wsC3560CX12pdS
+  - 1.3.6.1.4.1.9.1.2133    # Catalyst wsC3560CX12tcS
+  - 1.3.6.1.4.1.9.1.2134    # Catalyst wsC3560CX12pcS
+  - 1.3.6.1.4.1.9.1.2135    # Catalyst wsC3560CX8tcS
+  - 1.3.6.1.4.1.9.1.2136    # Catalyst wsC3560CX8pcS
+  - 1.3.6.1.4.1.9.1.2137    # Catalyst wsC2960CX8tcL
+  - 1.3.6.1.4.1.9.1.2162    # Catalyst C385012XS
+  - 1.3.6.1.4.1.9.1.2163    # Catalyst C385024XS
+  - 1.3.6.1.4.1.9.1.2164    # Catalyst C385048XS
+  - 1.3.6.1.4.1.9.1.2165    # Catalyst C385012X48U
+  - 1.3.6.1.4.1.9.1.2166    # Catalyst C385024XU
+  - 1.3.6.1.4.1.9.1.2191    # Catalyst WSC2960CX8PCL
+  - 1.3.6.1.4.1.9.1.2273    # Catalyst C6816xle
+  - 1.3.6.1.4.1.9.1.2274    # Catalyst C6832xle
+  - 1.3.6.1.4.1.9.1.2275    # Catalyst C6824xle
+  - 1.3.6.1.4.1.9.1.2276    # Catalyst C6840xle
+  - 1.3.6.1.4.1.9.1.2277    # Catalyst 35xxStack
+  - 1.3.6.1.4.1.9.1.2360    # Catalyst WSC2960L8TSLL
+  - 1.3.6.1.4.1.9.1.2361    # Catalyst WSC2960L8PSLL
+  - 1.3.6.1.4.1.9.1.2362    # Catalyst WSC2960L16TSLL
+  - 1.3.6.1.4.1.9.1.2363    # Catalyst WSC2960L16PSLL
+  - 1.3.6.1.4.1.9.1.2364    # Catalyst WSC2960L24TSLL
+  - 1.3.6.1.4.1.9.1.2365    # Catalyst WSC2960L24PSLL
+  - 1.3.6.1.4.1.9.1.2366    # Catalyst WSC2960L48TSLL
+  - 1.3.6.1.4.1.9.1.2367    # Catalyst WSC2960L48PSLL
+  - 1.3.6.1.4.1.9.1.2368    # Cisco IE40104S24P
+  - 1.3.6.1.4.1.9.1.2398    # Catalyst CDB8U
+  - 1.3.6.1.4.1.9.1.2399    # Catalyst CDB8P
+  - 1.3.6.1.4.1.9.1.2491    # Catalyst WSC365048TSE
+  - 1.3.6.1.4.1.9.1.2494    # Catalyst 9300
+  - 1.3.6.1.4.1.9.1.2495    # Catalyst WSC2960L24TQLL
+  - 1.3.6.1.4.1.9.1.2496    # Catalyst WSC2960L48TQLL
+  - 1.3.6.1.4.1.9.1.2497    # Catalyst WSC2960L24PQLL
+  - 1.3.6.1.4.1.9.1.2498    # Catalyst WSC2960L48PQLL
+  - 1.3.6.1.4.1.9.1.2499    # Catalyst 9404R
+  - 1.3.6.1.4.1.9.1.2500    # Catalyst 9400 Series 7 Slot
+  - 1.3.6.1.4.1.9.1.2501    # Catalyst 9400 Series 10 Slot
+  - 1.3.6.1.4.1.9.1.2564    # Catalyst 9300-48UN
+  - 1.3.6.1.4.1.9.1.2568    # Catalyst 950048Y4C
+  - 1.3.6.1.4.1.9.1.2593    # Catalyst 9500
+  - 1.3.6.1.4.1.9.1.2664    # Catalyst 9400
+  - 1.3.6.1.4.1.9.1.2688    # Catalyst 9500 Virtual
+  - 1.3.6.1.4.1.9.1.2694    # Catalyst 9200
+  - 1.3.6.1.4.1.9.1.2695    # Catalyst 9200R
+  - 1.3.6.1.4.1.9.1.2804    # Catalyst 9300L Stack
+  - 1.3.6.1.4.1.9.1.2897    # Catalyst 1000-48T-4X-L
+  - 1.3.6.1.4.1.9.1.2959    # Catalyst 1000-24T-4G-L
+  #- 1.3.6.1.4.1.9.1.3074    # Catalyst 8200L-1N-4T
+  - 1.3.6.1.4.1.9.1.3085    # Catalyst 8500-20X6C
+  - 1.3.6.1.4.1.9.1.3078    # Catalyst 9200CX-12T-2X2G
+  - 1.3.6.1.4.1.9.1.3079    # Catalyst 9200CX-12P-2X2G
+  - 1.3.6.1.4.1.9.1.3097    # Catalyst 9200CX-8P-2X2G
+  - 1.3.6.1.4.1.9.1.3098    # Catalyst 9200CX-8PT-2G
+  - 1.3.6.1.4.1.9.1.3099    # Catalyst 9200CX-8UXG-2X
+  - 1.3.6.1.4.1.9.1.3164    # Catalyst 9200CX-12P-2XGH
+  - 1.3.6.1.4.1.9.1.3195    # Catalyst 9200CX-8P-2XGH
+  - 1.3.6.1.4.1.9.1.3196    # Catalyst 9200CX-8UXG-2XH
+  - 1.3.6.1.4.1.9.1.2573    # Catalyst 9500-24Y4C
+  - 1.3.6.1.4.1.9.1.2567    # Catalyst 9500-32QC
+  - 1.3.6.1.4.1.9.1.2990    # Catalyst C8300-1N1S-4T2X
+  - 1.3.6.1.4.1.9.6.1.83.10.1    # SG300-10 Managed Switch
+  - 1.3.6.1.4.1.9.6.1.83.52.2    # SG300-52P Managed Switch
+  - 1.3.6.1.4.1.9.12.3.1.3.843    # MDS 9148 Multilayer Fabric Switch
+
+metrics:
+  - MIB: CISCO-IF-EXTENSION-MIB
+    is_interface: true
+    table:
+      OID: 1.3.6.1.4.1.9.9.276.1.1.1
+      name: cieIfPacketStatsTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.276.1.1.1.1.1
+        name: cieIfLastInTime
+        format: gauge
+      - OID: 1.3.6.1.4.1.9.9.276.1.1.1.1.2
+        name: cieIfLastOutTime
+        format: gauge
+      - OID: 1.3.6.1.4.1.9.9.276.1.1.1.1.10
+        name: cieIfInputQueueDrops
+      - OID: 1.3.6.1.4.1.9.9.276.1.1.1.1.11
+        name: cieIfOutputQueueDrops
+    metric_tags:
+      - MIB: IF-MIB
+        column:
+          OID: 1.3.6.1.2.1.31.1.1.1.1
+          name: ifName
+        table: ifXTable
+        tag: if_interface_name

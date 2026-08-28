@@ -1,0 +1,79 @@
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-appliance
+
+sysobjectid:
+  - 1.3.6.1.4.1.43356.*   # Mimosa
+
+metrics:
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.2.5.0
+      name: mimosaSatelliteStrength
+      enum:
+        good: 1
+        bad: 0
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.3.3.0
+      name: mimosaWanStatus
+      enum:
+        connected: 1
+        disconnected: 0        
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.3.4.0
+      name: mimosaWanUpTime
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.7.1.0
+      name: mimosaPhyTxRate
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.7.2.0
+      name: mimosaPhyRxRate
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.7.3.0
+      name: mimosaPerTxRate
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.7.4.0
+      name: mimosaPerRxRate
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.1.5.0
+      name: mimosaLastRebootTime
+  - MIB: MIMOSA-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.43356.2.1.2.1.8.0
+      name: mimosaInternalTemp   
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.43356.2.1.2.1.1.0
+      name: mimosaDeviceName
+    tag: mimosa_devicename
+  - column:
+      OID: 1.3.6.1.4.1.43356.2.1.2.1.2.0
+      name: mimosaSerialNumber
+    tag: serial_number
+  - column:
+      OID: 1.3.6.1.4.1.43356.2.1.2.1.3.0
+      name: mimosaFirmwareVersion
+    tag: firmware_version
+  - column:
+      OID: 1.3.6.1.4.1.43356.2.1.2.1.4.0
+      name: mimosaFirmwareBuildDate
+    tag: firmware_build
+  - column:
+      OID: 1.3.6.1.4.1.43356.2.1.2.3.1.0
+      name: mimosaWanSsid
+    tag: mimosa_wan_ssid
+  - column:
+      OID: 1.3.6.1.4.1.43356.2.1.2.3.2.0
+      name: mimosaWanMac
+      conversion: hwaddr
+    tag: mimosa_wan_mac

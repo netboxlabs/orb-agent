@@ -1,0 +1,588 @@
+# https://mibs.observium.org/mib/A10-AX-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - ospf-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.22610.1.3.*     # A10 Thunder
+  - 1.3.6.1.4.1.22610.1.3.20    # TH6430
+  - 1.3.6.1.4.1.22610.1.3.21    # TH5430
+  - 1.3.6.1.4.1.22610.1.3.22    # TH3030S
+  - 1.3.6.1.4.1.22610.1.3.23    # TH1030S
+  - 1.3.6.1.4.1.22610.1.3.24    # TH930S
+  - 1.3.6.1.4.1.22610.1.3.25    # TH4430
+  - 1.3.6.1.4.1.22610.1.3.26    # TH5330
+  - 1.3.6.1.4.1.22610.1.3.27    # TH4330
+  - 1.3.6.1.4.1.22610.1.3.28    # TH5630
+  - 1.3.6.1.4.1.22610.1.3.29    # TH6630
+  - 1.3.6.1.4.1.22610.1.3.30    # TH3430S
+  - 1.3.6.1.4.1.22610.1.3.31    # TH5330S
+  - 1.3.6.1.4.1.22610.1.3.32    # TH5840S
+  - 1.3.6.1.4.1.22610.1.3.37    # TH7440S
+  - 1.3.6.1.4.1.22610.1.3.51    # TH3350S
+
+provider: kentik-load-balancer
+
+metrics:
+  - MIB: A10-AX-MIB
+    symbols:
+      # The total memory (KB).
+      # Polled at 60s to support anomaly detection
+      - name: axSysMemoryTotal
+        OID: 1.3.6.1.4.1.22610.2.4.1.2.1.0
+        poll_time_sec: 60
+        tag: MemoryTotal
+      # The used memory (KB).
+      # Polled at 60s to support anomaly detection
+      - name: axSysMemoryUsage
+        OID: 1.3.6.1.4.1.22610.2.4.1.2.2.0
+        poll_time_sec: 60
+        tag: MemoryUsed
+      # The average CPU usage in last 5 seconds.
+      # Polled at 60s to support anomaly detection
+      - name: axSysAverageCpuUsage
+        OID: 1.3.6.1.4.1.22610.2.4.1.3.3.0
+        poll_time_sec: 60
+        tag: CPU
+      #Average A10 Load Balancer Average Control CPU Usag
+      - name: axSysAverageCtlCpuUsage
+        OID: 1.3.6.1.4.1.22610.2.4.1.3.4.0
+      #Average A10 Load Balancer Average Data CPU Usag
+      - name: axSysAverageDataCpuUsage
+        OID: 1.3.6.1.4.1.22610.2.4.1.3.5.0
+      # The total space of the disk in MB.
+      - name: axSysDiskTotalSpace
+        OID: 1.3.6.1.4.1.22610.2.4.1.4.1.0
+      # The free space of the disk in MB.
+      - name: axSysDiskFreeSpace
+        OID: 1.3.6.1.4.1.22610.2.4.1.4.2.0
+      # The physical system temperature in Celsius.
+      - name: axSysHwPhySystemTemp
+        OID: 1.3.6.1.4.1.22610.2.4.1.5.1.0
+      # The total voltage in use by the PSUs
+      - name: axPowerSupplyVoltageTotal
+        OID: 1.3.6.1.4.1.22610.2.4.1.5.10.0
+      # Total current connections
+      - name: axAppGlobalTotalCurrentConnections
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.1.0
+      # Total new connections
+      - name: axAppGlobalTotalNewConnections
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.2.0
+      # Total new L4 connections
+      - name: axAppGlobalTotalNewL4Connections
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.3.0
+      # Total new L7 connections
+      - name: axAppGlobalTotalNewL7Connections
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.4.0
+      # Total new IP-NAT connections
+      - name: axAppGlobalTotalNewIPNatConnections
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.5.0
+      # Total new SSL connections
+      - name: axAppGlobalTotalSSLConnections
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.6.0
+      # Total L7 requests
+      - name: axAppGlobalTotalL7Requests
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.7.0
+      # Total number of buffer drops in the last 10 seconds.
+      - name: axAppGlobalAppPacketDrop
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.8.0
+      # Total number of accumulative buffer drops.
+      - name: axAppGlobalTotalAppPacketDrop
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.9.0
+      # Total number of L4 sessions.
+      - name: axAppGlobalTotalL4Session
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.10.0
+      # Total throughput (bytes) of all the interfaces
+      - name: axAppGlobalTotalThroughput
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.2.13.0
+      # Application buffer configured limit.
+      - name: axAppGlobalBufferConfigLimit
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.3.1.0
+      # Application buffer current usage.
+      - name: axAppGlobalBufferCurrentUsage
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.3.2.0
+      # The total count of open persistent connection-reuse sessions.
+      - name: axConnReuseStatTotalOpenPersist
+        OID: 1.3.6.1.4.1.22610.2.4.3.5.1.0
+      # The total count of active persistent connection-reuse sessions.
+      - name: axConnReuseStatTotalActivePersist
+        OID: 1.3.6.1.4.1.22610.2.4.3.5.2.0
+      # The total count of established connection-reuse sessions.
+      - name: axConnReuseStatTotalEstablished
+        OID: 1.3.6.1.4.1.22610.2.4.3.5.3.0
+      # The total count of terminated connection-reuse sessions.
+      - name: axConnReuseStatTotalTerminated
+        OID: 1.3.6.1.4.1.22610.2.4.3.5.4.0
+      # The count of TCP established.
+      - name: axSessionGlobalStatTCPEstablished
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.1.0
+      # The count of TCP half open.
+      - name: axSessionGlobalStatTCPHalfOpen
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.2.0
+      # The count of UDP connections.
+      - name: axSessionGlobalStatUDP
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.3.0
+      # The count of non TCP/UDP IP sessions.
+      - name: axSessionGlobalStatNonTdpIPSession
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.4.0
+      # The count of other sessions.
+      - name: axSessionGlobalStatOther
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.5.0
+      # The count of reverse NAT TCP.
+      - name: axSessionGlobalStatReverseNATTCP
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.6.0
+      # The count of reverse NAT UDP.
+      - name: axSessionGlobalStatReverseNATUDP
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.7.0
+      # The count of free current connections.
+      - name: axSessionGlobalStatFreeCurrentConns
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.9.0
+      # The count of current connections.
+      - name: axSessionGlobalStatConnCount
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.10.0
+      # The count of freed connections.
+      - name: axSessionGlobalStatConnFree
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.11.0
+      # The count of TCP SYN half open.
+      - name: axSessionGlobalStatTCPSynHalfOpen
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.12.0
+      # The count of allocated SMP connections.
+      - name: axSessionGlobalStatConnSMPAllocated
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.13.0
+      # The count of free SMP connections.
+      - name: axSessionGlobalStatConnSMPFree
+        OID: 1.3.6.1.4.1.22610.2.4.3.19.1.14.0
+
+
+  # The table contains system fan status for AX 2500/2600/3000/5100/5200 only.
+  - MIB: A10-AX-MIB
+    table:
+      name: axSysFanStatusTable
+      OID: 1.3.6.1.4.1.22610.2.4.1.5.9
+    symbols:
+      # Fan status
+      - name: axFanStatus
+        OID: 1.3.6.1.4.1.22610.2.4.1.5.9.1.3
+        conversion: to_one
+        enum:
+          failed: 0
+          ok_fixed_high: 4
+          ok_low_med: 5
+          ok_med_med: 6
+          ok_med_high: 7
+          not_ready: -2
+          unknown: -1
+      # Fan speed
+      - name: axFanSpeed
+        OID: 1.3.6.1.4.1.22610.2.4.1.5.9.1.4
+    metric_tags:
+      # The system fan name
+      - column:
+          name: axFanName
+          OID: 1.3.6.1.4.1.22610.2.4.1.5.9.1.2
+
+  # A table of the system power supply voltage status
+  - MIB: A10-AX-MIB
+    table:
+      name: axPowerSupplyVoltageTable
+      OID: 1.3.6.1.4.1.22610.2.4.1.5.11
+    symbols:
+      # The status of the power supply voltage
+      - name: axPowerSupplyVoltageStatus
+        OID: 1.3.6.1.4.1.22610.2.4.1.5.11.1.2
+        enum:
+          invalid: 0
+          normal: 1
+          unknown: 2
+    metric_tags:
+      # The description of the system power supply
+      - column:
+          name: axPowerSupplyVoltageDescription
+          OID: 1.3.6.1.4.1.22610.2.4.1.5.11.1.3
+
+  # A table of power supply statuses
+  - MIB: A10-AX-MIB
+    table:
+      name: axSysPowerSupplyStatusTable
+      OID: 1.3.6.1.4.1.22610.2.4.1.5.12
+    symbols:
+      # The power supply status
+      - name: axPowerSupplyStatus
+        OID: 1.3.6.1.4.1.22610.2.4.1.5.12.1.3
+        enum:
+          off: 0
+          on: 1
+          absent: 2
+          unknown: -1
+    metric_tags:
+      # The power supply name
+      - column:
+          name: axPowerSupplyName
+          OID: 1.3.6.1.4.1.22610.2.4.1.5.12.1.2
+
+  # A table has information of the system resource usages, it should contains the results as the CLI command, 'show system resouce-usage'
+  - MIB: A10-AX-MIB
+    table:
+      name: axAppGlobalSystemResourceUsageTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.1.1.1
+    symbols:
+      # The current value for the allowed system resource.
+      - name: axAppGlobalAllowedCurrentValue
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.1.1.1.3
+      # The maximum value for the allowed system resource.
+      - name: axAppGlobalAllowedMaxValue
+        OID: 1.3.6.1.4.1.22610.2.4.3.1.1.1.1.6
+    metric_tags:
+      # The system resource name. 
+      - column:
+          name: axAppGlobalSystemResourceName
+          OID: 1.3.6.1.4.1.22610.2.4.3.1.1.1.1.2
+
+  # A table has information of the servers.
+  - MIB: A10-AX-MIB
+    table:
+      name: axServerTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.2.1.2
+    symbols:
+      # The monitor state for this node address.
+      - name: axServerEnabledState
+        OID: 1.3.6.1.4.1.22610.2.4.3.2.1.2.1.3
+        enum:
+          disabled: 0
+          enabled: 1
+      # The server monitor status
+      - name: axServerMonitorState
+        OID: 1.3.6.1.4.1.22610.2.4.3.2.1.2.1.5
+        enum:
+          disabled: 0
+          up: 1
+          down: 2
+    metric_tags:
+      # The name of the server
+      - column:
+          name: axServerName
+          OID: 1.3.6.1.4.1.22610.2.4.3.2.1.2.1.1
+
+  # A table containing statistic information of node addresses.
+  - MIB: A10-AX-MIB
+    table:
+      name: axServerStatTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.2.2.2
+    symbols:
+      # The current connections from server side.
+      - name: axServerStatServerCurConns
+        OID: 1.3.6.1.4.1.22610.2.4.3.2.2.2.1.8
+      # The server status.
+      - name: axServerStatServerStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.2.2.2.1.10
+        enum:
+          disabled: 0
+          up: 1
+          down: 2
+      # The number of current L7 requests if applicable.
+      - name: axServerStatServerTotalCurrL7Reqs
+        OID: 1.3.6.1.4.1.22610.2.4.3.2.2.2.1.12
+    metric_tags:
+      # The server name.
+      - column:
+          name: axServerStatName
+          OID: 1.3.6.1.4.1.22610.2.4.3.2.2.2.1.2
+
+  # A table containing information of service groups.
+  - MIB: A10-AX-MIB
+    table:
+      name: axServiceGroupTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.3.1.2
+    symbols:
+      # The display status of the service group
+      - name: axServiceGroupDisplayStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.3.1.2.1.4
+        enum:
+          allUp: 1
+          functionalUp: 2
+          partialUp: 3
+          stopped: 4
+    metric_tags:
+      # The service group name.
+      - column:
+          name: axServiceGroupName
+          OID: 1.3.6.1.4.1.22610.2.4.3.3.1.2.1.1
+      # The type of service group.
+      - column:
+          name: axServiceGroupType
+          OID: 1.3.6.1.4.1.22610.2.4.3.3.1.2.1.2
+          enum:
+            firewall: 1
+            tcp: 2
+            udp: 3
+      # The load balance method for the service group.
+      - column:
+          name: axServiceGroupLbAlgorithm
+          OID: 1.3.6.1.4.1.22610.2.4.3.3.1.2.1.3
+          enum:
+            roundRobin: 0
+            weightRoundRobin: 1
+            leastConnection: 2
+            weightLeastConnection: 3
+            serviceLeastConnection: 4
+            serviceWeightLeastConnection: 5
+            fastResponseTime: 6
+            leastRequest: 7
+            roundRobinStrict: 8
+
+  # A table containing information of virtual servers.
+  - MIB: A10-AX-MIB
+    table:
+      name: axVirtualServerTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.4.1.2
+    symbols:
+      # Whether this virtual server is enabled.
+      - name: axVirtualServerEnabled
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.1.2.1.3
+        enum:
+          disabled: 0
+          enabled: 1
+      # The display status of this virtual server port.
+      - name: axVirtualServerDisplayStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.1.2.1.5
+        enum:
+          disabled: 0
+          allUp: 1
+          functionalUp: 2
+          partialUp: 3
+          stopped: 4
+    metric_tags:
+      # The name of this virtual server.
+      - column:
+          name: axVirtualServerName
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.1.2.1.1
+      # HA group name configured for the virtual server.
+      - column:
+          name: axVirtualServerHAGroup
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.1.2.1.4
+  # A table containing statistic information of virtual servers.
+  - MIB: A10-AX-MIB
+    table:
+      name: axVirtualServerNameStatTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1
+    symbols: 
+      # The number of packets received from client to server.
+      - name: axVirtualServerNameStatPktsIn	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.2
+      # The number of bytes received from client to server.
+      - name: axVirtualServerNameStatBytesIn
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.3
+      # The number of packets sent from server to client.
+      - name: axVirtualServerNameStatPktsOut
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.4
+      # The number of bytes sent from server to client.
+      - name: axVirtualServerNameStatBytesOut	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.5
+      # The persistent connections from client side.
+      - name: axVirtualServerNameStatPersistConns	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.6
+      # The total connections from client side.
+      - name: axVirtualServerNameStatTotConns	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.7
+      # The current connections from client side.
+      - name: axVirtualServerNameStatCurConns	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.8
+      # The current virtual server status.
+      - name: axVirtualServerNameStatStatus	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.9
+        enum:
+          up: 1
+          down: 2
+          disabled: 3
+      # The display status of this virtual server
+      - name: axVirtualServerNameStatDisplayStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.10
+        enum:
+          disabled: 0
+          allUp: 1
+          functionalUp: 2
+          partialUp: 3
+          stopped: 4
+      # The total number of L7 requests if applicable
+      - name: axVirtualServerNameStatTotalL7Reqs	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.11
+      # The number of current L7 requests if applicable
+      - name: axVirtualServerNameStatTotalCurrL7Reqs	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.12
+      # The number of successful L7 requests if applicable
+      - name: axVirtualServerNameStatTotalSuccL7Reqs	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.13
+    metric_tags:
+      # The name of this virtual server.
+      - column:
+          name: axVirtualServerStatDisplayName
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.5.1.1.1
+  # A table containing statistic information of virtual servers.
+  - MIB: A10-AX-MIB
+    table:
+      name: axVirtualServerStatTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1
+    symbols: 
+      # The number of packets received from client to server.
+      - name: axVirtualServerStatPktsIn	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.3
+      # The number of bytes received from client to server.
+      - name: axVirtualServerStatBytesIn	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.4
+      # The number of packets sent from server to client.
+      - name: axVirtualServerStatPktsOut	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.5
+      # The number of bytes sent from server to client.
+      - name: axVirtualServerStatBytesOut	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.6
+      # The persistent connections from client side.
+      - name: axVirtualServerStatPersistConns	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.7
+      # The total connections from client side.
+      - name: axVirtualServerStatTotConns	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.8
+      # The current connections from client side.
+      - name: axVirtualServerStatCurConns	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.9
+      # The current virtual server status.
+      - name: axVirtualServerStatStatus	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.10
+        enum:
+          up: 1
+          down: 2
+          disabled: 3
+      # The display status of this virtual server
+      - name: axVirtualServerStatDisplayStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.11
+        enum:
+          disabled: 0
+          allUp: 1
+          functionalUp: 2
+          partialUp: 3
+          stopped: 4
+      # The total number of L7 requests if applicable
+      - name: axVirtualServerStatTotalL7Reqs	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.12
+      # The number of current L7 requests if applicable
+      - name: axVirtualServerStatTotalCurrL7Reqs	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.13
+      # The number of successful L7 requests if applicable
+      - name: axVirtualServerStatTotalSuccL7Reqs	
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.14
+    metric_tags:
+      # The address of this virtual server.
+      - column:
+          name: axVirtualServerStatAddress
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.1
+      # The name of this virtual server.
+      - column:
+          name: axVirtualServerStatName
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.2.1.1.2
+
+  # A table containing statistic information of virtual server service ports.
+  - MIB: A10-AX-MIB
+    table:
+      name: axVirtualServerPortStatTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1
+    symbols:
+      # The status of this virtual server port.
+      - name: axVirtualServerStatPortStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1.1.5
+        enum:
+          up: 1
+          down: 2
+          disabled: 3
+      # Current connections from client side.
+      - name: axVirtualServerPortStatCurConns
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1.1.12
+      # The display status of this virtual server port
+      - name: axVirtualServerStatPortDisplayStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1.1.13
+        enum:
+          disabled: 0
+          allUp: 1
+          functionalUp: 2
+          stopped: 4
+    metric_tags:
+      # The ip address of this virtual address.
+      - column:
+          name: axVirtualServerPortStatAddress
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1.1.1
+      # The port type of a virtual server port
+      - column:
+          name: axVirtualServerStatPortType
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1.1.2
+          enum:
+            firewall: 1
+            tcp: 2
+            udp: 3
+            rtsp: 8
+            ftp: 9
+            mms: 10
+            fastHTTP: 12
+            http: 14
+            https: 15
+            sslProxy: 16
+            smtp: 17
+            sip: 11
+            sips: 19
+            sip_tcp: 18
+            others: 5
+      # The service port number.
+      - column:
+          name: axVirtualServerStatPortNum
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1.1.3
+      # The name of the virtual server
+      - column:
+          name: axVirtualServerPortStatName
+          OID: 1.3.6.1.4.1.22610.2.4.3.4.4.1.1.4
+  # A table containing HA information.
+  - MIB: A10-AX-MIB
+    table:
+      name: axHAGroupStatusTable
+      OID: 1.3.6.1.4.1.22610.2.4.3.17.2.2
+    symbols:
+      - name: axHAGroupLocalStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.17.2.2.1.2
+        enum:
+          standby: 0
+          active: 1
+          notConfigured: 9
+      - name: axHAGroupLocalPriority
+        OID: 1.3.6.1.4.1.22610.2.4.3.17.2.2.1.3
+      - name: axHAGroupPeerStatus
+        OID: 1.3.6.1.4.1.22610.2.4.3.17.2.2.1.4
+        enum:
+          standby: 0
+          active: 1
+          notConfigured: 9
+      - name: axHAGroupPeerPriority
+        OID: 1.3.6.1.4.1.22610.2.4.3.17.2.2.1.5
+    metric_tags:
+      - column:
+          name: axHAGroupID
+          OID: 1.3.6.1.4.1.22610.2.4.3.17.2.2.1.1
+  #The CPU Usage
+  - MIB: A10-AX-MIB
+    table:
+      name: axSysCpuTable
+      OID: 1.3.6.1.4.1.22610.2.4.1.3.2
+    symbols:
+      - name: axSysCpuUsage
+        OID: 1.3.6.1.4.1.22610.2.4.1.3.2.1.2
+
+metric_tags:
+  # The system serial number.
+  - column:
+      name: axSysSerialNumber
+      OID: 1.3.6.1.4.1.22610.2.4.1.6.2.0
+  # The system firmware version.
+  - column:
+      name: axSysFirmwareVersion
+      OID: 1.3.6.1.4.1.22610.2.4.1.6.3.0
+  # The system aFlex engine version.
+  - column:
+      name: axSysAFleXEngineVersion
+      OID: 1.3.6.1.4.1.22610.2.4.1.6.4.0

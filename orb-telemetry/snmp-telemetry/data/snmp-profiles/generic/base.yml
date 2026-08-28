@@ -1,0 +1,9 @@
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - ip-mib.yml
+  - tcp-mib.yml
+  - udp-mib.yml
+  - ospf-mib.yml
+
+sysobjectid: 1.3.6.1.4.*

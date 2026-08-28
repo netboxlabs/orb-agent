@@ -1,0 +1,57 @@
+# https://mibs.observium.org/mib/HH3C-PRODUCT-ID-MIB/
+# https://mibs.observium.org/mib/HH3C-ENTITY-EXT-MIB/
+# https://mibs.observium.org/mib/HH3C-POWER-ETH-EXT-MIB/
+# https://mibs.observium.org/mib/HH3C-ENTITY-EXT-MIB/
+---
+
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.25506.11.1.*    # H3C Switches
+
+metrics:
+  # CPU Utilization for all running processes
+  - MIB: HH3C-ENTITY-EXT-MIB
+    table:
+      OID: 1.3.6.1.4.1.25506.2.6.1.4.1
+      name: hh3cProcessTable
+    symbols:
+      - OID: 1.3.6.1.4.1.25506.2.6.1.4.1.1.3
+        name: hh3cProcessUtil5Min
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.25506.2.6.1.4.1.1.1
+          name: hh3cProcessID
+      - column:
+          OID: 1.3.6.1.4.1.25506.2.6.1.4.1.1.2
+          name: hh3cProcessName
+  # CPU and Memory for the switch, limited to the "Board" sensors
+  - MIB: HH3C-ENTITY-EXT-MIB
+    table:
+      OID: 1.3.6.1.4.1.25506.2.6.1.1.1
+      name: hh3cEntityExtStateTable
+    symbols:
+      - OID: 1.3.6.1.4.1.25506.2.6.1.1.1.1.6
+        name: hh3cEntityExtCpuUsage
+        poll_time_sec: 60
+        tag: CPU
+      - OID: 1.3.6.1.4.1.25506.2.6.1.1.1.1.8
+        name: hh3cEntityExtMemUsage
+        poll_time_sec: 60
+        tag: MemoryUtilization
+    metric_tags:
+      - MIB: HH3C-ENTITY-EXT-MIB
+        column:
+          OID: 1.3.6.1.4.1.25506.2.6.1.1.1.1.1
+          name: hh3cEntityExtPhysicalIndex
+      - MIB: ENTITY-MIB
+        column:
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+          name: entPhysicalName
+          match_attributes:
+            - "Board"
+        tag: sensor_name

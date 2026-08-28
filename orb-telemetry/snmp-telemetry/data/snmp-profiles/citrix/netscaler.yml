@@ -1,0 +1,877 @@
+# https://mibs.observium.org/mib/NS-ROOT-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-load-balancer
+
+sysobjectid:
+  - 1.3.6.1.4.1.5951.1    # NetScaler root
+
+metrics:
+  # CPU utilization percentage
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: resCpuUsage
+      OID: 1.3.6.1.4.1.5951.4.1.1.41.1.0
+      poll_time_sec: 60
+      tag: CPU
+  # Percentage of memory utilization on NetScaler
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: resMemUsage
+      OID: 1.3.6.1.4.1.5951.4.1.1.41.2.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  # This shows whether NetScaler is in standalone mode or whether it is primary or secondary in case of failover mode
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: sysHighAvailabilityMode
+      OID: 1.3.6.1.4.1.5951.4.1.1.6.0
+      enum:
+        standalone: 0
+        primary: 1
+        secondary: 2
+        unknown: 3
+  # This represents the state of the failover peer NetScaler whether Primary or Secondary
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: haPeerState
+      OID: 1.3.6.1.4.1.5951.4.1.1.23.3.0
+      enum:
+        standalone: 0
+        primary: 1
+        secondary: 2
+        unknown: 3
+  # Total number of master state changes that the NetScaler appliance has made from primary to secondary and vice-versa
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: haTotStateTransitions
+      OID: 1.3.6.1.4.1.5951.4.1.1.23.4.0
+  # This represents the time since the NetScaler underwent a state change from primary to secondary or vice-versa
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: haTimeofLastStateTransition
+      OID: 1.3.6.1.4.1.5951.4.1.1.23.5.0
+  # Whether a NetScaler appliance is configured for high availability
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: haCurStatus
+      OID: 1.3.6.1.4.1.5951.4.1.1.23.23.0
+      enum:
+        no: 0
+        yes: 1
+  # State of the HA node, based on its health, in a high availability setup
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: haCurState
+      OID: 1.3.6.1.4.1.5951.4.1.1.23.24.0
+      enum:
+        unknown: 0
+        init: 1
+        down: 2
+        up: 3
+        partialFail: 4
+        monitorFail: 5
+        monitorOk: 6
+        completeFail: 7
+        dumb: 8
+        disabled: 9
+        partialFailSsl: 10
+        routemonitorFail: 11
+  # Number of services defined on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: svcCount
+      OID: 1.3.6.1.4.1.5951.4.1.2.6.1.0
+  # Number of servers defined on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: serverCount
+      OID: 1.3.6.1.4.1.5951.4.1.2.6.2.0
+  # Number of service groups defined on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: svcgroupCount
+      OID: 1.3.6.1.4.1.5951.4.1.2.6.3.0
+  # Number of service group members defined on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: svcgroupmemCount
+      OID: 1.3.6.1.4.1.5951.4.1.2.6.4.0
+  # Number of services configured on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: syssvcCount
+      OID: 1.3.6.1.4.1.5951.4.1.2.6.5.0
+  # Number of configured services which are up on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: sysupsvcCount
+      OID: 1.3.6.1.4.1.5951.4.1.2.6.6.0
+  # Number of configured service items which are up on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: sysupvcitmCount
+      OID: 1.3.6.1.4.1.5951.4.1.2.6.7.0
+  # Total number of vservers configured on the NetScaler
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: curConfigVservers
+      OID: 1.3.6.1.4.1.5951.4.1.3.5.1.0
+  # Number of virtual server bindings on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: vsvrBindCount
+      OID: 1.3.6.1.4.1.5951.4.1.3.5.2.0
+  # Number of virtual server, service group bindings on this NetScaler appliance
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: vsvrSvcGroupBindCount
+      OID: 1.3.6.1.4.1.5951.4.1.3.5.3.0
+  # Total number of LB vservers configured on the NetScaler
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: curConfigLbVservers
+      OID: 1.3.6.1.4.1.5951.4.1.3.5.4.0
+  # Total number of GSLB vservers configured on the NetScaler
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: curConfigGslbVservers
+      OID: 1.3.6.1.4.1.5951.4.1.3.5.5.0
+  # Total count of spillovers
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: totSpilloverCount
+      OID: 1.3.6.1.4.1.5951.4.1.3.5.6.0
+  # Number of active SSL sessions
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: sslCurSessions
+      OID: 1.3.6.1.4.1.5951.4.1.1.47.296.0
+  # SSL sessions/second between client and NetScaler
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: sslSessionsPerSec
+      OID: 1.3.6.1.4.1.5951.4.1.1.47.3.0
+  # Current client connections in the Established state, which indicates that data transfer can occur between the NetScaler and the client.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpCurClientEstablished
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.12.0
+  # Port allocations that have failed on a mapped IP address because the maximum limit of 65536 has been exceeded.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpErrAnyPortFail
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.69.0
+  # Port allocations that have failed on a subnet IP address or vserver IP address because the maximum limit of 65536 has been exceeded.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpErrIpPortFail
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.70.0
+  # TCP packets retransmitted. The NetScaler attempts to retransmit the packet up to seven times, after which it resets the other half of the TCP connection.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpErrRetransmit
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.59.0
+  # TCP packets received.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpTotRxPkts
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.61.0
+  # TCP packets sent.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpTotTxPkts
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.63.0
+  # Total number of HTTP requests received with the GET method.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotGets
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.45.0
+  # Total number of HTTP requests received with the POST method.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotPosts
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.46.0
+  # Total number of HTTP requests received with methods other than GET and POST. Some of the other well-defined HTTP methods are HEAD, PUT, DELETE, OPTIONS, and TRACE. User-defined methods are also allowed.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotOthers
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.47.0
+  # Total number of bytes of HTTP request data received.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotRxRequestBytes
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.48.0
+  # Total number of bytes of HTTP response data received.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotRxResponseBytes
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.49.0
+  # Total number of bytes of HTTP request data transmitted.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotTxRequestBytes
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.50.0
+  # Total number of bytes of HTTP response data transmitted.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotTxResponseBytes
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.51.0
+  # Total number of HTTP/1.0 requests received.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTot10Requests
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.52.0
+  # Total number of HTTP responses sent.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTotResponses
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.53.0
+  # Total number of HTTP/1.0 responses sent.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpTot10Responses
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.54.0
+  # Total number of HTTP requests received in which the header spans more than one packet.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpErrIncompleteRequests
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.57.0
+  # Total number of HTTP responses received in which the header spans more than one packet.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpErrIncompleteResponses
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.58.0
+  # Total number of HTTP requests and responses received in which the HTTP header spans more than one packet.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpErrIncompleteHeaders
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.60.0
+  # Total number of HTTP error responses received.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: httpErrServerBusy
+      OID: 1.3.6.1.4.1.5951.4.1.1.48.61.0
+  # Total number of established client connections.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: svcTotalClients
+      OID: 1.3.6.1.4.1.5951.4.1.2.1.1.48.0
+  # Total number of established server connections.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: svcTotalServers
+      OID: 1.3.6.1.4.1.5951.4.1.2.1.1.49.0
+  # This table contains information about the vServer statistics.
+  - MIB: NS-ROOT-MIB
+    table:
+      name: vserverTable
+      OID: 1.3.6.1.4.1.5951.4.1.3.1
+    symbols:
+      # Current state of the server.
+      - name: vsvrState
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.5
+        enum:
+          down: 1
+          unknown: 2
+          busy: 3
+          outOfService: 4
+          transitionToOutOfService: 5
+          up: 7
+          transitionToOutOfServiceDown: 8
+      # Number of current client connections.
+      - name: vsvrCurClntConnections
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.7
+    metric_tags:
+      # The name of the vserver
+      - column:
+          name: vsvrName
+          OID: 1.3.6.1.4.1.5951.4.1.3.1.1.1
+      # IP address of the vserver
+      - column:
+          name: vsvrIpAddress
+          OID: 1.3.6.1.4.1.5951.4.1.3.1.1.2
+          conversion: hextoip
+      # The port of the vserver
+      - column:
+          name: vsvrPort
+          OID: 1.3.6.1.4.1.5951.4.1.3.1.1.3
+      # Protocol associated with the vserver
+      - column:
+          name: vsvrType
+          OID: 1.3.6.1.4.1.5951.4.1.3.1.1.4
+          enum:
+            http: 0
+            ftp: 1
+            tcp: 2
+            udp: 3
+            sslBridge: 4
+            monitor: 5
+            monitorUdp: 6
+            nntp: 7
+            httpserver: 8
+            httpclient: 9
+            rpcserver: 10
+            rpcclient: 11
+            nat: 12
+            any: 13
+            ssl: 14
+            dns: 16
+            adns: 17
+            snmp: 18
+            ha: 19
+            monitorPing: 20
+            sslOtherTcp: 21
+            aaa: 22
+            secureMonitor: 23
+            sslvpnUdp: 24
+            rip: 25
+            dnsClient: 26
+            rpcServer: 27
+            rpcClient: 28
+            dhcrpa: 36
+            sipudp: 39
+            siptcp: 40
+            siptls: 41
+            dnstcp: 48
+            adnstcp: 49
+            rtsp: 50
+            push: 52
+            sslPush: 53
+            dhcpClient: 54
+            radius: 55
+            rdp: 61
+            mysql: 62
+            mssql: 63
+            diameter: 73
+            sslDiameter: 74
+            tftp: 75
+            tftpx: 90
+            pptp: 91
+            gre: 92
+            fix: 95
+            sslFix: 96
+            serviceUnknown: 99
+  # This table contains information about the disk space of the NetScaler
+  - MIB: NS-ROOT-MIB
+    table:
+      name: nsSysHealthDiskTable
+      OID: 1.3.6.1.4.1.5951.4.1.1.41.8
+    symbols:
+      # The total disk space in MBytes (includes available and used spaces also)
+      - name: sysHealthDiskSize
+        OID: 1.3.6.1.4.1.5951.4.1.1.41.8.1.2
+      # The total disk space available in MBytes
+      - name: sysHealthDiskAvail
+        OID: 1.3.6.1.4.1.5951.4.1.1.41.8.1.3
+      # The total disk space used in MBytes
+      - name: sysHealthDiskUsed
+        OID: 1.3.6.1.4.1.5951.4.1.1.41.8.1.4
+      # The Percentage of the disk space used
+      - name: sysHealthDiskPerusage
+        OID: 1.3.6.1.4.1.5951.4.1.1.41.8.1.5
+    metric_tags:
+      # The disk name
+      - column:
+          name: sysHealthDiskName
+          OID: 1.3.6.1.4.1.5951.4.1.1.41.8.1.1
+  # The interface related statistics table
+  - MIB: NS-ROOT-MIB
+    table:
+      name: nsIfStatsTable
+      OID: 1.3.6.1.4.1.5951.4.1.1.54
+    symbols:
+      # Number of bytes received by an interface since the NetScaler appliance was started or the interface statistics were cleared
+      - name: ifTotRxBytes
+        OID: 1.3.6.1.4.1.5951.4.1.1.54.1.3
+        tag: if_InBytes
+      # The average bandwidth, in bits per second, at which the specified interface has been receiving packets since the NetScaler appliance was started or the interface statistics were cleared.
+      - name: ifRxAvgBandwidthUsage
+        OID: 1.3.6.1.4.1.5951.4.1.1.54.1.4
+        tag: if_InBwUsage
+      # Number of bytes transmitted by an interface since the NetScaler appliance was started or the interface statistics were cleared
+      - name: ifTotTxBytes
+        OID: 1.3.6.1.4.1.5951.4.1.1.54.1.7
+        tag: if_OutBytes
+      # The average bandwidth, in bits per second, at which the specified interface has been transmitting packets since the NetScaler appliance was started or the interface statistics were cleared.
+      - name: ifTxAvgBandwidthUsage
+        OID: 1.3.6.1.4.1.5951.4.1.1.54.1.8
+        tag: if_OutBwUsage
+      # Interface throughput in Mbps
+      - name: ifThroughput
+        OID: 1.3.6.1.4.1.5951.4.1.1.54.1.48
+        tag: if_Speed
+      # The total data, in megabits, received by an interface since the NetScaler appliance was started or the interface statistics were cleared.
+      - name: ifTotRxMbits
+        OID: 1.3.6.1.4.1.5951.4.1.1.54.1.19
+        tag: if_InRxMbits
+      # The total data, in megabits, transmitted by an interface since the NetScaler appliance was started or the interface statistics were cleared.
+      - name: ifTotTxMbits
+        OID: 1.3.6.1.4.1.5951.4.1.1.54.1.20
+        tag: if_InTxMbits
+    metric_tags:
+      # The name of the interface
+      - column:
+          name: ifName
+          OID: 1.3.6.1.4.1.5951.4.1.1.54.1.1
+        tag: if_interface_name
+      # The media type of the interface
+      - column:
+          name: ifMedia
+          OID: 1.3.6.1.4.1.5951.4.1.1.54.1.2
+        tag: if_Media
+  # The vserver service relationship table
+  - MIB: NS-ROOT-MIB
+    table:
+      name: vserverServiceTable
+      OID: 1.3.6.1.4.1.5951.4.1.3.2
+    symbols:
+      # Number of times that the service has been provided.
+      - name: vsvrServiceHits
+        OID: 1.3.6.1.4.1.5951.4.1.3.2.1.5
+      # Total number of persistent hits.
+      - name: servicePersistentHits
+        OID: 1.3.6.1.4.1.5951.4.1.3.2.1.6
+    metric_tags:
+      # The name of the service to which the vserver is bound.
+      - column:
+          name: vsvrServiceName
+          OID: 1.3.6.1.4.1.5951.4.1.3.2.1.8
+      # The Full name of the service to which the vserver is bound.
+      - column:
+          name: vsvrServiceFullName
+          OID: 1.3.6.1.4.1.5951.4.1.3.2.1.9
+      # The full name of the vserver.
+      - column:
+          name: vserverFullName
+          OID: 1.3.6.1.4.1.5951.4.1.3.2.1.10
+  # This table contains information about each CPU in NetScaler.
+  - MIB: NS-ROOT-MIB
+    table:
+      name: nsCPUTable
+      OID: 1.3.6.1.4.1.5951.4.1.1.41.6
+    symbols:
+      # CPU utilization percentage.
+      - name: nsCPUusage
+        OID: 1.3.6.1.4.1.5951.4.1.1.41.6.1.2
+    metric_tags:
+      # The name of the CPU.
+      - column:
+          name: nsCPUname
+          OID: 1.3.6.1.4.1.5951.4.1.1.41.6.1.1
+  # Client connections, including connections in the Opening, Established, and Closing state.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpCurClientConn
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.2.0
+  # Current server connections in the Established state, which indicates that data transfer can occur between the NetScaler and the server.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: tcpCurServerConnEstablished
+      OID: 1.3.6.1.4.1.5951.4.1.1.46.10.0
+  # Number of SSL sessions on the NetScaler appliance.
+  - MIB: NS-ROOT-MIB
+    symbol:
+      name: sslTotSessions
+      OID: 1.3.6.1.4.1.5951.4.1.1.47.204.0
+  # Table for LB specific configuration
+  - MIB: NS-ROOT-MIB
+    table:
+      name: lbvserverTable
+      OID: 1.3.6.1.4.1.5951.4.1.3.6
+    symbols:
+      # The Policy used for Load Balancing.
+      - name: lbvsvrLBMethod
+        OID: 1.3.6.1.4.1.5951.4.1.3.6.1.1
+        enum:
+          weightedRoundRobin: 1
+          leastConnections: 2
+          leastResponse: 3
+          asynchronousMAC: 4
+          urlHashed: 5
+          domainHashed: 6
+          destinationIPHashed: 7
+          sourceIPHashed: 8
+          leastBandwidth: 9
+          leastPackets: 10
+          customLoad: 11
+          token: 12
+          staticProximity: 13
+          rdp: 14
+          leastreq: 15
+          rtt: 16
+          sourceIPDestinationIPHashed: 17
+          sourceIPSourcePort: 18
+          lrtm: 19
+          callIDHashed: 20
+      # The type of persistence used.
+      - name: lbvsvrPersistanceType
+        OID: 1.3.6.1.4.1.5951.4.1.3.6.1.2
+        enum:
+          none: 0
+          sourceIp: 1
+          cookieInsert: 2
+          cookieDelete: 3
+          cookieRead: 4
+          cookieHash: 5
+          sessionId: 6
+          server: 7
+          rule: 8
+          urlPassive: 9
+          customServerID: 10
+          groupSourceID: 11
+          groupCookieInsert: 12
+          groupRule: 13
+          destinationIP: 14
+          spillOver: 15
+          sourceIPdestinationIP: 16
+          callerID: 17
+          gslbBackup: 18
+          rtspSessionID: 19
+          diameter: 20
+          fixSession: 21
+      # The timeout set for persistence.
+      - name: lbvsvrPersistenceTimeOut
+        OID: 1.3.6.1.4.1.5951.4.1.3.6.1.3
+      # Number of connections that are currently active.
+      - name: lbvsvrActiveConn
+        OID: 1.3.6.1.4.1.5951.4.1.3.6.1.4
+      # Average TTFB between the NetScaler appliance and the server.
+      - name: lbvsvrAvgSvrTTFB
+        OID: 1.3.6.1.4.1.5951.4.1.3.6.1.5
+  # The netscaler services group table
+  - MIB: NS-ROOT-MIB
+    table:
+      name: serviceGroupTable
+      OID: 1.3.6.1.4.1.5951.4.1.2.11
+    symbols:
+      # The state of the service Group
+      - name: svcgrpSvcGroupState
+        OID: 1.3.6.1.4.1.5951.4.1.2.11.1.3
+        enum:
+          disabled: 0
+          enabled: 1
+    metric_tags:
+      # The name of the service Group
+      - column:
+          name: svcgrpSvcGroupName
+          OID: 1.3.6.1.4.1.5951.4.1.2.11.1.1
+      # The type of the service Group.
+      - column:
+          name: svcgrpSvcGroupType
+          OID: 1.3.6.1.4.1.5951.4.1.2.11.1.2
+          enum:
+            http: 0
+            ftp: 1
+            tcp: 2
+            udp: 3
+            sslBridge: 4
+            monitor: 5
+            monitorUdp: 6
+            nntp: 7
+            httpserver: 8
+            httpclient: 9
+            rpcserver: 10
+            rpcclient: 11
+            nat: 12
+            any: 13
+            ssl: 14
+            dns: 16
+            adns: 17
+            snmp: 18
+            ha: 19
+            monitorPing: 20
+            sslOtherTcp: 21
+            aaa: 22
+            secureMonitor: 23
+            sslvpnUdp: 24
+            rip: 25
+            dnsClient: 26
+            rpcServer: 27
+            rpcClient: 28
+            dhcrpa: 36
+            sipudp: 39
+            siptcp: 40
+            siptls: 41
+            dnstcp: 48
+            adnstcp: 49
+            rtsp: 50
+            push: 52
+            sslPush: 53
+            dhcpClient: 54
+            radius: 55
+            rdp: 61
+            mysql: 62
+            mssql: 63
+            diameter: 73
+            sslDiameter: 74
+            tftp: 75
+            tftpx: 90
+            pptp: 91
+            gre: 92
+            fix: 95
+            sslFix: 96
+            serviceUnknown: 99
+      # The full name of the service Group.
+      - column:
+          name: svcgrpSvcGroupFullName
+          OID: 1.3.6.1.4.1.5951.4.1.2.11.1.4
+      # Traffic Domain ID of this service group.
+      - column:
+          name: svcgrpTdId
+          OID: 1.3.6.1.4.1.5951.4.1.2.11.1.5
+  # The ssl certificate key pair configuration information
+  - MIB: NS-ROOT-MIB
+    table:
+      name: sslCertKeyTable
+      OID: 1.3.6.1.4.1.5951.4.1.1.56.1
+    symbols:
+      # Number of days remaining for the certificate to expire.
+      - name: sslDaysToExpire
+        OID: 1.3.6.1.4.1.5951.4.1.1.56.1.1.5
+    metric_tags:
+      # The certificate key pair Name.
+      - column:
+          name: sslCertKeyName
+          OID: 1.3.6.1.4.1.5951.4.1.1.56.1.1.1
+  # The vservers table
+  - MIB: NS-ROOT-MIB
+    table:
+      name: vserverTable
+      OID: 1.3.6.1.4.1.5951.4.1.3.1
+    symbols:
+      # Number of current connections to the actual servers behind the virtual server.
+      - name: vsvrCurSrvrConnections
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.8
+      # Total number of requests received on this service or virtual server. (This applies to HTTP/SSL services and servers.)
+      - name: vsvrTotalRequests
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.30
+      # Total number of request bytes received on this service or virtual server.
+      - name: vsvrTotalRequestBytes
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.31
+      # Number of responses received on this service or virtual server. (This applies to HTTP/SSL services and servers.)
+      - name: vsvrTotalResponses
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.32
+      # Number of response bytes received by this service or virtual server.
+      - name: vsvrTotalResponseBytes
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.33
+      # The current number of services which are bound to this vserver and are in the state 'down'.
+      - name: vsvrCurServicesDown
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.37
+      # The current number of services which are bound to this vserver and are in the state 'up'.
+      - name: vsvrCurServicesUp
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.41
+      # Request rate in requests per second for this service or virtual server.
+      - name: vsvrRequestRate
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.43
+      # Request rate in bytes per second fot this service or virtual server.
+      - name: vsvrRxBytesRate
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.44
+      # Response rate in bytes per second for this service or virtual server.
+      - name: vsvrTxBytesRate
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.45
+      # Rate of unacknowledged SYN packets for this service or virtual server.
+      - name: vsvrSynfloodRate
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.46
+      # Number of times vserver experienced spill over.
+      - name: vsvrTotSpillOvers
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.54
+      # Total number of established client connections.
+      - name: vsvrTotalClients
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.56
+      # The current number of services which are bound to this vserver.
+      - name: vsvrTotalServicesBound
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.61
+      # The percentage of UP services bound to this vserver.
+      - name: vsvrHealth
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.62
+      # Total number of established server connections.
+      - name: vsvrTotalServers
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.65
+      # The state of the vserver based on ActiveActive configuration.
+      - name: vsvrActiveActiveState
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.66
+        enum:
+          notApplicable: 0
+          active: 1
+          backup: 2
+      # Spill Over Threshold set on the vserver.
+      - name: vsvrSoThreshold
+        OID: 1.3.6.1.4.1.5951.4.1.3.1.1.70
+    metric_tags:
+      # The name of the vserver
+      - column:
+          name: vsvrFullName
+          OID: 1.3.6.1.4.1.5951.4.1.3.1.1.59
+  # The netscaler services table
+  - MIB: NS-ROOT-MIB
+    table:
+      name: serviceTable
+      OID: 1.3.6.1.4.1.5951.4.1.2.1
+    symbols:
+      # Average transaction time in microseconds between netscaler and the service behind it.
+      - name: svcAvgTransactionTime
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.7
+      # Total number of connections in ESTABLISHED state.
+      - name: svcEstablishedCon
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.8
+      # Number of connections that are currently active.
+      - name: svcActiveConn
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.9
+      # Number of requests in the surge queue.
+      - name: svcSurgeCount
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.10
+      # Total number of requests received on this service or virtual server. (This applies to HTTP/SSL services and servers.)
+      - name: svcTotalRequests
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.30
+      # Total number of request bytes received on this service or virtual server.
+      - name: svcTotalRequestBytes
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.31
+      # Number of responses received on this service or virtual server. (This applies to HTTP/SSL services and servers.)
+      - name: svcTotalResponses
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.32
+      # Number of response bytes received by this service or virtual server.
+      - name: svcTotalResponseBytes
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.33
+      # Total number of packets received by this service or virtual server.
+      - name: svcTotalPktsRecvd
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.34
+      # Total number of packets sent.
+      - name: svcTotalPktsSent
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.35
+      # Average TTFB between the NetScaler appliance and the server.
+      - name: svcAvgSvrTTFB
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.38
+      # Number of current client connections.
+      - name: svcCurClntConnections
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.41
+      # Request rate in requests per second for this service or virtual server.
+      - name: svcRequestRate
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.42
+      # Request rate in bytes per second for this service or virtual server.
+      - name: svcRxBytesRate
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.43
+      # Response rate in bytes per second for this service or virtual server.
+      - name: svcTxBytesRate
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.44
+      # Number of active transactions handled by this service. (Including those in the surge queue.)
+      - name: svcActiveTransactions
+        OID: 1.3.6.1.4.1.5951.4.1.2.1.1.53
+    metric_tags:
+      # The name of the service.
+      - column:
+          name: svcServiceName
+          OID: 1.3.6.1.4.1.5951.4.1.2.1.1.1
+      # The ip address at which the service is running.
+      - column:
+          name: svcIpAddress
+          OID: 1.3.6.1.4.1.5951.4.1.2.1.1.2
+          conversion: hextoip
+      # The port at which the service is running.
+      - column:
+          name: svcPort
+          OID: 1.3.6.1.4.1.5951.4.1.2.1.1.3
+      # The protocol type of the service.
+      - column:
+          name: svcServiceType
+          OID: 1.3.6.1.4.1.5951.4.1.2.1.1.4
+          enum:
+            http: 0
+            ftp: 1
+            tcp: 2
+            udp: 3
+            sslBridge: 4
+            monitor: 5
+            monitorUdp: 6
+            nntp: 7
+            httpserver: 8
+            httpclient: 9
+            rpcserver: 10
+            rpcclient: 11
+            nat: 12
+            any: 13
+            ssl: 14
+            dns: 16
+            adns: 17
+            snmp: 18
+            ha: 19
+            monitorPing: 20
+            sslOtherTcp: 21
+            aaa: 22
+            secureMonitor: 23
+            sslvpnUdp: 24
+            rip: 25
+            dnsClient: 26
+            rpcServer: 27
+            rpcClient: 28
+            dhcrpa: 36
+            sipudp: 39
+            siptcp: 40
+            siptls: 41
+            dnstcp: 48
+            adnstcp: 49
+            rtsp: 50
+            push: 52
+            sslPush: 53
+            dhcpClient: 54
+            radius: 55
+            rdp: 61
+            mysql: 62
+            mssql: 63
+            diameter: 73
+            sslDiameter: 74
+            tftp: 75
+            tftpx: 90
+            pptp: 91
+            gre: 92
+            fix: 95
+            sslFix: 96
+            serviceUnknown: 99
+      # The full name of the service.
+      - column:
+          name: svcServiceFullName
+          OID: 1.3.6.1.4.1.5951.4.1.2.1.1.54
+  # The servers table
+  - MIB: NS-ROOT-MIB
+    table:
+      name: serverTable
+      OID: 1.3.6.1.4.1.5951.4.1.2.2
+    symbols:
+      # The state of the server.
+      - name: serverState
+        OID: 1.3.6.1.4.1.5951.4.1.2.2.1.3
+        enum:
+          down: 1
+          unknown: 2
+          busy: 3
+          outOfService: 4
+          transitionToOutOfService: 5
+          up: 7
+          transitionToOutOfServiceDown: 8
+    metric_tags:
+      # The name of the server.
+      - column:
+          name: serverName
+          OID: 1.3.6.1.4.1.5951.4.1.2.2.1.1
+      # The IP address of the server.
+      - column:
+          name: serverIpAddress
+          OID: 1.3.6.1.4.1.5951.4.1.2.2.1.2
+          conversion: hextoip
+
+metric_tags:
+  # This shows the version of the kernel build running on the NetScaler
+  - column:
+      name: sysBuildVersion
+      OID: 1.3.6.1.4.1.5951.4.1.1.1.0
+  # The hardware version description of the NetScaler system
+  - column:
+      name: sysHardwareVersionDesc
+      OID: 1.3.6.1.4.1.5951.4.1.1.11.0
+  # The serial number of the NetScaler system
+  - column:
+      name: sysHardwareSerialNumber
+      OID: 1.3.6.1.4.1.5951.4.1.1.14.0

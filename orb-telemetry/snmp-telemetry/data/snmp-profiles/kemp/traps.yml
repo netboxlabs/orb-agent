@@ -1,0 +1,112 @@
+# Kemp vendor traps definition
+# https://mibs.observium.org/mib/B100-MIB/
+# This profile is created without sample data and may need to be edited in the future.
+---
+traps:
+  - trap_oid: 1.3.6.1.4.1.12196.13.3.1.2
+    trap_name: rSstateChange
+    events:
+      # Unique VS Id
+      - name: vSidx
+        OID: 1.3.6.1.4.1.12196.13.1.1.1.*
+      # IP address of VS Differented by AddressType
+      - name: vSip
+        OID: 1.3.6.1.4.1.12196.13.1.1.2.*
+      # VS port number
+      - name: vSport
+        OID: 1.3.6.1.4.1.12196.13.1.1.3.*
+      # VS address type
+      - name: vSaddrtype
+        OID: 1.3.6.1.4.1.12196.13.1.1.4.*
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          dns: 16
+      # Name of the VS
+      - name: vSname
+        OID: 1.3.6.1.4.1.12196.13.1.1.13.*
+      # IP address of RS
+      - name: rSip
+        OID: 1.3.6.1.4.1.12196.13.2.1.2.*
+      # RS port number
+      - name: rSport
+        OID: 1.3.6.1.4.1.12196.13.2.1.3.*
+      # RS address type
+      - name: rSaddrtype
+        OID: 1.3.6.1.4.1.12196.13.2.1.4.*
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          dns: 16
+      # Unique Id of RS
+      - name: rSidx
+        OID: 1.3.6.1.4.1.12196.13.2.1.5.*
+      # current state of RS
+      - name: rSstate
+        OID: 1.3.6.1.4.1.12196.13.2.1.8.*
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          dns: 16
+
+  - trap_oid: 1.3.6.1.4.1.12196.13.3.1.2
+    trap_name: rSstateChange
+    drop_undefined: false
+    events:
+      # Unique VS Id
+      - name: vSidx
+        OID: 1.3.6.1.4.1.12196.13.1.1.1.*
+      # IP address of VS Differented by AddressType
+      - name: vSip
+        OID: 1.3.6.1.4.1.12196.13.1.1.2.*
+      # VS port number
+      - name: vSport
+        OID: 1.3.6.1.4.1.12196.13.1.1.3.*
+      # VS address type
+      - name: vSaddrtype
+        OID: 1.3.6.1.4.1.12196.13.1.1.4.*
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          dns: 16
+      # Name of the VS
+      - name: vSname
+        OID: 1.3.6.1.4.1.12196.13.1.1.13.*
+      # IP address of RS
+      - name: rSip
+        OID: 1.3.6.1.4.1.12196.13.2.1.2.*
+      # RS port number
+      - name: rSport
+        OID: 1.3.6.1.4.1.12196.13.2.1.3.*
+      # RS address type
+      - name: rSaddrtype
+        OID: 1.3.6.1.4.1.12196.13.2.1.4.*
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          dns: 16
+      # Unique Id of RS
+      - name: rSidx
+        OID: 1.3.6.1.4.1.12196.13.2.1.5.*
+      # current state of RS
+      - name: rSstate
+        OID: 1.3.6.1.4.1.12196.13.2.1.8.*
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          dns: 16
+
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.4.1.12196.13.3.1.3
+    trap_name: hAstateChange
+    drop_undefined: false
+  # need to see an example of this one to build the events/varbinds
+  - trap_oid: 1.3.6.1.4.1.12196.13.3.1.4
+    trap_name: licenseExceeded
+    drop_undefined: false

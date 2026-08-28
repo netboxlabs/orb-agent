@@ -1,0 +1,149 @@
+# https://mibs.observium.org/mib/RESOURCE-MIB/
+# https://mibs.observium.org/mib/FIBRE-CHANNEL-FE-MIB/
+# https://mibs.observium.org/mib/BROCADE-SYSTEM-MIB/
+---
+
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-fibre-channel
+
+sysobjectid: 
+  - 1.3.6.1.4.1.1588.2.1.1.*     # Brocade Fibre Channel Switch
+  - 1.3.6.1.4.1.1588.2.1.1.32    # Brocade 4100
+  - 1.3.6.1.4.1.1588.2.1.1.44    # Brocade 4900
+  - 1.3.6.1.4.1.1588.2.1.1.62    # Brocade DCX
+  - 1.3.6.1.4.1.1588.2.1.1.64    # Brocade 5300
+  - 1.3.6.1.4.1.1588.2.1.1.66    # Brocade 5100
+  - 1.3.6.1.4.1.1588.2.1.1.71    # Brocade DS300B
+  - 1.3.6.1.4.1.1588.2.1.1.72    # Brocade 5480
+  - 1.3.6.1.4.1.1588.2.1.1.77    # Brocade DCX-4S
+  - 1.3.6.1.4.1.1588.2.1.1.83    # Brocade 7800
+  - 1.3.6.1.4.1.1588.2.1.1.109   # Brocade 6510
+  - 1.3.6.1.4.1.1588.2.1.1.117   # Brocade FC5022
+  - 1.3.6.1.4.1.1588.2.1.1.118   # Brocade 6500
+  - 1.3.6.1.4.1.1588.2.1.1.120   # Brocade DCX8510-8
+  - 1.3.6.1.4.1.1588.2.1.1.133   # Brocade 6520
+  - 1.3.6.1.4.1.1588.2.1.3       # Brocade 5470
+
+metrics:
+  - MIB: RESOURCE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.1588.2.1.1.1.26.1.0
+      name: swCpuUsage
+      poll_time_sec: 60
+      tag: CPU
+  - MIB: RESOURCE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.1588.2.1.1.1.26.6.0
+      name: swMemUsage
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  - MIB: FIBRE-CHANNEL-FE-MIB
+    table:
+      OID: 1.3.6.1.2.1.75.1.2.1
+      name: fcFxPortStatusTable
+    symbols:
+      - OID: 1.3.6.1.2.1.75.1.2.1.1.3
+        name: fcFxPortOperMode
+        enum:
+          unknown: 1
+          fPort: 2
+          flPort: 3
+      - OID: 1.3.6.1.2.1.75.1.2.1.1.4
+        name: fcFxPortAdminMode
+        enum:
+          fPort: 2
+          flPort: 3
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.2.1.75.1.2.1.1.1
+          name: portIndex
+          conversion: hextoint:BigEndian:uint16
+        tag: port_index
+  - MIB: FIBRE-CHANNEL-FE-MIB
+    table:
+      OID: 1.3.6.1.2.1.75.1.2.2
+      name: fcFxPortPhysTable
+    symbols:
+      - OID: 1.3.6.1.2.1.75.1.2.2.1.1
+        name: fcFxPortPhysAdminStatus
+        enum:
+          online: 1
+          offline: 2
+          testing: 3
+      - OID: 1.3.6.1.2.1.75.1.2.2.1.2
+        name: fcFxPortPhysOperStatus
+        enum:
+          online: 1
+          offline: 2
+          testing: 3
+          linkFailure: 4
+    metric_tags:
+      - index: 1
+        column:
+          OID: 1.3.6.1.2.1.75.1.2.1.1.1
+          name: portIndex
+          conversion: hextoint:BigEndian:uint16
+        tag: port_index
+  # A table that contains, one entry for each switch port, configuration and service parameters of the port.
+  - MIB: BROCADE-SYSTEM-MIB
+    table:
+      name: swFCPortTable
+      OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2
+    symbols:
+      # This object counts the number of (Fibre Channel) frames that the port has transmitted.
+      - name: swFCPortTxFrames
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.13
+      # This object counts the number of (Fibre Channel) frames that the port has received.
+      - name: swFCPortRxFrames
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.14
+      # This object counts the number of Class 2 frames that the port has received.
+      - name: swFCPortRxC2Frames
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.15
+      # This object counts the number of Class 3 frames that the port has received.
+      - name: swFCPortRxC3Frames
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.16
+      # This object counts the number of Link Control frames that the port has received.
+      - name: swFCPortRxLCs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.17
+      # This object counts the number of times when RDYs exceeds the frames received.
+      - name: swFCPortTooManyRdys
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.19
+      # This object counts the number of times when the transmit credit has reached zero.
+      - name: swFCPortNoTxCredits
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.20
+      # This object counts the number of encoding error or disparity error inside frames received.
+      - name: swFCPortRxEncInFrs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.21
+      # This object counts the number of CRC errors detected for frames received.
+      - name: swFCPortRxCrcs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.22
+      # This object counts the number of truncated frames that the port has received.
+      - name: swFCPortRcTruncs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.23
+      # This object counts the number of received frames that are too long.
+      - name: swFCPortRxTooLongs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.24
+      # This object counts the number of received frames that have bad EOF delimiter.
+      - name: swFCPortRxBadEofs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.25
+      # This object counts the number of encoding error or disparity error outside frames received.
+      - name: swFCPortRxEncOutFrs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.26
+      # This object counts the number of invalid Ordered Sets received.
+      - name: swFCPortRxBadOs
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.27
+      # This object counts the number of Class 3 frames that the port has discarded.
+      - name: swFCPortC3Discards
+        OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.28
+    metric_tags:
+      # A string indicates the name of the addressed port.
+      - column:
+          name: swFCPortName
+          OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.36
+      # This string indicates the physical port number of the addressed port. The format of the string is: /port, where 'slot' being present only for bladed systems.
+      - column:
+          name: swFCPortSpecifier
+          OID: 1.3.6.1.4.1.1588.2.1.1.1.6.2.1.37

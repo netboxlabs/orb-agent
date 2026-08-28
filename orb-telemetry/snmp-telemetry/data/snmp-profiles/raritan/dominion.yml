@@ -1,0 +1,57 @@
+# https://mibs.observium.org/mib/RemoteKVMDevice-MIB/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.13742.*    # Raritan Devices
+  - 1.3.6.1.4.1.13742.3.2.10    # Raritan Dominion SXII DSX2-32
+
+
+provider: kentik-switch
+
+metrics:
+  - MIB: RemoteKVMDevice-MIB
+    symbols:
+      # Percent current memory usage
+      - name: systemUsageMemory
+        OID: 1.3.6.1.4.1.13742.3.1.1.0
+        tag: MemoryUtilization
+        poll_time_sec: 60
+      # Percent current processor usage
+      - name: systemUsageCPU
+        OID: 1.3.6.1.4.1.13742.3.1.2.0
+        tag: CPU
+        poll_time_sec: 60
+  - MIB: RemoteKVMDevice-MIB
+    table:
+      name: systemPowerSupplyTable
+      OID: 1.3.6.1.4.1.13742.3.1.3
+    symbols:
+      # Is the system power supply on (true)
+      - name: systemPowerSupplyPowerOn
+        OID: 1.3.6.1.4.1.13742.3.1.3.1.2
+        enum:
+          false: 0
+          true: 1
+  - MIB: RemoteKVMDevice-MIB
+    table:
+      name: portDataTable
+      OID: 1.3.6.1.4.1.13742.3.1.4
+    symbols:
+      # Port status and availability:inactive, available, connected, busy
+      - name: portDataStatus
+        OID: 1.3.6.1.4.1.13742.3.1.4.1.5
+        enum:
+          inactive: 0
+          available: 1
+          connected: 2
+          busy: 3
+    metric_tags:
+      - column:
+        OID: 1.3.6.1.4.1.13742.3.1.4.1.3
+        name: portDataName
+      - column:
+        OID: 1.3.6.1.4.1.13742.3.1.4.1.4
+        name: portDataType

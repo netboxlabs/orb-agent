@@ -1,0 +1,313 @@
+# http://oidref.com/1.3.6.1.4.1.5528.100.20.10
+# https://mibs.observium.org/mib/NETBOTZV2-MIB/
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-netbotz
+
+sysobjectid:
+  - 1.3.6.1.4.1.5528.100.20.10.* 
+
+metrics:
+  # enclosureTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.2.1
+      name: enclosureTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.2.1.1.2
+        name: enclosureStatus
+        enum:
+          disconnected: 0
+          error: 1
+          normal: 2
+      - OID: 1.3.6.1.4.1.5528.100.2.1.1.3
+        name: enclosureErrorStatus
+        enum:
+          normal: 0
+          info: 1
+          warning: 2
+          error: 3
+          critical: 4
+          failure: 5
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.2.1.1.7
+          name: enclosureIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.2.1.1.1
+          name: enclosureId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.2.1.1.4
+          name: enclosureLabel
+
+  # dinPortTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.3.1
+      name: dinPortTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.3.1.1.2
+        name: dinPortStatus
+        enum:
+          disconnected: 0
+          error: 1
+          normal: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.3.1.1.9
+          name: dinPortIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.3.1.1.1
+          name: dinPortId
+
+  # otherPortTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.3.10
+      name: otherPortTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.3.10.1.2
+        name: otherPortStatus
+        enum:
+          disconnected: 0
+          error: 1
+          normal: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.3.10.1.5
+          name: otherPortIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.3.10.1.1
+          name: otherPortId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.3.10.1.3
+          name: otherPortLabel
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.3.10.1.4
+          name: otherPortEncId
+
+  # tempSensorTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.4.1.1
+      name: tempSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.4.1.1.1.3
+        name: tempSensorErrorStatus
+        enum:
+          normal: 0
+          info: 1
+          warning: 2
+          error: 3
+          critical: 4
+          failure: 5
+      - OID: 1.3.6.1.4.1.5528.100.4.1.1.1.8
+        name: tempSensorValueInt
+      - OID: 1.3.6.1.4.1.5528.100.4.1.1.1.9
+        name: tempSensorValueIntF
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.1.1.10
+          name: tempSensorIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.1.1.1
+          name: tempSensorId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.1.1.4
+          name: tempSensorLabel
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.1.1.5
+          name: tempSensorEncId
+
+  # humiSensorTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.4.1.2
+      name: humiSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.4.1.2.1.3
+        name: humiSensorErrorStatus
+        enum:
+          normal: 0
+          info: 1
+          warning: 2
+          error: 3
+          critical: 4
+          failure: 5
+      - OID: 1.3.6.1.4.1.5528.100.4.1.2.1.8
+        name: humiSensorValueInt
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.2.1.9
+          name: humiSensorIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.2.1.1
+          name: humiSensorId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.2.1.4
+          name: humiSensorLabel
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.2.1.5
+          name: humiSensorEncId
+
+  # dewPointSensorTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.4.1.3
+      name: dewPointSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.4.1.3.1.8
+        name: dewPointSensorValueInt
+      - OID: 1.3.6.1.4.1.5528.100.4.1.3.1.9
+        name: dewPointSensorValueIntF
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.3.1.10
+          name: dewPointSensorIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.3.1.1
+          name: dewPointSensorId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.3.1.4
+          name: dewPointSensorLabel
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.3.1.5
+          name: dewPointSensorEncId
+
+  # otherNumericSensorTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.4.1.10
+      name: otherNumericSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.4.1.10.1.3
+        name: otherNumericSensorErrorStatus
+        enum:
+          normal: 0
+          info: 1
+          warning: 2
+          error: 3
+          critical: 4
+          failure: 5
+      - OID: 1.3.6.1.4.1.5528.100.4.1.10.1.8
+        name: otherNumericSensorValueInt
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.10.1.12
+          name: otherNumericSensorIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.10.1.1
+          name: otherNumericSensorId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.10.1.4
+          name: otherNumericSensorLabel
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.10.1.5
+          name: otherNumericSensorEncId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.1.10.1.9
+          name: otherNumericSensorUnits
+
+  # doorSwitchSensorTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.4.2.2
+      name: doorSwitchSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.4.2.2.1.2
+        name: doorSwitchSensorValue
+        enum:
+          null: -1
+          open: 0
+          closed: 1
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.2.1.8
+          name: doorSwitchSensorIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.2.1.1
+          name: doorSwitchSensorId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.2.1.4
+          name: doorSwitchSensorLabel
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.2.1.5
+          name: doorSwitchSensorEncId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.2.1.7
+          name: doorSwitchSensorValueStr
+
+  # otherStateSensorTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.4.2.10
+      name: otherStateSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.4.2.10.1.3
+        name: otherStateSensorErrorStatus
+        enum:
+          normal: 0
+          info: 1
+          warning: 2
+          error: 3
+          critical: 4
+          failure: 5
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.10.1.4
+          name: otherStateSensorLabel
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.10.1.5
+          name: otherStateSensorEncId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.10.1.7
+          name: otherStateSensorValueStr
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.4.2.10.1.1
+          name: otherStateSensorId
+
+  # errorCondTable
+  - MIB: NETBOTZV2-MIB
+    table: 
+      OID: 1.3.6.1.4.1.5528.100.5.1
+      name: errorCondTable
+    symbols:
+      - OID: 1.3.6.1.4.1.5528.100.5.1.1.2
+        name: errorCondSeverity
+        enum:
+          normal: 0
+          info: 1
+          warning: 2
+          error: 3
+          critical: 4
+          failure: 5
+      - OID: 1.3.6.1.4.1.5528.100.5.1.1.6
+        name: errorCondResolved
+        enum:
+          no: 0
+          yes: 1
+          null: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.5.1.1.12
+          name: errorCondIndex
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.5.1.1.1
+          name: errorCondId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.5.1.1.3
+          name: errorCondTypeId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.5.1.1.5
+          name: errorCondStartTimeStr
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.5.1.1.8
+          name: errorCondResolvedTimeStr
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.5.1.1.9
+          name: errorCondEncId
+      - column:
+          OID: 1.3.6.1.4.1.5528.100.5.1.1.11
+          name: errorCondSensorId

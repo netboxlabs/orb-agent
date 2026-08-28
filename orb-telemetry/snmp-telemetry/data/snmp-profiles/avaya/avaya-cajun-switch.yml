@@ -1,0 +1,433 @@
+# SNMP Walks provided do not reflect support of the standard IF-MIB for these devices
+# https://mibs.observium.org/mib/CONFIG-MIB/
+# https://mibs.observium.org/mib/XSWITCH-MIB/
+# https://mibs.observium.org/mib/UTILIZATION-MANAGEMENT-MIB/
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.81.17.1.17    # Cajun P330
+  - 1.3.6.1.4.1.81.17.1.18    # Cajun P130
+  - 1.3.6.1.4.1.81.17.1.19    # Cajun P360
+
+metrics:
+  # The current CPU utilization in percentage if the monitoring is enabled. The sample interval is 5 seconds.
+  # Polled at 60s to support anomaly detection
+  - MIB: UTILIZATION-MANAGEMENT-MIB
+    symbol:
+      name: genCpuCurrentUtilization
+      OID: 1.3.6.1.4.1.6889.2.1.11.1.1.1.1.6.1
+      tag: CPU
+
+  # The percenatge of memory used.
+  # Polled at 60s to support anomaly detection
+  - MIB: UTILIZATION-MANAGEMENT-MIB
+    symbol:
+      name: genMemUtilizationPercentUsed
+      OID: 1.3.6.1.4.1.6889.2.1.11.1.2.6.1.3.1
+      tag: MemoryUtilization
+
+  # Table of configuration attributes for managed ports.
+  - MIB: CONFIG-MIB
+    table:
+      name: genPortTable
+      OID: 1.3.6.1.4.1.81.9.1
+    symbols:
+      # A disabled port neither transmits nor receives.
+      - name: genPortAdminStatus
+        OID: 1.3.6.1.4.1.81.9.1.1.10
+        enum:
+          enabled: 1
+          disabled: 2
+      # 
+      - name: scEthPortFunctionalStatus
+        OID: 1.3.6.1.4.1.81.28.2.1.1.1.27
+        enum:
+          ok: 1
+          rld: 2
+          rxJabber: 3
+          partition: 8
+          remoteFault: 10
+          rspError: 11
+          notSupported: 255
+    metric_tags:
+      # Index which identifies the port.
+      - column:
+          name: genPortId
+          OID: 1.3.6.1.4.1.81.9.1.1.2
+      # Describes the functionality of the port according to international standards.
+      - column:
+          name: genPortFunctionality
+          OID: 1.3.6.1.4.1.81.9.1.1.3
+          enum:
+            private: 1
+            repeaterAUI: 2
+            repeaterThin: 3
+            repeater10BaseT: 4
+            tenBaseFSyncAct: 5
+            foirl: 6
+            xcvr: 7
+            lobe: 8
+            ri: 9
+            ro: 10
+            serial: 11
+            localTalk: 12
+            fddi: 13
+            clock: 14
+            genTokenRing: 15
+            dte: 16
+            activeLobe: 17
+            genActiveTokenRing: 18
+            tenBaseFB: 19
+            eth10BaseT: 20
+            fiber: 21
+            wan: 22
+            star: 23
+            activeRI: 24
+            activeRO: 25
+            fl: 26
+            sonet-oc3: 27
+            a100BaseTX: 28
+            a100BaseFX: 29
+            oc3: 30
+            anATM-Main: 31
+            anATM-Secondary: 32
+            a1000BaseFX: 33
+            sonet: 40
+            fimVoice: 41
+            sdh-stm1: 42
+            eth1000BaseSX: 43
+            eth1000BaseLX: 44
+            eth10BaseFL: 45
+            ethLAG: 46
+            lag100: 47
+            lag1000: 48
+            eth1000BaseTX: 49
+            eth1000BaseCX: 50
+            gBICNotPresent: 51
+            gBICNotSupported: 52
+            eth1000BaseX-Proprietary: 53
+            oc12: 54
+            sFP-NotPresent: 55
+            sFP-NotSupported: 56
+            eth10BaseTwInPWR: 57
+            eth100BaseTXwInPWR: 58
+      # Attribute describing the type of port.
+      - column:
+          name: genPortType
+          OID: 1.3.6.1.4.1.81.9.1.1.4
+          enum:
+            le10bPort: 1
+            le10cPort: 2
+            le15Port: 3
+            le20Port: 4
+            le30xPort: 5
+            le30xdPort: 6
+            le40xPort: 7
+            le40xtPort: 8
+            lobeRJ45: 9
+            lobeD9: 10
+            lobeD25: 11
+            lobeFO: 12
+            ri104D25: 13
+            ro104D25: 14
+            riRJ45: 15
+            riD9: 16
+            riD25: 17
+            riFO: 18
+            ri104RJ45: 19
+            ri104D9: 20
+            roRJ45: 21
+            roD9: 22
+            roD25: 23
+            roFO: 24
+            ro104RJ45: 25
+            ro104D9: 26
+            le80xtPort: 27
+            le140xtPort: 28
+            ielb-AUIPort: 29
+            ielb-10btPort: 30
+            ltrf4Port: 31
+            ltrf16Port: 32
+            lts16Port: 33
+            llt8Port: 34
+            le20rPort: 35
+            itlbRoPort: 36
+            itlbRiPort: 37
+            itlbDTEPort: 38
+            starFO: 39
+            le10bnPort: 40
+            le120rPort: 41
+            le140xtf-foPort: 42
+            le140xtf-10btPort: 43
+            le140xtcPort: 44
+            le110bPort: 45
+            le110bqPort: 46
+            le140xtqPort: 47
+            lert40-AUIPort: 48
+            lert40-10btPort: 49
+            clock-int: 50
+            clock-ext: 51
+            ri104RJ45S: 52
+            ro104RJ45S: 53
+            lobe104RJ45S: 54
+            le20fbPort: 55
+            le140xtf-fofbPort: 56
+            fddi-micPort1: 57
+            fddi-micPort2: 58
+            fddi-micPort3: 59
+            fddi-stmPort1: 60
+            fddi-stmPort2: 61
+            fddi-stmPort3: 62
+            fddi-stlPort1: 63
+            fddi-stlPort2: 64
+            fddi-stlPort3: 65
+            fddi-stpPort1: 66
+            fddi-stpPort2: 67
+            fddi-stpPort3: 68
+            fddi-utpPort1: 69
+            fddi-utpPort2: 70
+            fddi-utpPort3: 71
+            fddi-stsPort1: 72
+            fddi-stsPort2: 73
+            fddi-stsPort3: 74
+            le140xtnPort: 75
+            ltr104a-lobePort: 76
+            ltr104a-riPort: 77
+            ltr104a-roPort: 78
+            le120qPort: 79
+            le120sq2PortS: 80
+            le120sq2PortM: 81
+            le120sq5Port: 82
+            le120q-fbPort: 83
+            le120sq2-fbPortS: 84
+            le120sq2-fbPortM: 85
+            le120sq5-fbPort: 86
+            ltr108t-lobePort1: 87
+            ltr108t-riPort1: 88
+            ltr108t-roPort1: 89
+            ltr108t-lobePort: 90
+            ltr108f-lobePort: 91
+            ltr108f-starPortFO: 92
+            ltr108f-riPortFO: 93
+            ltr108f-roPortFO: 94
+            lse808Port: 95
+            lhsPort: 96
+            iefnPort: 98
+            itfnPort: 99
+            itrePort: 100
+            ierpPort: 107
+            lse108Port: 108
+            lse208Port: 109
+            le110cqPort: 110
+            ltr108t-starPort1: 111
+            she-10btPort: 112
+            she-AUIPort: 113
+            she-FOPort: 114
+            she-FOSyncPort: 115
+            le115qPort: 116
+            sht-lobePort: 117
+            sht-riRJ45Port: 118
+            sht-riD9Port: 119
+            sht-riFOPort: 120
+            sht-roRJ45Port: 121
+            sht-roD9Port: 122
+            sht-roFOPort: 123
+            lhbPort: 124
+            le140xtsPort: 126
+            le40xtnPort: 127
+            le80xtnPort: 128
+            itrpPort: 129
+            fddi-lcfPort1: 130
+            fddi-lcfPort2: 131
+            fddi-lcfPort3: 132
+            ltr108f-lobeRJ45: 133
+            lse404Port: 134
+            star104RJ45S: 135
+            she-10bfbPort: 136
+            sht-starPort: 137
+            le240xtcPort: 138
+            le280xtPort: 139
+            iefrMICPort: 140
+            ri104RJ45SN: 141
+            iwr10BaseTPort: 142
+            ro104RJ45SN: 144
+            sh-efn-AUIPort: 145
+            lobe104RJ45SN: 146
+            sh-efnPort: 147
+            sh-tfnPort: 148
+            ierePort: 152
+            lse404sPort: 153
+            lse404s-fbPort: 154
+            le240xtcsPort: 155
+            le280xtsPort: 156
+            atmMMFPort: 157
+            lsaPort: 158
+            atmUTPPort: 159
+            sh-elbAUIPort: 160
+            sh-elb10btPort: 161
+            lse404srjPort: 162 
+            lfe100Port: 163
+            lsf100Port: 164
+            lst-lobeRJ45Port: 165
+            lst-starRJ45Port: 166
+            lst-riRJ45Port: 167
+            lst-roRJ45Port: 168
+            tenBaseTPort: 169
+            flPort: 170
+            shes-10btPort: 171
+            shes-AUIPort: 172
+            shes-FOPort: 173
+            shes-10bfbPort: 174
+            le180xtPort: 175
+            lfe1008Port: 177
+            lse-pmPort: 178
+            sh-40sfPort: 179
+            sh-80rjPort: 180
+            ls3ls-WAN: 181
+            leb200Port: 183
+            fat-pipe-fddiPort: 184
+            lfe4004Port: 186
+            sonetPort: 190
+            fimVoicePort: 191
+            lfe4004SFPort: 192
+            lfe4004STPort: 193
+            lge-2000SXPort: 194
+            lge-2000LXPort: 195
+            lfe8008SUTPPort: 196
+            visage10BTPort: 1000
+            visage16200FPort: 1001
+            visage16200TPort: 1004
+            visage16200FCPort: 1005
+            visage800TPort: 1006
+            visage800FPort: 1007
+            visage16155FRPort: 1008
+            visage16155FPort: 1009
+            visage2500Port: 1010
+            visage3LSPort: 1012
+            visage1600TPort: 1013
+            visage1000BaseSXPort: 1014
+            visage1000BaseLXPort: 1015
+            cajunP117SPort: 1016
+            cajunP117SRPort: 1017
+            m10or100BaseTXPort: 2000
+            m100BaseFXPort: 2001
+            m1000BaseSXPort: 2002
+            m1000BaseLXPort: 2003
+            m10BaseFLPort: 2004
+            m10BaseTPort: 2005
+            m10or100BaseTXdot1QPort: 2006
+            m-acc155or622MMFPort: 2007
+            m-acc155or622SMFPort: 2008
+            cajunP120-10or100TPort: 2500
+            cajunP120-100FPort: 2501
+            cajunP120-1000SXPort: 2502
+            cajunP120-1000LXPort: 2503
+            cajunP330-10or100TPort: 2504
+            cajunP330-100FPort: 2505
+            cajunP330-1000SXPort: 2506
+            cajunP330-1000LXPort: 2507
+            cajunP330-LAG: 2508
+            cajunP330-LAG100: 2509
+            cajunP330-LAG1000: 2510
+            cajunP110-LAG100: 2511
+            cajunP110-LAG1000: 2512
+            cajunP120-1000BaseCX-GBIC: 2513
+            cajunP120-1000BaseSX-GBIC: 2514
+            cajunP120-1000BaseLX-GBIC: 2515
+            cajunP120-1000BaseT-GBIC: 2516
+            cajunP120-GBIC-NotPresent: 2517
+            cajunP120-GBIC-Unknown: 2518
+            cajunP120-GBIC-Other: 2519
+            cajunP120-FibreChannel-GBIC: 2520
+            cajunP120-1000BaseTX: 2521
+            cajunP330-1000TXPort: 2522
+            cajunP330-1000SX-GBIC: 2523
+            cajunP330-1000LX-GBIC: 2524
+            cajunP330-1000T-GBIC: 2525
+            cajunP330-1000CX-GBIC: 2526
+            cajunP330-GBIC-NotPresent: 2527
+            cajunP330-GBIC-NotSupported: 2528
+            cajunP130-10or100BaseTXPort: 2530
+            cajunP130-100BaseFXPort: 2531
+            cajunP130-1000BaseSX-GBICPort: 2532
+            cajunP130-1000BaseLX-GBICPort: 2533
+            cajunP130-1000BaseX-Proprietary-GBICPort: 2534
+            cajunP130-GBIC-NotSupported: 2535
+            cajunP130-GBIC-NotPresent: 2536
+            cajunP130-LAG100: 2537
+            cajunP130-LAG1000: 2538
+            cajunP130-1000BaseTPort: 2539
+            cajunP330-ML-LAG: 2540
+            cajunP330-ML-1000SX-SFP: 2541
+            cajunP330-ML-1000LX-SFP: 2542
+            cajunP330-ML-LAG100: 2543
+            cajunP330-ML-LAG1000: 2544
+            cajunP330-ML-100or1000TPort: 2545
+            cajunP330-ML-10or100TPort: 2546
+            cajunP330-ML-SFP-NotPresent: 2547
+            cajunP330-ML-SFP-NotSupported: 2548
+            cajunP330-10or100TPortAndInPWR: 2549
+            m15-155FPort: 3000
+            m3-622FPort: 3001
+            m3-622SFPort: 3002
+            m15-155SFPort: 3003
+            m15-155MSPort: 3004
+            m2-2400IPort: 3005
+            m4-DS3Port: 3009
+            m4-E3Port: 3010
+            unknownPort: 255
+      # Descriptor of the port in ASCII (readable) format.
+      - column:
+          name: genPortDescr
+          OID: 1.3.6.1.4.1.81.9.1.1.5
+      # Name of the port in ASCII format.
+      - column:
+          name: genPortName
+          OID: 1.3.6.1.4.1.81.9.1.1.21
+      # Classification assigned to this port.
+      - column:
+          name: genPortClassification
+          OID: 1.3.6.1.4.1.81.9.1.1.22
+          enum:
+            regular: 1
+            valuable: 2
+            notSupported: 255
+      # The flow control mode of the port when operated in full duplex.
+      - column:
+          name: scEthPortMode
+          OID: 1.3.6.1.4.1.81.28.2.1.1.1.28
+          enum:
+            halfDuplex: 1
+            fullDupluxNoPause: 2
+            fullDuplexProprietaryFC: 3
+            fullDuplexISL: 4
+            fullDuplexFlowControlISL: 5
+            fullDuplexAsymTxPause: 6
+            fullDuplexSymPause: 7
+            fullDuplexAsymRxPause: 8
+            notSupported: 255
+      # This parameter defines the port speed.
+      - column:
+          name: scEthPortSpeed
+          OID: 1.3.6.1.4.1.81.28.2.1.1.1.29
+          enum:
+            ethernet: 1
+            fastEthernet: 2
+            gigabitEthernet: 3
+            a155Mbps: 4
+            a622Mbps: 5
+            notSupported: 255
+
+metric_tags:
+  # Enable or disable CPU utilization monitoring. The default is disabled(1).
+  - column:
+      name: genCpuUtilizationEnableMonitoring
+      OID: 1.3.6.1.4.1.6889.2.1.11.1.1.1.1.2.1
+      enum:
+        disabled: 1
+        enabled: 2
+    tag: cpu_monitoring_enabled

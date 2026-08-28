@@ -1,0 +1,168 @@
+# http://oid-info.com/get/1.3.6.1.4.1.318.1
+---
+extends:
+  - system-mib.yml
+  - ups-mib.yml
+
+provider: kentik-ups
+
+sysobjectid:
+  - 1.3.6.1.4.1.850.1.*   # SMART UPS
+  - 1.3.6.1.4.1.850.1.4   # SMART500RT1U
+
+metrics:
+  - MIB: TRIPPLITE-MIB
+    symbols:
+      # The current state of the main output of the device.
+      - OID: 1.3.6.1.4.1.850.100.1.12.1.0
+        name: tlUpsMainOutletState	
+        enum:
+          unknown: 0
+          off: 1
+          on: 2
+          mixed: 3
+      # The ambient temperature. The measurement returned will either be in units of Celsius (C) or Fahrenheit (F) depending upon whether Metric or English was selected for the reading by tlUpsConfigDisplayUnits.
+      - OID: 1.3.6.1.4.1.850.100.1.13.1.0
+        name: tlUpsTemperature
+      # The age of the battery in years.  This is equal to the current date minus tlConfigBattReplDate.
+      - OID: 1.3.6.1.4.1.850.100.1.2.1.0
+        name: tlUpsBatteryAge
+      # The temperature of the battery, in Farenheight degrees.  This is calculated from upsBatteryTemperature, which is in Celsius degrees.
+      - OID: 1.3.6.1.4.1.850.100.1.2.2.0
+        name: tlUpsTemperatureF
+      # The age of external battery in years.  This is equal to the current date minus tlConfigExternalBattReplDate.
+      - OID: 1.3.6.1.4.1.850.100.1.2.3.0
+        name: tlUpsExternalBatteryAge
+      # The present number of active alarm conditions.
+      - OID: 1.3.6.1.4.1.850.100.1.6.1.0
+        name: tlUpsAlarmsPresent
+      # The date of the last self-test run on the ups, in the format YYYYMMDD.
+      - OID: 1.3.6.1.4.1.850.100.1.7.1.0
+        name: tlUpsTestDate
+        convert: to_one
+       # Result of the last self-test run on the ups.
+      - OID: 1.3.6.1.4.1.850.100.1.7.2.0
+        name: tlUpsTestResultsDetail
+        convert: to_one
+      # The date on which the battery was last replaced, in the format YYYYMMDD.
+      - OID: 1.3.6.1.4.1.850.100.1.9.1.0
+        name: tlUpsConfigBattReplDate
+      # The date on which the external battery was last replaced, in the format YYYYMMDD.
+      - OID: 1.3.6.1.4.1.850.100.1.9.5.0
+        name: tlUpsConfigExternalBattReplDate
+      # The ambient temperature (C).
+      - OID: 1.3.6.1.4.1.850.101.1.1.1.0
+        name: tlEnvTemperatureC
+      # The ambient temperature (F).
+      - OID: 1.3.6.1.4.1.850.101.1.1.2.0
+        name: tlEnvTemperatureF
+      # Indicates whether or not temperature is in alarm.
+      - OID: 1.3.6.1.4.1.850.101.1.1.5.0
+        name: tlEnvTemperatureInAlarm
+        enum:
+          true: 1
+          false: 2
+      # The ambient humidity (%).
+      - OID: 1.3.6.1.4.1.850.101.1.2.1.0
+        name: tlEnvHumidity
+      # Indicates whether or not humidity is in alarm.
+      - OID: 1.3.6.1.4.1.850.101.1.2.4.0
+        name: tlEnvHumidityInAlarm
+        enum:
+          true: 1
+          false: 2
+
+  - MIB: TRIPPLITE-MIB
+    table:
+      OID: 1.3.6.1.4.1.850.100.1.3.2
+      name: tlUpsInputVoltageTable
+    symbols:
+      # The magnitude of the present input voltage. A value of 6553 indicates Unknown.
+      - OID: 1.3.6.1.4.1.850.100.1.3.2.1.3
+        name: tlUpsInputVoltage
+ 
+  - MIB: TRIPPLITE-MIB
+    table:
+      OID: 1.3.6.1.4.1.850.100.1.4.7
+      name: tlUpsOutputCircuitTable
+    symbols:
+      # Whether the breaker is open or closed.
+      - OID: 1.3.6.1.4.1.850.100.1.4.7.1.2
+        name: tlUpsOutputCircuitStatus
+        enum:
+          open: 0
+          closed: 1
+      # The magnitude of the present output current in tenths of an amp. A value of 65534 indicates Unknown.
+      - OID: 1.3.6.1.4.1.850.100.1.4.7.1.3
+        name: tlUpsOutputCircuitLoadCurrent
+       # The magnitude of the present output current in tenths of an amp. A value of 65534 indicates Unknown.
+      - OID: 1.3.6.1.4.1.850.100.1.4.7.1.4
+        name: tlUpsOutputCircuitVoltage
+      # The magnitude of the present output current in tenths of an amp. A value of 65534 indicates Unknown.
+      - OID: 1.3.6.1.4.1.850.100.1.4.7.1.5
+        name: tlUpsOutputCircuitPower
+
+  - MIB: TRIPPLITE-MIB
+    table:
+      OID: 1.3.6.1.4.1.850.101.2.1
+      name: tlEnvContactTable
+    symbols:
+      # The current status of the contact.
+      - OID: 1.3.6.1.4.1.850.101.2.1.1.3
+        name: tlEnvContactStatus
+        enum:
+          normal: 0
+          alarm: 1
+    metric_tags:
+      # The name or description of the contact.
+      - column:
+          OID: 1.3.6.1.4.1.850.101.2.1.1.2
+          name: tlEnvContactName 		
+      # The configuration of the contact.
+      - column:
+          OID: 1.3.6.1.4.1.850.101.2.1.1.4
+          name: tlEnvContactConfig
+          enum:
+            normallyOpen: 0
+            normallyClosed: 1
+
+  - MIB: TRIPPLITE-MIB
+    table:
+      OID: 1.3.6.1.4.1.850.100.1.10.2
+      name: tlUpsOutletTable
+    symbols:
+      # The current state of the outlet group.
+      - OID: 1.3.6.1.4.1.850.100.1.11.2.1.5
+        name: upsOutletGroupStatusGroupState
+        enum:
+          upsOutletGroupStatusOn: 1
+          upsOutletGroupStatusOff: 2
+          upsOutletGroupStatusUnknown: 3
+    metric_tags:
+      # The current state of the outlet group.
+      - column:
+          OID: 1.3.6.1.4.1.850.100.1.11.2.1.3
+          name: tlUpsOutletGroupName
+      # A description for this outlet group.
+      - column:
+          OID: 1.3.6.1.4.1.850.100.1.11.2.1.4
+          name: tlUpsOutletGroupDesc
+
+metric_tags:
+  # Serial number for the UPS.
+  - column:
+      OID: 1.3.6.1.4.1.850.100.1.1.2.0
+      name: tlUpsIdentSerialNum
+    tag: serial_number
+  # A user-supplied ID for the UPS.
+  - column:
+      OID: 1.3.6.1.4.1.850.100.1.1.3.0
+      name: tlUpsIdentID
+  # Serial number for the UPS network card.
+  - column:
+      OID: 1.3.6.1.4.1.850.100.1.1.4.0
+      name: tlUpsSnmpCardSerialNum
+  # The device location string.
+  - column:
+      OID: 1.3.6.1.4.1.850.100.1.1.6.0
+      name: tlUpsLocation

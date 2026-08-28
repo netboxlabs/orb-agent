@@ -1,0 +1,12 @@
+# general profile for netskope appliances. vendor has a mib available
+# but walk results from target devices did not show support for any of those oids
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - ucd-mib.yml
+
+provider: kentik-net-snmp
+
+sysobjectid:
+  - 1.3.6.1.4.1.8072.3.2.10.netskope

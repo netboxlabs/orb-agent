@@ -1,0 +1,381 @@
+# https://mibs.observium.org/mib/DATA-DOMAIN-MIB/
+# http://oid-info.com/get/1.3.6.1.4.1.19746.3.1
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-nas
+
+sysobjectid:
+  - 1.3.6.1.4.1.19746.3.1.*    # EMC Data Domain
+  - 1.3.6.1.4.1.19746.3.1.1    # EMC dd200
+  - 1.3.6.1.4.1.19746.3.1.2    # EMC dd200Proto
+  - 1.3.6.1.4.1.19746.3.1.3    # EMC dd410
+  - 1.3.6.1.4.1.19746.3.1.4    # EMC dd430
+  - 1.3.6.1.4.1.19746.3.1.5    # EMC dd460
+  - 1.3.6.1.4.1.19746.3.1.6    # EMC dd400g
+  - 1.3.6.1.4.1.19746.3.1.7    # EMC dd460g
+  - 1.3.6.1.4.1.19746.3.1.8    # EMC dd560
+  - 1.3.6.1.4.1.19746.3.1.9    # EMC dd560g
+  - 1.3.6.1.4.1.19746.3.1.10    # EMC dd580
+  - 1.3.6.1.4.1.19746.3.1.11    # EMC dd580g
+  - 1.3.6.1.4.1.19746.3.1.12    # EMC dd565
+  - 1.3.6.1.4.1.19746.3.1.13    # EMC dd530
+  - 1.3.6.1.4.1.19746.3.1.14    # EMC dd510
+  - 1.3.6.1.4.1.19746.3.1.15    # EMC dd120
+  - 1.3.6.1.4.1.19746.3.1.16    # EMC dd690
+  - 1.3.6.1.4.1.19746.3.1.17    # EMC dd690g
+  - 1.3.6.1.4.1.19746.3.1.18    # EMC dd660
+  - 1.3.6.1.4.1.19746.3.1.19    # EMC dd880
+  - 1.3.6.1.4.1.19746.3.1.20    # EMC dd880g
+  - 1.3.6.1.4.1.19746.3.1.21    # EMC dd610
+  - 1.3.6.1.4.1.19746.3.1.22    # EMC dd630
+  - 1.3.6.1.4.1.19746.3.1.23    # EMC dd140
+  - 1.3.6.1.4.1.19746.3.1.24    # EMC dd670
+  - 1.3.6.1.4.1.19746.3.1.25    # EMC dd860
+  - 1.3.6.1.4.1.19746.3.1.26    # EMC dd860g
+  - 1.3.6.1.4.1.19746.3.1.27    # EMC dd890
+  - 1.3.6.1.4.1.19746.3.1.28    # EMC dd640
+  - 1.3.6.1.4.1.19746.3.1.29    # EMC dd620
+  - 1.3.6.1.4.1.19746.3.1.30    # EMC dd160
+  - 1.3.6.1.4.1.19746.3.1.31    # EMC ddintrepid
+  - 1.3.6.1.4.1.19746.3.1.32    # EMC dd4500
+  - 1.3.6.1.4.1.19746.3.1.33    # EMC dd7200
+  - 1.3.6.1.4.1.19746.3.1.34    # EMC ddve
+  - 1.3.6.1.4.1.19746.3.1.35    # EMC dd990
+  - 1.3.6.1.4.1.19746.3.1.36    # EMC dd2500
+  - 1.3.6.1.4.1.19746.3.1.37    # EMC dd4200
+
+metrics:
+  # Memory Total
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageSize
+      OID: 1.3.6.1.2.1.25.2.3.1.5.1
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # Memory Used
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.1
+      poll_time_sec: 60
+      tag: MemoryUsed
+  # Memory Buffers
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.6
+      poll_time_sec: 60
+      tag: MemoryBuffer
+  # Memory Cache
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.7
+      poll_time_sec: 60
+      tag: MemoryCache
+  # Status of the file system
+  - MIB: DATA-DOMAIN-MIB
+    symbol:
+      name: fileSystemStatus
+      OID: 1.3.6.1.4.1.19746.1.3.1.1.0
+      enum:
+        enabled: 1
+        disabled: 2
+        running: 3
+        unknown: 4
+        error: 5
+        cleaning: 6
+  # Amount of Uncompressed data in Gigabytes that has been backed up by the system
+  - MIB: DATA-DOMAIN-MIB
+    symbol:
+      name: fileSystemVirtualSpace
+      OID: 1.3.6.1.4.1.19746.1.3.1.2.0
+  # File system uptime
+  - MIB: DATA-DOMAIN-MIB
+    symbol:
+      name: fileSystemUptime
+      OID: 1.3.6.1.4.1.19746.1.3.1.3.0
+      conversion: to_one
+  # File system status message
+  - MIB: DATA-DOMAIN-MIB
+    symbol:
+      name: fileSystemStatusMessage
+      OID: 1.3.6.1.4.1.19746.1.3.1.4.0
+      conversion: to_one
+
+  # A table containing entries of PowerModuleEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: powerModuleTable
+      OID: 1.3.6.1.4.1.19746.1.1.1.1.1
+    symbols:
+      # Current enclosure Power Module status
+      - name: powerModuleStatus
+        OID: 1.3.6.1.4.1.19746.1.1.1.1.1.1.4
+        enum:
+          absent: 0
+          ok: 1
+          failed: 2
+          faulty: 3
+          acnone: 4
+          unknown: 99
+    metric_tags:
+      # Power Module Description
+      - column:
+          name: powerModuleDescription
+          OID: 1.3.6.1.4.1.19746.1.1.1.1.1.1.3
+
+  # A table containing entries of TemperatureSensorEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: temperatureSensorTable
+      OID: 1.3.6.1.4.1.19746.1.1.2.1.1
+    symbols:
+      # Current Temperature Value of the sensor in Celsius
+      - name: tempSensorCurrentValue
+        OID: 1.3.6.1.4.1.19746.1.1.2.1.1.1.5
+      # Current status of the sensor
+      - name: tempSensorStatus
+        OID: 1.3.6.1.4.1.19746.1.1.2.1.1.1.6
+        enum:
+          failed: 0
+          ok: 1
+          notfound: 2
+          overheatWarning: 3
+          overheatCritical: 4
+    metric_tags:
+      # Temperature Sensor Description
+      - column:
+          name: tempSensorDescription
+          OID: 1.3.6.1.4.1.19746.1.1.2.1.1.1.4
+
+  # A table containing entries of FanPropertiesEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: fanPropertiesTable
+      OID: 1.3.6.1.4.1.19746.1.1.3.1.1
+    symbols:
+      # Current run level of fan
+      - name: fanLevel
+        OID: 1.3.6.1.4.1.19746.1.1.3.1.1.1.5
+        enum:
+          unknown: 0
+          low: 1
+          medium: 2
+          high: 3
+      # Current status of the fan
+      - name: fanStatus
+        OID: 1.3.6.1.4.1.19746.1.1.3.1.1.1.6
+        enum:
+          notfound: 0
+          ok: 1
+          fail: 2
+    metric_tags:
+      # Vendor supplied description of the fan
+      - column:
+          name: fanDescription
+          OID: 1.3.6.1.4.1.19746.1.1.3.1.1.1.4
+
+  # A table containing entries of FileSystemSpaceEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: filesystemSpaceTable
+      OID: 1.3.6.1.4.1.19746.1.3.2.1
+    symbols:
+      # Size of the file system resource in gigabytes
+      - name: fileSystemSpaceSize
+        OID: 1.3.6.1.4.1.19746.1.3.2.1.1.4
+      # Amount of used space within the file system resource in gigabytes
+      - name: fileSystemSpaceUsed
+        OID: 1.3.6.1.4.1.19746.1.3.2.1.1.5
+      # Amount of available space within the file system resource in gigabytes
+      - name: fileSystemSpaceAvail
+        OID: 1.3.6.1.4.1.19746.1.3.2.1.1.6
+      # Percentage of used space within the file system resource
+      - name: fileSystemPercentUsed
+        OID: 1.3.6.1.4.1.19746.1.3.2.1.1.7
+      # Amount of cleanable space within the file system resource
+      - name: fileSystemSpaceCleanable
+        OID: 1.3.6.1.4.1.19746.1.3.2.1.1.8
+    metric_tags:
+      # File system resource name
+      - column:
+          name: fileSystemResourceName
+          OID: 1.3.6.1.4.1.19746.1.3.2.1.1.3
+      # The tier that a resource belongs to, such as active or archive
+      - column:
+          name: fileSystemResourceTier
+          OID: 1.3.6.1.4.1.19746.1.3.2.1.1.9
+
+  # A table containing entries of FileSystemCompressionEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: fileSystemCompressionTable
+      OID: 1.3.6.1.4.1.19746.1.3.3.1
+    symbols:
+      # File system compression start time
+      - name: fileSystemCompressionStartTime
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.3
+      # File system compression end time
+      - name: fileSystemCompressionEndTime
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.4
+      # Size of the file system pre compression in gigabytes
+      - name: fileSystemPreCompressionSize
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.5
+      # Size of the file system post compression in gigabytes
+      - name: fileSystemPostCompressionSize
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.6
+      # File system global compression factor
+      - name: fileSystemGlobalCompressionFactor
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.7
+      # File system local compression factor
+      - name: fileSystemLocalCompressionFactor
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.8
+      # File system Total compression factor
+      - name: fileSystemTotalCompressionFactor
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.9
+      # File system Reduction Percent
+      - name: fileSystemReductionPercent
+        OID: 1.3.6.1.4.1.19746.1.3.3.1.1.11
+    metric_tags:
+      # File system compression period
+      - column:
+          name: fileSystemCompressionPeriod
+          OID: 1.3.6.1.4.1.19746.1.3.3.1.1.2
+
+  # A table containing entries of SystemStatsEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: systemStatsTable
+      OID: 1.3.6.1.4.1.19746.1.5.1.1
+    symbols:
+      # CPU Average Percentage Busy
+      - name: cpuAvgPercentageBusy
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.2
+        poll_time_sec: 60
+        tag: CPU
+      # CPU Max Percentage Busy
+      - name: cpuMaxPercentageBusy
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.3
+      # Number of NFS Operations performed per second
+      - name: nfsOpsPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.4
+      # Percentage of time NFS was Idle
+      - name: nfsIdlePercentage
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.5
+      # Percentage of time NFS was processing
+      - name: nfsProcPercentage
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.6
+      # Percentage of time NFS was sending requests
+      - name: nfsSendPercentage
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.7
+      # Percentage of time NFS was receiving requests
+      - name: nfsReceivePercentage
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.8
+      # Number of CIFS Operations performed per second
+      - name: cifsOpsPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.9
+      # Number of KBytes per second read from disk
+      - name: diskReadKBytesPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.10
+      # Number of KBytes per second written on disk
+      - name: diskWriteKBytesPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.11
+      # Percentage of Time Disks were busy
+      - name: diskBusyPercentage
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.12
+      # Number of KBytes read per second from NVRAM
+      - name: nvramReadKBytesPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.13
+      # Number of KBytes written per second on NVRAM
+      - name: nvramWriteKBytesPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.14
+      # Number of KBytes per second received for Replication
+      - name: replInKBytesPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.15
+      # Number of KBytes per second sent for Replication
+      - name: relOutKBytesPerSecond
+        OID: 1.3.6.1.4.1.19746.1.5.1.1.1.16
+
+  # A table containing entries of DiskPropertiesEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: diskPropertiesTable
+      OID: 1.3.6.1.4.1.19746.1.6.1.1
+    symbols:
+      # Current State of the disk
+      - name: diskPropState
+        OID: 1.3.6.1.4.1.19746.1.6.1.1.1.8
+        enum:
+          ok: 1
+          unknown: 2
+          absent: 3
+          failed: 4
+          spare: 5
+          available: 6
+      # Pack information of the disk. Applicable to enclosures with packs such as ES60, and not for ES20 or ES30.
+      - name: diskPack
+        OID: 1.3.6.1.4.1.19746.1.6.1.1.1.9
+        enum:
+          notapplicable: 0
+          pack1: 1
+          pack2: 2
+          pack3: 3
+          pack4: 4
+    metric_tags:
+      # Enclosure ID of disk
+      - column:
+          name: diskPropEnclosureID
+          OID: 1.3.6.1.4.1.19746.1.6.1.1.1.1
+      # Disk Number
+      - column:
+          name: diskPropIndex
+          OID: 1.3.6.1.4.1.19746.1.6.1.1.1.2
+      # Manufacture and model of the disk
+      - column:
+          name: diskModel
+          OID: 1.3.6.1.4.1.19746.1.6.1.1.1.4
+      # Firmware version of the disk
+      - column:
+          name: diskFirmwareVersion
+          OID: 1.3.6.1.4.1.19746.1.6.1.1.1.5
+      # Serial Number of the disk
+      - column:
+          name: diskSerialNumber
+          OID: 1.3.6.1.4.1.19746.1.6.1.1.1.6
+      # Capacity of the disk, in Gigabytes
+      - column:
+          name: diskCapacity
+          OID: 1.3.6.1.4.1.19746.1.6.1.1.1.7
+
+  # A table containing entries of DiskPerformanceEntry
+  - MIB: DATA-DOMAIN-MIB
+    table:
+      name: diskPerformanceTable
+      OID: 1.3.6.1.4.1.19746.1.6.2.1
+    symbols:
+      # Number of disk sectors read per second
+      - name: diskSectorsRead
+        OID: 1.3.6.1.4.1.19746.1.6.2.1.1.3
+      # Number of disk sectors written per second
+      - name: diskSectorsWritten
+        OID: 1.3.6.1.4.1.19746.1.6.2.1.1.4
+      # Total Number of Kilo-bytes read/written per second
+      - name: diskTotalKBytes
+        OID: 1.3.6.1.4.1.19746.1.6.2.1.1.5
+      # Percentage of time disk is busy
+      - name: diskBusy
+        OID: 1.3.6.1.4.1.19746.1.6.2.1.1.6
+      # Current State of the disk
+      - name: diskPerfState
+        OID: 1.3.6.1.4.1.19746.1.6.2.1.1.7
+        enum:
+          ok: 1
+          unknown: 2
+          absent: 3
+          failed: 4
+          spare: 5
+          available: 6

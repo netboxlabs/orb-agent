@@ -1,0 +1,127 @@
+# http://oid-info.com/get/1.3.6.1.4.1.4526.22
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - ucd-mib.yml
+
+provider: kentik-nas
+
+sysobjectid:
+  - 1.3.6.1.4.1.4526.100.12.*
+  - 1.3.6.1.4.1.4526.100.15.*
+  - 1.3.6.1.4.1.4526.100.16.*
+  - 1.3.6.1.4.1.4526.22.*
+
+metrics:
+  - MIB: READYNASOS-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.4526.22.1.0
+      name: nasMgrSoftwareVersion
+      tag: softwareVersion
+  - MIB: READYNASOS-MIB
+    table:
+      OID: 1.3.6.1.4.1.4526.22.3
+      name: diskTable
+    symbols:
+      - OID: 1.3.6.1.4.1.4526.22.3.1.6
+        name: ataError
+      - OID: 1.3.6.1.4.1.4526.22.3.1.7
+        name: diskCapacity
+      - OID: 1.3.6.1.4.1.4526.22.3.1.9
+        name: diskState
+        enum:
+          online: 1
+          offline: 0
+      - OID: 1.3.6.1.4.1.4526.22.3.1.10
+        name: diskTemperature
+    metric_tags:
+      - tag: diskID
+        column:
+          OID: 1.3.6.1.4.1.4526.22.3.1.2
+          name: diskID
+      - tag: diskSlotName
+        column:
+          OID: 1.3.6.1.4.1.4526.22.3.1.3
+          name: diskSlotName
+      - tag: diskSerial
+        column:
+          OID: 1.3.6.1.4.1.4526.22.3.1.4
+          name: diskSerial
+      - tag: diskModel
+        column:
+          OID: 1.3.6.1.4.1.4526.22.3.1.5
+          name: diskModel
+      - tag: diskInterface
+        column:
+          OID: 1.3.6.1.4.1.4526.22.3.1.8
+          name: diskInterface
+  - MIB: READYNASOS-MIB
+    table:
+      OID: 1.3.6.1.4.1.4526.22.4
+      name: fanTable
+    symbols:
+      - OID: 1.3.6.1.4.1.4526.22.4.1.2
+        name: fanRPM
+      - OID: 1.3.6.1.4.1.4526.22.4.1.3
+        name: fanStatus
+    metric_tags:
+      - tag: fanType
+        column:
+          OID: 1.3.6.1.4.1.4526.22.4.1.4
+          name: fanType
+  - MIB: READYNASOS-MIB
+    table:
+      OID: 1.3.6.1.4.1.4526.22.5
+      name: temperatureTable
+    symbols:
+      - OID: 1.3.6.1.4.1.4526.22.5.1.2
+        name: temperatureValue
+      - OID: 1.3.6.1.4.1.4526.22.5.1.4
+        name: temperatureMin
+      - OID: 1.3.6.1.4.1.4526.22.5.1.5
+        name: temperatureMax
+    metric_tags:
+      - tag: temperatureType
+        column:
+          OID: 1.3.6.1.4.1.4526.22.5.1.3
+          name: temperatureType
+  - MIB: READYNASOS-MIB
+    table:
+      OID: 1.3.6.1.4.1.4526.22.7
+      name: volumeTable
+    symbols:
+      - OID: 1.3.6.1.4.1.4526.22.7.1.3
+        name: volumeRAIDLevel
+      - OID: 1.3.6.1.4.1.4526.22.7.1.4
+        name: volumeStatus
+        enum:
+          REDUNDANT: 1
+          UNPROTECTED: 2
+          DEGRADED: 3
+          DEAD: 4
+          INACTIVE: 5
+          UNKNOWN: 6
+      - OID: 1.3.6.1.4.1.4526.22.7.1.5
+        name: volumeSize
+      - OID: 1.3.6.1.4.1.4526.22.7.1.6
+        name: volumeFreeSpace
+    metric_tags:
+      - tag: volumeName
+        column:
+          OID: 1.3.6.1.4.1.4526.22.7.1.2
+          name: volumeName
+  - MIB: READYNASOS-MIB
+    table:
+      OID: 1.3.6.1.4.1.4526.22.8
+      name: psuTable
+    symbols:
+      - name: psuStatus
+        OID: 1.3.6.1.4.1.4526.22.8.1.3
+        conversion: to_one
+    metric_tags:
+      - tag: psuDescription
+        column:
+          OID: 1.3.6.1.4.1.4526.22.8.1.2
+          name: psuDesc
+
