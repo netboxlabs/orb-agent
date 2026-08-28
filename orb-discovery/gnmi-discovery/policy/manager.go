@@ -381,6 +381,21 @@ func splitEffectivePort(host string, field uint16) (bare string, port uint16, in
 // but DNS names are case-insensitive.
 func canonicalHost(h string) string {
 	h = strings.Trim(h, "[]")
+
+	// A zone identifier is an interface name, and net.ParseIP refuses any address
+	// carrying one — so the whole value fell to the lower-casing path meant for
+	// hostnames, and got both halves wrong. Linux interface names are
+	// case-sensitive, so fe80::1%Eth0 and fe80::1%eth0 are two different links
+	// and were being rejected as one duplicate; meanwhile the address half was
+	// never canonicalized, so fe80::0001%eth0 and fe80::1%eth0 were treated as
+	// two endpoints when they are one.
+	if addr, zone, ok := strings.Cut(h, "%"); ok {
+		if ip := net.ParseIP(addr); ip != nil {
+			return ip.String() + "%" + zone
+		}
+		return strings.ToLower(addr) + "%" + zone
+	}
+
 	if ip := net.ParseIP(h); ip != nil {
 		return ip.String()
 	}

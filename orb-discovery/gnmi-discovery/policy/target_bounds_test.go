@@ -426,3 +426,74 @@ policies:
 `))
 	require.Error(t, err, "1022 + 3 is over it: real IPv6 hosts are not inside the /22")
 }
+
+// A zone identifier is an interface name, and Linux interface names are
+// case-sensitive. net.ParseIP refuses any address carrying a zone, so the whole
+// value fell to the lower-casing path meant for hostnames — collapsing two
+// different links into one and rejecting the policy.
+func TestCaseDistinctIPv6ZonesAreDifferentEndpoints(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: fe80::1%eth0
+        - host: fe80::1%Eth0
+`))
+	require.NoError(t, err, "eth0 and Eth0 are two links on Linux")
+	require.Len(t, policies["p1"].Scope.Targets, 2)
+}
+
+// The same fallback also failed to canonicalize the address half, so one address
+// written two ways counted as two endpoints. Both halves are handled now.
+func TestTwoSpellingsOfOneZonedAddressAreOneEndpoint(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: fe80::0001%eth0
+          username: alice
+        - host: fe80::1%eth0
+          username: bob
+`))
+	require.Error(t, err, "same address, same zone: one endpoint")
+	require.Contains(t, err.Error(), "two entries")
+}
+
+// canonicalHost is shared with the expansion dedupe, so the two must still agree
+// on every zoned form — that sharing is what keeps validation from admitting
+// something expansion silently merges.
+func TestValidationAndExpansionAgreeOnZonedAddresses(t *testing.T) {
+	same := [][2]string{
+		{"fe80::0001%eth0", "fe80::1%eth0"},
+		{"FE80::1%eth0", "fe80::1%eth0"},
+	}
+	for _, pair := range same {
+		require.Equal(t, canonicalHost(pair[0]), canonicalHost(pair[1]),
+			"%q and %q are one endpoint", pair[0], pair[1])
+		require.Equal(t,
+			dedupeKey(ensurePort(pair[0], 9339)),
+			dedupeKey(ensurePort(pair[1], 9339)),
+			"expansion must agree for %q and %q", pair[0], pair[1])
+	}
+
+	differ := [][2]string{
+		{"fe80::1%eth0", "fe80::1%Eth0"},
+		{"fe80::1%eth0", "fe80::1%eth1"},
+		{"fe80::1%eth0", "fe80::2%eth0"},
+	}
+	for _, pair := range differ {
+		require.NotEqual(t, canonicalHost(pair[0]), canonicalHost(pair[1]),
+			"%q and %q are different endpoints", pair[0], pair[1])
+		require.NotEqual(t,
+			dedupeKey(ensurePort(pair[0], 9339)),
+			dedupeKey(ensurePort(pair[1], 9339)),
+			"expansion must agree for %q and %q", pair[0], pair[1])
+	}
+
+	// Unchanged: a mapped IPv4 form still collapses onto the plain address.
+	require.Equal(t, canonicalHost("::ffff:10.0.0.1"), canonicalHost("10.0.0.1"))
+}
