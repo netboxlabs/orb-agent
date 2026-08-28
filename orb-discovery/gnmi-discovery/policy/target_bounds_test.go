@@ -206,3 +206,91 @@ policies:
 `))
 	require.NoError(t, err)
 }
+
+// Validation and expansion must agree on what "the same endpoint" means.
+// Validation lowercased the raw text while expansion canonicalized through
+// net.ParseIP, so two spellings of one IPv6 address passed validation as two
+// targets with two sets of credentials and were then merged by the expansion
+// dedupe — leaving the effective config to depend on entry order, with only a
+// warning to show for it.
+func TestTwoSpellingsOfOneIPv6AddressAreRejectedAsADuplicate(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 2001:db8::1
+          username: alice
+        - host: 2001:0db8::1
+          username: bob
+`))
+	require.Error(t, err, "the expansion would have merged these; validation must say so")
+	require.Contains(t, err.Error(), "two entries")
+}
+
+// Upper-case hex is the same address too.
+func TestIPv6CaseDoesNotMakeANewEndpoint(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 2001:DB8::1
+        - host: 2001:db8::1
+`))
+	require.Error(t, err)
+}
+
+// An IPv4-mapped form names the same endpoint as the plain address, which is what
+// the expansion dedupe already concluded.
+func TestAnIPv4MappedAddressIsTheSameEndpoint(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.1
+        - host: "::ffff:10.0.0.1"
+`))
+	require.Error(t, err)
+}
+
+// Two genuinely different addresses still pass, and a hostname is never compared
+// against an address: Expand does not resolve DNS, so they cannot be known to be
+// the same device.
+func TestDistinctAddressesAndNamesStillPass(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 2001:db8::1
+        - host: 2001:db8::2
+        - host: switch-a.example.com
+        - host: 10.0.0.1
+`))
+	require.NoError(t, err)
+}
+
+// The two layers must reach the same verdict for the same input. If they drift
+// again, validation admits something expansion silently merges.
+func TestValidationAndExpansionAgreeOnEndpointIdentity(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"2001:db8::1", "2001:0db8::1"},
+		{"2001:DB8::1", "2001:db8::1"},
+		{"10.0.0.1", "::ffff:10.0.0.1"},
+		{"SWITCH-A.example.com", "switch-a.example.com"},
+	} {
+		require.Equal(t, canonicalHost(pair[0]), canonicalHost(pair[1]),
+			"%q and %q name one endpoint", pair[0], pair[1])
+		require.Equal(t,
+			dedupeKey(ensurePort(pair[0], 9339)),
+			dedupeKey(ensurePort(pair[1], 9339)),
+			"expansion must agree for %q and %q", pair[0], pair[1])
+	}
+	require.NotEqual(t, canonicalHost("2001:db8::1"), canonicalHost("2001:db8::2"))
+}

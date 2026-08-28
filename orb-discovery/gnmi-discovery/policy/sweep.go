@@ -347,17 +347,16 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 	return out, nil
 }
 
-// dedupeKey collapses two spellings of one endpoint. A hostname keeps its own
-// text: Expand never resolves DNS, so a name and an address cannot be known to
-// be the same device.
+// dedupeKey collapses two spellings of one endpoint.
+//
+// It shares canonicalHost with the validation that runs earlier, so the two
+// cannot disagree about what "the same endpoint" means. They did once, and
+// validation admitted a pair that expansion then silently merged.
 func dedupeKey(host string) string {
 	if h, port, err := net.SplitHostPort(host); err == nil {
-		if ip := net.ParseIP(strings.Trim(h, "[]")); ip != nil {
-			return ip.String() + ":" + port
-		}
-		return strings.ToLower(h) + ":" + port
+		return canonicalHost(h) + ":" + port
 	}
-	return strings.ToLower(host)
+	return canonicalHost(host)
 }
 
 // probe asks one address whether anything is listening.

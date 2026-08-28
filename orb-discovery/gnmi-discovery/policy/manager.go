@@ -320,7 +320,7 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 			namedHosts++
 		}
 
-		key := fmt.Sprintf("%s:%d", strings.ToLower(bare), port)
+		key := fmt.Sprintf("%s:%d", canonicalHost(bare), port)
 		if first, dup := seen[key]; dup {
 			return fmt.Errorf(
 				"targets %d and %d both name %q; one device cannot have two entries", first, i, t.Host)
@@ -363,6 +363,27 @@ func splitEffectivePort(host string, field uint16) (string, uint16) {
 		}
 	}
 	return host, resolvedPort(field)
+}
+
+// canonicalHost normalizes a bare host for comparison: an IP literal to the one
+// spelling Go prints for it, a name to lower case.
+//
+// Validation and expansion must agree on what "the same endpoint" means, and
+// they did not. Validation lowercased the raw text while expansion canonicalized
+// through net.ParseIP, so `2001:db8::1` and `2001:0db8::1` passed validation as
+// two targets with two sets of credentials and were then collapsed into one by
+// the expansion dedupe — leaving the effective configuration to depend on which
+// entry came first, with only a warning. Both layers now call this.
+//
+// Lower-casing a name rather than resolving it is deliberate: Expand never
+// resolves DNS, so a name and an address cannot be known to be the same device,
+// but DNS names are case-insensitive.
+func canonicalHost(h string) string {
+	h = strings.Trim(h, "[]")
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(h)
 }
 
 // checkNoControlChars rejects a policy-supplied string carrying control
