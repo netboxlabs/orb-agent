@@ -322,7 +322,11 @@ func (d *gnmiDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 		}
 	}
 
-	d.logger.Debug("gnmi-discovery policy apply", "policy_id", data.ID, "data", data.Data)
+	// The body is deliberately not logged. A gnmi policy may carry a literal
+	// password, and a scope-level credential now covers a whole subnet rather
+	// than one device, so a debug-level agent would put the campus password in
+	// the log stream. The id and name identify the policy for troubleshooting.
+	d.logger.Debug("gnmi-discovery policy apply", "policy_id", data.ID, "policy_name", data.Name)
 
 	fullPolicy := map[string]any{
 		"policies": map[string]any{

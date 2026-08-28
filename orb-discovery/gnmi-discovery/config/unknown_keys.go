@@ -25,12 +25,20 @@ import (
 var unknownFieldRe = regexp.MustCompile(`field (.+) not found in type (\S+)$`)
 
 // narrowedTypes are the blocks whose keys are a closed, documented set. The
-// policy map, scope entries and surrounding YAML carry operator-chosen keys
-// and anchors with no set to check against, so reporting those would fire on
-// correct files and train operators to ignore the warning.
+// policy map and the surrounding YAML carry operator-chosen names and anchors
+// with no set to check against, so reporting those would fire on correct files
+// and train operators to ignore the warning.
+//
+// The scope and target blocks matter most here. A misspelled scope-level
+// `usernme` is silently dropped by the permissive decode, and every target in
+// the range then authenticates with no username at all — a whole subnet failing
+// for a reason nothing reports.
 var narrowedTypes = map[string]bool{
 	"config.PolicyConfig": true,
 	"config.Options":      true,
+	"config.Scope":        true,
+	"config.Target":       true,
+	"config.TLSConfig":    true,
 }
 
 // WarnUnknownPolicyKeys logs one warning per unrecognized key in a policy's
@@ -77,4 +85,69 @@ func yamlFieldNames(t reflect.Type) map[string]bool {
 		}
 	}
 	return names
+}
+
+// WarnNullTLSBlocks reports a `tls:` key written with nothing under it.
+//
+// Target.TLS is a pointer so that nil can mean "inherit the scope's block", and
+// a null node unmarshals to exactly that nil. So an operator who writes a bare
+// `tls:` on a target to mean "no TLS settings here" gets the opposite: the
+// scope's block, complete with whatever skip_verify or CA path it carries. The
+// distinction is invisible after unmarshalling, so it has to be caught on the
+// raw document.
+func WarnNullTLSBlocks(data []byte, logger *slog.Logger) {
+	if logger == nil {
+		return
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+		return
+	}
+	policies := mapValue(doc.Content[0], "policies")
+	if policies == nil {
+		return
+	}
+	// A mapping node interleaves keys and values, so names and bodies are read
+	// two at a time.
+	for i := 0; i+1 < len(policies.Content); i += 2 {
+		name, body := policies.Content[i].Value, policies.Content[i+1]
+		scope := mapValue(body, "scope")
+		if scope == nil {
+			continue
+		}
+		warnIfNullTLS(logger, scope, name, "scope")
+		targets := mapValue(scope, "targets")
+		if targets == nil {
+			continue
+		}
+		for _, target := range targets.Content {
+			host := "?"
+			if h := mapValue(target, "host"); h != nil {
+				host = h.Value
+			}
+			warnIfNullTLS(logger, target, name, host)
+		}
+	}
+}
+
+func warnIfNullTLS(logger *slog.Logger, node *yaml.Node, policy, where string) {
+	tls := mapValue(node, "tls")
+	if tls == nil || tls.Tag != "!!null" {
+		return
+	}
+	logger.Warn("empty tls block inherits the scope's TLS settings; remove the key to inherit, or give it fields to override",
+		"policy", policy, "target", where)
+}
+
+// mapValue returns the value node for key in a mapping node, or nil.
+func mapValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }

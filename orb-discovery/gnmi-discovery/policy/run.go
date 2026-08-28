@@ -23,6 +23,11 @@ const (
 
 const maxRunsPerTarget = 3
 
+// maxRunsPerPolicy caps what /status reports for one policy. A /22 policy can
+// hold three runs for each of a thousand targets, and the whole list is
+// marshalled on every health check.
+const maxRunsPerPolicy = 100
+
 // Run is a single flush execution (one reconciled-snapshot ingest).
 type Run struct {
 	ID       string `json:"id"`
@@ -138,20 +143,46 @@ func (rs *RunStore) UpdateRun(policy, host, runID string, status RunStatus, err 
 	}
 }
 
-// GetRunsForPolicy returns all runs for a policy (flattened, newest first).
+// GetRunsForPolicy returns a policy's most recently active runs.
+//
+// The result is capped. A policy sweeping a /22 holds up to maxRunsPerTarget
+// runs for each of a thousand targets, and the agent polls /status every 10s
+// with a 2s budget and restarts the backend when that times out — so an
+// uncapped list turns a large policy into a restart loop.
+//
+// Sweep runs are exempt from the cap. They are the one record that describes the
+// policy as a whole, and they are also the easiest to lose: a busy range
+// produces device runs continuously, which would push the sweep off the end.
 func (rs *RunStore) GetRunsForPolicy(policy string) []*Run {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	out := make([]*Run, 0)
-	for _, targetRuns := range rs.runs[policy] {
+	var sweeps []*Run
+	for host, targetRuns := range rs.runs[policy] {
 		for _, r := range targetRuns {
+			if host == sweepRunKey {
+				sweeps = append(sweeps, copyRun(r))
+				continue
+			}
 			out = append(out, copyRun(r))
 		}
 	}
-	// Most-recent-activity order, not creation order. A sweep run is created
-	// before every run it starts, so sorting on CreatedAt would bury it under the
-	// per-device runs it produced — and activity order is the more useful one
-	// generally. Per-device runs consequently order by activity too.
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	sortByActivity(out)
+	if room := maxRunsPerPolicy - len(sweeps); len(out) > room {
+		out = out[:max(room, 0)]
+	}
+	out = append(out, sweeps...)
+	sortByActivity(out)
 	return out
+}
+
+// sortByActivity orders runs most-recently-active first.
+//
+// Not creation order: a sweep run is created before every run it starts, so
+// sorting on CreatedAt would permanently bury it under the per-device runs it
+// produced. Activity order is also the more useful one generally. The
+// consequence for existing policies is that per-device runs order by activity
+// rather than by creation.
+func sortByActivity(runs []*Run) {
+	sort.Slice(runs, func(i, j int) bool { return runs[i].UpdatedAt > runs[j].UpdatedAt })
 }

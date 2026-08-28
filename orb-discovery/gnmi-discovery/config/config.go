@@ -13,8 +13,10 @@ const (
 // Default config values.
 const (
 	// DefaultGNMIPort is the IANA-registered gNMI port. Vendors differ in
-	// practice (Arista 6030, Nokia 57400), so operators should set an explicit
-	// host:port; this default only applies when a target omits the port.
+	// practice (Arista 6030, Nokia 57400), so operators should set the port
+	// explicitly — inline as host:port for a single endpoint, or via the port
+	// field, which is the only option for a CIDR or range. This default applies
+	// only when neither is given.
 	DefaultGNMIPort       = 9339
 	DefaultDebounceMs     = 2000
 	DefaultSampleInterval = 300000 // 5m

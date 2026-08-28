@@ -2,6 +2,7 @@ package policy
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -118,4 +119,39 @@ func TestAFailedSweepStillRescans(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(r.Runs()) >= 2
 	}, 3*time.Second, 10*time.Millisecond, "the sweep keeps ticking after finding nothing")
+}
+
+// A /22 policy holds up to three runs for each of a thousand targets, and the
+// agent marshals the whole list every 10s with a 2s budget before it restarts
+// the backend. The cap is what keeps a large policy from becoming a restart loop.
+func TestRunsForAPolicyAreCapped(t *testing.T) {
+	rs := NewRunStore()
+	for i := range 400 {
+		host := fmt.Sprintf("10.0.%d.%d:9339", i/256, i%256)
+		run := rs.CreateRun("p1", host)
+		rs.UpdateRun("p1", host, run.ID, RunStatusCompleted, nil, 1)
+	}
+	require.LessOrEqual(t, len(rs.GetRunsForPolicy("p1")), maxRunsPerPolicy)
+}
+
+// The sweep run is the one record describing the policy as a whole, and a busy
+// range produces device runs continuously — so it must not be what the cap drops.
+func TestTheSweepRunSurvivesTheCap(t *testing.T) {
+	rs := NewRunStore()
+	sweep := rs.CreateSweepRun("p1", []string{"10.0.0.0/22"})
+	rs.FinishSweepRun("p1", sweep.ID, RunStatusCompleted, "2 of 1022 address(es) answered", 2)
+
+	for i := range 400 {
+		host := fmt.Sprintf("10.0.%d.%d:9339", i/256, i%256)
+		run := rs.CreateRun("p1", host)
+		rs.UpdateRun("p1", host, run.ID, RunStatusCompleted, nil, 1)
+	}
+
+	var found bool
+	for _, r := range rs.GetRunsForPolicy("p1") {
+		if r.ID == sweep.ID {
+			found = true
+		}
+	}
+	require.True(t, found, "the sweep run is exempt from the cap")
 }
