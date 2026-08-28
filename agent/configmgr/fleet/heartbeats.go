@@ -196,6 +196,7 @@ func convertRunsToStateInfo(runs []policies.RunData) []messages.RunStateInfo {
 			UpdatedAt:   run.UpdatedAt,
 			Targets:     run.Targets,
 			Driver:      run.Driver,
+			Kind:        run.Kind,
 		}
 	}
 	return runInfos
