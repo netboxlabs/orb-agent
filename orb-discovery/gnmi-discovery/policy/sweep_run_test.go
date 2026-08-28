@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,4 +194,28 @@ func TestACanceledSweepIsNotLoggedAsAFailure(t *testing.T) {
 
 	require.NotContains(t, logs.String(), "level=ERROR",
 		"an ordinary policy removal must not log an error")
+}
+
+// entity_count reports how many targets the policy is subscribed to, not how
+// many this particular tick newly admitted. A rescan that finds nothing new is
+// the normal state of a healthy policy, and reporting 0 there would read as a
+// policy that had stopped discovering anything.
+func TestASweepReportsTheReachableTotalNotTheDelta(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{"10.0.0.2:9339": dialingErr()})
+	r := newRescanRunner(t, "10.0.0.0/30", dialer, 40*time.Millisecond)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	// Wait for a rescan tick that admitted nothing new: only .1 ever answers.
+	require.Eventually(t, func() bool {
+		for _, run := range r.Runs() {
+			if run.Status == RunStatusCompleted && run.EntityCount == 1 &&
+				strings.Contains(run.Reason, "1 subscribed") &&
+				strings.Contains(run.Reason, "0 of 1 probed") {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond,
+		"a tick with no newcomers still reports the one target that is subscribed")
 }

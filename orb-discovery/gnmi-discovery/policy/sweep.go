@@ -91,14 +91,14 @@ func (r *Runner) sweepOnce() {
 		return
 	}
 
-	status, reason := RunStatusCompleted, outcome.summary()
-	if outcome.subscribed == 0 && outcome.admitted == 0 {
+	status := RunStatusCompleted
+	if outcome.reachable() == 0 {
 		// The operator gave a range and nothing in it answered. That is the
 		// implementable form of "the policy failed": a run they can see, rather
 		// than a silent policy that reports healthy and discovers nothing.
 		status = RunStatusFailed
 	}
-	r.runStore.FinishSweepRun(r.name, run.ID, status, reason, outcome.admitted)
+	r.runStore.FinishSweepRun(r.name, run.ID, status, outcome.summary(), outcome.reachable())
 
 	// Spread the first dial once a sweep admits more than a handful. Every loop
 	// dials immediately, so 200 admitted targets means 200 simultaneous TLS
@@ -242,14 +242,19 @@ type sweepOutcome struct {
 	exampleReason string
 }
 
+// reachable is how many targets this policy is subscribed to once the sweep
+// finishes. It is what the run reports as its entity count, rather than the
+// number newly admitted: a rescan tick that finds nothing new is the normal
+// state of a healthy policy, and reporting 0 there would read as a policy that
+// had stopped discovering anything.
+func (o sweepOutcome) reachable() int { return o.subscribed + o.admitted }
+
 func (o sweepOutcome) summary() string {
-	if o.scanned == o.subscribed && o.scanned > 0 {
-		return fmt.Sprintf("%d target(s) already subscribed; nothing new to probe", o.subscribed)
+	probed := o.scanned - o.subscribed
+	if probed == 0 {
+		return fmt.Sprintf("%d subscribed; no unsubscribed addresses left to probe", o.reachable())
 	}
-	s := fmt.Sprintf("%d of %d address(es) answered", o.admitted, o.scanned-o.subscribed)
-	if o.subscribed > 0 {
-		s += fmt.Sprintf("; %d already subscribed", o.subscribed)
-	}
+	s := fmt.Sprintf("%d subscribed; %d of %d probed address(es) answered", o.reachable(), o.admitted, probed)
 	if o.rejected > 0 {
 		s += fmt.Sprintf("; %d did not answer, e.g. %s", o.rejected, o.exampleReason)
 	}
