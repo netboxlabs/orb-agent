@@ -386,7 +386,12 @@ func splitEffectivePort(host string, field uint16) (bare string, port uint16, in
 			return strings.Trim(h, "[]"), uint16(n), true
 		}
 	}
-	return host, resolvedPort(field), false
+	// Brackets come off here too, not only on the branch above. bare is what
+	// Count, Span, IsSingleEndpoint and canonicalHost are all asked about, and it
+	// was normalized on one path and not the other: canonicalHost trims its own
+	// input, so "[10.0.0.1]" collapsed with the plain address for identity while
+	// Span refused to parse it and counted it as a separate endpoint.
+	return strings.Trim(host, "[]"), resolvedPort(field), false
 }
 
 // canonicalHost normalizes a bare host for comparison: an IP literal to the one

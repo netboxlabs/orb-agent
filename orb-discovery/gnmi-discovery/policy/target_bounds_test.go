@@ -555,3 +555,66 @@ policies:
 `))
 	require.NoError(t, err, "a subnet, pinned hosts inside it, and a nested prefix")
 }
+
+// bare is what Count, Span, IsSingleEndpoint and canonicalHost are all asked
+// about, and it was normalized on one path and not the other. canonicalHost trims
+// its own input, so a bracketed literal collapsed with the plain address for
+// identity while Span refused to parse it and counted a separate endpoint — a /22
+// plus three bracketed pinned hosts inside it was rejected as 1025 addresses that
+// expansion resolves to 1022.
+func TestBracketedHostsInsideASubnetDoNotCountTwice(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.0/22
+        - host: "[10.0.0.1]"
+          username: a
+        - host: "[10.0.0.2]"
+          username: b
+        - host: "[10.0.0.3]"
+          username: c
+`))
+	require.NoError(t, err, "the bracketed hosts are inside the /22")
+}
+
+// A bracketed literal and its plain form are one endpoint, so naming both is the
+// duplicate it looks like.
+func TestABracketedAndAPlainAddressAreOneEndpoint(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: "[10.0.0.5]"
+          username: alice
+        - host: 10.0.0.5
+          username: bob
+`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "two entries")
+}
+
+// Bracketed IPv6 keeps working, with and without an inline port, since brackets
+// are how it is written at all.
+func TestBracketedIPv6StillWorks(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      port: 6030
+      targets:
+        - host: "[2001:db8::1]"
+        - host: "[2001:db8::2]:57400"
+`))
+	require.NoError(t, err)
+	hosts := []string{}
+	for _, tgt := range policies["p1"].Scope.Targets {
+		hosts = append(hosts, tgt.Host)
+	}
+	require.Equal(t, []string{"[2001:db8::1]:6030", "[2001:db8::2]:57400"}, hosts)
+}
