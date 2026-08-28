@@ -343,10 +343,20 @@ func dedupeKey(host string) string {
 
 // probe asks one address whether anything is listening.
 //
-// It sends no credentials. gnmic attaches them as gRPC metadata on every RPC
-// including Capabilities, so a credentialed sweep would spray the campus
-// password across every address in the range — and with a scope-level
-// skip_verify, at anything that answers.
+// It carries no identity of any kind. gnmic attaches username and password as
+// gRPC metadata on every RPC including Capabilities, so a credentialed sweep
+// would spray the campus password across every address in the range — and with a
+// scope-level skip_verify, at anything that answers.
+//
+// The client certificate is withheld for the same reason, one step weaker: a
+// probe is not an authenticated conversation, so presenting the agent's client
+// identity to every address in a range gives it away to whatever is listening
+// there. Admission never needs it. A device that requires mTLS and gets no
+// client cert answers "tls: certificate required", which is a peer answering and
+// is admitted — measured against a real mTLS server, not assumed.
+//
+// The server-side settings do go: without the CA and skip_verify the probe
+// cannot complete a handshake it is otherwise entitled to complete.
 func (r *Runner) probe(t config.Target) error {
 	ctx, cancel := context.WithTimeout(r.ctx, r.policy.Config.ResolvedProbeTimeout())
 	defer cancel()
@@ -358,8 +368,6 @@ func (r *Runner) probe(t config.Target) error {
 		Insecure:   tls.Insecure,
 		Origin:     t.ResolvedOrigin(),
 		CAFile:     tls.CAFile,
-		CertFile:   tls.CertFile,
-		KeyFile:    tls.KeyFile,
 	})
 	if err != nil {
 		// A Dial error is usually a configuration fault — an unreadable CA file,

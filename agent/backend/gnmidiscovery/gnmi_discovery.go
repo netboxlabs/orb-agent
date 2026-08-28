@@ -371,25 +371,43 @@ func (d *gnmiDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	return nil
 }
 
-// gnmiStatusResponse mirrors gnmi-discovery's /api/v1/status. Each run carries a
-// single `target` (string), unlike the shared backend.PolicyStatusRun which
-// expects a `targets` array — so decoding straight into backend.StatusResponse
-// would drop the per-run target. We decode into this shape and normalize
-// `target` into Targets below.
+// gnmiStatusResponse mirrors gnmi-discovery's /api/v1/status. A run carries both
+// a `targets` array and a single `target`, while the shared
+// backend.PolicyStatusRun has only the array — so decoding straight into
+// backend.StatusResponse would drop a run's target entirely. We decode into this
+// shape and normalize below.
 type gnmiStatusResponse struct {
 	Policies []struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
 		Runs   []struct {
-			ID          string `json:"id"`
-			Target      string `json:"target"`
-			Status      string `json:"status"`
-			Reason      string `json:"reason"`
-			EntityCount int64  `json:"entity_count"`
-			CreatedAt   int64  `json:"created_at"`
-			UpdatedAt   int64  `json:"updated_at"`
+			ID          string   `json:"id"`
+			Target      string   `json:"target"`
+			Targets     []string `json:"targets"`
+			Status      string   `json:"status"`
+			Reason      string   `json:"reason"`
+			EntityCount int64    `json:"entity_count"`
+			CreatedAt   int64    `json:"created_at"`
+			UpdatedAt   int64    `json:"updated_at"`
 		} `json:"runs"`
 	} `json:"policies"`
+}
+
+// runTargets picks the target list to report for one run.
+//
+// The array wins. A sweep run covering several scope entries carries each
+// original host string in `targets` and a comma-joined compatibility value in
+// `target`, so reading the singular field would deliver
+// "10.0.0.0/24,10.1.0.0/24" to the fleet as one target instead of two. The
+// singular field remains the fallback for a payload that predates the array.
+func runTargets(targets []string, target string) []string {
+	if len(targets) > 0 {
+		return targets
+	}
+	if target == "" {
+		return nil
+	}
+	return []string{target}
 }
 
 // GetPolicyStatus returns per-policy run status from the REST status endpoint,
@@ -407,10 +425,7 @@ func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error)
 	for _, p := range resp.Policies {
 		runs := make([]backend.PolicyStatusRun, 0, len(p.Runs))
 		for _, r := range p.Runs {
-			var targets []string
-			if r.Target != "" {
-				targets = []string{r.Target}
-			}
+			targets := runTargets(r.Targets, r.Target)
 			runs = append(runs, backend.PolicyStatusRun{
 				ID:          r.ID,
 				Status:      r.Status,

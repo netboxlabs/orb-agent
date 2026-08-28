@@ -74,8 +74,8 @@ policies:
 		"the scope secret was resolved from the environment, not passed through literally")
 	require.True(t, subscribed.SkipVerify, "the scope TLS block was inherited")
 
-	// The probe still carries the TLS settings: without them it cannot complete a
-	// handshake against a device that requires one.
+	// The probe still carries the server-side TLS settings: without them it
+	// cannot complete a handshake it is otherwise entitled to complete.
 	require.True(t, rejected[0].SkipVerify, "a probe uses the resolved TLS block")
 }
 
@@ -173,4 +173,81 @@ func runnerWithTargets(t *testing.T, list []config.Target, logger *slog.Logger) 
 		&recordingClient{}, newPerHostDialer(nil), store)
 	require.NoError(t, err)
 	return r
+}
+
+// A probe carries no identity of any kind, the client certificate included.
+// Presenting the agent's client identity to every address in a range hands it to
+// whatever is listening there, and admission never needs it: a device that
+// requires mTLS and receives no client cert answers "tls: certificate required",
+// which is a peer answering and is admitted. That was measured against a real
+// mTLS server rather than assumed.
+//
+// The server-side settings still go, or the probe cannot complete a handshake it
+// is entitled to complete.
+func TestAProbeWithholdsTheClientCertificateButKeepsTheServerSettings(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  campus:
+    scope:
+      username: admin
+      password: pw
+      tls:
+        ca: /run/secrets/ca.pem
+        cert: /run/secrets/client.pem
+        key: /run/secrets/client.key
+      targets:
+        - host: 10.0.0.0/30
+`))
+	require.NoError(t, err)
+
+	dialer := newPerHostDialer(nil)
+	dialer.defaultCapsErr = dialingErr() // reject all, so every dial is a probe
+	r := newRunnerFor(t, policies["campus"], dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(dialer.dialedHosts()) == 2
+	}, 3*time.Second, 10*time.Millisecond)
+
+	for _, spec := range dialer.specsSnapshot() {
+		require.Empty(t, spec.CertFile, "a probe must not present a client certificate")
+		require.Empty(t, spec.KeyFile, "a probe must not present a client key")
+		require.Empty(t, spec.Username)
+		require.Empty(t, spec.Password)
+		require.Equal(t, "/run/secrets/ca.pem", spec.CAFile,
+			"the CA verifies the server and must survive")
+	}
+}
+
+// The subscription that follows a successful probe does present the full mTLS
+// identity: withholding it there would break every device that requires it.
+func TestASubscriptionStillPresentsTheClientCertificate(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  campus:
+    scope:
+      tls:
+        cert: /run/secrets/client.pem
+        key: /run/secrets/client.key
+      targets:
+        - host: 10.0.0.0/31
+`))
+	require.NoError(t, err)
+
+	dialer := newPerHostDialer(nil)
+	r := newRunnerFor(t, policies["campus"], dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		for _, spec := range dialer.specsSnapshot() {
+			if spec.CertFile != "" {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond, "the subscription presents the client certificate")
 }

@@ -68,6 +68,12 @@ func (d *perHostDialer) dialedHosts() []string {
 	return append([]string(nil), d.dialed...)
 }
 
+func (d *perHostDialer) specsSnapshot() []gnmi.TargetSpec {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]gnmi.TargetSpec(nil), d.specs...)
+}
+
 func (d *perHostDialer) specsFor(host string) []gnmi.TargetSpec {
 	d.mu.Lock()
 	defer d.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -344,4 +345,72 @@ func uint32ToAddr(val uint32) netip.Addr {
 	var ip4 [4]byte
 	binary.BigEndian.PutUint32(ip4[:], val)
 	return netip.AddrFrom4(ip4)
+}
+
+// Span reports the inclusive address range a target covers, when it covers one.
+//
+// It exists so a caller can measure the *union* of several targets instead of
+// their sum: a policy that names a subnet and then pins three hosts inside it to
+// give them their own credentials describes the same endpoints as the subnet
+// alone, and summing the two double-counts the overlap.
+//
+// enumerable is false for a hostname, which stands for one endpoint that cannot
+// be compared with any address.
+func Span(target string) (start, end uint32, enumerable bool, err error) {
+	if isRangeCandidate(target) {
+		start, end, err = rangeBounds(target)
+		if err == nil {
+			return start, end, true, nil
+		}
+		if !errors.Is(err, errNotRange) {
+			return 0, 0, false, err
+		}
+	}
+
+	if strings.Contains(target, "/") {
+		start, end, err = cidrBounds(target)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		return start, end, true, nil
+	}
+
+	// A bare IPv4 address is a one-element span, which is what lets it merge
+	// into a subnet that already contains it.
+	if addr, perr := netip.ParseAddr(target); perr == nil && addr.Is4() {
+		v := addrToUint32(addr)
+		return v, v, true, nil
+	}
+
+	// A hostname, or an IPv6 literal: one endpoint, not comparable to a range.
+	return 0, 0, false, nil
+}
+
+// UnionSize returns how many distinct addresses a set of spans covers.
+//
+// Spans must already be grouped by port by the caller: the same address at two
+// ports is two endpoints, so merging across ports would undercount.
+func UnionSize(spans [][2]uint32) uint64 {
+	if len(spans) == 0 {
+		return 0
+	}
+	sorted := append([][2]uint32(nil), spans...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i][0] < sorted[j][0] })
+
+	var total uint64
+	curStart, curEnd := sorted[0][0], sorted[0][1]
+	for _, s := range sorted[1:] {
+		// Adjacent as well as overlapping: [1,5] and [6,9] are one run of 9, and
+		// counting them separately would still be correct here, but merging keeps
+		// the interval list short.
+		if uint64(s[0]) <= uint64(curEnd)+1 {
+			if s[1] > curEnd {
+				curEnd = s[1]
+			}
+			continue
+		}
+		total += uint64(curEnd-curStart) + 1
+		curStart, curEnd = s[0], s[1]
+	}
+	return total + uint64(curEnd-curStart) + 1
 }

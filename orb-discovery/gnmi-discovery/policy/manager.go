@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -267,10 +268,17 @@ func ensurePort(h string, port uint16) string {
 // inside a policy POST — so this counts without enumerating.
 func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 	seen := make(map[string]int, len(policy.Scope.Targets))
-	var total uint64
+	// Spans are grouped by port: the same address reached on two ports is two
+	// endpoints, so merging across ports would undercount.
+	spans := map[uint16][][2]uint32{}
+	var namedHosts uint64
 
 	for i, t := range policy.Scope.Targets {
-		port := resolvedPort(t.Port)
+		if err := checkHostText(t.Host); err != nil {
+			return err
+		}
+
+		bare, port := splitEffectivePort(t.Host, t.Port)
 
 		if targets.LooksLikeMultiAddress(t.Host) {
 			if _, _, err := net.SplitHostPort(t.Host); err == nil {
@@ -285,35 +293,88 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 				"host", t.Host, "ignored_port", t.Port)
 		}
 
-		count, err := targets.Count(t.Host)
+		// Per target first, so one oversized entry is named as the offender
+		// rather than blamed on whatever happened to come last.
+		count, err := targets.Count(bare)
 		if err != nil {
 			return fmt.Errorf("target %q: %w", t.Host, err)
 		}
-		total += count
-		if total > targets.MaxExpand {
+		if count > targets.MaxExpand {
 			return fmt.Errorf(
-				"target %q brings this policy to %d addresses, more than the %d supported",
-				t.Host, total, targets.MaxExpand)
+				"target %q expands to %d addresses, more than the %d supported",
+				t.Host, count, targets.MaxExpand)
 		}
 
-		key := fmt.Sprintf("%s:%d", strings.ToLower(hostWithoutPort(t.Host)), port)
+		start, end, enumerable, err := targets.Span(bare)
+		if err != nil {
+			return fmt.Errorf("target %q: %w", t.Host, err)
+		}
+		if enumerable {
+			spans[port] = append(spans[port], [2]uint32{start, end})
+		} else {
+			namedHosts++
+		}
+
+		key := fmt.Sprintf("%s:%d", strings.ToLower(bare), port)
 		if first, dup := seen[key]; dup {
 			return fmt.Errorf(
 				"targets %d and %d both name %q; one device cannot have two entries", first, i, t.Host)
 		}
 		seen[key] = i
 	}
+
+	// The union, not the sum. Naming a subnet and then pinning hosts inside it to
+	// give them their own credentials describes the subnet's endpoints and no
+	// more, and summing the two rejected a policy that expands to fewer targets
+	// than the cap allows.
+	total := namedHosts
+	for _, group := range spans {
+		total += targets.UnionSize(group)
+	}
+	if total > targets.MaxExpand {
+		return fmt.Errorf(
+			"this policy expands to %d distinct addresses, more than the %d supported",
+			total, targets.MaxExpand)
+	}
 	return nil
 }
 
-// hostWithoutPort strips an inline port so two spellings of one endpoint
-// collide. A hostname keeps its own text, since Expand never resolves DNS and
-// so cannot know a name and an address are the same device.
-func hostWithoutPort(host string) string {
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
+// splitEffectivePort returns a target's host without its port, and the port it
+// will actually be reached on: an inline suffix wins over the port field, which
+// wins over the scope's value and the default.
+//
+// Both halves have to come from the same decision. Taking the host from
+// hostWithoutPort while taking the port from the field alone made
+// "10.0.0.5:6030" and "10.0.0.5:57400" collide on one key — two real endpoints
+// rejected as a duplicate — and let an inline ":6030" and a "port: 6030" on the
+// same host produce two keys for one endpoint.
+func splitEffectivePort(host string, field uint16) (string, uint16) {
+	if targets.LooksLikeMultiAddress(host) {
+		return host, resolvedPort(field)
 	}
-	return host
+	if h, p, err := net.SplitHostPort(host); err == nil {
+		if n, cerr := strconv.ParseUint(p, 10, 16); cerr == nil {
+			return strings.Trim(h, "[]"), uint16(n)
+		}
+	}
+	return host, resolvedPort(field)
+}
+
+// checkHostText rejects a host carrying control characters.
+//
+// No hostname, IP, CIDR or range contains one, so this costs nothing legitimate.
+// It also removes the only route by which policy text reaches a log line as
+// something other than one field value: a host holding a newline could otherwise
+// forge whole log records, which is what CodeQL flags every log of a
+// policy-derived host for.
+func checkHostText(host string) error {
+	for _, r := range host {
+		if r == 0x7f || (r < 0x20 && r != 0) {
+			return fmt.Errorf("target host contains a control character at byte offset %d",
+				strings.IndexRune(host, r))
+		}
+	}
+	return nil
 }
 
 // inheritScopeDefaults folds the scope's settings into each target that has not
