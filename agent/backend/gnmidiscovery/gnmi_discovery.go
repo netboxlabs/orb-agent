@@ -384,6 +384,7 @@ type gnmiStatusResponse struct {
 			ID          string   `json:"id"`
 			Target      string   `json:"target"`
 			Targets     []string `json:"targets"`
+			Kind        string   `json:"kind"`
 			Status      string   `json:"status"`
 			Reason      string   `json:"reason"`
 			EntityCount int64    `json:"entity_count"`
@@ -426,6 +427,13 @@ func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error)
 		runs := make([]backend.PolicyStatusRun, 0, len(p.Runs))
 		for _, r := range p.Runs {
 			targets := runTargets(r.Targets, r.Target)
+			// A sweep run and a flush run describe different things and complete
+			// at different times, and they can carry the same target list, so
+			// nothing else in this payload tells them apart.
+			var metadata map[string]string
+			if r.Kind != "" {
+				metadata = map[string]string{"kind": r.Kind}
+			}
 			runs = append(runs, backend.PolicyStatusRun{
 				ID:          r.ID,
 				Status:      r.Status,
@@ -434,6 +442,7 @@ func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error)
 				CreatedAt:   r.CreatedAt,
 				UpdatedAt:   r.UpdatedAt,
 				Targets:     targets,
+				Metadata:    metadata,
 			})
 		}
 		policies = append(policies, backend.PolicyStatus{

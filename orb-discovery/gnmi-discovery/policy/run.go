@@ -21,6 +21,19 @@ const (
 	RunStatusFailed RunStatus = "failed"
 )
 
+// Run kinds. A sweep run and a per-device flush run describe different things
+// and complete at different times — a sweep of a named host finishes at once,
+// while its first flush waits for debounce, subscribe and the initial sync — so a
+// consumer asking "has this policy ingested anything?" needs to tell them apart.
+// Before the sweep run existed every run was a flush, and "any completed run" was
+// a sound proxy for that; it no longer is, and nothing in the payload said so.
+const (
+	// RunKindFlush is one reconciled-snapshot ingest for one device.
+	RunKindFlush = "flush"
+	// RunKindSweep is one target sweep for the whole policy.
+	RunKindSweep = "sweep"
+)
+
 const maxRunsPerTarget = 3
 
 // maxRunsPerPolicy caps what /status reports for one policy. A /22 policy can
@@ -36,7 +49,9 @@ type Run struct {
 	// Targets is what the agent actually reads: PolicyStatusRun decodes
 	// `json:"targets"` and has no `target` field, so a run that carries only the
 	// singular form reaches the fleet with no target at all.
-	Targets     []string  `json:"targets,omitempty"`
+	Targets []string `json:"targets,omitempty"`
+	// Kind distinguishes a policy-wide sweep run from a per-device flush run.
+	Kind        string    `json:"kind"`
 	Status      RunStatus `json:"status"`
 	Reason      string    `json:"reason,omitempty"`
 	EntityCount int       `json:"entity_count"`
@@ -64,8 +79,8 @@ func (rs *RunStore) CreateRun(policy, host string) *Run {
 	now := time.Now().UTC().UnixNano()
 	run := &Run{
 		ID: uuid.New().String(), PolicyID: policy, Target: host,
-		Targets: []string{host},
-		Status:  RunStatusRunning, CreatedAt: now, UpdatedAt: now,
+		Targets: []string{host}, Kind: RunKindFlush,
+		Status: RunStatusRunning, CreatedAt: now, UpdatedAt: now,
 	}
 	if rs.runs[policy] == nil {
 		rs.runs[policy] = make(map[string][]*Run)
@@ -98,6 +113,7 @@ func (rs *RunStore) CreateSweepRun(policy string, originalTargets []string) *Run
 			// wrote rather than a synthesized pseudo-host.
 			r.Targets = append([]string(nil), originalTargets...)
 			r.Target = strings.Join(originalTargets, ",")
+			r.Kind = RunKindSweep
 			return copyRun(r)
 		}
 	}

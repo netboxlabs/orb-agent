@@ -360,3 +360,39 @@ func TestTheSweepRunOutranksInFlightRuns(t *testing.T) {
 	}
 	require.True(t, found, "the sweep run is still exempt")
 }
+
+// Nothing else in the payload distinguishes a sweep run from a flush run: for a
+// single-host policy both carry the same target list, and both report completed.
+// A consumer asking "has this policy ingested anything?" read the sweep run —
+// which for a named host finishes before the first flush has even subscribed — as
+// a yes. Measured against the real backend and a live gNMI server, where it made
+// an external check pass roughly two seconds early.
+func TestSweepAndFlushRunsAreDistinguishable(t *testing.T) {
+	rs := NewRunStore()
+
+	flush := rs.CreateRun("p1", "10.0.0.1:9339")
+	rs.UpdateRun("p1", "10.0.0.1:9339", flush.ID, RunStatusCompleted, nil, 31)
+
+	sweep := rs.CreateSweepRun("p1", []string{"10.0.0.1:9339"})
+	rs.FinishSweepRun("p1", sweep.ID, RunStatusCompleted, "1 subscribed", 1)
+
+	kinds := map[string]string{}
+	for _, r := range rs.GetRunsForPolicy("p1") {
+		kinds[r.ID] = r.Kind
+	}
+	require.Equal(t, RunKindFlush, kinds[flush.ID])
+	require.Equal(t, RunKindSweep, kinds[sweep.ID])
+
+	// The ambiguity this resolves: the target lists really are identical.
+	var flushRun, sweepRun *Run
+	for _, r := range rs.GetRunsForPolicy("p1") {
+		switch r.ID {
+		case flush.ID:
+			flushRun = r
+		case sweep.ID:
+			sweepRun = r
+		}
+	}
+	require.Equal(t, flushRun.Targets, sweepRun.Targets,
+		"same targets, so kind is the only discriminator")
+}

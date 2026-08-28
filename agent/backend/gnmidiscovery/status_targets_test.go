@@ -53,3 +53,24 @@ func TestRunTargetsPrefersTheArray(t *testing.T) {
 		runTargets(nil, "10.0.0.11:6030"), "the singular field is the fallback")
 	require.Nil(t, runTargets(nil, ""), "a run with no target reports none")
 }
+
+// A sweep run and a flush run describe different things and complete at
+// different times — a sweep of a named host finishes at once, while its first
+// flush waits for debounce, subscribe and the initial sync. They can also carry
+// the same target list, so without this nothing in the payload tells them apart
+// and "any completed run" reads as "the policy ingested something".
+func TestRunKindReachesTheFleetAsMetadata(t *testing.T) {
+	var resp gnmiStatusResponse
+	require.NoError(t, json.Unmarshal([]byte(`{
+	  "policies": [{
+	    "name": "campus",
+	    "runs": [
+	      {"id": "s1", "kind": "sweep", "status": "completed", "targets": ["10.0.0.0/24"]},
+	      {"id": "f1", "kind": "flush", "status": "completed", "targets": ["10.0.0.1:9339"]}
+	    ]
+	  }]
+	}`), &resp))
+
+	require.Equal(t, "sweep", resp.Policies[0].Runs[0].Kind)
+	require.Equal(t, "flush", resp.Policies[0].Runs[1].Kind)
+}
