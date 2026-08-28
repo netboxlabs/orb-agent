@@ -353,3 +353,25 @@ policies:
 		require.Contains(t, err.Error(), "port", "the error points at the port field")
 	}
 }
+
+// End to end: a zoned IPv6 host whose interface name contains a hyphen is a
+// valid endpoint and must reach the runner bracketed and ported, not fail the
+// whole policy.
+func TestAZonedIPv6HostWithAHyphenIsAccepted(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      port: 6030
+      targets:
+        - host: fe80::1%br-lan
+        - host: fe80::2%eth0
+`))
+	require.NoError(t, err, "a hyphen in the zone must not fail the policy")
+	hosts := []string{}
+	for _, tgt := range policies["p1"].Scope.Targets {
+		hosts = append(hosts, tgt.Host)
+	}
+	require.Equal(t, []string{"[fe80::1%br-lan]:6030", "[fe80::2%eth0]:6030"}, hosts)
+}

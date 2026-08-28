@@ -174,3 +174,51 @@ func TestExpandRefusesMoreThanMaxExpand(t *testing.T) {
 		t.Errorf("Expand(10.0.0.0/22) = %d addresses, want 1022", len(got))
 	}
 }
+
+// An IPv6 zone is an interface name and may contain a hyphen — br-lan and
+// veth-* are ordinary. The range heuristic read the colon and the hyphen as
+// range syntax and failed the whole policy with "only IPv4 addresses are
+// supported", for an endpoint ensurePort goes out of its way to bracket.
+func TestZonedIPv6WithAHyphenInTheZoneIsOneEndpoint(t *testing.T) {
+	for _, target := range []string{
+		"fe80::1%eth-0",
+		"fe80::1%br-lan",
+		"fe80::1%veth-abc123",
+		"fe80::1%eth0", // unchanged: no hyphen at all
+	} {
+		if !IsSingleEndpoint(target) {
+			t.Errorf("IsSingleEndpoint(%q) = false, want true", target)
+		}
+		n, err := Count(target)
+		if err != nil {
+			t.Errorf("Count(%q) returned error: %v", target, err)
+			continue
+		}
+		if n != 1 {
+			t.Errorf("Count(%q) = %d, want 1", target, n)
+		}
+		got, err := Expand(target)
+		if err != nil {
+			t.Errorf("Expand(%q) returned error: %v", target, err)
+			continue
+		}
+		if len(got) != 1 || got[0] != target {
+			t.Errorf("Expand(%q) = %v, want [%q]", target, got, target)
+		}
+	}
+}
+
+// A real range is still a range, and an IPv6 range is still refused: the fix
+// exempts complete addresses, not anything containing a colon and a hyphen.
+func TestTheRangeHeuristicStillCatchesRealRanges(t *testing.T) {
+	for _, target := range []string{"10.0.0.1-10", "10.0.0.1-10.0.0.9", "10.0.0.0-255"} {
+		if IsSingleEndpoint(target) {
+			t.Errorf("IsSingleEndpoint(%q) = true, want false", target)
+		}
+	}
+	// An IPv6 range does not parse as one address, so it still reaches the range
+	// branch and is refused there.
+	if _, err := Count("2001:db8::1-5"); err == nil {
+		t.Error("Count(2001:db8::1-5) = nil error, want an error")
+	}
+}

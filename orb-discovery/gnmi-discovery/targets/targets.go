@@ -59,7 +59,18 @@ const MaxExpand = 1024
 // which branch a target takes, and Count exists precisely to be trustworthy
 // about a target Expand has not enumerated yet.
 func isRangeCandidate(target string) bool {
-	return strings.Contains(target, "-") && (strings.Contains(target, ":") || !hasLetters(target))
+	if !strings.Contains(target, "-") {
+		return false
+	}
+	// A complete address is never a range, whatever punctuation it contains. An
+	// IPv6 zone is an interface name and may hold a hyphen — fe80::1%br-lan is
+	// an ordinary bridge — and the heuristic below reads the colon and the hyphen
+	// as range syntax, then fails the whole policy with "only IPv4 addresses are
+	// supported" for an endpoint ensurePort goes out of its way to support.
+	if _, err := netip.ParseAddr(target); err == nil {
+		return false
+	}
+	return strings.Contains(target, ":") || !hasLetters(target)
 }
 
 // IsSingleEndpoint reports whether Expand passes target through unchanged as one
