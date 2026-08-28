@@ -72,7 +72,15 @@ func (r *Runner) sweepOnce() {
 	run := r.runStore.CreateSweepRun(r.name, r.originalHosts())
 
 	admitted, outcome, err := r.admitTargets()
-	if err != nil {
+	switch {
+	case err != nil && isCanceled(err):
+		// A policy DELETE cancels mid-sweep. That is the expected end of a sweep,
+		// not a failure, and logging it at Error would put a red line in the log
+		// on every ordinary policy removal.
+		r.logger.Debug("sweep canceled", "policy", r.name)
+		r.runStore.FinishSweepRun(r.name, run.ID, RunStatusFailed, "sweep canceled", 0)
+		return
+	case err != nil:
 		// Report and keep going. There is no path to failing the policy itself:
 		// PolicyData.State is set only from the ApplyPolicy HTTP result, the 201
 		// has already returned, and a runner holds no manager reference. Exiting
@@ -340,9 +348,11 @@ func (r *Runner) probe(t config.Target) error {
 		KeyFile:    tls.KeyFile,
 	})
 	if err != nil {
-		// A Dial error is a configuration fault, not a verdict: it fails
-		// identically for every address, so it is reported once by the caller
-		// rather than counted as N rejections.
+		// A Dial error is usually a configuration fault — an unreadable CA file,
+		// a malformed cert — so it fails identically for every address and lands
+		// as N rejections sharing one reason. That is the useful shape: the run's
+		// example_reason then names the file, rather than reporting an empty
+		// subnet with no explanation.
 		return err
 	}
 	// gnmic dials without WithBlock, so this session is live even for a dead

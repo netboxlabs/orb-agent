@@ -1,12 +1,18 @@
 package policy
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/mapping"
 )
 
 // Runs are the only channel the agent consumes: PolicyStatus carries {Name,
@@ -154,4 +160,37 @@ func TestTheSweepRunSurvivesTheCap(t *testing.T) {
 		}
 	}
 	require.True(t, found, "the sweep run is exempt from the cap")
+}
+
+// A policy DELETE cancels the sweep mid-probe. That is how a sweep is supposed
+// to end, so it must not be logged at Error: an operator removing policies would
+// get a red line for every one of them.
+func TestACanceledSweepIsNotLoggedAsAFailure(t *testing.T) {
+	dialer := newPerHostDialer(nil)
+	dialer.blockOn = make(chan struct{})
+
+	var logs bytes.Buffer
+	handler := slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})
+	policy := config.Policy{
+		Config: config.PolicyConfig{Mode: config.ModeAuto, DebounceMs: 10},
+		Scope:  config.Scope{Targets: []config.Target{{Host: "10.0.0.0/24"}}},
+	}
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+	r, err := NewRunner(context.Background(), slog.New(handler), "p1", policy,
+		&recordingClient{}, dialer, store)
+	require.NoError(t, err)
+
+	r.Start()
+	require.Eventually(t, func() bool {
+		return len(dialer.dialedHosts()) > 0
+	}, 3*time.Second, 5*time.Millisecond)
+
+	stopped := make(chan struct{})
+	go func() { _ = r.Stop(); close(stopped) }()
+	close(dialer.blockOn)
+	<-stopped
+
+	require.NotContains(t, logs.String(), "level=ERROR",
+		"an ordinary policy removal must not log an error")
 }

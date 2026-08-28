@@ -39,6 +39,17 @@ var narrowedTypes = map[string]bool{
 	"config.Scope":        true,
 	"config.Target":       true,
 	"config.TLSConfig":    true,
+
+	// The defaults blocks, where a typo silently drops a NetBox default and the
+	// entities land with the built-in value instead of the operator's.
+	"config.Defaults":          true,
+	"config.DeviceDefaults":    true,
+	"config.InterfaceDefaults": true,
+	"config.PrefixDefaults":    true,
+	"config.VlanDefaults":      true,
+	"config.IPAddressDefaults": true,
+	"config.VRFDefaults":       true,
+	"config.InterfacePattern":  true,
 }
 
 // WarnUnknownPolicyKeys logs one warning per unrecognized key in a policy's

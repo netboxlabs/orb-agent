@@ -82,20 +82,58 @@ policies:
 	require.Contains(t, out, "bogus key")
 }
 
-// Blocks that are not a closed, documented set stay silent. Warning on those
-// would fire on correct files and train operators to ignore the warning.
+// Blocks that are not a closed, documented set stay silent. Policy names and the
+// surrounding agent config are operator-chosen, so warning on them would fire on
+// correct files and train operators to ignore the warning.
 func TestBlocksWithOperatorChosenKeysStaySilent(t *testing.T) {
 	out := captureWarnings(t, `
 policies:
-  p1:
-    config:
-      defaults:
-        stray_default: 1
+  a_policy_name_nobody_can_predict:
     scope:
       targets:
         - host: 10.0.0.1
 `)
 	assert.Empty(t, out, "expected silence outside the narrowed blocks")
+}
+
+// A key written at the wrong indent level lands in a neighbouring block, where
+// the permissive decode drops it and the feature it configures never turns on.
+// This is the mistake a copied sample propagates.
+func TestAKeyInTheWrongBlockIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      defaults:
+        site: New York NY
+        rescan_interval_ms: 3600000
+    scope:
+      targets:
+        - host: 10.0.0.1
+`)
+	assert.Contains(t, out, "rescan_interval_ms")
+}
+
+// A typo inside a defaults block silently ships the built-in value instead of
+// the operator's.
+func TestMisspelledDefaultsKeysAreReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      defaults:
+        rol: Router
+        device:
+          manufacurer: Acme
+        interface:
+          if_typ: other
+    scope:
+      targets:
+        - host: 10.0.0.1
+`)
+	assert.Contains(t, out, "rol")
+	assert.Contains(t, out, "manufacurer")
+	assert.Contains(t, out, "if_typ")
 }
 
 // A misspelled scope credential is the expensive one: the permissive decode

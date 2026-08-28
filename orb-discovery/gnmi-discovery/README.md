@@ -65,6 +65,8 @@ policies:
     config:
       mode: auto           # auto (default) | on_change | sample | get
       debounce_ms: 2000    # flush delay after last notification (default 2000)
+      probe_timeout_ms: 3000       # how long one sweep probe waits for an address (default 3000)
+      rescan_interval_ms: 3600000  # re-probe unsubscribed addresses; 0 disables, floor 60000
       sample_interval_ms: 300000   # SAMPLE subscription interval (default 300000 = 5m)
       get_interval_ms: 900000      # GET poll interval (default 900000 = 15m)
       options:                     # per-policy behavior toggles (peer to defaults)
@@ -103,8 +105,6 @@ policies:
         # Name-regex; matching interfaces are skipped entirely:
         interface_exclude_patterns:
           - "^Management"
-        probe_timeout_ms: 3000       # how long one sweep probe waits (default 3000)
-        rescan_interval_ms: 3600000  # re-probe unsubscribed addresses; 0 disables, floor 60000
     scope:
       # Scope settings are defaults: a target that sets the field keeps its own.
       username: ${GNMI_USER}         # ${ENV_VAR} syntax supported

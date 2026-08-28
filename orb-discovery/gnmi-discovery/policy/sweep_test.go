@@ -97,11 +97,17 @@ func (s *perHostSession) Capabilities(_ context.Context) (*gnmi.CapabilitiesResu
 		// the sweep goroutine rather than whether cancellation propagates.
 		<-s.dialer.blockOn
 	}
-	if err, ok := s.dialer.capsErr[s.host]; ok {
+	// Under the lock: the rescan tests bring a device up mid-run by mutating
+	// capsErr while probes are in flight.
+	s.dialer.mu.Lock()
+	err, scripted := s.dialer.capsErr[s.host]
+	fallback := s.dialer.defaultCapsErr
+	s.dialer.mu.Unlock()
+	if scripted {
 		return nil, err
 	}
-	if s.dialer.defaultCapsErr != nil {
-		return nil, s.dialer.defaultCapsErr
+	if fallback != nil {
+		return nil, fallback
 	}
 	return &gnmi.CapabilitiesResult{Vendor: "Arista"}, nil
 }
