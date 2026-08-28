@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,5 +87,90 @@ func newRunnerFor(t *testing.T, policy config.Policy, dialer gnmi.Dialer) *Runne
 		"campus", policy, &recordingClient{}, dialer, store)
 	require.NoError(t, err)
 	r.backoffBase = time.Millisecond
+	return r
+}
+
+// Pinning one device inside a subnet is the documented way to give it its own
+// credentials, so it must not be reported as a duplicate — with rescan on, that
+// warning would repeat on every tick for the life of the policy. Two genuinely
+// overlapping ranges still warn.
+func TestAPinnedHostInsideASubnetIsNotWarnedAbout(t *testing.T) {
+	for name, hosts := range map[string][]string{
+		"pin first":    {"10.0.0.5", "10.0.0.0/29"},
+		"subnet first": {"10.0.0.0/29", "10.0.0.5"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			r := runnerWithHosts(t, hosts, slog.New(slog.NewTextHandler(&logs, nil)))
+			_, _, err := r.admitTargets()
+			require.NoError(t, err)
+			require.NotContains(t, logs.String(), "duplicate",
+				"a pinned host inside its own subnet is a supported config")
+		})
+	}
+
+	var logs bytes.Buffer
+	r := runnerWithHosts(t, []string{"10.0.0.0/29", "10.0.0.0-7"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	_, _, err := r.admitTargets()
+	require.NoError(t, err)
+	require.Contains(t, logs.String(), "duplicate",
+		"two overlapping ranges are a mistake worth reporting")
+}
+
+// The pinned entry's own settings survive the overlap, in either write order.
+func TestAPinnedHostInsideASubnetKeepsItsOwnSettings(t *testing.T) {
+	for name, targetList := range map[string][]config.Target{
+		"pin first": {
+			{Host: "10.0.0.5", Username: "legacy"},
+			{Host: "10.0.0.0/29"},
+		},
+		"subnet first": {
+			{Host: "10.0.0.0/29"},
+			{Host: "10.0.0.5", Username: "legacy"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := runnerWithTargets(t, targetList, slog.New(slog.DiscardHandler))
+			expanded, err := r.expandTargets()
+			require.NoError(t, err)
+
+			var found bool
+			for _, c := range expanded {
+				if c.target.Host == "10.0.0.5:9339" {
+					found = true
+					require.Equal(t, "legacy", c.target.Username)
+					require.True(t, c.explicit, "the pin is explicit, so it is never probed")
+				}
+			}
+			require.True(t, found)
+		})
+	}
+}
+
+func runnerWithHosts(t *testing.T, hosts []string, logger *slog.Logger) *Runner {
+	t.Helper()
+	list := make([]config.Target, 0, len(hosts))
+	for _, h := range hosts {
+		list = append(list, config.Target{Host: h})
+	}
+	return runnerWithTargets(t, list, logger)
+}
+
+func runnerWithTargets(t *testing.T, list []config.Target, logger *slog.Logger) *Runner {
+	t.Helper()
+	for i := range list {
+		if !strings.ContainsAny(list[i].Host, "/-") {
+			list[i].Host = ensurePort(list[i].Host, config.DefaultGNMIPort)
+		}
+	}
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+	r, err := NewRunner(context.Background(), logger, "p1",
+		config.Policy{
+			Config: config.PolicyConfig{Mode: config.ModeAuto, DebounceMs: 10},
+			Scope:  config.Scope{Targets: list},
+		},
+		&recordingClient{}, newPerHostDialer(nil), store)
+	require.NoError(t, err)
 	return r
 }

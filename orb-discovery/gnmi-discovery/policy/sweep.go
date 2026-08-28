@@ -298,13 +298,22 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 			key := dedupeKey(derived.Host)
 			if at, dup := seen[key]; dup {
 				// An explicit entry beats one produced by an expansion, so a
-				// device pinned inside a subnet keeps its own settings.
-				if literal && !out[at].explicit {
+				// device pinned inside a subnet keeps its own settings — in
+				// either order, since the two entries can be written either way
+				// round.
+				switch {
+				case literal && !out[at].explicit:
 					out[at] = candidate{target: derived, explicit: true}
-					continue
+				case out[at].explicit && !literal:
+					// Pinning a device inside a subnet is the documented way to
+					// give it its own credentials. It is not a mistake, and with
+					// rescan on, warning would repeat it on every tick forever.
+					r.logger.Debug("expansion skipped an address pinned by its own target entry",
+						"policy", r.name, "host", derived.Host)
+				default:
+					r.logger.Warn("dropping duplicate target produced by expansion",
+						"policy", r.name, "host", derived.Host)
 				}
-				r.logger.Warn("dropping duplicate target produced by expansion",
-					"policy", r.name, "host", derived.Host)
 				continue
 			}
 			seen[key] = len(out)

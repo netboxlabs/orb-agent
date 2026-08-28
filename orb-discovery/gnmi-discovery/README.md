@@ -115,8 +115,9 @@ policies:
         ca: /run/secrets/ca.pem      # prefer a CA over skip_verify
       targets:
         # A CIDR or range is expanded and probed; only addresses that answer are
-        # subscribed to. A CIDR drops network and broadcast (/24 = 254); a range
-        # keeps everything written (10.1.0.0-255 = 256). 1024 addresses per policy.
+        # subscribed to. A CIDR drops network and broadcast (/24 = 254, /31 and
+        # /32 have none to drop); a range keeps everything written (10.1.0.0-255
+        # = 256). At most 1024 addresses per policy, summed across targets.
         - host: 10.0.0.0/24
         - host: 10.1.0.0-50
         - host: 10.2.0.0-10.2.0.9

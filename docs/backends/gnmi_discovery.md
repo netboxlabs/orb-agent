@@ -112,10 +112,11 @@ subscription. This matters because a gNMI subscription is a persistent stream
 rather than a poll — without the probe, a `/24` would leave ~250 goroutines
 redialling empty addresses for the life of the policy.
 
-A CIDR excludes its network and broadcast addresses, so `10.0.0.0/24` is 254
-addresses. A range does not, because the operator enumerated it explicitly:
-`10.0.0.0-255` is 256. A policy may expand to at most 1024 addresses in total,
-counted across all its targets and checked before any expansion happens.
+A CIDR excludes its network and broadcast addresses, so `10.0.0.0/24` is 254 and
+`10.0.0.0/22` is 1022. A `/31` and a `/32` have no such pair to exclude and stay
+2 and 1. A range excludes nothing, because the operator enumerated it explicitly:
+`10.0.0.0-255` is 256, not 254. A policy may expand to at most 1024 addresses in
+total, counted across all its targets and checked before any expansion happens.
 
 A probe answers the question "is anything listening on the gNMI port", and
 nothing more. Any response admits the address, including a rejected RPC or a
