@@ -217,3 +217,31 @@ func TestNewLoader_SubdirRecursive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, l.Count())
 }
+
+// The agent image ships only the binary, so a loader that can read profiles
+// solely from disk collects nothing in production while every directory-based
+// test passes.
+func TestLoadProfiles_EmbeddedSetLoadsWithNoOverrideDir(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, l.Count(), 100,
+		"LoadProfiles(\"\") must load the embedded set")
+
+	_, err = l.Resolve("base.yml")
+	assert.NoError(t, err, "a known embedded profile must resolve")
+}
+
+// An override directory adds to the embedded set rather than replacing it.
+func TestLoadProfiles_OverrideDirOverlaysRatherThanReplaces(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "local-only.yml", "provider: local-test\n")
+
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+
+	_, err = l.Resolve("local-only.yml")
+	assert.NoError(t, err, "override profile must load")
+
+	_, err = l.Resolve("base.yml")
+	assert.NoError(t, err, "embedded profiles must survive an override dir")
+}

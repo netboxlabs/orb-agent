@@ -63,12 +63,14 @@ func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCo
 	if c, ok := m.collectorsByDir[profilesDir]; ok {
 		return c, nil
 	}
-	if _, err := os.Stat(profilesDir); err != nil {
-		return nil, fmt.Errorf("SNMP profiles directory not found: %s", profilesDir)
+	if profilesDir != "" {
+		if _, err := os.Stat(profilesDir); err != nil {
+			return nil, fmt.Errorf("SNMP profiles directory not found: %s", profilesDir)
+		}
 	}
-	loader, err := profiles.NewLoader(profilesDir, m.logger)
+	loader, err := profiles.LoadProfiles(profilesDir, m.logger)
 	if err != nil {
-		return nil, fmt.Errorf("loading SNMP profiles from %s: %w", profilesDir, err)
+		return nil, fmt.Errorf("loading SNMP profiles: %w", err)
 	}
 	resolved, err := loader.AllResolved()
 	if err != nil {
@@ -80,7 +82,7 @@ func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCo
 	}
 	c := collector.NewMetricsCollector(clientFactory, matcher, m.logger, defaultSNMPTimeout, 0)
 	m.collectorsByDir[profilesDir] = c
-	m.logger.Info("loaded SNMP profiles", "dir", profilesDir, "count", loader.Count())
+	m.logger.Info("loaded SNMP profiles", "override_dir", profilesDir, "count", loader.Count())
 	return c, nil
 }
 
@@ -130,9 +132,6 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	profilesDir := policy.Config.ProfilesDir
 	if profilesDir == "" {
 		profilesDir = m.defaultProfilesDir
-	}
-	if profilesDir == "" {
-		profilesDir = defaultProfilesDir
 	}
 
 	sharedCollector, err := m.getOrCreateCollector(profilesDir)

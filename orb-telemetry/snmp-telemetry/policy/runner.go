@@ -22,7 +22,6 @@ type contextKey string
 const (
 	policyKey          contextKey = "policy"
 	defaultSNMPTimeout            = 5 * time.Second
-	defaultProfilesDir            = "/usr/local/share/snmp-profiles"
 )
 
 // Runner represents the policy runner for SNMP metrics collection

@@ -25,9 +25,11 @@ func main() {
 	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
 	otelExportPeriod := flag.Int("otel-export-period", 10, "period in seconds between OpenTelemetry exports")
-	snmpProfilesDir := flag.String("snmp-profiles-dir", "", "default directory for ktranslate-compatible SNMP profile YAML files."+
-		" Overrides the built-in default (/usr/local/share/snmp-profiles). Per-policy profiles_dir still takes precedence."+
-		" Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_DIR})")
+	snmpProfilesDir := flag.String("snmp-profiles-dir", "",
+		"directory of ktranslate-compatible SNMP profile YAML files to overlay on the "+
+			"profiles bundled into the binary. Files here replace bundled ones with the "+
+			"same relative path; everything else is unaffected."+
+			" Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_DIR})")
 	logLevel := flag.String("log-level", "INFO", "log level (DEBUG, INFO, WARN, ERROR)")
 	logFormat := flag.String("log-format", "TEXT", "log format (TEXT, JSON)")
 	help := flag.Bool("help", false, "show this help")

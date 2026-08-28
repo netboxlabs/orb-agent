@@ -1,14 +1,19 @@
 package profiles
 
 import (
+	"embed"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed all:snmp-profiles
+var embeddedProfiles embed.FS
 
 // Loader reads ktranslate-format SNMP profile YAML files from a directory tree
 // and resolves the `extends` inheritance chain.
@@ -21,9 +26,8 @@ type Loader struct {
 	logger    *slog.Logger
 }
 
-// NewLoader creates a Loader and reads all .yaml/.yml files from dir recursively.
-func NewLoader(dir string, logger *slog.Logger) (*Loader, error) {
-	l := &Loader{
+func newEmptyLoader(dir string, logger *slog.Logger) *Loader {
+	return &Loader{
 		dir:       dir,
 		byFile:    make(map[string]*Profile),
 		byBase:    make(map[string]string),
@@ -31,10 +35,72 @@ func NewLoader(dir string, logger *slog.Logger) (*Loader, error) {
 		resolving: make(map[string]bool),
 		logger:    logger,
 	}
+}
+
+// NewLoader creates a Loader and reads all .yaml/.yml files from dir recursively.
+// Prefer LoadProfiles, which includes the bundled set; this remains for callers
+// that genuinely want a directory and nothing else, and for tests.
+func NewLoader(dir string, logger *slog.Logger) (*Loader, error) {
+	l := newEmptyLoader(dir, logger)
 	if err := l.readDir(); err != nil {
 		return nil, err
 	}
 	return l, nil
+}
+
+// LoadProfiles returns a Loader over the profiles bundled into the binary,
+// overlaid by any found in overrideDir.
+//
+// The bundled set is the reason this exists: the agent image copies only the
+// built binary, so a loader that reads solely from disk finds nothing there
+// while every test that hands it a directory passes.
+func LoadProfiles(overrideDir string, logger *slog.Logger) (*Loader, error) {
+	l := newEmptyLoader("", logger)
+	if err := l.readFS(embeddedProfiles, "snmp-profiles"); err != nil {
+		return nil, fmt.Errorf("reading embedded profiles: %w", err)
+	}
+	if overrideDir != "" {
+		l.dir = overrideDir
+		if err := l.readDir(); err != nil {
+			return nil, fmt.Errorf("reading override profiles from %s: %w", overrideDir, err)
+		}
+	}
+	return l, nil
+}
+
+// readFS loads every profile under root in fsys. An override read afterwards
+// replaces an entry with the same relative path, which is what makes the
+// override an overlay rather than a separate set.
+func (l *Loader) readFS(fsys fs.FS, root string) error {
+	return fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		ext := filepath.Ext(path)
+		if ext != ".yaml" && ext != ".yml" {
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return fmt.Errorf("reading profile %s: %w", path, err)
+		}
+		var p Profile
+		if err := yaml.Unmarshal(data, &p); err != nil {
+			l.logger.Warn("Skipping invalid profile", "path", path, "error", err)
+			return nil
+		}
+		rel := strings.TrimPrefix(path, root+"/")
+		base := filepath.Base(path)
+		p.FileName = base
+		l.byFile[rel] = &p
+		if _, exists := l.byBase[base]; !exists {
+			l.byBase[base] = rel
+		}
+		return nil
+	})
 }
 
 func (l *Loader) readDir() error {

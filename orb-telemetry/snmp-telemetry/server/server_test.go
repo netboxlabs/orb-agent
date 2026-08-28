@@ -43,7 +43,7 @@ policies:
   my-policy:
     config:
       metrics_interval: 60
-      profiles_dir: ../data/snmp-profiles
+      profiles_dir: ../profiles/snmp-profiles
     scope:
       authentication:
         protocol_version: SNMPv2c
