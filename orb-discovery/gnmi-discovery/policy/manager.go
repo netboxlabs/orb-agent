@@ -305,7 +305,8 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 		// mistaken for a range carrying an inline port.
 		if inline && !targets.IsSingleEndpoint(bare) {
 			return fmt.Errorf(
-				"target %q: a CIDR or range cannot carry an inline port; use the port field", t.Host)
+				"target %q: a CIDR or range cannot carry an inline port; use the port field", t.Host,
+			)
 		}
 		if inline && t.Port != 0 {
 			// An inline port wins, so the field is dead weight here. Warn rather
@@ -324,7 +325,8 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 		if count > targets.MaxExpand {
 			return fmt.Errorf(
 				"target %q expands to %d addresses, more than the %d supported",
-				t.Host, count, targets.MaxExpand)
+				t.Host, count, targets.MaxExpand,
+			)
 		}
 
 		scanWork += count
@@ -342,7 +344,8 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 							" sends that password to every address the sweep admits: set a ca so the"+
 							" server is authenticated, drop the password, name the hosts explicitly,"+
 							" or set config.send_credentials_to_unverified_targets to accept it",
-						t.Host)
+						t.Host,
+					)
 				}
 				unverified++
 			}
@@ -361,7 +364,8 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 		key := fmt.Sprintf("%s:%d", canonicalHost(bare), port)
 		if first, dup := seen[key]; dup {
 			return fmt.Errorf(
-				"targets %d and %d both name %q; one device cannot have two entries", first, i, t.Host)
+				"targets %d and %d both name %q; one device cannot have two entries", first, i, t.Host,
+			)
 		}
 		seen[key] = i
 	}
@@ -377,7 +381,8 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 	if total > targets.MaxExpand {
 		return fmt.Errorf(
 			"this policy expands to %d distinct addresses, more than the %d supported",
-			total, targets.MaxExpand)
+			total, targets.MaxExpand,
+		)
 	}
 
 	if unverified > 0 {
@@ -397,7 +402,8 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 		return fmt.Errorf(
 			"this policy's targets enumerate %d addresses in total, more than the %d supported;"+
 				" overlapping ranges are expanded separately before being deduplicated",
-			scanWork, maxScanWork)
+			scanWork, maxScanWork,
+		)
 	}
 	return nil
 }
@@ -449,7 +455,8 @@ func checkInlinePort(host string) error {
 	}
 	if _, cerr := strconv.ParseUint(port, 10, 16); cerr != nil {
 		return fmt.Errorf(
-			"target %q: inline port %q must be a number between 0 and 65535", host, port)
+			"target %q: inline port %q must be a number between 0 and 65535", host, port,
+		)
 	}
 	return nil
 }

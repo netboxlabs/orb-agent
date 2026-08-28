@@ -216,26 +216,58 @@ func TestASweepReportsTheReachableTotalNotTheDelta(t *testing.T) {
 		"a tick with no newcomers still reports the one target that is subscribed")
 }
 
-// A named host is started without being probed, so it must never be reported as
-// having answered. Folding it into the admitted count made an unreachable
-// single-host policy read "1 of 1 probed address(es) answered" when nothing was
-// probed at all.
-func TestANamedHostIsNotReportedAsHavingAnswered(t *testing.T) {
-	dialer := newPerHostDialer(map[string]error{"10.0.0.5:9339": dialingErr()})
+// A policy of named hosts probes nothing, so there is no sweep outcome to report
+// and no sweep run is created. That is also a compatibility boundary: before
+// ranges existed every run was a per-device flush, and consumers read "a
+// completed run" as "something was ingested". A sweep run completes long before
+// the first flush has subscribed, so emitting one for a policy written before
+// this feature would change what its status means without the operator changing
+// anything. Measured against a live gNMI server, it made an external check pass
+// about two seconds early.
+func TestAnAllExplicitPolicyEmitsNoSweepRun(t *testing.T) {
+	dialer := newPerHostDialer(nil)
 	r := newSweepRunner(t, "10.0.0.5", dialer)
 	r.Start()
 	t.Cleanup(func() { _ = r.Stop() })
 
-	run := sweepRunFor(t, r)
+	// Wait for the target loop to produce its flush run.
+	require.Eventually(t, func() bool {
+		for _, run := range r.Runs() {
+			if run.Kind == RunKindFlush {
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 10*time.Millisecond)
 
-	require.NotContains(t, run.Reason, "answered",
+	for _, run := range r.Runs() {
+		require.NotEqual(t, RunKindSweep, run.Kind,
+			"a policy of named hosts reports no sweep run")
+	}
+}
+
+// The accounting a named host must not corrupt, tested where it lives. A named
+// host is started without being probed, so folding it into the admitted count
+// reported it as having answered — an unreachable single-host policy read as
+// "1 of 1 probed address(es) answered" when nothing was probed at all.
+func TestASweepOutcomeNeverReportsAnUnprobedTargetAsAnswered(t *testing.T) {
+	// One named host, nothing probed.
+	only := sweepOutcome{scanned: 1, explicit: 1}
+	require.NotContains(t, only.summary(), "answered",
 		"nothing was probed, so nothing can have answered")
-	require.Contains(t, run.Reason, "1 named target(s) started without probing")
-	// Still subscribed, and still not a failure: naming the host is the operator
-	// asserting it exists, and dropping it for being mid-reboot is the regression
-	// the no-probe rule exists to avoid.
-	require.Equal(t, RunStatusCompleted, run.Status)
-	require.Equal(t, 1, run.EntityCount)
+	require.Contains(t, only.summary(), "1 named target(s) started without probing")
+	require.Equal(t, 1, only.total(), "it is still subscribed")
+	require.Zero(t, only.probed())
+
+	// A range alongside it: the two counts stay apart.
+	mixed := sweepOutcome{
+		scanned: 6, explicit: 1, admitted: 1, rejected: 4,
+		exampleReason: "connection refused",
+	}
+	require.Contains(t, mixed.summary(), "1 of 5 probed address(es) answered")
+	require.Contains(t, mixed.summary(), "1 named target(s) started without probing")
+	require.Contains(t, mixed.summary(), "4 did not answer")
+	require.Equal(t, 2, mixed.total())
 }
 
 // A sweep that mixes both kinds must keep the two counts distinct rather than

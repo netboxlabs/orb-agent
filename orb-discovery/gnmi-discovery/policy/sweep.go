@@ -68,7 +68,17 @@ func (r *Runner) sweep() {
 // loop for each newcomer. It never touches a live subscription: a device that
 // answered an earlier sweep is not re-probed, so a rescan cannot disturb it.
 func (r *Runner) sweepOnce() {
-	run := r.runStore.CreateSweepRun(r.name, r.originalHosts())
+	// A sweep run reports the outcome of probing, and a policy of named hosts
+	// probes nothing — the run would only restate the policy back. It is also a
+	// compatibility boundary: before ranges existed every run was a per-device
+	// flush, so consumers read "a completed run" as "something was ingested", and
+	// a sweep run completes long before the first flush has subscribed. Emitting
+	// one for a policy written before this feature would change what its status
+	// means without the operator changing anything.
+	var runID string
+	if r.hasRangedTarget() {
+		runID = r.runStore.CreateSweepRun(r.name, r.originalHosts()).ID
+	}
 
 	admitted, outcome, err := r.admitTargets()
 	switch {
@@ -77,7 +87,7 @@ func (r *Runner) sweepOnce() {
 		// not a failure, and logging it at Error would put a red line in the log
 		// on every ordinary policy removal.
 		r.logger.Debug("sweep canceled", "policy", r.name)
-		r.runStore.FinishSweepRun(r.name, run.ID, RunStatusFailed, "sweep canceled", 0)
+		r.finishSweepRun(runID, RunStatusFailed, "sweep canceled", 0)
 		return
 	case err != nil:
 		// Report and keep going. There is no path to failing the policy itself:
@@ -86,7 +96,7 @@ func (r *Runner) sweepOnce() {
 		// here would also kill rescan and leave the policy permanently dead.
 		r.logger.Error("sweep failed; no targets started",
 			"policy", r.name, "error", err)
-		r.runStore.FinishSweepRun(r.name, run.ID, RunStatusFailed, err.Error(), 0)
+		r.finishSweepRun(runID, RunStatusFailed, err.Error(), 0)
 		return
 	}
 
@@ -105,7 +115,7 @@ func (r *Runner) sweepOnce() {
 		reason += fmt.Sprintf("; credentials are being sent to targets whose server is not"+
 			" authenticated (%d range target(s))", n)
 	}
-	r.runStore.FinishSweepRun(r.name, run.ID, status, reason, outcome.total())
+	r.finishSweepRun(runID, status, reason, outcome.total())
 
 	// Spread the first dial once a sweep admits more than a handful. Every loop
 	// dials immediately, so 200 admitted targets means 200 simultaneous TLS
@@ -285,6 +295,26 @@ func (o sweepOutcome) summary() string {
 		s += fmt.Sprintf("; %d did not answer, e.g. %s", o.rejected, o.exampleReason)
 	}
 	return s
+}
+
+// finishSweepRun closes the sweep run when there is one.
+func (r *Runner) finishSweepRun(runID string, status RunStatus, reason string, count int) {
+	if runID == "" {
+		return
+	}
+	r.runStore.FinishSweepRun(r.name, runID, status, reason, count)
+}
+
+// hasRangedTarget reports whether any target stands for more than one address,
+// which is what makes a sweep worth reporting.
+func (r *Runner) hasRangedTarget() bool {
+	for _, t := range r.policy.Scope.Targets {
+		bare, _, _ := splitEffectivePort(t.Host, t.Port)
+		if !targets.IsSingleEndpoint(bare) {
+			return true
+		}
+	}
+	return false
 }
 
 // unverifiedCredentialTargets counts the ranged targets that carry a password

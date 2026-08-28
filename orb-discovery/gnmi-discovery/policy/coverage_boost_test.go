@@ -36,7 +36,8 @@ func TestNewManagerBadProfilesDir(t *testing.T) {
 	t.Parallel()
 	// A non-existent override dir is treated as "no overrides" (warn + continue)
 	// by LoadProfilesWithLogger, so NewManager must succeed.
-	m, err := NewManager(context.Background(), slog.Default(), nil,
+	m, err := NewManager(
+		context.Background(), slog.Default(), nil,
 		&gnmi.FakeDialer{Session: &gnmi.FakeSession{}},
 		"/nonexistent/profiles/dir/that/cannot/exist",
 	)
