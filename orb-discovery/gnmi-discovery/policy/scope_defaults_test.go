@@ -83,12 +83,12 @@ policies:
 	require.NoError(t, err)
 	targets := policies["p1"].Scope.Targets
 
-	require.Equal(t, "admin", targets[0].Username)
-	require.Equal(t, "s3cret", targets[0].Password, "scope secret must be resolved, not literal")
+	require.Equal(t, "admin", targets[0].ResolvedUsername())
+	require.Equal(t, "s3cret", targets[0].ResolvedPassword(), "scope secret must be resolved, not literal")
 	require.Equal(t, "10.0.0.1:6030", targets[0].Host, "scope port applied")
 
-	require.Equal(t, "legacy", targets[1].Username, "target overrides scope")
-	require.Equal(t, "s3cret", targets[1].Password, "unset fields still inherit")
+	require.Equal(t, "legacy", targets[1].ResolvedUsername(), "target overrides scope")
+	require.Equal(t, "s3cret", targets[1].ResolvedPassword(), "unset fields still inherit")
 }
 
 // A tls block replaces the scope's wholesale rather than merging field by field.
@@ -327,4 +327,74 @@ policies:
 `)
 	_, err = m.ParsePolicies(distinct)
 	require.NoError(t, err, "same host, different ports: two endpoints, not a duplicate")
+}
+
+// An anonymous device inside a credentialed scope. Presence, not emptiness,
+// controls inheritance: a target that writes `username: ""` has said it connects
+// without credentials, and inheriting over that would send the campus password
+// to a device the operator marked as taking none.
+//
+// This is why the fields are pointers. A plain string cannot tell an omitted
+// field from an explicitly empty one, since YAML decodes both to "".
+func TestAnExplicitlyEmptyCredentialBlocksInheritance(t *testing.T) {
+	m := newTestManager(t)
+	data := []byte(`
+policies:
+  p1:
+    scope:
+      username: admin
+      password: campus-secret
+      targets:
+        - host: 10.0.0.1
+        - host: 10.0.0.2
+          username: ""
+          password: ""
+`)
+	policies, err := m.ParsePolicies(data)
+	require.NoError(t, err)
+	targets := policies["p1"].Scope.Targets
+
+	require.Equal(t, "admin", targets[0].ResolvedUsername(), "an omitted field inherits")
+	require.Equal(t, "campus-secret", targets[0].ResolvedPassword())
+
+	require.NotNil(t, targets[1].Username, "an explicit empty value is present, not absent")
+	require.Empty(t, targets[1].ResolvedUsername(), "and it is not overwritten by the scope")
+	require.Empty(t, targets[1].ResolvedPassword())
+}
+
+// Only one of the two can be blocked, independently.
+func TestBlockingOneCredentialLeavesTheOtherInherited(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      username: admin
+      password: campus-secret
+      targets:
+        - host: 10.0.0.1
+          password: ""
+`))
+	require.NoError(t, err)
+	tgt := policies["p1"].Scope.Targets[0]
+	require.Equal(t, "admin", tgt.ResolvedUsername(), "username still inherits")
+	require.Empty(t, tgt.ResolvedPassword(), "password does not")
+}
+
+// A target with no credential fields at all and a scope with none either must not
+// end up holding empty non-nil pointers, which would block a later inherit and
+// would also mean the dialer is handed "" instead of nothing.
+func TestNoCredentialsAnywhereLeavesBothUnset(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.1
+`))
+	require.NoError(t, err)
+	tgt := policies["p1"].Scope.Targets[0]
+	require.Nil(t, tgt.Username)
+	require.Nil(t, tgt.Password)
 }

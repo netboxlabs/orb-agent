@@ -395,11 +395,16 @@ func inheritScopeDefaults(policy *config.Policy) {
 	scope := &policy.Scope
 	for i := range scope.Targets {
 		t := &scope.Targets[i]
-		if t.Username == "" {
-			t.Username = scope.Username
+		// Presence, not emptiness. A target that writes `username: ""` has said
+		// it connects anonymously, and inheriting over that would send the scope
+		// credentials to a device the operator marked as taking none.
+		if t.Username == nil && scope.Username != "" {
+			v := scope.Username
+			t.Username = &v
 		}
-		if t.Password == "" {
-			t.Password = scope.Password
+		if t.Password == nil && scope.Password != "" {
+			v := scope.Password
+			t.Password = &v
 		}
 		if t.Port == 0 {
 			t.Port = scope.Port
@@ -422,7 +427,13 @@ func (m *Manager) resolveEnv(policy *config.Policy) error {
 		t := &policy.Scope.Targets[i]
 		// Resolve every string field a user is likely to source from env: host,
 		// credentials, and TLS material paths.
-		fields := []*string{&t.Host, &t.Username, &t.Password}
+		fields := []*string{&t.Host}
+		if t.Username != nil {
+			fields = append(fields, t.Username)
+		}
+		if t.Password != nil {
+			fields = append(fields, t.Password)
+		}
 		// TLS is a pointer, and taking the address of a field through a nil one
 		// panics rather than failing to compile. No tls block is the common
 		// case, so this guard is on the hot path, not an edge case. ResolvedTLS

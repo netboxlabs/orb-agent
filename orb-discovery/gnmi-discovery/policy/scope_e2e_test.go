@@ -121,12 +121,12 @@ func TestAPinnedHostInsideASubnetIsNotWarnedAbout(t *testing.T) {
 func TestAPinnedHostInsideASubnetKeepsItsOwnSettings(t *testing.T) {
 	for name, targetList := range map[string][]config.Target{
 		"pin first": {
-			{Host: "10.0.0.5", Username: "legacy"},
+			{Host: "10.0.0.5", Username: strPtr("legacy")},
 			{Host: "10.0.0.0/29"},
 		},
 		"subnet first": {
 			{Host: "10.0.0.0/29"},
-			{Host: "10.0.0.5", Username: "legacy"},
+			{Host: "10.0.0.5", Username: strPtr("legacy")},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -138,7 +138,7 @@ func TestAPinnedHostInsideASubnetKeepsItsOwnSettings(t *testing.T) {
 			for _, c := range expanded {
 				if c.target.Host == "10.0.0.5:9339" {
 					found = true
-					require.Equal(t, "legacy", c.target.Username)
+					require.Equal(t, "legacy", c.target.ResolvedUsername())
 					require.True(t, c.explicit, "the pin is explicit, so it is never probed")
 				}
 			}
@@ -251,3 +251,5 @@ policies:
 		return false
 	}, 3*time.Second, 10*time.Millisecond, "the subscription presents the client certificate")
 }
+
+func strPtr(v string) *string { return &v }

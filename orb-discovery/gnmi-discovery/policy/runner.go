@@ -200,7 +200,7 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debouncer, retry *time.Timer) error {
 	tls := t.ResolvedTLS()
 	sess, err := r.dialer.Dial(r.ctx, gnmi.TargetSpec{
-		Host: t.Host, Username: t.Username, Password: t.Password,
+		Host: t.Host, Username: t.ResolvedUsername(), Password: t.ResolvedPassword(),
 		SkipVerify: tls.SkipVerify, Insecure: tls.Insecure, Origin: t.ResolvedOrigin(),
 		CAFile: tls.CAFile, CertFile: tls.CertFile, KeyFile: tls.KeyFile,
 	})

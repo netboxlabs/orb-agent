@@ -130,6 +130,13 @@ policies:
           override_defaults:         # per-target defaults override
             site: Chicago IL
 
+        # An explicitly empty credential blocks the scope's; an omitted one
+        # inherits it. This is how a device that takes no auth lives in a
+        # credentialed scope.
+        - host: 10.0.0.31
+          username: ""
+          password: ""
+
         - host: 10.0.0.21            # Nokia SR-OS
           port: 57400                # beats the scope port; an inline :port beats both
           username: admin            # beats the scope username

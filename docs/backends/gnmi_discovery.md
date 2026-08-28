@@ -86,7 +86,9 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | tls | map | no | Default TLS settings. A target's own `tls` block **replaces** this one entirely rather than merging field by field, because a bool cannot distinguish "unset" from "false". |
 
 Scope-level settings are defaults, not overrides: a target that sets a field keeps
-its own value. `mode`, `profile` and `override_defaults` are deliberately not
+its own value. What counts is that the field is *present*, not that it is
+non-empty, so a target inside a credentialed scope can connect anonymously by
+writing `username: ""` and `password: ""`. `mode`, `profile` and `override_defaults` are deliberately not
 scope fields — `mode` and `override_defaults` duplicate the policy-level `config`
 knobs, and a scope-level `profile` would pin one vendor profile onto every device
 in a range whose contents are by definition unknown.
@@ -96,8 +98,8 @@ in a range whose contents are by definition unknown.
 |:---:|:----:|:--------:|:-----------:|
 | host | str | yes | A single endpoint (`10.0.0.11`, `10.0.0.11:6030`, `switch-a.example.com`), a CIDR (`10.0.0.0/24`), or a range (`10.1.0.0-50`, `10.2.0.0-10.2.0.9`). A CIDR or range cannot carry an inline `:port` — use the `port` field. |
 | port | int | no | Port for this target, used when `host` carries no inline port (default `9339`). An inline `host:port` wins over this field, which wins over the scope's. |
-| username | str | no | gNMI username. `${ENV_VAR}` syntax is supported. |
-| password | str | no | gNMI password. `${ENV_VAR}` syntax is supported. |
+| username | str | no | gNMI username. `${ENV_VAR}` syntax is supported. Set it to `""` to connect anonymously from inside a scope that sets one — an omitted field inherits, an explicitly empty one does not. |
+| password | str | no | gNMI password. `${ENV_VAR}` syntax is supported. Set it to `""` to block the scope's, as with `username`. |
 | tls | map | no | TLS settings: `skip_verify` (keep TLS, don't verify the cert), `insecure` (opt-in PLAINTEXT, off by default), `ca`/`cert`/`key` (optional mTLS). TLS with system root CAs is the default. |
 | mode | str | no | Per-target delivery mode override (`auto`/`on_change`/`sample`/`get`). |
 | profile | str | no | Pin a gNMI profile (auto-detected when omitted). |

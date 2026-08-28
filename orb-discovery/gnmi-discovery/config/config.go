@@ -53,9 +53,14 @@ type TLSConfig struct {
 
 // Target is one gNMI endpoint.
 type Target struct {
-	Host     string `yaml:"host"`
-	Username string `yaml:"username,omitempty"`
-	Password string `yaml:"password,omitempty"`
+	Host string `yaml:"host"`
+	// Username and Password are pointers so that presence, not emptiness,
+	// controls inheritance. An anonymous device inside a credentialed scope is
+	// expressed as `username: ""` — present, so nothing is inherited — which a
+	// plain string cannot distinguish from an omitted field. snmp-discovery
+	// expresses the same thing through the presence of its authentication block.
+	Username *string `yaml:"username,omitempty"`
+	Password *string `yaml:"password,omitempty"`
 	// Port is the gNMI port. An inline "host:port" suffix wins over this field,
 	// which in turn wins over the scope's; unset everywhere means
 	// DefaultGNMIPort. A CIDR or range cannot carry an inline port, which is
@@ -91,6 +96,22 @@ func (t Target) ResolvedTLS() TLSConfig {
 		return TLSConfig{}
 	}
 	return *t.TLS
+}
+
+// ResolvedUsername returns this target's gNMI username, or "" when none is set.
+func (t Target) ResolvedUsername() string {
+	if t.Username == nil {
+		return ""
+	}
+	return *t.Username
+}
+
+// ResolvedPassword returns this target's gNMI password, or "" when none is set.
+func (t Target) ResolvedPassword() string {
+	if t.Password == nil {
+		return ""
+	}
+	return *t.Password
 }
 
 // ResolvedOrigin returns the gNMI request-path origin for this target: the
