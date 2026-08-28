@@ -143,37 +143,69 @@ func (rs *RunStore) UpdateRun(policy, host, runID string, status RunStatus, err 
 	}
 }
 
-// GetRunsForPolicy returns a policy's most recently active runs.
+// GetRunsForPolicy returns a policy's runs, capped.
 //
-// The result is capped. A policy sweeping a /22 holds up to maxRunsPerTarget
+// The cap exists because a policy sweeping a /22 holds up to maxRunsPerTarget
 // runs for each of a thousand targets, and the agent polls /status every 10s
-// with a 2s budget and restarts the backend when that times out — so an
-// uncapped list turns a large policy into a restart loop.
+// with a 2s budget and restarts the backend when that times out — so an uncapped
+// list turns a large policy into a restart loop.
 //
-// Sweep runs are exempt from the cap. They are the one record that describes the
-// policy as a whole, and they are also the easiest to lose: a busy range
-// produces device runs continuously, which would push the sweep off the end.
+// What survives the cap is ordered by how much it explains, not by recency:
+//
+// Sweep runs first. They are the one record describing the policy as a whole,
+// and the easiest to lose, since a busy range produces device runs continuously.
+//
+// Then runs still in flight, stalest first. These must never be dropped, and
+// activity order drops them first: a run's UpdatedAt is stamped when it is
+// created and not touched again until it finishes, so the longer one hangs the
+// further it sinks. deriveStatus looks for RunStatusRunning in this result alone,
+// so truncating an in-flight run makes a policy with a hung ingest report
+// completed and hides the run that would explain it. Stalest first because if
+// even these have to be trimmed, the most stuck ones are the ones worth seeing.
+//
+// Finished runs fill whatever budget is left, most recently active first.
 func (rs *RunStore) GetRunsForPolicy(policy string) []*Run {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
-	out := make([]*Run, 0)
-	var sweeps []*Run
+
+	var sweeps, running, finished []*Run
 	for host, targetRuns := range rs.runs[policy] {
 		for _, r := range targetRuns {
-			if host == sweepRunKey {
-				sweeps = append(sweeps, copyRun(r))
-				continue
+			c := copyRun(r)
+			switch {
+			case host == sweepRunKey:
+				sweeps = append(sweeps, c)
+			case c.Status == RunStatusRunning:
+				running = append(running, c)
+			default:
+				finished = append(finished, c)
 			}
-			out = append(out, copyRun(r))
 		}
 	}
-	sortByActivity(out)
-	if room := maxRunsPerPolicy - len(sweeps); len(out) > room {
-		out = out[:max(room, 0)]
+
+	sortByStalest(running)
+	sortByActivity(finished)
+
+	budget := max(maxRunsPerPolicy-len(sweeps), 0)
+	if len(running) > budget {
+		running = running[:budget]
 	}
+	budget -= len(running)
+	if len(finished) > budget {
+		finished = finished[:max(budget, 0)]
+	}
+
+	out := make([]*Run, 0, len(sweeps)+len(running)+len(finished))
 	out = append(out, sweeps...)
+	out = append(out, running...)
+	out = append(out, finished...)
 	sortByActivity(out)
 	return out
+}
+
+// sortByStalest orders runs least-recently-active first.
+func sortByStalest(runs []*Run) {
+	sort.Slice(runs, func(i, j int) bool { return runs[i].UpdatedAt < runs[j].UpdatedAt })
 }
 
 // sortByActivity orders runs most-recently-active first.

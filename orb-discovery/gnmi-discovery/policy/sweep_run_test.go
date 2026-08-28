@@ -287,3 +287,76 @@ func sweepRunFor(t *testing.T, r *Runner) *Run {
 	}, 5*time.Second, 10*time.Millisecond, "a finished sweep run")
 	return found
 }
+
+// A run still in flight must survive the cap. Activity order drops it first: a
+// run's UpdatedAt is stamped at creation and not touched again until it finishes,
+// so the longer an ingest hangs the further it sinks. deriveStatus looks for
+// RunStatusRunning in this result alone, so truncating the hung run made the
+// policy report completed and hid the one record that explained it.
+func TestAnInFlightRunSurvivesTheCap(t *testing.T) {
+	rs := NewRunStore()
+	hung := rs.CreateRun("p1", "10.0.0.9:9339") // created first, never finished
+
+	for i := range 400 {
+		host := fmt.Sprintf("10.0.%d.%d:9339", i/256, i%256)
+		run := rs.CreateRun("p1", host)
+		rs.UpdateRun("p1", host, run.ID, RunStatusCompleted, nil, 1)
+	}
+
+	runs := rs.GetRunsForPolicy("p1")
+	require.LessOrEqual(t, len(runs), maxRunsPerPolicy, "still capped")
+
+	var found bool
+	for _, r := range runs {
+		if r.ID == hung.ID {
+			found = true
+		}
+	}
+	require.True(t, found, "the hung run is the one thing that must not be dropped")
+	require.Equal(t, string(RunStatusRunning), deriveStatus(runs),
+		"a policy with a hung ingest must not report completed")
+}
+
+// If in-flight runs alone exceed the budget, the stalest are kept: they are the
+// most stuck, and so the ones worth showing.
+func TestWhenInFlightRunsExceedTheBudgetTheStalestAreKept(t *testing.T) {
+	rs := NewRunStore()
+	var first, last *Run
+	for i := range maxRunsPerPolicy + 20 {
+		host := fmt.Sprintf("10.0.1.%d:9339", i)
+		run := rs.CreateRun("p1", host)
+		if i == 0 {
+			first = run
+		}
+		last = run
+	}
+
+	runs := rs.GetRunsForPolicy("p1")
+	require.LessOrEqual(t, len(runs), maxRunsPerPolicy, "the payload stays bounded")
+
+	ids := map[string]bool{}
+	for _, r := range runs {
+		ids[r.ID] = true
+	}
+	require.True(t, ids[first.ID], "the stalest in-flight run is kept")
+	require.False(t, ids[last.ID], "the newest is what gets trimmed")
+	require.Equal(t, string(RunStatusRunning), deriveStatus(runs))
+}
+
+// The sweep run still outranks everything, including in-flight device runs.
+func TestTheSweepRunOutranksInFlightRuns(t *testing.T) {
+	rs := NewRunStore()
+	sweep := rs.CreateSweepRun("p1", []string{"10.0.0.0/22"})
+	rs.FinishSweepRun("p1", sweep.ID, RunStatusCompleted, "2 subscribed", 2)
+	for i := range maxRunsPerPolicy + 20 {
+		rs.CreateRun("p1", fmt.Sprintf("10.0.1.%d:9339", i))
+	}
+
+	var found bool
+	for _, r := range rs.GetRunsForPolicy("p1") {
+		if r.ID == sweep.ID {
+			found = true
+		}
+	}
+	require.True(t, found, "the sweep run is still exempt")
+}
