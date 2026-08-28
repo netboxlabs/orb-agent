@@ -67,8 +67,9 @@ policies:
       debounce_ms: 2000    # flush delay after last notification (default 2000)
       probe_timeout_ms: 3000       # how long one sweep probe waits for an address (default 3000)
       rescan_interval_ms: 3600000  # re-probe unsubscribed addresses; 0 disables, floor 60000
-      # A credentialed CIDR/range needs verified TLS: the sweep admits anything that
-      # answers and then sends the password to it. Set this only to accept that.
+      # A credentialed CIDR/range needs verified TLS: the sweep admits anything
+      # that answers and then sends the password to it. Set this only if you
+      # accept that.
       # send_credentials_to_unverified_targets: false
       sample_interval_ms: 300000   # SAMPLE subscription interval (default 300000 = 5m)
       get_interval_ms: 900000      # GET poll interval (default 900000 = 15m)
@@ -125,16 +126,16 @@ policies:
         - host: 10.1.0.0-50
         - host: 10.2.0.0-10.2.0.9
 
-        # A named host is subscribed without probing: naming it asserts it exists.
+        # A named host is subscribed without probing.
         - host: 10.0.0.11            # inherits every scope setting above
           profile: arista_eos        # pin a profile (auto-detect if omitted)
           mode: on_change            # per-target mode override
-          netbox_id: 42              # honoured: a bare address, not a range
+          netbox_id: 42              # kept for a bare address, ignored for a range
           override_defaults:         # per-target defaults override
             site: Chicago IL
 
         # An explicitly empty credential blocks the scope's; an omitted one
-        # inherits it. This is how a device that takes no auth lives in a
+        # inherits it. Use this for a device that takes no auth inside a
         # credentialed scope.
         - host: 10.0.0.31
           username: ""
@@ -145,7 +146,7 @@ policies:
           username: admin            # beats the scope username
           tls:                       # replaces the scope block wholesale, never merges
             skip_verify: true        # keep TLS but don't verify the target cert
-            insecure: false          # opt-in PLAINTEXT (no TLS) — off by default
+            insecure: false          # opt-in PLAINTEXT (no TLS), off by default
             cert: /run/secrets/cert.pem
             key: /run/secrets/key.pem
 ```
