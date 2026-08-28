@@ -618,3 +618,51 @@ policies:
 	}
 	require.Equal(t, []string{"[2001:db8::1]:6030", "[2001:db8::2]:57400"}, hosts)
 }
+
+// net.SplitHostPort accepts a service name and Go's dialer resolves one, so
+// "10.0.0.1:http" reaches port 80 while every check here read it as an unported
+// host named "10.0.0.1:http". A pinned target written that way never matched the
+// numeric candidate a range produced, and the device got two subscriptions with
+// two sets of credentials.
+//
+// Rejected rather than resolved: resolving would make a policy's meaning depend
+// on the /etc/services of whichever host parsed it.
+func TestANonNumericInlinePortIsRejected(t *testing.T) {
+	m := newTestManager(t)
+	for _, host := range []string{
+		"10.0.0.1:http",
+		"[2001:db8::1]:gnmi",
+		"10.0.0.1:99999", // out of range, and silently a hostname before
+		"10.0.0.1:",      // trailing colon, likewise
+	} {
+		_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: "` + host + `"
+`))
+		require.Error(t, err, "host %q must be rejected", host)
+		require.Contains(t, err.Error(), "inline port", "the error names the port, host %q", host)
+	}
+}
+
+// Numeric ports, IPv6 literals without brackets, and portless hosts are all
+// untouched by the check.
+func TestNumericAndPortlessHostsStillPass(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.1:6030
+        - host: 10.0.0.2
+        - host: "[2001:db8::1]:57400"
+        - host: 2001:db8::2
+        - host: fe80::1%br-lan
+        - host: switch-a.example.com
+        - host: 10.0.1.0/24
+`))
+	require.NoError(t, err)
+}

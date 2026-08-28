@@ -293,6 +293,9 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 		if err := checkNoControlChars(t.Host, "target host"); err != nil {
 			return err
 		}
+		if err := checkInlinePort(t.Host); err != nil {
+			return err
+		}
 
 		bare, port, inline := splitEffectivePort(t.Host, t.Port)
 
@@ -392,6 +395,35 @@ func splitEffectivePort(host string, field uint16) (bare string, port uint16, in
 	// input, so "[10.0.0.1]" collapsed with the plain address for identity while
 	// Span refused to parse it and counted it as a separate endpoint.
 	return strings.Trim(host, "[]"), resolvedPort(field), false
+}
+
+// checkInlinePort rejects an inline port that is not a number in range.
+//
+// net.SplitHostPort accepts a service name, and Go's dialer resolves one through
+// /etc/services — net.LookupPort("tcp", "http") is 80 — so "10.0.0.1:http"
+// reaches a device on port 80 while every check here read it as an unported host
+// named "10.0.0.1:http". A pinned target written that way never matched the
+// numeric candidate a range produced, so the device got two subscriptions with
+// two sets of credentials. The same silence swallowed an out-of-range number and
+// a trailing colon: "10.0.0.1:99999" and "10.0.0.1:" both became hostnames, to be
+// resolved by DNS and fail as lookups.
+//
+// Rejected rather than resolved. Resolving would make a policy's meaning depend
+// on the /etc/services of whichever host parsed it, so the same policy could
+// validate differently in the agent container than where it was written. Every
+// documented form is numeric and the port field is a uint16, so nothing
+// legitimate is refused.
+func checkInlinePort(host string) error {
+	_, port, err := net.SplitHostPort(host)
+	if err != nil {
+		// No inline port, or an IPv6 literal written without brackets.
+		return nil
+	}
+	if _, cerr := strconv.ParseUint(port, 10, 16); cerr != nil {
+		return fmt.Errorf(
+			"target %q: inline port %q must be a number between 0 and 65535", host, port)
+	}
+	return nil
 }
 
 // canonicalHost normalizes a bare host for comparison: an IP literal to the one
