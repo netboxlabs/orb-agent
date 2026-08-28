@@ -69,12 +69,28 @@ func (r *Runner) sweep() {
 // loop for each newcomer. It never touches a live subscription: a device that
 // answered an earlier sweep is not re-probed, so a rescan cannot disturb it.
 func (r *Runner) sweepOnce() {
-	admitted, err := r.admitTargets()
+	run := r.runStore.CreateSweepRun(r.name, r.originalHosts())
+
+	admitted, outcome, err := r.admitTargets()
 	if err != nil {
+		// Report and keep going. There is no path to failing the policy itself:
+		// PolicyData.State is set only from the ApplyPolicy HTTP result, the 201
+		// has already returned, and a runner holds no manager reference. Exiting
+		// here would also kill rescan and leave the policy permanently dead.
 		r.logger.Error("sweep failed; no targets started",
 			"policy", r.name, "error", err)
+		r.runStore.FinishSweepRun(r.name, run.ID, RunStatusFailed, err.Error(), 0)
 		return
 	}
+
+	status, reason := RunStatusCompleted, outcome.summary()
+	if outcome.subscribed == 0 && outcome.admitted == 0 {
+		// The operator gave a range and nothing in it answered. That is the
+		// implementable form of "the policy failed": a run they can see, rather
+		// than a silent policy that reports healthy and discovers nothing.
+		status = RunStatusFailed
+	}
+	r.runStore.FinishSweepRun(r.name, run.ID, status, reason, outcome.admitted)
 
 	// Spread the first dial once a sweep admits more than a handful. Every loop
 	// dials immediately, so 200 admitted targets means 200 simultaneous TLS
@@ -116,14 +132,16 @@ func (r *Runner) unsubscribed(in []candidate) []candidate {
 
 // admitTargets expands, dedupes, and probes, returning the targets worth
 // subscribing to.
-func (r *Runner) admitTargets() ([]config.Target, error) {
+func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 	expanded, err := r.expandTargets()
 	if err != nil {
-		return nil, err
+		return nil, sweepOutcome{}, err
 	}
+	out := sweepOutcome{scanned: len(expanded)}
 	expanded = r.unsubscribed(expanded)
+	out.subscribed = out.scanned - len(expanded)
 	if len(expanded) == 0 {
-		return nil, nil
+		return nil, out, nil
 	}
 
 	// Probe concurrently: a dead address costs the full probeTimeout, so a /22
@@ -144,7 +162,7 @@ func (r *Runner) admitTargets() ([]config.Target, error) {
 		case sem <- struct{}{}:
 		case <-r.ctx.Done():
 			wg.Wait()
-			return nil, r.ctx.Err()
+			return nil, sweepOutcome{}, r.ctx.Err()
 		}
 		wg.Add(1)
 		go func(i int, t config.Target) {
@@ -157,7 +175,7 @@ func (r *Runner) admitTargets() ([]config.Target, error) {
 	wg.Wait()
 
 	if r.ctx.Err() != nil {
-		return nil, r.ctx.Err()
+		return nil, sweepOutcome{}, r.ctx.Err()
 	}
 
 	var admitted []config.Target
@@ -178,7 +196,7 @@ func (r *Runner) admitTargets() ([]config.Target, error) {
 		err := verdicts[i]
 		switch {
 		case isCanceled(err):
-			return nil, err
+			return nil, sweepOutcome{}, err
 		case admits(err):
 			admitted = append(admitted, c.target)
 		default:
@@ -189,17 +207,55 @@ func (r *Runner) admitTargets() ([]config.Target, error) {
 		}
 	}
 
+	out.admitted = len(admitted)
+	out.rejected = rejected
+	out.exampleReason = reasonText(firstReason)
+
 	if rejected > 0 {
 		// One line, not one per address: an operator who scanned a sparse /24
 		// does not need 251 warnings, but must never be told a count without
 		// being told why.
 		r.logger.Info("target sweep complete",
 			"policy", r.name,
-			"admitted", len(admitted),
+			"admitted", out.admitted,
 			"rejected", rejected,
-			"example_reason", reasonText(firstReason))
+			"example_reason", out.exampleReason)
 	}
-	return admitted, nil
+	return admitted, out, nil
+}
+
+// sweepOutcome is what the sweep run reports. Run has only EntityCount and
+// Reason to say it with, so the counts are rendered into the reason text.
+type sweepOutcome struct {
+	scanned       int // addresses this policy expands to
+	subscribed    int // already had a target loop, so not re-probed
+	admitted      int // answered this sweep and got a loop
+	rejected      int // probed and did not answer
+	exampleReason string
+}
+
+func (o sweepOutcome) summary() string {
+	if o.scanned == o.subscribed && o.scanned > 0 {
+		return fmt.Sprintf("%d target(s) already subscribed; nothing new to probe", o.subscribed)
+	}
+	s := fmt.Sprintf("%d of %d address(es) answered", o.admitted, o.scanned-o.subscribed)
+	if o.subscribed > 0 {
+		s += fmt.Sprintf("; %d already subscribed", o.subscribed)
+	}
+	if o.rejected > 0 {
+		s += fmt.Sprintf("; %d did not answer, e.g. %s", o.rejected, o.exampleReason)
+	}
+	return s
+}
+
+// originalHosts returns the host strings the operator wrote, so the sweep run
+// names the CIDR itself rather than a synthesized pseudo-host.
+func (r *Runner) originalHosts() []string {
+	hosts := make([]string, 0, len(r.policy.Scope.Targets))
+	for _, t := range r.policy.Scope.Targets {
+		hosts = append(hosts, t.Host)
+	}
+	return hosts
 }
 
 // candidate pairs an expanded target with whether the operator wrote it
