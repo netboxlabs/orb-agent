@@ -56,7 +56,7 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | get_interval_ms | int | no | `GET` poll interval in ms (default `900000` = 15m). |
 | probe_timeout_ms | int | no | How long a sweep waits for one address to answer (default `3000`). Too low and a whole subnet reports as absent with no failure signal. |
 | rescan_interval_ms | int | no | Re-probe addresses this policy is not subscribed to, picking up devices that were down when the policy was applied. Unset or `0` disables it; a non-zero value below `60000` is rejected. |
-| send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not authenticate the server. Off by default, and the refusal is deliberate — see [Credentials and ranges](#credentials-and-ranges). |
+| send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not verify the server. Off by default. See [Credentials and ranges](#credentials-and-ranges). |
 | options | map | no | Per-policy toggles. `capture_config` (bool) captures the CONFIG datastore into `Device.config.running` (default off). |
 | defaults | map | no | NetBox defaults applied to discovered entities (see below). |
 
@@ -87,19 +87,19 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | tls | map | no | Default TLS settings. A target's own `tls` block **replaces** this one entirely rather than merging field by field, because a bool cannot distinguish "unset" from "false". |
 
 Scope-level settings are defaults, not overrides: a target that sets a field keeps
-its own value. What counts is that the field is *present*, not that it is
-non-empty, so a target inside a credentialed scope can connect anonymously by
-writing `username: ""` and `password: ""`. `mode`, `profile` and `override_defaults` are deliberately not
-scope fields — `mode` and `override_defaults` duplicate the policy-level `config`
+its own value. What counts is that the field is present, not that it is non-empty,
+so a target inside a credentialed scope can connect anonymously by writing
+`username: ""` and `password: ""`. `mode`, `profile` and `override_defaults` are deliberately not
+scope fields. `mode` and `override_defaults` duplicate the policy-level `config`
 knobs, and a scope-level `profile` would pin one vendor profile onto every device
-in a range whose contents are by definition unknown.
+in a range whose contents are not known in advance.
 
 #### Target
 | Key | Type | Required | Description |
 |:---:|:----:|:--------:|:-----------:|
-| host | str | yes | A single endpoint (`10.0.0.11`, `10.0.0.11:6030`, `switch-a.example.com`), a CIDR (`10.0.0.0/24`), or a range (`10.1.0.0-50`, `10.2.0.0-10.2.0.9`). A CIDR or range cannot carry an inline `:port` — use the `port` field. |
+| host | str | yes | A single endpoint (`10.0.0.11`, `10.0.0.11:6030`, `switch-a.example.com`), a CIDR (`10.0.0.0/24`), or a range (`10.1.0.0-50`, `10.2.0.0-10.2.0.9`). A CIDR or range cannot carry an inline `:port`; use the `port` field. |
 | port | int | no | Port for this target, used when `host` carries no inline port (default `9339`). An inline `host:port` wins over this field, which wins over the scope's. |
-| username | str | no | gNMI username. `${ENV_VAR}` syntax is supported. Set it to `""` to connect anonymously from inside a scope that sets one — an omitted field inherits, an explicitly empty one does not. |
+| username | str | no | gNMI username. `${ENV_VAR}` syntax is supported. Set it to `""` to connect anonymously from inside a scope that sets one. An omitted field inherits; an explicitly empty one does not. |
 | password | str | no | gNMI password. `${ENV_VAR}` syntax is supported. Set it to `""` to block the scope's, as with `username`. |
 | tls | map | no | TLS settings: `skip_verify` (keep TLS, don't verify the cert), `insecure` (opt-in PLAINTEXT, off by default), `ca`/`cert`/`key` (optional mTLS). TLS with system root CAs is the default. |
 | mode | str | no | Per-target delivery mode override (`auto`/`on_change`/`sample`/`get`). |
@@ -109,42 +109,36 @@ in a range whose contents are by definition unknown.
 | override_defaults | map | no | Per-target overrides of the policy `defaults`. |
 
 #### Ranges and subnets
-A `host` that names more than one address is expanded and each address is probed
-once before anything is subscribed to; only the addresses that answer get a
-subscription. This matters because a gNMI subscription is a persistent stream
-rather than a poll — without the probe, a `/24` would leave ~250 goroutines
-redialling empty addresses for the life of the policy.
+A `host` covering more than one address is expanded, and each address is probed
+once before anything subscribes. Only addresses that answer get a subscription.
+A gNMI subscription is a persistent stream rather than a poll, so without the
+probe a `/24` would leave around 250 goroutines redialling empty addresses for
+the life of the policy.
 
-A CIDR excludes its network and broadcast addresses, so `10.0.0.0/24` is 254 and
-`10.0.0.0/22` is 1022. A `/31` and a `/32` have no such pair to exclude and stay
-2 and 1. A range excludes nothing, because the operator enumerated it explicitly:
-`10.0.0.0-255` is 256, not 254. A policy may expand to at most 1024 addresses in
-total, counted across all its targets and checked before any expansion happens.
+A CIDR excludes its network and broadcast addresses, so `10.0.0.0/24` is 254
+addresses and `10.0.0.0/22` is 1022. A `/31` and a `/32` have no such pair to
+exclude and stay 2 and 1. A range excludes nothing, so `10.0.0.0-255` is 256.
+A policy may expand to at most 1024 addresses in total, counted across all its
+targets before any expansion happens.
 
-A probe answers the question "is anything listening on the gNMI port", and
-nothing more. Any response admits the address, including a rejected RPC or a
-failed TLS handshake — an mTLS device probed without a client cert, or a campus
-of self-signed certificates, is present, not absent. Only silence means absence.
-Probes carry no credentials, so a sweep never sprays the scope password across a
-range.
+A probe establishes only whether something is listening on the gNMI port. Any
+response admits the address, including a rejected RPC or a failed TLS handshake,
+so an mTLS device probed without a client certificate and a device with a
+self-signed certificate both count as present. Only silence counts as absent.
+Probes carry no credentials.
 
-A single named host is never probed: naming it is the operator asserting it
-exists, and a device that happens to be rebooting should not be dropped for the
-life of the policy.
-
-The sweep reports itself as a run on `/status`, named after the host strings you
-wrote, with the number of addresses that answered and the reason the rest did
-not. A range where nothing answered is reported as a failed run.
+A single named host is not probed. It is subscribed to directly and retried for
+the life of the policy, so a device that is rebooting when the policy is applied
+is not dropped.
 
 #### Credentials and ranges
-A probe carries no credentials, but the subscription that follows a successful
-probe does. Since a probe admits anything that answers, a range plus a password
-plus `skip_verify` or `insecure` means the password is offered to any service
-listening on the gNMI port inside that range — including one that is not a network
-device at all. That is reachable by accident: a range overlapping a server VLAN is
-a typo, not an attack.
+A probe carries no credentials, but the subscription that follows one does. A
+probe admits anything that answers, so a range with a password and either
+`skip_verify` or `insecure` sends that password to any service listening on the
+gNMI port in that range, including services that are not network devices. A range
+that overlaps a server VLAN is enough to cause this.
 
-So that combination is **refused**:
+That combination is refused:
 
 | Target | Password | TLS verification | Result |
 |:------:|:--------:|:----------------:|:------:|
@@ -154,21 +148,20 @@ So that combination is **refused**:
 | CIDR / range | yes | `skip_verify` | refused |
 | CIDR / range | yes | `insecure` | refused |
 
-Naming a host explicitly is unaffected — the operator said where the credential
-may go, and an attacker would have to intercept that connection rather than merely
-listen on a free address.
+Naming a host explicitly is not affected. The credential goes where the operator
+said it should, and collecting it requires intercepting that connection rather
+than listening on an unused address in a range.
 
-The gate is on the password, not on every credential. A client certificate is not
-a bearer secret: TLS binds possession to the session, so an endpoint that receives
-one cannot replay it. mTLS over a range without a password is allowed, as is a
-username without a password.
+The check is on the password, not on every credential. A client certificate is
+not a bearer secret, because TLS ties possession to the session and an endpoint
+that receives one cannot reuse it. mTLS over a range without a password is
+allowed, and so is a username without a password.
 
-To do credentialed range discovery, give the scope a `ca` so the server is
-authenticated. If the devices have per-device self-signed certificates and no
-shared CA, that is not possible, and the options are to name the hosts explicitly
-or to set `config.send_credentials_to_unverified_targets: true` and accept the
-exposure. Setting it logs a warning on every policy apply and is reported on every
-sweep run, so the decision stays visible rather than being forgotten.
+For credentialed range discovery, give the scope a `ca` so the server is
+verified. If the devices use per-device self-signed certificates with no shared
+CA, verification is not possible; either name the hosts explicitly or set
+`config.send_credentials_to_unverified_targets: true`. Setting it logs a warning
+each time the policy is applied.
 
 #### Interface type discovery
 Each interface's NetBox type is resolved per interface, in precedence order:
