@@ -27,6 +27,7 @@ type perHostDialer struct {
 
 	mu       sync.Mutex
 	dialed   []string
+	specs    []gnmi.TargetSpec
 	closed   map[string]int
 	inFlight int
 	peak     int
@@ -43,6 +44,7 @@ func (d *perHostDialer) Dial(_ context.Context, spec gnmi.TargetSpec) (gnmi.Sess
 	}
 	d.mu.Lock()
 	d.dialed = append(d.dialed, spec.Host)
+	d.specs = append(d.specs, spec)
 	d.mu.Unlock()
 	// Embed a real FakeSession so an admitted target's loop can run: it needs
 	// Subscribe and the rest of the interface, not just the two methods the
@@ -64,6 +66,18 @@ func (d *perHostDialer) dialedHosts() []string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]string(nil), d.dialed...)
+}
+
+func (d *perHostDialer) specsFor(host string) []gnmi.TargetSpec {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []gnmi.TargetSpec
+	for _, s := range d.specs {
+		if s.Host == host {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (d *perHostDialer) closeCount(host string) int {
