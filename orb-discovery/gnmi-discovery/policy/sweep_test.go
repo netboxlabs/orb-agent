@@ -1,0 +1,476 @@
+package policy
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/mapping"
+)
+
+// perHostDialer answers differently per address, which the shared FakeDialer
+// cannot do: it holds one session and ignores the TargetSpec entirely. The
+// classification matrix needs a distinct verdict per host, and concurrent probes
+// need distinct sessions or the -race detector fires on FakeSession's fields.
+type perHostDialer struct {
+	capsErr        map[string]error // by host:port; absent falls back to defaultCapsErr
+	defaultCapsErr error            // nil means the probe succeeds
+	dialErr        error
+
+	mu       sync.Mutex
+	dialed   []string
+	specs    []gnmi.TargetSpec
+	closed   map[string]int
+	inFlight int
+	peak     int
+	hang     map[string]bool // hosts whose Capabilities waits for ctx
+	blockOn  chan struct{}   // when non-nil, Capabilities waits on it
+}
+
+func newPerHostDialer(capsErr map[string]error) *perHostDialer {
+	return &perHostDialer{capsErr: capsErr, closed: map[string]int{}, hang: map[string]bool{}}
+}
+
+func (d *perHostDialer) Dial(_ context.Context, spec gnmi.TargetSpec) (gnmi.Session, error) {
+	if d.dialErr != nil {
+		return nil, d.dialErr
+	}
+	d.mu.Lock()
+	d.dialed = append(d.dialed, spec.Host)
+	d.specs = append(d.specs, spec)
+	d.mu.Unlock()
+	// Embed a real FakeSession so an admitted target's loop can run: it needs
+	// Subscribe and the rest of the interface, not just the two methods the
+	// probe touches.
+	return &perHostSession{
+		FakeSession: &gnmi.FakeSession{
+			Caps:            &gnmi.CapabilitiesResult{Vendor: "Arista"},
+			OnChangeSupport: true,
+			OnChangeStream: []gnmi.Notification{
+				{Updates: []gnmi.Update{{Path: "/system/state/hostname", Value: "r1"}}},
+				{SyncDone: true},
+			},
+		},
+		dialer: d, host: spec.Host,
+	}, nil
+}
+
+func (d *perHostDialer) dialedHosts() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.dialed...)
+}
+
+func (d *perHostDialer) specsSnapshot() []gnmi.TargetSpec {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]gnmi.TargetSpec(nil), d.specs...)
+}
+
+func (d *perHostDialer) specsFor(host string) []gnmi.TargetSpec {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []gnmi.TargetSpec
+	for _, s := range d.specs {
+		if s.Host == host {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (d *perHostDialer) closeCount(host string) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.closed[host]
+}
+
+type perHostSession struct {
+	*gnmi.FakeSession
+	dialer *perHostDialer
+	host   string
+}
+
+func (s *perHostSession) Capabilities(ctx context.Context) (*gnmi.CapabilitiesResult, error) {
+	s.dialer.mu.Lock()
+	s.dialer.inFlight++
+	if s.dialer.inFlight > s.dialer.peak {
+		s.dialer.peak = s.dialer.inFlight
+	}
+	s.dialer.mu.Unlock()
+	defer func() {
+		s.dialer.mu.Lock()
+		s.dialer.inFlight--
+		s.dialer.mu.Unlock()
+	}()
+
+	s.dialer.mu.Lock()
+	hang := s.dialer.hang[s.host]
+	s.dialer.mu.Unlock()
+	if hang {
+		// Never returns on its own: the probe's own deadline has to end it, which
+		// is what produces a genuine localStop.
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+
+	if s.dialer.blockOn != nil {
+		// Deliberately NOT selecting on ctx: this simulates a probe already past
+		// the point of cancellation, so the test measures whether Stop waits for
+		// the sweep goroutine rather than whether cancellation propagates.
+		<-s.dialer.blockOn
+	}
+	// Under the lock: the rescan tests bring a device up mid-run by mutating
+	// capsErr while probes are in flight.
+	s.dialer.mu.Lock()
+	err, scripted := s.dialer.capsErr[s.host]
+	fallback := s.dialer.defaultCapsErr
+	s.dialer.mu.Unlock()
+	if scripted {
+		return nil, err
+	}
+	if fallback != nil {
+		return nil, fallback
+	}
+	return &gnmi.CapabilitiesResult{Vendor: "Arista"}, nil
+}
+
+func (s *perHostSession) Close() error {
+	s.dialer.mu.Lock()
+	s.dialer.closed[s.host]++
+	s.dialer.mu.Unlock()
+	return s.FakeSession.Close()
+}
+
+func handshakeErr(msg string) error {
+	return status.Error(codes.Unavailable, "connection error: desc = \"transport: "+msg+"\"")
+}
+
+func dialingErr() error {
+	return status.Error(codes.Unavailable,
+		"connection error: desc = \"transport: Error while dialing: dial tcp: connect: connection refused\"")
+}
+
+// The gate may only conclude "something is listening on the gNMI port". Anything
+// that answered — even by rejecting the RPC, even by failing a TLS handshake —
+// is a device. Only silence is absence.
+//
+// The handshake cases are the ones an allow-list got wrong: a campus of devices
+// with self-signed certs, or an mTLS device probed without a client cert, all
+// answer with codes.Unavailable and would read as an empty subnet.
+//
+// The two deadline/cancel cases are the ones a code-only classifier got wrong in
+// the opposite direction. grpc-go produces DeadlineExceeded and Canceled locally
+// when the probe's own context ends, and a server may also send either of them
+// itself — so the code cannot separate them and the local context has to.
+func TestAdmissionAdmitsAnythingThatAnswered(t *testing.T) {
+	admitted := map[string]probeResult{
+		"ok":            {},
+		"unauthed":      {err: status.Error(codes.Unauthenticated, "no credentials")},
+		"forbidden":     {err: status.Error(codes.PermissionDenied, "denied")},
+		"no gnmi svc":   {err: status.Error(codes.Unimplemented, "unknown service gnmi.gNMI")},
+		"self-signed":   {err: handshakeErr("authentication handshake failed: x509: certificate signed by unknown authority")},
+		"mtls required": {err: handshakeErr("error reading server preface: remote error: tls: certificate required")},
+		"loaded device": {err: status.Error(codes.ResourceExhausted, "busy")},
+		// Server-sent, with the probe's own context still live: a peer answered.
+		"server deadline": {err: status.Error(codes.DeadlineExceeded, "deadline_exceeded")},
+		"server canceled": {err: status.Error(codes.Canceled, "rpc canceled by server")},
+		// A deadline that fires just after a successful reply must not retract it.
+		"answered then expired": {localStop: true},
+	}
+	for name, res := range admitted {
+		if got := admits(res); !got {
+			t.Errorf("%s: admits(%+v) = false, want true", name, res)
+		}
+	}
+
+	rejected := map[string]probeResult{
+		"refused": {err: dialingErr()},
+		// Our own deadline or cancellation ended the call, so nothing came back.
+		"local timeout":  {err: status.Error(codes.DeadlineExceeded, "context deadline exceeded"), localStop: true},
+		"local cancel":   {err: status.Error(codes.Canceled, "context canceled"), localStop: true},
+		"dial/tls fault": {err: errors.New("open /run/secrets/ca.pem: no such file or directory")},
+	}
+	for name, res := range rejected {
+		if got := admits(res); got {
+			t.Errorf("%s: admits(%+v) = true, want false", name, res)
+		}
+	}
+}
+
+// A sweep is cancelled by Stop and by a rescan tick. Counting those probes as
+// rejections would report a fabricated tally on every shutdown.
+func TestCanceledProbesAreNotCountedAsRejections(t *testing.T) {
+	require.True(t, isCanceled(context.Canceled))
+	require.False(t, isCanceled(dialingErr()))
+	// A peer answering with codes.Canceled is not this runner shutting down.
+	require.False(t, isCanceled(status.Error(codes.Canceled, "rpc canceled by server")),
+		"a remote status must never read as a local shutdown")
+}
+
+func TestSweepSubscribesOnlyToRespondingAddresses(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{
+		"10.0.0.2:9339": dialingErr(),
+		"10.0.0.3:9339": dialingErr(),
+	})
+	r := newSweepRunner(t, "10.0.0.0/30", dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(r.TargetStatuses()) == 1
+	}, 3*time.Second, 10*time.Millisecond, "only the responding address becomes a target")
+	require.Equal(t, "10.0.0.1:9339", r.TargetStatuses()[0].Host)
+}
+
+// Every probed session must be closed on every path. gnmic dials without
+// WithBlock, so Dial hands back a live ClientConn even for a dead address; an
+// unclosed one reconnect-loops in the background, per rejected address, per
+// sweep and per rescan tick.
+func TestEveryProbedSessionIsClosedIncludingRejections(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{"10.0.0.2:9339": dialingErr()})
+	r := newSweepRunner(t, "10.0.0.0/30", dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(dialer.dialedHosts()) >= 2
+	}, 3*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return dialer.closeCount("10.0.0.2:9339") == 1
+	}, 3*time.Second, 10*time.Millisecond, "a rejected probe still closes its session")
+}
+
+// A single host is the operator asserting the device exists. Probing it would
+// regress today's retry-forever behaviour: a device that is merely rebooting
+// would be dropped for the life of the policy.
+func TestASingleHostIsNeverProbed(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{"10.0.0.5:9339": dialingErr()})
+	r := newSweepRunner(t, "10.0.0.5", dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(r.TargetStatuses()) == 1
+	}, 3*time.Second, 10*time.Millisecond, "a named host is admitted without a probe")
+}
+
+// Stop must not return while the sweep goroutine is still running. Start does
+// wg.Add on its own side of the return precisely so that wg.Add happens-before
+// any wg.Wait; an uncounted sweep would let Stop report success while the sweep
+// carried on probing, outliving its own runner.
+//
+// Cancellation is a separate concern and works: a probe that honours ctx exits
+// promptly on Stop, which is what keeps DELETE from blocking. This test blocks
+// past that point on purpose.
+func TestStopWaitsForAnInFlightSweep(t *testing.T) {
+	dialer := newPerHostDialer(nil)
+	dialer.blockOn = make(chan struct{})
+	r := newSweepRunner(t, "10.0.0.0/24", dialer)
+	r.Start()
+
+	// Wait for a probe to actually be in flight. The sweep checks for
+	// cancellation before each probe, so a Stop that races Start exits at once —
+	// correct, but it would make this assertion vacuous.
+	require.Eventually(t, func() bool {
+		return len(dialer.dialedHosts()) > 0
+	}, 3*time.Second, 5*time.Millisecond)
+
+	stopped := make(chan struct{})
+	go func() {
+		_ = r.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while the sweep was still probing")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(dialer.blockOn)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return after the sweep was released")
+	}
+}
+
+func newSweepRunner(t *testing.T, host string, dialer gnmi.Dialer) *Runner {
+	t.Helper()
+	policy := config.Policy{
+		Config: config.PolicyConfig{Mode: config.ModeAuto, DebounceMs: 10},
+		Scope:  config.Scope{Targets: []config.Target{{Host: host}}},
+	}
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+	r, err := NewRunner(context.Background(), slog.New(slog.DiscardHandler),
+		"p1", policy, &recordingClient{}, dialer, store)
+	require.NoError(t, err)
+	r.backoffBase = time.Millisecond
+	return r
+}
+
+// A dead address costs the full probe timeout, so the sweep probes in parallel —
+// but bounded, because each probe holds a TLS handshake rather than a datagram.
+func TestProbesRunConcurrentlyButBounded(t *testing.T) {
+	dialer := newPerHostDialer(nil)
+	// Reject everything, so the only dials are probes: an admitted target starts
+	// a loop that dials again, which would make the count unstable.
+	dialer.defaultCapsErr = dialingErr()
+	r := newSweepRunner(t, "10.0.0.0/24", dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(dialer.dialedHosts()) == 254
+	}, 5*time.Second, 10*time.Millisecond, "all addresses probed")
+
+	dialer.mu.Lock()
+	peak := dialer.peak
+	dialer.mu.Unlock()
+	require.Greater(t, peak, 1, "probes must not be sequential")
+	require.LessOrEqual(t, peak, probeConcurrency, "probes must stay bounded")
+}
+
+// One device answering with codes.Canceled must not abandon the sweep. Reading a
+// peer's status as "the policy is going away" discarded every address the other
+// probes had already admitted and started no subscriptions at all — a single
+// misbehaving device silently killing discovery for the whole subnet, with only a
+// Debug line to show for it.
+func TestAPeerAnsweringCanceledDoesNotAbandonTheSweep(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{
+		"10.0.0.1:9339": status.Error(codes.Canceled, "rpc canceled by server"),
+	})
+	r := newSweepRunner(t, "10.0.0.0/29", dialer) // .1 through .6
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(r.TargetStatuses()) == 6
+	}, 3*time.Second, 10*time.Millisecond,
+		"every address answered, the Canceled one included")
+}
+
+// A server that sends DeadlineExceeded itself has answered, so the address holds
+// a device. Classifying on the code alone dropped it as silence.
+func TestAServerSentDeadlineIsAdmitted(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{
+		"10.0.0.1:9339": status.Error(codes.DeadlineExceeded, "deadline_exceeded"),
+		"10.0.0.2:9339": dialingErr(),
+	})
+	r := newSweepRunner(t, "10.0.0.0/30", dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(r.TargetStatuses()) == 1
+	}, 3*time.Second, 10*time.Millisecond)
+	require.Equal(t, "10.0.0.1:9339", r.TargetStatuses()[0].Host,
+		"the server answered; only the refused address is absent")
+}
+
+// The probe's own deadline expiring is still the one thing that means silence.
+func TestAnAddressThatNeverRepliesIsRejected(t *testing.T) {
+	dialer := newPerHostDialer(nil)
+	dialer.hang = map[string]bool{"10.0.0.1:9339": true}
+	policy := config.Policy{
+		Config: config.PolicyConfig{Mode: config.ModeAuto, DebounceMs: 10, ProbeTimeoutMs: 80},
+		Scope:  config.Scope{Targets: []config.Target{{Host: "10.0.0.0/30"}}},
+	}
+	r := newRunnerFor(t, policy, dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	run := sweepRunFor(t, r)
+	require.Equal(t, RunStatusCompleted, run.Status)
+	require.Equal(t, 1, run.EntityCount, "only .2 answered; .1 went silent")
+	require.NotContains(t, r.TargetStatuses()[0].Host, "10.0.0.1",
+		"a silent address gets no subscription")
+}
+
+// Overlapping ranges produce one duplicate per shared address, so logging each
+// one meant tens of thousands of lines per sweep — and per rescan tick. The
+// count and one example carry the same information.
+func TestDuplicateTargetsAreReportedOnceNotPerAddress(t *testing.T) {
+	var logs bytes.Buffer
+	r := runnerWithTargets(t, []config.Target{
+		{Host: "10.0.0.0/24"},
+		{Host: "10.0.0.1-10.0.0.200"},
+	}, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	expanded, err := r.expandTargets()
+	require.NoError(t, err)
+	require.Equal(t, 254, len(expanded), "the union of the two")
+
+	out := logs.String()
+	require.Equal(t, 1, strings.Count(out, "dropping duplicate targets"),
+		"one line, whatever the overlap")
+	require.Contains(t, out, "count=200")
+	require.Contains(t, out, "example_host=")
+}
+
+// Go resolves 06030 and 6030 to the same TCP port, so a pinned target written
+// with a zero-padded inline port names the same endpoint as the subnet-derived
+// candidate. Building the key from the raw text made them differ, so the pinned
+// entry never replaced the derived one and the device got two subscriptions with
+// two sets of credentials — two dials, two ingests, conflicting values.
+func TestAZeroPaddedInlinePortIsTheSameEndpoint(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      port: 6030
+      username: campus
+      targets:
+        - host: 10.0.0.0/30
+        - host: 10.0.0.1:06030
+          username: pinned
+`))
+	require.NoError(t, err)
+
+	r := runnerWithTargets(t, policies["p1"].Scope.Targets, slog.New(slog.DiscardHandler))
+	expanded, err := r.expandTargets()
+	require.NoError(t, err)
+	require.Len(t, expanded, 2, "a /30 is two addresses, and the pin is one of them")
+
+	var pinned *candidate
+	for i := range expanded {
+		if canonicalHost(mustBare(t, expanded[i].target.Host)) == "10.0.0.1" {
+			pinned = &expanded[i]
+		}
+	}
+	require.NotNil(t, pinned)
+	require.True(t, pinned.explicit, "the pinned entry wins, so it is never probed")
+	require.Equal(t, "pinned", pinned.target.ResolvedUsername(),
+		"and it keeps its own credentials")
+}
+
+func mustBare(t *testing.T, host string) string {
+	t.Helper()
+	bare, _, _ := splitEffectivePort(host, 0)
+	return bare
+}
+
+// The key normalizes the port numerically, so equivalent spellings collapse while
+// genuinely different ports stay apart.
+func TestDedupeKeyNormalizesThePort(t *testing.T) {
+	require.Equal(t, dedupeKey("10.0.0.1:6030"), dedupeKey("10.0.0.1:06030"))
+	require.Equal(t, dedupeKey("[2001:db8::1]:6030"), dedupeKey("[2001:db8::1]:06030"))
+	require.NotEqual(t, dedupeKey("10.0.0.1:6030"), dedupeKey("10.0.0.1:57400"))
+	// A host with no port is not the same as one carrying the default: inventing
+	// a port here would collapse two entries that are not the same endpoint.
+	require.NotEqual(t, dedupeKey("10.0.0.1"), dedupeKey("10.0.0.1:9339"))
+}

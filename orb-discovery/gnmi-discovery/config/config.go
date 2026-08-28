@@ -13,12 +13,22 @@ const (
 // Default config values.
 const (
 	// DefaultGNMIPort is the IANA-registered gNMI port. Vendors differ in
-	// practice (Arista 6030, Nokia 57400), so operators should set an explicit
-	// host:port; this default only applies when a target omits the port.
+	// practice (Arista 6030, Nokia 57400), so operators should set the port
+	// explicitly — inline as host:port for a single endpoint, or via the port
+	// field, which is the only option for a CIDR or range. This default applies
+	// only when neither is given.
 	DefaultGNMIPort       = 9339
 	DefaultDebounceMs     = 2000
 	DefaultSampleInterval = 300000 // 5m
 	DefaultGetInterval    = 900000 // 15m
+
+	// DefaultProbeTimeoutMs bounds one sweep probe. snmp-discovery's equivalent
+	// is 1s, but a gNMI probe is a TLS handshake plus a gRPC call rather than a
+	// UDP walk, so it needs longer.
+	DefaultProbeTimeoutMs = 3000
+
+	// MinRescanIntervalMs is the floor for a non-zero rescan_interval_ms.
+	MinRescanIntervalMs = 60000
 )
 
 // Status represents the runtime status of the gnmi-discovery service.
@@ -43,20 +53,65 @@ type TLSConfig struct {
 
 // Target is one gNMI endpoint.
 type Target struct {
-	Host             string    `yaml:"host"`
-	Username         string    `yaml:"username,omitempty"`
-	Password         string    `yaml:"password,omitempty"`
-	TLS              TLSConfig `yaml:"tls,omitempty"`
-	Mode             string    `yaml:"mode,omitempty"`    // overrides PolicyConfig.Mode
-	Profile          string    `yaml:"profile,omitempty"` // pins a profile; else auto-detect
-	OverrideDefaults *Defaults `yaml:"override_defaults,omitempty"`
-	NetboxID         *int      `yaml:"netbox_id,omitempty"`
+	Host string `yaml:"host"`
+	// Username and Password are pointers so that presence, not emptiness,
+	// controls inheritance. An anonymous device inside a credentialed scope is
+	// expressed as `username: ""` — present, so nothing is inherited — which a
+	// plain string cannot distinguish from an omitted field. snmp-discovery
+	// expresses the same thing through the presence of its authentication block.
+	Username *string `yaml:"username,omitempty"`
+	Password *string `yaml:"password,omitempty"`
+	// Port is the gNMI port. An inline "host:port" suffix wins over this field,
+	// which in turn wins over the scope's; unset everywhere means
+	// DefaultGNMIPort. A CIDR or range cannot carry an inline port, which is
+	// why this field exists.
+	Port uint16 `yaml:"port,omitempty"`
+	// TLS is a pointer so that "absent" is distinguishable from "present and
+	// zero": nil inherits the scope's block, a present block replaces it
+	// wholesale. Read it through ResolvedTLS, never directly — a nil
+	// dereference here compiles cleanly and panics at runtime.
+	TLS              *TLSConfig `yaml:"tls,omitempty"`
+	Mode             string     `yaml:"mode,omitempty"`    // overrides PolicyConfig.Mode
+	Profile          string     `yaml:"profile,omitempty"` // pins a profile; else auto-detect
+	OverrideDefaults *Defaults  `yaml:"override_defaults,omitempty"`
+	NetboxID         *int       `yaml:"netbox_id,omitempty"`
 	// Origin is the gNMI path origin sent on Subscribe/Get requests. Unset (nil)
 	// defaults to "openconfig" — the canonical OpenConfig origin, required by
 	// strict targets like Nokia SR Linux (which otherwise resolves an origin-less
 	// path against its native schema and rejects it). Set it explicitly to ""
 	// for a target that needs origin-less paths, or to a vendor-specific origin.
 	Origin *string `yaml:"origin,omitempty"`
+}
+
+// ResolvedTLS returns this target's TLS settings, or the zero value when no
+// block is set.
+//
+// Every read of Target.TLS goes through here. Go auto-dereferences a pointer
+// field selector, so `t.TLS.SkipVerify` on a nil TLS compiles without complaint
+// and panics at runtime — and nil is the common case, since most policies set no
+// tls block at all. The zero value is the secure default (TLS with the system
+// root CAs), which is what the field meant before it became a pointer.
+func (t Target) ResolvedTLS() TLSConfig {
+	if t.TLS == nil {
+		return TLSConfig{}
+	}
+	return *t.TLS
+}
+
+// ResolvedUsername returns this target's gNMI username, or "" when none is set.
+func (t Target) ResolvedUsername() string {
+	if t.Username == nil {
+		return ""
+	}
+	return *t.Username
+}
+
+// ResolvedPassword returns this target's gNMI password, or "" when none is set.
+func (t Target) ResolvedPassword() string {
+	if t.Password == nil {
+		return ""
+	}
+	return *t.Password
 }
 
 // ResolvedOrigin returns the gNMI request-path origin for this target: the
@@ -68,9 +123,24 @@ func (t Target) ResolvedOrigin() string {
 	return "openconfig"
 }
 
-// Scope holds the targets for a policy.
+// Scope holds a policy's targets and the settings they inherit.
+//
+// The scope block carries five of Target's fields. It deliberately does not
+// carry mode, override_defaults or profile: the first two duplicate
+// policy-level knobs (PolicyConfig.Mode and PolicyConfig.Defaults), and a
+// scope-level profile would pin one vendor profile across a whole range,
+// bypassing capability auto-detection — which defeats the point of scanning a
+// subnet whose contents are unknown.
+//
+// host and netbox_id are per-target by nature: host is the thing being
+// enumerated, and one NetBox device id cannot describe a range.
 type Scope struct {
-	Targets []Target `yaml:"targets"`
+	Username string     `yaml:"username,omitempty"`
+	Password string     `yaml:"password,omitempty"`
+	Port     uint16     `yaml:"port,omitempty"`
+	Origin   *string    `yaml:"origin,omitempty"`
+	TLS      *TLSConfig `yaml:"tls,omitempty"`
+	Targets  []Target   `yaml:"targets"`
 }
 
 // DeviceDefaults mirrors snmp-discovery's device defaults subset.
@@ -179,12 +249,61 @@ func (o *Options) ConfigCaptureEnabled() bool {
 
 // PolicyConfig holds policy-wide config (spec §7).
 type PolicyConfig struct {
-	Mode             string   `yaml:"mode,omitempty"`
-	DebounceMs       int      `yaml:"debounce_ms,omitempty"`
-	SampleIntervalMs int      `yaml:"sample_interval_ms,omitempty"`
-	GetIntervalMs    int      `yaml:"get_interval_ms,omitempty"`
-	Defaults         Defaults `yaml:"defaults"`
-	Options          Options  `yaml:"options,omitempty"`
+	Mode             string `yaml:"mode,omitempty"`
+	DebounceMs       int    `yaml:"debounce_ms,omitempty"`
+	SampleIntervalMs int    `yaml:"sample_interval_ms,omitempty"`
+	GetIntervalMs    int    `yaml:"get_interval_ms,omitempty"`
+
+	// ProbeTimeoutMs bounds one sweep probe. 0 or unset means
+	// DefaultProbeTimeoutMs, not "no timeout": a probe without a deadline against
+	// a silently-dropping address never returns, and the sweep would never finish.
+	ProbeTimeoutMs int `yaml:"probe_timeout_ms,omitempty"`
+
+	// SendCredentialsToUnverifiedTargets permits a CIDR or range target to carry
+	// a password when TLS does not authenticate the server.
+	//
+	// Off by default, and the refusal is the point. A sweep admits anything that
+	// answers on the gNMI port — deliberately, because only silence is absence —
+	// and the subscription that follows sends this policy's password to whatever
+	// was admitted. With skip_verify or insecure there is nothing authenticating
+	// the far end, so an unrelated service listening on that port inside the
+	// scanned range collects the credential. That is reachable by accident: a
+	// range that overlaps a server VLAN is a typo, not an attack.
+	//
+	// Naming a host explicitly is unaffected. The operator said where the
+	// credential may go.
+	SendCredentialsToUnverifiedTargets bool `yaml:"send_credentials_to_unverified_targets,omitempty"`
+
+	// RescanIntervalMs re-probes addresses this policy is not currently
+	// subscribed to, picking up devices that were down when the policy was
+	// applied. 0 or unset disables it. It exists because nothing else re-applies
+	// a policy periodically: the config manager returns early on an unchanged git
+	// ref, and on a new commit whose diff touches no matching policy file.
+	//
+	// Values below MinRescanIntervalMs are rejected rather than clamped. A sparse
+	// /24 re-probes ~250 addresses per tick, which is fine hourly and is a
+	// continuous scan per minute.
+	RescanIntervalMs int `yaml:"rescan_interval_ms,omitempty"`
+
+	Defaults Defaults `yaml:"defaults"`
+	Options  Options  `yaml:"options,omitempty"`
+}
+
+// ResolvedProbeTimeout returns the effective sweep probe timeout.
+func (c PolicyConfig) ResolvedProbeTimeout() time.Duration {
+	if c.ProbeTimeoutMs <= 0 {
+		return DefaultProbeTimeoutMs * time.Millisecond
+	}
+	return time.Duration(c.ProbeTimeoutMs) * time.Millisecond
+}
+
+// ResolvedRescanInterval returns the effective rescan period, or 0 when rescan
+// is disabled.
+func (c PolicyConfig) ResolvedRescanInterval() time.Duration {
+	if c.RescanIntervalMs <= 0 {
+		return 0
+	}
+	return time.Duration(c.RescanIntervalMs) * time.Millisecond
 }
 
 // Policy is a gnmi-discovery policy.

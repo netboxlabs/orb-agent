@@ -65,6 +65,11 @@ policies:
     config:
       mode: auto           # auto (default) | on_change | sample | get
       debounce_ms: 2000    # flush delay after last notification (default 2000)
+      probe_timeout_ms: 3000       # how long one sweep probe waits for an address (default 3000)
+      rescan_interval_ms: 3600000  # re-probe unsubscribed addresses; 0 disables, floor 60000
+      # A credentialed CIDR/range needs verified TLS: the sweep admits anything that
+      # answers and then sends the password to it. Set this only to accept that.
+      # send_credentials_to_unverified_targets: false
       sample_interval_ms: 300000   # SAMPLE subscription interval (default 300000 = 5m)
       get_interval_ms: 900000      # GET poll interval (default 900000 = 15m)
       options:                     # per-policy behavior toggles (peer to defaults)
@@ -104,26 +109,45 @@ policies:
         interface_exclude_patterns:
           - "^Management"
     scope:
+      # Scope settings are defaults: a target that sets the field keeps its own.
+      username: ${GNMI_USER}         # ${ENV_VAR} syntax supported
+      password: ${GNMI_PASS}
+      port: 6030                     # default port for targets with no inline :port
+      origin: openconfig             # gNMI path origin (default); set "" for origin-less
+      tls:                           # TLS is the default (system root CAs)
+        ca: /run/secrets/ca.pem      # prefer a CA over skip_verify
       targets:
-        - host: 10.0.0.11:6030       # Arista EOS default gNMI port
-          username: ${GNMI_USER}     # ${ENV_VAR} syntax supported
-          password: ${GNMI_PASS}
-          tls:                       # TLS is the default (system root CAs)
-            skip_verify: true        # keep TLS but don't verify the target cert
-            insecure: false          # opt-in PLAINTEXT (no TLS) — off by default
-            ca: /run/secrets/ca.pem  # optional mTLS
-            cert: /run/secrets/cert.pem
-            key: /run/secrets/key.pem
+        # A CIDR or range is expanded and probed; only addresses that answer are
+        # subscribed to. A CIDR drops network and broadcast (/24 = 254, /31 and
+        # /32 have none to drop); a range keeps everything written (10.1.0.0-255
+        # = 256). At most 1024 addresses per policy, summed across targets.
+        - host: 10.0.0.0/24
+        - host: 10.1.0.0-50
+        - host: 10.2.0.0-10.2.0.9
+
+        # A named host is subscribed without probing: naming it asserts it exists.
+        - host: 10.0.0.11            # inherits every scope setting above
           profile: arista_eos        # pin a profile (auto-detect if omitted)
           mode: on_change            # per-target mode override
-          origin: openconfig         # gNMI path origin (default); set "" for origin-less
-          netbox_id: 42              # pin to an existing NetBox device ID
+          netbox_id: 42              # honoured: a bare address, not a range
           override_defaults:         # per-target defaults override
             site: Chicago IL
 
-        - host: 10.0.0.21:57400     # Nokia SR-OS default gNMI port
-          username: admin
-          password: pw
+        # An explicitly empty credential blocks the scope's; an omitted one
+        # inherits it. This is how a device that takes no auth lives in a
+        # credentialed scope.
+        - host: 10.0.0.31
+          username: ""
+          password: ""
+
+        - host: 10.0.0.21            # Nokia SR-OS
+          port: 57400                # beats the scope port; an inline :port beats both
+          username: admin            # beats the scope username
+          tls:                       # replaces the scope block wholesale, never merges
+            skip_verify: true        # keep TLS but don't verify the target cert
+            insecure: false          # opt-in PLAINTEXT (no TLS) — off by default
+            cert: /run/secrets/cert.pem
+            key: /run/secrets/key.pem
 ```
 
 ### Interface type discovery

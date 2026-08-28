@@ -41,6 +41,9 @@ type RunStateInfo struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Targets     []string  `json:"targets,omitempty"`
 	Driver      string    `json:"driver,omitempty"`
+	// Kind distinguishes runs describing different work. See
+	// backend.PolicyStatusRun.Kind.
+	Kind string `json:"kind,omitempty"`
 }
 
 // PolicyStateInfo contains state information for a policy

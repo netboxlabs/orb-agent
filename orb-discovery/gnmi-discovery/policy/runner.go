@@ -64,6 +64,13 @@ type Runner struct {
 
 	mu     sync.Mutex
 	states map[string]*targetState // by host
+
+	// subscribed records every host that has a target loop, so a rescan probes
+	// only newcomers. It is deliberately not r.states: a later change that
+	// recorded rejected addresses in states for visibility would make every
+	// address a member and silently stop rescan from ever finding anything.
+	// Entries are never removed — a loop retries for the life of the policy.
+	subscribed map[string]struct{}
 }
 
 type targetState struct {
@@ -86,21 +93,24 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		runStore:    NewRunStore(),
 		backoffBase: time.Second,
 		states:      map[string]*targetState{},
+		subscribed:  map[string]struct{}{},
 	}, nil
 }
 
 // Runs returns the recent flush runs for this policy (newest first), for /status.
 func (r *Runner) Runs() []*Run { return r.runStore.GetRunsForPolicy(r.name) }
 
-// Start launches one goroutine per target.
+// Start launches the target sweep, which expands and probes before starting one
+// goroutine per admitted target.
+//
+// The wg.Add here is load-bearing and must stay on this side of the return:
+// StartPolicy calls Start under the manager lock precisely so that wg.Add
+// happens-before any StopPolicy's wg.Wait. An uncounted sweep goroutine would
+// let Stop return while the sweep is still probing, leaving it to outlive its
+// own runner, and would race wg.Add against an unblocking wg.Wait.
 func (r *Runner) Start() {
-	for _, t := range r.policy.Scope.Targets {
-		r.mu.Lock()
-		r.states[t.Host] = &targetState{}
-		r.mu.Unlock()
-		r.wg.Add(1)
-		go r.targetLoop(t)
-	}
+	r.wg.Add(1)
+	go r.sweep()
 }
 
 // Stop cancels all goroutines and waits.
@@ -123,8 +133,15 @@ func (r *Runner) setState(host string, fn func(*targetState)) {
 // survive reconnects (spec §9): a flap reconnects, the fresh initial sync
 // re-marks the live paths, and generation pruning removes only what genuinely
 // disappeared — no full re-ingest churn, no leaked debouncer goroutines.
-func (r *Runner) targetLoop(t config.Target) {
+func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 	defer r.wg.Done()
+	if startDelay > 0 {
+		select {
+		case <-time.After(startDelay):
+		case <-r.ctx.Done():
+			return
+		}
+	}
 	model := mapping.NewDeviceModel()
 	deb := NewDebouncer(time.Duration(r.policy.Config.DebounceMs) * time.Millisecond)
 	defer deb.Stop()
@@ -181,10 +198,11 @@ func (r *Runner) targetLoop(t config.Target) {
 // permanently demotes the target. Explicit on_change/sample modes never
 // auto-downgrade; they return the error to reconnect at the same mode.
 func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debouncer, retry *time.Timer) error {
+	tls := t.ResolvedTLS()
 	sess, err := r.dialer.Dial(r.ctx, gnmi.TargetSpec{
-		Host: t.Host, Username: t.Username, Password: t.Password,
-		SkipVerify: t.TLS.SkipVerify, Insecure: t.TLS.Insecure, Origin: t.ResolvedOrigin(),
-		CAFile: t.TLS.CAFile, CertFile: t.TLS.CertFile, KeyFile: t.TLS.KeyFile,
+		Host: t.Host, Username: t.ResolvedUsername(), Password: t.ResolvedPassword(),
+		SkipVerify: tls.SkipVerify, Insecure: tls.Insecure, Origin: t.ResolvedOrigin(),
+		CAFile: tls.CAFile, CertFile: tls.CertFile, KeyFile: tls.KeyFile,
 	})
 	if err != nil {
 		return err

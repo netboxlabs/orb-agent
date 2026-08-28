@@ -57,19 +57,29 @@ func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url 
 	if status != Running {
 		logger.Warn("skipping REST API request because process is not running or is unresponsive",
 			"backend", backendName, "url", url, "method", method, "error", err)
+		if err == nil {
+			// GetRunningStatus reports a stopped or unresponsive backend with a
+			// nil error. Returning it verbatim told the caller the request had
+			// succeeded, so a policy that was never delivered was recorded as
+			// applied.
+			err = fmt.Errorf("%s backend is %s", backendName, status)
+		}
 		return err
 	}
 
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
-		return fmt.Errorf("received error from payload %v", slog.Any("error", err))
+		return fmt.Errorf("%s: building %s %s: %w", backendName, method, url, err)
 	}
 
 	req.Header.Add("Content-Type", contentType)
 	res, getErr := client.Do(req)
 
 	if getErr != nil {
-		return fmt.Errorf("received error from payload %v", slog.Any("error", err))
+		// Reported err, not getErr. err is nil here by construction — the request
+		// built fine — so every connection failure, timeout and refused dial
+		// arrived as "received error from payload error=<nil>".
+		return fmt.Errorf("%s: %s %s: %w", backendName, method, url, getErr)
 	}
 
 	defer func() {
