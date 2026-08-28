@@ -314,12 +314,12 @@ policies:
 
 func TestEnsurePortEmpty(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, "", ensurePort(""))
+	require.Equal(t, "", ensurePort("", config.DefaultGNMIPort))
 }
 
 func TestEnsurePort(t *testing.T) {
 	t.Parallel()
-	dp := config.DefaultGNMIPort
+	var dp uint16 = config.DefaultGNMIPort
 	cases := map[string]string{
 		"10.0.0.1":                 fmt.Sprintf("10.0.0.1:%d", dp),            // IPv4, no port
 		"10.0.0.1:830":             "10.0.0.1:830",                            // IPv4 with port (unchanged)
@@ -332,7 +332,7 @@ func TestEnsurePort(t *testing.T) {
 		"fe80::1%eth0":             fmt.Sprintf("[fe80::1%%eth0]:%d", dp),     // zone-qualified IPv6 -> bracketed
 	}
 	for in, want := range cases {
-		require.Equal(t, want, ensurePort(in), "ensurePort(%q)", in)
+		require.Equal(t, want, ensurePort(in, dp), "ensurePort(%q)", in)
 	}
 }
 

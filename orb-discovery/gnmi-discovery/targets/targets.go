@@ -61,6 +61,29 @@ func isRangeCandidate(target string) bool {
 	return strings.Contains(target, "-") && (strings.Contains(target, ":") || !hasLetters(target))
 }
 
+// LooksLikeMultiAddress reports whether a target is *written* as a CIDR or a
+// range, judged syntactically so it still answers for malformed input that
+// Count would reject.
+//
+// Callers use it to refuse a form that cannot carry an inline port: neither
+// "10.0.0.0/24:6030" nor "10.0.0.1-10:6030" means what an operator carrying the
+// documented "10.0.0.11:6030" habit forward would expect, and the second is the
+// dangerous one — Expand treats it as a DNS name, so it fails as a lookup rather
+// than as a syntax error.
+func LooksLikeMultiAddress(target string) bool {
+	if strings.Contains(target, "/") {
+		return true
+	}
+	base, _, ok := strings.Cut(target, "-")
+	if !ok {
+		return false
+	}
+	// A hyphen only separates a range when what precedes it is an address;
+	// "switch-a.example.com" is a hostname.
+	_, err := netip.ParseAddr(strings.TrimSpace(base))
+	return err == nil
+}
+
 // Count returns how many addresses a target expands to, without enumerating.
 // It is the guard callers apply before Expand: enumerating a /8 allocates
 // hundreds of megabytes, so the size has to be knowable from the bounds alone.

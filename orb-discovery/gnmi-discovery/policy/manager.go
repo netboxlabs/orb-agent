@@ -19,6 +19,7 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/env"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/mapping"
+	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/targets"
 )
 
 // maxIntervalMs is the largest interval (in ms) that can be multiplied by
@@ -67,14 +68,29 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		return nil, errors.New("no policies found in the request")
 	}
 	for name, policy := range payload.Policies {
+		// Inherit BEFORE resolving env. resolveEnv walks only the target list,
+		// so inheriting afterwards would copy a scope-level ${GNMI_PASS} into
+		// every target as that literal string with resolution already past —
+		// every device in a subnet authenticating with the eleven characters
+		// "${GNMI_PASS}". Inheriting first also lets validatePolicy see each
+		// target's effective values rather than consulting two places.
+		inheritScopeDefaults(&policy)
+
 		if err := m.validatePolicy(policy); err != nil {
 			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
 		// Resolve env BEFORE applying defaults: ResolveEnv only matches a
-		// whole-string ${VAR}, so the host must be resolved before the default
-		// port is appended (otherwise "${HOST}:9339" would never resolve).
+		// whole-string ${VAR}, so the host must be resolved before the port is
+		// appended (otherwise "${HOST}:9339" would never resolve).
 		if err := m.resolveEnv(&policy); err != nil {
 			return nil, fmt.Errorf("%s : failed to resolve environment variables : %w", name, err)
+		}
+		// Host checks run here, after resolution, because a host written as
+		// ${SUBNET} is an opaque string until now: checked earlier it parses as
+		// a hostname and passes every bound, then resolves to a /8 that the
+		// runner enumerates into hundreds of megabytes.
+		if err := validateTargetHosts(&policy, m.logger); err != nil {
+			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
 		m.applyDefaults(&policy)
 		payload.Policies[name] = policy
@@ -174,7 +190,14 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		policy.Config.Defaults.Interface.Type = "other"
 	}
 	for i := range policy.Scope.Targets {
-		policy.Scope.Targets[i].Host = ensurePort(policy.Scope.Targets[i].Host)
+		t := &policy.Scope.Targets[i]
+		// A CIDR or range is not an endpoint yet. The runner appends the port to
+		// each address once it expands, so stamping one here would produce
+		// "10.0.0.0/24:9339" and break the parse it is about to do.
+		if targets.LooksLikeMultiAddress(t.Host) {
+			continue
+		}
+		t.Host = ensurePort(t.Host, resolvedPort(t.Port))
 	}
 }
 
@@ -182,7 +205,19 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 // IPv6-safe: a bare IPv6 literal (e.g. 2001:db8::1) has colons but no port, so
 // net.SplitHostPort is used to detect a real port, and IPv6 literals are
 // bracketed before the port is appended.
-func ensurePort(h string) string {
+// resolvedPort returns the port to use for a target. Inheritance has already
+// folded the scope's value into the target, so the precedence chain
+// inline > target > scope > default reduces to this plus ensurePort's refusal
+// to overwrite an inline suffix.
+func resolvedPort(port uint16) uint16 {
+	if port == 0 {
+		return config.DefaultGNMIPort
+	}
+	return port
+}
+
+// ensurePort appends port to h unless h already carries one.
+func ensurePort(h string, port uint16) string {
 	if h == "" {
 		return h
 	}
@@ -202,13 +237,105 @@ func ensurePort(h string) string {
 	}
 	switch {
 	case strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]"):
-		return fmt.Sprintf("%s:%d", h, config.DefaultGNMIPort) // bracketed IPv6, no port
+		return fmt.Sprintf("%s:%d", h, port) // bracketed IPv6, no port
 	case net.ParseIP(ipPart) != nil && strings.Contains(h, ":"):
-		return fmt.Sprintf("[%s]:%d", h, config.DefaultGNMIPort) // bare IPv6 literal (incl. zone) -> bracket
+		return fmt.Sprintf("[%s]:%d", h, port) // bare IPv6 literal (incl. zone) -> bracket
 	case strings.Contains(h, ":"):
 		return h // malformed host:port -> leave untouched
 	default:
-		return fmt.Sprintf("%s:%d", h, config.DefaultGNMIPort) // hostname / IPv4, no port
+		return fmt.Sprintf("%s:%d", h, port) // hostname / IPv4, no port
+	}
+}
+
+// validateTargetHosts checks what only becomes checkable once ${VAR}s are
+// resolved: how far each host expands, whether the forms are usable, and
+// whether two entries name the same endpoint.
+//
+// Expansion itself is deferred to the runner — a sweep of a /22 cannot happen
+// inside a policy POST — so this counts without enumerating.
+func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
+	seen := make(map[string]int, len(policy.Scope.Targets))
+	var total uint64
+
+	for i, t := range policy.Scope.Targets {
+		port := resolvedPort(t.Port)
+
+		if targets.LooksLikeMultiAddress(t.Host) {
+			if _, _, err := net.SplitHostPort(t.Host); err == nil {
+				return fmt.Errorf(
+					"target %q: a CIDR or range cannot carry an inline port; use the port field", t.Host)
+			}
+		} else if _, _, err := net.SplitHostPort(t.Host); err == nil && t.Port != 0 {
+			// An inline port wins, so the field is dead weight here. Warn rather
+			// than reject: an inline port on a single host is the documented form
+			// and must keep working.
+			logger.Warn("target sets both an inline port and the port field; the inline port wins",
+				"host", t.Host, "ignored_port", t.Port)
+		}
+
+		count, err := targets.Count(t.Host)
+		if err != nil {
+			return fmt.Errorf("target %q: %w", t.Host, err)
+		}
+		total += count
+		if total > targets.MaxExpand {
+			return fmt.Errorf(
+				"target %q brings this policy to %d addresses, more than the %d supported",
+				t.Host, total, targets.MaxExpand)
+		}
+
+		key := fmt.Sprintf("%s:%d", strings.ToLower(hostWithoutPort(t.Host)), port)
+		if first, dup := seen[key]; dup {
+			return fmt.Errorf(
+				"targets %d and %d both name %q; one device cannot have two entries", first, i, t.Host)
+		}
+		seen[key] = i
+	}
+	return nil
+}
+
+// hostWithoutPort strips an inline port so two spellings of one endpoint
+// collide. A hostname keeps its own text, since Expand never resolves DNS and
+// so cannot know a name and an address are the same device.
+func hostWithoutPort(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// inheritScopeDefaults folds the scope's settings into each target that has not
+// set them. Scalars inherit individually; tls inherits as a whole block, because
+// a bool cannot distinguish "unset" from "false" and a partial merge would
+// silently zero the fields a target did not mention.
+//
+// Blocks are copied rather than aliased. A shared pointer would give every
+// target in a 254-address expansion the same TLSConfig, which resolveEnv then
+// writes through once per target — the aliasing MergeDefaults documents avoiding
+// for the same reason.
+func inheritScopeDefaults(policy *config.Policy) {
+	scope := &policy.Scope
+	for i := range scope.Targets {
+		t := &scope.Targets[i]
+		if t.Username == "" {
+			t.Username = scope.Username
+		}
+		if t.Password == "" {
+			t.Password = scope.Password
+		}
+		if t.Port == 0 {
+			t.Port = scope.Port
+		}
+		// Origin distinguishes unset from an explicit "", so test for nil: a
+		// target asking for origin-less paths must not inherit "openconfig".
+		if t.Origin == nil && scope.Origin != nil {
+			origin := *scope.Origin
+			t.Origin = &origin
+		}
+		if t.TLS == nil && scope.TLS != nil {
+			tls := *scope.TLS
+			t.TLS = &tls
+		}
 	}
 }
 
