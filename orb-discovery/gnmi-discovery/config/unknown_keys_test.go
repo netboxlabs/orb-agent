@@ -382,3 +382,50 @@ policies: &loop
 		t.Fatal("WarnAmbiguousNullKeys did not terminate on a self-referential merge")
 	}
 }
+
+// origin is the fourth inheritable pointer field and was the one left out of this
+// check. A target meant to use origin-less paths writes `origin: ""`; a bare
+// `origin:` decodes to the same nil an omitted key produces, so it takes the
+// scope's vendor origin instead and the device then rejects its Subscribe or Get
+// paths, with nothing connecting that back to the policy.
+func TestABareOriginKeyIsReported(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+policies:
+  p1:
+    scope:
+      origin: srl_nokia
+      targets:
+        - host: 10.0.0.1
+          origin:
+        - host: 10.0.0.2
+          origin: null
+        - host: 10.0.0.3
+          origin: ""
+        - host: 10.0.0.4
+`)
+	assert.Contains(t, out, "10.0.0.1")
+	assert.Contains(t, out, "10.0.0.2")
+	assert.Contains(t, out, "empty origin key")
+	// slog escapes the quotes in its own output, so match the stable half.
+	assert.Contains(t, out, "for origin-less paths")
+	assert.NotContains(t, out, "10.0.0.3", `origin: "" is present and means what it says`)
+	assert.NotContains(t, out, "10.0.0.4", "an absent key is the normal way to inherit")
+}
+
+// Each field's guidance says what "" means for that field, since it is not the
+// same thing for a credential and for a path origin.
+func TestNullKeyGuidanceIsPerField(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+policies:
+  p1:
+    scope:
+      username: admin
+      origin: srl_nokia
+      targets:
+        - host: 10.0.0.1
+          username:
+          origin:
+`)
+	assert.Contains(t, out, "to connect without one")
+	assert.Contains(t, out, "for origin-less paths")
+}

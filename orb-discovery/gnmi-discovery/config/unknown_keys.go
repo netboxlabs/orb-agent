@@ -100,13 +100,18 @@ func yamlFieldNames(t reflect.Type) map[string]bool {
 
 // WarnAmbiguousNullKeys reports an inheritable key written with nothing under it.
 //
-// Target.TLS, Username and Password are pointers so that nil can mean "inherit
-// the scope's value", and a null node unmarshals to exactly that nil. So an
-// operator who writes a bare `tls:` or `username:` to mean "nothing here" gets
-// the opposite — the scope's value, complete with whatever credential or
-// skip_verify it carries. yaml.v3 gives `key:` and `key: null` the same nil, so
-// the distinction is invisible after unmarshalling and has to be caught on the
-// raw document.
+// Every inheritable field a target can override — tls, username, password and
+// origin — is a pointer so that nil can mean "inherit the scope's value", and a
+// null node unmarshals to exactly that nil. So an operator who writes a bare
+// `tls:` or `origin:` to mean "nothing here" gets the opposite: the scope's
+// value, complete with whatever credential, skip_verify or vendor origin it
+// carries. yaml.v3 gives `key:` and `key: null` the same nil, so the distinction
+// is invisible after unmarshalling and has to be caught on the raw document.
+//
+// All four are checked. Leaving origin out was its own bug: a target meant to
+// use origin-less paths silently took the scope's vendor origin, and the failure
+// then surfaced as its Subscribe or Get paths being rejected by the device, with
+// nothing connecting that back to the policy.
 func WarnAmbiguousNullKeys(data []byte, logger *slog.Logger) {
 	if logger == nil {
 		return
@@ -143,10 +148,15 @@ func WarnAmbiguousNullKeys(data []byte, logger *slog.Logger) {
 				"empty tls block inherits the scope's TLS settings; remove the key to inherit, or give it fields to override")
 			// A bare `username:` reads as "no username" and does the opposite:
 			// yaml.v3 decodes it to the same nil an omitted key produces, so the
-			// scope's credential is inherited. Only an empty string is present.
-			for _, key := range []string{"username", "password"} {
-				warnIfNull(logger, target, name, host, key,
-					"empty "+key+` key inherits the scope's value; write `+key+`: "" to connect without one`)
+			// scope's value is inherited. Only an empty string is present, and the
+			// guidance differs per field because what "" means differs.
+			for _, f := range []struct{ key, fix string }{
+				{"username", `write username: "" to connect without one`},
+				{"password", `write password: "" to connect without one`},
+				{"origin", `write origin: "" for origin-less paths`},
+			} {
+				warnIfNull(logger, target, name, host, f.key,
+					"empty "+f.key+" key inherits the scope's value; "+f.fix)
 			}
 		}
 	}
