@@ -92,15 +92,17 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 // Runs returns the recent flush runs for this policy (newest first), for /status.
 func (r *Runner) Runs() []*Run { return r.runStore.GetRunsForPolicy(r.name) }
 
-// Start launches one goroutine per target.
+// Start launches the target sweep, which expands and probes before starting one
+// goroutine per admitted target.
+//
+// The wg.Add here is load-bearing and must stay on this side of the return:
+// StartPolicy calls Start under the manager lock precisely so that wg.Add
+// happens-before any StopPolicy's wg.Wait. An uncounted sweep goroutine would
+// let Stop return while the sweep is still probing, leaving it to outlive its
+// own runner, and would race wg.Add against an unblocking wg.Wait.
 func (r *Runner) Start() {
-	for _, t := range r.policy.Scope.Targets {
-		r.mu.Lock()
-		r.states[t.Host] = &targetState{}
-		r.mu.Unlock()
-		r.wg.Add(1)
-		go r.targetLoop(t)
-	}
+	r.wg.Add(1)
+	go r.sweep()
 }
 
 // Stop cancels all goroutines and waits.
