@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -309,4 +310,75 @@ policies:
 `)
 	assert.Contains(t, out, "10.0.0.1")
 	assert.Contains(t, out, "tls block")
+}
+
+// A policies map may itself import entries with `<<`. The decoder brings them in
+// normally, so a merged policy's targets are live — and reading policies.Content
+// directly visited the merge key instead of the policies it imported, so those
+// targets were never walked at all.
+func TestPoliciesImportedThroughAMergeAreWalked(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+shared: &shared
+  p1:
+    scope:
+      username: admin
+      password: campus-secret
+      targets:
+        - host: 10.0.0.1
+          username: null
+policies:
+  <<: *shared
+  p2:
+    scope:
+      username: admin
+      targets:
+        - host: 10.0.0.2
+          username: null
+`)
+	assert.Contains(t, out, "10.0.0.1", "the merged policy's target")
+	assert.Contains(t, out, "10.0.0.2", "the literal policy's target")
+}
+
+// An explicit policy name beats a merged one of the same name, which is YAML's
+// own rule and therefore what the decoder will use.
+func TestAnExplicitPolicyOverridesAMergedOneOfTheSameName(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+shared: &shared
+  p1:
+    scope:
+      username: admin
+      targets:
+        - host: 10.0.0.1
+          username: null
+policies:
+  <<: *shared
+  p1:
+    scope:
+      targets:
+        - host: 10.9.9.9
+`)
+	assert.NotContains(t, out, "10.0.0.1", "the merged p1 is shadowed and never applied")
+	assert.NotContains(t, out, "10.9.9.9", "the winning p1 has nothing to warn about")
+}
+
+// A self-referential merge must not take the walker down with it. yaml.v3
+// rejects most of these before this code runs, but the walker reads
+// operator-supplied input and should not be what overflows the stack.
+func TestASelfReferentialMergeTerminates(t *testing.T) {
+	done := make(chan string, 1)
+	go func() {
+		done <- captureNullKeyWarnings(t, `
+policies: &loop
+  <<: *loop
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.1
+`)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WarnAmbiguousNullKeys did not terminate on a self-referential merge")
+	}
 }

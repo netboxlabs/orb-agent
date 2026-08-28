@@ -119,10 +119,11 @@ func WarnAmbiguousNullKeys(data []byte, logger *slog.Logger) {
 	if policies == nil {
 		return
 	}
-	// A mapping node interleaves keys and values, so names and bodies are read
-	// two at a time.
-	for i := 0; i+1 < len(policies.Content); i += 2 {
-		name, body := policies.Content[i].Value, policies.Content[i+1]
+	// Through mapEntries, not policies.Content: a policies map may itself import
+	// entries with `<<`, and reading the raw content visits the merge key instead
+	// of the policies it brought in.
+	for _, entry := range mapEntries(policies, maxMergeDepth) {
+		name, body := entry[0].Value, entry[1]
 		scope := mapValue(body, "scope")
 		if scope == nil {
 			continue
@@ -159,49 +160,74 @@ func warnIfNull(logger *slog.Logger, node *yaml.Node, policy, where, key, msg st
 	logger.Warn(msg, "policy", policy, "target", where)
 }
 
-// mapValue returns the value node for key in a mapping node, or nil.
+// mapEntries returns a mapping's effective key/value pairs, following aliases
+// and `<<` merge keys the way the decoder does.
 //
-// It follows aliases and honours `<<` merge keys, because the decoder does. A
-// walker that only matched literal keys went blind on any policy written with
-// anchors: a target inheriting `username: null` through a merge decodes to the
-// same nil as a target that wrote it directly, so it would silently take the
-// scope's credential while the direct one was warned about.
-func mapValue(node *yaml.Node, key string) *yaml.Node {
+// This is the primitive; both the lookup below and the policy enumeration are
+// expressed through it. They were separate once, and the split was the bug: the
+// lookup learned to resolve merges while the enumeration still read
+// node.Content directly, so policies imported into the map through `<<` were
+// decoded normally and never walked at all.
+//
+// Precedence is YAML's own: an explicit key beats anything merged, and among
+// merge sources the earlier entry wins. Both fall out of taking the first
+// occurrence of a name and ignoring the rest.
+func mapEntries(node *yaml.Node, depth int) [][2]*yaml.Node {
 	node = resolveAlias(node)
-	if node == nil || node.Kind != yaml.MappingNode {
+	if node == nil || node.Kind != yaml.MappingNode || depth <= 0 {
 		return nil
 	}
 
+	var out [][2]*yaml.Node
+	seen := make(map[string]bool, len(node.Content)/2)
 	var merged []*yaml.Node
+
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		k, v := node.Content[i], node.Content[i+1]
-		if k.Value == key {
-			// An explicit key wins over anything merged, which is YAML's own
-			// rule, so this returns before the merge sources are consulted.
-			return resolveAlias(v)
-		}
 		if k.Tag == mergeTag || k.Value == "<<" {
 			merged = append(merged, v)
+			continue
 		}
+		if seen[k.Value] {
+			continue
+		}
+		seen[k.Value] = true
+		out = append(out, [2]*yaml.Node{k, resolveAlias(v)})
 	}
 
-	// A merge value is a mapping or a sequence of them, earlier entries taking
-	// precedence — again YAML's rule, and why this returns on the first hit.
 	for _, m := range merged {
 		m = resolveAlias(m)
 		if m == nil {
 			continue
 		}
+		sources := []*yaml.Node{m}
 		if m.Kind == yaml.SequenceNode {
-			for _, item := range m.Content {
-				if found := mapValue(item, key); found != nil {
-					return found
-				}
-			}
-			continue
+			sources = m.Content
 		}
-		if found := mapValue(m, key); found != nil {
-			return found
+		for _, src := range sources {
+			for _, e := range mapEntries(src, depth-1) {
+				if seen[e[0].Value] {
+					continue
+				}
+				seen[e[0].Value] = true
+				out = append(out, e)
+			}
+		}
+	}
+	return out
+}
+
+// maxMergeDepth bounds how far merge keys are followed. A merge chain is finite
+// in any document yaml.v3 accepts, but this walker runs on operator-supplied
+// input and must not be the thing that overflows the stack on a self-referential
+// one.
+const maxMergeDepth = 32
+
+// mapValue returns the value node for key in a mapping node, or nil.
+func mapValue(node *yaml.Node, key string) *yaml.Node {
+	for _, e := range mapEntries(node, maxMergeDepth) {
+		if e[0].Value == key {
+			return e[1]
 		}
 	}
 	return nil
