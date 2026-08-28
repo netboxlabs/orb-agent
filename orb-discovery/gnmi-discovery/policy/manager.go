@@ -70,6 +70,11 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		return nil, errors.New("no policies found in the request")
 	}
 	for name, policy := range payload.Policies {
+		// The policy name reaches a log line on nearly every path through this
+		// backend, so it is checked before anything else logs it.
+		if err := checkNoControlChars(name, "policy name"); err != nil {
+			return nil, err
+		}
 		// Inherit BEFORE resolving env. resolveEnv walks only the target list,
 		// so inheriting afterwards would copy a scope-level ${GNMI_PASS} into
 		// every target as that literal string with resolution already past —
@@ -274,7 +279,7 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 	var namedHosts uint64
 
 	for i, t := range policy.Scope.Targets {
-		if err := checkHostText(t.Host); err != nil {
+		if err := checkNoControlChars(t.Host, "target host"); err != nil {
 			return err
 		}
 
@@ -360,18 +365,18 @@ func splitEffectivePort(host string, field uint16) (string, uint16) {
 	return host, resolvedPort(field)
 }
 
-// checkHostText rejects a host carrying control characters.
+// checkNoControlChars rejects a policy-supplied string carrying control
+// characters.
 //
-// No hostname, IP, CIDR or range contains one, so this costs nothing legitimate.
-// It also removes the only route by which policy text reaches a log line as
-// something other than one field value: a host holding a newline could otherwise
-// forge whole log records, which is what CodeQL flags every log of a
-// policy-derived host for.
-func checkHostText(host string) error {
-	for _, r := range host {
-		if r == 0x7f || (r < 0x20 && r != 0) {
-			return fmt.Errorf("target host contains a control character at byte offset %d",
-				strings.IndexRune(host, r))
+// No policy name, hostname, IP, CIDR or range contains one, so this refuses
+// nothing legitimate. It closes at the source the route by which policy text
+// reaches a log line as something other than one field value: a value holding a
+// newline could otherwise forge whole log records, which is what CodeQL flags
+// every log of a policy-derived host or policy name for.
+func checkNoControlChars(value, what string) error {
+	for i, r := range value {
+		if r == 0x7f || r < 0x20 {
+			return fmt.Errorf("%s contains a control character at byte offset %d", what, i)
 		}
 	}
 	return nil

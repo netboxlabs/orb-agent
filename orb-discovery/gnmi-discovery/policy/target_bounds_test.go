@@ -181,3 +181,28 @@ func TestAHostWithControlCharactersIsRejected(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "control character")
 }
+
+// A policy name reaches a log line on nearly every path through this backend, so
+// it gets the same treatment as a host.
+func TestAPolicyNameWithControlCharactersIsRejected(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte("policies:\n  \"p1\\nlevel=ERROR msg=forged\":\n    scope:\n      targets:\n        - host: 10.0.0.1\n"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "policy name")
+	require.Contains(t, err.Error(), "control character")
+}
+
+// A tab is a control character but a legitimate part of nothing here, and an
+// ordinary name still passes.
+func TestOrdinaryNamesAndHostsStillPass(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  campus-fabric_01:
+    scope:
+      targets:
+        - host: switch-a.example.com
+        - host: 10.0.0.0/24
+`))
+	require.NoError(t, err)
+}
