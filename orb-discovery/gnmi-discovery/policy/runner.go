@@ -64,6 +64,13 @@ type Runner struct {
 
 	mu     sync.Mutex
 	states map[string]*targetState // by host
+
+	// subscribed records every host that has a target loop, so a rescan probes
+	// only newcomers. It is deliberately not r.states: a later change that
+	// recorded rejected addresses in states for visibility would make every
+	// address a member and silently stop rescan from ever finding anything.
+	// Entries are never removed — a loop retries for the life of the policy.
+	subscribed map[string]struct{}
 }
 
 type targetState struct {
@@ -86,6 +93,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		runStore:    NewRunStore(),
 		backoffBase: time.Second,
 		states:      map[string]*targetState{},
+		subscribed:  map[string]struct{}{},
 	}, nil
 }
 
@@ -125,8 +133,15 @@ func (r *Runner) setState(host string, fn func(*targetState)) {
 // survive reconnects (spec §9): a flap reconnects, the fresh initial sync
 // re-marks the live paths, and generation pruning removes only what genuinely
 // disappeared — no full re-ingest churn, no leaked debouncer goroutines.
-func (r *Runner) targetLoop(t config.Target) {
+func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 	defer r.wg.Done()
+	if startDelay > 0 {
+		select {
+		case <-time.After(startDelay):
+		case <-r.ctx.Done():
+			return
+		}
+	}
 	model := mapping.NewDeviceModel()
 	deb := NewDebouncer(time.Duration(r.policy.Config.DebounceMs) * time.Millisecond)
 	defer deb.Stop()

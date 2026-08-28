@@ -19,6 +19,14 @@ const (
 	DefaultDebounceMs     = 2000
 	DefaultSampleInterval = 300000 // 5m
 	DefaultGetInterval    = 900000 // 15m
+
+	// DefaultProbeTimeoutMs bounds one sweep probe. snmp-discovery's equivalent
+	// is 1s, but a gNMI probe is a TLS handshake plus a gRPC call rather than a
+	// UDP walk, so it needs longer.
+	DefaultProbeTimeoutMs = 3000
+
+	// MinRescanIntervalMs is the floor for a non-zero rescan_interval_ms.
+	MinRescanIntervalMs = 60000
 )
 
 // Status represents the runtime status of the gnmi-discovery service.
@@ -218,12 +226,46 @@ func (o *Options) ConfigCaptureEnabled() bool {
 
 // PolicyConfig holds policy-wide config (spec §7).
 type PolicyConfig struct {
-	Mode             string   `yaml:"mode,omitempty"`
-	DebounceMs       int      `yaml:"debounce_ms,omitempty"`
-	SampleIntervalMs int      `yaml:"sample_interval_ms,omitempty"`
-	GetIntervalMs    int      `yaml:"get_interval_ms,omitempty"`
-	Defaults         Defaults `yaml:"defaults"`
-	Options          Options  `yaml:"options,omitempty"`
+	Mode             string `yaml:"mode,omitempty"`
+	DebounceMs       int    `yaml:"debounce_ms,omitempty"`
+	SampleIntervalMs int    `yaml:"sample_interval_ms,omitempty"`
+	GetIntervalMs    int    `yaml:"get_interval_ms,omitempty"`
+
+	// ProbeTimeoutMs bounds one sweep probe. 0 or unset means
+	// DefaultProbeTimeoutMs, not "no timeout": a probe without a deadline against
+	// a silently-dropping address never returns, and the sweep would never finish.
+	ProbeTimeoutMs int `yaml:"probe_timeout_ms,omitempty"`
+
+	// RescanIntervalMs re-probes addresses this policy is not currently
+	// subscribed to, picking up devices that were down when the policy was
+	// applied. 0 or unset disables it. It exists because nothing else re-applies
+	// a policy periodically: the config manager returns early on an unchanged git
+	// ref, and on a new commit whose diff touches no matching policy file.
+	//
+	// Values below MinRescanIntervalMs are rejected rather than clamped. A sparse
+	// /24 re-probes ~250 addresses per tick, which is fine hourly and is a
+	// continuous scan per minute.
+	RescanIntervalMs int `yaml:"rescan_interval_ms,omitempty"`
+
+	Defaults Defaults `yaml:"defaults"`
+	Options  Options  `yaml:"options,omitempty"`
+}
+
+// ResolvedProbeTimeout returns the effective sweep probe timeout.
+func (c PolicyConfig) ResolvedProbeTimeout() time.Duration {
+	if c.ProbeTimeoutMs <= 0 {
+		return DefaultProbeTimeoutMs * time.Millisecond
+	}
+	return time.Duration(c.ProbeTimeoutMs) * time.Millisecond
+}
+
+// ResolvedRescanInterval returns the effective rescan period, or 0 when rescan
+// is disabled.
+func (c PolicyConfig) ResolvedRescanInterval() time.Duration {
+	if c.RescanIntervalMs <= 0 {
+		return 0
+	}
+	return time.Duration(c.RescanIntervalMs) * time.Millisecond
 }
 
 // Policy is a gnmi-discovery policy.

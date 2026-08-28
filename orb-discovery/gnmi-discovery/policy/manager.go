@@ -119,6 +119,17 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if policy.Config.DebounceMs < 0 || int64(policy.Config.DebounceMs) > maxIntervalMs {
 		return fmt.Errorf("debounce_ms must be >= 0 and <= %d, got %d", maxIntervalMs, policy.Config.DebounceMs)
 	}
+	if policy.Config.ProbeTimeoutMs < 0 || int64(policy.Config.ProbeTimeoutMs) > maxIntervalMs {
+		return fmt.Errorf("probe_timeout_ms must be >= 0 and <= %d, got %d", maxIntervalMs, policy.Config.ProbeTimeoutMs)
+	}
+	// Rejected rather than clamped: an operator who wrote 5000 meant seconds and
+	// wants to know the field is milliseconds, not to be silently given an hour.
+	if ms := policy.Config.RescanIntervalMs; ms != 0 {
+		if ms < config.MinRescanIntervalMs || int64(ms) > maxIntervalMs {
+			return fmt.Errorf("rescan_interval_ms must be 0 (disabled) or between %d and %d, got %d",
+				config.MinRescanIntervalMs, maxIntervalMs, ms)
+		}
+	}
 	// Compile the interface name patterns/excludes at parse time so a bad regex
 	// fails the POST /policies with a 400 instead of silently breaking at flush.
 	if err := validateInterfaceRegexes(&policy.Config.Defaults); err != nil {

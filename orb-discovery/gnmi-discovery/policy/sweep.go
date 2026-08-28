@@ -18,11 +18,6 @@ import (
 )
 
 const (
-	// probeTimeout bounds one Dial-plus-Capabilities probe. A gNMI probe is a
-	// TLS handshake plus a gRPC call, not a UDP walk, so it is longer than
-	// snmp-discovery's 1s equivalent.
-	probeTimeout = 3 * time.Second
-
 	// probeConcurrency bounds probes in flight. snmp uses min(256, n), but each
 	// gNMI probe holds a TLS handshake rather than a datagram, so this is lower.
 	probeConcurrency = 64
@@ -32,6 +27,11 @@ const (
 	// it on connection-refused, NXDOMAIN, unreachable and missing-port, and on
 	// nothing else — a TLS handshake failure has already reached a peer.
 	dialingMarker = "transport: Error while dialing"
+
+	// jitterThreshold is the number of admitted targets above which the first
+	// dial is spread; jitterWindow is what it is spread across.
+	jitterThreshold = 8
+	jitterWindow    = 30 * time.Second
 )
 
 // sweep expands this policy's targets, probes the ones that stand for more than
@@ -47,6 +47,28 @@ const (
 func (r *Runner) sweep() {
 	defer r.wg.Done()
 
+	r.sweepOnce()
+
+	interval := r.policy.Config.ResolvedRescanInterval()
+	if interval == 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			r.sweepOnce()
+		}
+	}
+}
+
+// sweepOnce probes what this policy is not already subscribed to and starts a
+// loop for each newcomer. It never touches a live subscription: a device that
+// answered an earlier sweep is not re-probed, so a rescan cannot disturb it.
+func (r *Runner) sweepOnce() {
 	admitted, err := r.admitTargets()
 	if err != nil {
 		r.logger.Error("sweep failed; no targets started",
@@ -54,15 +76,42 @@ func (r *Runner) sweep() {
 		return
 	}
 
-	for _, t := range admitted {
+	// Spread the first dial once a sweep admits more than a handful. Every loop
+	// dials immediately, so 200 admitted targets means 200 simultaneous TLS
+	// handshakes, then 200 initial syncs landing together, then 200 concurrent
+	// ingests through the one shared Diode client. The spread is deterministic
+	// rather than random: it guarantees the gap instead of sampling for it.
+	var gap time.Duration
+	if len(admitted) > jitterThreshold {
+		gap = jitterWindow / time.Duration(len(admitted))
+	}
+
+	for i, t := range admitted {
 		// The state entry must exist before the loop starts, or setState is a
 		// silent no-op and the target's first error is lost.
 		r.mu.Lock()
 		r.states[t.Host] = &targetState{}
+		r.subscribed[t.Host] = struct{}{}
 		r.mu.Unlock()
 		r.wg.Add(1)
-		go r.targetLoop(t)
+		go r.targetLoop(t, time.Duration(i)*gap)
 	}
+}
+
+// unsubscribed drops candidates this policy already has a loop for, before any
+// probe is sent. Filtering afterwards would re-probe every live device on every
+// rescan tick, which is the one thing a rescan must not do.
+func (r *Runner) unsubscribed(in []candidate) []candidate {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := in[:0:0]
+	for _, c := range in {
+		if _, ok := r.subscribed[c.target.Host]; ok {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // admitTargets expands, dedupes, and probes, returning the targets worth
@@ -71,6 +120,10 @@ func (r *Runner) admitTargets() ([]config.Target, error) {
 	expanded, err := r.expandTargets()
 	if err != nil {
 		return nil, err
+	}
+	expanded = r.unsubscribed(expanded)
+	if len(expanded) == 0 {
+		return nil, nil
 	}
 
 	// Probe concurrently: a dead address costs the full probeTimeout, so a /22
@@ -217,7 +270,7 @@ func dedupeKey(host string) string {
 // password across every address in the range — and with a scope-level
 // skip_verify, at anything that answers.
 func (r *Runner) probe(t config.Target) error {
-	ctx, cancel := context.WithTimeout(r.ctx, probeTimeout)
+	ctx, cancel := context.WithTimeout(r.ctx, r.policy.Config.ResolvedProbeTimeout())
 	defer cancel()
 
 	tls := t.ResolvedTLS()
