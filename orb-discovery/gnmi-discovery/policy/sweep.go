@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -365,14 +364,21 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 
 // dedupeKey collapses two spellings of one endpoint.
 //
-// It shares canonicalHost with the validation that runs earlier, so the two
-// cannot disagree about what "the same endpoint" means. They did once, and
-// validation admitted a pair that expansion then silently merged.
+// It goes through the same decomposition and canonicalization the validation
+// earlier uses, so the two cannot disagree about what "the same endpoint" means.
+// Every time they have had their own version of that question, an edge case has
+// slipped between them: the port half is the latest, where this built the key
+// from the raw text and so read 10.0.0.1:06030 as a different endpoint from
+// 10.0.0.1:6030, subscribing to one device twice with two sets of credentials.
 func dedupeKey(host string) string {
-	if h, port, err := net.SplitHostPort(host); err == nil {
-		return canonicalHost(h) + ":" + port
+	bare, port, inline := splitEffectivePort(host, 0)
+	if !inline {
+		// No usable inline port. Not the same as the default: this host carries no
+		// port at all, and inventing one here would collapse it with a host that
+		// does.
+		return canonicalHost(bare)
 	}
-	return canonicalHost(host)
+	return fmt.Sprintf("%s:%d", canonicalHost(bare), port)
 }
 
 // probe asks one address whether anything is listening.

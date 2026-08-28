@@ -420,3 +420,57 @@ func TestDuplicateTargetsAreReportedOnceNotPerAddress(t *testing.T) {
 	require.Contains(t, out, "count=200")
 	require.Contains(t, out, "example_host=")
 }
+
+// Go resolves 06030 and 6030 to the same TCP port, so a pinned target written
+// with a zero-padded inline port names the same endpoint as the subnet-derived
+// candidate. Building the key from the raw text made them differ, so the pinned
+// entry never replaced the derived one and the device got two subscriptions with
+// two sets of credentials — two dials, two ingests, conflicting values.
+func TestAZeroPaddedInlinePortIsTheSameEndpoint(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      port: 6030
+      username: campus
+      targets:
+        - host: 10.0.0.0/30
+        - host: 10.0.0.1:06030
+          username: pinned
+`))
+	require.NoError(t, err)
+
+	r := runnerWithTargets(t, policies["p1"].Scope.Targets, slog.New(slog.DiscardHandler))
+	expanded, err := r.expandTargets()
+	require.NoError(t, err)
+	require.Len(t, expanded, 2, "a /30 is two addresses, and the pin is one of them")
+
+	var pinned *candidate
+	for i := range expanded {
+		if canonicalHost(mustBare(t, expanded[i].target.Host)) == "10.0.0.1" {
+			pinned = &expanded[i]
+		}
+	}
+	require.NotNil(t, pinned)
+	require.True(t, pinned.explicit, "the pinned entry wins, so it is never probed")
+	require.Equal(t, "pinned", pinned.target.ResolvedUsername(),
+		"and it keeps its own credentials")
+}
+
+func mustBare(t *testing.T, host string) string {
+	t.Helper()
+	bare, _, _ := splitEffectivePort(host, 0)
+	return bare
+}
+
+// The key normalizes the port numerically, so equivalent spellings collapse while
+// genuinely different ports stay apart.
+func TestDedupeKeyNormalizesThePort(t *testing.T) {
+	require.Equal(t, dedupeKey("10.0.0.1:6030"), dedupeKey("10.0.0.1:06030"))
+	require.Equal(t, dedupeKey("[2001:db8::1]:6030"), dedupeKey("[2001:db8::1]:06030"))
+	require.NotEqual(t, dedupeKey("10.0.0.1:6030"), dedupeKey("10.0.0.1:57400"))
+	// A host with no port is not the same as one carrying the default: inventing
+	// a port here would collapse two entries that are not the same endpoint.
+	require.NotEqual(t, dedupeKey("10.0.0.1"), dedupeKey("10.0.0.1:9339"))
+}
