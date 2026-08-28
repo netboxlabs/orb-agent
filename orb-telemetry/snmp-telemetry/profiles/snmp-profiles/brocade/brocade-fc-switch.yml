@@ -1,6 +1,7 @@
 # https://mibs.observium.org/mib/RESOURCE-MIB/
 # https://mibs.observium.org/mib/FIBRE-CHANNEL-FE-MIB/
 # https://mibs.observium.org/mib/BROCADE-SYSTEM-MIB/
+# https://circitor.fr/Mibs/Html/SW-MIB.php
 ---
 
 extends:
@@ -40,6 +41,36 @@ metrics:
       name: swMemUsage
       poll_time_sec: 60
       tag: MemoryUtilization
+  # Chassis sensors (temp C / fan RPM / PSU) — INDEX swSensorIndex
+  - MIB: SW-MIB
+    table:
+      OID: 1.3.6.1.4.1.1588.2.1.1.1.1.22
+      name: swSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.1588.2.1.1.1.1.22.1.3
+        name: swSensorStatus
+        enum:
+          unknown: 1
+          faulty: 2
+          below-min: 3
+          nominal: 4
+          above-max: 5
+          absent: 6
+      - OID: 1.3.6.1.4.1.1588.2.1.1.1.1.22.1.4
+        name: swSensorValue
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.1588.2.1.1.1.1.22.1.2
+          name: swSensorType
+          enum:
+            temperature: 1
+            fan: 2
+            power-supply: 3
+        tag: sensor_type
+      - column:
+          OID: 1.3.6.1.4.1.1588.2.1.1.1.1.22.1.5
+          name: swSensorInfo
+        tag: sensor_name
   - MIB: FIBRE-CHANNEL-FE-MIB
     table:
       OID: 1.3.6.1.2.1.75.1.2.1

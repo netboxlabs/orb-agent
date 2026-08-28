@@ -55,3 +55,44 @@ metrics:
           match_attributes:
             - "Board"
         tag: sensor_name
+  # Temperature and chassis error status (fan/PSU/sensor). Same table as CPU/memory
+  # but without the Board filter so FRU rows are not dropped. 65535 = unsupported.
+  # hh3cEntityExtVoltage is omitted: H3C documents it as not supported on this MIB.
+  - MIB: HH3C-ENTITY-EXT-MIB
+    table:
+      OID: 1.3.6.1.4.1.25506.2.6.1.1.1
+      name: hh3cEntityExtStateTable
+    symbols:
+      - OID: 1.3.6.1.4.1.25506.2.6.1.1.1.1.12
+        name: hh3cEntityExtTemperature
+        tag: Temperature
+      - OID: 1.3.6.1.4.1.25506.2.6.1.1.1.1.19
+        name: hh3cEntityExtErrorStatus
+        enum:
+          notSupported: 1
+          normal: 2
+          postFailure: 3
+          entityAbsent: 4
+          poeError: 11
+          stackError: 21
+          stackPortBlocked: 22
+          stackPortFailed: 23
+          sfpRecvError: 31
+          sfpSendError: 32
+          sfpBothError: 33
+          fanError: 41
+          psuError: 51
+          rpsError: 61
+          moduleFaulty: 71
+          sensorError: 81
+          hardwareFaulty: 91
+    metric_tags:
+      - MIB: HH3C-ENTITY-EXT-MIB
+        column:
+          OID: 1.3.6.1.4.1.25506.2.6.1.1.1.1.1
+          name: hh3cEntityExtPhysicalIndex
+      - MIB: ENTITY-MIB
+        column:
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+          name: entPhysicalName
+        tag: sensor_name

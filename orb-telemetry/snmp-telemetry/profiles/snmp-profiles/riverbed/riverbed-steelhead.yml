@@ -26,8 +26,8 @@ metrics:
   # CPU Utilization - polled at 60s to support anomaly detection
   - MIB: STEELHEAD-MIB
     symbol:
-      name: cpuLoad1
-      OID: 1.3.6.1.4.1.17163.1.1.5.1.1.0
+      name: cpuUtil1
+      OID: 1.3.6.1.4.1.17163.1.1.5.1.4.0
       poll_time_sec: 60
       tag: CPU
   # Current total number of optimized connections

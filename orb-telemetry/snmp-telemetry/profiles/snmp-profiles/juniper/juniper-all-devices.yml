@@ -24,11 +24,28 @@ metrics:
         name: jnxOperatingBuffer
         poll_time_sec: 60
         tag: MemoryUtilization
+      # Celsius; 0 means unavailable or inapplicable.
+      - OID: 1.3.6.1.4.1.2636.3.1.13.1.7
+        name: jnxOperatingTemp
+        tag: Temperature
+      - OID: 1.3.6.1.4.1.2636.3.1.13.1.6
+        name: jnxOperatingState
+        enum:
+          unknown: 1
+          running: 2
+          ready: 3
+          reset: 4
+          runningAtFullSpeed: 5
+          down: 6
+          standby: 7
     metric_tags:
       - tag: chassis
         column:
           OID: 1.3.6.1.4.1.2636.3.1.13.1.18
           name: jnxOperatingChassisDescr
+      - column:
+          OID: 1.3.6.1.4.1.2636.3.1.13.1.5
+          name: jnxOperatingDescr
 
   - MIB: JUNIPER-MIB
     table:

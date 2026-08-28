@@ -1,6 +1,7 @@
 # https://mibs.observium.org/mib/HP-ICF-OID/
 # https://mibs.observium.org/mib/STATISTICS-MIB/
 # https://mibs.observium.org/mib/NETSWITCH-MIB/
+# https://mibs.observium.org/mib/HP-ICF-CHASSIS/
 ---
 
 extends:
@@ -36,3 +37,26 @@ metrics:
         OID: 1.3.6.1.4.1.11.2.14.11.5.1.1.2.1.1.1.6
         poll_time_sec: 60
         tag: MemoryFree
+  # Chassis sensors (fan/temp/PSU status) — INDEX hpicfSensorIndex
+  - MIB: HP-ICF-CHASSIS
+    table:
+      name: hpicfSensorTable
+      OID: 1.3.6.1.4.1.11.2.14.11.1.2.6
+    symbols:
+      - name: hpicfSensorStatus
+        OID: 1.3.6.1.4.1.11.2.14.11.1.2.6.1.4
+        enum:
+          unknown: 1
+          bad: 2
+          warning: 3
+          good: 4
+          notPresent: 5
+    metric_tags:
+      - column:
+          name: hpicfSensorDescr
+          OID: 1.3.6.1.4.1.11.2.14.11.1.2.6.1.7
+        tag: sensor_name
+      - column:
+          name: hpicfSensorNumber
+          OID: 1.3.6.1.4.1.11.2.14.11.1.2.6.1.3
+        tag: sensor_number

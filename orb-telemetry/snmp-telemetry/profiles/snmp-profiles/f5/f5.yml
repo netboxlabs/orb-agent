@@ -1,6 +1,9 @@
 # https://techdocs.f5.com/kb/en-us/products/big-ip_ltm/manuals/product/bigip-external-monitoring-implementations-12-1-2/12.html
 # http://www.circitor.fr/Mibs/Html/F/F5-BIGIP-SYSTEM-MIB.php
 # http://www.circitor.fr/Mibs/Html/F/F5-BIGIP-LOCAL-MIB.php
+# Hardware sensors: F5 K4026 / K000149096 (F5-BIGIP-SYSTEM-MIB sysChassis* / sysCpuSensor*).
+# VE and vCMP guests have no physical sensors; those tables stay empty. VIPRION chassis
+# temp is often empty — use sysBladeTempTable / sysBladeVoltageTable on blades.
 ---
 extends:
   - system-mib.yml
@@ -93,6 +96,120 @@ metrics:
       OID: 1.3.6.1.4.1.3375.2.1.1.2.9.7.0
       name: sysClientsslStatCurCompatConns
       tag: current_compat_connections
+
+# Hardware sensors (physical BIG-IP only; empty on VE / vCMP guests)
+  # Chassis fans — INDEX sysChassisFanIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2
+      name: sysChassisFanTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2.1.2
+        name: sysChassisFanStatus
+        enum:
+          bad: 0
+          good: 1
+          notpresent: 2
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2.1.3
+        name: sysChassisFanSpeed
+        tag: FanRPM
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2.1.1
+          name: sysChassisFanIndex
+        tag: fan_index
+  # Chassis power supplies — INDEX sysChassisPowerSupplyIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.2.2
+      name: sysChassisPowerSupplyTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.2.2.1.2
+        name: sysChassisPowerSupplyStatus
+        enum:
+          bad: 0
+          good: 1
+          notpresent: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.2.2.1.1
+          name: sysChassisPowerSupplyIndex
+        tag: psu_index
+  # Chassis temperature sensors (Celsius) — INDEX sysChassisTempIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.3.2
+      name: sysChassisTempTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.3.2.1.2
+        name: sysChassisTempTemperature
+        tag: Temperature
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.3.2.1.1
+          name: sysChassisTempIndex
+        tag: temp_index
+  # Per-CPU temperature and fan — INDEX sysCpuSensorSlot, sysCpuSensorIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.6.2
+      name: sysCpuSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.2
+        name: sysCpuSensorTemperature
+      - OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.3
+        name: sysCpuSensorFanSpeed
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.4
+          name: sysCpuSensorName
+        tag: cpu_sensor_name
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.5
+          name: sysCpuSensorSlot
+        tag: cpu_sensor_slot
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.1
+          name: sysCpuSensorIndex
+        tag: cpu_sensor_index
+  # VIPRION blade temperature (Celsius) — INDEX sysBladeTempIndex, sysBladeTempSlot
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2
+      name: sysBladeTempTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.2
+        name: sysBladeTempTemperature
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.3
+          name: sysBladeTempLocation
+        tag: blade_temp_location
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.4
+          name: sysBladeTempSlot
+        tag: blade_slot
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.1
+          name: sysBladeTempIndex
+        tag: blade_temp_index
+  # VIPRION blade voltage (mV) — INDEX sysBladeVoltageIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2
+      name: sysBladeVoltageTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2.1.2
+        name: sysBladeVoltageVoltage
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2.1.1
+          name: sysBladeVoltageIndex
+        tag: blade_voltage_index
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2.1.3
+          name: sysBladeVoltageSlot
+        tag: blade_slot
 
   - MIB: F5-BIGIP-LOCAL-MIB
     # A table containing system statistics information of the host, such as memory usage, cpu type, etc.

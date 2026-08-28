@@ -355,6 +355,19 @@ metrics:
             fix: 95
             sslFix: 96
             serviceUnknown: 99
+  # Fan RPM, temperatures (C), and voltages (mV). Counter names start with fan / t / v.
+  - MIB: NS-ROOT-MIB
+    table:
+      name: nsSysHealthTable
+      OID: 1.3.6.1.4.1.5951.4.1.1.41.7
+    symbols:
+      - name: sysHealthCounterValue
+        OID: 1.3.6.1.4.1.5951.4.1.1.41.7.1.2
+    metric_tags:
+      - column:
+          name: sysHealthCounterName
+          OID: 1.3.6.1.4.1.5951.4.1.1.41.7.1.1
+        tag: sensor_name
   # This table contains information about the disk space of the NetScaler
   - MIB: NS-ROOT-MIB
     table:

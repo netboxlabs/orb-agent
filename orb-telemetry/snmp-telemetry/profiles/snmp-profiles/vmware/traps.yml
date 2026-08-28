@@ -27,3 +27,397 @@ traps:
           vm: 3
           other: 4
         tag: object_type
+# VMWARE-NSX-MIB traps
+  - trap_oid: 1.3.6.1.4.1.6876.120.1
+    trap_name: vmwNsxTNotifications
+    drop_undefined: true
+    events:
+      - name: vmwNsxTDataCenterUID
+        OID: 1.3.6.1.4.1.6876.120.1.1.1
+        tag: DataCenterUID
+      - name: vmwNsxTDataCenterFeatureName
+        OID: 1.3.6.1.4.1.6876.120.1.1.2
+        enum:
+            alarmManagement: 16
+            auditLogHealth: 24
+            capacity: 22
+            certificates: 3
+            clustering: 40
+            cniHealth: 10
+            communication: 35
+            dhcp: 20
+            distributedFirewall: 31
+            distributedIdsIps: 33
+            dns: 30
+            edge: 45
+            edgeHealth: 2
+            endpointProtection: 13
+            federation: 32
+            gatewayFirewall: 39
+            highAvailability: 21
+            identityFirewall: 36
+            infrastructureCommunication: 7
+            infrastructureService: 19
+            intelligenceCommunication: 9
+            intelligenceHealth: 6
+            ipam: 38
+            licenses: 5
+            loadBalancer: 17
+            managerHealth: 1
+            mtuCheck: 42
+            nat: 46
+            ncpHealth: 11
+            nodeAgentsHealth: 12
+            nsxApplicationPlatformCommunication: 41
+            nsxApplicationPlatformHealth: 43
+            passwordManagement: 4
+            routing: 28
+            transportNodeHealth: 18
+            vpn: 15
+        tag: DataCenterFeatureName
+      - name: vmwNsxTDataCenterEntityId
+        OID: 1.3.6.1.4.1.6876.120.1.1.21
+        tag: DataCenterEntityId
+      - name: vmwNsxTDataCenterEventType
+        OID: 1.3.6.1.4.1.6876.120.1.1.3
+        tag: DataCenterEventType
+      - name: vmwNsxTDataCenterEventSeverity
+        OID: 1.3.6.1.4.1.6876.120.1.1.4
+        enum:
+            alert: 1
+            critical: 2
+            debug: 7
+            emergency: 0
+            error: 3
+            informational: 6
+            notice: 5
+            warning: 4
+        tag: DataCenterEventSeverity
+      - name: vmwNsxTDataCenterTransportNodeAddress
+        OID: 1.3.6.1.4.1.6876.120.1.1.45
+        tag: DataCenterTransportNodeAddress
+      - name: vmwNsxTDataCenterTransportNodeName
+        OID: 1.3.6.1.4.1.6876.120.1.1.46
+        tag: DataCenterTransportNodeName
+      - name: vmwNsxTDataCenterNodeId
+        OID: 1.3.6.1.4.1.6876.120.1.1.5
+        tag: DataCenterNodeId
+      - name: vmwNsxTDataCenterAPICollectionPath
+        OID: 1.3.6.1.4.1.6876.120.1.1.122
+        tag: APICollectionPath
+      - name: vmwNsxTDataCenterActiveGlobalManager
+        OID: 1.3.6.1.4.1.6876.120.1.1.41
+        tag: ActiveGlobalManager
+      - name: vmwNsxTDataCenterActiveGlobalManagers
+        OID: 1.3.6.1.4.1.6876.120.1.1.42
+        tag: ActiveGlobalManagers
+      - name: vmwNsxTDataCenterApplianceAddress
+        OID: 1.3.6.1.4.1.6876.120.1.1.25
+        tag: ApplianceAddress
+      - name: vmwNsxTDataCenterApplianceFQDN
+        OID: 1.3.6.1.4.1.6876.120.1.1.89
+        tag: ApplianceFQDN
+      - name: vmwNsxTDataCenterBGPNeighborIP
+        OID: 1.3.6.1.4.1.6876.120.1.1.52
+        tag: BGPNeighborIP
+      - name: vmwNsxTDataCenterBGPSourceIP
+        OID: 1.3.6.1.4.1.6876.120.1.1.66
+        tag: BGPSourceIP
+      - name: vmwNsxTDataCenterCABundleAgeThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.121
+        tag: CABundleAgeThreshold
+      - name: vmwNsxTDataCenterCapacityDisplayName
+        OID: 1.3.6.1.4.1.6876.120.1.1.58
+        tag: CapacityDisplayName
+      - name: vmwNsxTDataCenterCapacityUsageCount
+        OID: 1.3.6.1.4.1.6876.120.1.1.59
+        tag: CapacityUsageCount
+      - name: vmwNsxTDataCenterCentralControlPlaneId
+        OID: 1.3.6.1.4.1.6876.120.1.1.47
+        tag: CentralControlPlaneId
+      - name: vmwNsxTDataCenterCurrentGatewayState
+        OID: 1.3.6.1.4.1.6876.120.1.1.26
+        tag: CurrentGatewayState
+      - name: vmwNsxTDataCenterCurrentServiceState
+        OID: 1.3.6.1.4.1.6876.120.1.1.27
+        tag: CurrentServiceState
+      - name: vmwNsxTDataCenterDHCPPoolUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.29
+        tag: DHCPPoolUsage
+      - name: vmwNsxTDataCenterDHCPServerId
+        OID: 1.3.6.1.4.1.6876.120.1.1.36
+        tag: DHCPServerId
+      - name: vmwNsxTDataCenterDNSId
+        OID: 1.3.6.1.4.1.6876.120.1.1.100
+        tag: DNSId
+      - name: vmwNsxTDataCenterDNSUpstreamIP
+        OID: 1.3.6.1.4.1.6876.120.1.1.101
+        tag: DNSUpstreamIP
+      - name: vmwNsxTDataCenterDatapathResourceUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.28
+        tag: DatapathResourceUsage
+      - name: vmwNsxTDataCenterDirectoryDomain
+        OID: 1.3.6.1.4.1.6876.120.1.1.81
+        tag: DirectoryDomain
+      - name: vmwNsxTDataCenterDiskPartitionName
+        OID: 1.3.6.1.4.1.6876.120.1.1.23
+        tag: DiskPartitionName
+      - name: vmwNsxTDataCenterDisplayedLicenseKey
+        OID: 1.3.6.1.4.1.6876.120.1.1.92
+        tag: DisplayedLicenseKey
+      - name: vmwNsxTDataCenterDuplicateIPAddress
+        OID: 1.3.6.1.4.1.6876.120.1.1.57
+        tag: DuplicateIPAddress
+      - name: vmwNsxTDataCenterEdgeCryptoDrvName
+        OID: 1.3.6.1.4.1.6876.120.1.1.146
+        tag: EdgeCryptoDrvName
+      - name: vmwNsxTDataCenterEdgeNICName
+        OID: 1.3.6.1.4.1.6876.120.1.1.60
+        tag: EdgeNICName
+      - name: vmwNsxTDataCenterEdgeNodeAndvSphereSettingsMismatchReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.127
+        tag: EdgeNodeAndvSphereSettingsMismatchReason
+      - name: vmwNsxTDataCenterEdgeNodeSettingMismatchReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.123
+        tag: EdgeNodeSettingMismatchReason
+      - name: vmwNsxTDataCenterEdgeServiceName
+        OID: 1.3.6.1.4.1.6876.120.1.1.30
+        tag: EdgeServiceName
+      - name: vmwNsxTDataCenterEdgeThreadName
+        OID: 1.3.6.1.4.1.6876.120.1.1.93
+        tag: EdgeThreadName
+      - name: vmwNsxTDataCenterEdgeVMvSphereSettingsMismatchReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.124
+        tag: EdgeVMvSphereSettingsMismatchReason
+      - name: vmwNsxTDataCenterEdgevSphereLocationMismatchReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.126
+        tag: EdgevSphereLocationMismatchReason
+      - name: vmwNsxTDataCenterEventId
+        OID: 1.3.6.1.4.1.6876.120.1.1.40
+        tag: EventId
+      - name: vmwNsxTDataCenterFailureReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.31
+        tag: FailureReason
+      - name: vmwNsxTDataCenterFirewallHalfopenFlowUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.95
+        tag: FirewallHalfopenFlowUsage
+      - name: vmwNsxTDataCenterFirewallICMPFlowUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.96
+        tag: FirewallICMPFlowUsage
+      - name: vmwNsxTDataCenterFirewallIPFlowUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.99
+        tag: FirewallIPFlowUsage
+      - name: vmwNsxTDataCenterFirewallSNATPortsUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.125
+        tag: FirewallSNATPortsUsage
+      - name: vmwNsxTDataCenterFirewallUDPFlowUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.98
+        tag: FirewallUDPFlowUsage
+      - name: vmwNsxTDataCenterFlowIdentifier
+        OID: 1.3.6.1.4.1.6876.120.1.1.133
+        tag: FlowIdentifier
+      - name: vmwNsxTDataCenterFromGMPath
+        OID: 1.3.6.1.4.1.6876.120.1.1.142
+        tag: FromGMPath
+      - name: vmwNsxTDataCenterGroupType
+        OID: 1.3.6.1.4.1.6876.120.1.1.138
+        tag: GroupType
+      - name: vmwNsxTDataCenterHeapType
+        OID: 1.3.6.1.4.1.6876.120.1.1.49
+        tag: HeapType
+      - name: vmwNsxTDataCenterHostnameOrIPAddressWithPort
+        OID: 1.3.6.1.4.1.6876.120.1.1.39
+        tag: HostnameOrIPAddressWithPort
+      - name: vmwNsxTDataCenterIDSEventsCount
+        OID: 1.3.6.1.4.1.6876.120.1.1.64
+        tag: IDSEventsCount
+      - name: vmwNsxTDataCenterIntelligenceNodeId
+        OID: 1.3.6.1.4.1.6876.120.1.1.38
+        tag: IntelligenceNodeId
+      - name: vmwNsxTDataCenterIntentPath
+        OID: 1.3.6.1.4.1.6876.120.1.1.94
+        tag: IntentPath
+      - name: vmwNsxTDataCenterLDAPServer
+        OID: 1.3.6.1.4.1.6876.120.1.1.53
+        tag: LDAPServer
+      - name: vmwNsxTDataCenterLatencySource
+        OID: 1.3.6.1.4.1.6876.120.1.1.86
+        tag: LatencySource
+      - name: vmwNsxTDataCenterLatencyThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.87
+        tag: LatencyThreshold
+      - name: vmwNsxTDataCenterLatencyValue
+        OID: 1.3.6.1.4.1.6876.120.1.1.88
+        tag: LatencyValue
+      - name: vmwNsxTDataCenterLicenseEditionType
+        OID: 1.3.6.1.4.1.6876.120.1.1.24
+        tag: LicenseEditionType
+      - name: vmwNsxTDataCenterLrId
+        OID: 1.3.6.1.4.1.6876.120.1.1.70
+        tag: LrId
+      - name: vmwNsxTDataCenterLrportId
+        OID: 1.3.6.1.4.1.6876.120.1.1.75
+        tag: LrportId
+      - name: vmwNsxTDataCenterManagerNodeIDS
+        OID: 1.3.6.1.4.1.6876.120.1.1.139
+        tag: ManagerNodeIDS
+      - name: vmwNsxTDataCenterManagerNodeId
+        OID: 1.3.6.1.4.1.6876.120.1.1.91
+        tag: ManagerNodeId
+      - name: vmwNsxTDataCenterManagerNodeName
+        OID: 1.3.6.1.4.1.6876.120.1.1.44
+        tag: ManagerNodeName
+      - name: vmwNsxTDataCenterMaxCapacityThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.83
+        tag: MaxCapacityThreshold
+      - name: vmwNsxTDataCenterMaxIDSEventsAllowed
+        OID: 1.3.6.1.4.1.6876.120.1.1.55
+        tag: MaxIDSEventsAllowed
+      - name: vmwNsxTDataCenterMaxSupportedCapacityCount
+        OID: 1.3.6.1.4.1.6876.120.1.1.85
+        tag: MaxSupportedCapacityCount
+      - name: vmwNsxTDataCenterMempoolName
+        OID: 1.3.6.1.4.1.6876.120.1.1.50
+        tag: MempoolName
+      - name: vmwNsxTDataCenterMinCapacityThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.84
+        tag: MinCapacityThreshold
+      - name: vmwNsxTDataCenterNICThroughput
+        OID: 1.3.6.1.4.1.6876.120.1.1.144
+        tag: NICThroughput
+      - name: vmwNsxTDataCenterNICThroughputThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.145
+        tag: NICThroughputThreshold
+      - name: vmwNsxTDataCenterNappClusterId
+        OID: 1.3.6.1.4.1.6876.120.1.1.129
+        tag: NappClusterId
+      - name: vmwNsxTDataCenterNappMessagingLAGThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.130
+        tag: NappMessagingLAGThreshold
+      - name: vmwNsxTDataCenterNappNodeId
+        OID: 1.3.6.1.4.1.6876.120.1.1.131
+        tag: NappNodeId
+      - name: vmwNsxTDataCenterNappNodeName
+        OID: 1.3.6.1.4.1.6876.120.1.1.147
+        tag: NappNodeName
+      - name: vmwNsxTDataCenterNappServiceName
+        OID: 1.3.6.1.4.1.6876.120.1.1.132
+        tag: NappServiceName
+      - name: vmwNsxTDataCenterNodeType
+        OID: 1.3.6.1.4.1.6876.120.1.1.6
+        enum:
+            autonomousedge: 6
+            edge: 1
+            esx: 2
+            globalmanager: 7
+            intelligence: 5
+            kvm: 3
+            manager: 0
+            publiccloudgateway: 4
+        tag: NodeType
+      - name: vmwNsxTDataCenterPasswordExpirationDays
+        OID: 1.3.6.1.4.1.6876.120.1.1.51
+        tag: PasswordExpirationDays
+      - name: vmwNsxTDataCenterPeerAddress
+        OID: 1.3.6.1.4.1.6876.120.1.1.54
+        tag: PeerAddress
+      - name: vmwNsxTDataCenterPreviousGatewayState
+        OID: 1.3.6.1.4.1.6876.120.1.1.32
+        tag: PreviousGatewayState
+      - name: vmwNsxTDataCenterPreviousServiceState
+        OID: 1.3.6.1.4.1.6876.120.1.1.33
+        tag: PreviousServiceState
+      - name: vmwNsxTDataCenterQueueName
+        OID: 1.3.6.1.4.1.6876.120.1.1.135
+        tag: QueueName
+      - name: vmwNsxTDataCenterQueueSize
+        OID: 1.3.6.1.4.1.6876.120.1.1.136
+        tag: QueueSize
+      - name: vmwNsxTDataCenterQueueSizeThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.137
+        tag: QueueSizeThreshold
+      - name: vmwNsxTDataCenterRemoteApplianceAddress
+        OID: 1.3.6.1.4.1.6876.120.1.1.90
+        tag: RemoteApplianceAddress
+      - name: vmwNsxTDataCenterRemoteManagerNodeId
+        OID: 1.3.6.1.4.1.6876.120.1.1.80
+        tag: RemoteManagerNodeId
+      - name: vmwNsxTDataCenterRemoteSiteId
+        OID: 1.3.6.1.4.1.6876.120.1.1.67
+        tag: RemoteSiteId
+      - name: vmwNsxTDataCenterRemoteSiteName
+        OID: 1.3.6.1.4.1.6876.120.1.1.65
+        tag: RemoteSiteName
+      - name: vmwNsxTDataCenterRxMisses
+        OID: 1.3.6.1.4.1.6876.120.1.1.71
+        tag: RxMisses
+      - name: vmwNsxTDataCenterRxProcessed
+        OID: 1.3.6.1.4.1.6876.120.1.1.72
+        tag: RxProcessed
+      - name: vmwNsxTDataCenterRxRingBufferOverflowPercentage
+        OID: 1.3.6.1.4.1.6876.120.1.1.61
+        tag: RxRingBufferOverflowPercentage
+      - name: vmwNsxTDataCenterSNATIPAddress
+        OID: 1.3.6.1.4.1.6876.120.1.1.128
+        tag: SNATIPAddress
+      - name: vmwNsxTDataCenterServiceDownReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.97
+        tag: ServiceDownReason
+      - name: vmwNsxTDataCenterServiceIP
+        OID: 1.3.6.1.4.1.6876.120.1.1.77
+        tag: ServiceIP
+      - name: vmwNsxTDataCenterServiceName
+        OID: 1.3.6.1.4.1.6876.120.1.1.37
+        tag: ServiceName
+      - name: vmwNsxTDataCenterServiceRouterId
+        OID: 1.3.6.1.4.1.6876.120.1.1.140
+        tag: ServiceRouterId
+      - name: vmwNsxTDataCenterSessionDownReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.43
+        tag: SessionDownReason
+      - name: vmwNsxTDataCenterSiteId
+        OID: 1.3.6.1.4.1.6876.120.1.1.68
+        tag: SiteId
+      - name: vmwNsxTDataCenterSiteName
+        OID: 1.3.6.1.4.1.6876.120.1.1.69
+        tag: SiteName
+      - name: vmwNsxTDataCenterSrId
+        OID: 1.3.6.1.4.1.6876.120.1.1.63
+        tag: SrId
+      - name: vmwNsxTDataCenterStaticAddress
+        OID: 1.3.6.1.4.1.6876.120.1.1.56
+        tag: StaticAddress
+      - name: vmwNsxTDataCenterSyncIssueReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.134
+        tag: SyncIssueReason
+      - name: vmwNsxTDataCenterSystemResourceUsage
+        OID: 1.3.6.1.4.1.6876.120.1.1.22
+        tag: SystemResourceUsage
+      - name: vmwNsxTDataCenterSystemUsageThreshold
+        OID: 1.3.6.1.4.1.6876.120.1.1.34
+        tag: SystemUsageThreshold
+      - name: vmwNsxTDataCenterTimeoutInMinutes
+        OID: 1.3.6.1.4.1.6876.120.1.1.82
+        tag: TimeoutInMinutes
+      - name: vmwNsxTDataCenterToGMPath
+        OID: 1.3.6.1.4.1.6876.120.1.1.143
+        tag: ToGMPath
+      - name: vmwNsxTDataCenterTransportNodeId
+        OID: 1.3.6.1.4.1.6876.120.1.1.141
+        tag: TransportNodeId
+      - name: vmwNsxTDataCenterTunnelDownReason
+        OID: 1.3.6.1.4.1.6876.120.1.1.48
+        tag: TunnelDownReason
+      - name: vmwNsxTDataCenterTxMisses
+        OID: 1.3.6.1.4.1.6876.120.1.1.73
+        tag: TxMisses
+      - name: vmwNsxTDataCenterTxProcessed
+        OID: 1.3.6.1.4.1.6876.120.1.1.74
+        tag: TxProcessed
+      - name: vmwNsxTDataCenterTxRingBufferOverflowPercentage
+        OID: 1.3.6.1.4.1.6876.120.1.1.62
+        tag: TxRingBufferOverflowPercentage
+      - name: vmwNsxTDataCenterUsername
+        OID: 1.3.6.1.4.1.6876.120.1.1.35
+        tag: Username
+
