@@ -92,13 +92,13 @@ func (r *Runner) sweepOnce() {
 	}
 
 	status := RunStatusCompleted
-	if outcome.reachable() == 0 {
+	if outcome.total() == 0 {
 		// The operator gave a range and nothing in it answered. That is the
 		// implementable form of "the policy failed": a run they can see, rather
 		// than a silent policy that reports healthy and discovers nothing.
 		status = RunStatusFailed
 	}
-	r.runStore.FinishSweepRun(r.name, run.ID, status, outcome.summary(), outcome.reachable())
+	r.runStore.FinishSweepRun(r.name, run.ID, status, outcome.summary(), outcome.total())
 
 	// Spread the first dial once a sweep admits more than a handful. Every loop
 	// dials immediately, so 200 admitted targets means 200 simultaneous TLS
@@ -194,8 +194,10 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 		if c.explicit {
 			// The operator named this device. Dropping it because it happens to
 			// be rebooting would regress the retry-forever behaviour a named
-			// host has always had.
+			// host has always had. Counted apart from the probed addresses: it
+			// was never asked, so it cannot be reported as having answered.
 			admitted = append(admitted, c.target)
+			out.explicit++
 			continue
 		}
 		if !probed[i] {
@@ -215,7 +217,7 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 		}
 	}
 
-	out.admitted = len(admitted)
+	out.admitted = len(admitted) - out.explicit
 	out.rejected = rejected
 	out.exampleReason = reasonText(firstReason)
 
@@ -234,27 +236,45 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 
 // sweepOutcome is what the sweep run reports. Run has only EntityCount and
 // Reason to say it with, so the counts are rendered into the reason text.
+//
+// explicit is kept apart from admitted because the two are not the same claim. A
+// named host is started without being probed, so folding it into admitted
+// reported it as having answered — an unreachable single-host policy read as
+// "1 of 1 probed address(es) answered" when nothing was probed at all.
 type sweepOutcome struct {
 	scanned       int // addresses this policy expands to
 	subscribed    int // already had a target loop, so not re-probed
-	admitted      int // answered this sweep and got a loop
+	explicit      int // named by the operator, started without a probe
+	admitted      int // probed, answered, and got a loop
 	rejected      int // probed and did not answer
 	exampleReason string
 }
 
-// reachable is how many targets this policy is subscribed to once the sweep
+// probed is derived from the verdicts rather than from scanned minus subscribed,
+// which counted the addresses that skipped the probe.
+func (o sweepOutcome) probed() int { return o.admitted + o.rejected }
+
+// started is how many loops this sweep launched, however they were justified.
+func (o sweepOutcome) started() int { return o.explicit + o.admitted }
+
+// total is how many targets this policy is subscribed to once the sweep
 // finishes. It is what the run reports as its entity count, rather than the
-// number newly admitted: a rescan tick that finds nothing new is the normal
-// state of a healthy policy, and reporting 0 there would read as a policy that
-// had stopped discovering anything.
-func (o sweepOutcome) reachable() int { return o.subscribed + o.admitted }
+// number newly started: a rescan tick that finds nothing new is the normal state
+// of a healthy policy, and reporting 0 there would read as a policy that had
+// stopped discovering anything.
+func (o sweepOutcome) total() int { return o.subscribed + o.started() }
 
 func (o sweepOutcome) summary() string {
-	probed := o.scanned - o.subscribed
-	if probed == 0 {
-		return fmt.Sprintf("%d subscribed; no unsubscribed addresses left to probe", o.reachable())
+	s := fmt.Sprintf("%d subscribed", o.total())
+	if o.probed() == 0 && o.explicit == 0 {
+		return s + "; no unsubscribed addresses left to probe"
 	}
-	s := fmt.Sprintf("%d subscribed; %d of %d probed address(es) answered", o.reachable(), o.admitted, probed)
+	if o.probed() > 0 {
+		s += fmt.Sprintf("; %d of %d probed address(es) answered", o.admitted, o.probed())
+	}
+	if o.explicit > 0 {
+		s += fmt.Sprintf("; %d named target(s) started without probing", o.explicit)
+	}
 	if o.rejected > 0 {
 		s += fmt.Sprintf("; %d did not answer, e.g. %s", o.rejected, o.exampleReason)
 	}

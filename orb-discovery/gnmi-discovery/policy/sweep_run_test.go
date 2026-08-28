@@ -102,12 +102,8 @@ func TestASweepThatFindsNothingIsReportedFailed(t *testing.T) {
 	r.Start()
 	t.Cleanup(func() { _ = r.Stop() })
 
-	require.Eventually(t, func() bool {
-		runs := r.Runs()
-		return len(runs) == 1 && runs[0].Status == RunStatusFailed
-	}, 3*time.Second, 10*time.Millisecond, "an empty range is a failed sweep run")
-
-	run := r.Runs()[0]
+	run := sweepRunFor(t, r)
+	require.Equal(t, RunStatusFailed, run.Status, "an empty range is a failed sweep run")
 	require.Equal(t, []string{"10.0.0.0/30"}, run.Targets)
 	require.Zero(t, run.EntityCount)
 	require.Contains(t, run.Reason, "did not answer",
@@ -218,4 +214,76 @@ func TestASweepReportsTheReachableTotalNotTheDelta(t *testing.T) {
 		return false
 	}, 3*time.Second, 10*time.Millisecond,
 		"a tick with no newcomers still reports the one target that is subscribed")
+}
+
+// A named host is started without being probed, so it must never be reported as
+// having answered. Folding it into the admitted count made an unreachable
+// single-host policy read "1 of 1 probed address(es) answered" when nothing was
+// probed at all.
+func TestANamedHostIsNotReportedAsHavingAnswered(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{"10.0.0.5:9339": dialingErr()})
+	r := newSweepRunner(t, "10.0.0.5", dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	run := sweepRunFor(t, r)
+
+	require.NotContains(t, run.Reason, "answered",
+		"nothing was probed, so nothing can have answered")
+	require.Contains(t, run.Reason, "1 named target(s) started without probing")
+	// Still subscribed, and still not a failure: naming the host is the operator
+	// asserting it exists, and dropping it for being mid-reboot is the regression
+	// the no-probe rule exists to avoid.
+	require.Equal(t, RunStatusCompleted, run.Status)
+	require.Equal(t, 1, run.EntityCount)
+}
+
+// A sweep that mixes both kinds must keep the two counts distinct rather than
+// letting the pinned host inflate the answered figure.
+func TestAMixedSweepSeparatesProbedAnswersFromNamedStarts(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{
+		"10.0.0.2:9339": dialingErr(),
+		"10.0.0.3:9339": dialingErr(),
+		"10.0.0.4:9339": dialingErr(),
+		"10.0.0.5:9339": dialingErr(), // pinned, unreachable, never probed
+		"10.0.0.6:9339": dialingErr(),
+	})
+	r := runnerWithTargets(t, []config.Target{
+		{Host: "10.0.0.0/29"}, // .1-.6
+		{Host: "10.0.0.5"},    // pinned inside it
+	}, slog.New(slog.DiscardHandler))
+	r.dialer = dialer
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	run := sweepRunFor(t, r)
+	require.Contains(t, run.Reason, "1 of 5 probed address(es) answered",
+		"the pinned host is not one of the five probed")
+	require.Contains(t, run.Reason, "1 named target(s) started without probing")
+	require.Contains(t, run.Reason, "4 did not answer")
+	require.Equal(t, 2, run.EntityCount, "one probed answer plus one named start")
+}
+
+// sweepRunFor returns the policy's finished sweep run.
+//
+// It reads the store's sweep bucket rather than picking by position or by target
+// list. Position is not an identifier — runs sort by most recent activity, so a
+// device run that flushed after the sweep sorts ahead of it — and for a
+// single-host policy the sweep run and that host's device run carry the same
+// target list, so neither is a discriminator.
+func sweepRunFor(t *testing.T, r *Runner) *Run {
+	t.Helper()
+	var found *Run
+	require.Eventually(t, func() bool {
+		r.runStore.mu.RLock()
+		defer r.runStore.mu.RUnlock()
+		for _, run := range r.runStore.runs[r.name][sweepRunKey] {
+			if run.Status != RunStatusRunning {
+				found = copyRun(run)
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond, "a finished sweep run")
+	return found
 }
