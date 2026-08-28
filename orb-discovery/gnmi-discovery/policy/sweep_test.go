@@ -1,9 +1,11 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -396,4 +398,25 @@ func TestAnAddressThatNeverRepliesIsRejected(t *testing.T) {
 	require.Equal(t, 1, run.EntityCount, "only .2 answered; .1 went silent")
 	require.NotContains(t, r.TargetStatuses()[0].Host, "10.0.0.1",
 		"a silent address gets no subscription")
+}
+
+// Overlapping ranges produce one duplicate per shared address, so logging each
+// one meant tens of thousands of lines per sweep — and per rescan tick. The
+// count and one example carry the same information.
+func TestDuplicateTargetsAreReportedOnceNotPerAddress(t *testing.T) {
+	var logs bytes.Buffer
+	r := runnerWithTargets(t, []config.Target{
+		{Host: "10.0.0.0/24"},
+		{Host: "10.0.0.1-10.0.0.200"},
+	}, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	expanded, err := r.expandTargets()
+	require.NoError(t, err)
+	require.Equal(t, 254, len(expanded), "the union of the two")
+
+	out := logs.String()
+	require.Equal(t, 1, strings.Count(out, "dropping duplicate targets"),
+		"one line, whatever the overlap")
+	require.Contains(t, out, "count=200")
+	require.Contains(t, out, "example_host=")
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,6 +27,14 @@ import (
 // maxIntervalMs is the largest interval (in ms) that can be multiplied by
 // time.Millisecond without overflowing time.Duration (int64 ns).
 const maxIntervalMs = int64(math.MaxInt64) / int64(time.Millisecond)
+
+// maxScanWork bounds how many addresses a policy's targets enumerate in total,
+// as opposed to how many distinct endpoints they describe. The two differ when
+// ranges overlap, because each entry is expanded before the results are
+// deduplicated. Four times the endpoint cap leaves ample room for a subnet plus
+// pinned hosts, or nested prefixes carrying different credentials, while refusing
+// the degenerate case.
+const maxScanWork = 4 * uint64(targets.MaxExpand)
 
 // Manager owns the set of running policies.
 type Manager struct {
@@ -278,7 +287,7 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 	// Spans are grouped by port: the same address reached on two ports is two
 	// endpoints, so merging across ports would undercount.
 	spans := map[uint16][][2]uint32{}
-	var namedHosts uint64
+	var namedHosts, scanWork uint64
 
 	for i, t := range policy.Scope.Targets {
 		if err := checkNoControlChars(t.Host, "target host"); err != nil {
@@ -314,6 +323,8 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 				t.Host, count, targets.MaxExpand)
 		}
 
+		scanWork += count
+
 		start, end, enumerable, err := targets.Span(bare)
 		if err != nil {
 			return fmt.Errorf("target %q: %w", t.Host, err)
@@ -344,6 +355,18 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 		return fmt.Errorf(
 			"this policy expands to %d distinct addresses, more than the %d supported",
 			total, targets.MaxExpand)
+	}
+
+	// Bounding the union alone bounds the subscriptions, which is what the cap
+	// was for, but not the work: the runner expands every entry independently
+	// before deduping, so heavily overlapping ranges cost the sum even though
+	// they yield the union. Forty equivalent /22s passed the union check and
+	// enumerated ~41k addresses per sweep, repeated on every rescan tick.
+	if scanWork > maxScanWork {
+		return fmt.Errorf(
+			"this policy's targets enumerate %d addresses in total, more than the %d supported;"+
+				" overlapping ranges are expanded separately before being deduplicated",
+			scanWork, maxScanWork)
 	}
 	return nil
 }
@@ -399,6 +422,14 @@ func canonicalHost(h string) string {
 	if ip := net.ParseIP(h); ip != nil {
 		return ip.String()
 	}
+
+	// A prefix names a subnet, and 10.0.0.1/22 names the same subnet as
+	// 10.0.0.0/22. Without masking, the two are separate entries that expand to
+	// the same 1022 addresses, and the second expansion is discarded wholesale.
+	if prefix, err := netip.ParsePrefix(h); err == nil {
+		return prefix.Masked().String()
+	}
+
 	return strings.ToLower(h)
 }
 

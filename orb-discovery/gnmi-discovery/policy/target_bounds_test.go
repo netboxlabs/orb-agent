@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -496,4 +498,60 @@ func TestValidationAndExpansionAgreeOnZonedAddresses(t *testing.T) {
 
 	// Unchanged: a mapped IPv4 form still collapses onto the plain address.
 	require.Equal(t, canonicalHost("::ffff:10.0.0.1"), canonicalHost("10.0.0.1"))
+}
+
+// 10.0.0.1/22 names the same subnet as 10.0.0.0/22, so two such entries are one
+// endpoint set written twice — and the second expansion is discarded wholesale,
+// which is the duplicate case for prefixes.
+func TestEquivalentPrefixesAreADuplicate(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.0/22
+          username: alice
+        - host: 10.0.0.1/22
+          username: bob
+`))
+	require.Error(t, err, "both name 10.0.0.0/22")
+	require.Contains(t, err.Error(), "two entries")
+}
+
+// Bounding the union bounds the subscriptions, which is what the cap is for, but
+// not the work: every entry is expanded before the results are deduplicated. A
+// handful of heavily overlapping ranges therefore cost the sum while yielding the
+// union, on every sweep and every rescan tick.
+func TestHeavilyOverlappingRangesAreRefused(t *testing.T) {
+	m := newTestManager(t)
+	var sb strings.Builder
+	sb.WriteString("policies:\n  p1:\n    scope:\n      targets:\n")
+	// Distinct spans, near-identical coverage: prefix masking cannot collapse
+	// these, so only a work bound catches them.
+	for i := range 40 {
+		fmt.Fprintf(&sb, "        - host: 10.0.0.%d-10.0.3.254\n", i+1)
+	}
+	_, err := m.ParsePolicies([]byte(sb.String()))
+	require.Error(t, err, "40 overlapping ranges enumerate ~40k addresses for 1022 endpoints")
+	require.Contains(t, err.Error(), "enumerate")
+}
+
+// The legitimate shapes the union allowance exists for must still pass.
+func TestOverlapWithinReasonStillPasses(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.0/22
+        - host: 10.0.0.5
+          username: legacy
+        - host: 10.0.0.6
+          username: legacy
+        - host: 10.0.1.0/24
+          username: other
+`))
+	require.NoError(t, err, "a subnet, pinned hosts inside it, and a nested prefix")
 }

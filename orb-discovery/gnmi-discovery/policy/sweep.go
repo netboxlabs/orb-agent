@@ -300,6 +300,8 @@ type candidate struct {
 func (r *Runner) expandTargets() ([]candidate, error) {
 	var out []candidate
 	seen := map[string]int{}
+	var dropped, pinned int
+	var firstDropped string
 
 	for _, t := range r.policy.Scope.Targets {
 		addrs, err := targets.Expand(t.Host)
@@ -332,17 +334,31 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 					// Pinning a device inside a subnet is the documented way to
 					// give it its own credentials. It is not a mistake, and with
 					// rescan on, warning would repeat it on every tick forever.
-					r.logger.Debug("expansion skipped an address pinned by its own target entry",
-						"policy", r.name, "host", derived.Host)
+					pinned++
 				default:
-					r.logger.Warn("dropping duplicate target produced by expansion",
-						"policy", r.name, "host", derived.Host)
+					// Counted, not logged per address. Overlapping ranges produce
+					// one duplicate per shared address, so a policy with a few
+					// equivalent subnets emitted tens of thousands of lines per
+					// sweep — and with rescan on, per tick.
+					dropped++
+					if firstDropped == "" {
+						firstDropped = derived.Host
+					}
 				}
 				continue
 			}
 			seen[key] = len(out)
 			out = append(out, candidate{target: derived, explicit: literal})
 		}
+	}
+
+	if dropped > 0 {
+		r.logger.Warn("dropping duplicate targets produced by expansion",
+			"policy", r.name, "count", dropped, "example_host", firstDropped)
+	}
+	if pinned > 0 {
+		r.logger.Debug("expansion skipped addresses pinned by their own target entries",
+			"policy", r.name, "count", pinned)
 	}
 	return out, nil
 }
