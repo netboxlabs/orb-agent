@@ -375,3 +375,54 @@ policies:
 	}
 	require.Equal(t, []string{"[fe80::1%br-lan]:6030", "[fe80::2%eth0]:6030"}, hosts)
 }
+
+// The cap must use the same notion of endpoint identity as expansion. An
+// IPv4-mapped form is not Is4, so it counted as an endpoint of its own while
+// canonicalHost and dedupeKey collapsed it with the plain address — and a /22
+// plus three pinned mapped hosts inside it was rejected as 1025 endpoints that
+// expansion resolves to 1022.
+func TestMappedIPv4HostsInsideASubnetDoNotCountTwice(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.0/22
+        - host: "::ffff:10.0.0.1"
+          username: a
+        - host: "::ffff:10.0.0.2"
+          username: b
+        - host: "::ffff:10.0.0.3"
+          username: c
+`))
+	require.NoError(t, err, "the mapped hosts are inside the /22, so this is 1022 endpoints")
+}
+
+// A genuine IPv6 address is still not merged into an IPv4 span, and still counts
+// as its own endpoint.
+func TestARealIPv6HostStillCountsSeparately(t *testing.T) {
+	m := newTestManager(t)
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.0/22
+        - host: 2001:db8::1
+        - host: 2001:db8::2
+`))
+	require.NoError(t, err, "1022 + 2 is exactly the cap")
+
+	_, err = m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.0/22
+        - host: 2001:db8::1
+        - host: 2001:db8::2
+        - host: 2001:db8::3
+`))
+	require.Error(t, err, "1022 + 3 is over it: real IPv6 hosts are not inside the /22")
+}

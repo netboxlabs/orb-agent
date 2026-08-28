@@ -222,3 +222,50 @@ func TestTheRangeHeuristicStillCatchesRealRanges(t *testing.T) {
 		t.Error("Count(2001:db8::1-5) = nil error, want an error")
 	}
 }
+
+// Span, Count and Expand must agree about a mapped IPv4 literal, since the cap
+// is enforced with Span and the endpoints come from Expand.
+func TestMappedIPv4LiteralIsOneEnumerableAddress(t *testing.T) {
+	const target = "::ffff:10.0.0.1"
+
+	start, end, enumerable, err := Span(target)
+	if err != nil {
+		t.Fatalf("Span(%q) returned error: %v", target, err)
+	}
+	if !enumerable {
+		t.Errorf("Span(%q) enumerable = false, want true: it is an IPv4 address", target)
+	}
+	if start != end {
+		t.Errorf("Span(%q) = [%d,%d], want a one-element span", target, start, end)
+	}
+	// It occupies the same slot as the plain form, which is what lets it merge
+	// into a subnet containing that address.
+	plainStart, _, _, err := Span("10.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start != plainStart {
+		t.Errorf("Span(%q) start = %d, want %d (the plain address)", target, start, plainStart)
+	}
+
+	n, err := Count(target)
+	if err != nil || n != 1 {
+		t.Errorf("Count(%q) = %d, %v; want 1, nil", target, n, err)
+	}
+	got, err := Expand(target)
+	if err != nil || len(got) != 1 {
+		t.Errorf("Expand(%q) = %v, %v; want one address", target, got, err)
+	}
+}
+
+// A real IPv6 address is still not enumerable: it is one endpoint that cannot be
+// compared with an IPv4 span.
+func TestARealIPv6LiteralIsNotEnumerable(t *testing.T) {
+	_, _, enumerable, err := Span("2001:db8::1")
+	if err != nil {
+		t.Fatalf("Span returned error: %v", err)
+	}
+	if enumerable {
+		t.Error("Span(2001:db8::1) enumerable = true, want false")
+	}
+}

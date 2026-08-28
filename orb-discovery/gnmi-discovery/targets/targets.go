@@ -391,9 +391,17 @@ func Span(target string) (start, end uint32, enumerable bool, err error) {
 
 	// A bare IPv4 address is a one-element span, which is what lets it merge
 	// into a subnet that already contains it.
-	if addr, perr := netip.ParseAddr(target); perr == nil && addr.Is4() {
-		v := addrToUint32(addr)
-		return v, v, true, nil
+	//
+	// Unmapped first: an IPv4-mapped form such as ::ffff:10.0.0.1 is not Is4, so
+	// without this it counted as an endpoint of its own while canonicalHost and
+	// dedupeKey collapsed it with the plain address — and a /22 plus three pinned
+	// mapped hosts inside it was rejected as 1025 endpoints that expansion
+	// resolves to 1022.
+	if addr, perr := netip.ParseAddr(target); perr == nil {
+		if addr = addr.Unmap(); addr.Is4() {
+			v := addrToUint32(addr)
+			return v, v, true, nil
+		}
 	}
 
 	// A hostname, or an IPv6 literal: one endpoint, not comparable to a range.
