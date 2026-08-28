@@ -188,7 +188,7 @@ func TestNilLoggerIsSafe(t *testing.T) {
 // node unmarshals to the nil that signals inheritance, so the target silently
 // picks up the scope's block — skip_verify, CA path and all.
 func TestBareTLSKeyIsReported(t *testing.T) {
-	out := captureNullTLSWarnings(t, `
+	out := captureNullKeyWarnings(t, `
 policies:
   p1:
     scope:
@@ -204,7 +204,7 @@ policies:
 }
 
 func TestFilledTLSBlocksAreSilent(t *testing.T) {
-	out := captureNullTLSWarnings(t, `
+	out := captureNullKeyWarnings(t, `
 policies:
   p1:
     scope:
@@ -216,9 +216,36 @@ policies:
 	assert.Empty(t, out)
 }
 
-func captureNullTLSWarnings(t *testing.T, doc string) string {
+func captureNullKeyWarnings(t *testing.T, doc string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	WarnNullTLSBlocks([]byte(doc), slog.New(slog.NewTextHandler(&buf, nil)))
+	WarnAmbiguousNullKeys([]byte(doc), slog.New(slog.NewTextHandler(&buf, nil)))
 	return buf.String()
+}
+
+// yaml.v3 gives `username:` and `username: null` the same nil pointer an omitted
+// key produces, so a bare credential key reads as "no username" and silently
+// does the opposite: it inherits the scope's. Only an empty string is present.
+func TestBareCredentialKeysAreReported(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+policies:
+  p1:
+    scope:
+      username: admin
+      password: campus-secret
+      targets:
+        - host: 10.0.0.1
+          username:
+        - host: 10.0.0.2
+          password: null
+        - host: 10.0.0.3
+          username: ""
+        - host: 10.0.0.4
+`)
+	assert.Contains(t, out, "10.0.0.1")
+	assert.Contains(t, out, "empty username key")
+	assert.Contains(t, out, "10.0.0.2")
+	assert.Contains(t, out, "empty password key")
+	assert.NotContains(t, out, "10.0.0.3", `username: "" is present, and does what it says`)
+	assert.NotContains(t, out, "10.0.0.4", "an absent key is the normal way to inherit")
 }

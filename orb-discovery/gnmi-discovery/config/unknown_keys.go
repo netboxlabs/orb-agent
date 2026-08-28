@@ -98,15 +98,16 @@ func yamlFieldNames(t reflect.Type) map[string]bool {
 	return names
 }
 
-// WarnNullTLSBlocks reports a `tls:` key written with nothing under it.
+// WarnAmbiguousNullKeys reports an inheritable key written with nothing under it.
 //
-// Target.TLS is a pointer so that nil can mean "inherit the scope's block", and
-// a null node unmarshals to exactly that nil. So an operator who writes a bare
-// `tls:` on a target to mean "no TLS settings here" gets the opposite: the
-// scope's block, complete with whatever skip_verify or CA path it carries. The
-// distinction is invisible after unmarshalling, so it has to be caught on the
+// Target.TLS, Username and Password are pointers so that nil can mean "inherit
+// the scope's value", and a null node unmarshals to exactly that nil. So an
+// operator who writes a bare `tls:` or `username:` to mean "nothing here" gets
+// the opposite — the scope's value, complete with whatever credential or
+// skip_verify it carries. yaml.v3 gives `key:` and `key: null` the same nil, so
+// the distinction is invisible after unmarshalling and has to be caught on the
 // raw document.
-func WarnNullTLSBlocks(data []byte, logger *slog.Logger) {
+func WarnAmbiguousNullKeys(data []byte, logger *slog.Logger) {
 	if logger == nil {
 		return
 	}
@@ -126,7 +127,8 @@ func WarnNullTLSBlocks(data []byte, logger *slog.Logger) {
 		if scope == nil {
 			continue
 		}
-		warnIfNullTLS(logger, scope, name, "scope")
+		warnIfNull(logger, scope, name, "scope", "tls",
+			"empty tls block inherits the scope's TLS settings; remove the key to inherit, or give it fields to override")
 		targets := mapValue(scope, "targets")
 		if targets == nil {
 			continue
@@ -136,18 +138,25 @@ func WarnNullTLSBlocks(data []byte, logger *slog.Logger) {
 			if h := mapValue(target, "host"); h != nil {
 				host = h.Value
 			}
-			warnIfNullTLS(logger, target, name, host)
+			warnIfNull(logger, target, name, host, "tls",
+				"empty tls block inherits the scope's TLS settings; remove the key to inherit, or give it fields to override")
+			// A bare `username:` reads as "no username" and does the opposite:
+			// yaml.v3 decodes it to the same nil an omitted key produces, so the
+			// scope's credential is inherited. Only an empty string is present.
+			for _, key := range []string{"username", "password"} {
+				warnIfNull(logger, target, name, host, key,
+					"empty "+key+` key inherits the scope's value; write `+key+`: "" to connect without one`)
+			}
 		}
 	}
 }
 
-func warnIfNullTLS(logger *slog.Logger, node *yaml.Node, policy, where string) {
-	tls := mapValue(node, "tls")
-	if tls == nil || tls.Tag != "!!null" {
+func warnIfNull(logger *slog.Logger, node *yaml.Node, policy, where, key, msg string) {
+	value := mapValue(node, key)
+	if value == nil || value.Tag != "!!null" {
 		return
 	}
-	logger.Warn("empty tls block inherits the scope's TLS settings; remove the key to inherit, or give it fields to override",
-		"policy", policy, "target", where)
+	logger.Warn(msg, "policy", policy, "target", where)
 }
 
 // mapValue returns the value node for key in a mapping node, or nil.

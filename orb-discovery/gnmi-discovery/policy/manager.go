@@ -65,7 +65,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		return nil, err
 	}
 	config.WarnUnknownPolicyKeys(data, m.logger)
-	config.WarnNullTLSBlocks(data, m.logger)
+	config.WarnAmbiguousNullKeys(data, m.logger)
 	if len(payload.Policies) == 0 {
 		return nil, errors.New("no policies found in the request")
 	}
