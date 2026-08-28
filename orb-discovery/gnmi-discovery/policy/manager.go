@@ -211,8 +211,10 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		t := &policy.Scope.Targets[i]
 		// A CIDR or range is not an endpoint yet. The runner appends the port to
 		// each address once it expands, so stamping one here would produce
-		// "10.0.0.0/24:9339" and break the parse it is about to do.
-		if targets.LooksLikeMultiAddress(t.Host) {
+		// "10.0.0.0/24:9339" and break the parse it is about to do. Asked of
+		// Expand's own branch decision, so a hostname that happens to begin with
+		// an address still gets its port.
+		if !targets.IsSingleEndpoint(t.Host) {
 			continue
 		}
 		t.Host = ensurePort(t.Host, resolvedPort(t.Port))
@@ -283,14 +285,16 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 			return err
 		}
 
-		bare, port := splitEffectivePort(t.Host, t.Port)
+		bare, port, inline := splitEffectivePort(t.Host, t.Port)
 
-		if targets.LooksLikeMultiAddress(t.Host) {
-			if _, _, err := net.SplitHostPort(t.Host); err == nil {
-				return fmt.Errorf(
-					"target %q: a CIDR or range cannot carry an inline port; use the port field", t.Host)
-			}
-		} else if _, _, err := net.SplitHostPort(t.Host); err == nil && t.Port != 0 {
+		// Asked of the host with its port removed, so a hostname that merely
+		// starts with an address — "10.0.0.1-switch.example.com:6030" — is not
+		// mistaken for a range carrying an inline port.
+		if inline && !targets.IsSingleEndpoint(bare) {
+			return fmt.Errorf(
+				"target %q: a CIDR or range cannot carry an inline port; use the port field", t.Host)
+		}
+		if inline && t.Port != 0 {
 			// An inline port wins, so the field is dead weight here. Warn rather
 			// than reject: an inline port on a single host is the documented form
 			// and must keep working.
@@ -353,16 +357,13 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 // "10.0.0.5:6030" and "10.0.0.5:57400" collide on one key — two real endpoints
 // rejected as a duplicate — and let an inline ":6030" and a "port: 6030" on the
 // same host produce two keys for one endpoint.
-func splitEffectivePort(host string, field uint16) (string, uint16) {
-	if targets.LooksLikeMultiAddress(host) {
-		return host, resolvedPort(field)
-	}
+func splitEffectivePort(host string, field uint16) (bare string, port uint16, inline bool) {
 	if h, p, err := net.SplitHostPort(host); err == nil {
 		if n, cerr := strconv.ParseUint(p, 10, 16); cerr == nil {
-			return strings.Trim(h, "[]"), uint16(n)
+			return strings.Trim(h, "[]"), uint16(n), true
 		}
 	}
-	return host, resolvedPort(field)
+	return host, resolvedPort(field), false
 }
 
 // canonicalHost normalizes a bare host for comparison: an IP literal to the one

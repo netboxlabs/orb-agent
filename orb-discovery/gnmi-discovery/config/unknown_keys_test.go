@@ -249,3 +249,64 @@ policies:
 	assert.NotContains(t, out, "10.0.0.3", `username: "" is present, and does what it says`)
 	assert.NotContains(t, out, "10.0.0.4", "an absent key is the normal way to inherit")
 }
+
+// Anchors and merge keys are ordinary YAML, and the decoder honours them. A
+// walker that matched only literal keys went blind on any policy using them: a
+// target inheriting `username: null` through a merge decodes to the same nil as
+// one that wrote it directly, so it silently took the scope's credential while
+// the direct one was warned about.
+func TestNullCredentialsInheritedThroughAMergeAreReported(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+policies:
+  p1:
+    scope:
+      username: admin
+      password: campus-secret
+      targets:
+        - &anon
+          host: 10.0.0.1
+          username: null
+        - <<: *anon
+          host: 10.0.0.2
+        - host: 10.0.0.3
+`)
+	assert.Contains(t, out, "10.0.0.1", "the direct null")
+	assert.Contains(t, out, "10.0.0.2", "the same null reached through a merge")
+	assert.NotContains(t, out, "10.0.0.3", "a target that inherits normally is silent")
+}
+
+// An explicit key beats a merged one, which is YAML's own precedence rule.
+func TestAnExplicitKeyOverridesAMergedNull(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+policies:
+  p1:
+    scope:
+      username: admin
+      targets:
+        - &base
+          host: 10.0.0.1
+          username: null
+        - <<: *base
+          host: 10.0.0.2
+          username: legacy
+`)
+	assert.Contains(t, out, "10.0.0.1")
+	assert.NotContains(t, out, "10.0.0.2", "the explicit username wins over the merged null")
+}
+
+// A whole target supplied as an alias is still walked.
+func TestATargetSuppliedAsAnAliasIsWalked(t *testing.T) {
+	out := captureNullKeyWarnings(t, `
+policies:
+  p1:
+    scope:
+      username: admin
+      targets:
+        - &whole
+          host: 10.0.0.1
+          tls:
+        - *whole
+`)
+	assert.Contains(t, out, "10.0.0.1")
+	assert.Contains(t, out, "tls block")
+}

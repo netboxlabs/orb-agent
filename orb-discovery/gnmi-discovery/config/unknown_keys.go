@@ -160,14 +160,66 @@ func warnIfNull(logger *slog.Logger, node *yaml.Node, policy, where, key, msg st
 }
 
 // mapValue returns the value node for key in a mapping node, or nil.
+//
+// It follows aliases and honours `<<` merge keys, because the decoder does. A
+// walker that only matched literal keys went blind on any policy written with
+// anchors: a target inheriting `username: null` through a merge decodes to the
+// same nil as a target that wrote it directly, so it would silently take the
+// scope's credential while the direct one was warned about.
 func mapValue(node *yaml.Node, key string) *yaml.Node {
+	node = resolveAlias(node)
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
 	}
+
+	var merged []*yaml.Node
 	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == key {
-			return node.Content[i+1]
+		k, v := node.Content[i], node.Content[i+1]
+		if k.Value == key {
+			// An explicit key wins over anything merged, which is YAML's own
+			// rule, so this returns before the merge sources are consulted.
+			return resolveAlias(v)
 		}
+		if k.Tag == mergeTag || k.Value == "<<" {
+			merged = append(merged, v)
+		}
+	}
+
+	// A merge value is a mapping or a sequence of them, earlier entries taking
+	// precedence — again YAML's rule, and why this returns on the first hit.
+	for _, m := range merged {
+		m = resolveAlias(m)
+		if m == nil {
+			continue
+		}
+		if m.Kind == yaml.SequenceNode {
+			for _, item := range m.Content {
+				if found := mapValue(item, key); found != nil {
+					return found
+				}
+			}
+			continue
+		}
+		if found := mapValue(m, key); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// mergeTag is the tag yaml.v3 gives a `<<` key.
+const mergeTag = "!!merge"
+
+// resolveAlias follows an alias to the node it names.
+func resolveAlias(n *yaml.Node) *yaml.Node {
+	// Bounded rather than a bare loop: yaml.v3 rejects a recursive anchor, but
+	// this walker runs on operator-supplied input and must not be the thing that
+	// spins on a malformed document.
+	for range 100 {
+		if n == nil || n.Kind != yaml.AliasNode {
+			return n
+		}
+		n = n.Alias
 	}
 	return nil
 }

@@ -62,27 +62,30 @@ func isRangeCandidate(target string) bool {
 	return strings.Contains(target, "-") && (strings.Contains(target, ":") || !hasLetters(target))
 }
 
-// LooksLikeMultiAddress reports whether a target is *written* as a CIDR or a
-// range, judged syntactically so it still answers for malformed input that
-// Count would reject.
+// IsSingleEndpoint reports whether Expand passes target through unchanged as one
+// endpoint — a bare address or a hostname — rather than expanding it.
 //
-// Callers use it to refuse a form that cannot carry an inline port: neither
-// "10.0.0.0/24:6030" nor "10.0.0.1-10:6030" means what an operator carrying the
-// documented "10.0.0.11:6030" habit forward would expect, and the second is the
-// dangerous one — Expand treats it as a DNS name, so it fails as a lookup rather
-// than as a syntax error.
-func LooksLikeMultiAddress(target string) bool {
+// It mirrors Expand's branch decisions exactly, without enumerating, so callers
+// deciding "may I append a port to this?" cannot disagree with what Expand will
+// actually do. A syntactic guess did disagree: "10.0.0.1-switch.example.com" is a
+// legal hostname that Expand passes through, because it contains letters, while
+// anything that merely began with an address and a hyphen was assumed to be a
+// range.
+func IsSingleEndpoint(target string) bool {
+	if isRangeCandidate(target) {
+		_, _, err := rangeBounds(target)
+		if err == nil {
+			return false // a real range
+		}
+		if !errors.Is(err, errNotRange) {
+			return false // malformed range syntax; not one endpoint either
+		}
+		// errNotRange: Expand falls through to the hostname branch, as here.
+	}
 	if strings.Contains(target, "/") {
-		return true
+		return false // a prefix, valid or not
 	}
-	base, _, ok := strings.Cut(target, "-")
-	if !ok {
-		return false
-	}
-	// A hyphen only separates a range when what precedes it is an address;
-	// "switch-a.example.com" is a hostname.
-	_, err := netip.ParseAddr(strings.TrimSpace(base))
-	return err == nil
+	return true
 }
 
 // Count returns how many addresses a target expands to, without enumerating.

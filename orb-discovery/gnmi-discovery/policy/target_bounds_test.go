@@ -294,3 +294,62 @@ func TestValidationAndExpansionAgreeOnEndpointIdentity(t *testing.T) {
 	}
 	require.NotEqual(t, canonicalHost("2001:db8::1"), canonicalHost("2001:db8::2"))
 }
+
+// A hostname may legally begin with an address and a hyphen. Expand passes it
+// through as one endpoint, because it contains letters — so the port has to be
+// appended, and a syntactic guess that saw "address, hyphen" assumed a range and
+// skipped it, leaving gnmic to fail the dial for a missing port.
+func TestAHostnameBeginningWithAnAddressStillGetsItsPort(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      port: 6030
+      targets:
+        - host: 10.0.0.1-switch.example.com
+        - host: 10.0.0.1-
+`))
+	require.NoError(t, err)
+	hosts := []string{}
+	for _, tgt := range policies["p1"].Scope.Targets {
+		hosts = append(hosts, tgt.Host)
+	}
+	require.Equal(t, []string{
+		"10.0.0.1-switch.example.com:6030",
+		"10.0.0.1-:6030",
+	}, hosts, "Expand treats both as hostnames, so both take the port")
+}
+
+// The other half of the same confusion: such a hostname carrying an inline port
+// was rejected outright, with an error blaming a CIDR or range it is not.
+func TestAHostnameBeginningWithAnAddressMayCarryAnInlinePort(t *testing.T) {
+	m := newTestManager(t)
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: 10.0.0.1-switch.example.com:6030
+`))
+	require.NoError(t, err, "this is a hostname with a port, not a range")
+	require.Equal(t, "10.0.0.1-switch.example.com:6030", policies["p1"].Scope.Targets[0].Host)
+}
+
+// A real range carrying an inline port is still rejected, which is what that
+// check exists for: Expand would read it as a DNS name and retry a nonexistent
+// host forever with only a generic dial error.
+func TestARealRangeWithAnInlinePortIsStillRejected(t *testing.T) {
+	m := newTestManager(t)
+	for _, host := range []string{"10.0.0.1-10:6030", "10.0.0.0/24:6030", "10.0.0.1-10.0.0.9:6030"} {
+		_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    scope:
+      targets:
+        - host: ` + host + `
+`))
+		require.Error(t, err, "host %q must be rejected", host)
+		require.Contains(t, err.Error(), "port", "the error points at the port field")
+	}
+}
