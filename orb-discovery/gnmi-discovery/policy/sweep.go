@@ -154,7 +154,7 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 
 	// Probe concurrently: a dead address costs the full probeTimeout, so a /22
 	// probed one at a time would take the better part of an hour.
-	verdicts := make([]error, len(expanded))
+	verdicts := make([]probeResult, len(expanded))
 	probed := make([]bool, len(expanded))
 	sem := make(chan struct{}, probeConcurrency)
 	var wg sync.WaitGroup
@@ -203,17 +203,16 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 		if !probed[i] {
 			continue
 		}
-		err := verdicts[i]
-		switch {
-		case isCanceled(err):
-			return nil, sweepOutcome{}, err
-		case admits(err):
+		// Shutdown is decided by r.ctx above, never by a peer's status. Reading
+		// codes.Canceled as "the policy is going away" let one device abandon the
+		// whole sweep, discarding every address the other probes had admitted.
+		if admits(verdicts[i]) {
 			admitted = append(admitted, c.target)
-		default:
-			rejected++
-			if firstReason == nil {
-				firstReason = err
-			}
+			continue
+		}
+		rejected++
+		if firstReason == nil {
+			firstReason = verdicts[i].err
 		}
 	}
 
@@ -377,7 +376,7 @@ func dedupeKey(host string) string {
 //
 // The server-side settings do go: without the CA and skip_verify the probe
 // cannot complete a handshake it is otherwise entitled to complete.
-func (r *Runner) probe(t config.Target) error {
+func (r *Runner) probe(t config.Target) probeResult {
 	ctx, cancel := context.WithTimeout(r.ctx, r.policy.Config.ResolvedProbeTimeout())
 	defer cancel()
 
@@ -395,14 +394,27 @@ func (r *Runner) probe(t config.Target) error {
 		// as N rejections sharing one reason. That is the useful shape: the run's
 		// example_reason then names the file, rather than reporting an empty
 		// subnet with no explanation.
-		return err
+		return probeResult{err: err}
 	}
 	// gnmic dials without WithBlock, so this session is live even for a dead
 	// address and will reconnect in the background until closed.
 	defer func() { _ = sess.Close() }()
 
 	_, capErr := sess.Capabilities(ctx)
-	return capErr
+	// Whether OUR context ended this is the only reliable way to tell silence
+	// from an answer. A gRPC code cannot: a server may send DeadlineExceeded or
+	// Canceled itself, which means a peer replied, and those are the same codes
+	// grpc-go produces locally when the probe's own deadline fires.
+	return probeResult{err: capErr, localStop: ctx.Err() != nil}
+}
+
+// probeResult is one address's answer, plus whether the probe's own context is
+// what ended the call.
+type probeResult struct {
+	err error
+	// localStop is true when the probe's context expired or was canceled, so
+	// nothing came back from the peer at all.
+	localStop bool
 }
 
 // admits reports whether a probe result means something is listening.
@@ -417,42 +429,44 @@ func (r *Runner) probe(t config.Target) error {
 // the gate degrades to admitting everything — which is the retry-forever
 // behaviour this backend had before the sweep existed — rather than to admitting
 // nothing, which would report a healthy campus as empty.
-func admits(err error) bool {
-	if err == nil {
+func admits(res probeResult) bool {
+	if res.err == nil {
+		// Answered. Checked before localStop, because a deadline that fires just
+		// after a successful reply must not retract it.
 		return true
 	}
-	if isCanceled(err) {
+	if res.localStop {
+		// Our own deadline or cancellation ended the call, so nothing came back:
+		// a dropped packet, or a peer that accepted the TCP connection and then
+		// said nothing. This is the only branch that means silence, and it is
+		// decided by the local context rather than by a status code — a server
+		// can send DeadlineExceeded or Canceled itself, and those arrive with the
+		// same codes grpc-go produces locally.
 		return false
 	}
-	st, ok := status.FromError(err)
+	st, ok := status.FromError(res.err)
 	if !ok {
+		// Not a gRPC status at all: a dial or TLS configuration fault.
 		return false
 	}
-	switch st.Code() {
-	case codes.DeadlineExceeded:
-		// Nothing came back: a dropped packet, or a peer that accepted the TCP
-		// connection and then said nothing.
+	// Refused and "TLS handshake failed" share codes.Unavailable and differ only
+	// in message. A handshake failure means a peer answered.
+	if st.Code() == codes.Unavailable && strings.Contains(st.Message(), dialingMarker) {
 		return false
-	case codes.Unavailable:
-		// Refused and "TLS handshake failed" share this code and differ only in
-		// message. A handshake failure means a peer answered.
-		return !strings.Contains(st.Message(), dialingMarker)
-	default:
-		// Any other code can only come from a server-sent status or an
-		// HTTP-status mapping, so a peer spoke.
-		return true
 	}
+	// Anything else reached a peer, including a server-sent DeadlineExceeded or
+	// Canceled.
+	return true
 }
 
-// isCanceled reports whether a probe ended because the sweep was torn down, as
-// happens on Stop and on a rescan tick. Those are not rejections and must not be
-// counted as any.
+// isCanceled reports whether an error is this runner's own cancellation, as
+// happens on Stop and on a policy DELETE.
+//
+// It is applied only to errors admitTargets produces from r.ctx, never to a
+// probe result. A peer is free to answer with codes.Canceled, and treating that
+// as a local shutdown abandoned the sweep.
 func isCanceled(err error) bool {
-	if errors.Is(err, context.Canceled) {
-		return true
-	}
-	st, ok := status.FromError(err)
-	return ok && st.Code() == codes.Canceled
+	return errors.Is(err, context.Canceled)
 }
 
 func reasonText(err error) string {

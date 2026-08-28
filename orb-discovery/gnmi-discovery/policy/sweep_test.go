@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -31,11 +32,12 @@ type perHostDialer struct {
 	closed   map[string]int
 	inFlight int
 	peak     int
-	blockOn  chan struct{} // when non-nil, Capabilities waits on it
+	hang     map[string]bool // hosts whose Capabilities waits for ctx
+	blockOn  chan struct{}   // when non-nil, Capabilities waits on it
 }
 
 func newPerHostDialer(capsErr map[string]error) *perHostDialer {
-	return &perHostDialer{capsErr: capsErr, closed: map[string]int{}}
+	return &perHostDialer{capsErr: capsErr, closed: map[string]int{}, hang: map[string]bool{}}
 }
 
 func (d *perHostDialer) Dial(_ context.Context, spec gnmi.TargetSpec) (gnmi.Session, error) {
@@ -98,7 +100,7 @@ type perHostSession struct {
 	host   string
 }
 
-func (s *perHostSession) Capabilities(_ context.Context) (*gnmi.CapabilitiesResult, error) {
+func (s *perHostSession) Capabilities(ctx context.Context) (*gnmi.CapabilitiesResult, error) {
 	s.dialer.mu.Lock()
 	s.dialer.inFlight++
 	if s.dialer.inFlight > s.dialer.peak {
@@ -110,6 +112,16 @@ func (s *perHostSession) Capabilities(_ context.Context) (*gnmi.CapabilitiesResu
 		s.dialer.inFlight--
 		s.dialer.mu.Unlock()
 	}()
+
+	s.dialer.mu.Lock()
+	hang := s.dialer.hang[s.host]
+	s.dialer.mu.Unlock()
+	if hang {
+		// Never returns on its own: the probe's own deadline has to end it, which
+		// is what produces a genuine localStop.
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 
 	if s.dialer.blockOn != nil {
 		// Deliberately NOT selecting on ctx: this simulates a probe already past
@@ -155,30 +167,42 @@ func dialingErr() error {
 // The handshake cases are the ones an allow-list got wrong: a campus of devices
 // with self-signed certs, or an mTLS device probed without a client cert, all
 // answer with codes.Unavailable and would read as an empty subnet.
+//
+// The two deadline/cancel cases are the ones a code-only classifier got wrong in
+// the opposite direction. grpc-go produces DeadlineExceeded and Canceled locally
+// when the probe's own context ends, and a server may also send either of them
+// itself — so the code cannot separate them and the local context has to.
 func TestAdmissionAdmitsAnythingThatAnswered(t *testing.T) {
-	admitted := map[string]error{
-		"ok":            nil,
-		"unauthed":      status.Error(codes.Unauthenticated, "no credentials"),
-		"forbidden":     status.Error(codes.PermissionDenied, "denied"),
-		"no gnmi svc":   status.Error(codes.Unimplemented, "unknown service gnmi.gNMI"),
-		"self-signed":   handshakeErr("authentication handshake failed: x509: certificate signed by unknown authority"),
-		"mtls required": handshakeErr("error reading server preface: remote error: tls: certificate required"),
-		"loaded device": status.Error(codes.ResourceExhausted, "busy"),
+	admitted := map[string]probeResult{
+		"ok":            {},
+		"unauthed":      {err: status.Error(codes.Unauthenticated, "no credentials")},
+		"forbidden":     {err: status.Error(codes.PermissionDenied, "denied")},
+		"no gnmi svc":   {err: status.Error(codes.Unimplemented, "unknown service gnmi.gNMI")},
+		"self-signed":   {err: handshakeErr("authentication handshake failed: x509: certificate signed by unknown authority")},
+		"mtls required": {err: handshakeErr("error reading server preface: remote error: tls: certificate required")},
+		"loaded device": {err: status.Error(codes.ResourceExhausted, "busy")},
+		// Server-sent, with the probe's own context still live: a peer answered.
+		"server deadline": {err: status.Error(codes.DeadlineExceeded, "deadline_exceeded")},
+		"server canceled": {err: status.Error(codes.Canceled, "rpc canceled by server")},
+		// A deadline that fires just after a successful reply must not retract it.
+		"answered then expired": {localStop: true},
 	}
-	for name, err := range admitted {
-		if got := admits(err); !got {
-			t.Errorf("%s: admits(%v) = false, want true", name, err)
+	for name, res := range admitted {
+		if got := admits(res); !got {
+			t.Errorf("%s: admits(%+v) = false, want true", name, res)
 		}
 	}
 
-	rejected := map[string]error{
-		"refused":  dialingErr(),
-		"timeout":  status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
-		"canceled": status.Error(codes.Canceled, "context canceled"),
+	rejected := map[string]probeResult{
+		"refused": {err: dialingErr()},
+		// Our own deadline or cancellation ended the call, so nothing came back.
+		"local timeout":  {err: status.Error(codes.DeadlineExceeded, "context deadline exceeded"), localStop: true},
+		"local cancel":   {err: status.Error(codes.Canceled, "context canceled"), localStop: true},
+		"dial/tls fault": {err: errors.New("open /run/secrets/ca.pem: no such file or directory")},
 	}
-	for name, err := range rejected {
-		if got := admits(err); got {
-			t.Errorf("%s: admits(%v) = true, want false", name, err)
+	for name, res := range rejected {
+		if got := admits(res); got {
+			t.Errorf("%s: admits(%+v) = true, want false", name, res)
 		}
 	}
 }
@@ -186,9 +210,11 @@ func TestAdmissionAdmitsAnythingThatAnswered(t *testing.T) {
 // A sweep is cancelled by Stop and by a rescan tick. Counting those probes as
 // rejections would report a fabricated tally on every shutdown.
 func TestCanceledProbesAreNotCountedAsRejections(t *testing.T) {
-	require.True(t, isCanceled(status.Error(codes.Canceled, "context canceled")))
 	require.True(t, isCanceled(context.Canceled))
 	require.False(t, isCanceled(dialingErr()))
+	// A peer answering with codes.Canceled is not this runner shutting down.
+	require.False(t, isCanceled(status.Error(codes.Canceled, "rpc canceled by server")),
+		"a remote status must never read as a local shutdown")
 }
 
 func TestSweepSubscribesOnlyToRespondingAddresses(t *testing.T) {
@@ -314,4 +340,60 @@ func TestProbesRunConcurrentlyButBounded(t *testing.T) {
 	dialer.mu.Unlock()
 	require.Greater(t, peak, 1, "probes must not be sequential")
 	require.LessOrEqual(t, peak, probeConcurrency, "probes must stay bounded")
+}
+
+// One device answering with codes.Canceled must not abandon the sweep. Reading a
+// peer's status as "the policy is going away" discarded every address the other
+// probes had already admitted and started no subscriptions at all — a single
+// misbehaving device silently killing discovery for the whole subnet, with only a
+// Debug line to show for it.
+func TestAPeerAnsweringCanceledDoesNotAbandonTheSweep(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{
+		"10.0.0.1:9339": status.Error(codes.Canceled, "rpc canceled by server"),
+	})
+	r := newSweepRunner(t, "10.0.0.0/29", dialer) // .1 through .6
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(r.TargetStatuses()) == 6
+	}, 3*time.Second, 10*time.Millisecond,
+		"every address answered, the Canceled one included")
+}
+
+// A server that sends DeadlineExceeded itself has answered, so the address holds
+// a device. Classifying on the code alone dropped it as silence.
+func TestAServerSentDeadlineIsAdmitted(t *testing.T) {
+	dialer := newPerHostDialer(map[string]error{
+		"10.0.0.1:9339": status.Error(codes.DeadlineExceeded, "deadline_exceeded"),
+		"10.0.0.2:9339": dialingErr(),
+	})
+	r := newSweepRunner(t, "10.0.0.0/30", dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	require.Eventually(t, func() bool {
+		return len(r.TargetStatuses()) == 1
+	}, 3*time.Second, 10*time.Millisecond)
+	require.Equal(t, "10.0.0.1:9339", r.TargetStatuses()[0].Host,
+		"the server answered; only the refused address is absent")
+}
+
+// The probe's own deadline expiring is still the one thing that means silence.
+func TestAnAddressThatNeverRepliesIsRejected(t *testing.T) {
+	dialer := newPerHostDialer(nil)
+	dialer.hang = map[string]bool{"10.0.0.1:9339": true}
+	policy := config.Policy{
+		Config: config.PolicyConfig{Mode: config.ModeAuto, DebounceMs: 10, ProbeTimeoutMs: 80},
+		Scope:  config.Scope{Targets: []config.Target{{Host: "10.0.0.0/30"}}},
+	}
+	r := newRunnerFor(t, policy, dialer)
+	r.Start()
+	t.Cleanup(func() { _ = r.Stop() })
+
+	run := sweepRunFor(t, r)
+	require.Equal(t, RunStatusCompleted, run.Status)
+	require.Equal(t, 1, run.EntityCount, "only .2 answered; .1 went silent")
+	require.NotContains(t, r.TargetStatuses()[0].Host, "10.0.0.1",
+		"a silent address gets no subscription")
 }
