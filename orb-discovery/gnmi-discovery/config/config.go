@@ -259,6 +259,21 @@ type PolicyConfig struct {
 	// a silently-dropping address never returns, and the sweep would never finish.
 	ProbeTimeoutMs int `yaml:"probe_timeout_ms,omitempty"`
 
+	// SendCredentialsToUnverifiedTargets permits a CIDR or range target to carry
+	// a password when TLS does not authenticate the server.
+	//
+	// Off by default, and the refusal is the point. A sweep admits anything that
+	// answers on the gNMI port — deliberately, because only silence is absence —
+	// and the subscription that follows sends this policy's password to whatever
+	// was admitted. With skip_verify or insecure there is nothing authenticating
+	// the far end, so an unrelated service listening on that port inside the
+	// scanned range collects the credential. That is reachable by accident: a
+	// range that overlaps a server VLAN is a typo, not an attack.
+	//
+	// Naming a host explicitly is unaffected. The operator said where the
+	// credential may go.
+	SendCredentialsToUnverifiedTargets bool `yaml:"send_credentials_to_unverified_targets,omitempty"`
+
 	// RescanIntervalMs re-probes addresses this policy is not currently
 	// subscribed to, picking up devices that were down when the policy was
 	// applied. 0 or unset disables it. It exists because nothing else re-applies

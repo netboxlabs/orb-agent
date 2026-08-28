@@ -97,7 +97,15 @@ func (r *Runner) sweepOnce() {
 		// than a silent policy that reports healthy and discovers nothing.
 		status = RunStatusFailed
 	}
-	r.runStore.FinishSweepRun(r.name, run.ID, status, outcome.summary(), outcome.total())
+	reason := outcome.summary()
+	if n := r.unverifiedCredentialTargets(); n > 0 {
+		// Surfaced on the run, not only in the log. An opt-in that is invisible
+		// after the day it was set is the failure mode the flag exists to avoid:
+		// this way the risk shows in Fleet on every sweep.
+		reason += fmt.Sprintf("; credentials are being sent to targets whose server is not"+
+			" authenticated (%d range target(s))", n)
+	}
+	r.runStore.FinishSweepRun(r.name, run.ID, status, reason, outcome.total())
 
 	// Spread the first dial once a sweep admits more than a handful. Every loop
 	// dials immediately, so 200 admitted targets means 200 simultaneous TLS
@@ -277,6 +285,28 @@ func (o sweepOutcome) summary() string {
 		s += fmt.Sprintf("; %d did not answer, e.g. %s", o.rejected, o.exampleReason)
 	}
 	return s
+}
+
+// unverifiedCredentialTargets counts the ranged targets that carry a password
+// without TLS authenticating the server. Validation refuses these unless the
+// policy opts in, so a non-zero count here means the operator opted in.
+func (r *Runner) unverifiedCredentialTargets() int {
+	n := 0
+	for _, t := range r.policy.Scope.Targets {
+		if t.ResolvedPassword() == "" {
+			continue
+		}
+		tls := t.ResolvedTLS()
+		if !tls.SkipVerify && !tls.Insecure {
+			continue
+		}
+		bare, _, _ := splitEffectivePort(t.Host, t.Port)
+		if targets.IsSingleEndpoint(bare) {
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 // originalHosts returns the host strings the operator wrote, so the sweep run

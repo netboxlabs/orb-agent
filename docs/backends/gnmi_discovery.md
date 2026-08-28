@@ -56,6 +56,7 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | get_interval_ms | int | no | `GET` poll interval in ms (default `900000` = 15m). |
 | probe_timeout_ms | int | no | How long a sweep waits for one address to answer (default `3000`). Too low and a whole subnet reports as absent with no failure signal. |
 | rescan_interval_ms | int | no | Re-probe addresses this policy is not subscribed to, picking up devices that were down when the policy was applied. Unset or `0` disables it; a non-zero value below `60000` is rejected. |
+| send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not authenticate the server. Off by default, and the refusal is deliberate — see [Credentials and ranges](#credentials-and-ranges). |
 | options | map | no | Per-policy toggles. `capture_config` (bool) captures the CONFIG datastore into `Device.config.running` (default off). |
 | defaults | map | no | NetBox defaults applied to discovered entities (see below). |
 
@@ -134,6 +135,40 @@ life of the policy.
 The sweep reports itself as a run on `/status`, named after the host strings you
 wrote, with the number of addresses that answered and the reason the rest did
 not. A range where nothing answered is reported as a failed run.
+
+#### Credentials and ranges
+A probe carries no credentials, but the subscription that follows a successful
+probe does. Since a probe admits anything that answers, a range plus a password
+plus `skip_verify` or `insecure` means the password is offered to any service
+listening on the gNMI port inside that range — including one that is not a network
+device at all. That is reachable by accident: a range overlapping a server VLAN is
+a typo, not an attack.
+
+So that combination is **refused**:
+
+| Target | Password | TLS verification | Result |
+|:------:|:--------:|:----------------:|:------:|
+| explicit host | yes | any | allowed |
+| CIDR / range | no | any | allowed |
+| CIDR / range | yes | verified (`ca`, or system roots) | allowed |
+| CIDR / range | yes | `skip_verify` | refused |
+| CIDR / range | yes | `insecure` | refused |
+
+Naming a host explicitly is unaffected — the operator said where the credential
+may go, and an attacker would have to intercept that connection rather than merely
+listen on a free address.
+
+The gate is on the password, not on every credential. A client certificate is not
+a bearer secret: TLS binds possession to the session, so an endpoint that receives
+one cannot replay it. mTLS over a range without a password is allowed, as is a
+username without a password.
+
+To do credentialed range discovery, give the scope a `ca` so the server is
+authenticated. If the devices have per-device self-signed certificates and no
+shared CA, that is not possible, and the options are to name the hosts explicitly
+or to set `config.send_credentials_to_unverified_targets: true` and accept the
+exposure. Setting it logs a warning on every policy apply and is reported on every
+sweep run, so the decision stays visible rather than being forgotten.
 
 #### Interface type discovery
 Each interface's NetBox type is resolved per interface, in precedence order:

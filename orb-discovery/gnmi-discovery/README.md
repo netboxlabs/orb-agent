@@ -67,6 +67,9 @@ policies:
       debounce_ms: 2000    # flush delay after last notification (default 2000)
       probe_timeout_ms: 3000       # how long one sweep probe waits for an address (default 3000)
       rescan_interval_ms: 3600000  # re-probe unsubscribed addresses; 0 disables, floor 60000
+      # A credentialed CIDR/range needs verified TLS: the sweep admits anything that
+      # answers and then sends the password to it. Set this only to accept that.
+      # send_credentials_to_unverified_targets: false
       sample_interval_ms: 300000   # SAMPLE subscription interval (default 300000 = 5m)
       get_interval_ms: 900000      # GET poll interval (default 900000 = 15m)
       options:                     # per-policy behavior toggles (peer to defaults)

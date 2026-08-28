@@ -288,6 +288,7 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 	// endpoints, so merging across ports would undercount.
 	spans := map[uint16][][2]uint32{}
 	var namedHosts, scanWork uint64
+	var unverified int
 
 	for i, t := range policy.Scope.Targets {
 		if err := checkNoControlChars(t.Host, "target host"); err != nil {
@@ -328,6 +329,25 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 
 		scanWork += count
 
+		// A ranged target sends this policy's password to whatever the sweep
+		// admits, and admission is deliberately broad. Without TLS authenticating
+		// the far end, that means any service listening on the gNMI port inside
+		// the range — reachable by accident when a range overlaps a server VLAN.
+		if !targets.IsSingleEndpoint(bare) && t.ResolvedPassword() != "" {
+			tls := t.ResolvedTLS()
+			if tls.Insecure || tls.SkipVerify {
+				if !policy.Config.SendCredentialsToUnverifiedTargets {
+					return fmt.Errorf(
+						"target %q carries a password but does not verify the server, and a range"+
+							" sends that password to every address the sweep admits: set a ca so the"+
+							" server is authenticated, drop the password, name the hosts explicitly,"+
+							" or set config.send_credentials_to_unverified_targets to accept it",
+						t.Host)
+				}
+				unverified++
+			}
+		}
+
 		start, end, enumerable, err := targets.Span(bare)
 		if err != nil {
 			return fmt.Errorf("target %q: %w", t.Host, err)
@@ -358,6 +378,14 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 		return fmt.Errorf(
 			"this policy expands to %d distinct addresses, more than the %d supported",
 			total, targets.MaxExpand)
+	}
+
+	if unverified > 0 {
+		// One line per policy, not per target. Logged even though the operator
+		// opted in: the whole point of the opt-in is that the risk stays visible.
+		logger.Warn("this policy sends credentials to targets whose server is not authenticated;"+
+			" a range sweep will offer the password to any endpoint answering on the gNMI port",
+			"range_targets", unverified)
 	}
 
 	// Bounding the union alone bounds the subscriptions, which is what the cap

@@ -27,6 +27,10 @@ policies:
   campus:
     config:
       mode: on_change
+      # This combination — a credentialed range whose server is not
+      # authenticated — is refused unless the policy opts in, precisely because
+      # of what this test then goes on to assert about where the password goes.
+      send_credentials_to_unverified_targets: true
     scope:
       username: admin
       password: ${GNMI_PASS}
