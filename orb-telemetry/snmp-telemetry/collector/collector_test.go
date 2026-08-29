@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -2140,3 +2141,201 @@ func TestCollectTarget_PassesCollectionContextToFactory(t *testing.T) {
 
 // testCtxKey marks the context a test hands to CollectTarget.
 type testCtxKey struct{}
+
+// ---------------------------------------------------------------------------
+// Scalar walks that answer with more than one row
+// ---------------------------------------------------------------------------
+
+// A grouped `symbols:` entry may name table columns and declare nothing that
+// says so. The device says so instead: a walk beneath the symbol that answers
+// with more than one instance is walking a column. Without a row identity
+// every row carries the same attribute set and the export keeps one arbitrary
+// value. The bundled Mikrotik router profile has that shape for the two
+// HOST-RESOURCES storage columns.
+func TestCollectTarget_ScalarWalkWithSeveralRowsGainsRowIndex(t *testing.T) {
+	const (
+		host        = "10.0.0.80"
+		sysObjValue = "1.3.6.1.4.1.14988.1.1"
+		totalOID    = "1.3.6.1.2.1.25.2.3.1.5"
+		usedOID     = "1.3.6.1.2.1.25.2.3.1.6"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		totalOID: {
+			totalOID + ".65": intPDU(totalOID+".65", 262144),
+			totalOID + ".66": intPDU(totalOID+".66", 16384),
+		},
+		usedOID: {
+			usedOID + ".65": intPDU(usedOID+".65", 131072),
+			usedOID + ".66": intPDU(usedOID+".66", 4096),
+		},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	byIndex := func(metric string) map[string]int64 {
+		out := map[string]int64{}
+		for _, pt := range store[metric] {
+			out[attrValue(pt, "row_index")] = pt.value
+		}
+		return out
+	}
+	require.Len(t, store["snmp.hrtotalmemory"], 2)
+	assert.Equal(t, map[string]int64{"65": 262144, "66": 16384}, byIndex("snmp.hrtotalmemory"))
+	require.Len(t, store["snmp.hrusedmemory"], 2)
+	assert.Equal(t, map[string]int64{"65": 131072, "66": 4096}, byIndex("snmp.hrusedmemory"))
+}
+
+// Two rows of the same column can hold the same value. They are still two
+// rows, so both have to survive with an identity of their own.
+func TestCollectTarget_ScalarWalkRowsWithEqualValuesStayApart(t *testing.T) {
+	const (
+		host        = "10.0.0.81"
+		sysObjValue = "1.3.6.1.4.1.9999.81"
+		colOID      = "1.3.6.1.4.1.9999.81.1.4"
+	)
+	p := profileWithOID(sysObjValue, "columns.yml", []profiles.MetricEntry{{
+		Symbols: []profiles.Symbol{{Name: "fanSpeed", OID: colOID}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		colOID: {
+			colOID + ".1": intPDU(colOID+".1", 3000),
+			colOID + ".2": intPDU(colOID+".2", 3000),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.fanspeed"]
+	require.Len(t, pts, 2)
+	indexes := []string{attrValue(pts[0], "row_index"), attrValue(pts[1], "row_index")}
+	sort.Strings(indexes)
+	assert.Equal(t, []string{"1", "2"}, indexes)
+}
+
+// An agent may answer the walk with the symbol OID itself as well as with
+// instances beneath it. The bare OID identifies no row, so labelling it with
+// the whole OID would put a meaningless dimension on that one series. This is
+// the scalar-path counterpart of the same rule on the table path.
+func TestCollectTarget_ScalarWalkLeavesTheUnindexedInstanceUnlabelled(t *testing.T) {
+	const (
+		host        = "10.0.0.92"
+		sysObjValue = "1.3.6.1.4.1.9999.92"
+		colOID      = "1.3.6.1.4.1.9999.92.1.4"
+	)
+	p := profileWithOID(sysObjValue, "mixed.yml", []profiles.MetricEntry{{
+		Symbols: []profiles.Symbol{{Name: "fanSpeed", OID: colOID}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		colOID: {
+			colOID:        intPDU(colOID, 1000),
+			colOID + ".1": intPDU(colOID+".1", 2000),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.fanspeed"]
+	require.Len(t, pts, 2)
+	byValue := map[int64]string{}
+	for _, pt := range pts {
+		byValue[pt.value] = attrValue(pt, "row_index")
+	}
+	assert.Equal(t, map[int64]string{1000: "", 2000: "1"}, byValue)
+}
+
+// A scalar `symbol:` entry gets the same treatment: the routing between the
+// two paths is not what decides it, the device's answer is.
+func TestCollectTarget_SingleScalarSymbolWalkWithSeveralRowsGainsRowIndex(t *testing.T) {
+	const (
+		host        = "10.0.0.82"
+		sysObjValue = "1.3.6.1.4.1.9999.82"
+		colOID      = "1.3.6.1.4.1.9999.82.1.9"
+	)
+	p := profileWithOID(sysObjValue, "single.yml", []profiles.MetricEntry{{
+		Symbol: &profiles.Symbol{Name: "diskUsed", OID: colOID},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		colOID: {
+			colOID + ".1": intPDU(colOID+".1", 10),
+			colOID + ".2": intPDU(colOID+".2", 20),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.diskused"]
+	require.Len(t, pts, 2)
+	byIndex := map[string]int64{}
+	for _, pt := range pts {
+		byIndex[attrValue(pt, "row_index")] = pt.value
+	}
+	assert.Equal(t, map[string]int64{"1": 10, "2": 20}, byIndex)
+}
+
+// The five bundled profiles that collect only through grouped `symbols:`
+// answer one instance per symbol, so none of them gains a row identity and
+// their series keep the shape they have. A rule that fired on the walk being
+// indexed rather than on it having several rows would split every one of
+// these in two.
+func TestCollectTarget_GroupedScalarProfilesKeepOneUnindexedSeries(t *testing.T) {
+	tests := []struct {
+		name        string
+		host        string
+		sysObjValue string
+		symbolOID   string
+		instanceOID string
+		metric      string
+	}{
+		{
+			"roomalert-32s", "10.0.0.83", "1.3.6.1.4.1.20916",
+			"1.3.6.1.4.1.20916.1.11.1.1.1.1.0", "1.3.6.1.4.1.20916.1.11.1.1.1.1.0", "snmp.internal-tempf",
+		},
+		{
+			"roomalert-3e", "10.0.0.84", "1.3.6.1.4.1.20916.1.9.1",
+			"1.3.6.1.4.1.20916.1.9.1.1.1.1.0", "1.3.6.1.4.1.20916.1.9.1.1.1.1.0", "snmp.digital-sen1-1",
+		},
+		{
+			"roomalert-3s", "10.0.0.85", "1.3.6.1.4.1.20916.1.13.1",
+			"1.3.6.1.4.1.20916.1.13.1.1.1.1.0", "1.3.6.1.4.1.20916.1.13.1.1.1.1.0", "snmp.internal-tempf",
+		},
+		{
+			"infrasensing-gateway", "10.0.0.86", "1.3.6.1.4.1.17095.1",
+			"1.3.6.1.4.1.17095.1000.1.4.0", "1.3.6.1.4.1.17095.1000.1.4.0", "snmp.sensor1_value_integer",
+		},
+		// The iPower symbols name no instance, so the device supplies the
+		// scalar `.0` the profile leaves off.
+		{
+			"ipower-pdu", "10.0.0.87", "1.3.6.1.4.1.38218",
+			"1.3.6.1.4.1.38218.1.6.1", "1.3.6.1.4.1.38218.1.6.1.0", "snmp.pdu-meter1-vrms",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+				sysObjectIDOID: {sysObjectIDOID: oIDPDU(tt.sysObjValue)},
+				sysDescrOID:    {},
+				tt.symbolOID:   {tt.instanceOID: intPDU(tt.instanceOID, 42)},
+			}}
+			c := newBundledCollector(t, walkerFactory(w))
+			require.NoError(t, c.CollectTarget(context.Background(), mustTarget(tt.host), mustAuth(), "p", DialOptions{}))
+
+			pts := c.testDeviceStore("p", tt.host)[tt.metric]
+			require.Len(t, pts, 1)
+			assert.Equal(t, int64(42), pts[0].value)
+			assert.Empty(t, attrValue(pts[0], "row_index"), "a single-row scalar walk must not gain a row identity")
+		})
+	}
+}

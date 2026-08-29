@@ -346,7 +346,11 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 // what the scalar path has nowhere to put.
 //
 // Entries that are table columns yet declare neither cannot be told apart from
-// grouped scalars without the MIB, so they stay on the scalar path.
+// grouped scalars without the MIB, so they stay on the scalar path. They are
+// not lost there: collectScalar gives a walk that answers with several rows a
+// row identity, which is the part of the table treatment such an entry needs.
+// What only this function can decide is the row-scoped metadata, which is why
+// it tests for that and not for the shape of the OIDs.
 func groupedSymbolsAreTableColumns(entry *profiles.MetricEntry) bool {
 	if len(entry.MetricTags) > 0 {
 		return true
@@ -501,6 +505,12 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 
 // collectScalar collects a single scalar OID metric into localBuf.
 // Records the metric name in throttledMetrics when poll_time_sec has not elapsed.
+//
+// A walk that answers with more than one instance is walking a table column,
+// whatever the profile calls it, so its points are given a row identity. The
+// profile cannot always say which entries are columns; the device can, and it
+// answers before any point is written. Without the identity every row carries
+// the same attribute set and the export keeps one arbitrary value.
 func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
 	metricName := buildMetricName(sym.Name)
 	if !c.isPollReady(key, sym.OID, sym.PollTimeSec) {
@@ -512,7 +522,9 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		c.logger.Debug("Error walking scalar OID", "oid", sym.OID, "name", sym.Name, "error", err)
 		return
 	}
-	for _, pdu := range pdus {
+	// One instance is the scalar case, and it keeps the attribute set it has.
+	severalRows := len(pdus) > 1
+	for fullOID, pdu := range pdus {
 		val, strVal, err := pduToValue(pdu, sym.Conversion)
 		if err != nil {
 			c.logger.Debug("Skipping non-numeric PDU", "oid", sym.OID, "name", sym.Name, "error", err)
@@ -521,6 +533,11 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 
 		attrs := make([]attribute.KeyValue, len(baseAttrs))
 		copy(attrs, baseAttrs)
+		if severalRows {
+			if rowIdx, indexed := rowIndex(fullOID, sym.OID); indexed {
+				attrs = append(attrs, attribute.String("row_index", rowIdx))
+			}
+		}
 		if len(sym.Enum) > 0 {
 			if name := enumName(sym.Enum, val); name != "" {
 				attrs = append(attrs, attribute.String(sym.Name+"_status", name))
