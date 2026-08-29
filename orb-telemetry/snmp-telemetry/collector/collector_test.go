@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -113,9 +114,15 @@ func newCollector(factory snmp.ClientFactory, p *profiles.Profile) *MetricsColle
 // testDeviceStore is a test-only accessor to read the collector's internal
 // store for a device polled on the default port.
 func (c *MetricsCollector) testDeviceStore(policy, host string) map[string][]observedPoint {
+	return c.testDeviceStoreKeyed(deviceKey{policy: policy, host: host, port: 161})
+}
+
+// testDeviceStoreKeyed is a test-only accessor for a device whose identity
+// carries more than policy, host and port.
+func (c *MetricsCollector) testDeviceStoreKeyed(key deviceKey) map[string][]observedPoint {
 	c.storeMu.RLock()
 	defer c.storeMu.RUnlock()
-	return c.deviceStore[deviceKey{policy: policy, host: host, port: 161}]
+	return c.deviceStore[key]
 }
 
 func mustTarget(host string) config.Target {
@@ -880,8 +887,8 @@ func TestCollectTarget_PoliciesDoNotOverwriteEachOther(t *testing.T) {
 	targetB := config.Target{Host: host, Port: 161, ID: "id-b"}
 	require.NoError(t, c.CollectTarget(ctx, targetB, mustAuth(), "policy-b", DialOptions{}))
 
-	storeA := c.testDeviceStore("policy-a", host)
-	storeB := c.testDeviceStore("policy-b", host)
+	storeA := c.testDeviceStoreKeyed(deviceKey{policy: "policy-a", host: host, port: 161, id: "id-a"})
+	storeB := c.testDeviceStoreKeyed(deviceKey{policy: "policy-b", host: host, port: 161, id: "id-b"})
 	require.Len(t, storeA["snmp.cpuutil"], 1)
 	require.Len(t, storeB["snmp.cpuutil"], 1)
 	assert.Equal(t, int64(11), storeA["snmp.cpuutil"][0].value)
@@ -1215,6 +1222,124 @@ func TestCollectTarget_ExportedAttrsCarryEveryKeyDimension(t *testing.T) {
 		assert.Equal(t, key.policy, attrValue(pts[0], "policy"))
 		assert.Equal(t, int64(key.port), attrInt(pts[0], "device_port"),
 			"the exported identity must carry the port the internal key does")
+	}
+}
+
+// keyDimensionAttrs names the exported attribute that carries each field of
+// deviceKey. A dimension added to the internal key without an attribute here
+// fails TestDeviceKey_EveryDimensionIsExported, which is what keeps the key and
+// the exported series in step.
+var keyDimensionAttrs = map[string]string{
+	"policy":  "policy",
+	"host":    "device_ip",
+	"port":    "device_port",
+	"id":      "netbox_id",
+	"context": "snmp_context",
+}
+
+// TestDeviceKey_EveryDimensionIsExported fails when deviceKey gains a field the
+// exported attribute set does not name. Two devices the collector keeps apart
+// internally have to be distinguishable in the series it exports, or one
+// device's points land on the other's attribute set.
+func TestDeviceKey_EveryDimensionIsExported(t *testing.T) {
+	typ := reflect.TypeOf(deviceKey{})
+	for i := range typ.NumField() {
+		name := typ.Field(i).Name
+		assert.Contains(t, keyDimensionAttrs, name,
+			"deviceKey.%s distinguishes two devices but no exported attribute carries it", name)
+	}
+	assert.Len(t, keyDimensionAttrs, typ.NumField(),
+		"keyDimensionAttrs names an attribute for a field deviceKey no longer has")
+}
+
+// TestCollectTarget_SameEndpointTwiceInOnePolicy covers a policy that targets
+// one host and port more than once. The entries differ only by NetBox ID and by
+// SNMPv3 context name, and each has to keep its own observations and its own
+// exported attribute set.
+func TestCollectTarget_SameEndpointTwiceInOnePolicy(t *testing.T) {
+	const (
+		host        = "10.0.0.70"
+		cpuOID      = "1.3.6.1.4.1.9999.70.1"
+		sysObjValue = "1.3.6.1.4.1.9999.70"
+	)
+	p := profileWithOID(sysObjValue, "sameendpoint.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	makeWalker := func(v int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, v)},
+		}}
+	}
+	v3 := func(ctxName string) *config.Authentication {
+		return &config.Authentication{ProtocolVersion: "SNMPv3", Username: "poller", ContextName: ctxName}
+	}
+
+	runs := []struct {
+		target  config.Target
+		auth    *config.Authentication
+		value   int
+		wantKey deviceKey
+	}{
+		{
+			target: config.Target{Host: host, Port: 161, ID: "11"}, auth: v3("vlan-100"), value: 1,
+			wantKey: deviceKey{policy: "p", host: host, port: 161, id: "11", context: "vlan-100"},
+		},
+		{
+			target: config.Target{Host: host, Port: 161, ID: "22"}, auth: v3("vlan-100"), value: 2,
+			wantKey: deviceKey{policy: "p", host: host, port: 161, id: "22", context: "vlan-100"},
+		},
+		{
+			target: config.Target{Host: host, Port: 161, ID: "11"}, auth: v3("vlan-200"), value: 3,
+			wantKey: deviceKey{policy: "p", host: host, port: 161, id: "11", context: "vlan-200"},
+		},
+	}
+
+	c := newCollector(nil, p)
+	for _, run := range runs {
+		c.clientFactory = walkerFactory(makeWalker(run.value))
+		require.NoError(t, c.CollectTarget(context.Background(), run.target, run.auth, "p", DialOptions{}))
+	}
+
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	require.Len(t, c.deviceStore, len(runs), "each entry keeps its own observations")
+	for _, run := range runs {
+		pts := c.deviceStore[run.wantKey]["snmp.cpuutil"]
+		require.Len(t, pts, 1, "%+v", run.wantKey)
+		assert.Equal(t, int64(run.value), pts[0].value, "a later run must not replace an earlier one")
+		assert.Equal(t, run.target.ID, attrValue(pts[0], "netbox_id"))
+		assert.Equal(t, run.auth.ContextName, attrValue(pts[0], "snmp_context"))
+	}
+}
+
+// TestCollectTarget_AbsentDimensionsAreNotExported keeps the attribute set free
+// of empty dimensions: a target with no NetBox ID and no context name exports
+// neither attribute.
+func TestCollectTarget_AbsentDimensionsAreNotExported(t *testing.T) {
+	const (
+		host        = "10.0.0.71"
+		cpuOID      = "1.3.6.1.4.1.9999.71.1"
+		sysObjValue = "1.3.6.1.4.1.9999.71"
+	)
+	p := profileWithOID(sysObjValue, "absentdims.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 7)},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, pts, 1)
+	for _, kv := range pts[0].attrs {
+		assert.NotEqual(t, "netbox_id", string(kv.Key))
+		assert.NotEqual(t, "snmp_context", string(kv.Key))
 	}
 }
 

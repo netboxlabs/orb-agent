@@ -34,10 +34,22 @@ const (
 // named it: two policies may poll the same address with different credentials
 // or intervals, so their observations and poll timestamps are kept apart. Port
 // is part of the identity because one host can answer on more than one.
+//
+// One policy can also name the same endpoint more than once. Two such entries
+// are told apart by their NetBox ID and by their SNMPv3 context name, which
+// selects a different MIB view on the same agent. Credentials are not part of
+// the key: they are secret, so no attribute could carry them, and a key
+// dimension the exported series cannot express is one that silently merges two
+// devices' points.
+//
+// Every field here has an exported attribute in appendIdentityAttrs. Adding one
+// without the other is what made this identity wrong twice.
 type deviceKey struct {
-	policy string
-	host   string
-	port   uint16
+	policy  string
+	host    string
+	port    uint16
+	id      string
+	context string
 }
 
 // DialOptions carries the SNMP transport settings for one collection. They
@@ -185,11 +197,32 @@ func (c *MetricsCollector) forgetDevice(key deviceKey) {
 	c.pollMu.Unlock()
 }
 
+// appendIdentityAttrs renders every dimension of a device key as an attribute.
+// Without them the series of two devices the collector keeps apart would be
+// indistinguishable, and the observable gauge would receive duplicate points
+// for one attribute set. A dimension that is empty is left off rather than
+// exported as blank, so the common target carries no dead attributes.
+func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.KeyValue {
+	attrs = append(attrs, attribute.String("device_ip", key.host))
+	attrs = append(attrs, attribute.Int("device_port", int(key.port)))
+	attrs = append(attrs, attribute.String("policy", key.policy))
+	if key.id != "" {
+		attrs = append(attrs, attribute.String("netbox_id", key.id))
+	}
+	if key.context != "" {
+		attrs = append(attrs, attribute.String("snmp_context", key.context))
+	}
+	return attrs
+}
+
 // CollectTarget collects SNMP metrics from a single target using its matched profile.
 // Returns nil if the device has no matching profile (not an error condition).
 // A run that fails leaves nothing behind for the device it was polling.
 func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string, dial DialOptions) error {
-	key := deviceKey{policy: policyName, host: target.Host, port: target.Port}
+	key := deviceKey{policy: policyName, host: target.Host, port: target.Port, id: target.ID}
+	if auth != nil {
+		key.context = auth.ContextName
+	}
 	if err := c.collect(ctx, key, target, auth, dial); err != nil {
 		c.forgetDevice(key)
 		return err
@@ -233,19 +266,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
 	c.reportUnsupportedConversions(profile)
 
-	// The attribute set carries every dimension the device key does: two
-	// policies may poll one device, and one host may answer on more than one
-	// port, so without them the series would be indistinguishable and the
-	// observable gauge would receive duplicate points for one attribute set.
-	baseAttrs := []attribute.KeyValue{
-		attribute.String("device_ip", target.Host),
-		attribute.Int("device_port", int(key.port)),
-		attribute.String("policy", key.policy),
-	}
-	if target.ID != "" {
-		baseAttrs = append(baseAttrs, attribute.String("netbox_id", target.ID))
-	}
-	baseAttrs = c.appendDeviceTags(ctx, walker, profile, baseAttrs, sysDescr, sysOIDValue)
+	baseAttrs := c.appendDeviceTags(ctx, walker, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
 
 	// localBuf accumulates fresh observations for this run.
 	// throttledMetrics records metric names skipped due to poll_time_sec not elapsed.

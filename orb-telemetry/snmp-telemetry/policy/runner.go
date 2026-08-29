@@ -46,7 +46,7 @@ type Runner struct {
 	mu               sync.RWMutex
 	lastErr          error
 	lastErrAt        time.Time
-	targetErrs       map[string]error // key = "host:port"; initialized in NewRunner
+	targetErrs       map[string]error // key from targetErrorKey; initialized in NewRunner
 }
 
 // NewRunner returns a new policy runner.
@@ -139,7 +139,7 @@ func (r *Runner) runMetrics(target config.Target) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.metricsInterval)
 	defer cancel()
 	auth := r.resolveTargetAuthentication(target)
-	targetKey := fmt.Sprintf("%s:%d", target.Host, target.Port)
+	targetKey := targetErrorKey(target, auth)
 	dial := collector.DialOptions{Timeout: r.snmpTimeout, Retries: r.retries}
 	if err := r.metricsCollector.CollectTarget(ctx, target, auth, policyName, dial); err != nil {
 		r.logger.Warn("SNMP metrics collection failed", "host", config.SanitizeLogValue(target.Host), "policy", config.SanitizeLogValue(policyName), "error", err)
@@ -149,8 +149,25 @@ func (r *Runner) runMetrics(target config.Target) {
 	}
 }
 
+// targetErrorKey names one entry of a policy's scope. Host and port alone do
+// not: a policy may name the same endpoint more than once, and two such entries
+// are told apart by their NetBox ID and by their SNMPv3 context name, the same
+// dimensions the collector keys its observations by. Without them a healthy
+// entry would clear a failing one's error and the policy would report itself
+// healthy while half its targets were unreachable.
+func targetErrorKey(target config.Target, auth *config.Authentication) string {
+	key := fmt.Sprintf("%s:%d", target.Host, target.Port)
+	if target.ID != "" {
+		key += " id=" + target.ID
+	}
+	if auth != nil && auth.ContextName != "" {
+		key += " context=" + auth.ContextName
+	}
+	return key
+}
+
 // SetTargetError records an error for a specific target.
-// Uses "host:port" as the key. Protected by r.mu.
+// Uses targetErrorKey as the key. Protected by r.mu.
 func (r *Runner) SetTargetError(target string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
