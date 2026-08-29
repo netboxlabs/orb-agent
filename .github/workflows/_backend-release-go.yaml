@@ -11,6 +11,11 @@ on:
         description: 'Backend app name — the "<app>/v${version}" tag prefix and package name.'
         required: true
         type: string
+      parent-dir:
+        description: 'Parent directory holding the backend (orb-discovery or orb-telemetry).'
+        required: false
+        default: orb-discovery
+        type: string
     outputs:
       released:
         description: 'true if a new release was published this run.'
@@ -41,10 +46,10 @@ jobs:
         with:
           component: backend
           app-name: ${{ inputs.app-name }}
-          working-directory: orb-discovery/${{ inputs.app-name }}
+          working-directory: ${{ inputs.parent-dir }}/${{ inputs.app-name }}
       - name: Release dry-run
         id: get-next-version
-        working-directory: orb-discovery/${{ inputs.app-name }}
+        working-directory: ${{ inputs.parent-dir }}/${{ inputs.app-name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_SEMANTIC_RELEASE_WEBHOOK }}
@@ -84,9 +89,9 @@ jobs:
         with:
           component: backend
           app-name: ${{ inputs.app-name }}
-          working-directory: orb-discovery/${{ inputs.app-name }}
+          working-directory: ${{ inputs.parent-dir }}/${{ inputs.app-name }}
       - name: Release
-        working-directory: orb-discovery/${{ inputs.app-name }}
+        working-directory: ${{ inputs.parent-dir }}/${{ inputs.app-name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SLACK_WEBHOOK: ${{ secrets.SLACK_OBSERVABILITY_RELEASE_WEBHOOK }}
