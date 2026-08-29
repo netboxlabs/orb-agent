@@ -1,9 +1,9 @@
 # Contributing to orb-agent
 
-orb-agent hosts the discovery backends (device, network, snmp, gnmi) and the
-worker alongside the agent in a single repository. To keep versioning and
-release notes coherent across all of these, the release pipeline keys off
-**PR titles** — so titles must follow the convention below.
+orb-agent hosts the discovery backends (device, network, snmp, gnmi), the snmp
+telemetry backend, and the worker alongside the agent in a single repository. To
+keep versioning and release notes coherent across all of these, the release
+pipeline keys off **PR titles** — so titles must follow the convention below.
 
 ## How releases work
 
