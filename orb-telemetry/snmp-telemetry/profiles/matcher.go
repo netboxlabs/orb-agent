@@ -60,26 +60,22 @@ func (c keyClaims) pick(keep func(*Profile) bool) *Profile {
 // NewMatcher builds a Matcher from a list of fully-resolved profiles.
 // Profiles without any sysobjectid entries are ignored (they are base/inherited profiles).
 //
-// Two profiles can claim the same sysObjectID, or the same basename that a
-// `matches` redirect names. keyClaims resolves those and
+// Two profiles can claim the same sysObjectID, exact or wildcard, or the same
+// basename that a `matches` redirect names. keyClaims resolves those and
 // reportShadowed reports the ones an operator can act on. Pass profiles in a
 // stable order (Loader.AllResolved sorts them) so a tie between two profiles of
 // the same origin does not move between restarts.
 func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 	byBase := make(map[string]keyClaims)
 	byExact := make(map[string]keyClaims)
+	byWildcard := make(map[string]keyClaims)
 
-	m := &Matcher{
-		exactIndex:    make(map[string]*Profile),
-		profileByFile: make(map[string]*Profile),
-	}
 	for _, p := range profiles {
 		byBase[p.FileName] = append(byBase[p.FileName], p)
 		for _, raw := range p.SysObjectID {
 			oid := normalizeOID(raw)
 			if strings.HasSuffix(oid, ".*") {
-				prefix := strings.TrimSuffix(oid, "*")
-				m.wildcardIndex = append(m.wildcardIndex, wildcardEntry{prefix: prefix, profile: p})
+				byWildcard[oid] = append(byWildcard[oid], p)
 			} else {
 				byExact[oid] = append(byExact[oid], p)
 			}
@@ -88,16 +84,33 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 
 	reportShadowed(byBase, logger, "basename")
 	reportShadowed(byExact, logger, "sysobjectid")
+	reportShadowed(byWildcard, logger, "sysobjectid")
 
+	m := &Matcher{
+		exactIndex:    make(map[string]*Profile, len(byExact)),
+		profileByFile: make(map[string]*Profile, len(byBase)),
+		wildcardIndex: make([]wildcardEntry, 0, len(byWildcard)),
+	}
 	for base, claims := range byBase {
 		m.profileByFile[base] = claims.kept()
 	}
 	for oid, claims := range byExact {
 		m.exactIndex[oid] = claims.kept()
 	}
-	// Sort wildcard entries by descending prefix length so the most specific match wins.
+	for oid, claims := range byWildcard {
+		m.wildcardIndex = append(m.wildcardIndex, wildcardEntry{
+			prefix:  strings.TrimSuffix(oid, "*"),
+			profile: claims.kept(),
+		})
+	}
+	// Longest prefix first so the most specific wildcard wins. Prefixes of
+	// equal length are ordered by value: the slice is built by ranging a map,
+	// so without that second key a tie would land differently on each restart.
 	slices.SortFunc(m.wildcardIndex, func(a, b wildcardEntry) int {
-		return len(b.prefix) - len(a.prefix)
+		if len(a.prefix) != len(b.prefix) {
+			return len(b.prefix) - len(a.prefix)
+		}
+		return strings.Compare(a.prefix, b.prefix)
 	})
 	return m
 }

@@ -104,7 +104,8 @@ bundled path. Its filename appears nowhere in the bundled set, so it replaces
 nothing by design and loads without a warning.
 
 Where an override and a bundled profile claim the same `sysobjectid`, the
-override wins and the collision is logged.
+override wins and the collision is logged. That covers patterns ending in `*`
+as well as exact OIDs.
 
 The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the

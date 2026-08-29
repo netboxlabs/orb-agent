@@ -215,6 +215,59 @@ func tagColumnNames(p *Profile) []string {
 	return names
 }
 
+// bundledWildcardOID is a wildcard sysObjectID carried by exactly one bundled
+// profile. The fixture names below sort either side of that profile's relative
+// path, so neither order can win on index position alone.
+const (
+	bundledWildcardOID  = "1.3.6.1.4.1.6574.*"
+	bundledWildcardPath = "synology/disk_station.yml"
+	bundledWildcardFile = "disk_station.yml"
+	wildcardProbeOID    = "1.3.6.1.4.1.6574.1"
+)
+
+// The override-wins tiebreak was applied only to the exact sysObjectID index,
+// so an override claiming a wildcard pattern won or lost on its position in
+// the wildcard slice. Probing all 157 bundled wildcard patterns, the override
+// lost 56 of them under one fixture name and 64 under another, silently.
+func TestMatcher_OverrideWinsCollidingWildcardSysObjectID(t *testing.T) {
+	for _, name := range []string{"aa-wildcard.yml", "zz-wildcard.yml"} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, name == "zz-wildcard.yml", name > bundledWildcardPath,
+				"the two fixtures must sort either side of the bundled profile")
+
+			dir := t.TempDir()
+			writeYAML(t, dir, name, "sysobjectid: "+bundledWildcardOID+"\n")
+
+			l, err := LoadProfiles(dir, silentLogger)
+			require.NoError(t, err)
+			all, err := l.AllResolved()
+			require.NoError(t, err)
+
+			got, ok := NewMatcher(all, silentLogger).Match(wildcardProbeOID)
+			require.True(t, ok)
+			assert.Equal(t, name, got.FileName, "the override profile must win the wildcard too")
+		})
+	}
+}
+
+func TestMatcher_WarnsOnCollidingWildcardSysObjectID(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "zz-wildcard.yml", "sysobjectid: "+bundledWildcardOID+"\n")
+
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	logger, buf := captureLogger()
+	NewMatcher(all, logger)
+
+	out := buf.String()
+	assert.Contains(t, out, bundledWildcardOID)
+	assert.Contains(t, out, "zz-wildcard.yml")
+	assert.Contains(t, out, bundledWildcardFile)
+}
+
 // Nine bundled files are named traps.yml. Overriding one of them at its own
 // path is correct use of the override directory, but the origin comparison
 // paired the override against each of the other eight and warned about every
