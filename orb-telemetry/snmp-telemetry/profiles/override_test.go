@@ -15,6 +15,11 @@ import (
 const (
 	bundledExactOID  = "1.3.6.1.4.1.890.1.15"
 	bundledExactFile = "zyxel-switch.yml"
+	bundledExactPath = "zyxel/zyxel-switch.yml"
+
+	// overrideAfterBundled sorts after bundledExactPath, so an override under
+	// this name only wins on the override-beats-bundled tiebreak.
+	overrideAfterBundled = "zz-zyxel.yml"
 )
 
 func captureLogger() (*slog.Logger, *bytes.Buffer) {
@@ -46,9 +51,16 @@ func TestAllResolved_StableOrder(t *testing.T) {
 // An override file placed at the wrong relative path still claims its
 // sysObjectID. The winner used to be decided by map iteration order, so the
 // same install matched a different profile on each restart.
+//
+// The fixture name has to sort AFTER the bundled profile's relative path.
+// Sorting before it lets first-one-indexed-wins produce the right answer on
+// its own, which is what an earlier version of this test measured.
 func TestMatcher_OverrideWinsCollidingSysObjectID(t *testing.T) {
+	require.Greater(t, overrideAfterBundled, bundledExactPath,
+		"the fixture must sort after the bundled profile or the tiebreak is not exercised")
+
 	dir := t.TempDir()
-	writeYAML(t, dir, "my-zyxel.yml", `
+	writeYAML(t, dir, overrideAfterBundled, `
 sysobjectid: `+bundledExactOID+`
 metrics:
   - symbol:
@@ -67,7 +79,7 @@ metrics:
 
 		got, ok := NewMatcher(all, silentLogger).Match(bundledExactOID)
 		require.True(t, ok)
-		assert.Equal(t, "my-zyxel.yml", got.FileName, "the override profile must win every time")
+		assert.Equal(t, overrideAfterBundled, got.FileName, "the override profile must win every time")
 	}
 }
 
