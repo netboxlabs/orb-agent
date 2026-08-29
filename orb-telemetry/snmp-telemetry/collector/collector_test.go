@@ -102,11 +102,12 @@ func newCollector(factory snmp.ClientFactory, p *profiles.Profile) *MetricsColle
 	return NewMetricsCollector(factory, matcher, discardLogger, time.Second, 1)
 }
 
-// deviceStore is a test-only accessor to read the collector's internal store.
-func (c *MetricsCollector) testDeviceStore(host string) map[string][]observedPoint {
+// testDeviceStore is a test-only accessor to read the collector's internal
+// store for a device polled on the default port.
+func (c *MetricsCollector) testDeviceStore(policy, host string) map[string][]observedPoint {
 	c.storeMu.RLock()
 	defer c.storeMu.RUnlock()
-	return c.deviceStore[host]
+	return c.deviceStore[deviceKey{policy: policy, host: host, port: 161}]
 }
 
 func mustTarget(host string) config.Target {
@@ -206,31 +207,39 @@ func TestBuildMetricName(t *testing.T) {
 // Unit tests: isPollReady
 // ---------------------------------------------------------------------------
 
+func testKey(policy, host string) deviceKey {
+	return deviceKey{policy: policy, host: host, port: 161}
+}
+
 func TestIsPollReady_ZeroAlwaysReady(t *testing.T) {
 	c := newCollector(nil, nil)
-	assert.True(t, c.isPollReady("host1", "1.2.3", 0))
-	assert.True(t, c.isPollReady("host1", "1.2.3", 0))
+	k := testKey("p", "host1")
+	assert.True(t, c.isPollReady(k, "1.2.3", 0))
+	assert.True(t, c.isPollReady(k, "1.2.3", 0))
 }
 
 func TestIsPollReady_ThrottleAndExpiry(t *testing.T) {
 	c := newCollector(nil, nil)
+	k := testKey("p", "host1")
 	// First call: ready.
-	assert.True(t, c.isPollReady("host1", "1.2.3", 60))
+	assert.True(t, c.isPollReady(k, "1.2.3", 60))
 	// Immediately after: not ready.
-	assert.False(t, c.isPollReady("host1", "1.2.3", 60))
+	assert.False(t, c.isPollReady(k, "1.2.3", 60))
 	// Simulate time elapsed by backdating the last-poll entry.
 	c.pollMu.Lock()
-	c.pollState["host1"]["1.2.3"] = time.Now().Add(-61 * time.Second)
+	c.pollState[k]["1.2.3"] = time.Now().Add(-61 * time.Second)
 	c.pollMu.Unlock()
 	// Now it should be ready again.
-	assert.True(t, c.isPollReady("host1", "1.2.3", 60))
+	assert.True(t, c.isPollReady(k, "1.2.3", 60))
 }
 
-func TestIsPollReady_IndependentPerHost(t *testing.T) {
+func TestIsPollReady_IndependentPerDevice(t *testing.T) {
 	c := newCollector(nil, nil)
-	assert.True(t, c.isPollReady("host1", "1.2.3", 60))
-	assert.True(t, c.isPollReady("host2", "1.2.3", 60)) // different host, same OID: independent
-	assert.False(t, c.isPollReady("host1", "1.2.3", 60))
+	assert.True(t, c.isPollReady(testKey("p", "host1"), "1.2.3", 60))
+	assert.True(t, c.isPollReady(testKey("p", "host2"), "1.2.3", 60)) // different host, same OID
+	assert.True(t, c.isPollReady(testKey("q", "host1"), "1.2.3", 60)) // different policy, same host
+	assert.True(t, c.isPollReady(deviceKey{policy: "p", host: "host1", port: 1161}, "1.2.3", 60))
+	assert.False(t, c.isPollReady(testKey("p", "host1"), "1.2.3", 60))
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +253,7 @@ func TestCollectTarget_NoProfileMatch(t *testing.T) {
 	c := newCollector(walkerFactory(w), nil) // matcher has no profiles
 	err := c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "policy1")
 	assert.NoError(t, err)
-	assert.Nil(t, c.testDeviceStore("10.0.0.1"))
+	assert.Nil(t, c.testDeviceStore("policy1", "10.0.0.1"))
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +279,7 @@ func TestCollectTarget_ScalarMetric(t *testing.T) {
 	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "policy1")
 	require.NoError(t, err)
 
-	store := c.testDeviceStore(host)
+	store := c.testDeviceStore("policy1", host)
 	require.NotNil(t, store)
 	pts := store["snmp.cpuutil"]
 	require.Len(t, pts, 1)
@@ -318,7 +327,7 @@ func TestCollectTarget_TableWithTags(t *testing.T) {
 	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "policy1")
 	require.NoError(t, err)
 
-	store := c.testDeviceStore(host)
+	store := c.testDeviceStore("policy1", host)
 	pts := store["snmp.ifouterrors"]
 	require.Len(t, pts, 2)
 
@@ -373,7 +382,7 @@ func TestCollectTarget_ThrottledMetricCarriesForward(t *testing.T) {
 	c.clientFactory = walkerFactory(makeWalker(1, 100))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
 
-	store := c.testDeviceStore(host)
+	store := c.testDeviceStore("p", host)
 	assert.Equal(t, int64(1), store["snmp.fastmetric"][0].value)
 	assert.Equal(t, int64(100), store["snmp.slowmetric"][0].value)
 
@@ -382,7 +391,7 @@ func TestCollectTarget_ThrottledMetricCarriesForward(t *testing.T) {
 	c.clientFactory = walkerFactory(makeWalker(2, 999))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
 
-	store = c.testDeviceStore(host)
+	store = c.testDeviceStore("p", host)
 	assert.Equal(t, int64(2), store["snmp.fastmetric"][0].value, "fast metric should be updated")
 	assert.Equal(t, int64(100), store["snmp.slowmetric"][0].value, "slow metric should retain last-known value")
 }
@@ -415,12 +424,12 @@ func TestCollectTarget_PolledButEmptyIsCleared(t *testing.T) {
 	// First run: metric present.
 	c.clientFactory = walkerFactory(makeWalker(true))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
-	assert.Len(t, c.testDeviceStore(host)["snmp.somemetric"], 1)
+	assert.Len(t, c.testDeviceStore("p", host)["snmp.somemetric"], 1)
 
 	// Second run: metric OID returns empty (OID vanished from device).
 	c.clientFactory = walkerFactory(makeWalker(false))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
-	assert.Empty(t, c.testDeviceStore(host)["snmp.somemetric"], "polled-but-empty metric should be cleared")
+	assert.Empty(t, c.testDeviceStore("p", host)["snmp.somemetric"], "polled-but-empty metric should be cleared")
 }
 
 // ---------------------------------------------------------------------------
@@ -520,7 +529,7 @@ func TestCollectTarget_WalkFullTable(t *testing.T) {
 	}
 	assert.Contains(t, w.walkCalls, tableOID)
 
-	store := c.testDeviceStore(host)
+	store := c.testDeviceStore("p", host)
 	pts := store["snmp.ifouterrors"]
 	require.Len(t, pts, 2)
 }
@@ -563,7 +572,7 @@ func TestCollectTarget_GroupedScalarSymbols(t *testing.T) {
 
 	assert.Contains(t, w.walkCalls, tempFOID, "grouped scalar OID must be walked")
 
-	store := c.testDeviceStore(host)
+	store := c.testDeviceStore("p", host)
 	require.Len(t, store["snmp.internal-tempf"], 1)
 	assert.Equal(t, int64(72), store["snmp.internal-tempf"][0].value)
 	require.Len(t, store["snmp.internal-humidity"], 1)
@@ -585,7 +594,7 @@ func TestCollectTarget_GroupedScalarSymbolsCarryEnum(t *testing.T) {
 	c := newBundledCollector(t, walkerFactory(w))
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
 
-	pts := c.testDeviceStore(host)["snmp.internal-power"]
+	pts := c.testDeviceStore("p", host)["snmp.internal-power"]
 	require.Len(t, pts, 1)
 	assert.Equal(t, "ac", attrValue(pts[0], "internal-power_status"))
 }
@@ -629,7 +638,7 @@ func TestCollectTarget_ProfileMetricTagsBecomeDeviceAttributes(t *testing.T) {
 	c := newBundledCollector(t, walkerFactory(w))
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
 
-	pts := c.testDeviceStore(host)["snmp.internal-tempf"]
+	pts := c.testDeviceStore("p", host)["snmp.internal-tempf"]
 	require.Len(t, pts, 1)
 	assert.Equal(t, "sensor-1", attrValue(pts[0], "SysName"))
 	assert.Equal(t, "rack 4", attrValue(pts[0], "SysLocation"))
@@ -691,7 +700,7 @@ func TestCollectTarget_ProfileMetricTagsReachTableRows(t *testing.T) {
 	c := newCollector(walkerFactory(w), p)
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
 
-	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 1)
 	assert.Equal(t, "sensor-1", attrValue(pts[0], "SysName"))
 	assert.Equal(t, "eth0", attrValue(pts[0], "if_desc"))
@@ -735,7 +744,7 @@ func TestCollectTarget_TableRowIndexIgnoresLeadingDot(t *testing.T) {
 	c := newCollector(walkerFactory(w), p)
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
 
-	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 2)
 
 	byRow := map[string]string{}
@@ -777,7 +786,7 @@ func TestCollectTarget_WalkFullTableIgnoresLeadingDot(t *testing.T) {
 	c := newCollector(walkerFactory(w), p)
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
 
-	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 1)
 	assert.Equal(t, "7", attrValue(pts[0], "row_index"))
 	assert.Equal(t, "eth0", attrValue(pts[0], "if_desc"))
@@ -817,8 +826,117 @@ func TestCollectTarget_ConditionJoinIgnoresLeadingDot(t *testing.T) {
 	c := newCollector(walkerFactory(w), p)
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
 
-	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 1, "only the row whose condition column equals 1 is emitted")
 	assert.Equal(t, int64(10), pts[0].value)
 	assert.Equal(t, "1", attrValue(pts[0], "row_index"))
+}
+
+// ---------------------------------------------------------------------------
+// Per-policy device identity
+// ---------------------------------------------------------------------------
+
+func TestCollectTarget_PoliciesDoNotOverwriteEachOther(t *testing.T) {
+	const (
+		host        = "10.0.0.20"
+		cpuOID      = "1.3.6.1.4.1.9999.20.1"
+		sysObjValue = "1.3.6.1.4.1.9999.20"
+	)
+	p := profileWithOID(sysObjValue, "shared.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	makeWalker := func(v int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, v)},
+		}}
+	}
+
+	c := newCollector(nil, p)
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(11))
+	targetA := config.Target{Host: host, Port: 161, ID: "id-a"}
+	require.NoError(t, c.CollectTarget(ctx, targetA, mustAuth(), "policy-a"))
+
+	c.clientFactory = walkerFactory(makeWalker(22))
+	targetB := config.Target{Host: host, Port: 161, ID: "id-b"}
+	require.NoError(t, c.CollectTarget(ctx, targetB, mustAuth(), "policy-b"))
+
+	storeA := c.testDeviceStore("policy-a", host)
+	storeB := c.testDeviceStore("policy-b", host)
+	require.Len(t, storeA["snmp.cpuutil"], 1)
+	require.Len(t, storeB["snmp.cpuutil"], 1)
+	assert.Equal(t, int64(11), storeA["snmp.cpuutil"][0].value)
+	assert.Equal(t, int64(22), storeB["snmp.cpuutil"][0].value)
+	assert.Equal(t, "id-a", attrValue(storeA["snmp.cpuutil"][0], "netbox_id"))
+	assert.Equal(t, "id-b", attrValue(storeB["snmp.cpuutil"][0], "netbox_id"))
+
+	// The two series would otherwise be indistinguishable at the OTLP endpoint.
+	assert.Equal(t, "policy-a", attrValue(storeA["snmp.cpuutil"][0], "policy"))
+	assert.Equal(t, "policy-b", attrValue(storeB["snmp.cpuutil"][0], "policy"))
+}
+
+func TestCollectTarget_SameHostDifferentPortStaysSeparate(t *testing.T) {
+	const (
+		host        = "10.0.0.21"
+		cpuOID      = "1.3.6.1.4.1.9999.21.1"
+		sysObjValue = "1.3.6.1.4.1.9999.21"
+	)
+	p := profileWithOID(sysObjValue, "ports.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	makeWalker := func(v int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, v)},
+		}}
+	}
+
+	c := newCollector(nil, p)
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(5))
+	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 161}, mustAuth(), "p"))
+	c.clientFactory = walkerFactory(makeWalker(6))
+	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 1161}, mustAuth(), "p"))
+
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	assert.Equal(t, int64(5), c.deviceStore[deviceKey{policy: "p", host: host, port: 161}]["snmp.cpuutil"][0].value)
+	assert.Equal(t, int64(6), c.deviceStore[deviceKey{policy: "p", host: host, port: 1161}]["snmp.cpuutil"][0].value)
+}
+
+func TestCollectTarget_PollStateIsPerPolicy(t *testing.T) {
+	const (
+		host        = "10.0.0.22"
+		slowOID     = "1.3.6.1.4.1.9999.22.1"
+		sysObjValue = "1.3.6.1.4.1.9999.22"
+	)
+	p := profileWithOID(sysObjValue, "throttled.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "slowMetric", OID: slowOID, PollTimeSec: 300}},
+	})
+	makeWalker := func(v int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			slowOID:        {slowOID: intPDU(slowOID, v)},
+		}}
+	}
+
+	c := newCollector(nil, p)
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(100))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "policy-a"))
+
+	// Policy B has never polled this OID, so the throttle must not apply and
+	// policy A's value must not be carried into policy B's store.
+	c.clientFactory = walkerFactory(makeWalker(999))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "policy-b"))
+
+	require.Len(t, c.testDeviceStore("policy-b", host)["snmp.slowmetric"], 1)
+	assert.Equal(t, int64(999), c.testDeviceStore("policy-b", host)["snmp.slowmetric"][0].value)
 }

@@ -30,6 +30,16 @@ const (
 	sysNameOID     = "1.3.6.1.2.1.1.5"
 )
 
+// deviceKey identifies one polled device. A device belongs to the policy that
+// named it: two policies may poll the same address with different credentials
+// or intervals, so their observations and poll timestamps are kept apart. Port
+// is part of the identity because one host can answer on more than one.
+type deviceKey struct {
+	policy string
+	host   string
+	port   uint16
+}
+
 // observedPoint holds a single metric observation with its attribute set.
 type observedPoint struct {
 	value int64
@@ -46,12 +56,12 @@ type MetricsCollector struct {
 	retries       int
 
 	pollMu    sync.Mutex
-	pollState map[string]map[string]time.Time // host -> symbolOID -> lastPoll
+	pollState map[deviceKey]map[string]time.Time // device -> symbolOID -> lastPoll
 
-	// Observable gauge store: device_ip -> metricName -> observations.
+	// Observable gauge store: device -> metricName -> observations.
 	// Updated after each CollectTarget run; read by OTLP callbacks on every export cycle.
 	storeMu     sync.RWMutex
-	deviceStore map[string]map[string][]observedPoint
+	deviceStore map[deviceKey]map[string][]observedPoint
 
 	// Registered observable gauge instruments (one per unique metric name).
 	gaugeMu       sync.Mutex
@@ -67,28 +77,28 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 		logger:        logger,
 		snmpTimeout:   snmpTimeout,
 		retries:       retries,
-		pollState:     make(map[string]map[string]time.Time),
-		deviceStore:   make(map[string]map[string][]observedPoint),
+		pollState:     make(map[deviceKey]map[string]time.Time),
+		deviceStore:   make(map[deviceKey]map[string][]observedPoint),
 		instruments:   make(map[string]metric.Int64ObservableGauge),
 	}
 }
 
-// isPollReady returns true if the symbol OID is due to be polled for the given host.
+// isPollReady returns true if the symbol OID is due to be polled for the given device.
 // pollTimeSec == 0 means always poll. Updates the last-poll timestamp on true.
-func (c *MetricsCollector) isPollReady(host, oid string, pollTimeSec int) bool {
+func (c *MetricsCollector) isPollReady(key deviceKey, oid string, pollTimeSec int) bool {
 	if pollTimeSec <= 0 {
 		return true
 	}
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
-	if c.pollState[host] == nil {
-		c.pollState[host] = make(map[string]time.Time)
+	if c.pollState[key] == nil {
+		c.pollState[key] = make(map[string]time.Time)
 	}
 	now := time.Now()
-	if last, ok := c.pollState[host][oid]; ok && now.Before(last.Add(time.Duration(pollTimeSec)*time.Second)) {
+	if last, ok := c.pollState[key][oid]; ok && now.Before(last.Add(time.Duration(pollTimeSec)*time.Second)) {
 		return false
 	}
-	c.pollState[host][oid] = now
+	c.pollState[key][oid] = now
 	return true
 }
 
@@ -132,7 +142,8 @@ func (c *MetricsCollector) ensureInstrument(name, description string) {
 
 // CollectTarget collects SNMP metrics from a single target using its matched profile.
 // Returns nil if the device has no matching profile (not an error condition).
-func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, _ string) error {
+func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string) error {
+	key := deviceKey{policy: policyName, host: target.Host, port: target.Port}
 	walker, err := c.clientFactory(target.Host, target.Port, c.retries, c.snmpTimeout, auth, c.logger)
 	if err != nil {
 		return fmt.Errorf("creating SNMP client for %s: %w", target.Host, err)
@@ -163,8 +174,11 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 	}
 	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
 
+	// The policy name is part of the attribute set because two policies may
+	// poll the same device; without it their series would be indistinguishable.
 	baseAttrs := []attribute.KeyValue{
 		attribute.String("device_ip", target.Host),
+		attribute.String("policy", policyName),
 	}
 	if target.ID != "" {
 		baseAttrs = append(baseAttrs, attribute.String("netbox_id", target.ID))
@@ -182,14 +196,14 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 		}
 		switch {
 		case entry.Symbol != nil:
-			c.collectScalar(ctx, walker, entry.Symbol, baseAttrs, target.Host, localBuf, throttledMetrics)
+			c.collectScalar(ctx, walker, entry.Symbol, baseAttrs, key, localBuf, throttledMetrics)
 		case entry.Table != nil:
-			c.collectTable(ctx, walker, &entry, baseAttrs, target.Host, localBuf, throttledMetrics)
+			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttledMetrics)
 		case len(entry.Symbols) > 0:
 			// Scalars grouped under `symbols:` with no `table:`. Almost all of
 			// them name a `.0` instance, so they collect as scalars.
 			for i := range entry.Symbols {
-				c.collectScalar(ctx, walker, &entry.Symbols[i], baseAttrs, target.Host, localBuf, throttledMetrics)
+				c.collectScalar(ctx, walker, &entry.Symbols[i], baseAttrs, key, localBuf, throttledMetrics)
 			}
 		}
 	}
@@ -199,7 +213,7 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 	// - polled metrics: use fresh values from localBuf (empty = device doesn't support that OID)
 	// This prevents stale rows from persisting when a table row disappears.
 	c.storeMu.Lock()
-	prevStore := c.deviceStore[target.Host]
+	prevStore := c.deviceStore[key]
 	newStore := make(map[string][]observedPoint, len(localBuf)+len(throttledMetrics))
 	for metricName := range throttledMetrics {
 		if pts, ok := prevStore[metricName]; ok {
@@ -209,7 +223,7 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 	for name, pts := range localBuf {
 		newStore[name] = pts
 	}
-	c.deviceStore[target.Host] = newStore
+	c.deviceStore[key] = newStore
 	c.storeMu.Unlock()
 
 	// Ensure an observable gauge callback is registered for each metric name.
@@ -286,9 +300,9 @@ func firstTagValue(pdus map[string]snmp.PDU, col *profiles.TagColumn) string {
 
 // collectScalar collects a single scalar OID metric into localBuf.
 // Records the metric name in throttledMetrics when poll_time_sec has not elapsed.
-func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, host string, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
+func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
 	metricName := buildMetricName(sym.Name)
-	if !c.isPollReady(host, sym.OID, sym.PollTimeSec) {
+	if !c.isPollReady(key, sym.OID, sym.PollTimeSec) {
 		throttledMetrics[metricName] = struct{}{}
 		return
 	}
@@ -329,7 +343,7 @@ type conditionCheck struct {
 }
 
 // collectTable collects all columns in an SNMP table, joining metric and tag columns by row index.
-func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, host string, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
+func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
 	// --- Phase 1: decide which symbols need polling this run ---
 	type symState struct {
 		sym       *profiles.Symbol
@@ -339,7 +353,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	anyActive := false
 	for i := range entry.Symbols {
 		sym := &entry.Symbols[i]
-		if c.isPollReady(host, sym.OID, sym.PollTimeSec) {
+		if c.isPollReady(key, sym.OID, sym.PollTimeSec) {
 			states[i] = symState{sym: sym, throttled: false}
 			anyActive = true
 		} else {
