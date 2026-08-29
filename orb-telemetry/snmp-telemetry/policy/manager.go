@@ -142,8 +142,10 @@ func (m *Manager) HasPolicy(name string) bool {
 // paths are both accepted; the directory is documented as neither.
 func validateProfilesDir(dir string) (string, error) {
 	clean := filepath.Clean(dir)
-	if strings.Contains(clean, "..") {
-		return "", fmt.Errorf(`SNMP profiles directory must not contain "..": %s`, dir)
+	for _, part := range strings.Split(clean, string(filepath.Separator)) {
+		if part == ".." {
+			return "", fmt.Errorf(`SNMP profiles directory must not contain a ".." element: %s`, dir)
+		}
 	}
 	return clean, nil
 }

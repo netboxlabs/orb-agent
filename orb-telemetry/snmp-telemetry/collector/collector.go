@@ -138,7 +138,7 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 	}
 	defer func() {
 		if err := walker.Close(); err != nil {
-			c.logger.Warn("Error closing SNMP connection", "host", target.Host, "error", err)
+			c.logger.Warn("Error closing SNMP connection", "host", config.SanitizeLogValue(target.Host), "error", err)
 		}
 	}()
 
@@ -157,10 +157,10 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 
 	profile, ok := c.matcher.MatchWithDescr(sysOIDValue, sysDescr)
 	if !ok {
-		c.logger.Debug("No SNMP profile matched, skipping metrics collection", "host", target.Host, "sysObjectID", sysOIDValue)
+		c.logger.Debug("No SNMP profile matched, skipping metrics collection", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue))
 		return nil
 	}
-	c.logger.Debug("Matched SNMP profile", "host", target.Host, "sysObjectID", sysOIDValue, "profile", profile.FileName)
+	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
 
 	baseAttrs := []attribute.KeyValue{
 		attribute.String("device_ip", target.Host),

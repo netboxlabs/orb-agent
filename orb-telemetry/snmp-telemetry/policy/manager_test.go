@@ -524,3 +524,32 @@ policies:
 	require.NoError(t, err, "an unrecognized key stays non-fatal")
 	assert.Contains(t, buf.String(), "snmp_timout")
 }
+
+// TestValidateProfilesDir_DotsInNames covers names that merely contain dots.
+// filepath.Clean resolves an interior "..", so only a leading one survives to be
+// rejected; a cleaned absolute path is an ordinary directory the operator could
+// have named outright.
+func TestValidateProfilesDir_DotsInNames(t *testing.T) {
+	tests := []struct {
+		name    string
+		dir     string
+		want    string
+		wantErr bool
+	}{
+		{name: "dots inside a directory name", dir: "/opt/a..b", want: "/opt/a..b"},
+		{name: "trailing dots in a name", dir: "/opt/profiles..", want: "/opt/profiles.."},
+		{name: "interior traversal is resolved", dir: "/opt/profiles/../../etc", want: "/etc"},
+		{name: "leading traversal is rejected", dir: "../../etc", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := validateProfilesDir(tt.dir)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}

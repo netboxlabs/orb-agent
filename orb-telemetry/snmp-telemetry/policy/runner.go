@@ -104,13 +104,13 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 // runMetrics collects SNMP operational metrics from a target using its matched profile.
 func (r *Runner) runMetrics(target config.Target) {
 	policyName := r.ctx.Value(policyKey).(string)
-	r.logger.Debug("Running SNMP metrics collection", "host", target.Host, "policy", policyName)
+	r.logger.Debug("Running SNMP metrics collection", "host", config.SanitizeLogValue(target.Host), "policy", config.SanitizeLogValue(policyName))
 	ctx, cancel := context.WithTimeout(r.ctx, r.metricsInterval)
 	defer cancel()
 	auth := r.resolveTargetAuthentication(target)
 	targetKey := fmt.Sprintf("%s:%d", target.Host, target.Port)
 	if err := r.metricsCollector.CollectTarget(ctx, target, auth, policyName); err != nil {
-		r.logger.Warn("SNMP metrics collection failed", "host", target.Host, "policy", policyName, "error", err)
+		r.logger.Warn("SNMP metrics collection failed", "host", config.SanitizeLogValue(target.Host), "policy", config.SanitizeLogValue(policyName), "error", err)
 		r.SetTargetError(targetKey, err)
 	} else {
 		r.ClearTargetError(targetKey)
