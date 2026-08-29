@@ -60,7 +60,7 @@ func (r *recordingWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
 
 // walkerFactory returns a ClientFactory that always returns the same walker.
 func walkerFactory(w snmp.Walker) snmp.ClientFactory {
-	return func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+	return func(_ context.Context, _ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return w, nil
 	}
 }
@@ -1027,7 +1027,7 @@ func TestCollectTarget_FailedDeviceStopsExporting(t *testing.T) {
 	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
 
 	// The device stops answering: the dial itself now fails.
-	c.clientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+	c.clientFactory = func(_ context.Context, _ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return nil, assert.AnError
 	}
 	require.Error(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
@@ -1076,7 +1076,7 @@ func TestCollectTarget_UsesCallerDialOptions(t *testing.T) {
 	}}
 	var gotTimeout time.Duration
 	var gotRetries int
-	c := newCollector(func(_ string, _ uint16, retries int, timeout time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+	c := newCollector(func(_ context.Context, _ string, _ uint16, retries int, timeout time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		gotTimeout, gotRetries = timeout, retries
 		return w, nil
 	}, nil)
@@ -2119,3 +2119,24 @@ func TestCollectTarget_UnusableConditionIsStillReported(t *testing.T) {
 
 	assert.Contains(t, logs.String(), "names no symbol or tag column in this entry")
 }
+
+// TestCollectTarget_PassesCollectionContextToFactory pins that the run's
+// context reaches the SNMP client. Without it the client cannot stop when the
+// collection is cancelled, and its retry sequence outlives the run.
+func TestCollectTarget_PassesCollectionContextToFactory(t *testing.T) {
+	var got context.Context
+	c := newCollector(func(ctx context.Context, _ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		got = ctx
+		return &recordingWalker{}, nil
+	}, nil)
+
+	ctx := context.WithValue(context.Background(), testCtxKey{}, "run-1")
+	// The walker answers nothing, so the run fails at sysObjectID. The client
+	// was still built, which is the whole of what this pins.
+	_ = c.CollectTarget(ctx, mustTarget("10.0.0.72"), mustAuth(), "p", DialOptions{})
+	require.NotNil(t, got)
+	assert.Equal(t, "run-1", got.Value(testCtxKey{}))
+}
+
+// testCtxKey marks the context a test hands to CollectTarget.
+type testCtxKey struct{}

@@ -86,8 +86,8 @@ func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCo
 		return nil, fmt.Errorf("resolving SNMP profiles: %w", err)
 	}
 	matcher := profiles.NewMatcher(resolved, m.logger)
-	clientFactory := func(host string, port uint16, retries int, timeout time.Duration, auth *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
-		return snmp.NewClient(host, port, retries, timeout, auth, logger)
+	clientFactory := func(ctx context.Context, host string, port uint16, retries int, timeout time.Duration, auth *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
+		return snmp.NewClient(ctx, host, port, retries, timeout, auth, logger)
 	}
 	// Dial settings are per policy, so they are passed to each collection
 	// rather than baked into the collector shared by every policy using this

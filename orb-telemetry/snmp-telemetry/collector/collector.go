@@ -231,7 +231,7 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 }
 
 func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target config.Target, auth *config.Authentication, dial DialOptions) error {
-	walker, err := c.clientFactory(target.Host, target.Port, dial.Retries, dial.Timeout, auth, c.logger)
+	walker, err := c.clientFactory(ctx, target.Host, target.Port, dial.Retries, dial.Timeout, auth, c.logger)
 	if err != nil {
 		return fmt.Errorf("creating SNMP client for %s: %w", target.Host, err)
 	}

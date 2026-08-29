@@ -82,10 +82,19 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if runner.retries < 0 {
 		runner.retries = 0
 	}
-	// Each run is bounded by metrics_interval, so a dial allowed to take the
-	// whole interval leaves no room for the walks that follow it.
-	if runner.snmpTimeout >= runner.metricsInterval {
-		return nil, fmt.Errorf("snmp_timeout (%s) must be less than metrics_interval (%s)", runner.snmpTimeout, runner.metricsInterval)
+	// Each run is bounded by metrics_interval, and a timed-out request is
+	// retried at the same timeout, so one request may take snmp_timeout times
+	// retries+1. A policy whose ceiling reaches the interval leaves no room for
+	// the walks that follow. Attempts are capped before the multiply so an
+	// outsized retries count cannot overflow it; the cap is already past the
+	// interval, so it cannot turn a rejection into an acceptance.
+	attempts := min(int64(runner.retries)+1, int64(runner.metricsInterval/runner.snmpTimeout)+1)
+	if time.Duration(attempts)*runner.snmpTimeout >= runner.metricsInterval {
+		if attempts == 1 {
+			return nil, fmt.Errorf("snmp_timeout (%s) must be less than metrics_interval (%s)", runner.snmpTimeout, runner.metricsInterval)
+		}
+		return nil, fmt.Errorf("snmp_timeout (%s) with %d retries allows one request %s, which must be less than metrics_interval (%s)",
+			runner.snmpTimeout, runner.retries, time.Duration(attempts)*runner.snmpTimeout, runner.metricsInterval)
 	}
 
 	// Schedule a metrics job for each expanded target

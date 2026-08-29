@@ -72,13 +72,19 @@ const (
 	ProtocolVersion3 = "SNMPv3"
 )
 
-// ClientFactory is a function that creates a new Walker
-type ClientFactory func(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (Walker, error)
+// ClientFactory is a function that creates a new Walker. ctx is the collection
+// the client is being built for.
+type ClientFactory func(ctx context.Context, host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (Walker, error)
 
-// NewClient creates a new Walker for the given target host
-func NewClient(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (Walker, error) {
+// NewClient creates a new Walker for the given target host.
+//
+// ctx bounds the whole conversation with the device, not one request. gosnmp
+// consults it when it dials and again before each request attempt, and clamps a
+// request's read deadline to the context deadline, so a cancelled collection
+// ends the retry sequence instead of outliving it.
+func NewClient(ctx context.Context, host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (Walker, error) {
 	var gosnmpLogger gosnmp.Logger
-	if logger.Enabled(context.Background(), slog.LevelDebug) {
+	if logger.Enabled(ctx, slog.LevelDebug) {
 		gosnmpLogger = gosnmp.NewLogger(&SlogAdapter{logger})
 	}
 
@@ -88,6 +94,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 			&gosnmp.GoSNMP{
 				Target:    host,
 				Port:      port,
+				Context:   ctx,
 				Community: authentication.Community,
 				Version:   gosnmp.Version1,
 				Timeout:   timeout,
@@ -100,6 +107,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 			&gosnmp.GoSNMP{
 				Target:    host,
 				Port:      port,
+				Context:   ctx,
 				Community: authentication.Community,
 				Version:   gosnmp.Version2c,
 				Timeout:   timeout,
@@ -129,6 +137,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 			&gosnmp.GoSNMP{
 				Target:        host,
 				Port:          port,
+				Context:       ctx,
 				Version:       gosnmp.Version3,
 				Timeout:       timeout,
 				Retries:       retries,

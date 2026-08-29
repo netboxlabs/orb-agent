@@ -83,9 +83,12 @@ policies:
 
 `snmp_timeout` sets how long one SNMP request may take, in seconds, and
 `retries` how many times a timed-out request is retried. Both are optional:
-`snmp_timeout` defaults to 5 seconds and `retries` to none. Because a
-collection run is bounded by `metrics_interval`, a policy whose `snmp_timeout`
-is not below its `metrics_interval` is rejected.
+`snmp_timeout` defaults to 5 seconds and `retries` to none. A collection run is
+bounded by `metrics_interval`, and a retried request costs `snmp_timeout`
+again, so a policy is rejected unless `snmp_timeout` times `retries` plus one
+is below its `metrics_interval`. The run's deadline is also handed to the SNMP
+client, so a run that is cancelled or out of time ends the retry sequence
+rather than outliving it.
 
 A target's `host` can be a single address, a hostname, a CIDR prefix, or an
 address range, and each address it expands to becomes its own recurring poll

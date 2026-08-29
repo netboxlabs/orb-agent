@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -49,6 +50,6 @@ func (n *FakeSNMPWalker) Walk(oid string, _ int) (map[string]PDU, error) {
 }
 
 // NewFakeSNMPWalker creates a new FakeSNMPWalker
-func NewFakeSNMPWalker(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (Walker, error) {
+func NewFakeSNMPWalker(_ context.Context, _ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (Walker, error) {
 	return &FakeSNMPWalker{}, nil
 }

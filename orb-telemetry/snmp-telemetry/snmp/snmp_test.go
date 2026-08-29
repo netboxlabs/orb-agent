@@ -1,7 +1,9 @@
 package snmp
 
 import (
+	"context"
 	"log/slog"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -17,7 +19,7 @@ var clientTestLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOpti
 
 func newTestClient(t *testing.T, auth *config.Authentication) *Client {
 	t.Helper()
-	w, err := NewClient("10.0.0.1", 161, 1, time.Second, auth, clientTestLogger)
+	w, err := NewClient(t.Context(), "10.0.0.1", 161, 1, time.Second, auth, clientTestLogger)
 	require.NoError(t, err)
 	c, ok := w.(*Client)
 	require.True(t, ok, "NewClient must return *Client")
@@ -88,7 +90,7 @@ func TestNewClient_V3SecurityLevelMapsToMsgFlags(t *testing.T) {
 // every PDU name with a dot, and a double that omits it hides every prefix
 // comparison a caller makes against a profile OID.
 func TestFakeSNMPWalker_NamesCarryLeadingDot(t *testing.T) {
-	w, err := NewFakeSNMPWalker("10.0.0.1", 161, 1, time.Second, nil, clientTestLogger)
+	w, err := NewFakeSNMPWalker(t.Context(), "10.0.0.1", 161, 1, time.Second, nil, clientTestLogger)
 	require.NoError(t, err)
 
 	pdus, err := w.Walk("1.3.6.1.2.1.2.2.1.2", 1)
@@ -98,4 +100,84 @@ func TestFakeSNMPWalker_NamesCarryLeadingDot(t *testing.T) {
 		assert.Equal(t, ".1.3.6.1.2.1.2.2.1.2.999", name)
 		assert.Equal(t, name, pdu.Name, "the map key and the PDU name must agree")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Collection context reaching the SNMP client
+// ---------------------------------------------------------------------------
+
+// TestNewClient_CarriesCollectionContext pins the context onto the gosnmp
+// handle for every protocol version. gosnmp consults it when it dials and again
+// before each request attempt, so a client built without it can stay in its
+// retry sequence long after the collection was cancelled.
+func TestNewClient_CarriesCollectionContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, auth := range []*config.Authentication{
+		{ProtocolVersion: ProtocolVersion1, Community: "public"},
+		{ProtocolVersion: ProtocolVersion2c, Community: "public"},
+		{ProtocolVersion: ProtocolVersion3, SecurityLevel: "noAuthNoPriv", Username: "admin"},
+	} {
+		t.Run(auth.ProtocolVersion, func(t *testing.T) {
+			w, err := NewClient(ctx, "10.0.0.1", 161, 1, time.Second, auth, clientTestLogger)
+			require.NoError(t, err)
+			c, ok := w.(*Client)
+			require.True(t, ok)
+			assert.Same(t, ctx, c.Context)
+		})
+	}
+}
+
+// TestClient_ConnectStopsOnCancelledContext checks the dial honours the
+// context. The address is a loopback literal so no resolver is involved.
+func TestClient_ConnectStopsOnCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	w, err := NewClient(ctx, "127.0.0.1", 161, 1, time.Second,
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "public"}, clientTestLogger)
+	require.NoError(t, err)
+	require.ErrorIs(t, w.Connect(), context.Canceled)
+}
+
+// TestClient_WalkStopsWhenContextIsCancelled is the point of the change: a walk
+// against a socket that never answers must abandon its retry sequence when the
+// collection is cancelled, rather than running every retry to completion.
+func TestClient_WalkStopsWhenContextIsCancelled(t *testing.T) {
+	// A bound UDP socket that reads nothing, so every request times out.
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	addr, ok := silent.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const (
+		perRequest = 50 * time.Millisecond
+		retries    = 100
+	)
+	w, err := NewClient(ctx, "127.0.0.1", uint16(addr.Port), retries, perRequest, //nolint:gosec
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "public"}, clientTestLogger)
+	require.NoError(t, err)
+	require.NoError(t, w.Connect())
+	defer func() { _ = w.Close() }()
+
+	go func() {
+		time.Sleep(3 * perRequest)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err = w.Walk("1.3.6.1.2.1.1.1", 0)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	// The full retry sequence is retries*perRequest, five seconds here. The
+	// bound is far below that and far above the cancellation, so the assertion
+	// does not turn on how fast the host is.
+	assert.Less(t, elapsed, retries*perRequest/4,
+		"the walk ran on past the cancelled collection")
 }
