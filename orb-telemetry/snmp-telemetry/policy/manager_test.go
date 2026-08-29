@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-co-op/gocron/v2"
+	"github.com/gosnmp/gosnmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -609,4 +612,85 @@ func TestStartPolicy_RejectsPolicyWithNoTargets(t *testing.T) {
 	pol.Scope.Targets = nil
 	require.ErrorContains(t, m.StartPolicy("policy-a", pol), "no targets")
 	assert.Empty(t, m.policies)
+}
+
+// ---------------------------------------------------------------------------
+// validatePolicy — v3 protocol names
+// ---------------------------------------------------------------------------
+
+// Names the SNMP client resolves and names it does not, mixed together. The
+// tests below assert the validator agrees with the client for every one of
+// them, so a list written beside the validator would not survive.
+var protocolNames = []string{
+	"", "NoAuth", "NoPriv",
+	"MD5", "SHA", "SHA224", "SHA256", "SHA384", "SHA512",
+	"DES", "AES", "AES192", "AES256", "AES192C", "AES256C",
+	"SHA3", "3DES", "sha", "aes", "none", "SHA-256",
+}
+
+func v3ProtocolAuth(authProtocol, privProtocol string) config.Authentication {
+	return config.Authentication{
+		ProtocolVersion: "SNMPv3",
+		SecurityLevel:   "noAuthNoPriv",
+		Username:        "admin",
+		AuthProtocol:    authProtocol,
+		PrivProtocol:    privProtocol,
+	}
+}
+
+// snmp.NewClient resolves both protocol names for every v3 policy, so one it
+// cannot resolve fails every collection before it connects. Whatever the client
+// accepts, validation must accept, and nothing more.
+func TestValidate_V3AuthProtocolMatchesTheClient(t *testing.T) {
+	m := newTestManager()
+	for _, name := range protocolNames {
+		auth := v3ProtocolAuth(name, "")
+		_, clientErr := snmp.NewClient(t.Context(), "192.0.2.1", 161, 1, time.Second, &auth, testLogger)
+		err := m.validatePolicy(minimalPolicy(auth))
+		if clientErr != nil {
+			require.Error(t, err, "auth protocol %q: the client rejects it, so validation must too", name)
+			assert.ErrorContains(t, err, name)
+			continue
+		}
+		require.NoError(t, err, "auth protocol %q: the client accepts it, so validation must too", name)
+	}
+}
+
+func TestValidate_V3PrivProtocolMatchesTheClient(t *testing.T) {
+	m := newTestManager()
+	for _, name := range protocolNames {
+		auth := v3ProtocolAuth("", name)
+		_, clientErr := snmp.NewClient(t.Context(), "192.0.2.1", 161, 1, time.Second, &auth, testLogger)
+		err := m.validatePolicy(minimalPolicy(auth))
+		if clientErr != nil {
+			require.Error(t, err, "priv protocol %q: the client rejects it, so validation must too", name)
+			assert.ErrorContains(t, err, name)
+			continue
+		}
+		require.NoError(t, err, "priv protocol %q: the client accepts it, so validation must too", name)
+	}
+}
+
+// An omitted protocol name is not an error: the client maps it to the default.
+func TestValidate_V3EmptyProtocolNamesKeepTheDefaults(t *testing.T) {
+	m := newTestManager()
+	auth := v3ProtocolAuth("", "")
+	require.NoError(t, m.validatePolicy(minimalPolicy(auth)))
+
+	w, err := snmp.NewClient(t.Context(), "192.0.2.1", 161, 1, time.Second, &auth, testLogger)
+	require.NoError(t, err)
+	c, ok := w.(*snmp.Client)
+	require.True(t, ok)
+	params, ok := c.SecurityParameters.(*gosnmp.UsmSecurityParameters)
+	require.True(t, ok)
+	assert.Equal(t, gosnmp.NoAuth, params.AuthenticationProtocol)
+	assert.Equal(t, gosnmp.NoPriv, params.PrivacyProtocol)
+}
+
+// A v1 or v2c policy never reaches the v3 protocol tables, so a stale name
+// carried alongside a community string is not a policy that cannot collect.
+func TestValidate_V2cIgnoresV3ProtocolNames(t *testing.T) {
+	m := newTestManager()
+	auth := config.Authentication{ProtocolVersion: "SNMPv2c", Community: "public", AuthProtocol: "SHA3"}
+	require.NoError(t, m.validatePolicy(minimalPolicy(auth)))
 }

@@ -393,6 +393,15 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 				return fmt.Errorf("%s: missing priv protocol", context)
 			}
 		}
+		// The client resolves both names for every v3 policy, so a name it does
+		// not accept fails collection before it connects and leaves a policy the
+		// API reports as running. An empty name selects the default.
+		if err := snmp.ValidateAuthProtocol(auth.AuthProtocol); err != nil {
+			return fmt.Errorf("%s: %w", context, err)
+		}
+		if err := snmp.ValidatePrivProtocol(auth.PrivProtocol); err != nil {
+			return fmt.Errorf("%s: %w", context, err)
+		}
 	}
 
 	return nil

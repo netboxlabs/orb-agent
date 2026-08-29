@@ -158,6 +158,22 @@ func NewClient(ctx context.Context, host string, port uint16, retries int, timeo
 	return nil, fmt.Errorf("unsupported protocol version: %s", authentication.ProtocolVersion)
 }
 
+// ValidateAuthProtocol reports whether name is an authentication protocol the
+// client can resolve. It goes through the table NewClient uses rather than a
+// list of its own, so a caller checking a policy up front cannot drift from
+// what collection accepts. An empty name is valid and selects the default.
+func ValidateAuthProtocol(name string) error {
+	_, err := getAuthProtocol(name)
+	return err
+}
+
+// ValidatePrivProtocol is the privacy protocol counterpart of
+// ValidateAuthProtocol.
+func ValidatePrivProtocol(name string) error {
+	_, err := getPrivProtocol(name)
+	return err
+}
+
 func getAuthProtocol(authProtocol string) (gosnmp.SnmpV3AuthProtocol, error) {
 	switch authProtocol {
 	case "", "NoAuth":
