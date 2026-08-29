@@ -948,6 +948,15 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 				if mac := net.HardwareAddr(raw).String(); mac != "" {
 					return mac
 				}
+			default:
+				// A hextoint tag column renders as its decoded number. Without
+				// this the raw octets reach the attribute as text, which looks
+				// like a value rather than a missing one.
+				if strings.HasPrefix(col.Conversion, "hextoint:") {
+					if v, err := applyHexToInt(raw, col.Conversion); err == nil {
+						return strconv.FormatInt(v, 10)
+					}
+				}
 			}
 		}
 		return strings.TrimSpace(string(raw))

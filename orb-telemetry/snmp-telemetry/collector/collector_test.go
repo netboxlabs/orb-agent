@@ -1386,3 +1386,24 @@ func TestCollectTarget_SupportedConversionsAreNotReported(t *testing.T) {
 		assert.NotContains(t, logs.String(), "symbol="+sym.Name, "supported conversion %q was reported", sym.Conversion)
 	}
 }
+
+// TestPduToString_HexToIntTagColumn covers a tag column declaring a hextoint
+// conversion, as brocade-fc-switch.yml does for portIndex. Without the
+// conversion the raw octets render as text, which looks like a value.
+func TestPduToString_HexToIntTagColumn(t *testing.T) {
+	col := &profiles.TagColumn{
+		OID:        "1.3.6.1.2.1.75.1.2.1.1.1",
+		Name:       "portIndex",
+		Conversion: "hextoint:BigEndian:uint16",
+	}
+	pdu := snmp.PDU{Type: gosnmp.OctetString, Value: []byte{0x00, 0x2a}}
+	require.Equal(t, "42", pduToString(pdu, col))
+}
+
+// TestPduToString_UnknownConversionFallsBackToRaw pins that an unrecognised
+// conversion still renders the trimmed octet string rather than panicking.
+func TestPduToString_UnknownConversionFallsBackToRaw(t *testing.T) {
+	col := &profiles.TagColumn{Name: "x", Conversion: "some_future_conversion"}
+	pdu := snmp.PDU{Type: gosnmp.OctetString, Value: []byte("  raw  ")}
+	require.Equal(t, "raw", pduToString(pdu, col))
+}
