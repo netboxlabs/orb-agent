@@ -109,6 +109,11 @@ the device's default one. `context_name` is valid only inside an SNMPv3
 authentication block; setting it under `protocol_version: v1` or
 `protocol_version: v2c` is rejected.
 
+A policy request body is capped at 1 MiB, and a larger one is rejected with
+HTTP 413 before it is parsed. That ceiling is far above any policy this backend
+expects: the sample above weighs about 600 bytes, and a target's `host` can be a
+CIDR prefix, so covering a whole /16 costs one line rather than 65536 of them.
+
 A policy can also set `profiles_dir` under `config` to overlay a directory of
 profiles for that policy only, instead of the one passed to
 `--snmp-profiles-dir`. That value arrives over the API, so a path containing

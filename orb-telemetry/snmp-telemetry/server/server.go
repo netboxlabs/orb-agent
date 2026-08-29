@@ -17,6 +17,16 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/policy"
 )
 
+// maxPolicyBodyBytes bounds every request body the server reads.
+//
+// The documented sample policy weighs 602 bytes and the richest sample in the
+// repo docs, with every optional key set, weighs under 4 KiB. A target may be a
+// CIDR prefix, so the 65536-address expansion cap costs one 30-byte line rather
+// than an enumerated list, and device count does not drive body size. The bound
+// still holds roughly 2900 targets that each spell out a full SNMPv3 block, or
+// 32000 bare hosts, which is far past what one agent should poll.
+const maxPolicyBodyBytes = 1 << 20
+
 // Response represents the server response
 type Response struct {
 	Detail string `json:"detail"`
@@ -66,6 +76,10 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		Handler: server.router,
 	}
 
+	// Bound the body before routing, so a handler added later cannot read an
+	// unbounded one. The reader is lazy: a handler that never reads pays nothing.
+	server.router.Use(limitBodySize)
+
 	v1 := server.router.Group("/api/v1")
 	{
 		v1.GET("/status", server.getStatus)
@@ -76,6 +90,11 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 	}
 
 	return server
+}
+
+func limitBodySize(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxPolicyBodyBytes)
+	c.Next()
 }
 
 // Router returns the router
@@ -130,6 +149,12 @@ func (s *Server) createPolicy(c *gin.Context) {
 	}
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			c.IndentedJSON(http.StatusRequestEntityTooLarge,
+				Response{fmt.Sprintf("policy body exceeds the limit of %d bytes", maxPolicyBodyBytes)})
+			return
+		}
 		c.IndentedJSON(http.StatusBadRequest, Response{err.Error()})
 		return
 	}
