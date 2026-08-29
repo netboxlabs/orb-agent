@@ -61,3 +61,27 @@ func TestIndexTransform_Apply(t *testing.T) {
 		})
 	}
 }
+
+// A `conversion:` may sit on the metric-tag object rather than inside its
+// `column:`. One bundled profile writes it that way, and a struct that does not
+// deserialize it there exports the raw octets as the attribute value.
+func TestMetricTag_ConversionOnTheTagIsDeserialized(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	p, err := l.Resolve("cisco/cisco-csr.yml")
+	require.NoError(t, err)
+
+	var found *MetricTag
+	for _, entry := range p.Metrics {
+		for i := range entry.MetricTags {
+			if entry.MetricTags[i].Tag == "rtt_echo_source_address" {
+				found = &entry.MetricTags[i]
+			}
+		}
+	}
+	require.NotNil(t, found)
+	assert.Equal(t, "hextoip", found.Conversion)
+	require.NotNil(t, found.Column)
+	assert.Empty(t, found.Column.Conversion, "the column declares none, so the tag's is the only one")
+}

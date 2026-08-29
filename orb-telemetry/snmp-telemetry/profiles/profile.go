@@ -105,6 +105,10 @@ type MetricTag struct {
 	Symbol *TagColumn `yaml:"symbol"` // alias used in some profiles
 	MIB    string     `yaml:"MIB"`
 	Table  string     `yaml:"table"`
+	// Conversion is the rendering rule when a profile declares it beside the
+	// tag rather than inside the column. It names the same column either way.
+	// The column's own conversion is the more specific of the two and wins.
+	Conversion string `yaml:"conversion"`
 	// IndexTransform is set when Table names a table other than the one the
 	// metric rows come from. It says which components of a metric row's
 	// composite index identify the row in that other table.

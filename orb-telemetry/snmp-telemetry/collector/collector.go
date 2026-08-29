@@ -999,11 +999,23 @@ func buildMetricName(symbolName string) string {
 
 // metricTagColumn returns the tag column from a MetricTag, handling the
 // alias where some profiles use "symbol" instead of "column".
+//
+// A profile may declare `conversion:` beside the tag rather than inside the
+// column. It renders the same column, so it is folded in here and reaches
+// every caller. The column's own conversion is the more specific of the two,
+// so it wins when both are present. The copy keeps the profile itself
+// untouched, since one is shared by every device that matches it.
 func metricTagColumn(mt *profiles.MetricTag) *profiles.TagColumn {
-	if mt.Column != nil {
-		return mt.Column
+	col := mt.Column
+	if col == nil {
+		col = mt.Symbol
 	}
-	return mt.Symbol
+	if col == nil || mt.Conversion == "" || col.Conversion != "" {
+		return col
+	}
+	converted := *col
+	converted.Conversion = mt.Conversion
+	return &converted
 }
 
 // pduToValue converts a PDU to an int64 metric value, applying conversion rules.

@@ -2339,3 +2339,139 @@ func TestCollectTarget_GroupedScalarProfilesKeepOneUnindexedSeries(t *testing.T)
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// A conversion declared on the metric tag rather than inside its column
+// ---------------------------------------------------------------------------
+
+// A tag-level `conversion:` renders the same column its own would, so the row
+// attribute is the converted value and not the raw octets.
+func TestCollectTable_ConversionOnTheTagIsApplied(t *testing.T) {
+	const (
+		host        = "10.0.0.88"
+		sysObjValue = "1.3.6.1.4.1.9999.88"
+		tableOID    = "1.3.6.1.4.1.9999.88.1"
+		rttOID      = "1.3.6.1.4.1.9999.88.1.1"
+		srcOID      = "1.3.6.1.4.1.9999.88.1.2"
+	)
+	p := profileWithOID(sysObjValue, "rtt.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "rttTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "rttLatency", OID: rttOID}},
+		MetricTags: []profiles.MetricTag{{
+			Tag:        "rtt_echo_source_address",
+			Column:     &profiles.TagColumn{OID: srcOID, Name: "rttMonEchoAdminSourceAddress"},
+			Conversion: "hextoip",
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		rttOID:         {rttOID + ".1": intPDU(rttOID+".1", 12)},
+		srcOID: {srcOID + ".1": {
+			Name: srcOID + ".1", Type: gosnmp.OctetString, Value: []byte{10, 0, 0, 1},
+		}},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.rttlatency"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "10.0.0.1", attrValue(pts[0], "rtt_echo_source_address"))
+}
+
+// The column is the more specific of the two declarations, so it wins when
+// both name a conversion.
+func TestCollectTable_ColumnConversionBeatsTheTagConversion(t *testing.T) {
+	const (
+		host        = "10.0.0.89"
+		sysObjValue = "1.3.6.1.4.1.9999.89"
+		tableOID    = "1.3.6.1.4.1.9999.89.1"
+		rttOID      = "1.3.6.1.4.1.9999.89.1.1"
+		addrOID     = "1.3.6.1.4.1.9999.89.1.2"
+	)
+	p := profileWithOID(sysObjValue, "rtt.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "rttTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "rttLatency", OID: rttOID}},
+		MetricTags: []profiles.MetricTag{{
+			Tag:        "peer",
+			Column:     &profiles.TagColumn{OID: addrOID, Name: "peerAddress", Conversion: "hwaddr"},
+			Conversion: "hextoip",
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		rttOID:         {rttOID + ".1": intPDU(rttOID+".1", 12)},
+		addrOID: {addrOID + ".1": {
+			Name: addrOID + ".1", Type: gosnmp.OctetString, Value: []byte{10, 0, 0, 1},
+		}},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.rttlatency"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "0a:00:00:01", attrValue(pts[0], "peer"))
+}
+
+// A device-wide `metric_tags:` entry carries the tag-level conversion the same
+// way. The two paths render through one helper, and this pins that they do.
+func TestCollectTarget_DeviceTagConversionOnTheTagIsApplied(t *testing.T) {
+	const (
+		host        = "10.0.0.90"
+		sysObjValue = "1.3.6.1.4.1.9999.90"
+		addrOID     = "1.3.6.1.4.1.9999.90.1.1.0"
+		metricOID   = "1.3.6.1.4.1.9999.90.2.0"
+	)
+	p := profileWithOID(sysObjValue, "device.yml", []profiles.MetricEntry{{
+		Symbol: &profiles.Symbol{Name: "uptime", OID: metricOID},
+	}})
+	p.MetricTags = []profiles.MetricTag{{
+		Tag:        "management_ip",
+		Column:     &profiles.TagColumn{OID: addrOID, Name: "mgmtAddress"},
+		Conversion: "hextoip",
+	}}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		metricOID:      {metricOID: intPDU(metricOID, 5)},
+		addrOID: {addrOID: {
+			Name: addrOID, Type: gosnmp.OctetString, Value: []byte{192, 168, 1, 20},
+		}},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.uptime"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "192.168.1.20", attrValue(pts[0], "management_ip"))
+}
+
+// The bundled Cisco CSR profile is the one that declares a conversion on the
+// tag, so it is driven end to end through the real matcher.
+func TestCollectTarget_BundledCSRSourceAddressRendersAsAnIP(t *testing.T) {
+	const (
+		host        = "10.0.0.91"
+		sysObjValue = "1.3.6.1.4.1.9.1.1537"
+		latencyOID  = "1.3.6.1.4.1.9.9.42.1.2.10.1.1"
+		srcOID      = "1.3.6.1.4.1.9.9.42.1.2.2.1.6"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		latencyOID:     {latencyOID + ".7": intPDU(latencyOID+".7", 4)},
+		srcOID: {srcOID + ".7": {
+			Name: srcOID + ".7", Type: gosnmp.OctetString, Value: []byte{172, 16, 5, 9},
+		}},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.rttmonlatestrttopercompletiontime"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "172.16.5.9", attrValue(pts[0], "rtt_echo_source_address"))
+}
