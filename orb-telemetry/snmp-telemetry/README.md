@@ -110,9 +110,17 @@ Adding a profile for a device the bundled set does not cover needs no matching
 bundled path. Its filename appears nowhere in the bundled set, so it replaces
 nothing by design and loads without a warning.
 
-Where an override and a bundled profile claim the same `sysobjectid`, the
-override wins and the collision is logged. That covers patterns ending in `*`
-as well as exact OIDs.
+Where an override and a bundled profile declare the same `sysobjectid`, the
+override wins and the collision is logged. A pattern ending in `*` counts as
+the same only when the whole pattern is identical.
+
+That tiebreak runs per declared OID, not per device. Matching itself is
+unchanged: an exact OID still beats every wildcard, and a longer wildcard
+prefix still beats a shorter one, whatever the profiles' origins. An override
+declaring `1.3.6.1.4.1.9.*` therefore leaves a device covered by a bundled
+`1.3.6.1.4.1.9.1.*` with the bundled profile, and nothing is logged, because
+the two never claim the same pattern. To take a device from a bundled profile,
+declare the OID or the pattern that profile declares.
 
 The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the

@@ -355,6 +355,29 @@ func TestMatcher_WarnsOnCollidingWildcardSysObjectID(t *testing.T) {
 	assert.Contains(t, out, bundledWildcardFile)
 }
 
+// The override tiebreak resolves one declared pattern, not one device. An
+// override whose wildcard is broader than a bundled profile's never shares a
+// key with it, so it loses every device the longer bundled prefix covers and
+// nothing is logged. The README says so; this pins it.
+func TestMatcher_BroaderOverrideWildcardLosesToBundledPrefix(t *testing.T) {
+	broader := strings.TrimSuffix(bundledWildcardOID, "6574.*") + "*"
+	require.Less(t, len(broader), len(bundledWildcardOID), "the fixture pattern must be the broader one")
+
+	dir := t.TempDir()
+	writeYAML(t, dir, "zz-broad.yml", "sysobjectid: "+broader+"\n")
+
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	logger, buf := captureLogger()
+	got, ok := NewMatcher(all, logger).Match(wildcardProbeOID)
+	require.True(t, ok)
+	assert.Equal(t, bundledWildcardPath, got.RelPath, "the longer bundled prefix must still win")
+	assert.Empty(t, buf.String(), "the two never claim the same pattern, so there is nothing to warn about")
+}
+
 // Nine bundled files are named traps.yml. Overriding one of them at its own
 // path is correct use of the override directory, but the origin comparison
 // paired the override against each of the other eight and warned about every
