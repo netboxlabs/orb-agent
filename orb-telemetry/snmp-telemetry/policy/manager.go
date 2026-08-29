@@ -119,6 +119,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 
 	for name, policy := range payload.Policies {
 		normalizeAuthProtocolVersions(&policy)
+		normalizeTargetHosts(&policy)
 		payload.Policies[name] = policy
 		if err := m.validatePolicy(policy); err != nil {
 			return nil, fmt.Errorf("%s: invalid policy: %w", name, err)
@@ -314,6 +315,16 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		if target.Port == 0 {
 			policy.Scope.Targets[i].Port = SNMPDefaultPort
 		}
+	}
+}
+
+// normalizeTargetHosts trims surrounding whitespace from every target host, so
+// the blank check, the size guard and the expander all read the same value. A
+// padded host is otherwise not blank, passes validation, and then expands to an
+// unresolvable hostname.
+func normalizeTargetHosts(policy *config.Policy) {
+	for i := range policy.Scope.Targets {
+		policy.Scope.Targets[i].Host = strings.TrimSpace(policy.Scope.Targets[i].Host)
 	}
 }
 

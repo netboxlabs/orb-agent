@@ -735,7 +735,18 @@ func TestParsePolicies_RejectsTargetWithNoHost(t *testing.T) {
 // is left as the policy wrote it: validation does not rewrite a target, and
 // trimming one here would hand the expander a different string from the one it
 // reads out of the policy.
-func TestValidate_AcceptsPaddedTargetHost(t *testing.T) {
+// TestParsePolicies_TrimsPaddedTargetHost pins that a padded host is normalised
+// once at parse time. Without it the blank check trims but the stored value does
+// not, so the target passes validation and then expands to an unresolvable
+// hostname.
+func TestParsePolicies_TrimsPaddedTargetHost(t *testing.T) {
 	m := newTestManager()
-	assert.NoError(t, m.validatePolicy(policyWithTarget(" 192.0.2.1 ")))
+	pol := policyWithTarget(" 192.0.2.1 ")
+	normalizeTargetHosts(&pol)
+	assert.Equal(t, "192.0.2.1", pol.Scope.Targets[0].Host)
+	assert.NoError(t, m.validatePolicy(pol))
+
+	blank := policyWithTarget("   ")
+	normalizeTargetHosts(&blank)
+	assert.Error(t, m.validatePolicy(blank), "a host that is only whitespace is still blank")
 }
