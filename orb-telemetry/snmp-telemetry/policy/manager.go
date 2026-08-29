@@ -441,9 +441,6 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		if strings.TrimSpace(target.Host) == "" {
 			return errors.New("target host must not be empty")
 		}
-		if err := checkTargetExpansion(target.Host); err != nil {
-			return err
-		}
 		if target.Authentication != nil {
 			context := fmt.Sprintf("target %s", target.Host)
 			if err := m.validateAuthentication(target.Authentication, context); err != nil {
@@ -452,6 +449,13 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		} else if !hasPolicyAuth {
 			return fmt.Errorf("target %s: no authentication configured and no policy-level fallback available", target.Host)
 		}
+	}
+
+	// The expansion budget spans the policy, so it cannot be charged one target
+	// at a time inside the loop. Checked after it so a blank or misconfigured
+	// entry is still reported by name rather than as a size.
+	if err := checkPolicyExpansion(policy.Scope.Targets); err != nil {
+		return err
 	}
 
 	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {

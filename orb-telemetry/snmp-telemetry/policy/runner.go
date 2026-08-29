@@ -101,12 +101,15 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			"request_ceiling", ceiling, "metrics_interval", runner.metricsInterval)
 	}
 
+	// Charged over the whole policy before any target is expanded, since
+	// expanding one allocates its whole address list up front. Guarded here as
+	// well as in validatePolicy so a direct NewRunner call cannot slip past.
+	if err := checkPolicyExpansion(runner.scope.Targets); err != nil {
+		return nil, err
+	}
+
 	// Schedule a metrics job for each expanded target
 	for _, target := range runner.scope.Targets {
-		// Checked before expanding, which allocates the whole list up front.
-		if err := checkTargetExpansion(target.Host); err != nil {
-			return nil, err
-		}
 		// Skipping the target instead would leave a policy with no job for it,
 		// and a policy whose targets are all unexpandable would start with no
 		// jobs at all and be reported as running while collecting nothing.
