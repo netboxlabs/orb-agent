@@ -390,11 +390,12 @@ func TestStop_EmptyManager(t *testing.T) {
 // stubScheduler stands in for gocron's scheduler so Stop can be driven without
 // a real one, which takes seconds to time out. Embedding the interface leaves
 // its other methods nil, which is fine: Runner.Stop only calls StopJobs and
-// Shutdown.
+// Shutdown on it.
 type stubScheduler struct {
 	gocron.Scheduler
-	err   error
-	stops int
+	err       error
+	stops     int
+	shutdowns int
 }
 
 func (s *stubScheduler) StopJobs() error {
@@ -402,11 +403,25 @@ func (s *stubScheduler) StopJobs() error {
 	return s.err
 }
 
-func (s *stubScheduler) Shutdown() error { return s.err }
+func (s *stubScheduler) Shutdown() error {
+	s.shutdowns++
+	return s.err
+}
 
 func stubRunner(err error) (*Runner, *stubScheduler) {
 	s := &stubScheduler{err: err}
-	return &Runner{scheduler: s, targetErrs: make(map[string]error)}, s
+	// Stop cancels the runner's collection context, so the stub needs one.
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Runner{scheduler: s, ctx: ctx, cancel: cancel, targetErrs: make(map[string]error)}, s
+}
+
+// A scheduler that could not stop its jobs still has to be shut down, or its
+// goroutines outlive the policy that owned them.
+func TestRunnerStop_ShutsDownEvenWhenStoppingJobsFailed(t *testing.T) {
+	r, s := stubRunner(fmt.Errorf("scheduler wedged"))
+	require.Error(t, r.Stop())
+	assert.Equal(t, 1, s.stops)
+	assert.Equal(t, 1, s.shutdowns, "the scheduler was left running")
 }
 
 // Stop drained the policy map before stopping the runners, so the first

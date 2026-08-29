@@ -239,3 +239,122 @@ func TestNewRunner_WarnsWhenRetriesCanExceedTheInterval(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "SNMP retries can exceed the collection interval")
 }
+
+// ---------------------------------------------------------------------------
+// Stopping a policy whose collection is still running
+// ---------------------------------------------------------------------------
+
+// stallingCollector models a collection slow enough to still be running when
+// its policy is deleted. It records its observation only when the run was not
+// cancelled, the way the real collector abandons a run whose context is done
+// before it rebuilds the device store.
+type stallingCollector struct {
+	// runner is set by the test once the runner exists, so ForgetPolicy can
+	// see whether the run had already been cancelled when it was called.
+	runner *Runner
+
+	entered     chan struct{}
+	release     chan struct{}
+	enterOnce   sync.Once
+	releaseOnce sync.Once
+
+	mu                sync.Mutex
+	store             map[string][]string
+	forgotAfterCancel bool
+}
+
+func newStallingCollector() *stallingCollector {
+	return &stallingCollector{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		store:   make(map[string][]string),
+	}
+}
+
+func (s *stallingCollector) CollectTarget(ctx context.Context, target config.Target, _ *config.Authentication, policyName string, _ collector.DialOptions) error {
+	s.enterOnce.Do(func() { close(s.entered) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.release:
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store[policyName] = append(s.store[policyName], target.Host)
+	return nil
+}
+
+func (s *stallingCollector) ForgetPolicy(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forgotAfterCancel = s.runner != nil && s.runner.ctx.Err() != nil
+	delete(s.store, name)
+}
+
+func (s *stallingCollector) stored(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.store[name]...)
+}
+
+func (s *stallingCollector) forgetSawCancel() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forgotAfterCancel
+}
+
+func (s *stallingCollector) unblock() {
+	s.releaseOnce.Do(func() { close(s.release) })
+}
+
+// A policy deleted while a collection is running must not have that collection
+// write its observations back after the state was dropped. Asserting the store
+// is empty as Stop returns would pass against that, so the stalled run is let
+// through to completion first.
+func TestRunnerStop_CancelsACollectionStillInFlight(t *testing.T) {
+	c := newStallingCollector()
+	r, err := NewRunner(context.Background(), testLogger, "p1", policyWithDial(60, 5, 0), c)
+	require.NoError(t, err)
+	c.runner = r
+	t.Cleanup(c.unblock)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.runMetrics(config.Target{Host: "192.0.2.1", Port: 161})
+	}()
+	<-c.entered
+
+	require.NoError(t, r.Stop())
+	assert.True(t, c.forgetSawCancel(), "the run must be cancelled before its state is dropped")
+
+	c.unblock()
+	<-done
+	assert.Empty(t, c.stored("p1"), "a stopped policy's collection repopulated the store")
+}
+
+// gocron can only wait for a collection that is already running, so a run the
+// scheduler cannot cancel holds the delete open for the whole stop timeout and
+// then fails it. Cancelling before that wait is what lets the wait succeed.
+func TestRunnerStop_CancelsBeforeWaitingForTheScheduler(t *testing.T) {
+	c := newStallingCollector()
+	r, err := NewRunner(context.Background(), testLogger, "p1", policyWithDial(60, 5, 0), c)
+	require.NoError(t, err)
+	c.runner = r
+	t.Cleanup(c.unblock)
+
+	r.Start()
+	jobs := r.scheduler.Jobs()
+	require.Len(t, jobs, 1)
+	// The run bounds itself at metrics_interval, a minute here, so nothing but
+	// Stop can end it inside the scheduler's ten second stop timeout.
+	require.NoError(t, jobs[0].RunNow())
+	<-c.entered
+
+	start := time.Now()
+	require.NoError(t, r.Stop(), "the scheduler timed out waiting for the collection")
+	assert.Less(t, time.Since(start), 5*time.Second)
+}

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -33,8 +34,13 @@ type Collector interface {
 
 // Runner represents the policy runner for SNMP metrics collection
 type Runner struct {
-	scheduler        gocron.Scheduler
+	scheduler gocron.Scheduler
+	// ctx bounds every collection this runner starts, and cancel ends them.
+	// The scheduler's own job context is not enough: gocron can wait for a
+	// running job but cannot cut it short, so a collection that outlasts its
+	// stop timeout would go on writing after the policy was forgotten.
 	ctx              context.Context
+	cancel           context.CancelFunc
 	name             string
 	metricsCollector Collector
 	metricsInterval  time.Duration
@@ -58,6 +64,17 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		return nil, err
 	}
 
+	runCtx, cancel := context.WithCancel(context.WithValue(ctx, policyKey, name))
+	// Every path out of here but the last one drops the runner, so its context
+	// would otherwise stay attached to the manager's for the life of the
+	// process.
+	built := false
+	defer func() {
+		if !built {
+			cancel()
+		}
+	}()
+
 	runner := &Runner{
 		scheduler:        s,
 		logger:           logger,
@@ -65,7 +82,8 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		metricsCollector: metricsCollector,
 		config:           policy.Config,
 		scope:            policy.Scope,
-		ctx:              context.WithValue(ctx, policyKey, name),
+		ctx:              runCtx,
+		cancel:           cancel,
 		targetErrs:       make(map[string]error),
 	}
 
@@ -136,6 +154,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		}
 	}
 
+	built = true
 	return runner, nil
 }
 
@@ -237,13 +256,19 @@ func (r *Runner) Start() {
 
 // Stop stops the policy runner and drops the collector state it owns, so a
 // deleted policy stops exporting instead of repeating its last observations
-// for the life of the process. The drop happens even when the scheduler fails
-// to unwind cleanly, and after Shutdown so no in-flight run can rewrite it.
+// for the life of the process.
+//
+// The order matters. Cancelling first ends a collection that is already
+// running, which is the only thing that can: the scheduler can wait for one but
+// not cut it short. StopJobs then has a wait it can finish, and it comes before
+// the state is dropped so a run is not still writing when the drop happens.
+// Shutdown runs whatever StopJobs reported, rather than leaving the scheduler
+// behind when a job overran. ForgetPolicy comes last and unconditionally, so
+// the policy stops exporting even if the scheduler did not unwind cleanly.
 func (r *Runner) Stop() error {
+	r.cancel()
 	err := r.scheduler.StopJobs()
-	if err == nil {
-		err = r.scheduler.Shutdown()
-	}
+	err = errors.Join(err, r.scheduler.Shutdown())
 	if r.metricsCollector != nil {
 		r.metricsCollector.ForgetPolicy(r.name)
 	}
