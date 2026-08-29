@@ -424,6 +424,12 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	}
 
 	for _, target := range policy.Scope.Targets {
+		// A blank host expands to one empty destination rather than to nothing,
+		// so the runner would schedule a job that can never reach a device
+		// while the API reports the policy as running.
+		if strings.TrimSpace(target.Host) == "" {
+			return errors.New("target host must not be empty")
+		}
 		if err := checkTargetExpansion(target.Host); err != nil {
 			return err
 		}

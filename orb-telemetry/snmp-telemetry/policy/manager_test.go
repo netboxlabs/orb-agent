@@ -615,7 +615,7 @@ func TestStartPolicy_RejectsPolicyWithNoTargets(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// validatePolicy — v3 protocol names
+// validatePolicy: v3 protocol names
 // ---------------------------------------------------------------------------
 
 // Names the SNMP client resolves and names it does not, mixed together. The
@@ -693,4 +693,49 @@ func TestValidate_V2cIgnoresV3ProtocolNames(t *testing.T) {
 	m := newTestManager()
 	auth := config.Authentication{ProtocolVersion: "SNMPv2c", Community: "public", AuthProtocol: "SHA3"}
 	require.NoError(t, m.validatePolicy(minimalPolicy(auth)))
+}
+
+// ---------------------------------------------------------------------------
+// validatePolicy: target host
+// ---------------------------------------------------------------------------
+
+// A target entry with no host clears the non-empty list check and expands to a
+// single empty destination, so the runner schedules an SNMP job against nothing
+// while the API reports the policy as running.
+func TestValidate_RejectsBlankTargetHost(t *testing.T) {
+	m := newTestManager()
+	for _, host := range []string{"", " ", "\t", "  \n "} {
+		err := m.validatePolicy(policyWithTarget(host))
+		require.Error(t, err, "host %q should be rejected", host)
+		assert.ErrorContains(t, err, "target host must not be empty")
+	}
+}
+
+// The blank host arrives in the request body, so the check has to hold on the
+// parse path and not only on a direct validatePolicy call.
+func TestParsePolicies_RejectsTargetWithNoHost(t *testing.T) {
+	m := newTestManager()
+	body := `policies:
+  test:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+      targets:
+        - {}
+`
+	_, err := m.ParsePolicies([]byte(body))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "target host must not be empty")
+}
+
+// TrimSpace decides emptiness and nothing else. A host with padding around it
+// is left as the policy wrote it: validation does not rewrite a target, and
+// trimming one here would hand the expander a different string from the one it
+// reads out of the policy.
+func TestValidate_AcceptsPaddedTargetHost(t *testing.T) {
+	m := newTestManager()
+	assert.NoError(t, m.validatePolicy(policyWithTarget(" 192.0.2.1 ")))
 }

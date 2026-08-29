@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/targets"
 )
 
 // oversizedTargets are the shapes that expand past maxTargetAddresses. The
@@ -106,4 +107,21 @@ func TestNewRunner_RejectsOversizedTarget(t *testing.T) {
 		require.Error(t, err, "target %s should be rejected", host)
 		assert.ErrorContains(t, err, "65536")
 	}
+}
+
+// The size guard reads a target through targets.Count, which reports what
+// targets.Expand returns: one empty address for an empty target. Teaching Count
+// to refuse it would put the two back out of step, which is what reading a
+// target once exists to prevent, so a blank host is refused by policy
+// validation instead of by the count.
+func TestCheckTargetExpansion_LeavesTheBlankHostToValidation(t *testing.T) {
+	assert.NoError(t, checkTargetExpansion(""))
+
+	count, err := targets.Count("")
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), count)
+
+	addrs, err := targets.Expand("")
+	require.NoError(t, err)
+	assert.Len(t, addrs, 1)
 }
