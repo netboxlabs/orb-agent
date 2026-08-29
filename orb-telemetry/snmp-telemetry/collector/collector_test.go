@@ -1218,3 +1218,99 @@ func attrInt(pt observedPoint, key string) int64 {
 	}
 	return -1
 }
+
+// ---------------------------------------------------------------------------
+// Table joins driven by index_transform, against the bundled Juniper profiles
+// ---------------------------------------------------------------------------
+
+// bundledProfile resolves one profile out of the set embedded in the binary.
+func bundledProfile(t *testing.T, relPath string) *profiles.Profile {
+	t.Helper()
+	loader, err := profiles.LoadProfiles("", discardLogger)
+	require.NoError(t, err)
+	p, err := loader.Resolve(relPath)
+	require.NoError(t, err)
+	return p
+}
+
+// TestCollectTarget_IndexTransformJoinsAcrossTables exercises the DCU table in
+// the bundled SRX profile. Its rows are indexed by ifIndex, address family and
+// class name, while the ifName column it tags them from is indexed by ifIndex
+// alone, so the join only lands if the index_transform is applied first.
+func TestCollectTarget_IndexTransformJoinsAcrossTables(t *testing.T) {
+	const (
+		dcuPackets = "1.3.6.1.4.1.2636.3.6.2.1.4"
+		ifName     = "1.3.6.1.2.1.31.1.1.1.1"
+		// ifIndex 547, address family 1, class name "gold".
+		rowGold = "547.1.4.103.111.108.100"
+		// ifIndex 548, address family 2, class name "silver".
+		rowSilver = "548.2.6.115.105.108.118.101.114"
+	)
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {
+			sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.2636.1.1.1.2.135"),
+		},
+		dcuPackets: {
+			dcuPackets + "." + rowGold:   counter64PDU(dcuPackets+"."+rowGold, 111),
+			dcuPackets + "." + rowSilver: counter64PDU(dcuPackets+"."+rowSilver, 222),
+		},
+		ifName: {
+			ifName + ".547": stringPDU(ifName+".547", "ge-0/0/0"),
+			ifName + ".548": stringPDU(ifName+".548", "ge-0/0/1"),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), bundledProfile(t, "juniper/juniper-srx-firewalls.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p1", DialOptions{}))
+
+	points := c.testDeviceStore("p1", "10.0.0.1")["snmp.jnxdcustatspackets"]
+	require.Len(t, points, 2)
+
+	got := make(map[string]string, len(points))
+	for _, pt := range points {
+		var rowIdx, name string
+		for _, a := range pt.attrs {
+			switch a.Key {
+			case "row_index":
+				rowIdx = a.Value.AsString()
+			case "if_interface_name":
+				name = a.Value.AsString()
+			}
+		}
+		got[rowIdx] = name
+	}
+	assert.Equal(t, map[string]string{rowGold: "ge-0/0/0", rowSilver: "ge-0/0/1"}, got)
+}
+
+// TestCollectTarget_IndexTransformSkipsRowWithNoMatch checks that a metric row
+// whose transformed index names no row in the other table keeps its metric and
+// simply carries no joined attribute.
+func TestCollectTarget_IndexTransformSkipsRowWithNoMatch(t *testing.T) {
+	const (
+		dcuPackets = "1.3.6.1.4.1.2636.3.6.2.1.4"
+		ifName     = "1.3.6.1.2.1.31.1.1.1.1"
+		row        = "999.1.4.103.111.108.100"
+	)
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {
+			sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.2636.1.1.1.2.135"),
+		},
+		dcuPackets: {
+			dcuPackets + "." + row: counter64PDU(dcuPackets+"."+row, 7),
+		},
+		ifName: {
+			ifName + ".547": stringPDU(ifName+".547", "ge-0/0/0"),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), bundledProfile(t, "juniper/juniper-srx-firewalls.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p1", DialOptions{}))
+
+	points := c.testDeviceStore("p1", "10.0.0.1")["snmp.jnxdcustatspackets"]
+	require.Len(t, points, 1)
+	for _, a := range points[0].attrs {
+		assert.NotEqual(t, "if_interface_name", string(a.Key))
+	}
+}

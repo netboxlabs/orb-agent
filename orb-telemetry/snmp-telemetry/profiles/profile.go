@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"fmt"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -102,6 +103,42 @@ type MetricTag struct {
 	Symbol *TagColumn `yaml:"symbol"` // alias used in some profiles
 	MIB    string     `yaml:"MIB"`
 	Table  string     `yaml:"table"`
+	// IndexTransform is set when Table names a table other than the one the
+	// metric rows come from. It says which components of a metric row's
+	// composite index identify the row in that other table.
+	IndexTransform IndexTransform `yaml:"index_transform"`
+}
+
+// IndexRange selects a contiguous run of components from a composite table
+// index. Start and End are zero-based positions in the dot-separated index and
+// both ends are included.
+type IndexRange struct {
+	Start int `yaml:"start"`
+	End   int `yaml:"end"`
+}
+
+// IndexTransform maps a metric row's composite index onto the index of the
+// table a MetricTag reads from. The selected runs are concatenated in the order
+// they are declared.
+type IndexTransform []IndexRange
+
+// Apply returns the index into the referenced table for one metric row index.
+//
+// It reports false when a range is malformed or reaches past the row index, so
+// a caller drops the join rather than looking up a wrong row.
+func (t IndexTransform) Apply(rowIndex string) (string, bool) {
+	if len(t) == 0 {
+		return rowIndex, true
+	}
+	parts := strings.Split(rowIndex, ".")
+	out := make([]string, 0, len(parts))
+	for _, r := range t {
+		if r.Start < 0 || r.End < r.Start || r.End >= len(parts) {
+			return "", false
+		}
+		out = append(out, parts[r.Start:r.End+1]...)
+	}
+	return strings.Join(out, "."), true
 }
 
 // TagColumn is the OID source for a MetricTag value.

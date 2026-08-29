@@ -408,6 +408,15 @@ type conditionCheck struct {
 	expected  int64
 }
 
+// joinedTag is a metric_tag whose column lives in a table other than the one
+// the metric rows come from. byIndex is keyed by that other table's index, and
+// transform turns a metric row's composite index into that key.
+type joinedTag struct {
+	name      string
+	transform profiles.IndexTransform
+	byIndex   map[string]string
+}
+
 // collectTable collects all columns in an SNMP table, joining metric and tag columns by row index.
 func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
 	// --- Phase 1: decide which symbols need polling this run ---
@@ -439,15 +448,22 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	}
 
 	// --- Phase 3: walk tag columns ---
-	// rowTags: rowIndex -> tag name -> tag value string
+	// rowTags: rowIndex -> tag name -> tag value string, for columns indexed
+	// the same way as the metric rows.
+	// joinedTags: columns read from another table, matched to a metric row by
+	// transforming that row's composite index.
 	rowTags := make(map[string]map[string]string)
-	for _, mt := range entry.MetricTags {
-		col := metricTagColumn(&mt)
+	var joinedTags []joinedTag
+	for i := range entry.MetricTags {
+		mt := &entry.MetricTags[i]
+		col := metricTagColumn(mt)
 		if col == nil || col.OID == "" {
 			continue
 		}
 		var pdus map[string]snmp.PDU
-		if columnPDUs != nil {
+		// A column carrying an index_transform belongs to another table, so a
+		// full-table walk of this table cannot have picked it up.
+		if columnPDUs != nil && len(mt.IndexTransform) == 0 {
 			pdus = columnPDUs[col.OID]
 		} else {
 			var err error
@@ -457,14 +473,22 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				continue
 			}
 		}
+		tagName := mt.Tag
+		if tagName == "" {
+			tagName = col.Name
+		}
+		if len(mt.IndexTransform) > 0 {
+			jt := joinedTag{name: tagName, transform: mt.IndexTransform, byIndex: make(map[string]string, len(pdus))}
+			for fullOID, pdu := range pdus {
+				jt.byIndex[extractRowIndex(fullOID, col.OID)] = pduToString(pdu, col)
+			}
+			joinedTags = append(joinedTags, jt)
+			continue
+		}
 		for fullOID, pdu := range pdus {
 			rowIdx := extractRowIndex(fullOID, col.OID)
 			if rowTags[rowIdx] == nil {
 				rowTags[rowIdx] = make(map[string]string)
-			}
-			tagName := mt.Tag
-			if tagName == "" {
-				tagName = col.Name
 			}
 			rowTags[rowIdx][tagName] = pduToString(pdu, col)
 		}
@@ -570,6 +594,15 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			if tags, ok := rowTags[rowIdx]; ok {
 				for k, v := range tags {
 					rowAttrs = append(rowAttrs, attribute.String(k, v))
+				}
+			}
+			for _, jt := range joinedTags {
+				key, ok := jt.transform.Apply(rowIdx)
+				if !ok {
+					continue
+				}
+				if v, ok := jt.byIndex[key]; ok {
+					rowAttrs = append(rowAttrs, attribute.String(jt.name, v))
 				}
 			}
 			if len(sym.Enum) > 0 {
