@@ -99,7 +99,7 @@ func newCollector(factory snmp.ClientFactory, p *profiles.Profile) *MetricsColle
 		ps = []*profiles.Profile{p}
 	}
 	matcher := profiles.NewMatcher(ps, discardLogger)
-	return NewMetricsCollector(factory, matcher, discardLogger, time.Second, 1)
+	return NewMetricsCollector(factory, matcher, discardLogger)
 }
 
 // testDeviceStore is a test-only accessor to read the collector's internal
@@ -251,7 +251,7 @@ func TestCollectTarget_NoProfileMatch(t *testing.T) {
 		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjectIDOID + ".0")},
 	}}
 	c := newCollector(walkerFactory(w), nil) // matcher has no profiles
-	err := c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "policy1")
+	err := c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "policy1", DialOptions{})
 	assert.NoError(t, err)
 	assert.Nil(t, c.testDeviceStore("policy1", "10.0.0.1"))
 }
@@ -276,7 +276,7 @@ func TestCollectTarget_ScalarMetric(t *testing.T) {
 		cpuOID:         {cpuOID: intPDU(cpuOID, 75)},
 	}}
 	c := newCollector(walkerFactory(w), p)
-	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "policy1")
+	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "policy1", DialOptions{})
 	require.NoError(t, err)
 
 	store := c.testDeviceStore("policy1", host)
@@ -324,7 +324,7 @@ func TestCollectTarget_TableWithTags(t *testing.T) {
 		},
 	}}
 	c := newCollector(walkerFactory(w), p)
-	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "policy1")
+	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "policy1", DialOptions{})
 	require.NoError(t, err)
 
 	store := c.testDeviceStore("policy1", host)
@@ -380,7 +380,7 @@ func TestCollectTarget_ThrottledMetricCarriesForward(t *testing.T) {
 
 	// First run: both polled.
 	c.clientFactory = walkerFactory(makeWalker(1, 100))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	store := c.testDeviceStore("p", host)
 	assert.Equal(t, int64(1), store["snmp.fastmetric"][0].value)
@@ -389,7 +389,7 @@ func TestCollectTarget_ThrottledMetricCarriesForward(t *testing.T) {
 	// Second run: slowMetric is throttled (poll_time_sec=300, only seconds have passed).
 	// The walker returns different slow values but they should NOT be used.
 	c.clientFactory = walkerFactory(makeWalker(2, 999))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	store = c.testDeviceStore("p", host)
 	assert.Equal(t, int64(2), store["snmp.fastmetric"][0].value, "fast metric should be updated")
@@ -423,12 +423,12 @@ func TestCollectTarget_PolledButEmptyIsCleared(t *testing.T) {
 
 	// First run: metric present.
 	c.clientFactory = walkerFactory(makeWalker(true))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	assert.Len(t, c.testDeviceStore("p", host)["snmp.somemetric"], 1)
 
 	// Second run: metric OID returns empty (OID vanished from device).
 	c.clientFactory = walkerFactory(makeWalker(false))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	assert.Empty(t, c.testDeviceStore("p", host)["snmp.somemetric"], "polled-but-empty metric should be cleared")
 }
 
@@ -468,14 +468,14 @@ func TestCollectTarget_TagNotWalkedWhenAllThrottled(t *testing.T) {
 	ctx := context.Background()
 
 	// First run: symbol is polled, tag column MUST be walked.
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	firstRunCalls := make([]string, len(w.walkCalls))
 	copy(firstRunCalls, w.walkCalls)
 	assert.Contains(t, firstRunCalls, descrColOID, "tag column should be walked on first run")
 
 	// Second run: poll_time_sec=300 not elapsed, symbol is throttled.
 	w.walkCalls = nil
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	assert.NotContains(t, w.walkCalls, descrColOID, "tag column must NOT be walked when all symbols are throttled")
 	assert.NotContains(t, w.walkCalls, errColOID, "metric column must NOT be walked when throttled")
 }
@@ -520,7 +520,7 @@ func TestCollectTarget_WalkFullTable(t *testing.T) {
 	}}
 
 	c := newCollector(walkerFactory(w), p)
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	// Only the table root OID (plus sysObjectID/sysDescr/sysName) should appear — not individual column OIDs.
 	for _, call := range w.walkCalls {
@@ -546,7 +546,7 @@ func newBundledCollector(t *testing.T, factory snmp.ClientFactory) *MetricsColle
 	require.NoError(t, err)
 	all, err := loader.AllResolved()
 	require.NoError(t, err)
-	return NewMetricsCollector(factory, profiles.NewMatcher(all, discardLogger), discardLogger, time.Second, 1)
+	return NewMetricsCollector(factory, profiles.NewMatcher(all, discardLogger), discardLogger)
 }
 
 // A profile may group scalars under `symbols:` with no `table:`. Those entries
@@ -568,7 +568,7 @@ func TestCollectTarget_GroupedScalarSymbols(t *testing.T) {
 	}}
 
 	c := newBundledCollector(t, walkerFactory(w))
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	assert.Contains(t, w.walkCalls, tempFOID, "grouped scalar OID must be walked")
 
@@ -592,7 +592,7 @@ func TestCollectTarget_GroupedScalarSymbolsCarryEnum(t *testing.T) {
 	}}
 
 	c := newBundledCollector(t, walkerFactory(w))
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	pts := c.testDeviceStore("p", host)["snmp.internal-power"]
 	require.Len(t, pts, 1)
@@ -636,7 +636,7 @@ func TestCollectTarget_ProfileMetricTagsBecomeDeviceAttributes(t *testing.T) {
 	}}
 
 	c := newBundledCollector(t, walkerFactory(w))
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	pts := c.testDeviceStore("p", host)["snmp.internal-tempf"]
 	require.Len(t, pts, 1)
@@ -663,7 +663,7 @@ func TestCollectTarget_ProfileMetricTagsReuseSystemWalks(t *testing.T) {
 	}}
 
 	c := newBundledCollector(t, walkerFactory(w))
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	assert.NotContains(t, w.walkCalls, sysDescrOID+".0", "sysDescr must not be walked twice")
 	assert.NotContains(t, w.walkCalls, sysObjectIDOID+".0", "sysObjectID must not be walked twice")
@@ -698,7 +698,7 @@ func TestCollectTarget_ProfileMetricTagsReachTableRows(t *testing.T) {
 	}}
 
 	c := newCollector(walkerFactory(w), p)
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 1)
@@ -742,7 +742,7 @@ func TestCollectTarget_TableRowIndexIgnoresLeadingDot(t *testing.T) {
 	}}
 
 	c := newCollector(walkerFactory(w), p)
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 2)
@@ -784,7 +784,7 @@ func TestCollectTarget_WalkFullTableIgnoresLeadingDot(t *testing.T) {
 	}}
 
 	c := newCollector(walkerFactory(w), p)
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 1)
@@ -824,7 +824,7 @@ func TestCollectTarget_ConditionJoinIgnoresLeadingDot(t *testing.T) {
 	}}
 
 	c := newCollector(walkerFactory(w), p)
-	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
 	require.Len(t, pts, 1, "only the row whose condition column equals 1 is emitted")
@@ -858,11 +858,11 @@ func TestCollectTarget_PoliciesDoNotOverwriteEachOther(t *testing.T) {
 
 	c.clientFactory = walkerFactory(makeWalker(11))
 	targetA := config.Target{Host: host, Port: 161, ID: "id-a"}
-	require.NoError(t, c.CollectTarget(ctx, targetA, mustAuth(), "policy-a"))
+	require.NoError(t, c.CollectTarget(ctx, targetA, mustAuth(), "policy-a", DialOptions{}))
 
 	c.clientFactory = walkerFactory(makeWalker(22))
 	targetB := config.Target{Host: host, Port: 161, ID: "id-b"}
-	require.NoError(t, c.CollectTarget(ctx, targetB, mustAuth(), "policy-b"))
+	require.NoError(t, c.CollectTarget(ctx, targetB, mustAuth(), "policy-b", DialOptions{}))
 
 	storeA := c.testDeviceStore("policy-a", host)
 	storeB := c.testDeviceStore("policy-b", host)
@@ -899,9 +899,9 @@ func TestCollectTarget_SameHostDifferentPortStaysSeparate(t *testing.T) {
 	ctx := context.Background()
 
 	c.clientFactory = walkerFactory(makeWalker(5))
-	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 161}, mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 161}, mustAuth(), "p", DialOptions{}))
 	c.clientFactory = walkerFactory(makeWalker(6))
-	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 1161}, mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 1161}, mustAuth(), "p", DialOptions{}))
 
 	c.storeMu.RLock()
 	defer c.storeMu.RUnlock()
@@ -930,12 +930,12 @@ func TestCollectTarget_PollStateIsPerPolicy(t *testing.T) {
 	ctx := context.Background()
 
 	c.clientFactory = walkerFactory(makeWalker(100))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "policy-a"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "policy-a", DialOptions{}))
 
 	// Policy B has never polled this OID, so the throttle must not apply and
 	// policy A's value must not be carried into policy B's store.
 	c.clientFactory = walkerFactory(makeWalker(999))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "policy-b"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "policy-b", DialOptions{}))
 
 	require.Len(t, c.testDeviceStore("policy-b", host)["snmp.slowmetric"], 1)
 	assert.Equal(t, int64(999), c.testDeviceStore("policy-b", host)["snmp.slowmetric"][0].value)
@@ -963,8 +963,8 @@ func TestForgetPolicy_DropsOnlyThatPolicy(t *testing.T) {
 	c := newCollector(walkerFactory(w), p)
 	ctx := context.Background()
 
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "doomed"))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostB), mustAuth(), "keeper"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "doomed", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostB), mustAuth(), "keeper", DialOptions{}))
 	require.NotEmpty(t, c.testDeviceStore("doomed", hostA))
 	require.NotEmpty(t, c.testDeviceStore("keeper", hostB))
 
@@ -1000,14 +1000,14 @@ func TestCollectTarget_FailedDeviceStopsExporting(t *testing.T) {
 	c := newCollector(walkerFactory(w), p)
 	ctx := context.Background()
 
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
 
 	// The device stops answering: the dial itself now fails.
 	c.clientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return nil, assert.AnError
 	}
-	require.Error(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.Error(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	assert.Nil(t, c.testDeviceStore("p", host), "a device that fails to collect must not keep exporting its last values")
 }
 
@@ -1030,11 +1030,36 @@ func TestCollectTarget_ProfileStopsMatchingClearsStore(t *testing.T) {
 	c := newCollector(walkerFactory(makeWalker(sysObjValue)), p)
 	ctx := context.Background()
 
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
 
 	// The address is reassigned to a device no profile covers.
 	c.clientFactory = walkerFactory(makeWalker("1.3.6.1.4.1.1234"))
-	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	assert.Nil(t, c.testDeviceStore("p", host))
+}
+
+// ---------------------------------------------------------------------------
+// Per-dial settings
+// ---------------------------------------------------------------------------
+
+func TestCollectTarget_UsesCallerDialOptions(t *testing.T) {
+	const (
+		host        = "10.0.0.40"
+		sysObjValue = "1.3.6.1.4.1.9999.40"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+	}}
+	var gotTimeout time.Duration
+	var gotRetries int
+	c := newCollector(func(_ string, _ uint16, retries int, timeout time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		gotTimeout, gotRetries = timeout, retries
+		return w, nil
+	}, nil)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(),
+		"p", DialOptions{Timeout: 9 * time.Second, Retries: 3}))
+	assert.Equal(t, 9*time.Second, gotTimeout)
+	assert.Equal(t, 3, gotRetries)
 }

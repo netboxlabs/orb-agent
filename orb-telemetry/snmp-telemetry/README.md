@@ -51,6 +51,8 @@ policies:
   snmp_metrics_1:
     config:
       metrics_interval: 60
+      snmp_timeout: 5
+      retries: 1
     scope:
       targets:
         - host: "192.168.1.1"
@@ -68,6 +70,12 @@ policies:
         protocol_version: "v2c"
         community: "public"
 ```
+
+`snmp_timeout` sets how long one SNMP request may take, in seconds, and
+`retries` how many times a timed-out request is retried. Both are optional:
+`snmp_timeout` defaults to 5 seconds and `retries` to none. Because a
+collection run is bounded by `metrics_interval`, a policy whose `snmp_timeout`
+is not below its `metrics_interval` is rejected.
 
 A target's `host` can be a single address, a hostname, a CIDR prefix, or an
 address range, and each address it expands to becomes its own recurring poll

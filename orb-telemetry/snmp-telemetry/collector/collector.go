@@ -40,6 +40,14 @@ type deviceKey struct {
 	port   uint16
 }
 
+// DialOptions carries the SNMP transport settings for one collection. They
+// belong to the policy that named the target, not to the profile set, so the
+// collector takes them per call rather than holding them.
+type DialOptions struct {
+	Timeout time.Duration
+	Retries int
+}
+
 // observedPoint holds a single metric observation with its attribute set.
 type observedPoint struct {
 	value int64
@@ -52,8 +60,6 @@ type MetricsCollector struct {
 	clientFactory snmp.ClientFactory
 	matcher       *profiles.Matcher
 	logger        *slog.Logger
-	snmpTimeout   time.Duration
-	retries       int
 
 	pollMu    sync.Mutex
 	pollState map[deviceKey]map[string]time.Time // device -> symbolOID -> lastPoll
@@ -70,13 +76,11 @@ type MetricsCollector struct {
 }
 
 // NewMetricsCollector creates a MetricsCollector.
-func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Matcher, logger *slog.Logger, snmpTimeout time.Duration, retries int) *MetricsCollector {
+func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Matcher, logger *slog.Logger) *MetricsCollector {
 	return &MetricsCollector{
 		clientFactory: clientFactory,
 		matcher:       matcher,
 		logger:        logger,
-		snmpTimeout:   snmpTimeout,
-		retries:       retries,
 		pollState:     make(map[deviceKey]map[string]time.Time),
 		deviceStore:   make(map[deviceKey]map[string][]observedPoint),
 		instruments:   make(map[string]metric.Int64ObservableGauge),
@@ -179,17 +183,17 @@ func (c *MetricsCollector) forgetDevice(key deviceKey) {
 // CollectTarget collects SNMP metrics from a single target using its matched profile.
 // Returns nil if the device has no matching profile (not an error condition).
 // A run that fails leaves nothing behind for the device it was polling.
-func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string) error {
+func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string, dial DialOptions) error {
 	key := deviceKey{policy: policyName, host: target.Host, port: target.Port}
-	if err := c.collect(ctx, key, target, auth); err != nil {
+	if err := c.collect(ctx, key, target, auth, dial); err != nil {
 		c.forgetDevice(key)
 		return err
 	}
 	return nil
 }
 
-func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target config.Target, auth *config.Authentication) error {
-	walker, err := c.clientFactory(target.Host, target.Port, c.retries, c.snmpTimeout, auth, c.logger)
+func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target config.Target, auth *config.Authentication, dial DialOptions) error {
+	walker, err := c.clientFactory(target.Host, target.Port, dial.Retries, dial.Timeout, auth, c.logger)
 	if err != nil {
 		return fmt.Errorf("creating SNMP client for %s: %w", target.Host, err)
 	}

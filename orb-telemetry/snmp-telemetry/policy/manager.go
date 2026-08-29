@@ -89,7 +89,10 @@ func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCo
 	clientFactory := func(host string, port uint16, retries int, timeout time.Duration, auth *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
 		return snmp.NewClient(host, port, retries, timeout, auth, logger)
 	}
-	c := collector.NewMetricsCollector(clientFactory, matcher, m.logger, defaultSNMPTimeout, 0)
+	// Dial settings are per policy, so they are passed to each collection
+	// rather than baked into the collector shared by every policy using this
+	// profile set.
+	c := collector.NewMetricsCollector(clientFactory, matcher, m.logger)
 	m.collectorsByDir[profilesDir] = c
 	m.logger.Info("loaded SNMP profiles", "override_dir", config.SanitizeLogValue(profilesDir), "count", loader.Count())
 	return c, nil
@@ -366,6 +369,14 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 
 	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
 		return fmt.Errorf("metrics_interval must be a positive integer")
+	}
+
+	if policy.Config.SNMPTimeout < 0 {
+		return fmt.Errorf("snmp_timeout must not be negative")
+	}
+
+	if policy.Config.Retries < 0 {
+		return fmt.Errorf("retries must not be negative")
 	}
 
 	return nil

@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/targets"
 )
@@ -26,7 +27,7 @@ const (
 // Collector is the slice of the metrics collector a runner drives. Naming it
 // here keeps the runner's dependency narrow and the policy lifecycle testable.
 type Collector interface {
-	CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string) error
+	CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string, dial collector.DialOptions) error
 	ForgetPolicy(policyName string)
 }
 
@@ -37,6 +38,8 @@ type Runner struct {
 	name             string
 	metricsCollector Collector
 	metricsInterval  time.Duration
+	snmpTimeout      time.Duration
+	retries          int
 	config           config.PolicyConfig
 	scope            config.Scope
 	logger           *slog.Logger
@@ -70,6 +73,20 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		return nil, fmt.Errorf("metrics_interval must be a positive integer")
 	}
 	runner.metricsInterval = time.Duration(*policy.Config.MetricsInterval) * time.Second
+
+	runner.snmpTimeout = time.Duration(policy.Config.SNMPTimeout) * time.Second
+	if runner.snmpTimeout <= 0 {
+		runner.snmpTimeout = defaultSNMPTimeout
+	}
+	runner.retries = policy.Config.Retries
+	if runner.retries < 0 {
+		runner.retries = 0
+	}
+	// Each run is bounded by metrics_interval, so a dial allowed to take the
+	// whole interval leaves no room for the walks that follow it.
+	if runner.snmpTimeout >= runner.metricsInterval {
+		return nil, fmt.Errorf("snmp_timeout (%s) must be less than metrics_interval (%s)", runner.snmpTimeout, runner.metricsInterval)
+	}
 
 	// Schedule a metrics job for each expanded target
 	for _, target := range runner.scope.Targets {
@@ -121,7 +138,8 @@ func (r *Runner) runMetrics(target config.Target) {
 	defer cancel()
 	auth := r.resolveTargetAuthentication(target)
 	targetKey := fmt.Sprintf("%s:%d", target.Host, target.Port)
-	if err := r.metricsCollector.CollectTarget(ctx, target, auth, policyName); err != nil {
+	dial := collector.DialOptions{Timeout: r.snmpTimeout, Retries: r.retries}
+	if err := r.metricsCollector.CollectTarget(ctx, target, auth, policyName, dial); err != nil {
 		r.logger.Warn("SNMP metrics collection failed", "host", config.SanitizeLogValue(target.Host), "policy", config.SanitizeLogValue(policyName), "error", err)
 		r.SetTargetError(targetKey, err)
 	} else {
