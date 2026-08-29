@@ -178,10 +178,17 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.Symbol != nil {
+		switch {
+		case entry.Symbol != nil:
 			c.collectScalar(ctx, walker, entry.Symbol, baseAttrs, target.Host, localBuf, throttledMetrics)
-		} else if entry.Table != nil {
+		case entry.Table != nil:
 			c.collectTable(ctx, walker, &entry, baseAttrs, target.Host, localBuf, throttledMetrics)
+		case len(entry.Symbols) > 0:
+			// Scalars grouped under `symbols:` with no `table:`. Almost all of
+			// them name a `.0` instance, so they collect as scalars.
+			for i := range entry.Symbols {
+				c.collectScalar(ctx, walker, &entry.Symbols[i], baseAttrs, target.Host, localBuf, throttledMetrics)
+			}
 		}
 	}
 

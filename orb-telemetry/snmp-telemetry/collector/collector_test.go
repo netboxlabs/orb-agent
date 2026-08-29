@@ -511,3 +511,78 @@ func TestCollectTarget_WalkFullTable(t *testing.T) {
 	pts := store["snmp.ifouterrors"]
 	require.Len(t, pts, 2)
 }
+
+// ---------------------------------------------------------------------------
+// Grouped scalars: `symbols:` with no `table:`
+// ---------------------------------------------------------------------------
+
+// newBundledCollector builds a MetricsCollector over the profiles bundled into
+// the binary, so a test can drive a real profile rather than a hand-built one.
+func newBundledCollector(t *testing.T, factory snmp.ClientFactory) *MetricsCollector {
+	t.Helper()
+	loader, err := profiles.LoadProfiles("", discardLogger)
+	require.NoError(t, err)
+	all, err := loader.AllResolved()
+	require.NoError(t, err)
+	return NewMetricsCollector(factory, profiles.NewMatcher(all, discardLogger), discardLogger, time.Second, 1)
+}
+
+// A profile may group scalars under `symbols:` with no `table:`. Those entries
+// are neither a scalar `symbol:` nor a table, and 86 bundled profiles use the
+// shape, five of them exclusively.
+func TestCollectTarget_GroupedScalarSymbols(t *testing.T) {
+	const (
+		host        = "10.0.0.7"
+		sysObjValue = "1.3.6.1.4.1.20916"
+		tempFOID    = "1.3.6.1.4.1.20916.1.11.1.1.1.1.0"
+		humidityOID = "1.3.6.1.4.1.20916.1.11.1.1.2.1.0"
+		powerOID    = "1.3.6.1.4.1.20916.1.11.1.1.3.1.0"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		tempFOID:       {tempFOID: intPDU(tempFOID, 72)},
+		humidityOID:    {humidityOID: intPDU(humidityOID, 41)},
+		powerOID:       {powerOID: intPDU(powerOID, 1)},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	assert.Contains(t, w.walkCalls, tempFOID, "grouped scalar OID must be walked")
+
+	store := c.testDeviceStore(host)
+	require.Len(t, store["snmp.internal-tempf"], 1)
+	assert.Equal(t, int64(72), store["snmp.internal-tempf"][0].value)
+	require.Len(t, store["snmp.internal-humidity"], 1)
+	assert.Equal(t, int64(41), store["snmp.internal-humidity"][0].value)
+}
+
+// A grouped symbol keeps the per-symbol decorations a scalar `symbol:` gets.
+func TestCollectTarget_GroupedScalarSymbolsCarryEnum(t *testing.T) {
+	const (
+		host        = "10.0.0.8"
+		sysObjValue = "1.3.6.1.4.1.20916"
+		powerOID    = "1.3.6.1.4.1.20916.1.11.1.1.3.1.0"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		powerOID:       {powerOID: intPDU(powerOID, 1)},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	pts := c.testDeviceStore(host)["snmp.internal-power"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "ac", attrValue(pts[0], "internal-power_status"))
+}
+
+// attrValue returns the string value of one attribute on an observation, or "".
+func attrValue(pt observedPoint, key string) string {
+	for _, kv := range pt.attrs {
+		if string(kv.Key) == key {
+			return kv.Value.AsString()
+		}
+	}
+	return ""
+}
