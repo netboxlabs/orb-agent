@@ -1160,3 +1160,61 @@ func TestCollectTarget_DeviceTagsStopAtTheDeadline(t *testing.T) {
 	assert.NotContains(t, w.walkCalls, locationOID, "a device tag walked after the deadline expired")
 	assert.NotContains(t, w.walkCalls, cpuOID)
 }
+
+// ---------------------------------------------------------------------------
+// Exported identity
+// ---------------------------------------------------------------------------
+
+// The exported attribute set has to carry every dimension the internal device
+// key does. Two agents on one host differ only by port, so without it they key
+// apart internally and export the same attribute set: the observable gauge then
+// receives two points for one series and one endpoint's value is lost.
+func TestCollectTarget_ExportedAttrsCarryEveryKeyDimension(t *testing.T) {
+	const (
+		host        = "10.0.0.52"
+		cpuOID      = "1.3.6.1.4.1.9999.52.1"
+		sysObjValue = "1.3.6.1.4.1.9999.52"
+	)
+	p := profileWithOID(sysObjValue, "identity.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	makeWalker := func(v int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, v)},
+		}}
+	}
+
+	c := newCollector(nil, p)
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(5))
+	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 161}, mustAuth(), "p", DialOptions{}))
+	c.clientFactory = walkerFactory(makeWalker(6))
+	require.NoError(t, c.CollectTarget(ctx, config.Target{Host: host, Port: 1161}, mustAuth(), "p", DialOptions{}))
+
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	for _, key := range []deviceKey{
+		{policy: "p", host: host, port: 161},
+		{policy: "p", host: host, port: 1161},
+	} {
+		pts := c.deviceStore[key]["snmp.cpuutil"]
+		require.Len(t, pts, 1)
+		assert.Equal(t, key.host, attrValue(pts[0], "device_ip"))
+		assert.Equal(t, key.policy, attrValue(pts[0], "policy"))
+		assert.Equal(t, int64(key.port), attrInt(pts[0], "device_port"),
+			"the exported identity must carry the port the internal key does")
+	}
+}
+
+// attrInt returns the int value of one attribute on an observation, or -1.
+func attrInt(pt observedPoint, key string) int64 {
+	for _, kv := range pt.attrs {
+		if string(kv.Key) == key {
+			return kv.Value.AsInt64()
+		}
+	}
+	return -1
+}

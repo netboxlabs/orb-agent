@@ -227,10 +227,13 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	}
 	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
 
-	// The policy name is part of the attribute set because two policies may
-	// poll the same device; without it their series would be indistinguishable.
+	// The attribute set carries every dimension the device key does: two
+	// policies may poll one device, and one host may answer on more than one
+	// port, so without them the series would be indistinguishable and the
+	// observable gauge would receive duplicate points for one attribute set.
 	baseAttrs := []attribute.KeyValue{
 		attribute.String("device_ip", target.Host),
+		attribute.Int("device_port", int(key.port)),
 		attribute.String("policy", key.policy),
 	}
 	if target.ID != "" {

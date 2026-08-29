@@ -6,8 +6,10 @@ exports them as OTLP metrics.
 
 For each target, the backend walks the device over SNMP, matches its
 `sysObjectID` against the loaded profiles, and emits the matched profile's
-metrics as OTLP gauges. Each gauge carries a `device_ip` attribute, plus
-`netbox_id` when the target sets an `id`. Metrics are sent only when
+metrics as OTLP gauges. Each gauge carries `device_ip`, `device_port` and
+`policy` attributes, plus `netbox_id` when the target sets an `id`. The first
+three are the device identity, so two policies polling one device, or one host
+answering on two ports, stay distinct series. Metrics are sent only when
 `--otel-endpoint` is set; without it, targets are still polled but nothing is
 exported.
 
