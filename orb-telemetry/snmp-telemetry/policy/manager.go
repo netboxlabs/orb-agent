@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"strings"
 	"sync"
@@ -34,6 +35,12 @@ type Status struct {
 
 // Manager manages snmp-telemetry policy runners
 type Manager struct {
+	// mu guards the policies map. The HTTP server calls StartPolicy,
+	// StopPolicy and GetPolicyStatuses from concurrent request goroutines, and
+	// the agent polls status on a timer while pushing policy updates, so an
+	// unguarded map hits Go's "concurrent map read and map write" fatal error.
+	// Runner state has its own lock; mu only protects the map.
+	mu                 sync.RWMutex
 	policies           map[string]*Runner
 	logger             *slog.Logger
 	ctx                context.Context
@@ -119,16 +126,16 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 
 // HasPolicy checks if the policy exists
 func (m *Manager) HasPolicy(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	_, ok := m.policies[name]
 	return ok
 }
 
-// StartPolicy starts a single named policy
+// StartPolicy starts a single named policy. The duplicate check and the insert
+// happen together under mu, so two concurrent requests for the same name cannot
+// both start a runner.
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
-	if m.HasPolicy(name) {
-		return fmt.Errorf("policy %s already exists", name)
-	}
-
 	profilesDir := policy.Config.ProfilesDir
 	if profilesDir == "" {
 		profilesDir = m.defaultProfilesDir
@@ -137,6 +144,12 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	sharedCollector, err := m.getOrCreateCollector(profilesDir)
 	if err != nil {
 		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.policies[name]; ok {
+		return fmt.Errorf("policy %s already exists", name)
 	}
 
 	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector)
@@ -150,24 +163,35 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	return nil
 }
 
-// StopPolicy stops a single named policy
+// StopPolicy stops a single named policy. The runner is detached under mu and
+// stopped outside it, since Stop blocks on the scheduler unwinding.
 func (m *Manager) StopPolicy(name string) error {
+	m.mu.Lock()
 	r, ok := m.policies[name]
+	if ok {
+		delete(m.policies, name)
+	}
+	m.mu.Unlock()
 	if !ok {
 		return nil
 	}
 	if err := r.Stop(); err != nil {
 		return fmt.Errorf("stopping policy %s: %w", name, err)
 	}
-	delete(m.policies, name)
 	return nil
 }
 
 // Stop stops all running policies
 func (m *Manager) Stop() error {
-	for name := range m.policies {
-		if err := m.StopPolicy(name); err != nil {
-			return err
+	m.mu.Lock()
+	runners := make(map[string]*Runner, len(m.policies))
+	maps.Copy(runners, m.policies)
+	m.policies = make(map[string]*Runner)
+	m.mu.Unlock()
+
+	for name, r := range runners {
+		if err := r.Stop(); err != nil {
+			return fmt.Errorf("stopping policy %s: %w", name, err)
 		}
 	}
 	return nil
@@ -178,8 +202,12 @@ func (m *Manager) GetCapabilities() []string {
 	return []string{"targets"}
 }
 
-// GetPolicyStatuses returns the status of all known policies
+// GetPolicyStatuses returns the status of all known policies. RLock guards the
+// map iteration against a concurrent StartPolicy or StopPolicy; GetLastError
+// takes the runner's own lock, so there is no nesting on mu.
 func (m *Manager) GetPolicyStatuses() []Status {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	statuses := make([]Status, 0, len(m.policies))
 	for name, runner := range m.policies {
 		s := Status{Name: name, Status: "running"}
