@@ -89,9 +89,17 @@ available.
 An override file's path must match the bundled file's path exactly, including
 its subdirectory. For example, overriding the bundled
 `_general/system-mib.yml` requires placing the replacement at
-`_general/system-mib.yml` under the override directory. A file dropped at the
-override directory's root as `system-mib.yml` silently loads as a separate,
-unused profile instead of replacing the bundled one.
+`_general/system-mib.yml` under the override directory.
+
+A file at any other path is still loaded, and still takes effect. One placed at
+the override directory's root under a bundled profile's filename, such as
+`system-mib.yml`, becomes the parent of every bundled profile carrying
+`extends: system-mib.yml`, while `_general/system-mib.yml` itself stays in place
+unchanged. The backend logs a warning naming the path that would have replaced
+the bundled profile, so check the log after adding an override.
+
+Where an override and a bundled profile claim the same `sysobjectid`, the
+override wins and the collision is logged.
 
 The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the

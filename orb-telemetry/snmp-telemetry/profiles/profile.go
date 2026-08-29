@@ -29,10 +29,27 @@ func (s *StringOrSlice) UnmarshalYAML(value *yaml.Node) error {
 	return fmt.Errorf("unsupported YAML node kind %v for StringOrSlice", value.Kind)
 }
 
+// Origin records where a profile was read from. It decides the winner when a
+// bundled profile and an override file claim the same sysObjectID.
+type Origin string
+
+const (
+	// OriginEmbedded marks a profile bundled into the binary.
+	OriginEmbedded Origin = "embedded"
+	// OriginOverride marks a profile read from an override directory.
+	OriginOverride Origin = "override"
+)
+
 // Profile is the top-level representation of a ktranslate-compatible SNMP profile file.
 type Profile struct {
 	// FileName is the base filename, populated by the Loader (not from YAML).
+	// It is what an `extends` or `matches` reference names.
 	FileName string `yaml:"-"`
+	// RelPath is the path relative to the profile root, populated by the Loader.
+	// It is what an override file must match to replace a bundled profile.
+	RelPath string `yaml:"-"`
+	// Origin is where the profile was read from, populated by the Loader.
+	Origin Origin `yaml:"-"`
 
 	Extends     []string          `yaml:"extends"`
 	Provider    string            `yaml:"provider"`

@@ -83,7 +83,7 @@ func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCo
 	if err != nil {
 		return nil, fmt.Errorf("resolving SNMP profiles: %w", err)
 	}
-	matcher := profiles.NewMatcher(resolved)
+	matcher := profiles.NewMatcher(resolved, m.logger)
 	clientFactory := func(host string, port uint16, retries int, timeout time.Duration, auth *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
 		return snmp.NewClient(host, port, retries, timeout, auth, logger)
 	}

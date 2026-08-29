@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -60,12 +62,40 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Loader, error) {
 		return nil, fmt.Errorf("reading embedded profiles: %w", err)
 	}
 	if overrideDir != "" {
+		bundled := slices.Collect(maps.Keys(l.byFile))
 		l.dir = overrideDir
 		if err := l.readDir(); err != nil {
 			return nil, fmt.Errorf("reading override profiles from %s: %w", overrideDir, err)
 		}
+		l.warnMisplacedOverrides(bundled)
 	}
 	return l, nil
+}
+
+// warnMisplacedOverrides reports override files that replace no bundled
+// profile. An override only takes effect when its path under the override
+// directory matches the bundled file's path exactly, so a file dropped at the
+// override root loads as an extra profile and leaves the bundled one in place.
+// Nothing else tells the operator that, and the two outcomes look identical
+// from the collected metrics.
+func (l *Loader) warnMisplacedOverrides(bundledPaths []string) {
+	bundled := make(map[string]bool, len(bundledPaths))
+	for _, rel := range bundledPaths {
+		bundled[rel] = true
+	}
+	for _, rel := range slices.Sorted(maps.Keys(l.byFile)) {
+		p := l.byFile[rel]
+		if p.Origin != OriginOverride || bundled[rel] {
+			continue
+		}
+		attrs := []any{"file", rel, "override_dir", l.dir}
+		// A bundled profile of the same basename is almost always the one the
+		// operator meant to replace, so name the path that would have done it.
+		if want, ok := l.byBase[p.FileName]; ok && bundled[want] {
+			attrs = append(attrs, "expected_path", want)
+		}
+		l.logger.Warn("SNMP profile override replaces no bundled profile", attrs...)
+	}
 }
 
 // readFS loads every profile under root in fsys. An override read afterwards
@@ -95,6 +125,8 @@ func (l *Loader) readFS(fsys fs.FS, root string) error {
 		rel := strings.TrimPrefix(path, root+"/")
 		base := filepath.Base(path)
 		p.FileName = base
+		p.RelPath = rel
+		p.Origin = OriginEmbedded
 		l.byFile[rel] = &p
 		if _, exists := l.byBase[base]; !exists {
 			l.byBase[base] = rel
@@ -130,9 +162,11 @@ func (l *Loader) readDir() error {
 		}
 		base := filepath.Base(path)
 		p.FileName = base
-		l.byFile[rel] = &p
+		p.RelPath = filepath.ToSlash(rel)
+		p.Origin = OriginOverride
+		l.byFile[p.RelPath] = &p
 		if _, exists := l.byBase[base]; !exists {
-			l.byBase[base] = rel
+			l.byBase[base] = p.RelPath
 		}
 		return nil
 	})
@@ -182,6 +216,8 @@ func (l *Loader) Resolve(key string) (*Profile, error) {
 
 	merged := &Profile{
 		FileName:    p.FileName,
+		RelPath:     p.RelPath,
+		Origin:      p.Origin,
 		Provider:    p.Provider,
 		SysObjectID: p.SysObjectID,
 		Matches:     p.Matches,
@@ -218,11 +254,16 @@ func (l *Loader) Resolve(key string) (*Profile, error) {
 	return merged, nil
 }
 
-// AllResolved resolves every loaded profile and returns them.
-// Profiles that fail to resolve are logged and skipped.
+// AllResolved resolves every loaded profile and returns them in relative-path
+// order. Profiles that fail to resolve are logged and skipped.
+//
+// The order is sorted rather than map order because the Matcher indexes this
+// slice and has to break ties between profiles claiming the same key. Map order
+// would decide those ties differently on every restart.
 func (l *Loader) AllResolved() ([]*Profile, error) {
-	result := make([]*Profile, 0, len(l.byFile))
-	for name := range l.byFile {
+	names := slices.Sorted(maps.Keys(l.byFile))
+	result := make([]*Profile, 0, len(names))
+	for _, name := range names {
 		p, err := l.Resolve(name)
 		if err != nil {
 			l.logger.Warn("Failed to resolve profile", "file", name, "error", err)

@@ -89,7 +89,7 @@ func newCollector(factory snmp.ClientFactory, p *profiles.Profile) *MetricsColle
 	if p != nil {
 		ps = []*profiles.Profile{p}
 	}
-	matcher := profiles.NewMatcher(ps)
+	matcher := profiles.NewMatcher(ps, discardLogger)
 	return NewMetricsCollector(factory, matcher, discardLogger, time.Second, 1)
 }
 

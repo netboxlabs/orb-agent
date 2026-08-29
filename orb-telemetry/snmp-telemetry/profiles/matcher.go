@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -21,18 +22,30 @@ type Matcher struct {
 
 // NewMatcher builds a Matcher from a list of fully-resolved profiles.
 // Profiles without any sysobjectid entries are ignored (they are base/inherited profiles).
-func NewMatcher(profiles []*Profile) *Matcher {
+//
+// Two profiles can claim the same sysObjectID, or the same basename that a
+// `matches` redirect names. winner resolves those, and logger reports the ones
+// an operator can act on. Pass profiles in a stable order (Loader.AllResolved
+// sorts them) so a tie between two profiles of the same origin does not move
+// between restarts.
+func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 	m := &Matcher{
 		exactIndex:    make(map[string]*Profile),
 		profileByFile: make(map[string]*Profile),
 	}
 	for _, p := range profiles {
-		m.profileByFile[p.FileName] = p
+		if prev, ok := m.profileByFile[p.FileName]; ok {
+			m.profileByFile[p.FileName] = winner(prev, p, logger, "basename", p.FileName)
+		} else {
+			m.profileByFile[p.FileName] = p
+		}
 		for _, raw := range p.SysObjectID {
 			oid := normalizeOID(raw)
 			if strings.HasSuffix(oid, ".*") {
 				prefix := strings.TrimSuffix(oid, "*")
 				m.wildcardIndex = append(m.wildcardIndex, wildcardEntry{prefix: prefix, profile: p})
+			} else if prev, ok := m.exactIndex[oid]; ok {
+				m.exactIndex[oid] = winner(prev, p, logger, "sysobjectid", oid)
 			} else {
 				m.exactIndex[oid] = p
 			}
@@ -43,6 +56,32 @@ func NewMatcher(profiles []*Profile) *Matcher {
 		return len(m.wildcardIndex[i].prefix) > len(m.wildcardIndex[j].prefix)
 	})
 	return m
+}
+
+// winner picks which of two profiles claiming the same key keeps it. An
+// override-directory profile beats a bundled one, since overriding is what the
+// operator asked for; otherwise the profile already indexed keeps the key,
+// which is stable as long as the input order is.
+//
+// A collision between an override and a bundled profile is the operator's to
+// fix, so it is logged at warn level. The bundled set itself ships several
+// files that share a basename, and warning about those on a correct install
+// would only teach operators to ignore the warning.
+func winner(current, candidate *Profile, logger *slog.Logger, kind, key string) *Profile {
+	kept, dropped := current, candidate
+	if candidate.Origin == OriginOverride && current.Origin != OriginOverride {
+		kept, dropped = candidate, current
+	}
+	if logger != nil {
+		msg := "duplicate " + kind + " across SNMP profiles"
+		attrs := []any{kind, key, "using", kept.RelPath, "ignoring", dropped.RelPath}
+		if current.Origin == candidate.Origin {
+			logger.Debug(msg, attrs...)
+		} else {
+			logger.Warn(msg, attrs...)
+		}
+	}
+	return kept
 }
 
 // Match returns the best-matching profile for the given device sysObjectID.
