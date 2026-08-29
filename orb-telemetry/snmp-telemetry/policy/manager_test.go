@@ -525,21 +525,20 @@ policies:
 	assert.Contains(t, buf.String(), "snmp_timout")
 }
 
-// TestValidateProfilesDir_DotsInNames covers names that merely contain dots.
-// filepath.Clean resolves an interior "..", so only a leading one survives to be
-// rejected; a cleaned absolute path is an ordinary directory the operator could
-// have named outright.
-func TestValidateProfilesDir_DotsInNames(t *testing.T) {
+// TestValidateProfilesDir_DotsAnywhereRejected pins the deliberately blunt rule:
+// any ".." is refused, including one inside a directory name. filepath.Clean
+// resolves an interior traversal first, so /opt/profiles/../../etc becomes /etc
+// and is accepted, which is no wider than naming /etc outright.
+func TestValidateProfilesDir_DotsAnywhereRejected(t *testing.T) {
 	tests := []struct {
 		name    string
 		dir     string
 		want    string
 		wantErr bool
 	}{
-		{name: "dots inside a directory name", dir: "/opt/a..b", want: "/opt/a..b"},
-		{name: "trailing dots in a name", dir: "/opt/profiles..", want: "/opt/profiles.."},
 		{name: "interior traversal is resolved", dir: "/opt/profiles/../../etc", want: "/etc"},
 		{name: "leading traversal is rejected", dir: "../../etc", wantErr: true},
+		{name: "dots inside a name are rejected too", dir: "/opt/a..b", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

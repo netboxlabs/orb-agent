@@ -142,10 +142,12 @@ func (m *Manager) HasPolicy(name string) bool {
 // paths are both accepted; the directory is documented as neither.
 func validateProfilesDir(dir string) (string, error) {
 	clean := filepath.Clean(dir)
-	for _, part := range strings.Split(clean, string(filepath.Separator)) {
-		if part == ".." {
-			return "", fmt.Errorf(`SNMP profiles directory must not contain a ".." element: %s`, dir)
-		}
+	// Refuse any ".." at all rather than only a leading path element. Checking
+	// elements would also accept a name such as /opt/a..b, but the substring
+	// form is the barrier static analysis recognises, and a profiles directory
+	// with dots in its name is not worth the weaker check.
+	if strings.Contains(clean, "..") {
+		return "", fmt.Errorf(`SNMP profiles directory must not contain "..": %s`, dir)
 	}
 	return clean, nil
 }
