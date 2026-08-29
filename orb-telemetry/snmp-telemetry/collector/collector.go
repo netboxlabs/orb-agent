@@ -261,10 +261,14 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 			c.collectScalar(ctx, walker, entry.Symbol, baseAttrs, key, localBuf, throttledMetrics)
 		case entry.Table != nil:
 			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttledMetrics)
+		case len(entry.Symbols) > 0 && groupedSymbolsAreTableColumns(&entry):
+			// Columns of a table the profile names no `table:` root for. The
+			// rows still have to be joined by index, or the entry's row-scoped
+			// metadata is lost and the rows carry no identity.
+			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttledMetrics)
 		case len(entry.Symbols) > 0:
-			// Scalars grouped under `symbols:` with no `table:`. Almost all of
-			// them name a `.0` instance, so they collect as scalars. One entry
-			// can carry dozens, each a request of its own, so the deadline is
+			// Scalars grouped under `symbols:` with no `table:`. One entry can
+			// carry dozens, each a request of its own, so the deadline is
 			// checked between them and not only between entries.
 			for i := range entry.Symbols {
 				if err := ctx.Err(); err != nil {
@@ -299,6 +303,31 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	}
 
 	return nil
+}
+
+// groupedSymbolsAreTableColumns reports whether an entry that lists `symbols:`
+// with no `table:` root is describing table columns rather than grouped scalars.
+//
+// The OID shape does not decide it. Of the 60 such entries in the bundled set,
+// 44 name a `.0` instance throughout and 16 do not, but those 16 include
+// genuine scalars, and a table column can equally be written as a fully
+// qualified instance. What does decide it is row-scoped metadata: an entry
+// `metric_tags:` block names a per-row dimension and a symbol `condition:`
+// selects rows, and neither has any meaning for a scalar. Both are also exactly
+// what the scalar path has nowhere to put.
+//
+// Entries that are table columns yet declare neither cannot be told apart from
+// grouped scalars without the MIB, so they stay on the scalar path.
+func groupedSymbolsAreTableColumns(entry *profiles.MetricEntry) bool {
+	if len(entry.MetricTags) > 0 {
+		return true
+	}
+	for i := range entry.Symbols {
+		if entry.Symbols[i].Condition != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // appendDeviceTags renders the profile's top-level metric_tags and appends them
@@ -629,7 +658,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			if err := ctx.Err(); err != nil {
 				return
 			}
-			rowIdx := extractRowIndex(fullOID, sym.OID)
+			rowIdx, indexed := rowIndex(fullOID, sym.OID)
 
 			if hasCondition {
 				rowVals := conditionRowVals[cond.columnOID]
@@ -648,7 +677,9 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 
 			rowAttrs := make([]attribute.KeyValue, len(baseAttrs))
 			copy(rowAttrs, baseAttrs)
-			rowAttrs = append(rowAttrs, attribute.String("row_index", rowIdx))
+			if indexed {
+				rowAttrs = append(rowAttrs, attribute.String("row_index", rowIdx))
+			}
 			if tags, ok := rowTags[rowIdx]; ok {
 				for k, v := range tags {
 					rowAttrs = append(rowAttrs, attribute.String(k, v))
@@ -769,12 +800,20 @@ func normalizeOID(oid string) string {
 
 // extractRowIndex strips the column OID prefix from a full OID to get the row index suffix.
 func extractRowIndex(fullOID, columnOID string) string {
+	idx, _ := rowIndex(fullOID, columnOID)
+	return idx
+}
+
+// rowIndex strips the column OID prefix from a full OID and reports whether
+// there was one to strip. A symbol may name a fully qualified instance rather
+// than a column, and its single PDU then identifies no row.
+func rowIndex(fullOID, columnOID string) (string, bool) {
 	fullOID = normalizeOID(fullOID)
 	prefix := normalizeOID(columnOID) + "."
 	if strings.HasPrefix(fullOID, prefix) {
-		return fullOID[len(prefix):]
+		return fullOID[len(prefix):], true
 	}
-	return fullOID
+	return fullOID, false
 }
 
 // buildMetricName converts a profile symbol name to an OTLP metric name.

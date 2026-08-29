@@ -204,6 +204,14 @@ func TestExtractRowIndex(t *testing.T) {
 	assert.Equal(t, "3", extractRowIndex(".1.3.6.1.2.1.2.2.1.2.3", ".1.3.6.1.2.1.2.2.1.2"))
 	// No prefix match — returns full OID unchanged.
 	assert.Equal(t, "1.2.3.4", extractRowIndex("1.2.3.4", "9.9.9.9"))
+
+	// A fully qualified instance OID has no column prefix to strip.
+	idx, indexed := rowIndex("1.3.6.1.2.1.2.2.1.2.3", "1.3.6.1.2.1.2.2.1.2")
+	assert.Equal(t, "3", idx)
+	assert.True(t, indexed)
+	idx, indexed = rowIndex("1.2.3.4", "1.2.3.4")
+	assert.Equal(t, "1.2.3.4", idx)
+	assert.False(t, indexed)
 }
 
 func TestBuildMetricName(t *testing.T) {
@@ -1406,4 +1414,134 @@ func TestPduToString_UnknownConversionFallsBackToRaw(t *testing.T) {
 	col := &profiles.TagColumn{Name: "x", Conversion: "some_future_conversion"}
 	pdu := snmp.PDU{Type: gosnmp.OctetString, Value: []byte("  raw  ")}
 	require.Equal(t, "raw", pduToString(pdu, col))
+}
+
+// ---------------------------------------------------------------------------
+// Grouped symbols that are table columns
+// ---------------------------------------------------------------------------
+
+// A grouped `symbols:` entry that also declares `metric_tags:` is describing
+// table columns, not scalars: the tag names a per-row dimension. One bundled
+// radio profile has that shape, and its per-interface rows are
+// indistinguishable without the interface name.
+func TestCollectTarget_GroupedSymbolsWithMetricTagsCollectAsTableRows(t *testing.T) {
+	const (
+		host        = "10.0.0.60"
+		sysObjValue = "1.3.6.1.4.1.17713.60.1"
+		mcsOID      = "1.3.6.1.4.1.17713.60.1.1.1.5"
+		ifNameOID   = "1.3.6.1.4.1.17713.60.1.1.1.2"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		mcsOID: {
+			mcsOID + ".1": intPDU(mcsOID+".1", 9),
+			mcsOID + ".2": intPDU(mcsOID+".2", 11),
+		},
+		ifNameOID: {
+			ifNameOID + ".1": stringPDU(ifNameOID+".1", "radio-1"),
+			ifNameOID + ".2": stringPDU(ifNameOID+".2", "radio-2"),
+		},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.mcs"]
+	require.Len(t, pts, 2)
+	byName := map[string]int64{}
+	for _, pt := range pts {
+		byName[attrValue(pt, "ifName")] = pt.value
+	}
+	assert.Equal(t, map[string]int64{"radio-1": 9, "radio-2": 11}, byName)
+}
+
+// A grouped `symbols:` entry whose symbol carries a `condition:` is also
+// describing table columns: a condition filters rows of the same table. The
+// scalar path has nowhere to apply it, so every row is emitted.
+func TestCollectTarget_GroupedSymbolsWithConditionFilterRows(t *testing.T) {
+	const (
+		host        = "10.0.0.61"
+		sysObjValue = "1.3.6.1.4.1.9999.61"
+		usedOID     = "1.3.6.1.4.1.9999.61.1.7"
+		typeOID     = "1.3.6.1.4.1.9999.61.1.3"
+	)
+	p := profileWithOID(sysObjValue, "pools.yml", []profiles.MetricEntry{{
+		Symbols: []profiles.Symbol{
+			{Name: "poolUsed", OID: usedOID, Condition: "poolType=10"},
+			{Name: "poolType", OID: typeOID},
+		},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		usedOID: {
+			usedOID + ".1": intPDU(usedOID+".1", 100),
+			usedOID + ".2": intPDU(usedOID+".2", 200),
+		},
+		typeOID: {
+			typeOID + ".1": intPDU(typeOID+".1", 10),
+			typeOID + ".2": intPDU(typeOID+".2", 3),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.poolused"]
+	require.Len(t, pts, 1, "only the row the condition selects may be emitted")
+	assert.Equal(t, int64(100), pts[0].value)
+	assert.Equal(t, "1", attrValue(pts[0], "row_index"))
+}
+
+// The entries the grouped-symbols arm was added for carry no row-scoped
+// metadata, so they stay on the scalar path and keep their attribute set. A
+// row_index on these would split each series in two across the change.
+func TestCollectTarget_GroupedScalarsKeepTheScalarPath(t *testing.T) {
+	const (
+		host        = "10.0.0.62"
+		sysObjValue = "1.3.6.1.4.1.38218"
+		vrmsOID     = "1.3.6.1.4.1.38218.1.6.1"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		vrmsOID:        {vrmsOID: intPDU(vrmsOID, 231)},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.pdu-meter1-vrms"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(231), pts[0].value)
+	assert.Empty(t, attrValue(pts[0], "row_index"), "a grouped scalar must not gain a row identity")
+}
+
+// A symbol may name a fully qualified instance rather than a column, in which
+// case its single PDU strips to no row index. Labelling it with the whole OID
+// would put a meaningless dimension on the series.
+func TestCollectTarget_TableSymbolNamingOneInstanceHasNoRowIndex(t *testing.T) {
+	const (
+		host        = "10.0.0.63"
+		sysObjValue = "1.3.6.1.4.1.9999.63"
+		instOID     = "1.3.6.1.4.1.9999.63.1.7.1.1"
+		nameColOID  = "1.3.6.1.4.1.9999.63.1.3"
+	)
+	p := profileWithOID(sysObjValue, "instance.yml", []profiles.MetricEntry{{
+		Symbols:    []profiles.Symbol{{Name: "poolUsed", OID: instOID}},
+		MetricTags: []profiles.MetricTag{{Column: &profiles.TagColumn{OID: nameColOID, Name: "poolName"}}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		instOID:        {instOID: intPDU(instOID, 555)},
+		nameColOID:     {nameColOID + ".1.1": stringPDU(nameColOID+".1.1", "pool-a")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.poolused"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(555), pts[0].value)
+	assert.Empty(t, attrValue(pts[0], "row_index"))
 }
