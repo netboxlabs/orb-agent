@@ -117,7 +117,7 @@ func TestMatcher_BundledSetLoadsWithoutWarnings(t *testing.T) {
 // An override only replaces a bundled profile when its relative path matches.
 // A file dropped at the override root is loaded, but replaces nothing, and
 // nothing told the operator that before.
-func TestLoadProfiles_WarnsOnOverrideWithoutBundledCounterpart(t *testing.T) {
+func TestLoadProfiles_WarnsOnMisplacedOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeYAML(t, dir, "system-mib.yml", "metrics: []\n")
 
@@ -128,6 +128,23 @@ func TestLoadProfiles_WarnsOnOverrideWithoutBundledCounterpart(t *testing.T) {
 	out := buf.String()
 	assert.Contains(t, out, "system-mib.yml")
 	assert.Contains(t, out, "_general/system-mib.yml", "the warning must name the path that would replace the bundled profile")
+}
+
+// Adding a vendor the bundled set does not carry is a supported use of the
+// override directory. Its basename appears nowhere in the bundled set, so
+// there is no bundled profile it could have been meant to replace and nothing
+// to warn about.
+func TestLoadProfiles_NewVendorProfileIsSilent(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "acme-router.yml", "sysobjectid: 1.3.6.1.4.1.99999.1\n")
+
+	logger, buf := captureLogger()
+	l, err := LoadProfiles(dir, logger)
+	require.NoError(t, err)
+	assert.Empty(t, buf.String(), "a brand-new profile replaces nothing by design and must not warn")
+
+	_, err = l.Resolve("acme-router.yml")
+	require.NoError(t, err, "the new profile must still load")
 }
 
 func TestLoadProfiles_CorrectlyPlacedOverrideIsSilent(t *testing.T) {

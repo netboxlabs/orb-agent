@@ -72,12 +72,19 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Loader, error) {
 	return l, nil
 }
 
-// warnMisplacedOverrides reports override files that replace no bundled
-// profile. An override only takes effect when its path under the override
-// directory matches the bundled file's path exactly, so a file dropped at the
-// override root loads as an extra profile and leaves the bundled one in place.
-// Nothing else tells the operator that, and the two outcomes look identical
-// from the collected metrics.
+// warnMisplacedOverrides reports override files that look like a replacement
+// for a bundled profile but sit at the wrong path. An override only takes
+// effect as a replacement when its path under the override directory matches
+// the bundled file's path exactly, so a file dropped at the override root
+// loads as an extra profile and leaves the bundled one in place. Nothing else
+// tells the operator that, and the two outcomes look identical from the
+// collected metrics.
+//
+// The discriminator is the basename. A file carrying a bundled profile's
+// basename from somewhere other than that profile's path was almost certainly
+// meant to replace it. A basename the bundled set does not carry is a new
+// profile, which is a supported use of the override directory and replaces
+// nothing by design.
 func (l *Loader) warnMisplacedOverrides(bundledPaths []string) {
 	bundled := make(map[string]bool, len(bundledPaths))
 	for _, rel := range bundledPaths {
@@ -88,13 +95,12 @@ func (l *Loader) warnMisplacedOverrides(bundledPaths []string) {
 		if p.Origin != OriginOverride || bundled[rel] {
 			continue
 		}
-		attrs := []any{"file", rel, "override_dir", l.dir}
-		// A bundled profile of the same basename is almost always the one the
-		// operator meant to replace, so name the path that would have done it.
-		if want, ok := l.byBase[p.FileName]; ok && bundled[want] {
-			attrs = append(attrs, "expected_path", want)
+		want, ok := l.byBase[p.FileName]
+		if !ok || !bundled[want] {
+			continue
 		}
-		l.logger.Warn("SNMP profile override replaces no bundled profile", attrs...)
+		l.logger.Warn("SNMP profile override sits at the wrong path and replaces nothing",
+			"file", rel, "override_dir", l.dir, "expected_path", want)
 	}
 }
 
