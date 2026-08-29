@@ -138,6 +138,24 @@ func (l *Loader) readDir() error {
 	})
 }
 
+// prepend returns a freshly allocated slice containing head followed by tail.
+// It never writes into head's or tail's backing array: it always allocates a
+// new one up front and only reads from its arguments. This matters because
+// head is typically a cached, already-resolved parent's slice that may be
+// shared by more than one child through l.resolved; appending directly onto
+// it (e.g. append(head, tail...)) would reuse head's backing array whenever
+// head has spare capacity, letting one child's merge silently overwrite
+// another's.
+func prepend[T any](head, tail []T) []T {
+	if len(head) == 0 && len(tail) == 0 {
+		return nil
+	}
+	out := make([]T, 0, len(head)+len(tail))
+	out = append(out, head...)
+	out = append(out, tail...)
+	return out
+}
+
 // Resolve returns the fully-merged profile for the given key, resolving all extends recursively.
 // key may be a relative path (e.g. "cisco/cisco-catalyst.yml") or a bare basename
 // (e.g. "system-mib.yml") as used in extends references.
@@ -176,12 +194,23 @@ func (l *Loader) Resolve(key string) (*Profile, error) {
 			l.logger.Warn("Could not resolve extended profile, skipping", "parent", parentName, "child", key, "error", err)
 			continue
 		}
-		// Parent metrics/tags are prepended; child overrides provider and SysObjectID
-		merged.Metrics = append(parent.Metrics, merged.Metrics...)
-		merged.MetricTags = append(parent.MetricTags, merged.MetricTags...)
+		// Parent metrics/tags are prepended. A resolved parent is cached in
+		// l.resolved and may be extended by more than one sibling, so its
+		// slice must never be the destination of an append: append(x, ...)
+		// reuses x's backing array whenever x has spare capacity, and a
+		// second sibling writing into that spare capacity would silently
+		// corrupt the metrics of the first sibling's already-cached profile.
+		// prepend allocates a fresh backing array up front and only ever
+		// reads from parent.Metrics/parent.MetricTags, so no two resolved
+		// profiles can end up sharing an array.
+		merged.Metrics = prepend(parent.Metrics, merged.Metrics)
+		merged.MetricTags = prepend(parent.MetricTags, merged.MetricTags)
 	}
 
-	// Append this profile's own metrics/tags after parent's
+	// Append this profile's own metrics/tags after parent's. merged.Metrics
+	// (nil, or a slice built exclusively by prepend above) is owned solely
+	// by this call, so appending onto it here cannot alias another
+	// profile's slice.
 	merged.Metrics = append(merged.Metrics, p.Metrics...)
 	merged.MetricTags = append(merged.MetricTags, p.MetricTags...)
 

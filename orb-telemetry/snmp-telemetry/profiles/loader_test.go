@@ -245,3 +245,125 @@ func TestLoadProfiles_OverrideDirOverlaysRatherThanReplaces(t *testing.T) {
 	_, err = l.Resolve("base.yml")
 	assert.NoError(t, err, "embedded profiles must survive an override dir")
 }
+
+func metricNames(p *Profile) []string {
+	names := make([]string, len(p.Metrics))
+	for i, m := range p.Metrics {
+		names[i] = m.Symbol.Name
+	}
+	return names
+}
+
+// Regression test for a bug where two profiles extending the same parent
+// could corrupt each other. Resolve built the merged slice as
+// append(parent.Metrics, merged.Metrics...); on the first loop iteration
+// merged.Metrics is nil, so that append returns parent.Metrics's own slice
+// header unchanged, backing array and all. The next line then appended the
+// child's own metrics onto that same array. If the parent's slice had any
+// spare capacity, the child's metrics landed inside the parent's backing
+// array instead of a new one. A second child extending the same parent
+// reused that capacity too, silently overwriting the first child's already
+// -cached resolved profile.
+//
+// The existing loader tests never caught this because their fixtures are
+// two- or three-file chains where the parent slice is built with exactly
+// enough capacity for its own elements (no spare left over). This test
+// crafts a parent with spare capacity explicitly, the same shape a
+// multi-level extends chain produces in practice (see
+// TestLoadProfiles_ResolveAllMatchesIsolatedResolve for that happening with
+// the real bundled profiles).
+func TestResolve_ParentSpareCapacityNotSharedBetweenChildren(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "childA.yml", `
+extends:
+  - parent.yml
+metrics:
+  - symbol:
+      name: aOnly
+      OID: 9.9.9.1
+`)
+	writeYAML(t, dir, "childB.yml", `
+extends:
+  - parent.yml
+metrics:
+  - symbol:
+      name: bOnly
+      OID: 9.9.9.2
+`)
+
+	l, err := NewLoader(dir, silentLogger)
+	require.NoError(t, err)
+
+	// Inject an already-resolved parent whose Metrics slice has one element
+	// but room for four, i.e. len 1, cap 4. This is deterministic, unlike
+	// relying on incidental append growth from YAML decoding, and it is
+	// exactly the shape a cached parent has after its own extends chain
+	// resolves with room to spare.
+	parentMetrics := make([]MetricEntry, 1, 4)
+	parentMetrics[0] = MetricEntry{Symbol: &Symbol{Name: "parentMetric", OID: "1.1.1"}}
+	require.Greater(t, cap(parentMetrics), len(parentMetrics), "fixture requires spare capacity in the parent slice")
+	l.resolved["parent.yml"] = &Profile{FileName: "parent.yml", Metrics: parentMetrics}
+
+	childA, err := l.Resolve("childA.yml")
+	require.NoError(t, err)
+	childB, err := l.Resolve("childB.yml")
+	require.NoError(t, err)
+
+	// Assert only after both are resolved: the corruption overwrites
+	// childA's already-cached slice when childB is resolved next, so
+	// checking childA immediately after its own Resolve call would miss it.
+	assert.Equal(t, []string{"parentMetric", "aOnly"}, metricNames(childA),
+		"childA must keep its own metric untouched by childB's resolve")
+	assert.Equal(t, []string{"parentMetric", "bOnly"}, metricNames(childB),
+		"childB must have its own metric, not childA's")
+}
+
+// This is the check that actually caught the bug, computed directly and in
+// O(n) rather than by re-resolving each of the ~200 bundled profiles against
+// a freshly built loader (that alternative built a whole new loader, and so
+// reparsed the entire embedded set, once per profile - ~200 loaders each
+// walking ~200 files - which dominated this package's -race runtime for no
+// real benefit).
+//
+// The invariant Resolve must uphold is that no two resolved profiles ever
+// share a backing array for Metrics or MetricTags. That can be checked
+// directly: resolve every bundled profile once from a single shared loader
+// (so siblings compete for the same cache the way production does), and
+// confirm the address of each non-empty slice's first element is unique
+// across all of them. Two simultaneously-alive slices can only report the
+// same first-element address if they share a backing array - Go's allocator
+// cannot hand out the same address to two distinct live objects - so this
+// has no false positives.
+//
+// Against the unfixed code this fails because juniper/juniper-mx-router.yml
+// and juniper/juniper-srx-firewalls.yml both extend
+// juniper/juniper-all-devices.yml: the buggy Resolve leaves all three
+// profiles' Metrics slices pointing at the same backing array.
+func TestLoadProfiles_ResolvedProfilesDoNotShareBackingArrays(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	require.NotEmpty(t, l.byFile)
+
+	metricsOwner := make(map[*MetricEntry]string, len(l.byFile))
+	tagsOwner := make(map[*MetricTag]string, len(l.byFile))
+
+	for name := range l.byFile {
+		p, err := l.Resolve(name)
+		require.NoError(t, err)
+
+		if len(p.Metrics) > 0 {
+			ptr := &p.Metrics[0]
+			if owner, seen := metricsOwner[ptr]; seen {
+				t.Fatalf("profile %q and %q share a Metrics backing array", owner, name)
+			}
+			metricsOwner[ptr] = name
+		}
+		if len(p.MetricTags) > 0 {
+			ptr := &p.MetricTags[0]
+			if owner, seen := tagsOwner[ptr]; seen {
+				t.Fatalf("profile %q and %q share a MetricTags backing array", owner, name)
+			}
+			tagsOwner[ptr] = name
+		}
+	}
+}

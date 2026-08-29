@@ -82,9 +82,16 @@ profiles for that policy only, instead of the one passed to
 
 Profile YAML files are embedded into the binary at build time, so the backend
 runs with a working profile set out of the box. `--snmp-profiles-dir` overlays
-an additional directory on top of the bundled set: files there replace
-bundled files at the same relative path, and everything else bundled stays
+an additional directory on top of the bundled set. A file there replaces the
+bundled file at the same relative path, and every other bundled file stays
 available.
+
+An override file's path must match the bundled file's path exactly, including
+its subdirectory. For example, overriding the bundled
+`_general/system-mib.yml` requires placing the replacement at
+`_general/system-mib.yml` under the override directory. A file dropped at the
+override directory's root as `system-mib.yml` silently loads as a separate,
+unused profile instead of replacing the bundled one.
 
 The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the
