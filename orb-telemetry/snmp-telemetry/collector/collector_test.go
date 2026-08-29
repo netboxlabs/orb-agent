@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -36,6 +37,9 @@ type recordingWalker struct {
 	// onWalk, when set, runs before each Walk returns. A test uses it to expire
 	// the collection deadline partway through a profile.
 	onWalk func(oid string)
+	// walkErrs maps OID -> error returned instead of PDUs, so a test can fail
+	// one request of a run that otherwise succeeds.
+	walkErrs map[string]error
 }
 
 func (r *recordingWalker) Connect() error { return nil }
@@ -44,6 +48,9 @@ func (r *recordingWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
 	r.walkCalls = append(r.walkCalls, oid)
 	if r.onWalk != nil {
 		r.onWalk(oid)
+	}
+	if err := r.walkErrs[oid]; err != nil {
+		return nil, err
 	}
 	pdus, ok := r.responses[oid]
 	if !ok {
@@ -228,42 +235,48 @@ func TestBuildMetricName(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests: isPollReady
+// Unit tests: pollDue and markPolled
 // ---------------------------------------------------------------------------
 
 func testKey(policy, host string) deviceKey {
 	return deviceKey{policy: policy, host: host, port: 161}
 }
 
-func TestIsPollReady_ZeroAlwaysReady(t *testing.T) {
+func TestPollDue_ZeroAlwaysDue(t *testing.T) {
 	c := newCollector(nil, nil)
 	k := testKey("p", "host1")
-	assert.True(t, c.isPollReady(k, "1.2.3", 0))
-	assert.True(t, c.isPollReady(k, "1.2.3", 0))
+	assert.True(t, c.pollDue(k, "1.2.3", 0))
+	c.markPolled(k, "1.2.3", 0)
+	assert.True(t, c.pollDue(k, "1.2.3", 0))
+
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	assert.Empty(t, c.pollState[k], "an always-polled symbol needs no timestamp")
 }
 
-func TestIsPollReady_ThrottleAndExpiry(t *testing.T) {
+func TestPollDue_ThrottleAndExpiry(t *testing.T) {
 	c := newCollector(nil, nil)
 	k := testKey("p", "host1")
-	// First call: ready.
-	assert.True(t, c.isPollReady(k, "1.2.3", 60))
-	// Immediately after: not ready.
-	assert.False(t, c.isPollReady(k, "1.2.3", 60))
+	// Asking does not start the window.
+	assert.True(t, c.pollDue(k, "1.2.3", 60))
+	assert.True(t, c.pollDue(k, "1.2.3", 60))
+	// Collecting does.
+	c.markPolled(k, "1.2.3", 60)
+	assert.False(t, c.pollDue(k, "1.2.3", 60))
 	// Simulate time elapsed by backdating the last-poll entry.
 	c.pollMu.Lock()
 	c.pollState[k]["1.2.3"] = time.Now().Add(-61 * time.Second)
 	c.pollMu.Unlock()
-	// Now it should be ready again.
-	assert.True(t, c.isPollReady(k, "1.2.3", 60))
+	assert.True(t, c.pollDue(k, "1.2.3", 60))
 }
 
-func TestIsPollReady_IndependentPerDevice(t *testing.T) {
+func TestPollDue_IndependentPerDevice(t *testing.T) {
 	c := newCollector(nil, nil)
-	assert.True(t, c.isPollReady(testKey("p", "host1"), "1.2.3", 60))
-	assert.True(t, c.isPollReady(testKey("p", "host2"), "1.2.3", 60)) // different host, same OID
-	assert.True(t, c.isPollReady(testKey("q", "host1"), "1.2.3", 60)) // different policy, same host
-	assert.True(t, c.isPollReady(deviceKey{policy: "p", host: "host1", port: 1161}, "1.2.3", 60))
-	assert.False(t, c.isPollReady(testKey("p", "host1"), "1.2.3", 60))
+	c.markPolled(testKey("p", "host1"), "1.2.3", 60)
+	assert.True(t, c.pollDue(testKey("p", "host2"), "1.2.3", 60)) // different host, same OID
+	assert.True(t, c.pollDue(testKey("q", "host1"), "1.2.3", 60)) // different policy, same host
+	assert.True(t, c.pollDue(deviceKey{policy: "p", host: "host1", port: 1161}, "1.2.3", 60))
+	assert.False(t, c.pollDue(testKey("p", "host1"), "1.2.3", 60))
 }
 
 // ---------------------------------------------------------------------------
@@ -1899,6 +1912,120 @@ func TestCollectTarget_MatchAttributesOnADeviceTagIsReported(t *testing.T) {
 
 	assert.Equal(t, 1, strings.Count(logs.String(), "column tags the device rather than a row"), "logs: %s", logs.String())
 	assert.Contains(t, logs.String(), "profile=device-tag.yml")
+}
+
+// ---------------------------------------------------------------------------
+// Throttling and requests that fail
+// ---------------------------------------------------------------------------
+
+// TestCollectTarget_FailedScalarWalkDoesNotThrottle covers a symbol whose walk
+// fails inside a run that otherwise succeeds. The run keeps the device, so the
+// blanket forget-on-failure rule never fires, and a poll timestamp recorded
+// before the walk returned would hold the symbol off for its whole poll window
+// with no previous value to carry forward. Bundled LLDP metrics poll hourly.
+func TestCollectTarget_FailedScalarWalkDoesNotThrottle(t *testing.T) {
+	const (
+		host        = "10.0.0.110"
+		slowOID     = "1.3.6.1.4.1.9999.110.1.0"
+		sysObjValue = "1.3.6.1.4.1.9999.110"
+	)
+	p := profileWithOID(sysObjValue, "throttle.yml", []profiles.MetricEntry{
+		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{Name: "slowMetric", OID: slowOID, PollTimeSec: 3600}},
+	})
+	makeWalker := func(fail bool) *recordingWalker {
+		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			slowOID:        {slowOID: intPDU(slowOID, 42)},
+		}}
+		if fail {
+			w.walkErrs = map[string]error{slowOID: errors.New("request timeout")}
+		}
+		return w
+	}
+
+	c := newCollector(walkerFactory(makeWalker(true)), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Empty(t, c.testDeviceStore("p", host)["snmp.slowmetric"])
+
+	c.clientFactory = walkerFactory(makeWalker(false))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	points := c.testDeviceStore("p", host)["snmp.slowmetric"]
+	require.Len(t, points, 1, "the symbol was never collected, so nothing may throttle it")
+	assert.Equal(t, int64(42), points[0].value)
+}
+
+// TestCollectTarget_FailedTableColumnWalkDoesNotThrottle is the same rule for a
+// table column, whose walk fails on its own without failing the entry.
+func TestCollectTarget_FailedTableColumnWalkDoesNotThrottle(t *testing.T) {
+	const (
+		host        = "10.0.0.111"
+		sysObjValue = "1.3.6.1.4.1.9999.111"
+		tableOID    = sysObjValue + ".1"
+		slowCol     = tableOID + ".1.1"
+		fastCol     = tableOID + ".1.2"
+	)
+	p := profileWithOID(sysObjValue, "throttle-table.yml", []profiles.MetricEntry{{
+		MIB:   "TEST-MIB",
+		Table: &profiles.Table{Name: "testTable", OID: tableOID},
+		Symbols: []profiles.Symbol{
+			{Name: "slowColumn", OID: slowCol, PollTimeSec: 3600},
+			{Name: "fastColumn", OID: fastCol},
+		},
+	}})
+	makeWalker := func(fail bool) *recordingWalker {
+		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			slowCol:        {slowCol + ".1": intPDU(slowCol+".1", 7)},
+			fastCol:        {fastCol + ".1": intPDU(fastCol+".1", 8)},
+		}}
+		if fail {
+			w.walkErrs = map[string]error{slowCol: errors.New("request timeout")}
+		}
+		return w
+	}
+
+	c := newCollector(walkerFactory(makeWalker(true)), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Empty(t, c.testDeviceStore("p", host)["snmp.slowcolumn"])
+
+	c.clientFactory = walkerFactory(makeWalker(false))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	points := c.testDeviceStore("p", host)["snmp.slowcolumn"]
+	require.Len(t, points, 1, "the column was never collected, so nothing may throttle it")
+	assert.Equal(t, int64(7), points[0].value)
+}
+
+// TestCollectTarget_WalkThatAnswersWithNothingStillThrottles keeps the fix from
+// turning every unsupported OID into a request on every cycle. A walk that
+// returns without error collected the symbol, whatever the device chose to
+// answer, so the poll window starts.
+func TestCollectTarget_WalkThatAnswersWithNothingStillThrottles(t *testing.T) {
+	const (
+		host        = "10.0.0.112"
+		slowOID     = "1.3.6.1.4.1.9999.112.1.0"
+		sysObjValue = "1.3.6.1.4.1.9999.112"
+	)
+	p := profileWithOID(sysObjValue, "unsupported.yml", []profiles.MetricEntry{
+		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{Name: "slowMetric", OID: slowOID, PollTimeSec: 3600}},
+	})
+	empty := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		slowOID:        {},
+	}}
+	answering := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		slowOID:        {slowOID: intPDU(slowOID, 42)},
+	}}
+
+	c := newCollector(walkerFactory(empty), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	c.clientFactory = walkerFactory(answering)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.NotContains(t, answering.walkCalls, slowOID, "an answered walk must start the poll window")
 }
 
 // TestPduToString_HexToIntTagColumn covers a tag column declaring a hextoint

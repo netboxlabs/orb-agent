@@ -104,23 +104,42 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 	}
 }
 
-// isPollReady returns true if the symbol OID is due to be polled for the given device.
-// pollTimeSec == 0 means always poll. Updates the last-poll timestamp on true.
-func (c *MetricsCollector) isPollReady(key deviceKey, oid string, pollTimeSec int) bool {
+// pollDue reports whether the symbol OID is due to be polled for the given
+// device. pollTimeSec == 0 means always poll.
+//
+// It reads the last-poll timestamp and does not write one: markPolled does that
+// once the request has come back. Recording it here instead would start the
+// poll window on a request that failed, and since a failed request leaves no
+// observation to carry forward, an hourly symbol would then be missing for an
+// hour after one timeout.
+func (c *MetricsCollector) pollDue(key deviceKey, oid string, pollTimeSec int) bool {
 	if pollTimeSec <= 0 {
 		return true
+	}
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	last, ok := c.pollState[key][oid]
+	return !ok || !time.Now().Before(last.Add(time.Duration(pollTimeSec)*time.Second))
+}
+
+// markPolled starts the poll window for the symbol OID on the given device.
+//
+// It is called once the walk has returned without error, whatever the device
+// answered with: a device that does not implement an OID has still been asked,
+// and re-asking it every cycle is what the poll window is there to prevent.
+// A device forgotten after a failed run loses these timestamps with the rest of
+// its state, so the two rules agree that nothing throttles what was not
+// collected.
+func (c *MetricsCollector) markPolled(key deviceKey, oid string, pollTimeSec int) {
+	if pollTimeSec <= 0 {
+		return
 	}
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
 	if c.pollState[key] == nil {
 		c.pollState[key] = make(map[string]time.Time)
 	}
-	now := time.Now()
-	if last, ok := c.pollState[key][oid]; ok && now.Before(last.Add(time.Duration(pollTimeSec)*time.Second)) {
-		return false
-	}
-	c.pollState[key][oid] = now
-	return true
+	c.pollState[key][oid] = time.Now()
 }
 
 // ensureInstrument lazily registers an observable gauge callback for metricName.
@@ -545,7 +564,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		return
 	}
 	metricName := buildMetricName(sym.Name)
-	if !c.isPollReady(key, sym.OID, sym.PollTimeSec) {
+	if !c.pollDue(key, sym.OID, sym.PollTimeSec) {
 		throttledMetrics[metricName] = struct{}{}
 		return
 	}
@@ -554,6 +573,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		c.logger.Debug("Error walking scalar OID", "oid", sym.OID, "name", sym.Name, "error", err)
 		return
 	}
+	c.markPolled(key, sym.OID, sym.PollTimeSec)
 	// One instance is the scalar case, and it keeps the attribute set it has.
 	severalRows := len(pdus) > 1
 	for fullOID, pdu := range pdus {
@@ -808,7 +828,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			// it neither drives a walk nor carries a previous value forward.
 			continue
 		}
-		if c.isPollReady(key, sym.OID, sym.PollTimeSec) {
+		if c.pollDue(key, sym.OID, sym.PollTimeSec) {
 			states = append(states, symState{sym: sym, throttled: false})
 			anyActive = true
 		} else {
@@ -963,6 +983,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				continue
 			}
 		}
+		c.markPolled(key, sym.OID, sym.PollTimeSec)
 
 		cond, hasCondition := conditions[sym.OID]
 		metricName := buildMetricName(sym.Name)
