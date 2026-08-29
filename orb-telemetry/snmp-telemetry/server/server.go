@@ -28,6 +28,39 @@ import (
 // 32000 bare hosts, which is far past what one agent should poll.
 const maxPolicyBodyBytes = 1 << 20
 
+// Connection deadlines. maxPolicyBodyBytes bounds how many bytes a request may
+// carry, not how long they may take, so without these a client holds a
+// connection, and the goroutine behind it, indefinitely by trickling headers or
+// a sub-limit body.
+const (
+	// A request line and a handful of headers, from a client on the same host
+	// or the same network. Ten seconds is far past what that costs and is the
+	// tighter of the two read bounds, so a stalled header is dropped without
+	// waiting out the body window.
+	readHeaderTimeout = 10 * time.Second
+	// Headers plus the whole body. A body is capped at maxPolicyBodyBytes, so
+	// thirty seconds asks a client sending the largest allowed policy to
+	// sustain about 35 KiB/s. The agent posts a policy with a ten second client
+	// timeout, so it gives up long before this does.
+	readTimeout = 30 * time.Second
+	// The write deadline starts when the request headers are read and covers
+	// the body read, the handler and the response write, so it has to outlast
+	// the slowest handler or a working request comes back truncated. The
+	// slowest is DELETE /policies/:policy, which blocks on the runner's
+	// scheduler shutdown: gocron bounds that by its stop timeout plus two
+	// seconds, once for StopJobs and again for Shutdown, which is 24 seconds at
+	// gocron's ten second default. POST /policies is nowhere near it, taking
+	// under a second to schedule a policy at the full 65536-address budget.
+	// Sixty seconds keeps that ceiling clear of the deadline even when the read
+	// window is spent first.
+	writeTimeout = 60 * time.Second
+	// Keep-alive. Left unset, Go reuses ReadTimeout for idle connections, which
+	// ties keep-alive to a bound that exists for a different reason. The agent
+	// polls status every five seconds and its client pools connections, so a
+	// minute keeps one warm across polls.
+	idleTimeout = 60 * time.Second
+)
+
 // contentTypeYAML is the only media type the policy endpoint accepts.
 const contentTypeYAML = "application/x-yaml"
 
@@ -76,8 +109,12 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		port:   port,
 	}
 	server.httpServer = &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", host, port),
-		Handler: server.router,
+		Addr:              fmt.Sprintf("%s:%d", host, port),
+		Handler:           server.router,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 
 	// Bound the body before routing, so a handler added later cannot read an

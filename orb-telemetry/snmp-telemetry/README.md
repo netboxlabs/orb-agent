@@ -116,6 +116,14 @@ HTTP 413 before it is parsed. That ceiling is far above any policy this backend
 expects: the sample above weighs about 600 bytes, and a target's `host` can be a
 CIDR prefix, so covering a whole /16 costs one line rather than 65536 of them.
 
+That cap bounds how many bytes a request may carry, not how long they may take,
+so the API also sets connection deadlines: 10 seconds to finish the request
+headers, 30 seconds for headers and body together, 60 seconds from the headers
+to the last byte of the response, and 60 seconds idle on a kept-alive
+connection. The write deadline covers the handler, and the slowest one is a
+policy delete waiting on its scheduler to unwind, which takes at most 24
+seconds.
+
 A policy can also set `profiles_dir` under `config` to overlay a directory of
 profiles for that policy only, instead of the one passed to
 `--snmp-profiles-dir`. That value arrives over the API, so a path containing
