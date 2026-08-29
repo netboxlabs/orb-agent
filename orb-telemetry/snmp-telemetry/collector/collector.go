@@ -140,10 +140,55 @@ func (c *MetricsCollector) ensureInstrument(name, description string) {
 	c.registrations = append(c.registrations, reg)
 }
 
+// ForgetPolicy drops every observation and poll timestamp owned by policyName,
+// so a policy that has been stopped stops exporting. Devices named by other
+// policies are untouched, which is what keying on the policy name buys.
+func (c *MetricsCollector) ForgetPolicy(policyName string) {
+	c.storeMu.Lock()
+	for key := range c.deviceStore {
+		if key.policy == policyName {
+			delete(c.deviceStore, key)
+		}
+	}
+	c.storeMu.Unlock()
+
+	c.pollMu.Lock()
+	for key := range c.pollState {
+		if key.policy == policyName {
+			delete(c.pollState, key)
+		}
+	}
+	c.pollMu.Unlock()
+}
+
+// forgetDevice drops one device's observations and poll timestamps. A device
+// that failed to collect stops exporting rather than repeating its last values,
+// so staleness is visible as an absent series. Clearing the poll timestamps too
+// means the next successful run repopulates every metric instead of throttling
+// some of them against a window that has nothing left to carry forward.
+func (c *MetricsCollector) forgetDevice(key deviceKey) {
+	c.storeMu.Lock()
+	delete(c.deviceStore, key)
+	c.storeMu.Unlock()
+
+	c.pollMu.Lock()
+	delete(c.pollState, key)
+	c.pollMu.Unlock()
+}
+
 // CollectTarget collects SNMP metrics from a single target using its matched profile.
 // Returns nil if the device has no matching profile (not an error condition).
+// A run that fails leaves nothing behind for the device it was polling.
 func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string) error {
 	key := deviceKey{policy: policyName, host: target.Host, port: target.Port}
+	if err := c.collect(ctx, key, target, auth); err != nil {
+		c.forgetDevice(key)
+		return err
+	}
+	return nil
+}
+
+func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target config.Target, auth *config.Authentication) error {
 	walker, err := c.clientFactory(target.Host, target.Port, c.retries, c.snmpTimeout, auth, c.logger)
 	if err != nil {
 		return fmt.Errorf("creating SNMP client for %s: %w", target.Host, err)
@@ -169,6 +214,10 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 
 	profile, ok := c.matcher.MatchWithDescr(sysOIDValue, sysDescr)
 	if !ok {
+		// The address may have been reassigned to a device no profile covers,
+		// so anything collected under the old profile is dropped rather than
+		// left exporting.
+		c.forgetDevice(key)
 		c.logger.Debug("No SNMP profile matched, skipping metrics collection", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue))
 		return nil
 	}
@@ -178,7 +227,7 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 	// poll the same device; without it their series would be indistinguishable.
 	baseAttrs := []attribute.KeyValue{
 		attribute.String("device_ip", target.Host),
-		attribute.String("policy", policyName),
+		attribute.String("policy", key.policy),
 	}
 	if target.ID != "" {
 		baseAttrs = append(baseAttrs, attribute.String("netbox_id", target.ID))

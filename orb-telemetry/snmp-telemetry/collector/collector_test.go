@@ -940,3 +940,101 @@ func TestCollectTarget_PollStateIsPerPolicy(t *testing.T) {
 	require.Len(t, c.testDeviceStore("policy-b", host)["snmp.slowmetric"], 1)
 	assert.Equal(t, int64(999), c.testDeviceStore("policy-b", host)["snmp.slowmetric"][0].value)
 }
+
+// ---------------------------------------------------------------------------
+// Forgetting: policy teardown and devices that stop responding
+// ---------------------------------------------------------------------------
+
+func TestForgetPolicy_DropsOnlyThatPolicy(t *testing.T) {
+	const (
+		hostA       = "10.0.0.30"
+		hostB       = "10.0.0.31"
+		cpuOID      = "1.3.6.1.4.1.9999.30.1"
+		sysObjValue = "1.3.6.1.4.1.9999.30"
+	)
+	p := profileWithOID(sysObjValue, "forget.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 300}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 7)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	ctx := context.Background()
+
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "doomed"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostB), mustAuth(), "keeper"))
+	require.NotEmpty(t, c.testDeviceStore("doomed", hostA))
+	require.NotEmpty(t, c.testDeviceStore("keeper", hostB))
+
+	c.ForgetPolicy("doomed")
+
+	assert.Nil(t, c.testDeviceStore("doomed", hostA), "the stopped policy must stop exporting")
+	assert.NotEmpty(t, c.testDeviceStore("keeper", hostB), "another policy's devices must survive")
+
+	// The poll timestamps go too, so a policy restarted under the same name
+	// polls a throttled OID immediately instead of waiting out the old window.
+	c.pollMu.Lock()
+	_, doomedPolls := c.pollState[testKey("doomed", hostA)]
+	_, keeperPolls := c.pollState[testKey("keeper", hostB)]
+	c.pollMu.Unlock()
+	assert.False(t, doomedPolls)
+	assert.True(t, keeperPolls)
+}
+
+func TestCollectTarget_FailedDeviceStopsExporting(t *testing.T) {
+	const (
+		host        = "10.0.0.32"
+		cpuOID      = "1.3.6.1.4.1.9999.32.1"
+		sysObjValue = "1.3.6.1.4.1.9999.32"
+	)
+	p := profileWithOID(sysObjValue, "dead.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 42)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	ctx := context.Background()
+
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
+
+	// The device stops answering: the dial itself now fails.
+	c.clientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return nil, assert.AnError
+	}
+	require.Error(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	assert.Nil(t, c.testDeviceStore("p", host), "a device that fails to collect must not keep exporting its last values")
+}
+
+func TestCollectTarget_ProfileStopsMatchingClearsStore(t *testing.T) {
+	const (
+		host        = "10.0.0.33"
+		cpuOID      = "1.3.6.1.4.1.9999.33.1"
+		sysObjValue = "1.3.6.1.4.1.9999.33"
+	)
+	p := profileWithOID(sysObjValue, "match.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	makeWalker := func(sysObj string) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObj)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, 42)},
+		}}
+	}
+	c := newCollector(walkerFactory(makeWalker(sysObjValue)), p)
+	ctx := context.Background()
+
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
+
+	// The address is reassigned to a device no profile covers.
+	c.clientFactory = walkerFactory(makeWalker("1.3.6.1.4.1.1234"))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p"))
+	assert.Nil(t, c.testDeviceStore("p", host))
+}

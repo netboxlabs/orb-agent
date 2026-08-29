@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 
-	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/targets"
 )
@@ -24,11 +23,19 @@ const (
 	defaultSNMPTimeout            = 5 * time.Second
 )
 
+// Collector is the slice of the metrics collector a runner drives. Naming it
+// here keeps the runner's dependency narrow and the policy lifecycle testable.
+type Collector interface {
+	CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string) error
+	ForgetPolicy(policyName string)
+}
+
 // Runner represents the policy runner for SNMP metrics collection
 type Runner struct {
 	scheduler        gocron.Scheduler
 	ctx              context.Context
-	metricsCollector *collector.MetricsCollector
+	name             string
+	metricsCollector Collector
 	metricsInterval  time.Duration
 	config           config.PolicyConfig
 	scope            config.Scope
@@ -42,7 +49,7 @@ type Runner struct {
 // NewRunner returns a new policy runner.
 // metricsCollector is the shared collector for this policy's profiles directory —
 // created once by the Manager and reused across all policies using the same dir.
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector *collector.MetricsCollector) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector Collector) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
@@ -51,6 +58,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	runner := &Runner{
 		scheduler:        s,
 		logger:           logger,
+		name:             name,
 		metricsCollector: metricsCollector,
 		config:           policy.Config,
 		scope:            policy.Scope,
@@ -103,7 +111,7 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 
 // runMetrics collects SNMP operational metrics from a target using its matched profile.
 func (r *Runner) runMetrics(target config.Target) {
-	policyName := r.ctx.Value(policyKey).(string)
+	policyName := r.name
 	r.logger.Debug("Running SNMP metrics collection", "host", config.SanitizeLogValue(target.Host), "policy", config.SanitizeLogValue(policyName))
 	ctx, cancel := context.WithTimeout(r.ctx, r.metricsInterval)
 	defer cancel()
@@ -170,10 +178,17 @@ func (r *Runner) Start() {
 	r.scheduler.Start()
 }
 
-// Stop stops the policy runner
+// Stop stops the policy runner and drops the collector state it owns, so a
+// deleted policy stops exporting instead of repeating its last observations
+// for the life of the process. The drop happens even when the scheduler fails
+// to unwind cleanly, and after Shutdown so no in-flight run can rewrite it.
 func (r *Runner) Stop() error {
-	if err := r.scheduler.StopJobs(); err != nil {
-		return err
+	err := r.scheduler.StopJobs()
+	if err == nil {
+		err = r.scheduler.Shutdown()
 	}
-	return r.scheduler.Shutdown()
+	if r.metricsCollector != nil {
+		r.metricsCollector.ForgetPolicy(r.name)
+	}
+	return err
 }
