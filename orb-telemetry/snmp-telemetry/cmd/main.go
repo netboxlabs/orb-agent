@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,6 +20,37 @@ import (
 
 // AppName is the application name
 const AppName = "snmp-telemetry"
+
+// metricsFlushTimeout bounds the final export at shutdown.
+const metricsFlushTimeout = 5 * time.Second
+
+// stopper is the part of the server the shutdown sequence uses.
+type stopper interface {
+	Stop()
+}
+
+// shutdown unwinds the process in the order the runners need. Every runner
+// context derives from the root one, so cancelling it first is what lets
+// srv.Stop return: stopping the server first would wait on collections that
+// have not been told to finish, a wait as long as the SNMP timeouts still
+// outstanding. The flush runs last and on its own context, so the cancellation
+// does not cost the last export.
+func shutdown(cancelRoot context.CancelFunc, srv stopper, flush func()) {
+	cancelRoot()
+	srv.Stop()
+	flush()
+}
+
+// flushMetrics exports whatever the meter provider still holds. It takes its
+// own context because the root one is already cancelled by the time it runs,
+// and an exporter handed a cancelled context drops the export.
+func flushMetrics(logger *slog.Logger, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := metrics.Shutdown(ctx); err != nil {
+		logger.Error("failed to shutdown metrics", "error", err)
+	}
+}
 
 func main() {
 	host := flag.String("host", "0.0.0.0", "server host")
@@ -64,15 +96,7 @@ func main() {
 	manager := policy.NewManager(rootCtx, logger, profilesDir)
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 
-	// shutdownMetrics flushes on its own context: rootCtx is cancelled during
-	// shutdown, and an exporter handed a cancelled context drops the last export.
-	shutdownMetrics := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := metrics.Shutdown(ctx); err != nil {
-			logger.Error("failed to shutdown metrics", "error", err)
-		}
-	}
+	shutdownMetrics := func() { flushMetrics(logger, metricsFlushTimeout) }
 
 	// Handle signals
 	done := make(chan bool, 1)
@@ -84,9 +108,7 @@ func main() {
 			select {
 			case <-sigs:
 				logger.Warn("stop signal received, stopping " + AppName)
-				srv.Stop()
-				shutdownMetrics()
-				cancelFunc()
+				shutdown(cancelFunc, srv, shutdownMetrics)
 			case <-rootCtx.Done():
 				logger.Warn("main context cancelled")
 				done <- true
@@ -100,9 +122,7 @@ func main() {
 	go func() {
 		if err, ok := <-serverErrCh; ok && err != nil {
 			logger.Error(AppName+" server encountered an error", "error", err)
-			srv.Stop()
-			shutdownMetrics()
-			cancelFunc()
+			shutdown(cancelFunc, srv, shutdownMetrics)
 		}
 	}()
 
