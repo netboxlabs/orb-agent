@@ -76,7 +76,9 @@ authentication block; setting it under `protocol_version: v1` or
 
 A policy can also set `profiles_dir` under `config` to overlay a directory of
 profiles for that policy only, instead of the one passed to
-`--snmp-profiles-dir`.
+`--snmp-profiles-dir`. That value arrives over the API, so a path containing
+`..` is rejected: give an absolute path, or one relative to the working
+directory.
 
 ### SNMP Profiles
 

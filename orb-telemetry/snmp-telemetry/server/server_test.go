@@ -3,10 +3,12 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,19 +40,24 @@ func TestGetPolicies_Empty(t *testing.T) {
 func TestGetPolicies_WithPolicy(t *testing.T) {
 	srv := newTestServer(t)
 
-	body := []byte(`
+	// A policy-supplied profiles_dir may not walk upward, so the sibling
+	// directory this test overlays is named absolutely.
+	profilesDir, err := filepath.Abs("../profiles/snmp-profiles")
+	require.NoError(t, err)
+
+	body := fmt.Appendf(nil, `
 policies:
   my-policy:
     config:
       metrics_interval: 60
-      profiles_dir: ../profiles/snmp-profiles
+      profiles_dir: %s
     scope:
       authentication:
         protocol_version: SNMPv2c
         community: public
       targets:
         - host: 192.168.1.1
-`)
+`, profilesDir)
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-yaml")

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -134,13 +135,30 @@ func (m *Manager) HasPolicy(name string) bool {
 	return ok
 }
 
+// validateProfilesDir cleans a policy-supplied profiles directory and rejects
+// one that walks upward. The value arrives over the API, and an override
+// directory is named outright rather than reached by climbing out of another
+// one, so ".." only ever widens what a policy can read. Absolute and relative
+// paths are both accepted; the directory is documented as neither.
+func validateProfilesDir(dir string) (string, error) {
+	clean := filepath.Clean(dir)
+	if strings.Contains(clean, "..") {
+		return "", fmt.Errorf(`SNMP profiles directory must not contain "..": %s`, dir)
+	}
+	return clean, nil
+}
+
 // StartPolicy starts a single named policy. The duplicate check and the insert
 // happen together under mu, so two concurrent requests for the same name cannot
 // both start a runner.
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
-	profilesDir := policy.Config.ProfilesDir
-	if profilesDir == "" {
-		profilesDir = m.defaultProfilesDir
+	profilesDir := m.defaultProfilesDir
+	if policy.Config.ProfilesDir != "" {
+		dir, err := validateProfilesDir(policy.Config.ProfilesDir)
+		if err != nil {
+			return err
+		}
+		profilesDir = dir
 	}
 
 	sharedCollector, err := m.getOrCreateCollector(profilesDir)

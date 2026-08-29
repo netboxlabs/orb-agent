@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -339,6 +340,39 @@ func TestApplyDefaults_PreservesExistingPort(t *testing.T) {
 	pol.Scope.Targets[0].Port = 1161
 	m.applyDefaults(&pol)
 	assert.Equal(t, uint16(1161), pol.Scope.Targets[0].Port)
+}
+
+// ---------------------------------------------------------------------------
+// validateProfilesDir
+// ---------------------------------------------------------------------------
+
+func TestValidateProfilesDir_AcceptsAbsoluteAndRelative(t *testing.T) {
+	dir := t.TempDir()
+	got, err := validateProfilesDir(dir + string(filepath.Separator))
+	require.NoError(t, err)
+	assert.Equal(t, dir, got)
+
+	got, err = validateProfilesDir("./profiles/overrides")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("profiles", "overrides"), got)
+}
+
+// A profiles_dir arrives in the request body, so one that climbs out of the
+// directory it names is refused before anything reads it.
+func TestValidateProfilesDir_RejectsUpwardTraversal(t *testing.T) {
+	for _, dir := range []string{"..", "../overrides", "profiles/../../overrides"} {
+		_, err := validateProfilesDir(dir)
+		require.Error(t, err, dir)
+		assert.Contains(t, err.Error(), "SNMP profiles directory")
+	}
+}
+
+func TestStartPolicy_RejectsProfilesDirThatWalksUpward(t *testing.T) {
+	m := newTestManager()
+	pol := minimalPolicy(v2cAuth())
+	pol.Config.ProfilesDir = "../../etc"
+	require.Error(t, m.StartPolicy("policy-a", pol))
+	assert.Empty(t, m.policies)
 }
 
 // ---------------------------------------------------------------------------
