@@ -2,12 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
@@ -86,4 +91,70 @@ func TestFlushMetricsSurvivesRootCancellation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the final flush did not reach the endpoint after the root context was cancelled")
 	}
+}
+
+// A server error runs the shutdown sequence from its own goroutine, and that
+// sequence cancels the root context on its first step. Releasing main on that
+// cancellation lets the process exit through the server stop and the final
+// export.
+func TestWaitForShutdownWaitsForTheSequenceToFinish(t *testing.T) {
+	rootCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	release := make(chan struct{})
+	var finished atomic.Bool
+	run := func() {
+		// The real sequence cancels the root context before it stops the
+		// server and flushes metrics.
+		cancel()
+		<-release
+		finished.Store(true)
+	}
+
+	serverErrCh := make(chan error, 1)
+	serverErrCh <- errors.New("listen tcp 127.0.0.1:8078: address already in use")
+
+	returned := make(chan struct{})
+	go func() {
+		waitForShutdown(rootCtx, discardLogger(), nil, serverErrCh, run)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Fatal("waitForShutdown returned while the shutdown sequence was still running")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("waitForShutdown did not return once the shutdown sequence had finished")
+	}
+	assert.True(t, finished.Load(), "the shutdown sequence must have finished before main is released")
+}
+
+// A stop signal and a server error can arrive together. The sequence stops the
+// server and flushes the meter provider, so it must run once.
+func TestWaitForShutdownRunsTheSequenceOnce(t *testing.T) {
+	rootCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var runs atomic.Int32
+	run := func() {
+		runs.Add(1)
+		cancel()
+	}
+
+	sigs := make(chan os.Signal, 1)
+	sigs <- syscall.SIGTERM
+	serverErrCh := make(chan error, 1)
+	serverErrCh <- errors.New("listen tcp 127.0.0.1:8078: address already in use")
+
+	waitForShutdown(rootCtx, discardLogger(), sigs, serverErrCh, run)
+
+	assert.Never(t, func() bool { return runs.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond,
+		"the shutdown sequence ran more than once")
+	assert.Equal(t, int32(1), runs.Load())
 }

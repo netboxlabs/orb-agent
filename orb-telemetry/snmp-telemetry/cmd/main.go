@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -98,31 +99,45 @@ func main() {
 
 	shutdownMetrics := func() { flushMetrics(logger, metricsFlushTimeout) }
 
-	// Handle signals
-	done := make(chan bool, 1)
-
-	go func() {
-		sigs := make(chan os.Signal, 1)
-		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-		for {
-			select {
-			case <-sigs:
-				logger.Warn("stop signal received, stopping " + AppName)
-				shutdown(cancelFunc, srv, shutdownMetrics)
-			case <-rootCtx.Done():
-				logger.Warn("main context cancelled")
-				done <- true
-				return
-			}
-		}
-	}()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	serverErrCh := srv.Start()
+
+	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
+		shutdown(cancelFunc, srv, shutdownMetrics)
+	})
+}
+
+// waitForShutdown blocks until a stop signal or a server error asks the process
+// to stop, and returns only once the shutdown sequence has finished. Both paths
+// go through one sync.Once: the sequence cancels the root context on its first
+// step, so a caller that released main on that cancellation would let the
+// process exit through the server stop and the final export.
+func waitForShutdown(rootCtx context.Context, logger *slog.Logger, sigs <-chan os.Signal, serverErrCh <-chan error, run func()) {
+	done := make(chan struct{})
+	var once sync.Once
+	trigger := func() {
+		once.Do(func() {
+			run()
+			close(done)
+		})
+	}
+
+	go func() {
+		select {
+		case <-sigs:
+			logger.Warn("stop signal received, stopping " + AppName)
+		case <-rootCtx.Done():
+			logger.Warn("main context cancelled")
+		}
+		trigger()
+	}()
 
 	go func() {
 		if err, ok := <-serverErrCh; ok && err != nil {
 			logger.Error(AppName+" server encountered an error", "error", err)
-			shutdown(cancelFunc, srv, shutdownMetrics)
+			trigger()
 		}
 	}()
 
