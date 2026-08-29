@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -420,4 +421,29 @@ func TestGetPolicyStatuses_MixedState(t *testing.T) {
 	assert.Equal(t, "running_with_errors", byName["failing-policy"].Status)
 	require.NotNil(t, byName["failing-policy"].LastError)
 	assert.Contains(t, *byName["failing-policy"].LastError, "10.0.0.1:161")
+}
+
+// ---------------------------------------------------------------------------
+// ParsePolicies — unknown key reporting
+// ---------------------------------------------------------------------------
+
+func TestParsePolicies_WarnsOnUnknownKey(t *testing.T) {
+	var buf bytes.Buffer
+	m := NewManager(context.Background(), slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})), "")
+
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    config:
+      metrics_interval: 60
+      snmp_timout: 10
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+      targets:
+        - host: 192.0.2.1
+`))
+	require.NoError(t, err, "an unrecognized key stays non-fatal")
+	assert.Contains(t, buf.String(), "snmp_timout")
 }
