@@ -85,8 +85,10 @@ type Symbol struct {
 	Enum        map[string]int `yaml:"enum"`
 	Conversion  string         `yaml:"conversion"`
 	Format      string         `yaml:"format"`
-	// Condition filters table rows: format "OtherSymbolName=<intValue>".
-	// Only rows where the referenced symbol equals the given value are emitted.
+	// Condition filters table rows: format "name=value". The name is either a
+	// sibling symbol or a column the entry declares under metric_tags, and the
+	// value is either a bare integer or a quoted string. Only rows whose
+	// referenced column equals the value are emitted.
 	Condition string `yaml:"condition"`
 }
 

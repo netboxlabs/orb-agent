@@ -1688,35 +1688,309 @@ func TestCollectTarget_TableMetricWalksStopAtTheDeadline(t *testing.T) {
 
 // TestReportUnusableConditions_OncePerProfile pins that a condition the
 // collector cannot apply is reported once for the profile rather than on every
-// collection. The bundled Cisco Firepower entry names a metric tag column and
-// compares a string, neither of which the condition parser resolves.
+// collection. This entry's condition names a column the entry declares nowhere,
+// so no walk could resolve it.
 func TestReportUnusableConditions_OncePerProfile(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	entry := profiles.MetricEntry{
 		Symbols: []profiles.Symbol{
-			{Name: "used", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.18", Condition: "cempMemPoolName=DP System memory"},
+			{Name: "used", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.18", Condition: `absentColumn="DP System memory"`},
 			{Name: "free", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.20"},
 		},
 	}
 	c := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
 
 	for range 3 {
-		c.reportUnusableConditions(entry, "cisco/cisco-firepower.yml")
+		c.reportUnusableConditions(entry, "vendor/example.yml")
 	}
 	require.Equal(t, 3, strings.Count(buf.String(), "cannot apply"),
 		"the helper itself reports every call; the once-per-profile guard lives in reportUnsupportedConversions")
 
 	buf.Reset()
-	p := &profiles.Profile{RelPath: "cisco/cisco-firepower.yml", Metrics: []profiles.MetricEntry{entry}}
+	p := &profiles.Profile{RelPath: "vendor/example.yml", Metrics: []profiles.MetricEntry{entry}}
 	c2 := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
 	for range 3 {
 		c2.reportUnsupportedConversions(p)
 	}
 	require.Equal(t, 1, strings.Count(buf.String(), "cannot apply"),
 		"three collections of one profile must report the condition once")
-	// The Firepower condition compares a string, so it fails the integer check
-	// before the symbol lookup is ever reached.
-	require.Contains(t, buf.String(), "value is not an integer")
+	require.Contains(t, buf.String(), "names no symbol or tag column in this entry")
+}
+
+// ---------------------------------------------------------------------------
+// Conditions comparing a textual column
+// ---------------------------------------------------------------------------
+
+// TestResolveCondition covers every shape a profile `condition:` takes: the
+// bundled integer form against a sibling symbol, the quoted form against a
+// column the entry declares in metric_tags, and the forms that cannot be
+// applied at all.
+func TestResolveCondition(t *testing.T) {
+	entry := &profiles.MetricEntry{
+		Symbols: []profiles.Symbol{
+			{Name: "poolType", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.2"},
+			{Name: "poolUsed", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.7"},
+		},
+		MetricTags: []profiles.MetricTag{
+			{Column: &profiles.TagColumn{Name: "poolName", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.3"}},
+			{Tag: "renamed", Column: &profiles.TagColumn{Name: "poolLabel", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.4"}},
+			{
+				Tag:            "joined",
+				Column:         &profiles.TagColumn{Name: "elsewhere", OID: "1.3.6.1.2.1.31.1.1.1.1"},
+				IndexTransform: profiles.IndexTransform{{Start: 0, End: 0}},
+			},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		condition string
+		wantOID   string
+		wantInt   int64
+		wantNum   bool
+		wantStr   string
+		wantWhy   string
+	}{
+		{
+			name: "integer against sibling symbol", condition: "poolType=10",
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.2", wantInt: 10, wantNum: true,
+		},
+		{
+			name: "spaces around both sides", condition: " poolType = 10 ",
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.2", wantInt: 10, wantNum: true,
+		},
+		{
+			name: "quoted string against tag column", condition: `poolName="DP System memory"`,
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.3", wantStr: "DP System memory",
+		},
+		{
+			name: "tag column reached by its tag name", condition: `renamed="label"`,
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.4", wantStr: "label",
+		},
+		{
+			name: "tag column reached by its column name", condition: `poolLabel="label"`,
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.4", wantStr: "label",
+		},
+		{
+			name: "single quotes", condition: "poolName='DP System memory'",
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.3", wantStr: "DP System memory",
+		},
+		{
+			name: "unquoted non-integer is a string", condition: "poolName=active",
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.3", wantStr: "active",
+		},
+		{
+			name: "quoted digits stay a string", condition: `poolName="10"`,
+			wantOID: "1.3.6.1.4.1.9.9.221.1.1.1.1.3", wantStr: "10",
+		},
+		{name: "no equals sign", condition: "poolType", wantWhy: "not a name=value pair"},
+		{name: "empty name", condition: "=10", wantWhy: "not a name=value pair"},
+		{name: "unknown name", condition: "nothingHere=1", wantWhy: "names no symbol or tag column in this entry"},
+		{
+			name: "column joined from another table", condition: `joined="ge-0/0/0"`,
+			wantWhy: "column is joined from another table",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			check, why := resolveCondition(entry, tt.condition)
+			if tt.wantWhy != "" {
+				assert.Equal(t, tt.wantWhy, why)
+				return
+			}
+			require.Empty(t, why)
+			assert.Equal(t, tt.wantOID, check.columnOID)
+			assert.Equal(t, tt.wantNum, check.numeric)
+			assert.Equal(t, tt.wantInt, check.expectInt)
+			assert.Equal(t, tt.wantStr, check.expected)
+		})
+	}
+}
+
+// TestResolveCondition_BundledIntegerCasesUnchanged pins the five bundled
+// conditions that name a sibling symbol and compare an integer. All five must
+// keep resolving to that symbol's OID and to a numeric comparison.
+func TestResolveCondition_BundledIntegerCasesUnchanged(t *testing.T) {
+	cases := []struct {
+		relPath string
+		symbol  string
+		wantOID string
+		wantVal int64
+	}{
+		{"cisco/cisco-asa.yml", "cempMemPoolUsed", "1.3.6.1.4.1.9.9.221.1.1.1.1.2", 10},
+		{"cisco/cisco-asa.yml", "cempMemPoolFree", "1.3.6.1.4.1.9.9.221.1.1.1.1.2", 10},
+		{"huawei/huawei-all-devices.yml", "hwEntityCpuUsage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.3", 4},
+		{"huawei/huawei-all-devices.yml", "hwEntityMemUsage", "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.3", 4},
+		{"_template.yml", "entSensorThresholdValue", "1.3.6.1.4.1.9.9.91.1.2.1.1.2", 30},
+	}
+
+	found := 0
+	for _, tc := range cases {
+		p := bundledProfile(t, tc.relPath)
+		for i := range p.Metrics {
+			entry := &p.Metrics[i]
+			for j := range entry.Symbols {
+				sym := &entry.Symbols[j]
+				if sym.Name != tc.symbol || sym.Condition == "" {
+					continue
+				}
+				found++
+				check, why := resolveCondition(entry, sym.Condition)
+				require.Empty(t, why, "%s %s", tc.relPath, tc.symbol)
+				assert.True(t, check.numeric, "%s %s stays an integer comparison", tc.relPath, tc.symbol)
+				assert.Equal(t, tc.wantVal, check.expectInt)
+				assert.Equal(t, tc.wantOID, check.columnOID)
+				assert.Nil(t, check.column, "a sibling symbol reference carries no tag column")
+			}
+		}
+	}
+	assert.Equal(t, 5, found, "the bundled set declares five integer conditions")
+}
+
+// TestCollectTarget_StringConditionSelectsRows checks that a condition naming a
+// metric_tags column and comparing text emits only the rows that match.
+func TestCollectTarget_StringConditionSelectsRows(t *testing.T) {
+	const (
+		host        = "10.0.0.60"
+		nameColOID  = "1.3.6.1.4.1.9999.60.1.3"
+		usedColOID  = "1.3.6.1.4.1.9999.60.1.18"
+		sysObjValue = "1.3.6.1.4.1.9999.60"
+	)
+	p := profileWithOID(sysObjValue, "strcond.yml", []profiles.MetricEntry{
+		{
+			Symbols: []profiles.Symbol{
+				{Name: "poolHCUsed", OID: usedColOID, Condition: `poolName="DP System memory"`},
+			},
+			MetricTags: []profiles.MetricTag{
+				{Column: &profiles.TagColumn{Name: "poolName", OID: nameColOID}},
+			},
+		},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		nameColOID: {
+			nameColOID + ".1": stringPDU(nameColOID+".1", "DP System memory"),
+			nameColOID + ".2": stringPDU(nameColOID+".2", "System memory"),
+			// Agents commonly pad a display string; pduToString trims it.
+			nameColOID + ".3": stringPDU(nameColOID+".3", "  DP System memory  "),
+			// Case is significant, so this pool is a different one.
+			nameColOID + ".4": stringPDU(nameColOID+".4", "dp system memory"),
+		},
+		usedColOID: {
+			usedColOID + ".1": counter64PDU(usedColOID+".1", 11),
+			usedColOID + ".2": counter64PDU(usedColOID+".2", 22),
+			usedColOID + ".3": counter64PDU(usedColOID+".3", 33),
+			usedColOID + ".4": counter64PDU(usedColOID+".4", 44),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.poolhcused"]
+	got := make([]int64, 0, len(pts))
+	for _, pt := range pts {
+		got = append(got, pt.value)
+	}
+	assert.ElementsMatch(t, []int64{11, 33}, got,
+		"only the rows whose name column equals the condition value are emitted")
+
+	// The condition column is also a metric_tag, so it is walked once, not twice.
+	nameWalks := 0
+	for _, oid := range w.walkCalls {
+		if oid == nameColOID {
+			nameWalks++
+		}
+	}
+	assert.Equal(t, 1, nameWalks)
+}
+
+// TestCollectTarget_BundledFirepowerFiltersHighCapacityPools drives the bundled
+// Firepower profile, whose two high-capacity memory symbols are declared for one
+// named pool only. Without the filter the collector emits a row per pool, which
+// is output the profile never asked for.
+func TestCollectTarget_BundledFirepowerFiltersHighCapacityPools(t *testing.T) {
+	const (
+		host       = "10.0.0.61"
+		nameColOID = "1.3.6.1.4.1.9.9.221.1.1.1.1.3"
+		hcUsedOID  = "1.3.6.1.4.1.9.9.221.1.1.1.1.18"
+		hcFreeOID  = "1.3.6.1.4.1.9.9.221.1.1.1.1.20"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.9.1.2285")},
+		nameColOID: {
+			nameColOID + ".1.1": stringPDU(nameColOID+".1.1", "System memory"),
+			nameColOID + ".1.2": stringPDU(nameColOID+".1.2", "DP System memory"),
+		},
+		hcUsedOID: {
+			hcUsedOID + ".1.1": counter64PDU(hcUsedOID+".1.1", 100),
+			hcUsedOID + ".1.2": counter64PDU(hcUsedOID+".1.2", 200),
+		},
+		hcFreeOID: {
+			hcFreeOID + ".1.1": counter64PDU(hcFreeOID+".1.1", 300),
+			hcFreeOID + ".1.2": counter64PDU(hcFreeOID+".1.2", 400),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), bundledProfile(t, "cisco/cisco-firepower.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	used := store["snmp.cempmempoolhcused"]
+	require.Len(t, used, 1, "only the named pool is emitted")
+	assert.Equal(t, int64(200), used[0].value)
+	assert.Equal(t, "DP System memory", attrValue(used[0], "cempMemPoolName"))
+
+	free := store["snmp.cempmempoolhcfree"]
+	require.Len(t, free, 1, "only the named pool is emitted")
+	assert.Equal(t, int64(400), free[0].value)
+}
+
+// TestCollectTarget_ApplicableConditionIsNotReported checks that the
+// once-per-profile report stops naming a condition the collector now applies.
+func TestCollectTarget_ApplicableConditionIsNotReported(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.9.1.2285")},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "cisco/cisco-firepower.yml"))
+	c.logger = logger
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.62"), mustAuth(), "p", DialOptions{}))
+
+	assert.NotContains(t, logs.String(), "cempMemPoolName",
+		"a condition the collector applies must not be reported as unusable")
+}
+
+// TestCollectTarget_UnusableConditionIsStillReported keeps the report honest:
+// a condition naming nothing in its entry is still called out.
+func TestCollectTarget_UnusableConditionIsStillReported(t *testing.T) {
+	const (
+		host        = "10.0.0.63"
+		colOID      = "1.3.6.1.4.1.9999.63.1.1"
+		sysObjValue = "1.3.6.1.4.1.9999.63"
+	)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	p := profileWithOID(sysObjValue, "badcond.yml", []profiles.MetricEntry{
+		{
+			Table:   &profiles.Table{Name: "t", OID: "1.3.6.1.4.1.9999.63.1"},
+			Symbols: []profiles.Symbol{{Name: "col", OID: colOID, Condition: "absentColumn=1"}},
+		},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	c.logger = logger
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Contains(t, logs.String(), "names no symbol or tag column in this entry")
 }

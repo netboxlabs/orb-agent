@@ -461,35 +461,16 @@ func (c *MetricsCollector) reportUnsupportedConversions(profile *profiles.Profil
 }
 
 // reportUnusableConditions reports a condition the collector cannot apply.
-// Whether a condition parses, carries an integer and names a sibling symbol is
-// a property of the profile, not of the device, so it is reported here once
-// rather than on every collection. The collection path logs the same cases at
-// debug level.
+// Whether a condition parses and resolves the column it names is a property of
+// the profile, not of the device, so it is reported here once rather than on
+// every collection. The collection path logs the same cases at debug level.
 func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, profileName string) {
-	if len(entry.Symbols) == 0 {
-		return
-	}
-	known := make(map[string]struct{}, len(entry.Symbols))
-	for _, sym := range entry.Symbols {
-		known[sym.Name] = struct{}{}
-	}
-	for _, sym := range entry.Symbols {
+	for i := range entry.Symbols {
+		sym := &entry.Symbols[i]
 		if sym.Condition == "" {
 			continue
 		}
-		reason := ""
-		parts := strings.SplitN(sym.Condition, "=", 2)
-		switch {
-		case len(parts) != 2:
-			reason = "not a name=value pair"
-		default:
-			if _, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64); err != nil {
-				reason = "value is not an integer"
-			} else if _, ok := known[strings.TrimSpace(parts[0])]; !ok {
-				reason = "names no symbol in this entry"
-			}
-		}
-		if reason != "" {
+		if _, reason := resolveCondition(&entry, sym.Condition); reason != "" {
 			c.logger.Warn("Ignoring condition this collector cannot apply",
 				"condition", sym.Condition, "reason", reason,
 				"symbol", sym.Name, "profile", profileName)
@@ -535,10 +516,108 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 	}
 }
 
-// conditionCheck holds the parsed condition for a table symbol.
+// conditionCheck holds the resolved condition for a table symbol: the column
+// whose rows it tests and the value a row has to carry to be emitted.
 type conditionCheck struct {
 	columnOID string
-	expected  int64
+	// column is set when the reference is a metric_tags column rather than a
+	// sibling symbol, so the row renders through the same conversion and enum
+	// the tag itself would use.
+	column *profiles.TagColumn
+	// numeric selects which of expectInt and expected is compared.
+	numeric   bool
+	expectInt int64
+	expected  string
+}
+
+// conditionRow carries both renderings of one row of a condition column, so a
+// single walk serves an integer comparison and a textual one alike.
+type conditionRow struct {
+	num    int64
+	hasNum bool
+	str    string
+}
+
+// matches reports whether one row of the condition column satisfies the
+// condition.
+//
+// A textual value is compared exactly and case-sensitively. Both sides are
+// already free of surrounding whitespace: pduToString trims what the device
+// returns, and the profile's quotes delimit exactly the text it means. Case is
+// kept significant because a MIB display string is, and folding it would let a
+// condition select a row the profile did not name.
+func (cc conditionCheck) matches(row conditionRow) bool {
+	if cc.numeric {
+		return row.hasNum && row.num == cc.expectInt
+	}
+	return row.str == cc.expected
+}
+
+// resolveCondition parses a symbol `condition:` and resolves the column it
+// names. A condition reads `name=value`. The name is either a sibling symbol or
+// a column the entry declares under metric_tags, named by its tag or by the
+// column name. The value is either a bare integer or a quoted string.
+//
+// The returned reason is empty when the condition can be applied and otherwise
+// says why it cannot. The collection path and the once-per-profile report both
+// go through here, so they cannot disagree about which conditions are usable.
+func resolveCondition(entry *profiles.MetricEntry, condition string) (conditionCheck, string) {
+	parts := strings.SplitN(condition, "=", 2)
+	if len(parts) != 2 {
+		return conditionCheck{}, "not a name=value pair"
+	}
+	refName := strings.TrimSpace(parts[0])
+	if refName == "" {
+		return conditionCheck{}, "not a name=value pair"
+	}
+
+	var check conditionCheck
+	raw := strings.TrimSpace(parts[1])
+	if unquoted, quoted := trimQuotes(raw); quoted {
+		check.expected = unquoted
+	} else if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		check.numeric, check.expectInt = true, v
+	} else {
+		check.expected = raw
+	}
+
+	for i := range entry.Symbols {
+		if entry.Symbols[i].Name == refName {
+			check.columnOID = entry.Symbols[i].OID
+			return check, ""
+		}
+	}
+	for i := range entry.MetricTags {
+		mt := &entry.MetricTags[i]
+		col := metricTagColumn(mt)
+		if col == nil || col.OID == "" {
+			continue
+		}
+		if col.Name != refName && mt.Tag != refName {
+			continue
+		}
+		if len(mt.IndexTransform) > 0 {
+			// The column is read from another table and keyed by that table's
+			// index, so its rows do not line up with the metric rows.
+			return conditionCheck{}, "column is joined from another table"
+		}
+		check.columnOID, check.column = col.OID, col
+		return check, ""
+	}
+	return conditionCheck{}, "names no symbol or tag column in this entry"
+}
+
+// trimQuotes strips a matching pair of quotes and reports whether there was
+// one. A profile writes a textual condition value quoted, and the quotes are
+// stored with it because the surrounding YAML scalar is plain.
+func trimQuotes(s string) (string, bool) {
+	if len(s) < 2 {
+		return s, false
+	}
+	if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+		return s[1 : len(s)-1], true
+	}
+	return s, false
 }
 
 // joinedTag is a metric_tag whose column lives in a table other than the one
@@ -586,6 +665,10 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	// joinedTags: columns read from another table, matched to a metric row by
 	// transforming that row's composite index.
 	rowTags := make(map[string]map[string]string)
+	// tagColumnPDUs keeps what each tag column walk returned, keyed by column
+	// OID, so a condition naming one of those columns reuses the walk instead
+	// of asking the device for the same column twice.
+	tagColumnPDUs := make(map[string]map[string]snmp.PDU)
 	var joinedTags []joinedTag
 	for i := range entry.MetricTags {
 		// Each uncached column is a request of its own and one entry can
@@ -624,6 +707,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			joinedTags = append(joinedTags, jt)
 			continue
 		}
+		tagColumnPDUs[col.OID] = pdus
 		for fullOID, pdu := range pdus {
 			rowIdx := extractRowIndex(fullOID, col.OID)
 			if rowTags[rowIdx] == nil {
@@ -633,12 +717,8 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		}
 	}
 
-	// --- Phase 4: parse and walk condition columns (active symbols only) ---
-	symOIDByName := make(map[string]string, len(entry.Symbols))
-	for _, sym := range entry.Symbols {
-		symOIDByName[sym.Name] = sym.OID
-	}
-	conditionRowVals := make(map[string]map[string]int64)
+	// --- Phase 4: resolve and walk condition columns (active symbols only) ---
+	conditionRows := make(map[string]map[string]conditionRow)
 	conditions := make(map[string]conditionCheck)
 	for _, st := range states {
 		// A condition names a column of its own to walk. Returning here leaves
@@ -649,45 +729,40 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		if st.throttled || st.sym.Condition == "" {
 			continue
 		}
-		parts := strings.SplitN(st.sym.Condition, "=", 2)
-		if len(parts) != 2 {
-			c.logger.Debug("Ignoring malformed condition", "symbol", st.sym.Name, "condition", st.sym.Condition)
+		check, reason := resolveCondition(entry, st.sym.Condition)
+		if reason != "" {
+			c.logger.Debug("Ignoring condition this collector cannot apply",
+				"symbol", st.sym.Name, "condition", st.sym.Condition, "reason", reason)
 			continue
 		}
-		refName := strings.TrimSpace(parts[0])
-		expectedStr := strings.TrimSpace(parts[1])
-		expected, err := strconv.ParseInt(expectedStr, 10, 64)
-		if err != nil {
-			c.logger.Debug("Ignoring condition with non-integer value", "symbol", st.sym.Name, "condition", st.sym.Condition)
+		conditions[st.sym.OID] = check
+		if _, walked := conditionRows[check.columnOID]; walked {
 			continue
 		}
-		refOID, ok := symOIDByName[refName]
-		if !ok {
-			c.logger.Debug("Condition references unknown symbol", "symbol", st.sym.Name, "ref", refName)
-			continue
-		}
-		conditions[st.sym.OID] = conditionCheck{columnOID: refOID, expected: expected}
-		if _, walked := conditionRowVals[refOID]; !walked {
-			var pdus map[string]snmp.PDU
-			if columnPDUs != nil {
-				pdus = columnPDUs[refOID]
-			} else {
-				pdus, err = c.walk(walker, refOID, 1)
-				if err != nil {
-					c.logger.Debug("Error walking condition column", "oid", refOID, "error", err)
-					conditionRowVals[refOID] = nil
-					continue
-				}
+		var pdus map[string]snmp.PDU
+		switch {
+		case columnPDUs != nil:
+			pdus = columnPDUs[check.columnOID]
+		case tagColumnPDUs[check.columnOID] != nil:
+			pdus = tagColumnPDUs[check.columnOID]
+		default:
+			var err error
+			pdus, err = c.walk(walker, check.columnOID, 1)
+			if err != nil {
+				c.logger.Debug("Error walking condition column", "oid", check.columnOID, "error", err)
+				conditionRows[check.columnOID] = nil
+				continue
 			}
-			rowVals := make(map[string]int64, len(pdus))
-			for fullOID, pdu := range pdus {
-				rowIdx := extractRowIndex(fullOID, refOID)
-				if v, _, err := pduToValue(pdu, ""); err == nil {
-					rowVals[rowIdx] = v
-				}
-			}
-			conditionRowVals[refOID] = rowVals
 		}
+		rows := make(map[string]conditionRow, len(pdus))
+		for fullOID, pdu := range pdus {
+			row := conditionRow{str: pduToString(pdu, check.column)}
+			if v, _, err := pduToValue(pdu, ""); err == nil {
+				row.num, row.hasNum = v, true
+			}
+			rows[extractRowIndex(fullOID, check.columnOID)] = row
+		}
+		conditionRows[check.columnOID] = rows
 	}
 
 	// --- Phase 5: collect active metric columns ---
@@ -723,11 +798,12 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			rowIdx, indexed := rowIndex(fullOID, sym.OID)
 
 			if hasCondition {
-				rowVals := conditionRowVals[cond.columnOID]
-				if rowVals == nil {
+				rows := conditionRows[cond.columnOID]
+				if rows == nil {
 					continue
 				}
-				if rowVals[rowIdx] != cond.expected {
+				row, present := rows[rowIdx]
+				if !present || !cond.matches(row) {
 					continue
 				}
 			}
