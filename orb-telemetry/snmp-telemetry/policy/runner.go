@@ -73,6 +73,10 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 	// Schedule a metrics job for each expanded target
 	for _, target := range runner.scope.Targets {
+		// Checked before expanding, which allocates the whole list up front.
+		if err := checkTargetExpansion(target.Host); err != nil {
+			return nil, err
+		}
 		expandedIPs, err := targets.Expand(target.Host)
 		if err != nil {
 			logger.Warn("Error expanding target host, skipping", "host", config.SanitizeLogValue(target.Host), "error", err)

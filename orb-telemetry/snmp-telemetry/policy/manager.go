@@ -351,6 +351,9 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	}
 
 	for _, target := range policy.Scope.Targets {
+		if err := checkTargetExpansion(target.Host); err != nil {
+			return err
+		}
 		if target.Authentication != nil {
 			context := fmt.Sprintf("target %s", target.Host)
 			if err := m.validateAuthentication(target.Authentication, context); err != nil {

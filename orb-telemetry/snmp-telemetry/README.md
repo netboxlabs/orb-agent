@@ -69,6 +69,13 @@ policies:
         community: "public"
 ```
 
+A target's `host` can be a single address, a hostname, a CIDR prefix, or an
+address range, and each address it expands to becomes its own recurring poll
+job. A target that expands to more than 65536 addresses (a /16) is rejected.
+That ceiling is a guard against a prefix wide enough to exhaust memory before
+polling starts, not a recommended size: polling tens of thousands of devices
+from one policy is far past what one agent should carry.
+
 `community`, `username`, `auth_passphrase`, and `priv_passphrase` accept
 `${VARNAME}` environment variable references. If the referenced variable is
 unset, the policy is rejected.
