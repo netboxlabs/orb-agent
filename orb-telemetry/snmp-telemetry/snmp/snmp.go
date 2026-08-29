@@ -134,6 +134,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Retries:       retries,
 				MsgFlags:      msgFlags,
 				SecurityModel: gosnmp.UserSecurityModel,
+				ContextName:   authentication.ContextName,
 				Logger:        gosnmpLogger,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,
@@ -150,7 +151,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 
 func getAuthProtocol(authProtocol string) (gosnmp.SnmpV3AuthProtocol, error) {
 	switch authProtocol {
-	case "NoAuth":
+	case "", "NoAuth":
 		return gosnmp.NoAuth, nil
 	case "MD5":
 		return gosnmp.MD5, nil
@@ -170,7 +171,7 @@ func getAuthProtocol(authProtocol string) (gosnmp.SnmpV3AuthProtocol, error) {
 
 func getPrivProtocol(privProtocol string) (gosnmp.SnmpV3PrivProtocol, error) {
 	switch privProtocol {
-	case "NoPriv":
+	case "", "NoPriv":
 		return gosnmp.NoPriv, nil
 	case "DES":
 		return gosnmp.DES, nil

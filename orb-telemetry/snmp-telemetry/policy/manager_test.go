@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -277,6 +278,45 @@ func TestValidate_ZeroMetricsInterval(t *testing.T) {
 	}
 	err := m.validatePolicy(pol)
 	assert.ErrorContains(t, err, "metrics_interval")
+}
+
+// A device exposing its MIB in a named context returns nothing for the default
+// context, so an absent context_name looks like a successful empty walk.
+func TestValidateAuthentication_ContextNameAcceptedForV3(t *testing.T) {
+	m := newTestManager()
+	err := m.validateAuthentication(&config.Authentication{
+		ProtocolVersion: "SNMPv3",
+		SecurityLevel:   "authPriv",
+		Username:        "admin",
+		AuthProtocol:    "SHA",
+		AuthPassphrase:  "authpass",
+		PrivProtocol:    "AES",
+		PrivPassphrase:  "privpass",
+		ContextName:     "vrf-mgmt",
+	}, "scope")
+	if err != nil {
+		t.Errorf("context_name rejected for SNMPv3: %v", err)
+	}
+}
+
+// v1 and v2c have no context concept. Ignoring the field would make a
+// misconfigured policy look healthy while returning nothing.
+func TestValidateAuthentication_ContextNameRejectedForV1AndV2c(t *testing.T) {
+	m := newTestManager()
+	for _, version := range []string{"SNMPv1", "SNMPv2c"} {
+		err := m.validateAuthentication(&config.Authentication{
+			ProtocolVersion: version,
+			Community:       "public",
+			ContextName:     "vrf-mgmt",
+		}, "scope")
+		if err == nil {
+			t.Errorf("%s: context_name accepted, want rejection", version)
+			continue
+		}
+		if !strings.Contains(err.Error(), "context_name") {
+			t.Errorf("%s: error %q does not name the offending field", version, err)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

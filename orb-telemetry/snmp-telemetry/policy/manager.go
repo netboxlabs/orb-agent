@@ -243,6 +243,11 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 		return fmt.Errorf("%s: unsupported protocol version", context)
 	}
 
+	if auth.ContextName != "" && auth.ProtocolVersion != snmp.ProtocolVersion3 {
+		return fmt.Errorf("%s: context_name is only valid for SNMPv3 (got %q)",
+			context, auth.ProtocolVersion)
+	}
+
 	if auth.ProtocolVersion == "SNMPv2c" || auth.ProtocolVersion == "SNMPv1" {
 		if auth.Community == "" {
 			return fmt.Errorf("%s: missing community", context)
