@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -195,35 +197,45 @@ func TestTargetErrorKey_PlainTargetIsHostAndPort(t *testing.T) {
 	assert.Equal(t, "10.0.0.3:1161", targetErrorKey(target, nil))
 }
 
-// TestNewRunner_RejectsRetryInclusiveCeilingAtOrAboveInterval covers the ceiling
-// a single request really has. A timed-out request is retried at the same
-// timeout, so retries+1 attempts fit inside metrics_interval or the run has no
-// room for the rest of the profile.
-func TestNewRunner_RejectsRetryInclusiveCeilingAtOrAboveInterval(t *testing.T) {
-	// Nine seconds, ten retries and a ten second interval: each attempt is
-	// below the interval, the sequence is ten times past it.
-	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(10, 9, 10), &spyCollector{})
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "snmp_timeout")
-	assert.ErrorContains(t, err, "retries")
+// TestNewRunner_WarnsWhenRetriesCanExceedTheInterval separates the two cases.
+// A single attempt that fills the interval can never produce a sample and is
+// rejected. A retry sequence that reaches the interval only does so against a
+// device that never answers, so it warns and the policy still starts.
+func TestNewRunner_WarnsWhenRetriesCanExceedTheInterval(t *testing.T) {
+	capture := func(pol config.Policy) (string, error) {
+		var buf bytes.Buffer
+		lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		_, err := NewRunner(t.Context(), lg, "p1", pol, &spyCollector{})
+		return buf.String(), err
+	}
 
-	// Exactly at the interval is rejected, the same as a single attempt is.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 12, 4), &spyCollector{})
-	assert.Error(t, err)
+	// Nine seconds, ten retries, a ten second interval: each attempt fits, the
+	// sequence does not. Accepted with a warning.
+	out, err := capture(policyWithDial(10, 9, 10))
+	require.NoError(t, err)
+	assert.Contains(t, out, "SNMP retries can exceed the collection interval")
 
-	// One retry short of the interval is accepted.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 12, 3), &spyCollector{})
-	assert.NoError(t, err)
+	// Exactly at the interval warns too.
+	out, err = capture(policyWithDial(60, 12, 4))
+	require.NoError(t, err)
+	assert.Contains(t, out, "SNMP retries can exceed the collection interval")
 
-	// With no retries the message stays the single-attempt one.
+	// One retry short of the interval is silent.
+	out, err = capture(policyWithDial(60, 12, 3))
+	require.NoError(t, err)
+	assert.NotContains(t, out, "SNMP retries can exceed the collection interval")
+
+	// A single attempt filling the interval is still an error, not a warning.
 	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{})
 	require.Error(t, err)
+	assert.ErrorContains(t, err, "snmp_timeout")
 	assert.NotContains(t, err.Error(), "retries")
 
-	// An outsized retries count is rejected rather than overflowing the
-	// ceiling. This one is chosen so that attempts times five seconds wraps to
-	// zero, which an unguarded multiply would read as comfortably inside the
-	// interval.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, 1<<55-1), &spyCollector{})
-	assert.Error(t, err)
+	// An outsized retries count warns rather than overflowing the ceiling.
+	// This one is chosen so that attempts times five seconds wraps to zero,
+	// which an unguarded multiply would read as comfortably inside the
+	// interval and so stay silent.
+	out, err = capture(policyWithDial(60, 5, 1<<55-1))
+	require.NoError(t, err)
+	assert.Contains(t, out, "SNMP retries can exceed the collection interval")
 }

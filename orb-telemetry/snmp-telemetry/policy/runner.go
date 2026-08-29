@@ -82,19 +82,23 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if runner.retries < 0 {
 		runner.retries = 0
 	}
-	// Each run is bounded by metrics_interval, and a timed-out request is
-	// retried at the same timeout, so one request may take snmp_timeout times
-	// retries+1. A policy whose ceiling reaches the interval leaves no room for
-	// the walks that follow. Attempts are capped before the multiply so an
-	// outsized retries count cannot overflow it; the cap is already past the
-	// interval, so it cannot turn a rejection into an acceptance.
+	// A single attempt that fills the interval can never produce a sample: the
+	// run's deadline expires at or before the first request returns. That is
+	// rejected, matching snmp-discovery.
+	if runner.snmpTimeout >= runner.metricsInterval {
+		return nil, fmt.Errorf("snmp_timeout (%s) must be less than metrics_interval (%s)", runner.snmpTimeout, runner.metricsInterval)
+	}
+	// Retries raise the ceiling for one request to snmp_timeout times
+	// retries+1, but that ceiling is only reached against a device that never
+	// answers. Warning rather than rejecting keeps a policy that collects
+	// normally from being refused for its worst case. Attempts are capped
+	// before the multiply so an outsized retries count cannot overflow it.
 	attempts := min(int64(runner.retries)+1, int64(runner.metricsInterval/runner.snmpTimeout)+1)
-	if time.Duration(attempts)*runner.snmpTimeout >= runner.metricsInterval {
-		if attempts == 1 {
-			return nil, fmt.Errorf("snmp_timeout (%s) must be less than metrics_interval (%s)", runner.snmpTimeout, runner.metricsInterval)
-		}
-		return nil, fmt.Errorf("snmp_timeout (%s) with %d retries allows one request %s, which must be less than metrics_interval (%s)",
-			runner.snmpTimeout, runner.retries, time.Duration(attempts)*runner.snmpTimeout, runner.metricsInterval)
+	if ceiling := time.Duration(attempts) * runner.snmpTimeout; ceiling >= runner.metricsInterval {
+		logger.Warn("SNMP retries can exceed the collection interval, a run against an unresponsive device will be cut short",
+			"policy", config.SanitizeLogValue(name),
+			"snmp_timeout", runner.snmpTimeout, "retries", runner.retries,
+			"request_ceiling", ceiling, "metrics_interval", runner.metricsInterval)
 	}
 
 	// Schedule a metrics job for each expanded target
