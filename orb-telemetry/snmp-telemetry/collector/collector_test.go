@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -29,12 +30,18 @@ type recordingWalker struct {
 	responses map[string]map[string]snmp.PDU
 	// walkCalls records each (oid, depth) call.
 	walkCalls []string
+	// onWalk, when set, runs before each Walk returns. A test uses it to expire
+	// the collection deadline partway through a profile.
+	onWalk func(oid string)
 }
 
 func (r *recordingWalker) Connect() error { return nil }
 func (r *recordingWalker) Close() error   { return nil }
 func (r *recordingWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
 	r.walkCalls = append(r.walkCalls, oid)
+	if r.onWalk != nil {
+		r.onWalk(oid)
+	}
 	pdus, ok := r.responses[oid]
 	if !ok {
 		return map[string]snmp.PDU{}, nil
@@ -1062,4 +1069,94 @@ func TestCollectTarget_UsesCallerDialOptions(t *testing.T) {
 		"p", DialOptions{Timeout: 9 * time.Second, Retries: 3}))
 	assert.Equal(t, 9*time.Second, gotTimeout)
 	assert.Equal(t, 3, gotRetries)
+}
+
+// ---------------------------------------------------------------------------
+// Deadline handling
+// ---------------------------------------------------------------------------
+
+// A grouped `symbols:` entry can carry dozens of symbols, so a run whose
+// deadline expires partway through one must not keep polling the rest: the
+// bundled environment-monitor entry alone would cost 80-odd further per-request
+// timeouts against an unresponsive device, and policy shutdown waits on them.
+func TestCollectTarget_GroupedScalarsStopAtTheDeadline(t *testing.T) {
+	const (
+		host        = "10.0.0.50"
+		sysObjValue = "1.3.6.1.4.1.9999.50"
+		colOID      = "1.3.6.1.4.1.9999.50.1."
+	)
+	syms := make([]profiles.Symbol, 5)
+	responses := map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+	}
+	for i := range syms {
+		oid := fmt.Sprintf("%s%d.0", colOID, i)
+		syms[i] = profiles.Symbol{Name: fmt.Sprintf("sensor%d", i), OID: oid}
+		responses[oid] = map[string]snmp.PDU{oid: intPDU(oid, i)}
+	}
+	p := profileWithOID(sysObjValue, "grouped.yml", []profiles.MetricEntry{{Symbols: syms}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &recordingWalker{responses: responses}
+	w.onWalk = func(oid string) {
+		if oid == syms[0].OID {
+			cancel()
+		}
+	}
+
+	c := newCollector(walkerFactory(w), p)
+	err := c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{})
+	require.ErrorIs(t, err, context.Canceled)
+
+	assert.Contains(t, w.walkCalls, syms[0].OID)
+	for _, sym := range syms[1:] {
+		assert.NotContains(t, w.walkCalls, sym.OID, "a symbol polled after the deadline expired")
+	}
+}
+
+// The profile-level metric_tags are walked one column at a time before any
+// metric is collected, and a profile declares up to a dozen of them.
+func TestCollectTarget_DeviceTagsStopAtTheDeadline(t *testing.T) {
+	const (
+		host        = "10.0.0.51"
+		sysObjValue = "1.3.6.1.4.1.9999.51"
+		contactOID  = "1.3.6.1.2.1.1.4.0"
+		nameOID     = "1.3.6.1.2.1.1.5.0"
+		locationOID = "1.3.6.1.2.1.1.6.0"
+		cpuOID      = "1.3.6.1.4.1.9999.51.1"
+	)
+	p := profileWithOID(sysObjValue, "tags.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	p.MetricTags = []profiles.MetricTag{
+		{Column: &profiles.TagColumn{OID: contactOID, Name: "SysContact"}},
+		{Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
+		{Column: &profiles.TagColumn{OID: locationOID, Name: "SysLocation"}},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		contactOID:     {contactOID: stringPDU(contactOID, "noc@example.com")},
+		nameOID:        {nameOID: stringPDU(nameOID, "sensor-1")},
+		locationOID:    {locationOID: stringPDU(locationOID, "rack 4")},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 42)},
+	}}
+	w.onWalk = func(oid string) {
+		if oid == contactOID {
+			cancel()
+		}
+	}
+
+	c := newCollector(walkerFactory(w), p)
+	err := c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{})
+	require.ErrorIs(t, err, context.Canceled)
+
+	assert.NotContains(t, w.walkCalls, nameOID, "a device tag walked after the deadline expired")
+	assert.NotContains(t, w.walkCalls, locationOID, "a device tag walked after the deadline expired")
+	assert.NotContains(t, w.walkCalls, cpuOID)
 }

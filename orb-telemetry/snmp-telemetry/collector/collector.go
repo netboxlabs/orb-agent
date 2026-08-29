@@ -236,7 +236,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	if target.ID != "" {
 		baseAttrs = append(baseAttrs, attribute.String("netbox_id", target.ID))
 	}
-	baseAttrs = c.appendDeviceTags(walker, profile, baseAttrs, sysDescr, sysOIDValue)
+	baseAttrs = c.appendDeviceTags(ctx, walker, profile, baseAttrs, sysDescr, sysOIDValue)
 
 	// localBuf accumulates fresh observations for this run.
 	// throttledMetrics records metric names skipped due to poll_time_sec not elapsed.
@@ -254,8 +254,13 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttledMetrics)
 		case len(entry.Symbols) > 0:
 			// Scalars grouped under `symbols:` with no `table:`. Almost all of
-			// them name a `.0` instance, so they collect as scalars.
+			// them name a `.0` instance, so they collect as scalars. One entry
+			// can carry dozens, each a request of its own, so the deadline is
+			// checked between them and not only between entries.
 			for i := range entry.Symbols {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				c.collectScalar(ctx, walker, &entry.Symbols[i], baseAttrs, key, localBuf, throttledMetrics)
 			}
 		}
@@ -289,9 +294,14 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 
 // appendDeviceTags renders the profile's top-level metric_tags and appends them
 // to attrs. They describe the device rather than a row, so they belong on every
-// series the profile produces.
-func (c *MetricsCollector) appendDeviceTags(walker snmp.Walker, profile *profiles.Profile, attrs []attribute.KeyValue, sysDescr, sysObjectID string) []attribute.KeyValue {
+// series the profile produces. Each uncached column is a request of its own, so
+// the walk stops once the deadline has expired and the caller returns on the
+// same check straight after.
+func (c *MetricsCollector) appendDeviceTags(ctx context.Context, walker snmp.Walker, profile *profiles.Profile, attrs []attribute.KeyValue, sysDescr, sysObjectID string) []attribute.KeyValue {
 	for _, mt := range profile.MetricTags {
+		if ctx.Err() != nil {
+			return attrs
+		}
 		col := metricTagColumn(&mt)
 		if col == nil || col.OID == "" {
 			continue
