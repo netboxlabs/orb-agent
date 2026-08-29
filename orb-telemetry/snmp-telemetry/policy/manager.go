@@ -42,8 +42,14 @@ type Manager struct {
 	// the agent polls status on a timer while pushing policy updates, so an
 	// unguarded map hits Go's "concurrent map read and map write" fatal error.
 	// Runner state has its own lock; mu only protects the map.
-	mu                 sync.RWMutex
-	policies           map[string]*Runner
+	mu       sync.RWMutex
+	policies map[string]*Runner
+	// stopping reserves a policy name while its runner unwinds, keyed by name
+	// and closed once Stop has returned. A stopping runner calls ForgetPolicy,
+	// which is keyed on the policy name alone, so a replacement started under
+	// that name before Stop returns would have its observations and poll state
+	// erased by the runner it replaced. Guarded by mu.
+	stopping           map[string]chan struct{}
 	logger             *slog.Logger
 	ctx                context.Context
 	defaultProfilesDir string
@@ -58,6 +64,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, defaultProfilesDir str
 		ctx:                ctx,
 		logger:             logger,
 		policies:           make(map[string]*Runner),
+		stopping:           make(map[string]chan struct{}),
 		defaultProfilesDir: defaultProfilesDir,
 		collectorsByDir:    make(map[string]*collector.MetricsCollector),
 	}
@@ -155,6 +162,22 @@ func validateProfilesDir(dir string) (string, error) {
 	return clean, nil
 }
 
+// reserveStopping marks name as owned by a runner that is still stopping and
+// returns the release to call once Stop has returned. Must be called with mu
+// held; the release takes mu itself, so it runs after the caller has unlocked.
+func (m *Manager) reserveStopping(name string) func() {
+	done := make(chan struct{})
+	m.stopping[name] = done
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.stopping[name] == done {
+			delete(m.stopping, name)
+		}
+		close(done)
+	}
+}
+
 // StartPolicy starts a single named policy. The duplicate check and the insert
 // happen together under mu, so two concurrent requests for the same name cannot
 // both start a runner.
@@ -178,10 +201,27 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.policies[name]; ok {
-		return fmt.Errorf("policy %s already exists", name)
+	for {
+		if _, ok := m.policies[name]; ok {
+			m.mu.Unlock()
+			return fmt.Errorf("policy %s already exists", name)
+		}
+		stopping, ok := m.stopping[name]
+		if !ok {
+			break
+		}
+		// The name is still owned by a runner that is shutting down. Wait for
+		// it outside mu: Stop blocks on the scheduler unwinding, and holding mu
+		// across that would serialise every other request on this one name.
+		m.mu.Unlock()
+		select {
+		case <-stopping:
+		case <-m.ctx.Done():
+			return fmt.Errorf("policy %s: waiting for the previous runner to stop: %w", name, m.ctx.Err())
+		}
+		m.mu.Lock()
 	}
+	defer m.mu.Unlock()
 
 	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector)
 	if err != nil {
@@ -195,17 +235,22 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 }
 
 // StopPolicy stops a single named policy. The runner is detached under mu and
-// stopped outside it, since Stop blocks on the scheduler unwinding.
+// stopped outside it, since Stop blocks on the scheduler unwinding. The name
+// stays reserved for the whole of Stop so a POST for the same name cannot start
+// a replacement that the outgoing runner would then forget.
 func (m *Manager) StopPolicy(name string) error {
 	m.mu.Lock()
 	r, ok := m.policies[name]
+	var release func()
 	if ok {
 		delete(m.policies, name)
+		release = m.reserveStopping(name)
 	}
 	m.mu.Unlock()
 	if !ok {
 		return nil
 	}
+	defer release()
 	if err := r.Stop(); err != nil {
 		return fmt.Errorf("stopping policy %s: %w", name, err)
 	}
@@ -221,11 +266,17 @@ func (m *Manager) Stop() error {
 	runners := make(map[string]*Runner, len(m.policies))
 	maps.Copy(runners, m.policies)
 	m.policies = make(map[string]*Runner)
+	releases := make(map[string]func(), len(runners))
+	for name := range runners {
+		releases[name] = m.reserveStopping(name)
+	}
 	m.mu.Unlock()
 
 	var errs []error
 	for _, name := range slices.Sorted(maps.Keys(runners)) {
-		if err := runners[name].Stop(); err != nil {
+		err := runners[name].Stop()
+		releases[name]()
+		if err != nil {
 			errs = append(errs, fmt.Errorf("stopping policy %s: %w", name, err))
 		}
 	}
