@@ -101,10 +101,14 @@ func (s *Server) Start() <-chan error {
 }
 
 func (s *Server) getStatus(c *gin.Context) {
-	s.stat.UpTimeSeconds = int64(math.Round(time.Since(s.stat.StartTime).Seconds()))
+	// The uptime is computed on a request-local copy. s.stat is written once at
+	// construction and shared by every handler goroutine, so writing the field
+	// back into it races two concurrent status requests against each other.
+	stat := s.stat
+	stat.UpTimeSeconds = int64(math.Round(time.Since(stat.StartTime).Seconds()))
 
 	response := StatusResponse{
-		Status:   s.stat,
+		Status:   stat,
 		Policies: s.manager.GetPolicyStatuses(),
 	}
 

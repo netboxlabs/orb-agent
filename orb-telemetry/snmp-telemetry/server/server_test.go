@@ -3,12 +3,14 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,4 +75,34 @@ policies:
 	assert.Contains(t, w.Body.String(), `"running"`)
 
 	srv.Stop()
+}
+
+// The agent polls /status on a timer while the API is otherwise in use, so two
+// handlers run at once. Computing the uptime on the shared status struct while
+// copying that struct into the response is a data race, which this test trips
+// under -race.
+func TestGetStatus_ConcurrentRequests(t *testing.T) {
+	srv := newTestServer(t)
+
+	const requests = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range requests {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest(http.MethodGet, "/api/v1/status", nil)
+			srv.Router().ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+			assert.Equal(t, "1.0.0", got["version"])
+			assert.NotNil(t, got["up_time_seconds"])
+		}()
+	}
+	close(start)
+	wg.Wait()
 }
