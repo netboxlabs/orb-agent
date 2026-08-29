@@ -295,9 +295,31 @@ func (l *Loader) AllResolved() ([]*Profile, error) {
 			l.logger.Warn("Failed to resolve profile", "file", name, "error", err)
 			continue
 		}
+		reportInertProfile(p, l.logger)
 		result = append(result, p)
 	}
 	return result, nil
+}
+
+// reportInertProfile warns when a profile declares metrics the collector can
+// never read. Every metric entry has to carry a symbol, a symbols block or a
+// table; an entry with none of those parses cleanly and yields nothing, which
+// is what a profile written against a different schema looks like from here.
+// A profile with no metric entries at all is not reported: the bundled set
+// includes base profiles that exist only to be inherited.
+func reportInertProfile(p *Profile, logger *slog.Logger) {
+	if len(p.Metrics) == 0 {
+		return
+	}
+	for _, m := range p.Metrics {
+		if m.Symbol != nil || len(m.Symbols) > 0 || m.Table != nil {
+			return
+		}
+	}
+	logger.Warn("SNMP profile declares no metric the collector can read, it will yield nothing",
+		"file", config.SanitizeLogValue(p.RelPath),
+		"entries", len(p.Metrics),
+		"sysobjectid_count", len(p.SysObjectID))
 }
 
 // Count returns the number of raw (unresolved) profiles loaded.

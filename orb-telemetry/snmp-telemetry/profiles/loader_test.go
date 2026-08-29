@@ -1,9 +1,11 @@
 package profiles
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -366,4 +368,24 @@ func TestLoadProfiles_ResolvedProfilesDoNotShareBackingArrays(t *testing.T) {
 			tagsOwner[ptr] = name
 		}
 	}
+}
+
+// TestAllResolved_ReportsInertProfile covers a profile written against a
+// different schema: it parses, but no metric entry carries a symbol, symbols
+// block or table, so it can never yield a value. The bundled
+// ruckus/Ruckus_Contoller_SNMP.yml is the one such file today.
+func TestAllResolved_ReportsInertProfile(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	l, err := LoadProfiles("", logger)
+	require.NoError(t, err)
+	_, err = l.AllResolved()
+	require.NoError(t, err)
+
+	out := buf.String()
+	require.Contains(t, out, "declares no metric the collector can read")
+	require.Contains(t, out, "Ruckus_Contoller_SNMP.yml")
+	require.Equal(t, 1, strings.Count(out, "declares no metric the collector can read"),
+		"a base profile with no metric entries must not be reported")
 }
