@@ -94,10 +94,12 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		if err := checkTargetExpansion(target.Host); err != nil {
 			return nil, err
 		}
+		// Skipping the target instead would leave a policy with no job for it,
+		// and a policy whose targets are all unexpandable would start with no
+		// jobs at all and be reported as running while collecting nothing.
 		expandedIPs, err := targets.Expand(target.Host)
 		if err != nil {
-			logger.Warn("Error expanding target host, skipping", "host", config.SanitizeLogValue(target.Host), "error", err)
-			continue
+			return nil, fmt.Errorf("expanding target %s: %w", target.Host, err)
 		}
 		for _, ip := range expandedIPs {
 			t := config.Target{
