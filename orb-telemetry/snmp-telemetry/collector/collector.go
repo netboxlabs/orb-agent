@@ -507,7 +507,9 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 			warn(&entry.Symbols[i])
 		}
 		c.reportUnusableConditions(entry, name)
+		c.reportUnusableFilters(entry.MetricTags, name, "")
 	}
+	c.reportUnusableFilters(profile.MetricTags, name, "column tags the device rather than a row")
 }
 
 // reportUnusableConditions reports a condition the collector cannot apply.
@@ -688,6 +690,99 @@ func trimQuotes(s string) (string, bool) {
 	return s, false
 }
 
+// rowFilter is one tag column's match_attributes: the tag the column renders
+// under, and the patterns a row's value has to match for the row to be emitted.
+type rowFilter struct {
+	tagName  string
+	patterns []*regexp.Regexp
+}
+
+// compileRowFilter compiles a tag column's match_attributes and reports whether
+// anything is left to filter on. ktranslate compiles each entry as a regular
+// expression and matches it unanchored, so a plain string selects every row
+// whose value contains it.
+//
+// A pattern that does not compile is left out, and a column left with none
+// filters nothing, so a profile typo cannot silence an entry outright. Both
+// cases are named once per profile by reviewProfile.
+func (c *MetricsCollector) compileRowFilter(tagName string, col *profiles.TagColumn) (rowFilter, bool) {
+	f := rowFilter{tagName: tagName, patterns: make([]*regexp.Regexp, 0, len(col.MatchAttributes))}
+	for _, pattern := range col.MatchAttributes {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			c.logger.Debug("Ignoring row filter this collector cannot apply",
+				"pattern", pattern, "column", col.Name, "error", err)
+			continue
+		}
+		f.patterns = append(f.patterns, re)
+	}
+	return f, len(f.patterns) > 0
+}
+
+// rowPassesFilters reports whether one row satisfies every filter the entry's
+// tag columns declare.
+//
+// A row the filter column returned no value for is left alone: the profile
+// names the values to keep rather than saying a row without one is unwanted,
+// and ktranslate likewise only tests the rows that carry the attribute. It also
+// means a filter column the device does not implement leaves the entry
+// collecting as it did before the filter was declared.
+func rowPassesFilters(filters []rowFilter, tags map[string]string) bool {
+	for _, f := range filters {
+		value, ok := tags[f.tagName]
+		if !ok {
+			continue
+		}
+		matched := false
+		for _, re := range f.patterns {
+			if re.MatchString(value) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// reportUnusableFilters reports a match_attributes declaration the collector
+// cannot apply. Whether a pattern compiles, and whether the column carrying it
+// selects rows at all, are properties of the profile rather than of the device,
+// so they are reported here once rather than on every collection. The
+// collection path logs the same cases at debug level.
+//
+// unusable, when set, is the reason every filter in tags is ignored: the
+// top-level metric_tags describe the device, so a filter there has no rows.
+func (c *MetricsCollector) reportUnusableFilters(tags []profiles.MetricTag, profileName, unusable string) {
+	for i := range tags {
+		mt := &tags[i]
+		col := metricTagColumn(mt)
+		if col == nil || len(col.MatchAttributes) == 0 {
+			continue
+		}
+		reason := unusable
+		if reason == "" && len(mt.IndexTransform) > 0 {
+			// The column is read from another table and keyed by that table's
+			// index, so its rows do not line up with the metric rows.
+			reason = "column is joined from another table"
+		}
+		if reason != "" {
+			c.logger.Warn("Ignoring row filter this collector cannot apply",
+				"reason", reason, "column", col.Name, "profile", profileName)
+			continue
+		}
+		for _, pattern := range col.MatchAttributes {
+			if _, err := regexp.Compile(pattern); err != nil {
+				c.logger.Warn("Ignoring row filter this collector cannot apply",
+					"reason", "pattern is not a valid regular expression",
+					"pattern", pattern, "column", col.Name, "profile", profileName)
+			}
+		}
+	}
+}
+
 // joinedTag is a metric_tag whose column lives in a table other than the one
 // the metric rows come from. byIndex is keyed by that other table's index, and
 // transform turns a metric row's composite index into that key.
@@ -742,6 +837,9 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	// OID, so a condition naming one of those columns reuses the walk instead
 	// of asking the device for the same column twice.
 	tagColumnPDUs := make(map[string]map[string]snmp.PDU)
+	// rowFilters are the match_attributes of the tag columns that declare them.
+	// A row has to satisfy every one of them to be emitted.
+	var rowFilters []rowFilter
 	var joinedTags []joinedTag
 	for i := range entry.MetricTags {
 		// Each uncached column is a request of its own and one entry can
@@ -781,6 +879,11 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			continue
 		}
 		tagColumnPDUs[col.OID] = pdus
+		if len(col.MatchAttributes) > 0 {
+			if f, ok := c.compileRowFilter(tagName, col); ok {
+				rowFilters = append(rowFilters, f)
+			}
+		}
 		for fullOID, pdu := range pdus {
 			rowIdx := extractRowIndex(fullOID, col.OID)
 			if rowTags[rowIdx] == nil {
@@ -869,6 +972,10 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				return
 			}
 			rowIdx, indexed := rowIndex(fullOID, sym.OID)
+
+			if !rowPassesFilters(rowFilters, rowTags[rowIdx]) {
+				continue
+			}
 
 			if hasCondition {
 				rows := conditionRows[cond.columnOID]

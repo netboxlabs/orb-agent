@@ -1644,6 +1644,263 @@ func TestCollectTarget_ScriptedSymbolIsReportedOnce(t *testing.T) {
 	assert.Contains(t, matched[0], "profile=ubiquiti/unifi-access-point.yml")
 }
 
+// ---------------------------------------------------------------------------
+// Row filters declared by match_attributes on a tag column
+// ---------------------------------------------------------------------------
+
+// filterProfile builds a one-table profile whose rows are tagged from nameOID
+// and filtered by patterns.
+func filterProfile(sysObjValue, metricOID, nameOID string, patterns []string) *profiles.Profile {
+	return profileWithOID(sysObjValue, "filter.yml", []profiles.MetricEntry{{
+		MIB:     "TEST-MIB",
+		Table:   &profiles.Table{Name: "testTable", OID: sysObjValue},
+		Symbols: []profiles.Symbol{{Name: "rowValue", OID: metricOID}},
+		MetricTags: []profiles.MetricTag{{
+			Tag:    "row_name",
+			Column: &profiles.TagColumn{OID: nameOID, Name: "rowName", MatchAttributes: patterns},
+		}},
+	}})
+}
+
+// filteredValues reads the rowValue points a filterProfile collection produced,
+// keyed by the row name each carries.
+func filteredValues(t *testing.T, c *MetricsCollector, host string) map[string]int64 {
+	t.Helper()
+	got := make(map[string]int64)
+	for _, pt := range c.testDeviceStore("p", host)["snmp.rowvalue"] {
+		name := ""
+		for _, a := range pt.attrs {
+			if a.Key == "row_name" {
+				name = a.Value.AsString()
+			}
+		}
+		got[name] = pt.value
+	}
+	return got
+}
+
+// TestCollectTarget_MatchAttributesFiltersRows uses the bundled H3C switch
+// profile. Its CPU and memory entry declares match_attributes ["Board"] on the
+// entPhysicalName column, and the profile's own comment on the next entry calls
+// that "the Board filter". Without it every entity row reports as the switch's
+// CPU and memory.
+func TestCollectTarget_MatchAttributesFiltersRows(t *testing.T) {
+	const (
+		host        = "10.0.0.100"
+		sysObjValue = "1.3.6.1.4.1.25506.11.1.123"
+		cpuCol      = "1.3.6.1.4.1.25506.2.6.1.1.1.1.6"
+		tempCol     = "1.3.6.1.4.1.25506.2.6.1.1.1.1.12"
+		nameCol     = "1.3.6.1.2.1.47.1.1.1.1.7"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		cpuCol:         {cpuCol + ".1": intPDU(cpuCol+".1", 30), cpuCol + ".2": intPDU(cpuCol+".2", 70)},
+		tempCol:        {tempCol + ".1": intPDU(tempCol+".1", 40), tempCol + ".2": intPDU(tempCol+".2", 41)},
+		nameCol: {
+			nameCol + ".1": stringPDU(nameCol+".1", "Board 0"),
+			nameCol + ".2": stringPDU(nameCol+".2", "GigabitEthernet1/0/1"),
+		},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "hp/hp-h3c-switch.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	cpu := store["snmp.hh3centityextcpuusage"]
+	require.Len(t, cpu, 1, "only the board row carries the switch CPU")
+	assert.Equal(t, int64(30), cpu[0].value)
+
+	// The sibling entry reads the same table without the filter, so its rows
+	// must all survive. This is what keeps the filter from becoming global.
+	assert.Len(t, store["snmp.hh3centityexttemperature"], 2, "the unfiltered entry must keep every row")
+}
+
+// TestCollectTarget_MatchAttributesIsAnOrOverPatterns pins that a row is kept
+// when it matches any one of the listed patterns.
+func TestCollectTarget_MatchAttributesIsAnOrOverPatterns(t *testing.T) {
+	const (
+		host        = "10.0.0.101"
+		sysObjValue = "1.3.6.1.4.1.9999.101"
+		metricOID   = sysObjValue + ".1.1"
+		nameOID     = sysObjValue + ".1.2"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		metricOID: {
+			metricOID + ".1": intPDU(metricOID+".1", 1),
+			metricOID + ".2": intPDU(metricOID+".2", 2),
+			metricOID + ".3": intPDU(metricOID+".3", 3),
+		},
+		nameOID: {
+			nameOID + ".1": stringPDU(nameOID+".1", "alpha-1"),
+			nameOID + ".2": stringPDU(nameOID+".2", "beta-2"),
+			nameOID + ".3": stringPDU(nameOID+".3", "gamma-3"),
+		},
+	}}
+	c := newCollector(walkerFactory(w), filterProfile(sysObjValue, metricOID, nameOID, []string{"alpha", "beta"}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, map[string]int64{"alpha-1": 1, "beta-2": 2}, filteredValues(t, c, host))
+}
+
+// TestCollectTarget_MatchAttributesMatchesAnywhereInTheValue pins the rule the
+// bundled uses need: ktranslate compiles each entry as a regular expression and
+// matches it unanchored, so "Board" selects a row named "Board 0". Anchored
+// equality would drop every bundled row the filter is there to keep.
+func TestCollectTarget_MatchAttributesMatchesAnywhereInTheValue(t *testing.T) {
+	const (
+		host        = "10.0.0.102"
+		sysObjValue = "1.3.6.1.4.1.9999.102"
+		metricOID   = sysObjValue + ".1.1"
+		nameOID     = sysObjValue + ".1.2"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		metricOID: {
+			metricOID + ".1": intPDU(metricOID+".1", 1),
+			metricOID + ".2": intPDU(metricOID+".2", 2),
+		},
+		nameOID: {
+			nameOID + ".1": stringPDU(nameOID+".1", "Board 0"),
+			nameOID + ".2": stringPDU(nameOID+".2", "Fan 1"),
+		},
+	}}
+	c := newCollector(walkerFactory(w), filterProfile(sysObjValue, metricOID, nameOID, []string{"Board"}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, map[string]int64{"Board 0": 1}, filteredValues(t, c, host))
+}
+
+// TestCollectTarget_MatchAttributesLeavesAnUnansweredRowAlone pins what happens
+// to a row the filter column returned no value for. The filter says which
+// values to keep, not that a row without one is unwanted, so the row is emitted
+// and simply carries no such tag. It also means a filter column the device does
+// not implement leaves the entry collecting as it did before.
+func TestCollectTarget_MatchAttributesLeavesAnUnansweredRowAlone(t *testing.T) {
+	const (
+		host        = "10.0.0.103"
+		sysObjValue = "1.3.6.1.4.1.9999.103"
+		metricOID   = sysObjValue + ".1.1"
+		nameOID     = sysObjValue + ".1.2"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		metricOID: {
+			metricOID + ".1": intPDU(metricOID+".1", 1),
+			metricOID + ".2": intPDU(metricOID+".2", 2),
+		},
+		nameOID: {nameOID + ".1": stringPDU(nameOID+".1", "Fan 1")},
+	}}
+	c := newCollector(walkerFactory(w), filterProfile(sysObjValue, metricOID, nameOID, []string{"Board"}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, map[string]int64{"": 2}, filteredValues(t, c, host))
+}
+
+// TestCollectTarget_InvalidMatchAttributeIsReportedAndIgnored keeps a profile
+// typo from silencing an entry: a pattern that does not compile is dropped, and
+// a column whose patterns all fail to compile filters nothing.
+func TestCollectTarget_InvalidMatchAttributeIsReportedAndIgnored(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.104"
+		sysObjValue = "1.3.6.1.4.1.9999.104"
+		metricOID   = sysObjValue + ".1.1"
+		nameOID     = sysObjValue + ".1.2"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		metricOID: {
+			metricOID + ".1": intPDU(metricOID+".1", 1),
+			metricOID + ".2": intPDU(metricOID+".2", 2),
+		},
+		nameOID: {
+			nameOID + ".1": stringPDU(nameOID+".1", "Board 0"),
+			nameOID + ".2": stringPDU(nameOID+".2", "Fan 1"),
+		},
+	}}
+	p := filterProfile(sysObjValue, metricOID, nameOID, []string{"["})
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, map[string]int64{"Board 0": 1, "Fan 1": 2}, filteredValues(t, c, host))
+	assert.Equal(t, 1, strings.Count(logs.String(), "not a valid regular expression"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "profile=filter.yml")
+}
+
+// TestCollectTarget_MatchAttributesOnAJoinedColumnIsReported covers the one
+// shape the collector cannot apply: a filter column read from another table is
+// keyed by that table's index, so its rows do not line up with the metric rows.
+// No bundled profile writes that, and the rows are emitted unfiltered rather
+// than filtered against the wrong row.
+func TestCollectTarget_MatchAttributesOnAJoinedColumnIsReported(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.105"
+		sysObjValue = "1.3.6.1.4.1.9999.105"
+		metricOID   = sysObjValue + ".1.1"
+		nameOID     = sysObjValue + ".2.1"
+	)
+	p := profileWithOID(sysObjValue, "joined.yml", []profiles.MetricEntry{{
+		MIB:     "TEST-MIB",
+		Table:   &profiles.Table{Name: "testTable", OID: sysObjValue},
+		Symbols: []profiles.Symbol{{Name: "rowValue", OID: metricOID}},
+		MetricTags: []profiles.MetricTag{{
+			Tag:            "row_name",
+			Column:         &profiles.TagColumn{OID: nameOID, Name: "rowName", MatchAttributes: []string{"Board"}},
+			IndexTransform: profiles.IndexTransform{{Start: 0, End: 0}},
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		metricOID: {
+			metricOID + ".1.9": intPDU(metricOID+".1.9", 1),
+			metricOID + ".2.9": intPDU(metricOID+".2.9", 2),
+		},
+		nameOID: {
+			nameOID + ".1": stringPDU(nameOID+".1", "Board 0"),
+			nameOID + ".2": stringPDU(nameOID+".2", "Fan 1"),
+		},
+	}}
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, map[string]int64{"Board 0": 1, "Fan 1": 2}, filteredValues(t, c, host))
+	assert.Equal(t, 1, strings.Count(logs.String(), "column is joined from another table"), "logs: %s", logs.String())
+}
+
+// TestCollectTarget_MatchAttributesOnADeviceTagIsReported covers the other
+// place the field can appear. The top-level metric_tags describe the device, so
+// a filter there has no rows to select and is reported rather than dropped in
+// silence. No bundled profile writes one.
+func TestCollectTarget_MatchAttributesOnADeviceTagIsReported(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.106"
+		sysObjValue = "1.3.6.1.4.1.9999.106"
+		nameOID     = sysObjValue + ".1.0"
+	)
+	p := profileWithOID(sysObjValue, "device-tag.yml", nil)
+	p.MetricTags = []profiles.MetricTag{{
+		Tag:    "chassis",
+		Column: &profiles.TagColumn{OID: nameOID, Name: "chassisName", MatchAttributes: []string{"Board"}},
+	}}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		nameOID:        {nameOID: stringPDU(nameOID, "Fan 1")},
+	}}
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 1, strings.Count(logs.String(), "column tags the device rather than a row"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "profile=device-tag.yml")
+}
+
 // TestPduToString_HexToIntTagColumn covers a tag column declaring a hextoint
 // conversion, as brocade-fc-switch.yml does for portIndex. Without the
 // conversion the raw octets render as text, which looks like a value.

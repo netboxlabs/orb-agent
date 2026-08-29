@@ -157,4 +157,8 @@ type TagColumn struct {
 	Name       string         `yaml:"name"`
 	Enum       map[string]int `yaml:"enum"`
 	Conversion string         `yaml:"conversion"`
+	// MatchAttributes filters the rows of the entry the column belongs to. Each
+	// element is a regular expression tested against the column's own rendered
+	// value for a row, and a row matching any of them is kept.
+	MatchAttributes []string `yaml:"match_attributes"`
 }

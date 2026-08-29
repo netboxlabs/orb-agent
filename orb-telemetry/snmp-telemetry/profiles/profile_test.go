@@ -112,3 +112,31 @@ func TestSymbol_ScriptIsDeserialized(t *testing.T) {
 	scripted(t, "ubiquiti/unifi-access-point.yml", "loadValue")
 	scripted(t, "isilon/isilon.yml", "clusterCPUIdlePct")
 }
+
+// A `match_attributes:` on a tag column filters the rows of the entry it
+// belongs to. Both bundled uses list one pattern; a struct that does not
+// deserialize it emits every row of the table the entry names.
+func TestTagColumn_MatchAttributesAreDeserialized(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	filters := func(t *testing.T, relPath string) map[string][]string {
+		t.Helper()
+		p, err := l.Resolve(relPath)
+		require.NoError(t, err)
+		got := make(map[string][]string)
+		for _, entry := range p.Metrics {
+			for i := range entry.MetricTags {
+				for _, col := range []*TagColumn{entry.MetricTags[i].Column, entry.MetricTags[i].Symbol} {
+					if col != nil && len(col.MatchAttributes) > 0 {
+						got[col.Name] = col.MatchAttributes
+					}
+				}
+			}
+		}
+		return got
+	}
+
+	assert.Equal(t, map[string][]string{"entPhysicalName": {"Board"}}, filters(t, "hp/hp-h3c-switch.yml"))
+	assert.Equal(t, map[string][]string{"loadDescr": {"1 Minute Average"}}, filters(t, "ubiquiti/unifi-access-point.yml"))
+}
