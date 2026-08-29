@@ -1,7 +1,7 @@
 name: Backend test (Go)
 
-# Reusable go build + test + coverage for a Go discovery backend (lint lives in
-# the whole-repo lint workflow).
+# Reusable go build + test + coverage for a Go backend (lint lives in the
+# whole-repo lint workflow).
 on:
   workflow_call:
     inputs:
@@ -40,8 +40,8 @@ jobs:
       - name: Install additional dependencies
         run: |
           go install github.com/mfridman/tparse@v0.14.0
-          # snmp/gnmi test-coverage targets call gcov2lcov (network's does not);
-          # install it for all three (harmless where unused).
+          # snmp/gnmi/snmp-telemetry test-coverage targets call gcov2lcov
+          # (network's does not); install it for all four (harmless where unused).
           go install github.com/jandelgado/gcov2lcov@v1.1.1
           sudo apt-get -y install nmap
           sudo setcap cap_net_raw,cap_net_admin=eip $(which nmap)
