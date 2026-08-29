@@ -159,6 +159,10 @@ func validateProfilesDir(dir string) (string, error) {
 // happen together under mu, so two concurrent requests for the same name cannot
 // both start a runner.
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
+	if len(policy.Scope.Targets) == 0 {
+		return fmt.Errorf("%s : no targets found in the policy", name)
+	}
+
 	profilesDir := m.defaultProfilesDir
 	if policy.Config.ProfilesDir != "" {
 		dir, err := validateProfilesDir(policy.Config.ProfilesDir)
@@ -345,6 +349,12 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 
 // validatePolicy validates the policy
 func (m *Manager) validatePolicy(policy config.Policy) error {
+	// A policy with no targets schedules no jobs, so accepting one leaves a
+	// policy the API reports as running and that collects nothing.
+	if len(policy.Scope.Targets) == 0 {
+		return errors.New("no targets configured")
+	}
+
 	hasPolicyAuth := policy.Scope.Authentication.ProtocolVersion != ""
 
 	if hasPolicyAuth {

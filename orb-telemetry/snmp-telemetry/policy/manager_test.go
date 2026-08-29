@@ -552,3 +552,61 @@ func TestValidateProfilesDir_DotsAnywhereRejected(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Empty target list
+// ---------------------------------------------------------------------------
+
+// The per-target validation loop runs zero times when scope.targets is absent,
+// so the policy used to be accepted, start no jobs, and still report itself as
+// running: an operator would see a healthy policy that collects nothing.
+func TestValidate_NoTargets(t *testing.T) {
+	m := newTestManager()
+	interval := 60
+	pol := config.Policy{
+		Config: config.PolicyConfig{MetricsInterval: &interval},
+		Scope:  config.Scope{Authentication: v2cAuth()},
+	}
+	assert.ErrorContains(t, m.validatePolicy(pol), "no targets")
+}
+
+func TestParsePolicies_RejectsPolicyWithNoTargets(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "no targets")
+}
+
+func TestParsePolicies_RejectsEmptyTargetList(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+      targets: []
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "no targets")
+}
+
+func TestStartPolicy_RejectsPolicyWithNoTargets(t *testing.T) {
+	m := newTestManager()
+	pol := minimalPolicy(v2cAuth())
+	pol.Scope.Targets = nil
+	require.ErrorContains(t, m.StartPolicy("policy-a", pol), "no targets")
+	assert.Empty(t, m.policies)
+}

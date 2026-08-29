@@ -106,3 +106,31 @@ func TestGetStatus_ConcurrentRequests(t *testing.T) {
 	close(start)
 	wg.Wait()
 }
+
+// A policy with no targets starts no jobs, so accepting one leaves the operator
+// with a policy the API reports as running and that collects nothing.
+func TestCreatePolicy_RejectsPolicyWithNoTargets(t *testing.T) {
+	srv := newTestServer(t)
+
+	body := []byte(`
+policies:
+  my-policy:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: public
+`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-yaml")
+	srv.Router().ServeHTTP(w, req)
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "no targets")
+
+	w = httptest.NewRecorder()
+	req, _ = http.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+	srv.Router().ServeHTTP(w, req)
+	assert.JSONEq(t, `[]`, w.Body.String())
+}
