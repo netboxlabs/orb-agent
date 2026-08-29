@@ -21,6 +21,11 @@ const (
 	// overrideAfterBundled sorts after bundledExactPath, so an override under
 	// this name only wins on the override-beats-bundled tiebreak.
 	overrideAfterBundled = "zz-zyxel.yml"
+
+	// unrelatedBundledOID is carried by one bundled profile in a different
+	// directory, so nothing placed at bundledExactPath has a claim on it.
+	unrelatedBundledOID  = "1.3.6.1.4.1.318.1.3.11"
+	unrelatedBundledFile = "apc_ats.yml"
 )
 
 func captureLogger() (*slog.Logger, *bytes.Buffer) {
@@ -100,6 +105,34 @@ func TestMatcher_WarnsOnCollidingSysObjectID(t *testing.T) {
 	assert.Contains(t, out, bundledExactOID)
 	assert.Contains(t, out, "my-zyxel.yml")
 	assert.Contains(t, out, bundledExactFile)
+}
+
+// An override at a bundled profile's own path stands in for that profile, so
+// the keys that profile owned must not warn. The exemption used to cover every
+// key the override declared, which let a correctly placed file take a
+// sysObjectID owned by an unrelated bundled profile with nothing in the log.
+func TestMatcher_WarnsWhenPlacedOverrideClaimsAnotherProfilesSysObjectID(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, filepath.Dir(bundledExactPath)), 0o750))
+	writeYAML(t, dir, filepath.FromSlash(bundledExactPath), `
+sysobjectid:
+  - `+bundledExactOID+`
+  - `+unrelatedBundledOID+`
+`)
+
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	logger, buf := captureLogger()
+	NewMatcher(all, logger)
+
+	out := buf.String()
+	assert.Contains(t, out, unrelatedBundledOID, "the OID taken from another profile must be named")
+	assert.Contains(t, out, unrelatedBundledFile, "the profile it was taken from must be named")
+	assert.NotContains(t, out, bundledExactOID,
+		"the OID the override inherited from the profile it replaces must stay silent")
 }
 
 // The bundled set carries several files that share a basename, which is not an

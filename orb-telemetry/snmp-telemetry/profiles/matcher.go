@@ -31,10 +31,18 @@ func (c keyClaims) kept() *Profile {
 }
 
 // bundled is the profile that would serve the key if the override directory
-// held nothing at a path the bundled set lacks. A file that replaces a bundled
-// profile at that profile's own path counts here: it stands in for the bundled
-// file rather than competing with it.
+// held nothing.
 func (c keyClaims) bundled() *Profile {
+	return c.pick(func(p *Profile) bool { return p.Origin != OriginOverride })
+}
+
+// bundledOrReplacement is bundled, widened to accept an override that replaces
+// a bundled profile at that profile's own path. Such a file carries the
+// replaced profile's basename by definition, so on a basename key it stands in
+// for that profile rather than competing with it. It inherits no sysobjectid:
+// an OID it declares that a different bundled profile owns is taken from that
+// profile, which is the operator's to fix.
+func (c keyClaims) bundledOrReplacement() *Profile {
 	return c.pick(func(p *Profile) bool {
 		return p.Origin != OriginOverride || p.ReplacesBundled
 	})
@@ -82,9 +90,9 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 		}
 	}
 
-	reportShadowed(byBase, logger, "basename")
-	reportShadowed(byExact, logger, "sysobjectid")
-	reportShadowed(byWildcard, logger, "sysobjectid")
+	reportShadowed(byBase, logger, "basename", keyClaims.bundledOrReplacement)
+	reportShadowed(byExact, logger, "sysobjectid", keyClaims.bundled)
+	reportShadowed(byWildcard, logger, "sysobjectid", keyClaims.bundled)
 
 	m := &Matcher{
 		exactIndex:    make(map[string]*Profile, len(byExact)),
@@ -121,7 +129,10 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 // itself ships nine files named traps.yml, and comparing origins pairwise
 // warned once per losing sibling, so correctly overriding one of them produced
 // eight warnings naming vendors the operator never touched.
-func reportShadowed(claims map[string]keyClaims, logger *slog.Logger, kind string) {
+//
+// baseline picks the claimant the warning measures against, which differs by
+// index: see bundled and bundledOrReplacement.
+func reportShadowed(claims map[string]keyClaims, logger *slog.Logger, kind string, baseline func(keyClaims) *Profile) {
 	if logger == nil {
 		return
 	}
@@ -130,7 +141,7 @@ func reportShadowed(claims map[string]keyClaims, logger *slog.Logger, kind strin
 		if len(c) < 2 {
 			continue
 		}
-		kept, bundled := c.kept(), c.bundled()
+		kept, bundled := c.kept(), baseline(c)
 		if bundled != nil && bundled != kept {
 			logger.Warn("SNMP profile shadows the one that would have served this key",
 				kind, key, "using", kept.RelPath, "instead_of", bundled.RelPath)
