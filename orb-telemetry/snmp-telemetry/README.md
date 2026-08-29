@@ -91,13 +91,20 @@ its subdirectory. For example, overriding the bundled
 `_general/system-mib.yml` requires placing the replacement at
 `_general/system-mib.yml` under the override directory.
 
-A file at any other path is still loaded, but it replaces nothing. One placed
-at the override directory's root under a bundled profile's filename, such as
-`system-mib.yml`, leaves `_general/system-mib.yml` in place and does not become
-the parent of the bundled profiles carrying `extends: system-mib.yml`: an
-`extends` reference naming a bare filename always resolves to the bundled
-profile of that name. The backend logs a warning naming the path that would
-have replaced the bundled profile, so check the log after adding an override.
+A file at any other path is still loaded, but it does not replace the bundled
+file. One placed at the override directory's root under a bundled profile's
+filename, such as `system-mib.yml`, leaves `_general/system-mib.yml` in place
+and does not become the parent of the bundled profiles carrying
+`extends: system-mib.yml`: an `extends` reference naming a bare filename always
+resolves to the bundled profile of that name.
+
+It does take over a `matches:` redirect naming that filename. A `matches:`
+entry names its target by bare filename, and there the override outranks the
+bundled profile of the same name, so a `pf_sense.yml` at the override root
+serves the redirects the bundled profiles point at `pf_sense.yml`. The backend
+logs one warning naming the path that would have replaced the bundled profile
+and another naming each filename the misplaced file took over, so check the log
+after adding an override.
 
 Adding a profile for a device the bundled set does not cover needs no matching
 bundled path. Its filename appears nowhere in the bundled set, so it replaces

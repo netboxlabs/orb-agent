@@ -261,6 +261,37 @@ metric_tags:
 	assert.Contains(t, tagColumnNames(found), "OverrideSysName")
 }
 
+// bundledRedirect names a `matches` redirect the bundled set uses: the profile
+// serving redirectOID sends a sysDescr matching redirectDescr to
+// redirectTarget, which the bundled set keeps at redirectTargetPath.
+const (
+	redirectOID        = "1.3.6.1.4.1.8072.3.2.10"
+	redirectDescr      = "pfsense 2.5"
+	redirectTarget     = "pf_sense.yml"
+	redirectTargetPath = "pf_sense/pf_sense.yml"
+)
+
+// A misplaced override does not replace the bundled file and does not parent
+// the profiles extending its name, but a `matches` entry names its target by
+// bare filename and the override outranks the bundled profile there. The
+// README says so; this pins it.
+func TestMatcher_RootOverrideTakesOverMatchesRedirect(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, redirectTarget, "metrics: []\n")
+
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	logger, buf := captureLogger()
+	got, ok := NewMatcher(all, logger).MatchWithDescr(redirectOID, redirectDescr)
+	require.True(t, ok)
+	assert.Equal(t, redirectTarget, got.RelPath, "the misplaced file serves the redirect")
+	assert.Contains(t, buf.String(), redirectTargetPath,
+		"the log must name the bundled profile the redirect was taken from")
+}
+
 func tagColumnNames(p *Profile) []string {
 	names := make([]string, 0, len(p.MetricTags))
 	for _, tag := range p.MetricTags {
