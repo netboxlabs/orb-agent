@@ -67,7 +67,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	for _, target := range runner.scope.Targets {
 		expandedIPs, err := targets.Expand(target.Host)
 		if err != nil {
-			logger.Warn("Error expanding target host, skipping", "host", target.Host, "error", err)
+			logger.Warn("Error expanding target host, skipping", "host", config.SanitizeLogValue(target.Host), "error", err)
 			continue
 		}
 		for _, ip := range expandedIPs {

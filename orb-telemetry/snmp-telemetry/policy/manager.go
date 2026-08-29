@@ -91,7 +91,7 @@ func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCo
 	}
 	c := collector.NewMetricsCollector(clientFactory, matcher, m.logger, defaultSNMPTimeout, 0)
 	m.collectorsByDir[profilesDir] = c
-	m.logger.Info("loaded SNMP profiles", "override_dir", profilesDir, "count", loader.Count())
+	m.logger.Info("loaded SNMP profiles", "override_dir", config.SanitizeLogValue(profilesDir), "count", loader.Count())
 	return c, nil
 }
 
@@ -179,7 +179,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 
 	r.Start()
 	m.policies[name] = r
-	m.logger.Info("started policy", "policy", name)
+	m.logger.Info("started policy", "policy", config.SanitizeLogValue(name))
 	return nil
 }
 

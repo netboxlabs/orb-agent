@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
 
 //go:embed all:snmp-profiles
@@ -104,7 +106,8 @@ func (l *Loader) reviewOverrides(bundled map[string]bool) {
 			continue
 		}
 		l.logger.Warn("SNMP profile override sits at the wrong path and replaces nothing",
-			"file", rel, "override_dir", l.dir, "expected_path", want)
+			"file", config.SanitizeLogValue(rel), "override_dir", config.SanitizeLogValue(l.dir),
+			"expected_path", config.SanitizeLogValue(want))
 	}
 }
 
@@ -163,7 +166,7 @@ func (l *Loader) readDir() error {
 		}
 		var p Profile
 		if err := yaml.Unmarshal(data, &p); err != nil {
-			l.logger.Warn("Skipping invalid profile", "path", path, "error", err)
+			l.logger.Warn("Skipping invalid profile", "path", config.SanitizeLogValue(path), "error", err)
 			return nil
 		}
 		rel, err := filepath.Rel(l.dir, path)
