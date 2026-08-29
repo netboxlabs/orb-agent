@@ -243,3 +243,57 @@ func (zeroes) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// Clients and middleware routinely append a charset parameter, and HTTP media
+// types are case-insensitive, so comparing the header as a whole string turns
+// valid submissions away before parsing.
+func TestCreatePolicy_ContentType(t *testing.T) {
+	const invalid = "invalid Content-Type. Only 'application/x-yaml' is supported"
+
+	// Reaches the parser and is rejected there, so the message tells the gate's
+	// verdict apart from the parser's.
+	noTargets := []byte(`
+policies:
+  my-policy:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: public
+`)
+
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		accepted    bool
+	}{
+		{"bare", "application/x-yaml", true},
+		{"charset parameter", "application/x-yaml; charset=utf-8", true},
+		{"parameter without a space", "application/x-yaml;charset=UTF-8", true},
+		{"upper case media type", "APPLICATION/X-YAML", true},
+		{"mixed case with a parameter", "Application/X-Yaml; Charset=utf-8", true},
+		{"absent", "", false},
+		{"unrelated type", "application/json", false},
+		{"yaml under another name", "text/yaml", false},
+		// mime.ParseMediaType tolerates a bare trailing semicolon, and the media
+		// type is unambiguous, so it is not re-rejected here.
+		{"trailing semicolon", "application/x-yaml;", true},
+		{"malformed parameter", "application/x-yaml; charset", false},
+		{"unterminated quoted parameter", `application/x-yaml; charset="utf-8`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestServer(t)
+
+			w := postPolicy(t, srv, tc.contentType, noTargets)
+
+			require.Equal(t, http.StatusBadRequest, w.Code)
+			if tc.accepted {
+				assert.NotContains(t, w.Body.String(), invalid)
+				assert.Contains(t, w.Body.String(), "no targets")
+			} else {
+				assert.Contains(t, w.Body.String(), invalid)
+			}
+		})
+	}
+}

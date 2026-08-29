@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -26,6 +27,9 @@ import (
 // still holds roughly 2900 targets that each spell out a full SNMPv3 block, or
 // 32000 bare hosts, which is far past what one agent should poll.
 const maxPolicyBodyBytes = 1 << 20
+
+// contentTypeYAML is the only media type the policy endpoint accepts.
+const contentTypeYAML = "application/x-yaml"
 
 // Response represents the server response
 type Response struct {
@@ -143,8 +147,14 @@ func (s *Server) getPolicies(c *gin.Context) {
 }
 
 func (s *Server) createPolicy(c *gin.Context) {
-	if t := c.Request.Header.Get("Content-type"); t != "application/x-yaml" {
-		c.IndentedJSON(http.StatusBadRequest, Response{"invalid Content-Type. Only 'application/x-yaml' is supported"})
+	// Compare only the media type, so a charset parameter the client or a proxy
+	// appended does not turn a valid submission away. ParseMediaType already
+	// lower-cases the media type, so the comparison is case-insensitive as HTTP
+	// requires. An absent or malformed header fails here and stays rejected: the
+	// agent's client always sets the header, and the body is never sniffed.
+	mediaType, _, err := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
+	if err != nil || mediaType != contentTypeYAML {
+		c.IndentedJSON(http.StatusBadRequest, Response{"invalid Content-Type. Only '" + contentTypeYAML + "' is supported"})
 		return
 	}
 	body, err := io.ReadAll(c.Request.Body)
