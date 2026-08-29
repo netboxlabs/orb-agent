@@ -15,7 +15,13 @@ exported.
 
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
-`http://0.0.0.0:4319`). Both forms dial the given address.
+`https://collector.example.com:4317`). Both forms dial the given address.
+
+The scheme decides transport security. `https://` and `grpcs://` connect over
+TLS, verified against the host's root CAs; `http://` and `grpc://` connect in
+plaintext. A bare `host:port` carries no scheme and connects in plaintext, the
+same reading the agent applies to this value for its own exporters, so an
+endpoint that must use TLS has to say so with a scheme.
 
 ### Usage
 ```sh

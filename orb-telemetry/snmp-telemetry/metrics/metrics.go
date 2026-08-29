@@ -12,6 +12,7 @@ import (
 	otlpmetric "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"google.golang.org/grpc/credentials"
 )
 
 // Global variables for meter and cache
@@ -26,15 +27,38 @@ var (
 	logger             *slog.Logger
 )
 
-// endpointOption picks the right otlpmetricgrpc option for the configured
-// endpoint. A bare host:port is not a valid URL, so WithEndpointURL would
-// misparse or silently reject it; use WithEndpoint for that case and reserve
+// endpointOptions returns the otlpmetricgrpc options for the configured
+// endpoint: where to connect, and whether that connection is plaintext.
+//
+// A bare host:port is not a valid URL, so WithEndpointURL would misparse or
+// silently reject it; use WithEndpoint for that case and reserve
 // WithEndpointURL for values that actually carry a scheme.
-func endpointOption(endpoint string) otlpmetric.Option {
-	if strings.Contains(endpoint, "://") {
-		return otlpmetric.WithEndpointURL(endpoint)
+//
+// Transport security follows the scheme. A bare host:port carries none and
+// means plaintext, matching how the agent normalizes the same value for its
+// own OTLP exporters. Applying the insecure option unconditionally would
+// override the scheme, send plaintext to a collector expecting TLS, and fail
+// every export.
+func endpointOptions(endpoint string) []otlpmetric.Option {
+	scheme, _, hasScheme := strings.Cut(endpoint, "://")
+	if !hasScheme {
+		// WithEndpoint expects a bare host:port and passes a trailing slash
+		// through unnormalized, so strip it.
+		return []otlpmetric.Option{
+			otlpmetric.WithEndpoint(strings.TrimRight(endpoint, "/")),
+			otlpmetric.WithInsecure(),
+		}
 	}
-	return otlpmetric.WithEndpoint(strings.TrimRight(endpoint, "/"))
+
+	// WithEndpointURL keys TLS off https alone and leaves every other scheme
+	// plaintext, which is right for http and grpc but not for grpcs. Give
+	// grpcs the credentials the SDK uses by default, verified against the
+	// host's root CAs.
+	opts := []otlpmetric.Option{otlpmetric.WithEndpointURL(endpoint)}
+	if strings.EqualFold(scheme, "grpcs") {
+		opts = append(opts, otlpmetric.WithTLSCredentials(credentials.NewTLS(nil)))
+	}
+	return opts
 }
 
 // SetupMetricsExport configures the OTLP metrics exporter with a periodic reader.
@@ -44,10 +68,7 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 		return nil
 	}
 
-	exporter, err := otlpmetric.New(ctx,
-		endpointOption(endpoint),
-		otlpmetric.WithInsecure(),
-	)
+	exporter, err := otlpmetric.New(ctx, endpointOptions(endpoint)...)
 	if err != nil {
 		return fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
