@@ -14,11 +14,19 @@ type wildcardEntry struct {
 	profile *Profile
 }
 
+// matchRedirect is one compiled `matches` entry: a sysDescr pattern and the
+// profile it redirects to.
+type matchRedirect struct {
+	re   *regexp.Regexp
+	file string
+}
+
 // Matcher matches a device sysObjectID (and optionally sysDescr) to a Profile.
 type Matcher struct {
-	exactIndex    map[string]*Profile // normalized OID -> profile (exact matches)
-	wildcardIndex []wildcardEntry     // sorted longest-prefix-first for wildcard matches
-	profileByFile map[string]*Profile // filename -> profile (for matches redirects)
+	exactIndex    map[string]*Profile          // normalized OID -> profile (exact matches)
+	wildcardIndex []wildcardEntry              // sorted longest-prefix-first for wildcard matches
+	profileByFile map[string]*Profile          // filename -> profile (for matches redirects)
+	redirects     map[*Profile][]matchRedirect // profile -> compiled matches patterns, in evaluation order
 }
 
 // keyClaims holds every profile claiming one index key, in the order the
@@ -120,6 +128,30 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 		}
 		return strings.Compare(a.prefix, b.prefix)
 	})
+
+	m.redirects = make(map[*Profile][]matchRedirect)
+	for _, p := range profiles {
+		if len(p.Matches) == 0 {
+			continue
+		}
+		// Sort patterns for deterministic evaluation order.
+		var compiled []matchRedirect
+		for _, pattern := range slices.Sorted(maps.Keys(p.Matches)) {
+			re, err := regexp.Compile("(?i)" + pattern)
+			if err != nil {
+				if logger != nil {
+					logger.Warn("SNMP profile matches pattern is invalid, redirect disabled",
+						"profile", p.RelPath, "pattern", pattern, "error", err)
+				}
+				continue
+			}
+			compiled = append(compiled, matchRedirect{re: re, file: p.Matches[pattern]})
+		}
+		if len(compiled) > 0 {
+			m.redirects[p] = compiled
+		}
+	}
+
 	return m
 }
 
@@ -187,28 +219,24 @@ func (m *Matcher) Match(deviceSysOID string) (*Profile, bool) {
 
 // MatchWithDescr returns the best-matching profile using both sysObjectID and sysDescr.
 // If the OID-matched profile has a matches section, the sysDescr is tested against each
-// pattern (case-insensitive) and the first matching pattern's profile is returned instead.
-// This mirrors how ktranslate handles devices that share a sysOID but differ by description.
+// pattern (case-insensitive, compiled once in NewMatcher) and the first matching
+// pattern's profile is returned instead. This mirrors how ktranslate handles devices
+// that share a sysOID but differ by description.
 func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool) {
 	profile, ok := m.Match(deviceSysOID)
 	if !ok {
 		return nil, false
 	}
-	if len(profile.Matches) == 0 || sysDescr == "" {
+	redirects, hasRedirects := m.redirects[profile]
+	if !hasRedirects || sysDescr == "" {
 		return profile, true
 	}
 
-	// Sort patterns for deterministic evaluation order.
-	patterns := slices.Sorted(maps.Keys(profile.Matches))
-
-	lowerDescr := strings.ToLower(sysDescr)
-	for _, pattern := range patterns {
-		redirectFile := profile.Matches[pattern]
-		matched, err := regexp.MatchString(pattern, lowerDescr)
-		if err != nil || !matched {
+	for _, r := range redirects {
+		if !r.re.MatchString(sysDescr) {
 			continue
 		}
-		if redirectProfile, found := m.profileByFile[redirectFile]; found {
+		if redirectProfile, found := m.profileByFile[r.file]; found {
 			return redirectProfile, true
 		}
 	}
