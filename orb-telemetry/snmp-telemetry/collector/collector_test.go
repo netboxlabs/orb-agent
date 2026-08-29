@@ -1,6 +1,7 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -1312,5 +1313,76 @@ func TestCollectTarget_IndexTransformSkipsRowWithNoMatch(t *testing.T) {
 	require.Len(t, points, 1)
 	for _, a := range points[0].attrs {
 		assert.NotEqual(t, "if_interface_name", string(a.Key))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Conversions the collector does not implement
+// ---------------------------------------------------------------------------
+
+// TestCollectTarget_UnsupportedConversionIsReportedOnce uses the bundled APC UPS
+// profile, whose upsBasicStateOutputState symbol declares powerset_status. The
+// collector has no branch for it, so the metric is skipped; the operator has to
+// be told which conversion, symbol and profile caused that, and told only once.
+func TestCollectTarget_UnsupportedConversionIsReportedOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.318.1.3.2.11")},
+	}}
+	p := bundledProfile(t, "apc/apc_ups.yml")
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+
+	// Three runs across two devices: the report is bounded by the profile, not
+	// by the device or the collection cycle.
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p1", DialOptions{}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p1", DialOptions{}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.2"), mustAuth(), "p1", DialOptions{}))
+
+	var matched []string
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(line, "powerset_status") {
+			matched = append(matched, line)
+		}
+	}
+	require.Len(t, matched, 1, "logs: %s", logs.String())
+	assert.Contains(t, matched[0], "conversion=powerset_status")
+	assert.Contains(t, matched[0], "symbol=upsBasicStateOutputState")
+	assert.Contains(t, matched[0], "profile=apc/apc_ups.yml")
+	assert.Contains(t, matched[0], "oid=1.3.6.1.4.1.318.1.1.1.11.1.1.0")
+}
+
+// TestCollectTarget_SupportedConversionsAreNotReported keeps the report honest:
+// every conversion pduToValue implements must stay silent.
+func TestCollectTarget_SupportedConversionsAreNotReported(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	symbols := []profiles.Symbol{
+		{Name: "plain", OID: "1.3.6.1.4.1.99.1.1.0"},
+		{Name: "toOne", OID: "1.3.6.1.4.1.99.1.2.0", Conversion: "to_one"},
+		{Name: "hexToIP", OID: "1.3.6.1.4.1.99.1.3.0", Conversion: "hextoip"},
+		{Name: "hwAddr", OID: "1.3.6.1.4.1.99.1.4.0", Conversion: "hwaddr"},
+		{Name: "hexToInt", OID: "1.3.6.1.4.1.99.1.5.0", Conversion: "hextoint:BigEndian:uint16"},
+		{Name: "regexp", OID: "1.3.6.1.4.1.99.1.6.0", Conversion: "regexp:(\\d+)"},
+		{Name: "unknown", OID: "1.3.6.1.4.1.99.1.7.0", Conversion: "some_future_conversion"},
+	}
+	p := profileWithOID("1.3.6.1.4.1.99", "future.yml", []profiles.MetricEntry{{MIB: "TEST-MIB", Symbols: symbols}})
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.99")},
+	}}
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p1", DialOptions{}))
+
+	// A conversion the collector has never heard of surfaces on its own, with
+	// no branch added for it.
+	assert.Contains(t, logs.String(), "conversion=some_future_conversion")
+	for _, sym := range symbols {
+		if sym.Name == "unknown" {
+			continue
+		}
+		assert.NotContains(t, logs.String(), "symbol="+sym.Name, "supported conversion %q was reported", sym.Conversion)
 	}
 }

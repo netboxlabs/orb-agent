@@ -145,6 +145,15 @@ declaring `1.3.6.1.4.1.9.*` therefore leaves a device covered by a bundled
 the two never claim the same pattern. To take a device from a bundled profile,
 declare the OID or the pattern that profile declares.
 
+A profile symbol may declare a `conversion` to turn a non-numeric OID value
+into a metric. The collector implements `to_one`, `hextoip`, `hwaddr`,
+`hextoint:<endianness>:<type>` and `regexp:<pattern>`. A symbol declaring
+anything else is skipped, and the backend logs one warning naming the
+conversion, the symbol and the profile the first time a device matches that
+profile. `powerset_status` is the only conversion the bundled set declares that
+the collector does not implement, on the APC UPS `upsBasicStateOutputState`
+symbol.
+
 The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the
 Apache 2.0 license. See [profiles/PROVENANCE.md](./profiles/PROVENANCE.md)

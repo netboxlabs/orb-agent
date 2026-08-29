@@ -73,17 +73,22 @@ type MetricsCollector struct {
 	gaugeMu       sync.Mutex
 	instruments   map[string]metric.Int64ObservableGauge
 	registrations []metric.Registration // kept alive to prevent GC
+
+	// Profiles already checked for conversions the collector cannot apply.
+	reviewMu         sync.Mutex
+	reviewedProfiles map[string]struct{}
 }
 
 // NewMetricsCollector creates a MetricsCollector.
 func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Matcher, logger *slog.Logger) *MetricsCollector {
 	return &MetricsCollector{
-		clientFactory: clientFactory,
-		matcher:       matcher,
-		logger:        logger,
-		pollState:     make(map[deviceKey]map[string]time.Time),
-		deviceStore:   make(map[deviceKey]map[string][]observedPoint),
-		instruments:   make(map[string]metric.Int64ObservableGauge),
+		clientFactory:    clientFactory,
+		matcher:          matcher,
+		logger:           logger,
+		pollState:        make(map[deviceKey]map[string]time.Time),
+		deviceStore:      make(map[deviceKey]map[string][]observedPoint),
+		instruments:      make(map[string]metric.Int64ObservableGauge),
+		reviewedProfiles: make(map[string]struct{}),
 	}
 }
 
@@ -226,6 +231,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		return nil
 	}
 	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
+	c.reportUnsupportedConversions(profile)
 
 	// The attribute set carries every dimension the device key does: two
 	// policies may poll one device, and one host may answer on more than one
@@ -362,6 +368,58 @@ func firstTagValue(pdus map[string]snmp.PDU, col *profiles.TagColumn) string {
 		}
 	}
 	return ""
+}
+
+// supportedConversion reports whether pduToValue implements the conversion a
+// symbol declares. An empty conversion is the plain numeric path.
+//
+// It mirrors the branches in pduToValue: a new conversion has to be added in
+// both places, or it will be reported as unsupported while working.
+func supportedConversion(conversion string) bool {
+	switch conversion {
+	case "", "to_one", "hextoip", "hwaddr":
+		return true
+	}
+	return strings.HasPrefix(conversion, "hextoint:") || strings.HasPrefix(conversion, "regexp:")
+}
+
+// reportUnsupportedConversions warns about every symbol in a matched profile
+// that declares a conversion pduToValue does not implement. Such a symbol never
+// produces a metric, and without this nothing says why it is missing.
+//
+// A profile is reviewed the first time a device matches it and never again, so
+// the warnings appear once for the life of the process however many devices
+// carry the profile and however often they are polled.
+func (c *MetricsCollector) reportUnsupportedConversions(profile *profiles.Profile) {
+	name := profile.RelPath
+	if name == "" {
+		name = profile.FileName
+	}
+	c.reviewMu.Lock()
+	_, reviewed := c.reviewedProfiles[name]
+	if !reviewed {
+		c.reviewedProfiles[name] = struct{}{}
+	}
+	c.reviewMu.Unlock()
+	if reviewed {
+		return
+	}
+
+	warn := func(sym *profiles.Symbol) {
+		if supportedConversion(sym.Conversion) {
+			return
+		}
+		c.logger.Warn("Skipping metric: SNMP profile declares a conversion this collector does not implement",
+			"conversion", sym.Conversion, "symbol", sym.Name, "oid", sym.OID, "profile", name)
+	}
+	for _, entry := range profile.Metrics {
+		if entry.Symbol != nil {
+			warn(entry.Symbol)
+		}
+		for i := range entry.Symbols {
+			warn(&entry.Symbols[i])
+		}
+	}
 }
 
 // collectScalar collects a single scalar OID metric into localBuf.
