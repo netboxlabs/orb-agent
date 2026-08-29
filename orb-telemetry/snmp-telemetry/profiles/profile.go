@@ -120,6 +120,12 @@ type MetricTag struct {
 	// metric rows come from. It says which components of a metric row's
 	// composite index identify the row in that other table.
 	IndexTransform IndexTransform `yaml:"index_transform"`
+	// OID and Name are the direct form: a profile leaves `column:` empty and
+	// writes the column's OID and name on the tag itself. They describe the
+	// same column the nested form does, so a tag declaring them is read as one
+	// that declared a column.
+	OID  string `yaml:"OID"`
+	Name string `yaml:"name"`
 }
 
 // IndexRange selects a contiguous run of components from a composite table

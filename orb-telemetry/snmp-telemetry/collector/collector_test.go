@@ -3068,3 +3068,280 @@ func TestCollectTarget_UnmatchedDeviceIsNeverBulkWalked(t *testing.T) {
 	assert.False(t, w.bulkWalk)
 	assert.Equal(t, map[string]bool{sysObjectIDOID: false, sysDescrOID: false}, w.bulkByOID)
 }
+
+// ---------------------------------------------------------------------------
+// A metric tag that carries its OID directly
+// ---------------------------------------------------------------------------
+
+// The direct form resolves to the column it describes, so every caller of the
+// shared helper reads it the way it reads a nested `column:`.
+func TestMetricTagColumn_DirectOIDBecomesAColumn(t *testing.T) {
+	col := metricTagColumn(&profiles.MetricTag{OID: "1.3.6.1.4.1.9999.1.1", Name: "portDataName"})
+	require.NotNil(t, col)
+	assert.Equal(t, "1.3.6.1.4.1.9999.1.1", col.OID)
+	assert.Equal(t, "portDataName", col.Name)
+}
+
+// The nested column is the more specific of the two declarations, so it wins
+// when a tag writes both. No bundled profile does; an override file could.
+func TestMetricTagColumn_NestedColumnBeatsADirectOID(t *testing.T) {
+	col := metricTagColumn(&profiles.MetricTag{
+		OID:    "1.3.6.1.4.1.9999.1.1",
+		Name:   "directName",
+		Column: &profiles.TagColumn{OID: "1.3.6.1.4.1.9999.1.2", Name: "nestedName"},
+	})
+	require.NotNil(t, col)
+	assert.Equal(t, "1.3.6.1.4.1.9999.1.2", col.OID)
+	assert.Equal(t, "nestedName", col.Name)
+}
+
+// A nested column naming no OID walks nothing, so it does not stand in the way
+// of a direct declaration beside it.
+func TestMetricTagColumn_ColumnWithNoOIDYieldsToADirectOID(t *testing.T) {
+	col := metricTagColumn(&profiles.MetricTag{
+		OID:    "1.3.6.1.4.1.9999.1.1",
+		Name:   "directName",
+		Column: &profiles.TagColumn{Name: "nestedName"},
+	})
+	require.NotNil(t, col)
+	assert.Equal(t, "1.3.6.1.4.1.9999.1.1", col.OID)
+	assert.Equal(t, "directName", col.Name)
+}
+
+// The tag-level conversion renders the column whichever form declared it. It is
+// folded in one place, so the direct form reaches it without a path of its own.
+func TestMetricTagColumn_DirectOIDCarriesTheTagConversion(t *testing.T) {
+	col := metricTagColumn(&profiles.MetricTag{
+		OID: "1.3.6.1.4.1.9999.1.1", Name: "mgmtAddress", Conversion: "hextoip",
+	})
+	require.NotNil(t, col)
+	assert.Equal(t, "hextoip", col.Conversion)
+}
+
+// A tag declaring no OID in either form resolves to nothing, and the callers
+// that skip a column without an OID skip it the same way.
+func TestMetricTagColumn_NeitherFormResolvesToNothing(t *testing.T) {
+	assert.Nil(t, metricTagColumn(&profiles.MetricTag{Tag: "row_name"}))
+	assert.Nil(t, metricTagColumn(&profiles.MetricTag{Tag: "row_name", Name: "rowName"}))
+	assert.Nil(t, metricTagColumn(&profiles.MetricTag{Tag: "row_name", OID: "  "}))
+}
+
+// A table entry whose tag carries its own OID tags its rows with it.
+func TestCollectTable_DirectOIDTagReachesRows(t *testing.T) {
+	const (
+		host        = "10.0.0.110"
+		sysObjValue = "1.3.6.1.4.1.9999.110"
+		tableOID    = sysObjValue + ".1"
+		statusOID   = tableOID + ".1.5"
+		nameOID     = tableOID + ".1.3"
+	)
+	p := profileWithOID(sysObjValue, "direct.yml", []profiles.MetricEntry{{
+		Table:      &profiles.Table{Name: "portDataTable", OID: tableOID},
+		Symbols:    []profiles.Symbol{{Name: "portDataStatus", OID: statusOID}},
+		MetricTags: []profiles.MetricTag{{OID: nameOID, Name: "portDataName"}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID:      {statusOID + ".1": intPDU(statusOID+".1", 2)},
+		nameOID:        {nameOID + ".1": stringPDU(nameOID+".1", "Console A")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.portdatastatus"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(2), pts[0].value)
+	assert.Equal(t, "Console A", attrValue(pts[0], "portDataName"))
+}
+
+// A `tag:` beside the direct form names the attribute, the way it does beside a
+// nested column.
+func TestCollectTable_DirectOIDTagUsesTheTagName(t *testing.T) {
+	const (
+		host        = "10.0.0.111"
+		sysObjValue = "1.3.6.1.4.1.9999.111"
+		tableOID    = sysObjValue + ".1"
+		statusOID   = tableOID + ".1.5"
+		nameOID     = tableOID + ".1.3"
+	)
+	p := profileWithOID(sysObjValue, "direct.yml", []profiles.MetricEntry{{
+		Table:      &profiles.Table{Name: "portDataTable", OID: tableOID},
+		Symbols:    []profiles.Symbol{{Name: "portDataStatus", OID: statusOID}},
+		MetricTags: []profiles.MetricTag{{Tag: "port_name", OID: nameOID, Name: "portDataName"}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID:      {statusOID + ".1": intPDU(statusOID+".1", 2)},
+		nameOID:        {nameOID + ".1": stringPDU(nameOID+".1", "Console A")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.portdatastatus"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "Console A", attrValue(pts[0], "port_name"))
+	assert.Empty(t, attrValue(pts[0], "portDataName"))
+}
+
+// An `index_transform:` beside the direct form joins it from another table, the
+// way it does beside a nested column.
+func TestCollectTable_DirectOIDTagJoinsAcrossTables(t *testing.T) {
+	const (
+		host        = "10.0.0.112"
+		sysObjValue = "1.3.6.1.4.1.9999.112"
+		tableOID    = sysObjValue + ".1"
+		statusOID   = tableOID + ".1.5"
+		nameOID     = sysObjValue + ".2.1.1"
+	)
+	p := profileWithOID(sysObjValue, "direct.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "portDataTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "portDataStatus", OID: statusOID}},
+		MetricTags: []profiles.MetricTag{{
+			Table: "ifXTable", OID: nameOID, Name: "ifName",
+			IndexTransform: profiles.IndexTransform{{Start: 0, End: 0}},
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID:      {statusOID + ".7.1": intPDU(statusOID+".7.1", 2)},
+		nameOID:        {nameOID + ".7": stringPDU(nameOID+".7", "ge-0/0/7")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.portdatastatus"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "ge-0/0/7", attrValue(pts[0], "ifName"))
+}
+
+// A `condition:` naming the direct form's column filters on it, the way it does
+// on a nested column.
+func TestCollectTable_ConditionNamesADirectOIDTag(t *testing.T) {
+	const (
+		host        = "10.0.0.113"
+		sysObjValue = "1.3.6.1.4.1.9999.113"
+		tableOID    = sysObjValue + ".1"
+		statusOID   = tableOID + ".1.5"
+		typeOID     = tableOID + ".1.4"
+	)
+	p := profileWithOID(sysObjValue, "direct.yml", []profiles.MetricEntry{{
+		Table: &profiles.Table{Name: "portDataTable", OID: tableOID},
+		Symbols: []profiles.Symbol{
+			{Name: "portDataStatus", OID: statusOID, Condition: `portDataType="serial"`},
+		},
+		MetricTags: []profiles.MetricTag{{OID: typeOID, Name: "portDataType"}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID: {
+			statusOID + ".1": intPDU(statusOID+".1", 2),
+			statusOID + ".2": intPDU(statusOID+".2", 3),
+		},
+		typeOID: {
+			typeOID + ".1": stringPDU(typeOID+".1", "serial"),
+			typeOID + ".2": stringPDU(typeOID+".2", "modem"),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.portdatastatus"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(2), pts[0].value)
+	assert.Equal(t, "serial", attrValue(pts[0], "portDataType"))
+}
+
+// The bundled Raritan Dominion profile is the one that writes the direct form,
+// so it is driven end to end through the real matcher. Its portDataStatus rows
+// were exported with neither port tag before the shape was read.
+func TestCollectTarget_BundledDominionPortTagsReachRows(t *testing.T) {
+	const (
+		host        = "10.0.0.114"
+		sysObjValue = "1.3.6.1.4.1.13742.3.2.10"
+		statusOID   = "1.3.6.1.4.1.13742.3.1.4.1.5"
+		nameOID     = "1.3.6.1.4.1.13742.3.1.4.1.3"
+		typeOID     = "1.3.6.1.4.1.13742.3.1.4.1.4"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID:      {statusOID + ".3": intPDU(statusOID+".3", 2)},
+		nameOID:        {nameOID + ".3": stringPDU(nameOID+".3", "Console A")},
+		typeOID:        {typeOID + ".3": stringPDU(typeOID+".3", "serial")},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.portdatastatus"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "Console A", attrValue(pts[0], "portDataName"))
+	assert.Equal(t, "serial", attrValue(pts[0], "portDataType"))
+}
+
+// A tag that names no OID in either form tags nothing. It is reported once for
+// the profile, the way the other declarations this collector cannot act on are.
+func TestCollectTarget_TagWithNoOIDIsReportedOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.115"
+		sysObjValue = "1.3.6.1.4.1.9999.115"
+		tableOID    = sysObjValue + ".1"
+		statusOID   = tableOID + ".1.5"
+	)
+	p := profileWithOID(sysObjValue, "no-oid.yml", []profiles.MetricEntry{{
+		Table:      &profiles.Table{Name: "portDataTable", OID: tableOID},
+		Symbols:    []profiles.Symbol{{Name: "portDataStatus", OID: statusOID}},
+		MetricTags: []profiles.MetricTag{{Tag: "port_name"}},
+	}})
+	p.MetricTags = []profiles.MetricTag{{Name: "chassisName"}}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID:      {statusOID + ".1": intPDU(statusOID+".1", 2)},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 2, strings.Count(logs.String(), "names no OID"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "tag=port_name")
+	assert.Contains(t, logs.String(), "tag=chassisName")
+	assert.Contains(t, logs.String(), "profile=no-oid.yml")
+}
+
+// Every bundled profile resolves a column for every tag it declares, so the
+// report is silent across the whole bundled set.
+func TestReviewProfile_BundledProfilesDeclareNoTagWithoutAnOID(t *testing.T) {
+	loader, err := profiles.LoadProfiles("", discardLogger)
+	require.NoError(t, err)
+	all, err := loader.AllResolved()
+	require.NoError(t, err)
+
+	var without []string
+	check := func(relPath string, tags []profiles.MetricTag) {
+		for i := range tags {
+			if col := metricTagColumn(&tags[i]); col == nil || col.OID == "" {
+				without = append(without, relPath+" "+tags[i].Tag)
+			}
+		}
+	}
+	for _, p := range all {
+		check(p.RelPath, p.MetricTags)
+		for _, entry := range p.Metrics {
+			check(p.RelPath, entry.MetricTags)
+		}
+	}
+	assert.Empty(t, without)
+}

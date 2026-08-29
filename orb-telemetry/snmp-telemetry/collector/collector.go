@@ -401,11 +401,8 @@ func (c *MetricsCollector) appendDeviceTags(ctx context.Context, walker snmp.Wal
 		if col == nil || col.OID == "" {
 			continue
 		}
-		name := mt.Tag
-		if name == "" {
-			// The bare `column:` form carries no tag, so the column name is the key.
-			name = col.Name
-		}
+		// The bare `column:` form carries no tag, so the column name is the key.
+		name := metricTagName(&mt, col)
 		if name == "" {
 			continue
 		}
@@ -532,8 +529,10 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 		}
 		c.reportUnusableConditions(entry, name)
 		c.reportUnusableFilters(entry.MetricTags, name, "")
+		c.reportUnusableTags(entry.MetricTags, name)
 	}
 	c.reportUnusableFilters(profile.MetricTags, name, "column tags the device rather than a row")
+	c.reportUnusableTags(profile.MetricTags, name)
 }
 
 // reportUnusableConditions reports a condition the collector cannot apply.
@@ -808,6 +807,27 @@ func (c *MetricsCollector) reportUnusableFilters(tags []profiles.MetricTag, prof
 	}
 }
 
+// reportUnusableTags reports a metric tag that names no OID in either the
+// nested `column:` form or the direct one. It tags nothing, so it leaves an
+// attribute missing from every row of the entry, and like the other
+// declarations this collector cannot act on it is a property of the profile
+// rather than of the device.
+func (c *MetricsCollector) reportUnusableTags(tags []profiles.MetricTag, profileName string) {
+	for i := range tags {
+		mt := &tags[i]
+		col := metricTagColumn(mt)
+		if col != nil && col.OID != "" {
+			continue
+		}
+		name := metricTagName(mt, col)
+		if name == "" {
+			name = mt.Name
+		}
+		c.logger.Warn("Ignoring metric tag this collector cannot apply",
+			"reason", "names no OID", "tag", name, "profile", profileName)
+	}
+}
+
 // joinedTag is a metric_tag whose column lives in a table other than the one
 // the metric rows come from. byIndex is keyed by that other table's index, and
 // transform turns a metric row's composite index into that key.
@@ -891,10 +911,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				continue
 			}
 		}
-		tagName := mt.Tag
-		if tagName == "" {
-			tagName = col.Name
-		}
+		tagName := metricTagName(mt, col)
 		if len(mt.IndexTransform) > 0 {
 			jt := joinedTag{name: tagName, transform: mt.IndexTransform, byIndex: make(map[string]string, len(pdus))}
 			for fullOID, pdu := range pdus {
@@ -1166,7 +1183,12 @@ func buildMetricName(symbolName string) string {
 }
 
 // metricTagColumn returns the tag column from a MetricTag, handling the
-// alias where some profiles use "symbol" instead of "column".
+// alias where some profiles use "symbol" instead of "column", and the direct
+// form where the OID and name sit on the tag beside an empty `column:`.
+//
+// Every reader of a tag column comes through here, so a shape supported here
+// reaches the row tags, the device tags, the full-table walk, the row filters
+// and the conditions at once.
 //
 // A profile may declare `conversion:` beside the tag rather than inside the
 // column. It renders the same column, so it is folded in here and reaches
@@ -1178,12 +1200,43 @@ func metricTagColumn(mt *profiles.MetricTag) *profiles.TagColumn {
 	if col == nil {
 		col = mt.Symbol
 	}
+	if col == nil || col.OID == "" {
+		// The nested column is the more specific declaration and wins whenever
+		// it names an OID. One that names none walks nothing, so the direct
+		// declaration beside it stands in whole.
+		if direct := directTagColumn(mt); direct != nil {
+			col = direct
+		}
+	}
 	if col == nil || mt.Conversion == "" || col.Conversion != "" {
 		return col
 	}
 	converted := *col
 	converted.Conversion = mt.Conversion
 	return &converted
+}
+
+// directTagColumn builds the column a tag describes when it writes the OID and
+// name on itself rather than inside `column:`, and returns nil when it does
+// not. An OID of nothing but spaces is no OID: gosnmp reads an empty root as
+// the whole .1.3.6.1 subtree.
+func directTagColumn(mt *profiles.MetricTag) *profiles.TagColumn {
+	if strings.TrimSpace(mt.OID) == "" {
+		return nil
+	}
+	return &profiles.TagColumn{OID: mt.OID, Name: mt.Name}
+}
+
+// metricTagName is the attribute key a tag renders under: its own `tag:` when
+// it has one, and otherwise the name of the column it resolved to.
+func metricTagName(mt *profiles.MetricTag, col *profiles.TagColumn) string {
+	if mt.Tag != "" {
+		return mt.Tag
+	}
+	if col == nil {
+		return ""
+	}
+	return col.Name
 }
 
 // pduToValue converts a PDU to an int64 metric value, applying conversion rules.

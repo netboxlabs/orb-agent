@@ -214,3 +214,33 @@ sysobjectid: 1.3.6.1.4.1.8072.3.2.12
 		assert.Equal(t, want, p.NoUseBulkWalkAll, "profile %q", name)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// A metric tag that carries its OID directly
+// ---------------------------------------------------------------------------
+
+// A metric tag may write `column:` empty and put the OID and name on the tag
+// object itself. A struct that does not deserialize them there discards the
+// OID, and the rows of the entry are exported without the tag.
+func TestMetricTag_DirectOIDIsDeserialized(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	p, err := l.Resolve("raritan/dominion.yml")
+	require.NoError(t, err)
+
+	got := make(map[string]string)
+	for _, entry := range p.Metrics {
+		for i := range entry.MetricTags {
+			mt := &entry.MetricTags[i]
+			if mt.Column != nil || mt.Symbol != nil || mt.OID == "" {
+				continue
+			}
+			got[mt.Name] = mt.OID
+		}
+	}
+	assert.Equal(t, map[string]string{
+		"portDataName": "1.3.6.1.4.1.13742.3.1.4.1.3",
+		"portDataType": "1.3.6.1.4.1.13742.3.1.4.1.4",
+	}, got)
+}
