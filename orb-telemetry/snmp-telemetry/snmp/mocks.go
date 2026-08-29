@@ -22,23 +22,26 @@ func (n *FakeSNMPWalker) Close() error {
 	return nil
 }
 
-// Walk implements Walker interface
+// Walk implements Walker interface.
+//
+// PDU names carry a leading dot because gosnmp emits them that way. Requested
+// OIDs do not, matching the profile OIDs callers pass in.
 func (n *FakeSNMPWalker) Walk(oid string, _ int) (map[string]PDU, error) {
 	if oid == "1.3.6.1.2.1.4.20.1.1" {
 		return map[string]PDU{
-			"1.3.6.1.2.1.4.20.1.1": {Value: "192.168.1.1", Type: gosnmp.IPAddress},
+			".1.3.6.1.2.1.4.20.1.1": {Name: ".1.3.6.1.2.1.4.20.1.1", Value: "192.168.1.1", Type: gosnmp.IPAddress},
 		}, nil
 	}
 
 	if oid == "1.3.6.1.2.1.2.2.1.2" {
 		return map[string]PDU{
-			"1.3.6.1.2.1.2.2.1.2.999": {Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString},
+			".1.3.6.1.2.1.2.2.1.2.999": {Name: ".1.3.6.1.2.1.2.2.1.2.999", Value: "GigabitEthernet1/0/1", Type: gosnmp.OctetString},
 		}, nil
 	}
 
 	if oid == "1.3.6.1.2.1.2.2.1.5" {
 		return map[string]PDU{
-			"1.3.6.1.2.1.2.2.1.5.999": {Value: 1000000, Type: gosnmp.Integer},
+			".1.3.6.1.2.1.2.2.1.5.999": {Name: ".1.3.6.1.2.1.2.2.1.5.999", Value: 1000000, Type: gosnmp.Integer},
 		}, nil
 	}
 

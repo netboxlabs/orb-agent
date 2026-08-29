@@ -243,7 +243,7 @@ func (c *MetricsCollector) appendDeviceTags(walker snmp.Walker, profile *profile
 			}
 			continue
 		}
-		pdus, err := walker.Walk(col.OID, 0)
+		pdus, err := c.walk(walker, col.OID, 0)
 		if err != nil {
 			c.logger.Debug("Error walking device tag", "oid", col.OID, "tag", name, "error", err)
 			continue
@@ -292,7 +292,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		throttledMetrics[metricName] = struct{}{}
 		return
 	}
-	pdus, err := walker.Walk(sym.OID, 0)
+	pdus, err := c.walk(walker, sym.OID, 0)
 	if err != nil {
 		c.logger.Debug("Error walking scalar OID", "oid", sym.OID, "name", sym.Name, "error", err)
 		return
@@ -371,7 +371,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			pdus = columnPDUs[col.OID]
 		} else {
 			var err error
-			pdus, err = walker.Walk(col.OID, 1)
+			pdus, err = c.walk(walker, col.OID, 1)
 			if err != nil {
 				c.logger.Debug("Error walking tag column", "oid", col.OID, "tag", mt.Tag, "error", err)
 				continue
@@ -424,7 +424,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			if columnPDUs != nil {
 				pdus = columnPDUs[refOID]
 			} else {
-				pdus, err = walker.Walk(refOID, 1)
+				pdus, err = c.walk(walker, refOID, 1)
 				if err != nil {
 					c.logger.Debug("Error walking condition column", "oid", refOID, "error", err)
 					conditionRowVals[refOID] = nil
@@ -453,7 +453,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			pdus = columnPDUs[sym.OID]
 		} else {
 			var err error
-			pdus, err = walker.Walk(sym.OID, 1)
+			pdus, err = c.walk(walker, sym.OID, 1)
 			if err != nil {
 				c.logger.Debug("Error walking table column", "oid", sym.OID, "name", sym.Name, "error", err)
 				continue
@@ -510,28 +510,31 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 }
 
 // walkFullTable walks the table root OID once and distributes PDUs to per-column maps.
+// The returned maps are keyed by the profile's own column OID, which is how the
+// callers look them up.
 func (c *MetricsCollector) walkFullTable(walker snmp.Walker, entry *profiles.MetricEntry) map[string]map[string]snmp.PDU {
-	allPDUs, err := walker.Walk(entry.Table.OID, 0)
+	allPDUs, err := c.walk(walker, entry.Table.OID, 0)
 	if err != nil {
 		c.logger.Debug("Error walking full table", "oid", entry.Table.OID, "table", entry.Table.Name, "error", err)
 		return nil
 	}
 
-	// Build set of interesting column OID prefixes (metric + tag + condition refs).
-	colPrefixes := make(map[string]struct{})
+	// Build set of interesting column OID prefixes (metric + tag + condition refs),
+	// keyed by the normalized prefix and carrying the profile OID to key the result by.
+	colPrefixes := make(map[string]string)
 	for _, sym := range entry.Symbols {
-		colPrefixes[sym.OID] = struct{}{}
+		colPrefixes[normalizeOID(sym.OID)] = sym.OID
 	}
 	for _, mt := range entry.MetricTags {
 		if col := metricTagColumn(&mt); col != nil && col.OID != "" {
-			colPrefixes[col.OID] = struct{}{}
+			colPrefixes[normalizeOID(col.OID)] = col.OID
 		}
 	}
 
 	result := make(map[string]map[string]snmp.PDU, len(colPrefixes))
 	for fullOID, pdu := range allPDUs {
-		for colOID := range colPrefixes {
-			if strings.HasPrefix(fullOID, colOID+".") || fullOID == colOID {
+		for prefix, colOID := range colPrefixes {
+			if strings.HasPrefix(fullOID, prefix+".") || fullOID == prefix {
 				if result[colOID] == nil {
 					result[colOID] = make(map[string]snmp.PDU)
 				}
@@ -542,9 +545,25 @@ func (c *MetricsCollector) walkFullTable(walker snmp.Walker, entry *profiles.Met
 	return result
 }
 
+// walk walks an OID subtree and returns the PDUs keyed by normalized OID.
+// gosnmp names every PDU with a leading dot, so normalizing once here spares
+// every caller from carrying the difference into its own comparisons.
+func (c *MetricsCollector) walk(walker snmp.Walker, oid string, identifierSize int) (map[string]snmp.PDU, error) {
+	pdus, err := walker.Walk(oid, identifierSize)
+	if err != nil {
+		return nil, err
+	}
+	normalized := make(map[string]snmp.PDU, len(pdus))
+	for name, pdu := range pdus {
+		pdu.Name = normalizeOID(pdu.Name)
+		normalized[normalizeOID(name)] = pdu
+	}
+	return normalized, nil
+}
+
 // walkScalar walks a scalar OID subtree and returns the first string value found.
 func (c *MetricsCollector) walkScalar(walker snmp.Walker, oid string) (string, error) {
-	pdus, err := walker.Walk(oid, 0)
+	pdus, err := c.walk(walker, oid, 0)
 	if err != nil {
 		return "", err
 	}
@@ -570,9 +589,17 @@ func (c *MetricsCollector) walkScalar(walker snmp.Walker, oid string) (string, e
 	return "", fmt.Errorf("no value returned for OID %s", oid)
 }
 
+// normalizeOID strips the leading dot gosnmp puts on every PDU name. Profile
+// OIDs mostly omit it and a few carry one, so both sides go through here before
+// any OID is compared or used as a prefix.
+func normalizeOID(oid string) string {
+	return strings.TrimPrefix(oid, ".")
+}
+
 // extractRowIndex strips the column OID prefix from a full OID to get the row index suffix.
 func extractRowIndex(fullOID, columnOID string) string {
-	prefix := columnOID + "."
+	fullOID = normalizeOID(fullOID)
+	prefix := normalizeOID(columnOID) + "."
 	if strings.HasPrefix(fullOID, prefix) {
 		return fullOID[len(prefix):]
 	}

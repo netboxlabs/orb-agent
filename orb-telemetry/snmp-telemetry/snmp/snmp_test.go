@@ -83,3 +83,19 @@ func TestNewClient_V3SecurityLevelMapsToMsgFlags(t *testing.T) {
 		assert.Equal(t, want, c.MsgFlags, "security level %q", level)
 	}
 }
+
+// The fake has to answer the way gosnmp does: parseObjectIdentifier prefixes
+// every PDU name with a dot, and a double that omits it hides every prefix
+// comparison a caller makes against a profile OID.
+func TestFakeSNMPWalker_NamesCarryLeadingDot(t *testing.T) {
+	w, err := NewFakeSNMPWalker("10.0.0.1", 161, 1, time.Second, nil, clientTestLogger)
+	require.NoError(t, err)
+
+	pdus, err := w.Walk("1.3.6.1.2.1.2.2.1.2", 1)
+	require.NoError(t, err)
+	require.Len(t, pdus, 1)
+	for name, pdu := range pdus {
+		assert.Equal(t, ".1.3.6.1.2.1.2.2.1.2.999", name)
+		assert.Equal(t, name, pdu.Name, "the map key and the PDU name must agree")
+	}
+}

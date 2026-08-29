@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,10 +35,18 @@ func (r *recordingWalker) Connect() error { return nil }
 func (r *recordingWalker) Close() error   { return nil }
 func (r *recordingWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
 	r.walkCalls = append(r.walkCalls, oid)
-	if pdus, ok := r.responses[oid]; ok {
-		return pdus, nil
+	pdus, ok := r.responses[oid]
+	if !ok {
+		return map[string]snmp.PDU{}, nil
 	}
-	return map[string]snmp.PDU{}, nil
+	// gosnmp names every PDU with a leading dot. Fixtures are written without
+	// one, the way profile OIDs are, so it is added here instead.
+	out := make(map[string]snmp.PDU, len(pdus))
+	for name, pdu := range pdus {
+		pdu.Name = "." + strings.TrimPrefix(name, ".")
+		out[pdu.Name] = pdu
+	}
+	return out, nil
 }
 
 // walkerFactory returns a ClientFactory that always returns the same walker.
@@ -180,6 +189,10 @@ func TestPduToValue_OctetString_NonNumeric(t *testing.T) {
 func TestExtractRowIndex(t *testing.T) {
 	assert.Equal(t, "3", extractRowIndex("1.3.6.1.2.1.2.2.1.2.3", "1.3.6.1.2.1.2.2.1.2"))
 	assert.Equal(t, "10.2", extractRowIndex("1.3.6.1.2.1.2.2.1.2.10.2", "1.3.6.1.2.1.2.2.1.2"))
+	// A leading dot on either side is not part of the OID.
+	assert.Equal(t, "3", extractRowIndex(".1.3.6.1.2.1.2.2.1.2.3", "1.3.6.1.2.1.2.2.1.2"))
+	assert.Equal(t, "3", extractRowIndex("1.3.6.1.2.1.2.2.1.2.3", ".1.3.6.1.2.1.2.2.1.2"))
+	assert.Equal(t, "3", extractRowIndex(".1.3.6.1.2.1.2.2.1.2.3", ".1.3.6.1.2.1.2.2.1.2"))
 	// No prefix match — returns full OID unchanged.
 	assert.Equal(t, "1.2.3.4", extractRowIndex("1.2.3.4", "9.9.9.9"))
 }
@@ -682,4 +695,130 @@ func TestCollectTarget_ProfileMetricTagsReachTableRows(t *testing.T) {
 	require.Len(t, pts, 1)
 	assert.Equal(t, "sensor-1", attrValue(pts[0], "SysName"))
 	assert.Equal(t, "eth0", attrValue(pts[0], "if_desc"))
+}
+
+// ---------------------------------------------------------------------------
+// Leading-dot PDU names
+// ---------------------------------------------------------------------------
+
+// gosnmp names every PDU with a leading dot and profile OIDs carry none, so
+// every prefix comparison in the table path has to tolerate the difference.
+// Without it row_index degrades to the whole OID and no tag ever joins.
+func TestCollectTarget_TableRowIndexIgnoresLeadingDot(t *testing.T) {
+	const (
+		host        = "10.0.0.12"
+		tableOID    = "1.3.6.1.2.1.2.2"
+		errColOID   = "1.3.6.1.2.1.2.2.1.20"
+		descrColOID = "1.3.6.1.2.1.2.2.1.2"
+		sysObjValue = "1.3.6.1.4.1.9999.12"
+	)
+	p := profileWithOID(sysObjValue, "test12.yml", []profiles.MetricEntry{
+		{
+			Table:      &profiles.Table{Name: "ifTable", OID: tableOID},
+			Symbols:    []profiles.Symbol{{Name: "ifOutErrors", OID: errColOID}},
+			MetricTags: []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: descrColOID, Name: "ifDescr"}}},
+		},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		errColOID: {
+			errColOID + ".1":  counter32PDU(errColOID+".1", 10),
+			errColOID + ".42": counter32PDU(errColOID+".42", 20),
+		},
+		descrColOID: {
+			descrColOID + ".1":  stringPDU(descrColOID+".1", "eth0"),
+			descrColOID + ".42": stringPDU(descrColOID+".42", "eth1"),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	require.Len(t, pts, 2)
+
+	byRow := map[string]string{}
+	for _, pt := range pts {
+		byRow[attrValue(pt, "row_index")] = attrValue(pt, "if_desc")
+	}
+	assert.Equal(t, map[string]string{"1": "eth0", "42": "eth1"}, byRow)
+}
+
+// walk_full_table takes one walk of the table root and splits the answer by
+// column prefix, which is the same comparison and fails the same way. A handful
+// of profiles write their own OIDs with a leading dot, so the tag column here
+// carries one the device's answer does not.
+func TestCollectTarget_WalkFullTableIgnoresLeadingDot(t *testing.T) {
+	const (
+		host        = "10.0.0.13"
+		tableOID    = "1.3.6.1.2.1.2.2"
+		errColOID   = "1.3.6.1.2.1.2.2.1.20"
+		descrColOID = "1.3.6.1.2.1.2.2.1.2"
+		sysObjValue = "1.3.6.1.4.1.9999.13"
+	)
+	p := profileWithOID(sysObjValue, "test13.yml", []profiles.MetricEntry{
+		{
+			Table:         &profiles.Table{Name: "ifTable", OID: tableOID},
+			WalkFullTable: true,
+			Symbols:       []profiles.Symbol{{Name: "ifOutErrors", OID: errColOID}},
+			MetricTags:    []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: "." + descrColOID, Name: "ifDescr"}}},
+		},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		tableOID: {
+			errColOID + ".7":   counter32PDU(errColOID+".7", 33),
+			descrColOID + ".7": stringPDU(descrColOID+".7", "eth0"),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "7", attrValue(pts[0], "row_index"))
+	assert.Equal(t, "eth0", attrValue(pts[0], "if_desc"))
+}
+
+// A condition filters rows by another column's value, joined by row index.
+func TestCollectTarget_ConditionJoinIgnoresLeadingDot(t *testing.T) {
+	const (
+		host        = "10.0.0.14"
+		tableOID    = "1.3.6.1.2.1.2.2"
+		errColOID   = "1.3.6.1.2.1.2.2.1.20"
+		operColOID  = "1.3.6.1.2.1.2.2.1.8"
+		sysObjValue = "1.3.6.1.4.1.9999.14"
+	)
+	p := profileWithOID(sysObjValue, "test14.yml", []profiles.MetricEntry{
+		{
+			Table: &profiles.Table{Name: "ifTable", OID: tableOID},
+			Symbols: []profiles.Symbol{
+				{Name: "ifOperStatus", OID: operColOID},
+				{Name: "ifOutErrors", OID: errColOID, Condition: "ifOperStatus=1"},
+			},
+		},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		operColOID: {
+			operColOID + ".1": intPDU(operColOID+".1", 1),
+			operColOID + ".2": intPDU(operColOID+".2", 2),
+		},
+		errColOID: {
+			errColOID + ".1": counter32PDU(errColOID+".1", 10),
+			errColOID + ".2": counter32PDU(errColOID+".2", 20),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	require.Len(t, pts, 1, "only the row whose condition column equals 1 is emitted")
+	assert.Equal(t, int64(10), pts[0].value)
+	assert.Equal(t, "1", attrValue(pts[0], "row_index"))
 }
