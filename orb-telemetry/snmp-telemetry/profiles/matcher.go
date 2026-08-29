@@ -2,8 +2,9 @@ package profiles
 
 import (
 	"log/slog"
+	"maps"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -20,68 +21,117 @@ type Matcher struct {
 	profileByFile map[string]*Profile // filename -> profile (for matches redirects)
 }
 
+// keyClaims holds every profile claiming one index key, in the order the
+// profiles were indexed.
+type keyClaims []*Profile
+
+// kept is the profile that serves the key.
+func (c keyClaims) kept() *Profile {
+	return c.pick(func(*Profile) bool { return true })
+}
+
+// bundled is the profile that would serve the key if the override directory
+// held nothing at a path the bundled set lacks. A file that replaces a bundled
+// profile at that profile's own path counts here: it stands in for the bundled
+// file rather than competing with it.
+func (c keyClaims) bundled() *Profile {
+	return c.pick(func(p *Profile) bool {
+		return p.Origin != OriginOverride || p.ReplacesBundled
+	})
+}
+
+// pick applies the tiebreak across the claimants that keep accepts. An
+// override-directory profile beats a bundled one, since overriding is what the
+// operator asked for; otherwise the first one indexed wins, which is stable as
+// long as the input order is.
+func (c keyClaims) pick(keep func(*Profile) bool) *Profile {
+	var best *Profile
+	for _, p := range c {
+		if !keep(p) {
+			continue
+		}
+		if best == nil || (p.Origin == OriginOverride && best.Origin != OriginOverride) {
+			best = p
+		}
+	}
+	return best
+}
+
 // NewMatcher builds a Matcher from a list of fully-resolved profiles.
 // Profiles without any sysobjectid entries are ignored (they are base/inherited profiles).
 //
 // Two profiles can claim the same sysObjectID, or the same basename that a
-// `matches` redirect names. winner resolves those, and logger reports the ones
-// an operator can act on. Pass profiles in a stable order (Loader.AllResolved
-// sorts them) so a tie between two profiles of the same origin does not move
-// between restarts.
+// `matches` redirect names. keyClaims resolves those and
+// reportShadowed reports the ones an operator can act on. Pass profiles in a
+// stable order (Loader.AllResolved sorts them) so a tie between two profiles of
+// the same origin does not move between restarts.
 func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
+	byBase := make(map[string]keyClaims)
+	byExact := make(map[string]keyClaims)
+
 	m := &Matcher{
 		exactIndex:    make(map[string]*Profile),
 		profileByFile: make(map[string]*Profile),
 	}
 	for _, p := range profiles {
-		if prev, ok := m.profileByFile[p.FileName]; ok {
-			m.profileByFile[p.FileName] = winner(prev, p, logger, "basename", p.FileName)
-		} else {
-			m.profileByFile[p.FileName] = p
-		}
+		byBase[p.FileName] = append(byBase[p.FileName], p)
 		for _, raw := range p.SysObjectID {
 			oid := normalizeOID(raw)
 			if strings.HasSuffix(oid, ".*") {
 				prefix := strings.TrimSuffix(oid, "*")
 				m.wildcardIndex = append(m.wildcardIndex, wildcardEntry{prefix: prefix, profile: p})
-			} else if prev, ok := m.exactIndex[oid]; ok {
-				m.exactIndex[oid] = winner(prev, p, logger, "sysobjectid", oid)
 			} else {
-				m.exactIndex[oid] = p
+				byExact[oid] = append(byExact[oid], p)
 			}
 		}
 	}
+
+	reportShadowed(byBase, logger, "basename")
+	reportShadowed(byExact, logger, "sysobjectid")
+
+	for base, claims := range byBase {
+		m.profileByFile[base] = claims.kept()
+	}
+	for oid, claims := range byExact {
+		m.exactIndex[oid] = claims.kept()
+	}
 	// Sort wildcard entries by descending prefix length so the most specific match wins.
-	sort.Slice(m.wildcardIndex, func(i, j int) bool {
-		return len(m.wildcardIndex[i].prefix) > len(m.wildcardIndex[j].prefix)
+	slices.SortFunc(m.wildcardIndex, func(a, b wildcardEntry) int {
+		return len(b.prefix) - len(a.prefix)
 	})
 	return m
 }
 
-// winner picks which of two profiles claiming the same key keeps it. An
-// override-directory profile beats a bundled one, since overriding is what the
-// operator asked for; otherwise the profile already indexed keeps the key,
-// which is stable as long as the input order is.
-//
-// A collision between an override and a bundled profile is the operator's to
-// fix, so it is logged at warn level. The bundled set itself ships several
-// files that share a basename, and warning about those on a correct install
-// would only teach operators to ignore the warning.
-func winner(current, candidate *Profile, logger *slog.Logger, kind, key string) *Profile {
-	kept, dropped := current, candidate
-	if candidate.Origin == OriginOverride && current.Origin != OriginOverride {
-		kept, dropped = candidate, current
+// reportShadowed warns about keys a profile added under the override directory
+// took from the profile that would otherwise have served them, which is the
+// operator's to fix. Everything else is logged at debug level: the bundled set
+// itself ships nine files named traps.yml, and comparing origins pairwise
+// warned once per losing sibling, so correctly overriding one of them produced
+// eight warnings naming vendors the operator never touched.
+func reportShadowed(claims map[string]keyClaims, logger *slog.Logger, kind string) {
+	if logger == nil {
+		return
 	}
-	if logger != nil {
-		msg := "duplicate " + kind + " across SNMP profiles"
-		attrs := []any{kind, key, "using", kept.RelPath, "ignoring", dropped.RelPath}
-		if current.Origin == candidate.Origin {
-			logger.Debug(msg, attrs...)
-		} else {
-			logger.Warn(msg, attrs...)
+	for _, key := range slices.Sorted(maps.Keys(claims)) {
+		c := claims[key]
+		if len(c) < 2 {
+			continue
 		}
+		kept, bundled := c.kept(), c.bundled()
+		if bundled != nil && bundled != kept {
+			logger.Warn("SNMP profile shadows the one that would have served this key",
+				kind, key, "using", kept.RelPath, "instead_of", bundled.RelPath)
+			continue
+		}
+		ignoring := make([]string, 0, len(c)-1)
+		for _, p := range c {
+			if p != kept {
+				ignoring = append(ignoring, p.RelPath)
+			}
+		}
+		logger.Debug("duplicate "+kind+" across SNMP profiles",
+			kind, key, "using", kept.RelPath, "ignoring", ignoring)
 	}
-	return kept
 }
 
 // Match returns the best-matching profile for the given device sysObjectID.
@@ -119,11 +169,7 @@ func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool)
 	}
 
 	// Sort patterns for deterministic evaluation order.
-	patterns := make([]string, 0, len(profile.Matches))
-	for p := range profile.Matches {
-		patterns = append(patterns, p)
-	}
-	sort.Strings(patterns)
+	patterns := slices.Sorted(maps.Keys(profile.Matches))
 
 	lowerDescr := strings.ToLower(sysDescr)
 	for _, pattern := range patterns {

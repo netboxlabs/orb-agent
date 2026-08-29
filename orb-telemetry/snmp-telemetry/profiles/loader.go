@@ -62,37 +62,41 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Loader, error) {
 		return nil, fmt.Errorf("reading embedded profiles: %w", err)
 	}
 	if overrideDir != "" {
-		bundled := slices.Collect(maps.Keys(l.byFile))
+		bundled := make(map[string]bool, len(l.byFile))
+		for rel := range l.byFile {
+			bundled[rel] = true
+		}
 		l.dir = overrideDir
 		if err := l.readDir(); err != nil {
 			return nil, fmt.Errorf("reading override profiles from %s: %w", overrideDir, err)
 		}
-		l.warnMisplacedOverrides(bundled)
+		l.reviewOverrides(bundled)
 	}
 	return l, nil
 }
 
-// warnMisplacedOverrides reports override files that look like a replacement
-// for a bundled profile but sit at the wrong path. An override only takes
-// effect as a replacement when its path under the override directory matches
-// the bundled file's path exactly, so a file dropped at the override root
-// loads as an extra profile and leaves the bundled one in place. Nothing else
-// tells the operator that, and the two outcomes look identical from the
-// collected metrics.
+// reviewOverrides marks the override files that stand in for a bundled profile
+// and warns about the ones that look like they were meant to.
+//
+// An override only replaces a bundled profile when its path under the override
+// directory matches the bundled file's path exactly, so a file dropped at the
+// override root loads as an extra profile and leaves the bundled one in place.
+// Nothing else tells the operator that, and the two outcomes look identical
+// from the collected metrics.
 //
 // The discriminator is the basename. A file carrying a bundled profile's
 // basename from somewhere other than that profile's path was almost certainly
 // meant to replace it. A basename the bundled set does not carry is a new
 // profile, which is a supported use of the override directory and replaces
 // nothing by design.
-func (l *Loader) warnMisplacedOverrides(bundledPaths []string) {
-	bundled := make(map[string]bool, len(bundledPaths))
-	for _, rel := range bundledPaths {
-		bundled[rel] = true
-	}
+func (l *Loader) reviewOverrides(bundled map[string]bool) {
 	for _, rel := range slices.Sorted(maps.Keys(l.byFile)) {
 		p := l.byFile[rel]
-		if p.Origin != OriginOverride || bundled[rel] {
+		if p.Origin != OriginOverride {
+			continue
+		}
+		if bundled[rel] {
+			p.ReplacesBundled = true
 			continue
 		}
 		want, ok := l.byBase[p.FileName]
@@ -233,12 +237,13 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 	defer delete(l.resolving, key)
 
 	merged := &Profile{
-		FileName:    p.FileName,
-		RelPath:     p.RelPath,
-		Origin:      p.Origin,
-		Provider:    p.Provider,
-		SysObjectID: p.SysObjectID,
-		Matches:     p.Matches,
+		FileName:        p.FileName,
+		RelPath:         p.RelPath,
+		Origin:          p.Origin,
+		ReplacesBundled: p.ReplacesBundled,
+		Provider:        p.Provider,
+		SysObjectID:     p.SysObjectID,
+		Matches:         p.Matches,
 	}
 
 	// Resolve and merge parent profiles (extends) first

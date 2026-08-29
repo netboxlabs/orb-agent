@@ -50,6 +50,10 @@ type Profile struct {
 	RelPath string `yaml:"-"`
 	// Origin is where the profile was read from, populated by the Loader.
 	Origin Origin `yaml:"-"`
+	// ReplacesBundled is true when this profile came from the override
+	// directory at a bundled profile's relative path, so it stands in for that
+	// profile instead of adding one. Populated by the Loader.
+	ReplacesBundled bool `yaml:"-"`
 
 	Extends     []string          `yaml:"extends"`
 	Provider    string            `yaml:"provider"`

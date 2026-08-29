@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -212,4 +213,33 @@ func tagColumnNames(p *Profile) []string {
 		}
 	}
 	return names
+}
+
+// Nine bundled files are named traps.yml. Overriding one of them at its own
+// path is correct use of the override directory, but the origin comparison
+// paired the override against each of the other eight and warned about every
+// pair, naming files the operator never touched.
+func TestMatcher_CorrectOverrideOfSharedBasenameNamesOnlyAffectedFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cisco"), 0o750))
+	writeYAML(t, dir, filepath.Join("cisco", "traps.yml"), "metrics: []\n")
+
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	logger, buf := captureLogger()
+	NewMatcher(all, logger)
+
+	out := strings.TrimSpace(buf.String())
+	var lines []string
+	if out != "" {
+		lines = strings.Split(out, "\n")
+	}
+	assert.LessOrEqual(t, len(lines), 1, "overriding one bundled traps.yml must not warn once per sibling")
+	for _, untouched := range []string{"citrix", "eaton", "f5", "kemp", "nutanix", "purestorage", "sciencelogic", "vmware"} {
+		assert.NotContains(t, out, untouched+"/traps.yml",
+			"a warning must not name a file the operator's override did not affect")
+	}
 }
