@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-co-op/gocron/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -347,6 +348,48 @@ func TestApplyDefaults_PreservesExistingPort(t *testing.T) {
 func TestStop_EmptyManager(t *testing.T) {
 	m := newTestManager()
 	assert.NoError(t, m.Stop())
+}
+
+// stubScheduler stands in for gocron's scheduler so Stop can be driven without
+// a real one, which takes seconds to time out. Embedding the interface leaves
+// its other methods nil, which is fine: Runner.Stop only calls StopJobs and
+// Shutdown.
+type stubScheduler struct {
+	gocron.Scheduler
+	err   error
+	stops int
+}
+
+func (s *stubScheduler) StopJobs() error {
+	s.stops++
+	return s.err
+}
+
+func (s *stubScheduler) Shutdown() error { return s.err }
+
+func stubRunner(err error) (*Runner, *stubScheduler) {
+	s := &stubScheduler{err: err}
+	return &Runner{scheduler: s, targetErrs: make(map[string]error)}, s
+}
+
+// Stop drained the policy map before stopping the runners, so the first
+// failure returned early and left the rest of them polling with no entry in
+// the map for /status to report.
+func TestStop_AttemptsEveryRunnerAndJoinsErrors(t *testing.T) {
+	m := newTestManager()
+	failingA, _ := stubRunner(fmt.Errorf("scheduler wedged"))
+	failingB, _ := stubRunner(fmt.Errorf("scheduler wedged"))
+	healthy, healthySched := stubRunner(nil)
+	m.policies["policy-a"] = failingA
+	m.policies["policy-b"] = failingB
+	m.policies["policy-c"] = healthy
+
+	err := m.Stop()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "policy-a")
+	assert.Contains(t, err.Error(), "policy-b")
+	assert.Equal(t, 1, healthySched.stops, "a runner after a failing one must still be stopped")
+	assert.Empty(t, m.policies)
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -182,7 +183,10 @@ func (m *Manager) StopPolicy(name string) error {
 	return nil
 }
 
-// Stop stops all running policies
+// Stop stops all running policies. Every runner is attempted even after one
+// fails: the map is drained first, so a runner left unstopped keeps polling
+// with no entry behind for GetPolicyStatuses to report it. Names are visited
+// in order so the joined error reads the same on every run.
 func (m *Manager) Stop() error {
 	m.mu.Lock()
 	runners := make(map[string]*Runner, len(m.policies))
@@ -190,12 +194,13 @@ func (m *Manager) Stop() error {
 	m.policies = make(map[string]*Runner)
 	m.mu.Unlock()
 
-	for name, r := range runners {
-		if err := r.Stop(); err != nil {
-			return fmt.Errorf("stopping policy %s: %w", name, err)
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(runners)) {
+		if err := runners[name].Stop(); err != nil {
+			errs = append(errs, fmt.Errorf("stopping policy %s: %w", name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // GetCapabilities returns the capabilities of snmp-telemetry
