@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,17 @@ var (
 	logger             *slog.Logger
 )
 
+// endpointOption picks the right otlpmetricgrpc option for the configured
+// endpoint. A bare host:port is not a valid URL, so WithEndpointURL would
+// misparse or silently reject it; use WithEndpoint for that case and reserve
+// WithEndpointURL for values that actually carry a scheme.
+func endpointOption(endpoint string) otlpmetric.Option {
+	if strings.Contains(endpoint, "://") {
+		return otlpmetric.WithEndpointURL(endpoint)
+	}
+	return otlpmetric.WithEndpoint(strings.TrimRight(endpoint, "/"))
+}
+
 // SetupMetricsExport configures the OTLP metrics exporter with a periodic reader.
 func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string, exportPeriodSeconds int) error {
 	if endpoint == "" {
@@ -33,7 +45,7 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 	}
 
 	exporter, err := otlpmetric.New(ctx,
-		otlpmetric.WithEndpointURL(endpoint),
+		endpointOption(endpoint),
 		otlpmetric.WithInsecure(),
 	)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,6 +169,7 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 	if target.ID != "" {
 		baseAttrs = append(baseAttrs, attribute.String("netbox_id", target.ID))
 	}
+	baseAttrs = c.appendDeviceTags(walker, profile, baseAttrs, sysDescr, sysOIDValue)
 
 	// localBuf accumulates fresh observations for this run.
 	// throttledMetrics records metric names skipped due to poll_time_sec not elapsed.
@@ -216,6 +218,70 @@ func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Targ
 	}
 
 	return nil
+}
+
+// appendDeviceTags renders the profile's top-level metric_tags and appends them
+// to attrs. They describe the device rather than a row, so they belong on every
+// series the profile produces.
+func (c *MetricsCollector) appendDeviceTags(walker snmp.Walker, profile *profiles.Profile, attrs []attribute.KeyValue, sysDescr, sysObjectID string) []attribute.KeyValue {
+	for _, mt := range profile.MetricTags {
+		col := metricTagColumn(&mt)
+		if col == nil || col.OID == "" {
+			continue
+		}
+		name := mt.Tag
+		if name == "" {
+			// The bare `column:` form carries no tag, so the column name is the key.
+			name = col.Name
+		}
+		if name == "" {
+			continue
+		}
+		if value, ok := cachedSystemValue(col.OID, sysDescr, sysObjectID); ok {
+			if value != "" {
+				attrs = append(attrs, attribute.String(name, value))
+			}
+			continue
+		}
+		pdus, err := walker.Walk(col.OID, 0)
+		if err != nil {
+			c.logger.Debug("Error walking device tag", "oid", col.OID, "tag", name, "error", err)
+			continue
+		}
+		if value := firstTagValue(pdus, col); value != "" {
+			attrs = append(attrs, attribute.String(name, value))
+		}
+	}
+	return attrs
+}
+
+// cachedSystemValue returns the value CollectTarget already read for the two
+// system OIDs it walks before profile matching, so neither is walked twice.
+func cachedSystemValue(oid, sysDescr, sysObjectID string) (string, bool) {
+	switch strings.TrimSuffix(oid, ".0") {
+	case sysDescrOID:
+		return sysDescr, true
+	case sysObjectIDOID:
+		return sysObjectID, true
+	}
+	return "", false
+}
+
+// firstTagValue renders the lowest-numbered PDU of a device tag walk. Device
+// tags name a scalar instance, so one value is expected; sorting keeps the
+// choice stable if a device answers with more.
+func firstTagValue(pdus map[string]snmp.PDU, col *profiles.TagColumn) string {
+	oids := make([]string, 0, len(pdus))
+	for oid := range pdus {
+		oids = append(oids, oid)
+	}
+	sort.Strings(oids)
+	for _, oid := range oids {
+		if value := pduToString(pdus[oid], col); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // collectScalar collects a single scalar OID metric into localBuf.

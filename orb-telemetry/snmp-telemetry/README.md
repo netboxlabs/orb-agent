@@ -11,6 +11,10 @@ metrics as OTLP gauges. Each gauge carries a `device_ip` attribute, plus
 `--otel-endpoint` is set; without it, targets are still polled but nothing is
 exported.
 
+`--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
+or a full URL with a scheme (e.g. `grpc://collector:4317`,
+`http://0.0.0.0:4319`). Both forms dial the given address.
+
 ### Usage
 ```sh
 Usage of snmp-telemetry:

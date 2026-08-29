@@ -586,3 +586,100 @@ func attrValue(pt observedPoint, key string) string {
 	}
 	return ""
 }
+
+// ---------------------------------------------------------------------------
+// Profile-level metric_tags become device-wide attributes
+// ---------------------------------------------------------------------------
+
+// A profile carries a top-level `metric_tags:` block describing device-wide
+// dimensions. 181 of the bundled profiles declare one, almost all of them
+// through the inherited system MIB block, and every series has to carry them.
+func TestCollectTarget_ProfileMetricTagsBecomeDeviceAttributes(t *testing.T) {
+	const (
+		host        = "10.0.0.9"
+		sysObjValue = "1.3.6.1.4.1.20916"
+		descr       = "environment monitor"
+		contactOID  = "1.3.6.1.2.1.1.4.0"
+		nameOID     = "1.3.6.1.2.1.1.5.0"
+		locationOID = "1.3.6.1.2.1.1.6.0"
+		tempFOID    = "1.3.6.1.4.1.20916.1.11.1.1.1.1.0"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {sysDescrOID: stringPDU(sysDescrOID, descr)},
+		contactOID:     {contactOID: stringPDU(contactOID, "noc@example.com")},
+		nameOID:        {nameOID: stringPDU(nameOID, "sensor-1")},
+		locationOID:    {locationOID: stringPDU(locationOID, "rack 4")},
+		tempFOID:       {tempFOID: intPDU(tempFOID, 72)},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	pts := c.testDeviceStore(host)["snmp.internal-tempf"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "sensor-1", attrValue(pts[0], "SysName"))
+	assert.Equal(t, "rack 4", attrValue(pts[0], "SysLocation"))
+	assert.Equal(t, "noc@example.com", attrValue(pts[0], "SysContact"))
+	assert.Equal(t, descr, attrValue(pts[0], "SysDescr"))
+	assert.Equal(t, sysObjValue, attrValue(pts[0], "SysObjectID"))
+	assert.Equal(t, host, attrValue(pts[0], "device_ip"))
+}
+
+// sysDescr and sysObjectID are already read before profile matching, so the
+// tags naming them must not cost a second walk.
+func TestCollectTarget_ProfileMetricTagsReuseSystemWalks(t *testing.T) {
+	const (
+		host        = "10.0.0.10"
+		sysObjValue = "1.3.6.1.4.1.20916"
+		nameOID     = "1.3.6.1.2.1.1.5.0"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {sysDescrOID: stringPDU(sysDescrOID, "environment monitor")},
+		nameOID:        {nameOID: stringPDU(nameOID, "sensor-1")},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	assert.NotContains(t, w.walkCalls, sysDescrOID+".0", "sysDescr must not be walked twice")
+	assert.NotContains(t, w.walkCalls, sysObjectIDOID+".0", "sysObjectID must not be walked twice")
+	assert.Contains(t, w.walkCalls, nameOID, "a device tag with no cached value must be walked")
+}
+
+// Table rows carry the device-wide tags alongside their own row tags.
+func TestCollectTarget_ProfileMetricTagsReachTableRows(t *testing.T) {
+	const (
+		host        = "10.0.0.11"
+		tableOID    = "1.3.6.1.2.1.2.2"
+		errColOID   = "1.3.6.1.2.1.2.2.1.20"
+		descrColOID = "1.3.6.1.2.1.2.2.1.2"
+		nameOID     = "1.3.6.1.2.1.1.5.0"
+		sysObjValue = "1.3.6.1.4.1.9999.11"
+	)
+	p := profileWithOID(sysObjValue, "test11.yml", []profiles.MetricEntry{
+		{
+			Table:      &profiles.Table{Name: "ifTable", OID: tableOID},
+			Symbols:    []profiles.Symbol{{Name: "ifOutErrors", OID: errColOID}},
+			MetricTags: []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: descrColOID, Name: "ifDescr"}}},
+		},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}}}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		nameOID:        {nameOID: stringPDU(nameOID, "sensor-1")},
+		errColOID:      {errColOID + ".1": counter32PDU(errColOID+".1", 10)},
+		descrColOID:    {descrColOID + ".1": stringPDU(descrColOID+".1", "eth0")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p"))
+
+	pts := c.testDeviceStore(host)["snmp.ifouterrors"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "sensor-1", attrValue(pts[0], "SysName"))
+	assert.Equal(t, "eth0", attrValue(pts[0], "if_desc"))
+}
