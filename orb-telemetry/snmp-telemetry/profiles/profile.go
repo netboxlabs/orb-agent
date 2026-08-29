@@ -90,6 +90,10 @@ type Symbol struct {
 	// value is either a bare integer or a quoted string. Only rows whose
 	// referenced column equals the value are emitted.
 	Condition string `yaml:"condition"`
+	// Script is a ktranslate transform of the polled value, written in its own
+	// dialect. This collector runs none, so it is deserialized only to be able
+	// to tell that the exported number would not be what the symbol names.
+	Script string `yaml:"script"`
 }
 
 // Table identifies an SNMP table by name and root OID.

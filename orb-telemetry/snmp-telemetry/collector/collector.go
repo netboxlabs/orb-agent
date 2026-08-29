@@ -441,6 +441,13 @@ func unusableSymbolReason(sym *profiles.Symbol) string {
 		// can consume the collection deadline on its own.
 		return "declares no OID"
 	}
+	if sym.Script != "" {
+		// The script rescales the polled value, and its dialect is ktranslate's
+		// rather than anything this collector can read. The untransformed number
+		// carries the name and tag of the transformed one, so exporting it would
+		// be wrong rather than merely coarse.
+		return "declares a script this collector does not run"
+	}
 	return ""
 }
 

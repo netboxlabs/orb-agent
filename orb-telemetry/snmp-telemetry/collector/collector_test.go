@@ -1593,6 +1593,57 @@ func TestCollectTarget_SymbolWithNoOIDIsNotCollected(t *testing.T) {
 	assert.NotContains(t, w.walkCalls, "")
 }
 
+// TestCollectTarget_ScriptedSymbolIsSkipped uses the bundled UniFi profile,
+// whose loadValue symbol carries a script dividing the reading by 100 and a
+// `CPU` tag. The collector runs no scripts, so exporting the raw reading under
+// that tag would ship a per-mille number labelled as a percentage. The metric
+// is left out instead.
+func TestCollectTarget_ScriptedSymbolIsSkipped(t *testing.T) {
+	const (
+		host     = "10.0.0.90"
+		loadOID  = "1.3.6.1.4.1.10002.1.1.1.4.2.1.3.1"
+		memTotal = "1.3.6.1.4.1.10002.1.1.1.1.1.0"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.41112")},
+		loadOID:        {loadOID: intPDU(loadOID, 4200)},
+		memTotal:       {memTotal: intPDU(memTotal, 512)},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "ubiquiti/unifi-access-point.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Empty(t, store["snmp.loadvalue"], "a scripted symbol must not export its untransformed value")
+	assert.NotContains(t, w.walkCalls, loadOID, "a symbol that cannot be exported must not be walked")
+	require.Len(t, store["snmp.memtotal"], 1, "the rest of the profile must still be collected")
+}
+
+// TestCollectTarget_ScriptedSymbolIsReportedOnce names the profile and symbol
+// that stop being exported, once for the life of the process.
+func TestCollectTarget_ScriptedSymbolIsReportedOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.41112")},
+	}}
+	p := bundledProfile(t, "ubiquiti/unifi-access-point.yml")
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p", DialOptions{}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.2"), mustAuth(), "p", DialOptions{}))
+
+	var matched []string
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(line, "declares a script") {
+			matched = append(matched, line)
+		}
+	}
+	require.Len(t, matched, 1, "logs: %s", logs.String())
+	assert.Contains(t, matched[0], "symbol=loadValue")
+	assert.Contains(t, matched[0], "profile=ubiquiti/unifi-access-point.yml")
+}
+
 // TestPduToString_HexToIntTagColumn covers a tag column declaring a hextoint
 // conversion, as brocade-fc-switch.yml does for portIndex. Without the
 // conversion the raw octets render as text, which looks like a value.

@@ -85,3 +85,30 @@ func TestMetricTag_ConversionOnTheTagIsDeserialized(t *testing.T) {
 	require.NotNil(t, found.Column)
 	assert.Empty(t, found.Column.Conversion, "the column declares none, so the tag's is the only one")
 }
+
+// A `script:` on a symbol is a ktranslate transform of the polled value. The
+// collector runs none, so it has to be able to see that one was declared: the
+// untransformed number carries the name of the transformed one. Both bundled
+// uses rescale a CPU reading.
+func TestSymbol_ScriptIsDeserialized(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	scripted := func(t *testing.T, relPath, symbolName string) {
+		t.Helper()
+		p, err := l.Resolve(relPath)
+		require.NoError(t, err)
+		for _, entry := range p.Metrics {
+			for i := range entry.Symbols {
+				if entry.Symbols[i].Name == symbolName {
+					assert.NotEmpty(t, entry.Symbols[i].Script)
+					return
+				}
+			}
+		}
+		t.Fatalf("symbol %s not found in %s", symbolName, relPath)
+	}
+
+	scripted(t, "ubiquiti/unifi-access-point.yml", "loadValue")
+	scripted(t, "isilon/isilon.yml", "clusterCPUIdlePct")
+}
