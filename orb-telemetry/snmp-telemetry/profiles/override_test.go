@@ -135,6 +135,29 @@ sysobjectid:
 		"the OID the override inherited from the profile it replaces must stay silent")
 }
 
+// A key can draw more than two claimants. The warning named the profile that
+// would have served it and stopped there, so a second override claiming the
+// same OID went unmentioned in every log line.
+func TestMatcher_WarnNamesEveryClaimantOfOneSysObjectID(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "aa-collide.yml", "sysobjectid: "+bundledExactOID+"\n")
+	writeYAML(t, dir, "zz-collide.yml", "sysobjectid: "+bundledExactOID+"\n")
+
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	logger, buf := captureLogger()
+	NewMatcher(all, logger)
+
+	out := buf.String()
+	assert.Len(t, strings.Split(strings.TrimSpace(out), "\n"), 1, "one key must produce one warning")
+	for _, want := range []string{bundledExactOID, "aa-collide.yml", "zz-collide.yml", bundledExactFile} {
+		assert.Contains(t, out, want, "the warning must name every claimant")
+	}
+}
+
 // The bundled set carries several files that share a basename, which is not an
 // operator's mistake and must not warn on a correct install.
 func TestMatcher_BundledSetLoadsWithoutWarnings(t *testing.T) {

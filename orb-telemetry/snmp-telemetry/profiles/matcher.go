@@ -142,16 +142,22 @@ func reportShadowed(claims map[string]keyClaims, logger *slog.Logger, kind strin
 			continue
 		}
 		kept, bundled := c.kept(), baseline(c)
-		if bundled != nil && bundled != kept {
-			logger.Warn("SNMP profile shadows the one that would have served this key",
-				kind, key, "using", kept.RelPath, "instead_of", bundled.RelPath)
-			continue
-		}
+		// Every claimant the message does not name in its own field. A key can
+		// draw more than two, and naming only the shadowed one left the rest
+		// out of both branches.
 		ignoring := make([]string, 0, len(c)-1)
 		for _, p := range c {
-			if p != kept {
+			if p != kept && p != bundled {
 				ignoring = append(ignoring, p.RelPath)
 			}
+		}
+		if bundled != nil && bundled != kept {
+			attrs := []any{kind, key, "using", kept.RelPath, "instead_of", bundled.RelPath}
+			if len(ignoring) > 0 {
+				attrs = append(attrs, "ignoring", ignoring)
+			}
+			logger.Warn("SNMP profile shadows the one that would have served this key", attrs...)
+			continue
 		}
 		logger.Debug("duplicate "+kind+" across SNMP profiles",
 			kind, key, "using", kept.RelPath, "ignoring", ignoring)
