@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/env"
@@ -45,11 +46,14 @@ func main() {
 	logger := config.NewLogger(*logLevel, *logFormat)
 	logger.Info("starting "+AppName, "version", version.GetBuildVersion())
 
-	ctx := context.Background()
+	// The policy manager derives every runner context from this one, so it is
+	// created before the manager: handing it context.Background() would leave
+	// in-flight collections running after a stop signal.
+	rootCtx, cancelFunc := context.WithCancel(context.Background())
 
 	endpoint := env.ResolveEnvOrExit(*otelEndpoint)
 	if endpoint != "" {
-		if err := metrics.SetupMetricsExport(ctx, logger, endpoint, *otelExportPeriod); err != nil {
+		if err := metrics.SetupMetricsExport(rootCtx, logger, endpoint, *otelExportPeriod); err != nil {
 			logger.Error("Failed to setup metrics export", "error", err)
 			os.Exit(1)
 		}
@@ -57,12 +61,21 @@ func main() {
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
-	manager := policy.NewManager(ctx, logger, profilesDir)
+	manager := policy.NewManager(rootCtx, logger, profilesDir)
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
+
+	// shutdownMetrics flushes on its own context: rootCtx is cancelled during
+	// shutdown, and an exporter handed a cancelled context drops the last export.
+	shutdownMetrics := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := metrics.Shutdown(ctx); err != nil {
+			logger.Error("failed to shutdown metrics", "error", err)
+		}
+	}
 
 	// Handle signals
 	done := make(chan bool, 1)
-	rootCtx, cancelFunc := context.WithCancel(ctx)
 
 	go func() {
 		sigs := make(chan os.Signal, 1)
@@ -72,9 +85,7 @@ func main() {
 			case <-sigs:
 				logger.Warn("stop signal received, stopping " + AppName)
 				srv.Stop()
-				if err := metrics.Shutdown(ctx); err != nil {
-					logger.Error("failed to shutdown metrics", "error", err)
-				}
+				shutdownMetrics()
 				cancelFunc()
 			case <-rootCtx.Done():
 				logger.Warn("main context cancelled")
@@ -90,9 +101,7 @@ func main() {
 		if err, ok := <-serverErrCh; ok && err != nil {
 			logger.Error(AppName+" server encountered an error", "error", err)
 			srv.Stop()
-			if shutdownErr := metrics.Shutdown(ctx); shutdownErr != nil {
-				logger.Error("failed to shutdown metrics", "error", shutdownErr)
-			}
+			shutdownMetrics()
 			cancelFunc()
 		}
 	}()
