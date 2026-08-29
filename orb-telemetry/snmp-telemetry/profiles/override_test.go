@@ -162,11 +162,12 @@ func TestLoadProfiles_CorrectlyPlacedOverrideIsSilent(t *testing.T) {
 	assert.Empty(t, p.MetricTags, "the override must replace the bundled profile, not merge with it")
 }
 
-// A file named after a bundled profile but placed at the override root wins the
-// byFile lookup that extends resolution tries first, so it becomes the parent of
-// every bundled profile that extends that basename. The behaviour is pinned here
-// because the no-counterpart warning is what tells the operator about it.
-func TestResolve_RootOverrideBecomesParentOfBundledProfiles(t *testing.T) {
+// A file named after a bundled profile but placed at the override root used to
+// win the byFile lookup extends resolution tried first, so one mislocated file
+// became the parent of every bundled profile extending that basename: 164 of
+// them for system-mib.yml. A bare basename now goes through the basename index,
+// so the bundled parent stays the parent.
+func TestResolve_RootOverrideDoesNotReparentBundledProfiles(t *testing.T) {
 	dir := t.TempDir()
 	writeYAML(t, dir, "system-mib.yml", `
 metric_tags:
@@ -180,13 +181,35 @@ metric_tags:
 	require.NoError(t, err)
 	require.Contains(t, buf.String(), "system-mib.yml", "the operator must be warned about the misplaced file")
 
-	p, err := l.Resolve("3com/3com.yml")
+	child, err := l.Resolve("3com/3com.yml")
 	require.NoError(t, err)
+	assert.NotContains(t, tagColumnNames(child), "OverrideSysName",
+		"extends must resolve the bundled parent, not a file at the override root")
+
+	bundledParent, err := l.Resolve("system-mib.yml")
+	require.NoError(t, err)
+	assert.Equal(t, "_general/system-mib.yml", bundledParent.RelPath,
+		"a bare basename must resolve through the basename index")
+
+	// The mislocated file is still loaded, it just parents nothing.
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	var found *Profile
+	for _, p := range all {
+		if p.RelPath == "system-mib.yml" {
+			found = p
+		}
+	}
+	require.NotNil(t, found, "the mislocated override must still be loaded")
+	assert.Contains(t, tagColumnNames(found), "OverrideSysName")
+}
+
+func tagColumnNames(p *Profile) []string {
 	names := make([]string, 0, len(p.MetricTags))
 	for _, tag := range p.MetricTags {
 		if tag.Column != nil {
 			names = append(names, tag.Column.Name)
 		}
 	}
-	assert.Contains(t, names, "OverrideSysName", "extends resolves the root file ahead of the bundled one")
+	return names
 }

@@ -199,13 +199,25 @@ func prepend[T any](head, tail []T) []T {
 // Resolve returns the fully-merged profile for the given key, resolving all extends recursively.
 // key may be a relative path (e.g. "cisco/cisco-catalyst.yml") or a bare basename
 // (e.g. "system-mib.yml") as used in extends references.
+//
+// A bare basename goes through the basename index, so a bundled
+// `extends: system-mib.yml` keeps resolving to _general/system-mib.yml
+// whatever an override directory holds at its root. Consulting the path index
+// first let one mislocated file reparent every profile extending that name.
+// A key with a path separator stays an exact path lookup.
 func (l *Loader) Resolve(key string) (*Profile, error) {
-	// Normalise bare basenames to their relative path via the byBase index.
-	if _, ok := l.byFile[key]; !ok {
-		if rel, ok2 := l.byBase[key]; ok2 {
+	if !strings.Contains(key, "/") {
+		if rel, ok := l.byBase[key]; ok {
 			key = rel
 		}
 	}
+	return l.resolvePath(key)
+}
+
+// resolvePath resolves one profile by its exact relative path. Every profile
+// the loader holds is reachable this way, including one whose basename another
+// profile already owns in byBase.
+func (l *Loader) resolvePath(key string) (*Profile, error) {
 	if p, ok := l.resolved[key]; ok {
 		return p, nil
 	}
@@ -270,7 +282,7 @@ func (l *Loader) AllResolved() ([]*Profile, error) {
 	names := slices.Sorted(maps.Keys(l.byFile))
 	result := make([]*Profile, 0, len(names))
 	for _, name := range names {
-		p, err := l.Resolve(name)
+		p, err := l.resolvePath(name)
 		if err != nil {
 			l.logger.Warn("Failed to resolve profile", "file", name, "error", err)
 			continue

@@ -91,12 +91,17 @@ its subdirectory. For example, overriding the bundled
 `_general/system-mib.yml` requires placing the replacement at
 `_general/system-mib.yml` under the override directory.
 
-A file at any other path is still loaded, and still takes effect. One placed at
-the override directory's root under a bundled profile's filename, such as
-`system-mib.yml`, becomes the parent of every bundled profile carrying
-`extends: system-mib.yml`, while `_general/system-mib.yml` itself stays in place
-unchanged. The backend logs a warning naming the path that would have replaced
-the bundled profile, so check the log after adding an override.
+A file at any other path is still loaded, but it replaces nothing. One placed
+at the override directory's root under a bundled profile's filename, such as
+`system-mib.yml`, leaves `_general/system-mib.yml` in place and does not become
+the parent of the bundled profiles carrying `extends: system-mib.yml`: an
+`extends` reference naming a bare filename always resolves to the bundled
+profile of that name. The backend logs a warning naming the path that would
+have replaced the bundled profile, so check the log after adding an override.
+
+Adding a profile for a device the bundled set does not cover needs no matching
+bundled path. Its filename appears nowhere in the bundled set, so it replaces
+nothing by design and loads without a warning.
 
 Where an override and a bundled profile claim the same `sysobjectid`, the
 override wins and the collision is logged.
