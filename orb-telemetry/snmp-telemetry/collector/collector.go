@@ -456,6 +456,44 @@ func (c *MetricsCollector) reportUnsupportedConversions(profile *profiles.Profil
 		for i := range entry.Symbols {
 			warn(&entry.Symbols[i])
 		}
+		c.reportUnusableConditions(entry, name)
+	}
+}
+
+// reportUnusableConditions reports a condition the collector cannot apply.
+// Whether a condition parses, carries an integer and names a sibling symbol is
+// a property of the profile, not of the device, so it is reported here once
+// rather than on every collection. The collection path logs the same cases at
+// debug level.
+func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, profileName string) {
+	if len(entry.Symbols) == 0 {
+		return
+	}
+	known := make(map[string]struct{}, len(entry.Symbols))
+	for _, sym := range entry.Symbols {
+		known[sym.Name] = struct{}{}
+	}
+	for _, sym := range entry.Symbols {
+		if sym.Condition == "" {
+			continue
+		}
+		reason := ""
+		parts := strings.SplitN(sym.Condition, "=", 2)
+		switch {
+		case len(parts) != 2:
+			reason = "not a name=value pair"
+		default:
+			if _, err := strconv.ParseInt(strings.TrimSpace(parts[1]), 10, 64); err != nil {
+				reason = "value is not an integer"
+			} else if _, ok := known[strings.TrimSpace(parts[0])]; !ok {
+				reason = "names no symbol in this entry"
+			}
+		}
+		if reason != "" {
+			c.logger.Warn("Ignoring condition this collector cannot apply",
+				"condition", sym.Condition, "reason", reason,
+				"symbol", sym.Name, "profile", profileName)
+		}
 	}
 }
 
@@ -613,19 +651,19 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		}
 		parts := strings.SplitN(st.sym.Condition, "=", 2)
 		if len(parts) != 2 {
-			c.logger.Warn("Ignoring malformed condition", "symbol", st.sym.Name, "condition", st.sym.Condition)
+			c.logger.Debug("Ignoring malformed condition", "symbol", st.sym.Name, "condition", st.sym.Condition)
 			continue
 		}
 		refName := strings.TrimSpace(parts[0])
 		expectedStr := strings.TrimSpace(parts[1])
 		expected, err := strconv.ParseInt(expectedStr, 10, 64)
 		if err != nil {
-			c.logger.Warn("Ignoring condition with non-integer value", "symbol", st.sym.Name, "condition", st.sym.Condition)
+			c.logger.Debug("Ignoring condition with non-integer value", "symbol", st.sym.Name, "condition", st.sym.Condition)
 			continue
 		}
 		refOID, ok := symOIDByName[refName]
 		if !ok {
-			c.logger.Warn("Condition references unknown symbol", "symbol", st.sym.Name, "ref", refName)
+			c.logger.Debug("Condition references unknown symbol", "symbol", st.sym.Name, "ref", refName)
 			continue
 		}
 		conditions[st.sym.OID] = conditionCheck{columnOID: refOID, expected: expected}

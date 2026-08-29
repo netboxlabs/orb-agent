@@ -1685,3 +1685,38 @@ func TestCollectTarget_TableMetricWalksStopAtTheDeadline(t *testing.T) {
 	assert.Contains(t, w.walkCalls, firstOID)
 	assert.NotContains(t, w.walkCalls, secondOID, "a metric column walked after the deadline expired")
 }
+
+// TestReportUnusableConditions_OncePerProfile pins that a condition the
+// collector cannot apply is reported once for the profile rather than on every
+// collection. The bundled Cisco Firepower entry names a metric tag column and
+// compares a string, neither of which the condition parser resolves.
+func TestReportUnusableConditions_OncePerProfile(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	entry := profiles.MetricEntry{
+		Symbols: []profiles.Symbol{
+			{Name: "used", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.18", Condition: "cempMemPoolName=DP System memory"},
+			{Name: "free", OID: "1.3.6.1.4.1.9.9.221.1.1.1.1.20"},
+		},
+	}
+	c := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
+
+	for range 3 {
+		c.reportUnusableConditions(entry, "cisco/cisco-firepower.yml")
+	}
+	require.Equal(t, 3, strings.Count(buf.String(), "cannot apply"),
+		"the helper itself reports every call; the once-per-profile guard lives in reportUnsupportedConversions")
+
+	buf.Reset()
+	p := &profiles.Profile{RelPath: "cisco/cisco-firepower.yml", Metrics: []profiles.MetricEntry{entry}}
+	c2 := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
+	for range 3 {
+		c2.reportUnsupportedConversions(p)
+	}
+	require.Equal(t, 1, strings.Count(buf.String(), "cannot apply"),
+		"three collections of one profile must report the condition once")
+	// The Firepower condition compares a string, so it fails the integer check
+	// before the symbol lookup is ever reached.
+	require.Contains(t, buf.String(), "value is not an integer")
+}
