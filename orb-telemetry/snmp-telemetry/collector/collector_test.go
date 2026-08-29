@@ -1545,3 +1545,143 @@ func TestCollectTarget_TableSymbolNamingOneInstanceHasNoRowIndex(t *testing.T) {
 	assert.Equal(t, int64(555), pts[0].value)
 	assert.Empty(t, attrValue(pts[0], "row_index"))
 }
+
+// ---------------------------------------------------------------------------
+// Table collection stops at the deadline
+// ---------------------------------------------------------------------------
+
+// A table entry's tag columns are walked one at a time and one bundled
+// wireless-controller entry declares 23 of them. A run whose deadline has
+// expired must not keep issuing them, or an unavailable device holds the
+// runner for a further per-request timeout each.
+func TestCollectTarget_TableTagWalksStopAtTheDeadline(t *testing.T) {
+	const (
+		host        = "10.0.0.64"
+		sysObjValue = "1.3.6.1.4.1.9999.64"
+		tableOID    = "1.3.6.1.4.1.9999.64.1"
+		errColOID   = "1.3.6.1.4.1.9999.64.1.1.4"
+	)
+	tagOIDs := []string{
+		"1.3.6.1.4.1.9999.64.1.1.1",
+		"1.3.6.1.4.1.9999.64.1.1.2",
+		"1.3.6.1.4.1.9999.64.1.1.3",
+	}
+	tags := make([]profiles.MetricTag, len(tagOIDs))
+	responses := map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		errColOID:      {errColOID + ".1": counter32PDU(errColOID+".1", 7)},
+	}
+	for i, oid := range tagOIDs {
+		tags[i] = profiles.MetricTag{Tag: fmt.Sprintf("t%d", i), Column: &profiles.TagColumn{OID: oid}}
+		responses[oid] = map[string]snmp.PDU{oid + ".1": stringPDU(oid+".1", "v")}
+	}
+	p := profileWithOID(sysObjValue, "wide.yml", []profiles.MetricEntry{{
+		Table:      &profiles.Table{Name: "wide", OID: tableOID},
+		Symbols:    []profiles.Symbol{{Name: "ifOutErrors", OID: errColOID}},
+		MetricTags: tags,
+	}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &recordingWalker{responses: responses}
+	w.onWalk = func(oid string) {
+		if oid == tagOIDs[0] {
+			cancel()
+		}
+	}
+
+	c := newCollector(walkerFactory(w), p)
+	require.ErrorIs(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}), context.Canceled)
+
+	assert.Contains(t, w.walkCalls, tagOIDs[0])
+	for _, oid := range tagOIDs[1:] {
+		assert.NotContains(t, w.walkCalls, oid, "a tag column walked after the deadline expired")
+	}
+	assert.NotContains(t, w.walkCalls, errColOID, "rows must not be collected once their tags are incomplete")
+}
+
+// A condition names a second column to walk, and one entry can carry several.
+func TestCollectTarget_TableConditionWalksStopAtTheDeadline(t *testing.T) {
+	const (
+		host        = "10.0.0.65"
+		sysObjValue = "1.3.6.1.4.1.9999.65"
+		tableOID    = "1.3.6.1.4.1.9999.65.1"
+		usedOID     = "1.3.6.1.4.1.9999.65.1.1.1"
+		sizeOID     = "1.3.6.1.4.1.9999.65.1.1.2"
+		typeOID     = "1.3.6.1.4.1.9999.65.1.1.3"
+		stateOID    = "1.3.6.1.4.1.9999.65.1.1.4"
+	)
+	p := profileWithOID(sysObjValue, "cond.yml", []profiles.MetricEntry{{
+		Table: &profiles.Table{Name: "pools", OID: tableOID},
+		Symbols: []profiles.Symbol{
+			{Name: "poolUsed", OID: usedOID, Condition: "poolType=10"},
+			{Name: "poolSize", OID: sizeOID, Condition: "poolState=1"},
+			{Name: "poolType", OID: typeOID},
+			{Name: "poolState", OID: stateOID},
+		},
+	}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		typeOID:        {typeOID + ".1": intPDU(typeOID+".1", 10)},
+		stateOID:       {stateOID + ".1": intPDU(stateOID+".1", 1)},
+		usedOID:        {usedOID + ".1": intPDU(usedOID+".1", 100)},
+		sizeOID:        {sizeOID + ".1": intPDU(sizeOID+".1", 200)},
+	}}
+	w.onWalk = func(oid string) {
+		if oid == typeOID {
+			cancel()
+		}
+	}
+
+	c := newCollector(walkerFactory(w), p)
+	require.ErrorIs(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}), context.Canceled)
+
+	assert.Contains(t, w.walkCalls, typeOID)
+	assert.NotContains(t, w.walkCalls, stateOID, "a condition column walked after the deadline expired")
+	assert.NotContains(t, w.walkCalls, usedOID, "rows must not be collected once their filter is incomplete")
+}
+
+// The metric columns are walked one at a time too. A column the device does
+// not answer yields no PDUs, so a deadline check inside the row loop alone
+// never runs and the next column is walked regardless.
+func TestCollectTarget_TableMetricWalksStopAtTheDeadline(t *testing.T) {
+	const (
+		host        = "10.0.0.66"
+		sysObjValue = "1.3.6.1.4.1.9999.66"
+		tableOID    = "1.3.6.1.4.1.9999.66.1"
+		firstOID    = "1.3.6.1.4.1.9999.66.1.1.1"
+		secondOID   = "1.3.6.1.4.1.9999.66.1.1.2"
+	)
+	p := profileWithOID(sysObjValue, "cols.yml", []profiles.MetricEntry{{
+		Table: &profiles.Table{Name: "cols", OID: tableOID},
+		Symbols: []profiles.Symbol{
+			{Name: "ifInErrors", OID: firstOID},
+			{Name: "ifOutErrors", OID: secondOID},
+		},
+	}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// firstOID has no entry, so the walk returns no PDUs at all.
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		secondOID:      {secondOID + ".1": counter32PDU(secondOID+".1", 3)},
+	}}
+	w.onWalk = func(oid string) {
+		if oid == firstOID {
+			cancel()
+		}
+	}
+
+	c := newCollector(walkerFactory(w), p)
+	require.ErrorIs(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}), context.Canceled)
+
+	assert.Contains(t, w.walkCalls, firstOID)
+	assert.NotContains(t, w.walkCalls, secondOID, "a metric column walked after the deadline expired")
+}

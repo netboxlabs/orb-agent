@@ -279,6 +279,14 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		}
 	}
 
+	// A deadline that expires inside the last entry truncates the run as much
+	// as one that expires between entries, and the table path returns without
+	// an error of its own. Checking once more here fails the run either way
+	// rather than persisting half a profile as if it were complete.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Rebuild the device store:
 	// - throttled metrics: carry last-known value forward (poll not yet due)
 	// - polled metrics: use fresh values from localBuf (empty = device doesn't support that OID)
@@ -542,6 +550,12 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	rowTags := make(map[string]map[string]string)
 	var joinedTags []joinedTag
 	for i := range entry.MetricTags {
+		// Each uncached column is a request of its own and one entry can
+		// declare a couple of dozen. Returning here leaves the entry's rows
+		// uncollected rather than emitting them with their tags half applied.
+		if ctx.Err() != nil {
+			return
+		}
 		mt := &entry.MetricTags[i]
 		col := metricTagColumn(mt)
 		if col == nil || col.OID == "" {
@@ -589,6 +603,11 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	conditionRowVals := make(map[string]map[string]int64)
 	conditions := make(map[string]conditionCheck)
 	for _, st := range states {
+		// A condition names a column of its own to walk. Returning here leaves
+		// the rows uncollected rather than emitting them unfiltered.
+		if ctx.Err() != nil {
+			return
+		}
 		if st.throttled || st.sym.Condition == "" {
 			continue
 		}
@@ -635,6 +654,11 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 
 	// --- Phase 5: collect active metric columns ---
 	for _, st := range states {
+		// The check inside the row loop below does not cover a column the
+		// device answers with nothing, so the deadline is checked per column.
+		if ctx.Err() != nil {
+			return
+		}
 		if st.throttled {
 			continue
 		}
