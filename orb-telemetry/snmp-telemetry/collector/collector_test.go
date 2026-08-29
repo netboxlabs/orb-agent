@@ -1521,6 +1521,78 @@ func TestCollectTarget_SupportedConversionsAreNotReported(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Symbols the collector cannot collect at all
+// ---------------------------------------------------------------------------
+
+// TestCollectTarget_SymbolWithNoOIDIsNotWalked uses the bundled Call Manager
+// profile, whose SIP trunk entry ends in a symbol with an empty OID. gosnmp
+// reads an empty root as the whole .1.3.6.1 subtree, so issuing that walk one
+// PDU at a time can burn the entire collection deadline, and the run that
+// misses the deadline leaves nothing behind for the device.
+func TestCollectTarget_SymbolWithNoOIDIsNotWalked(t *testing.T) {
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.9.1.1348")},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "cisco/cisco-call-manager.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p1", DialOptions{}))
+
+	for _, oid := range w.walkCalls {
+		require.NotEqual(t, "", oid, "an empty OID was walked, which gosnmp reads as the whole tree")
+	}
+}
+
+// TestCollectTarget_SymbolWithNoOIDIsReportedOnce checks the operator is told
+// which profile carries the malformed symbol, and told once for the life of the
+// process rather than on every collection cycle.
+func TestCollectTarget_SymbolWithNoOIDIsReportedOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.9.1.1348")},
+	}}
+	p := bundledProfile(t, "cisco/cisco-call-manager.yml")
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.1"), mustAuth(), "p1", DialOptions{}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.2"), mustAuth(), "p1", DialOptions{}))
+
+	var matched []string
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(line, "declares no OID") {
+			matched = append(matched, line)
+		}
+	}
+	require.Len(t, matched, 1, "logs: %s", logs.String())
+	assert.Contains(t, matched[0], "profile=cisco/cisco-call-manager.yml")
+}
+
+// TestCollectTarget_SymbolWithNoOIDIsNotCollected pins the scalar path too: a
+// symbol with no OID produces no request and no metric.
+func TestCollectTarget_SymbolWithNoOIDIsNotCollected(t *testing.T) {
+	const (
+		host        = "10.0.0.70"
+		goodOID     = "1.3.6.1.4.1.9999.70.1.0"
+		sysObjValue = "1.3.6.1.4.1.9999.70"
+	)
+	p := profileWithOID(sysObjValue, "empty-oid.yml", []profiles.MetricEntry{
+		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{Name: "goodMetric", OID: goodOID}},
+		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{Name: "brokenMetric"}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		goodOID:        {goodOID: intPDU(goodOID, 4)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	require.Len(t, store["snmp.goodmetric"], 1)
+	assert.Empty(t, store["snmp.brokenmetric"])
+	assert.NotContains(t, w.walkCalls, "")
+}
+
 // TestPduToString_HexToIntTagColumn covers a tag column declaring a hextoint
 // conversion, as brocade-fc-switch.yml does for portIndex. Without the
 // conversion the raw octets render as text, which looks like a value.
@@ -1832,13 +1904,13 @@ func TestReportUnusableConditions_OncePerProfile(t *testing.T) {
 		c.reportUnusableConditions(entry, "vendor/example.yml")
 	}
 	require.Equal(t, 3, strings.Count(buf.String(), "cannot apply"),
-		"the helper itself reports every call; the once-per-profile guard lives in reportUnsupportedConversions")
+		"the helper itself reports every call; the once-per-profile guard lives in reviewProfile")
 
 	buf.Reset()
 	p := &profiles.Profile{RelPath: "vendor/example.yml", Metrics: []profiles.MetricEntry{entry}}
 	c2 := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
 	for range 3 {
-		c2.reportUnsupportedConversions(p)
+		c2.reviewProfile(p)
 	}
 	require.Equal(t, 1, strings.Count(buf.String(), "cannot apply"),
 		"three collections of one profile must report the condition once")

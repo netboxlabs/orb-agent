@@ -264,7 +264,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		return nil
 	}
 	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
-	c.reportUnsupportedConversions(profile)
+	c.reviewProfile(profile)
 
 	baseAttrs := c.appendDeviceTags(ctx, walker, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
 
@@ -432,6 +432,18 @@ func firstTagValue(pdus map[string]snmp.PDU, col *profiles.TagColumn) string {
 	return ""
 }
 
+// unusableSymbolReason says why a symbol can produce no metric at all, or ""
+// when it can. The collection path skips exactly these symbols and the
+// once-per-profile review names exactly these, so the two cannot disagree.
+func unusableSymbolReason(sym *profiles.Symbol) string {
+	if strings.TrimSpace(sym.OID) == "" {
+		// gosnmp reads an empty root as the whole .1.3.6.1 subtree, so the walk
+		// can consume the collection deadline on its own.
+		return "declares no OID"
+	}
+	return ""
+}
+
 // supportedConversion reports whether pduToValue implements the conversion a
 // symbol declares. An empty conversion is the plain numeric path.
 //
@@ -445,14 +457,15 @@ func supportedConversion(conversion string) bool {
 	return strings.HasPrefix(conversion, "hextoint:") || strings.HasPrefix(conversion, "regexp:")
 }
 
-// reportUnsupportedConversions warns about every symbol in a matched profile
-// that declares a conversion pduToValue does not implement. Such a symbol never
-// produces a metric, and without this nothing says why it is missing.
+// reviewProfile warns about every declaration in a matched profile that the
+// collector cannot act on: a symbol it skips outright, a conversion pduToValue
+// does not implement, and a condition it cannot resolve. Each of those leaves a
+// metric missing or unfiltered, and without this nothing says why.
 //
 // A profile is reviewed the first time a device matches it and never again, so
 // the warnings appear once for the life of the process however many devices
 // carry the profile and however often they are polled.
-func (c *MetricsCollector) reportUnsupportedConversions(profile *profiles.Profile) {
+func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 	name := profile.RelPath
 	if name == "" {
 		name = profile.FileName
@@ -468,6 +481,11 @@ func (c *MetricsCollector) reportUnsupportedConversions(profile *profiles.Profil
 	}
 
 	warn := func(sym *profiles.Symbol) {
+		if reason := unusableSymbolReason(sym); reason != "" {
+			c.logger.Warn("Skipping metric: SNMP profile declares a symbol this collector cannot collect",
+				"reason", reason, "symbol", sym.Name, "oid", sym.OID, "profile", name)
+			return
+		}
 		if supportedConversion(sym.Conversion) {
 			return
 		}
@@ -512,6 +530,11 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 // answers before any point is written. Without the identity every row carries
 // the same attribute set and the export keeps one arbitrary value.
 func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
+	if unusableSymbolReason(sym) != "" {
+		// Reported once per profile by reviewProfile. Skipping before the walk
+		// is what keeps an empty OID from being issued as a whole-tree walk.
+		return
+	}
 	metricName := buildMetricName(sym.Name)
 	if !c.isPollReady(key, sym.OID, sym.PollTimeSec) {
 		throttledMetrics[metricName] = struct{}{}
@@ -674,15 +697,20 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		sym       *profiles.Symbol
 		throttled bool
 	}
-	states := make([]symState, len(entry.Symbols))
+	states := make([]symState, 0, len(entry.Symbols))
 	anyActive := false
 	for i := range entry.Symbols {
 		sym := &entry.Symbols[i]
+		if unusableSymbolReason(sym) != "" {
+			// Reported once per profile by reviewProfile. Left out of states, so
+			// it neither drives a walk nor carries a previous value forward.
+			continue
+		}
 		if c.isPollReady(key, sym.OID, sym.PollTimeSec) {
-			states[i] = symState{sym: sym, throttled: false}
+			states = append(states, symState{sym: sym, throttled: false})
 			anyActive = true
 		} else {
-			states[i] = symState{sym: sym, throttled: true}
+			states = append(states, symState{sym: sym, throttled: true})
 			throttledMetrics[buildMetricName(sym.Name)] = struct{}{}
 		}
 	}
