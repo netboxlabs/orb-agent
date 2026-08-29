@@ -26,9 +26,31 @@ func (s *SlogAdapter) Printf(format string, v ...any) {
 	s.logger.Debug(fmt.Sprintf(format, v...))
 }
 
+// maxRepetitions is the batch size of a GETBULK request.
+//
+// The tradeoff is response size. gosnmp falls back to 50 and its own
+// documentation warns some agents cannot answer that many; such an agent
+// replies TooBig, which ends the walk early and collects less than a GETNEXT
+// walk would have. 25 halves the reply, matches the default Prometheus
+// snmp_exporter ships, and still fetches a thousand-row table in tens of round
+// trips rather than thousands.
+const maxRepetitions uint32 = 25
+
 // Client wraps gosnmp.GoSNMP to implement the Walker interface
 type Client struct {
 	*gosnmp.GoSNMP
+	// bulkWalk arms GETBULK for subsequent walks. It starts off: the first
+	// walks of a collection read sysObjectID and sysDescr, which is how the
+	// profile that decides this is chosen.
+	bulkWalk bool
+}
+
+// SetBulkWalk implements the Walker interface by arming or disarming GETBULK.
+//
+// SNMPv1 has no GETBULK and gosnmp fails such a request outright rather than
+// falling back, so a v1 client stays on GETNEXT whatever the profile asks for.
+func (c *Client) SetBulkWalk(enabled bool) {
+	c.bulkWalk = enabled && c.Version != gosnmp.Version1
 }
 
 // Close implements the Walker interface by closing the SNMP connection
@@ -39,9 +61,17 @@ func (c *Client) Close() error {
 	return nil
 }
 
-// Walk implements the Walker interface by walking the SNMP tree
+// Walk implements the Walker interface by walking the SNMP tree.
+//
+// A bulk walk fetches maxRepetitions values per request where a GETNEXT walk
+// costs one request per value, which is the difference between tens and
+// thousands of round trips on the multi-column tables the profiles carry.
 func (c *Client) Walk(objectID string, _ int) (map[string]PDU, error) {
-	pdu, err := c.WalkAll(objectID)
+	walkAll := c.WalkAll
+	if c.bulkWalk {
+		walkAll = c.BulkWalkAll
+	}
+	pdu, err := walkAll(objectID)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +121,7 @@ func NewClient(ctx context.Context, host string, port uint16, retries int, timeo
 	switch authentication.ProtocolVersion {
 	case ProtocolVersion1:
 		return &Client{
-			&gosnmp.GoSNMP{
+			GoSNMP: &gosnmp.GoSNMP{
 				Target:    host,
 				Port:      port,
 				Context:   ctx,
@@ -104,15 +134,16 @@ func NewClient(ctx context.Context, host string, port uint16, retries int, timeo
 		}, nil
 	case ProtocolVersion2c:
 		return &Client{
-			&gosnmp.GoSNMP{
-				Target:    host,
-				Port:      port,
-				Context:   ctx,
-				Community: authentication.Community,
-				Version:   gosnmp.Version2c,
-				Timeout:   timeout,
-				Retries:   retries,
-				Logger:    gosnmpLogger,
+			GoSNMP: &gosnmp.GoSNMP{
+				Target:         host,
+				Port:           port,
+				Context:        ctx,
+				Community:      authentication.Community,
+				Version:        gosnmp.Version2c,
+				Timeout:        timeout,
+				Retries:        retries,
+				MaxRepetitions: maxRepetitions,
+				Logger:         gosnmpLogger,
 			},
 		}, nil
 	case ProtocolVersion3:
@@ -134,17 +165,18 @@ func NewClient(ctx context.Context, host string, port uint16, retries int, timeo
 			msgFlags = gosnmp.AuthPriv
 		}
 		return &Client{
-			&gosnmp.GoSNMP{
-				Target:        host,
-				Port:          port,
-				Context:       ctx,
-				Version:       gosnmp.Version3,
-				Timeout:       timeout,
-				Retries:       retries,
-				MsgFlags:      msgFlags,
-				SecurityModel: gosnmp.UserSecurityModel,
-				ContextName:   authentication.ContextName,
-				Logger:        gosnmpLogger,
+			GoSNMP: &gosnmp.GoSNMP{
+				Target:         host,
+				Port:           port,
+				Context:        ctx,
+				Version:        gosnmp.Version3,
+				Timeout:        timeout,
+				Retries:        retries,
+				MaxRepetitions: maxRepetitions,
+				MsgFlags:       msgFlags,
+				SecurityModel:  gosnmp.UserSecurityModel,
+				ContextName:    authentication.ContextName,
+				Logger:         gosnmpLogger,
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,
 					AuthenticationProtocol:   authProtocol,
@@ -217,6 +249,10 @@ func getPrivProtocol(privProtocol string) (gosnmp.SnmpV3PrivProtocol, error) {
 // Walker interface defines methods for walking SNMP trees
 type Walker interface {
 	Walk(objectID string, identifierSize int) (map[string]PDU, error)
+	// SetBulkWalk selects the request type subsequent walks issue. It is a
+	// method rather than a dial option because the profile that decides it is
+	// only known once sysObjectID has been read from the device.
+	SetBulkWalk(enabled bool)
 	Connect() error
 	Close() error
 }

@@ -140,3 +140,77 @@ func TestTagColumn_MatchAttributesAreDeserialized(t *testing.T) {
 	assert.Equal(t, map[string][]string{"entPhysicalName": {"Board"}}, filters(t, "hp/hp-h3c-switch.yml"))
 	assert.Equal(t, map[string][]string{"loadDescr": {"1 Minute Average"}}, filters(t, "ubiquiti/unifi-access-point.yml"))
 }
+
+// ---------------------------------------------------------------------------
+// no_use_bulkwalkall
+// ---------------------------------------------------------------------------
+
+// A profile that disables bulk walking says so with `no_use_bulkwalkall`, and
+// the field has to survive both parsing and the extends merge. A profile whose
+// flag is dropped is bulk walked against an agent that was declared unable to
+// answer a GETBULK.
+func TestProfile_NoUseBulkWalkAllDeserializes(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	var disabled []string
+	for _, p := range all {
+		if p.NoUseBulkWalkAll {
+			disabled = append(disabled, p.RelPath)
+		}
+	}
+	// The bundled set declares the field five times, at profile level only:
+	// true in these three, false in nutanix/nutanix.yml and
+	// vmware/vmware-nsx.yml, where false is also the zero value.
+	assert.Equal(t, []string{
+		"_general/net-snmp.yml",
+		"elemental/elemental-device.yml",
+		"sunbird/power-iq.yml",
+	}, disabled)
+
+	nutanix, err := l.Resolve("nutanix/nutanix.yml")
+	require.NoError(t, err)
+	assert.False(t, nutanix.NoUseBulkWalkAll)
+}
+
+// The flag describes the agent, so a profile that inherits from one carrying it
+// inherits the restriction. Merging the other way would bulk walk a device a
+// profile in its own chain said not to.
+func TestResolve_NoUseBulkWalkAllInheritsFromParent(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "base.yml", `
+no_use_bulkwalkall: true
+metrics:
+  - symbol:
+      name: sysUpTime
+      OID: 1.3.6.1.2.1.1.3.0
+`)
+	writeYAML(t, dir, "child.yml", `
+extends:
+  - base.yml
+sysobjectid: 1.3.6.1.4.1.8072.3.2.10
+`)
+	writeYAML(t, dir, "own.yml", `
+no_use_bulkwalkall: true
+sysobjectid: 1.3.6.1.4.1.8072.3.2.11
+`)
+	writeYAML(t, dir, "plain.yml", `
+sysobjectid: 1.3.6.1.4.1.8072.3.2.12
+`)
+	l, err := NewLoader(dir, silentLogger)
+	require.NoError(t, err)
+
+	for name, want := range map[string]bool{
+		"base.yml":  true,
+		"child.yml": true,
+		"own.yml":   true,
+		"plain.yml": false,
+	} {
+		p, err := l.Resolve(name)
+		require.NoError(t, err)
+		assert.Equal(t, want, p.NoUseBulkWalkAll, "profile %q", name)
+	}
+}

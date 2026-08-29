@@ -173,6 +173,15 @@ profile. `powerset_status` is the only conversion the bundled set declares that
 the collector does not implement, on the APC UPS `upsBasicStateOutputState`
 symbol.
 
+Once a profile matches, its tables are walked with GETBULK, 25 values per
+request, rather than one GETNEXT per value. A profile that sets
+`no_use_bulkwalkall: true` is walked with GETNEXT instead, and so is everything
+that `extends` it; the bundled set uses this for `_general/net-snmp.yml`,
+`elemental/elemental-device.yml` and `sunbird/power-iq.yml`. SNMPv1 has no
+GETBULK, so a v1 target always uses GETNEXT. The two walks that read
+`sysObjectID` and `sysDescr` come before a profile is known and use GETNEXT
+as well.
+
 The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the
 Apache 2.0 license. See [profiles/PROVENANCE.md](./profiles/PROVENANCE.md)

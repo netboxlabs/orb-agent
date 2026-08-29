@@ -40,12 +40,25 @@ type recordingWalker struct {
 	// walkErrs maps OID -> error returned instead of PDUs, so a test can fail
 	// one request of a run that otherwise succeeds.
 	walkErrs map[string]error
+	// bulkWalk is the walk mode currently selected, and bulkByOID records the
+	// mode each walk was issued under. A double that answered the same however
+	// it was asked would hide a regression from GETBULK back to GETNEXT.
+	bulkWalk  bool
+	bulkByOID map[string]bool
 }
 
 func (r *recordingWalker) Connect() error { return nil }
 func (r *recordingWalker) Close() error   { return nil }
+func (r *recordingWalker) SetBulkWalk(enabled bool) {
+	r.bulkWalk = enabled
+}
+
 func (r *recordingWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
 	r.walkCalls = append(r.walkCalls, oid)
+	if r.bulkByOID == nil {
+		r.bulkByOID = make(map[string]bool)
+	}
+	r.bulkByOID[oid] = r.bulkWalk
 	if r.onWalk != nil {
 		r.onWalk(oid)
 	}
@@ -2981,4 +2994,77 @@ func TestCollectTarget_BundledCSRSourceAddressRendersAsAnIP(t *testing.T) {
 	pts := c.testDeviceStore("p", host)["snmp.rttmonlatestrttopercompletiontime"]
 	require.Len(t, pts, 1)
 	assert.Equal(t, "172.16.5.9", attrValue(pts[0], "rtt_echo_source_address"))
+}
+
+// ---------------------------------------------------------------------------
+// GETBULK
+// ---------------------------------------------------------------------------
+
+// bulkWalkFixture is a device with one table column and enough of a profile to
+// match it.
+func bulkWalkFixture(sysObjValue, colOID string) (*profiles.Profile, *recordingWalker) {
+	p := profileWithOID(sysObjValue, "bulk.yml", []profiles.MetricEntry{
+		{Symbols: []profiles.Symbol{{Name: "ifInOctets", OID: colOID}}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		colOID:         {colOID + ".1": counter32PDU(colOID+".1", 4096)},
+	}}
+	return p, w
+}
+
+// A profile that says nothing about bulk walking gets GETBULK for its tables.
+// The two walks that choose the profile come first and cannot: nothing yet
+// says the device tolerates a GETBULK.
+func TestCollectTarget_BulkWalksTheProfileTables(t *testing.T) {
+	const (
+		host        = "10.0.0.90"
+		sysObjValue = "1.3.6.1.4.1.9999.90"
+		colOID      = "1.3.6.1.2.1.2.2.1.10"
+	)
+	p, w := bulkWalkFixture(sysObjValue, colOID)
+	c := newCollector(walkerFactory(w), p)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, map[string]bool{
+		sysObjectIDOID: false,
+		sysDescrOID:    false,
+		colOID:         true,
+	}, w.bulkByOID)
+}
+
+// A profile carrying `no_use_bulkwalkall` describes an agent that answers
+// GETBULK badly, so every walk of the run stays on GETNEXT.
+func TestCollectTarget_ProfileDisablingBulkWalkKeepsGetNext(t *testing.T) {
+	const (
+		host        = "10.0.0.91"
+		sysObjValue = "1.3.6.1.4.1.8072.3.2.10"
+		colOID      = "1.3.6.1.2.1.2.2.1.10"
+	)
+	p, w := bulkWalkFixture(sysObjValue, colOID)
+	p.NoUseBulkWalkAll = true
+	c := newCollector(walkerFactory(w), p)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, map[string]bool{
+		sysObjectIDOID: false,
+		sysDescrOID:    false,
+		colOID:         false,
+	}, w.bulkByOID)
+}
+
+// A device no profile matches is never bulk walked: the run ends at the two
+// walks that failed to identify it.
+func TestCollectTarget_UnmatchedDeviceIsNeverBulkWalked(t *testing.T) {
+	const host = "10.0.0.92"
+	_, w := bulkWalkFixture("1.3.6.1.4.1.9999.92", "1.3.6.1.2.1.2.2.1.10")
+	c := newCollector(walkerFactory(w), nil)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.False(t, w.bulkWalk)
+	assert.Equal(t, map[string]bool{sysObjectIDOID: false, sysDescrOID: false}, w.bulkByOID)
 }

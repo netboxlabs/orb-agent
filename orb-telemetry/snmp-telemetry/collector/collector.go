@@ -285,6 +285,11 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
 	c.reviewProfile(profile)
 
+	// Everything from here walks the profile's tables, which is where the round
+	// trips are. The two walks above chose the profile, so this is the first
+	// point at which the device's tolerance for GETBULK is known.
+	walker.SetBulkWalk(!profile.NoUseBulkWalkAll)
+
 	baseAttrs := c.appendDeviceTags(ctx, walker, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
 
 	// localBuf accumulates fresh observations for this run.

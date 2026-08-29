@@ -240,13 +240,14 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 	defer delete(l.resolving, key)
 
 	merged := &Profile{
-		FileName:        p.FileName,
-		RelPath:         p.RelPath,
-		Origin:          p.Origin,
-		ReplacesBundled: p.ReplacesBundled,
-		Provider:        p.Provider,
-		SysObjectID:     p.SysObjectID,
-		Matches:         p.Matches,
+		FileName:         p.FileName,
+		RelPath:          p.RelPath,
+		Origin:           p.Origin,
+		ReplacesBundled:  p.ReplacesBundled,
+		Provider:         p.Provider,
+		SysObjectID:      p.SysObjectID,
+		Matches:          p.Matches,
+		NoUseBulkWalkAll: p.NoUseBulkWalkAll,
 	}
 
 	// Resolve and merge parent profiles (extends) first
@@ -267,6 +268,11 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 		// profiles can end up sharing an array.
 		merged.Metrics = prepend(parent.Metrics, merged.Metrics)
 		merged.MetricTags = prepend(parent.MetricTags, merged.MetricTags)
+		// The flag describes the agent rather than one metric, so a parent that
+		// disables bulk walking disables it for everything extending it. A
+		// child cannot clear it: the zero value is indistinguishable from an
+		// absent field, so letting a child win would clear it everywhere.
+		merged.NoUseBulkWalkAll = merged.NoUseBulkWalkAll || parent.NoUseBulkWalkAll
 	}
 
 	// Append this profile's own metrics/tags after parent's. merged.Metrics

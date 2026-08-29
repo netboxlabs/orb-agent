@@ -60,6 +60,9 @@ type Profile struct {
 	Provider    string            `yaml:"provider"`
 	SysObjectID StringOrSlice     `yaml:"sysobjectid"`
 	Matches     map[string]string `yaml:"matches"`
+	// NoUseBulkWalkAll marks an agent that answers GETBULK badly or not at all.
+	// A profile that sets it is walked with GETNEXT, one request per value.
+	NoUseBulkWalkAll bool `yaml:"no_use_bulkwalkall"`
 
 	Metrics    []MetricEntry `yaml:"metrics"`
 	MetricTags []MetricTag   `yaml:"metric_tags"`
