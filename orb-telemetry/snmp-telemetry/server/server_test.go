@@ -21,11 +21,21 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/server"
 )
 
+// testProfilesRoot is the directory the policies below name their override
+// inside. A policy-supplied profiles_dir is confined to a root the operator
+// sets, so a server built without one accepts no override at all.
+func testProfilesRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs("..")
+	require.NoError(t, err)
+	return root
+}
+
 func newTestServer(t *testing.T) *server.Server {
 	t.Helper()
 	ctx := context.Background()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	manager := policy.NewManager(ctx, logger, policy.Options{})
+	manager := policy.NewManager(ctx, logger, policy.Options{ProfilesRoot: testProfilesRoot(t)})
 	return server.NewServer("localhost", 8078, logger, manager, "1.0.0")
 }
 
@@ -43,10 +53,9 @@ func TestGetPolicies_Empty(t *testing.T) {
 func TestGetPolicies_WithPolicy(t *testing.T) {
 	srv := newTestServer(t)
 
-	// A policy-supplied profiles_dir may not walk upward, so the sibling
-	// directory this test overlays is named absolutely.
-	profilesDir, err := filepath.Abs("../profiles/snmp-profiles")
-	require.NoError(t, err)
+	// A policy-supplied profiles_dir is confined to the server's profiles root,
+	// so the bundled tree this test overlays is named inside it.
+	profilesDir := filepath.Join(testProfilesRoot(t), "profiles", "snmp-profiles")
 
 	body := fmt.Appendf(nil, `
 policies:
@@ -157,8 +166,7 @@ func padPolicyTo(t *testing.T, body []byte, n int) []byte {
 
 func validPolicy(t *testing.T) []byte {
 	t.Helper()
-	profilesDir, err := filepath.Abs("../profiles/snmp-profiles")
-	require.NoError(t, err)
+	profilesDir := filepath.Join(testProfilesRoot(t), "profiles", "snmp-profiles")
 	return fmt.Appendf(nil, `
 policies:
   my-policy:
@@ -187,7 +195,8 @@ func postPolicy(t *testing.T, srv *server.Server, contentType string, body []byt
 }
 
 // io.ReadAll buffers the whole body before parsing, so an unbounded body lets a
-// single request exhaust the process. The listener defaults to 0.0.0.0.
+// single request exhaust the process, and the listener has no authentication in
+// front of it.
 func TestCreatePolicy_RejectsBodyOverTheLimit(t *testing.T) {
 	srv := newTestServer(t)
 

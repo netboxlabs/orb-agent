@@ -78,6 +78,11 @@ func main() {
 		"comma-separated environment variable names a policy may read through a ${NAME} "+
 			"reference in community, username, auth_passphrase or priv_passphrase. Empty, "+
 			"the default, rejects every reference.")
+	snmpProfilesRoot := flag.String("snmp-profiles-root", "",
+		"directory a policy's own profiles_dir must resolve inside. A policy names an absolute "+
+			"path under it, or one relative to it. Empty, the default, rejects every per-policy "+
+			"profiles_dir."+
+			" Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_ROOT})")
 	logLevel := flag.String("log-level", "INFO", "log level (DEBUG, INFO, WARN, ERROR)")
 	logFormat := flag.String("log-format", "TEXT", "log format (TEXT, JSON)")
 	help := flag.Bool("help", false, "show this help")
@@ -110,6 +115,7 @@ func main() {
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
+		ProfilesRoot:       env.ResolveEnvOrExit(*snmpProfilesRoot),
 		AllowedEnvVars:     splitList(*policyEnvVars),
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())

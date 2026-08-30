@@ -32,9 +32,10 @@ func TestManagerPolicyMapIsConcurrencySafe(t *testing.T) {
 	}
 
 	// Warm the shared collector so the goroutines below contend on the policies
-	// map rather than serialising on the profile load.
+	// map rather than serialising on the profile load. It stays running for the
+	// rest of the test: a profile set lives only while a policy uses it, so
+	// stopping this one here would put every worker back on a cold cache.
 	require.NoError(t, m.StartPolicy("warmup", policyFor("192.0.2.1")))
-	require.NoError(t, m.StopPolicy("warmup"))
 
 	const workers = 8
 	const rounds = 40
@@ -97,9 +98,11 @@ func (g *gatedCollector) unblock() {
 func TestStopPolicy_HoldsTheNameUntilTheRunnerHasStopped(t *testing.T) {
 	m := newTestManager()
 	// Warm the shared collector so StartPolicy below races on the name rather
-	// than on the profile load.
-	_, err := m.getOrCreateCollector("")
+	// than on the profile load. The reference is held for the whole test, since
+	// a profile set no policy is using is discarded.
+	_, err := m.acquireCollector("")
 	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector("") })
 
 	gate := newGatedCollector()
 	t.Cleanup(gate.unblock)
@@ -134,8 +137,11 @@ func TestStopPolicy_HoldsTheNameUntilTheRunnerHasStopped(t *testing.T) {
 // Hammer that one name to keep the reservation map honest under -race.
 func TestSameNameStartStopIsConcurrencySafe(t *testing.T) {
 	m := newTestManager()
-	_, err := m.getOrCreateCollector("")
+	// Warm the shared collector, and hold the reference for the whole test: a
+	// profile set no policy is using is discarded.
+	_, err := m.acquireCollector("")
 	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector("") })
 
 	const workers = 8
 	const rounds = 20
@@ -171,8 +177,11 @@ func TestSameNameStartStopIsConcurrencySafe(t *testing.T) {
 // runner unwinds.
 func TestStopPolicy_DoesNotBlockOtherNames(t *testing.T) {
 	m := newTestManager()
-	_, err := m.getOrCreateCollector("")
+	// Warm the shared collector, and hold the reference for the whole test: a
+	// profile set no policy is using is discarded.
+	_, err := m.acquireCollector("")
 	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector("") })
 
 	gate := newGatedCollector()
 	t.Cleanup(gate.unblock)

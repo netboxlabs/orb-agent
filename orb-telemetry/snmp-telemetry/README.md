@@ -46,6 +46,8 @@ Usage of snmp-telemetry:
     	server port (default 8078)
   -snmp-profiles-dir string
     	directory of ktranslate-compatible SNMP profile YAML files to overlay on the profiles bundled into the binary. Files here replace bundled ones with the same relative path; everything else is unaffected. Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_DIR})
+  -snmp-profiles-root string
+    	directory a policy's own profiles_dir must resolve inside. A policy names an absolute path under it, or one relative to it. Empty, the default, rejects every per-policy profiles_dir. Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_ROOT})
 ```
 
 ### Binding and access control
@@ -167,9 +169,31 @@ seconds.
 
 A policy can also set `profiles_dir` under `config` to overlay a directory of
 profiles for that policy only, instead of the one passed to
-`--snmp-profiles-dir`. That value arrives over the API, so a path containing
-`..` is rejected: give an absolute path, or one relative to the working
-directory.
+`--snmp-profiles-dir`. That value arrives over the API and names a tree the
+backend reads, so it is confined to `--snmp-profiles-root`. Without that flag no
+policy may set `profiles_dir` at all; with it, a policy names either an absolute
+path inside the root or a path relative to it, and anything else is rejected,
+`..` included.
+
+```sh
+snmp-telemetry --snmp-profiles-root /opt/orb/snmp-profiles \
+               --snmp-profiles-dir /opt/orb/snmp-profiles/default
+```
+
+```yaml
+config:
+  profiles_dir: vendor-a          # /opt/orb/snmp-profiles/vendor-a
+```
+
+The two flags do different jobs. `--snmp-profiles-dir` is the overlay every
+policy uses unless it names its own, and it is set on the command line, so it is
+not confined to the root. `--snmp-profiles-root` bounds only what a policy may
+name. Pointing `--snmp-profiles-dir` at a directory under the root, as above, is
+the tidy arrangement, but it is not required.
+
+Policies naming one directory share a single loaded profile set. It is loaded on
+the first policy to use it and released with the last, so a directory no running
+policy names is not held.
 
 ### SNMP Profiles
 

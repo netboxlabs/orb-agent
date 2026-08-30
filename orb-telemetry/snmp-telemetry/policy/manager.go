@@ -49,16 +49,34 @@ type Manager struct {
 	// which is keyed on the policy name alone, so a replacement started under
 	// that name before Stop returns would have its observations and poll state
 	// erased by the runner it replaced. Guarded by mu.
-	stopping           map[string]chan struct{}
+	stopping map[string]chan struct{}
+	// policyDirs records the profiles directory each running policy uses, so
+	// stopping one releases the profile set it charged. Guarded by mu, and
+	// written together with policies so the two cannot disagree about which
+	// directories are in use.
+	policyDirs         map[string]string
 	logger             *slog.Logger
 	ctx                context.Context
 	defaultProfilesDir string
+	// profilesRoot confines a policy-supplied profiles_dir. Empty rejects every
+	// per-policy override.
+	profilesRoot string
 	// allowedEnvVars is the set of environment variables a policy may read
 	// through a ${NAME} credential reference. Empty reads none.
 	allowedEnvVars map[string]struct{}
 
 	collectorsMu    sync.Mutex
-	collectorsByDir map[string]*collector.MetricsCollector
+	collectorsByDir map[string]*cachedCollector
+}
+
+// cachedCollector is one profile set and the number of running policies using
+// it. The cache exists so policies naming one directory read the profiles once
+// between them, and the count is what ends that: a collector holds a fully
+// resolved profile set, so one kept per directory a request happened to name
+// would grow without bound.
+type cachedCollector struct {
+	collector *collector.MetricsCollector
+	refs      int
 }
 
 // Options configures a Manager.
@@ -66,6 +84,11 @@ type Options struct {
 	// DefaultProfilesDir is the profile overlay every policy uses unless it
 	// names its own. It comes from the command line, so it is not restricted.
 	DefaultProfilesDir string
+	// ProfilesRoot is the directory a policy-supplied profiles_dir must resolve
+	// inside. Empty, the default, rejects every per-policy override: the value
+	// arrives over an unauthenticated API and names a tree the backend walks,
+	// so without a root there is nowhere it is known to be safe.
+	ProfilesRoot string
 	// AllowedEnvVars names the environment variables a policy may read through
 	// a ${NAME} credential reference. Empty, the default, rejects every
 	// reference: a policy arrives over an unauthenticated API and the backend
@@ -86,21 +109,24 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 		ctx:                ctx,
 		logger:             logger,
 		policies:           make(map[string]*Runner),
+		policyDirs:         make(map[string]string),
 		stopping:           make(map[string]chan struct{}),
 		defaultProfilesDir: opts.DefaultProfilesDir,
+		profilesRoot:       opts.ProfilesRoot,
 		allowedEnvVars:     allowed,
-		collectorsByDir:    make(map[string]*collector.MetricsCollector),
+		collectorsByDir:    make(map[string]*cachedCollector),
 	}
 }
 
-// getOrCreateCollector returns the shared MetricsCollector for the given profiles directory,
-// creating it (and loading profiles) on first use. Subsequent calls for the same dir return
-// the cached instance without re-loading. Thread-safe.
-func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCollector, error) {
+// acquireCollector returns the shared MetricsCollector for the given profiles
+// directory, loading the profiles on first use, and charges one reference to
+// it. Every caller must pair this with releaseCollector. Thread-safe.
+func (m *Manager) acquireCollector(profilesDir string) (*collector.MetricsCollector, error) {
 	m.collectorsMu.Lock()
 	defer m.collectorsMu.Unlock()
 	if c, ok := m.collectorsByDir[profilesDir]; ok {
-		return c, nil
+		c.refs++
+		return c.collector, nil
 	}
 	if profilesDir != "" {
 		if _, err := os.Stat(profilesDir); err != nil {
@@ -123,9 +149,26 @@ func (m *Manager) getOrCreateCollector(profilesDir string) (*collector.MetricsCo
 	// rather than baked into the collector shared by every policy using this
 	// profile set.
 	c := collector.NewMetricsCollector(clientFactory, matcher, m.logger)
-	m.collectorsByDir[profilesDir] = c
+	m.collectorsByDir[profilesDir] = &cachedCollector{collector: c, refs: 1}
 	m.logger.Info("loaded SNMP profiles", "override_dir", config.SanitizeLogValue(profilesDir), "count", loader.Count())
 	return c, nil
+}
+
+// releaseCollector drops one reference to a profiles directory's collector and
+// discards it once the last policy using it has gone. A start that never
+// completes releases what it charged, so a request naming a directory no policy
+// ends up running does not leave a profile set behind.
+func (m *Manager) releaseCollector(profilesDir string) {
+	m.collectorsMu.Lock()
+	defer m.collectorsMu.Unlock()
+	c, ok := m.collectorsByDir[profilesDir]
+	if !ok {
+		return
+	}
+	c.refs--
+	if c.refs <= 0 {
+		delete(m.collectorsByDir, profilesDir)
+	}
 }
 
 // ParsePolicies parses and validates policies from a YAML request body
@@ -169,12 +212,16 @@ func (m *Manager) HasPolicy(name string) bool {
 	return ok
 }
 
-// validateProfilesDir cleans a policy-supplied profiles directory and rejects
-// one that walks upward. The value arrives over the API, and an override
-// directory is named outright rather than reached by climbing out of another
-// one, so ".." only ever widens what a policy can read. Absolute and relative
-// paths are both accepted; the directory is documented as neither.
-func validateProfilesDir(dir string) (string, error) {
+// validateProfilesDir resolves a policy-supplied profiles directory inside root
+// and rejects anything root does not contain. The value arrives over the API
+// and names a tree the backend stats and walks, so rejecting ".." alone is not
+// enough: an absolute path such as "/" carries none and would still be walked.
+// A relative path is read against root, so a policy names the subdirectory it
+// wants rather than repeating the root. An empty root rejects every override.
+func validateProfilesDir(root, dir string) (string, error) {
+	if root == "" {
+		return "", fmt.Errorf("SNMP profiles directory may not be set per policy: start the backend with --snmp-profiles-root to allow it")
+	}
 	clean := filepath.Clean(dir)
 	// Refuse any ".." at all rather than only a leading path element. Checking
 	// elements would also accept a name such as /opt/a..b, but the substring
@@ -182,6 +229,17 @@ func validateProfilesDir(dir string) (string, error) {
 	// with dots in its name is not worth the weaker check.
 	if strings.Contains(clean, "..") {
 		return "", fmt.Errorf(`SNMP profiles directory must not contain "..": %s`, dir)
+	}
+	cleanRoot := filepath.Clean(root)
+	if !filepath.IsAbs(clean) {
+		clean = filepath.Join(cleanRoot, clean)
+	}
+	// Compare by path element rather than by string prefix, which would accept
+	// a sibling whose name starts with the root's, such as /opt/profiles-other
+	// under /opt/profiles.
+	rel, err := filepath.Rel(cleanRoot, clean)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("SNMP profiles directory must be inside %s: %s", cleanRoot, dir)
 	}
 	return clean, nil
 }
@@ -212,17 +270,26 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 
 	profilesDir := m.defaultProfilesDir
 	if policy.Config.ProfilesDir != "" {
-		dir, err := validateProfilesDir(policy.Config.ProfilesDir)
+		dir, err := validateProfilesDir(m.profilesRoot, policy.Config.ProfilesDir)
 		if err != nil {
 			return err
 		}
 		profilesDir = dir
 	}
 
-	sharedCollector, err := m.getOrCreateCollector(profilesDir)
+	sharedCollector, err := m.acquireCollector(profilesDir)
 	if err != nil {
 		return err
 	}
+	// Every way out below this point leaves no policy using the profile set, so
+	// the reference is given back. Registered before mu is taken, so it runs
+	// after mu is released.
+	started := false
+	defer func() {
+		if !started {
+			m.releaseCollector(profilesDir)
+		}
+	}()
 
 	m.mu.Lock()
 	for {
@@ -254,6 +321,8 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 
 	r.Start()
 	m.policies[name] = r
+	m.policyDirs[name] = profilesDir
+	started = true
 	m.logger.Info("started policy", "policy", config.SanitizeLogValue(name))
 	return nil
 }
@@ -266,15 +335,23 @@ func (m *Manager) StopPolicy(name string) error {
 	m.mu.Lock()
 	r, ok := m.policies[name]
 	var release func()
+	var profilesDir string
 	if ok {
 		delete(m.policies, name)
+		profilesDir = m.policyDirs[name]
+		delete(m.policyDirs, name)
 		release = m.reserveStopping(name)
 	}
 	m.mu.Unlock()
 	if !ok {
 		return nil
 	}
-	defer release()
+	// The profile set is given back only once the runner has stopped, so a
+	// replacement waiting on the name finds it still loaded.
+	defer func() {
+		release()
+		m.releaseCollector(profilesDir)
+	}()
 	if err := r.Stop(); err != nil {
 		return fmt.Errorf("stopping policy %s: %w", name, err)
 	}
@@ -290,6 +367,9 @@ func (m *Manager) Stop() error {
 	runners := make(map[string]*Runner, len(m.policies))
 	maps.Copy(runners, m.policies)
 	m.policies = make(map[string]*Runner)
+	dirs := make(map[string]string, len(m.policyDirs))
+	maps.Copy(dirs, m.policyDirs)
+	m.policyDirs = make(map[string]string)
 	releases := make(map[string]func(), len(runners))
 	for name := range runners {
 		releases[name] = m.reserveStopping(name)
@@ -300,6 +380,7 @@ func (m *Manager) Stop() error {
 	for _, name := range slices.Sorted(maps.Keys(runners)) {
 		err := runners[name].Stop()
 		releases[name]()
+		m.releaseCollector(dirs[name])
 		if err != nil {
 			errs = append(errs, fmt.Errorf("stopping policy %s: %w", name, err))
 		}

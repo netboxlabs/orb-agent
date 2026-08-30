@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -349,29 +348,11 @@ func TestApplyDefaults_PreservesExistingPort(t *testing.T) {
 // validateProfilesDir
 // ---------------------------------------------------------------------------
 
-func TestValidateProfilesDir_AcceptsAbsoluteAndRelative(t *testing.T) {
-	dir := t.TempDir()
-	got, err := validateProfilesDir(dir + string(filepath.Separator))
-	require.NoError(t, err)
-	assert.Equal(t, dir, got)
-
-	got, err = validateProfilesDir("./profiles/overrides")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join("profiles", "overrides"), got)
-}
-
 // A profiles_dir arrives in the request body, so one that climbs out of the
-// directory it names is refused before anything reads it.
-func TestValidateProfilesDir_RejectsUpwardTraversal(t *testing.T) {
-	for _, dir := range []string{"..", "../overrides", "profiles/../../overrides"} {
-		_, err := validateProfilesDir(dir)
-		require.Error(t, err, dir)
-		assert.Contains(t, err.Error(), "SNMP profiles directory")
-	}
-}
-
+// root is refused before anything reads it. The rest of the rule is covered in
+// profilesdir_test.go.
 func TestStartPolicy_RejectsProfilesDirThatWalksUpward(t *testing.T) {
-	m := newTestManager()
+	m := newTestManagerRootedAt(t.TempDir())
 	pol := minimalPolicy(v2cAuth())
 	pol.Config.ProfilesDir = "../../etc"
 	require.Error(t, m.StartPolicy("policy-a", pol))
@@ -541,34 +522,6 @@ policies:
 `))
 	require.NoError(t, err, "an unrecognized key stays non-fatal")
 	assert.Contains(t, buf.String(), "snmp_timout")
-}
-
-// TestValidateProfilesDir_DotsAnywhereRejected pins the deliberately blunt rule:
-// any ".." is refused, including one inside a directory name. filepath.Clean
-// resolves an interior traversal first, so /opt/profiles/../../etc becomes /etc
-// and is accepted, which is no wider than naming /etc outright.
-func TestValidateProfilesDir_DotsAnywhereRejected(t *testing.T) {
-	tests := []struct {
-		name    string
-		dir     string
-		want    string
-		wantErr bool
-	}{
-		{name: "interior traversal is resolved", dir: "/opt/profiles/../../etc", want: "/etc"},
-		{name: "leading traversal is rejected", dir: "../../etc", wantErr: true},
-		{name: "dots inside a name are rejected too", dir: "/opt/a..b", wantErr: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateProfilesDir(tt.dir)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, tt.want, got)
-		})
-	}
 }
 
 // ---------------------------------------------------------------------------
