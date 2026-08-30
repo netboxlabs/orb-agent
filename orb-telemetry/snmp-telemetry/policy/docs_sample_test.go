@@ -23,3 +23,30 @@ func TestTheDocumentedSamplePolicyIsValid(t *testing.T) {
 	_, err = m.ParsePolicies([]byte(block))
 	require.NoError(t, err, "the documented sample must parse and validate")
 }
+
+// The README described a retry validation the runner does not perform: it said
+// a policy whose retry ceiling reaches metrics_interval is rejected, where the
+// runner warns and starts it. Each claim is checked beside the call that
+// decides it, so re-tightening one without rewriting the other fails here.
+func TestTheDocumentedRetryRuleMatchesTheRunner(t *testing.T) {
+	raw, err := os.ReadFile("../README.md")
+	require.NoError(t, err)
+	// Collapsed, since the prose is wrapped and a claim can straddle a line.
+	doc := strings.Join(strings.Fields(string(raw)), " ")
+	says := func(claim string) {
+		t.Helper()
+		require.Contains(t, doc, claim, "the README does not say this")
+	}
+
+	// A single attempt that fills the interval can never produce a sample.
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{})
+	require.Error(t, err)
+	says("is rejected, because a single attempt filling the interval can never produce a sample")
+
+	// A retry sequence that reaches the interval starts anyway, and an
+	// unresponsive device gets a truncated sequence rather than a refusal.
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(10, 9, 10), &spyCollector{})
+	require.NoError(t, err)
+	says("warned about rather than rejected")
+	says("the retry sequence is cut short when the interval runs out")
+}
