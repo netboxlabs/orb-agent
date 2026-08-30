@@ -1483,6 +1483,17 @@ func pduToValue(pdu snmp.PDU, conversion string) (int64, string, error) {
 		return 1, pduToString(pdu, nil), nil
 	}
 
+	// The numeric branches below read the value and not the conversion, so
+	// which conversions may reach them is decided here rather than left to fall
+	// out of the control flow. The cases are the numeric cases of the switch
+	// that follows.
+	switch pdu.Type {
+	case gosnmp.Integer, gosnmp.Counter32, gosnmp.Gauge32, gosnmp.Counter64, gosnmp.TimeTicks:
+		if !numericPDUAcceptsConversion(conversion) {
+			return 0, "", fmt.Errorf("conversion %q is not meaningful for numeric PDU type %v", conversion, pdu.Type)
+		}
+	}
+
 	switch pdu.Type {
 	case gosnmp.Integer:
 		if v, ok := pdu.Value.(int); ok {
@@ -1526,6 +1537,32 @@ func pduToValue(pdu snmp.PDU, conversion string) (int64, string, error) {
 		return 0, "", fmt.Errorf("non-numeric OctetString PDU (conversion=%q)", conversion)
 	}
 	return 0, "", fmt.Errorf("non-numeric PDU type %v", pdu.Type)
+}
+
+// numericPDUAcceptsConversion reports whether a conversion may be carried
+// through a PDU the device answered numerically.
+//
+// hextoint and regexp are representation decoders: they recover a number that a
+// device chose to encode as text, so a device that answered with a number has
+// already supplied their output and passing it through is an equivalence rather
+// than a relaxation. Skipping it would drop correct telemetry for the sake of
+// representation.
+//
+// hextoip and hwaddr are not in that family. Their output is an address, and a
+// number is not one, so they fail closed rather than shipping an undecoded
+// value under a metric named for a decoded one.
+//
+// The conversion is read through conversionError, the parse profile review
+// uses, so a malformed one is refused here as well rather than accepted on its
+// prefix. to_one is answered before this is reached, since it counts the
+// value's presence whatever the type.
+func numericPDUAcceptsConversion(conversion string) bool {
+	if conversionError(conversion) != nil {
+		return false
+	}
+	return conversion == "" ||
+		strings.HasPrefix(conversion, "hextoint:") ||
+		strings.HasPrefix(conversion, "regexp:")
 }
 
 // signedValue converts an unsigned SNMP value to the int64 an observation

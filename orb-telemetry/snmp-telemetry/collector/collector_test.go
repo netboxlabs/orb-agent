@@ -4683,3 +4683,107 @@ func TestConversionError_BundledPrefixedConversionsAllParse(t *testing.T) {
 	// prefixed declaration the bundled set carries.
 	assert.Equal(t, map[string]int{"hextoint:": 2, "regexp:": 3}, counts)
 }
+
+// ---------------------------------------------------------------------------
+// A conversion has to mean something for the PDU type the device answered with
+// ---------------------------------------------------------------------------
+
+// hextoint and regexp decode a number out of an OctetString, so a device that
+// answered with a number has already supplied what they exist to recover and
+// the value passes through. hextoip and hwaddr decode an address, which a bare
+// number is not, so passing one through would put an undecoded value under a
+// metric named for a decoded one.
+func TestPduToValue_NumericPDUAcceptsOnlyTheNumericConversions(t *testing.T) {
+	for _, tt := range []struct {
+		conversion string
+		wantErr    bool
+	}{
+		{conversion: ""},
+		{conversion: "hextoint:BigEndian:uint16"},
+		{conversion: `regexp:(\d+)`},
+		{conversion: "hextoip", wantErr: true},
+		{conversion: "hwaddr", wantErr: true},
+	} {
+		t.Run(tt.conversion, func(t *testing.T) {
+			val, _, err := pduToValue(intPDU("x", 42), tt.conversion)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "not meaningful")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, int64(42), val)
+		})
+	}
+}
+
+// The pass-through covers every PDU type the collector reads a number from, not
+// only Integer, and to_one keeps its own answer whatever the type.
+func TestPduToValue_EveryNumericTypeTakesTheSameDecision(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		pdu  snmp.PDU
+	}{
+		{"Integer", intPDU("x", 42)},
+		{"Counter32", counter32PDU("x", 42)},
+		{"Gauge32", snmp.PDU{Name: "x", Type: gosnmp.Gauge32, Value: uint(42)}},
+		{"Counter64", snmp.PDU{Name: "x", Type: gosnmp.Counter64, Value: uint64(42)}},
+		{"TimeTicks", snmp.PDU{Name: "x", Type: gosnmp.TimeTicks, Value: uint32(42)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			val, _, err := pduToValue(tt.pdu, "hextoint:BigEndian:uint16")
+			require.NoError(t, err)
+			assert.Equal(t, int64(42), val)
+
+			_, _, err = pduToValue(tt.pdu, "hwaddr")
+			require.Error(t, err, "an address conversion has nothing to decode here")
+
+			val, _, err = pduToValue(tt.pdu, "to_one")
+			require.NoError(t, err)
+			assert.Equal(t, int64(1), val, "to_one answers before the type is read")
+		})
+	}
+}
+
+// The pass-through reads the conversion through the same parse the review does,
+// so a malformed one is not waved through on its prefix alone.
+func TestPduToValue_MalformedNumericConversionIsNotWavedThrough(t *testing.T) {
+	_, _, err := pduToValue(intPDU("x", 42), "regexp:[")
+	require.Error(t, err)
+
+	_, _, err = pduToValue(intPDU("x", 42), "hextoint:MiddleEndian:uint16")
+	require.Error(t, err)
+}
+
+// An OctetString still decodes, so the decision is about the PDU type rather
+// than about the conversion.
+func TestPduToValue_OctetStringStillDecodesTheAddressConversions(t *testing.T) {
+	val, display, err := pduToValue(snmp.PDU{Name: "x", Type: gosnmp.OctetString, Value: []byte{0xc0, 0x00, 0x02, 0x01}}, "hextoip")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), val)
+	assert.Equal(t, "192.0.2.1", display)
+
+	val, display, err = pduToValue(snmp.PDU{Name: "x", Type: gosnmp.OctetString, Value: []byte{0x00, 0x1b, 0x21, 0x3c, 0x4d, 0x5e}}, "hwaddr")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), val)
+	assert.Equal(t, "00:1b:21:3c:4d:5e", display)
+}
+
+// A bundled symbol declaring hwaddr against a device that answers with a number
+// exports nothing rather than the number. The profile names the MAC of the
+// stack master, and an integer is not one.
+func TestCollectTarget_BundledAddressConversionOnANumericPDUExportsNothing(t *testing.T) {
+	const (
+		host   = "10.0.0.77"
+		macOID = "1.3.6.1.4.1.2011.5.25.183.1.4.0"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.2011.2.23.343")},
+		macOID:         {macOID: intPDU(macOID, 42)},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "huawei/huawei-switches.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Empty(t, c.testDeviceStore("p", host)["snmp.hwstacksystemmac"])
+	assert.Contains(t, w.walkCalls, macOID, "the symbol is collectable, so it is still walked")
+}

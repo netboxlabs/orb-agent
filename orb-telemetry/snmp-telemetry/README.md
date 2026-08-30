@@ -243,11 +243,20 @@ declare the OID or the pattern that profile declares.
 A profile symbol may declare a `conversion` to turn a non-numeric OID value
 into a metric. The collector implements `to_one`, `hextoip`, `hwaddr`,
 `hextoint:<endianness>:<type>` and `regexp:<pattern>`. A symbol declaring
-anything else is skipped, and the backend logs one warning naming the
-conversion, the symbol and the profile the first time a device matches that
-profile. `powerset_status` is the only conversion the bundled set declares that
-the collector does not implement, on the APC UPS `upsBasicStateOutputState`
-symbol.
+anything else is skipped, and so is one whose `hextoint:` endianness or width
+is unrecognised or whose `regexp:` pattern does not compile, since neither can
+be applied to any value. The backend logs one warning naming the conversion,
+the symbol and the profile the first time a device matches that profile.
+`powerset_status` is the only conversion the bundled set declares that the
+collector does not implement, on the APC UPS `upsBasicStateOutputState` symbol.
+
+A symbol that is collected can still yield no point, if the device answers with
+a type its conversion cannot be applied to. `hextoint:` and `regexp:` recover a
+number from text, so a device that answers with a number has already supplied
+what they produce and the value is kept as it stands. `hextoip` and `hwaddr`
+produce an address instead, which a bare number is not, so a numeric answer to
+one of those is dropped rather than exported undecoded under a metric named for
+an address.
 
 Once a profile matches, its tables are walked with GETBULK, 25 values per
 request, rather than one GETNEXT per value. A profile that sets
