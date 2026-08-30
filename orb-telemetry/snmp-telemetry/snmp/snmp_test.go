@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -174,8 +175,7 @@ func TestClient_WalkStopsWhenContextIsCancelled(t *testing.T) {
 	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = silent.Close() }()
-	addr, ok := silent.LocalAddr().(*net.UDPAddr)
-	require.True(t, ok)
+	port := udpPort(t, silent.LocalAddr())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -184,7 +184,7 @@ func TestClient_WalkStopsWhenContextIsCancelled(t *testing.T) {
 		perRequest = 50 * time.Millisecond
 		retries    = 100
 	)
-	w, err := NewClient(ctx, "127.0.0.1", uint16(addr.Port), retries, perRequest, //nolint:gosec
+	w, err := NewClient(ctx, "127.0.0.1", port, retries, perRequest,
 		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "public"}, clientTestLogger)
 	require.NoError(t, err)
 	require.NoError(t, w.Connect())
@@ -231,8 +231,21 @@ func oidLess(a, b string) bool {
 // and GETBULK out of the same data, so the two walks can be compared value for
 // value, and it counts requests by type so the round trips of each are visible.
 // Counting in the client would only report what the client meant to send.
+// udpPort returns a listener's port, checking the address type and the range
+// rather than asserting them. A port is always inside uint16, but the compiler
+// cannot know that from net.UDPAddr's int field.
+func udpPort(t *testing.T, addr net.Addr) uint16 {
+	t.Helper()
+	udp, ok := addr.(*net.UDPAddr)
+	require.True(t, ok, "expected a UDP address, got %T", addr)
+	require.GreaterOrEqual(t, udp.Port, 0)
+	require.LessOrEqual(t, udp.Port, math.MaxUint16)
+	return uint16(udp.Port)
+}
+
 type fakeAgent struct {
 	conn net.PacketConn
+	port uint16
 	vars []gosnmp.SnmpPDU
 
 	mu       sync.Mutex
@@ -244,14 +257,10 @@ func newFakeAgent(t *testing.T, vars []gosnmp.SnmpPDU) *fakeAgent {
 	t.Helper()
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
-	a := &fakeAgent{conn: conn, vars: vars, requests: make(map[gosnmp.PDUType]int)}
+	a := &fakeAgent{conn: conn, port: udpPort(t, conn.LocalAddr()), vars: vars, requests: make(map[gosnmp.PDUType]int)}
 	go a.serve()
 	t.Cleanup(func() { _ = conn.Close() })
 	return a
-}
-
-func (a *fakeAgent) port() uint16 {
-	return uint16(a.conn.LocalAddr().(*net.UDPAddr).Port) //nolint:errcheck,forcetypeassert,gosec
 }
 
 func (a *fakeAgent) counts() (map[gosnmp.PDUType]int, []uint32) {
@@ -356,7 +365,7 @@ func interfaceTable(root string, columns, rows int) []gosnmp.SnmpPDU {
 
 func agentClient(t *testing.T, a *fakeAgent, version string) *Client {
 	t.Helper()
-	w, err := NewClient(t.Context(), "127.0.0.1", a.port(), 1, 3*time.Second,
+	w, err := NewClient(t.Context(), "127.0.0.1", a.port, 1, 3*time.Second,
 		&config.Authentication{ProtocolVersion: version, Community: "public"}, clientTestLogger)
 	require.NoError(t, err)
 	require.NoError(t, w.Connect())
@@ -440,8 +449,7 @@ func TestClient_BulkWalkHonoursTheCollectionContext(t *testing.T) {
 	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() { _ = silent.Close() }()
-	addr, ok := silent.LocalAddr().(*net.UDPAddr)
-	require.True(t, ok)
+	port := udpPort(t, silent.LocalAddr())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -450,7 +458,7 @@ func TestClient_BulkWalkHonoursTheCollectionContext(t *testing.T) {
 		perRequest = 50 * time.Millisecond
 		retries    = 100
 	)
-	w, err := NewClient(ctx, "127.0.0.1", uint16(addr.Port), retries, perRequest, //nolint:gosec
+	w, err := NewClient(ctx, "127.0.0.1", port, retries, perRequest,
 		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "public"}, clientTestLogger)
 	require.NoError(t, err)
 	require.NoError(t, w.Connect())
