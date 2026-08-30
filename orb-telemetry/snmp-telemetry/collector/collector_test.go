@@ -20,6 +20,7 @@ import (
 	"github.com/gosnmp/gosnmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/embedded"
 
@@ -485,6 +486,195 @@ func TestCollectTarget_PolledButEmptyIsCleared(t *testing.T) {
 	c.clientFactory = walkerFactory(makeWalker(false))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 	assert.Empty(t, c.testDeviceStore("p", host)["snmp.somemetric"], "polled-but-empty metric should be cleared")
+}
+
+// attrSetKey is asked for a key, not for a sorted point. Building an attribute
+// set sorts the slice it is given, so a point handed to it straight would come
+// back with its attributes rearranged.
+func TestAttrSetKey_LeavesTheCallersAttributesAlone(t *testing.T) {
+	attrs := []attribute.KeyValue{
+		attribute.String("row_index", "2"),
+		attribute.String("device_ip", "10.0.0.1"),
+		attribute.String("tag", "CPU"),
+	}
+	before := append([]attribute.KeyValue(nil), attrs...)
+
+	key := attrSetKey(attrs)
+
+	assert.Equal(t, before, attrs, "the point keeps the attribute order it was collected in")
+	assert.Equal(t, "device_ip=10.0.0.1,row_index=2,tag=CPU", key)
+	assert.Equal(t, key, attrSetKey([]attribute.KeyValue{
+		attribute.String("tag", "CPU"),
+		attribute.String("device_ip", "10.0.0.1"),
+		attribute.String("row_index", "2"),
+	}), "the same attributes are the same series in any order")
+	assert.NotEqual(t, key, attrSetKey(attrs[:2]), "a missing attribute is a different series")
+}
+
+// ---------------------------------------------------------------------------
+// Retention when one metric name is declared twice
+// ---------------------------------------------------------------------------
+
+// A resolved profile can hold two declarations of one metric name with
+// different poll periods. The bundled Dell OS10 profile inherits an unthrottled
+// hrProcessorLoad tagged by processor description and adds a 60 second
+// declaration tagged CPU. Retention was assigned per metric name, so on a
+// metrics_interval under 60 seconds the tagged series was carried forward and
+// then replaced wholesale by the untagged fresh points, and vanished between
+// due polls.
+func TestCollectTarget_BundledDellTaggedCPUSurvivesItsUnthrottledSibling(t *testing.T) {
+	const (
+		host     = "10.0.0.75"
+		loadCol  = "1.3.6.1.2.1.25.3.3.1.2"
+		descrCol = "1.3.6.1.2.1.25.3.2.1.3"
+	)
+	makeWalker := func(first, second int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.674.11000.5000.100.2.1.1")},
+			loadCol: {
+				loadCol + ".1": intPDU(loadCol+".1", first),
+				loadCol + ".2": intPDU(loadCol+".2", second),
+			},
+			descrCol: {
+				descrCol + ".1": stringPDU(descrCol+".1", "core 1"),
+				descrCol + ".2": stringPDU(descrCol+".2", "core 2"),
+			},
+		}}
+	}
+	byTag := func(pts []observedPoint, tag string) map[string]int64 {
+		out := make(map[string]int64)
+		for _, pt := range pts {
+			if attrValue(pt, "tag") == tag {
+				out[attrValue(pt, "row_index")] = pt.value
+			}
+		}
+		return out
+	}
+
+	c := newCollector(nil, bundledProfile(t, "dell/dell-os10.yml"))
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(11, 22))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+	first := c.testDeviceStore("p", host)["snmp.hrprocessorload"]
+	require.Len(t, first, 4, "both declarations poll on the first run")
+	require.Equal(t, map[string]int64{"1": 11, "2": 22}, byTag(first, "CPU"))
+
+	// Seconds later: the inherited declaration is due, the 60 second one is not.
+	c.clientFactory = walkerFactory(makeWalker(33, 44))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	second := c.testDeviceStore("p", host)["snmp.hrprocessorload"]
+	assert.Equal(t, map[string]int64{"1": 11, "2": 22}, byTag(second, "CPU"),
+		"the throttled declaration keeps the points it left")
+	assert.Equal(t, map[string]int64{"1": 33, "2": 44}, byTag(second, ""),
+		"the due declaration is refreshed")
+	for _, pt := range second {
+		if attrValue(pt, "tag") == "" {
+			assert.NotEmpty(t, attrValue(pt, "processor_description"), "the inherited series keeps its tag column")
+		}
+	}
+	assert.Len(t, second, 4)
+}
+
+// Retention that merged on the attribute set alone would carry a row the due
+// declaration no longer answers for, which is what rebuilding the store from
+// the fresh points was there to prevent. A point is retained only when its own
+// declaration was throttled.
+func TestCollectTarget_AThrottledSiblingDoesNotRestoreAVanishedRow(t *testing.T) {
+	const (
+		host        = "10.0.0.76"
+		tableOID    = "1.3.6.1.4.1.99.10.1"
+		loadCol     = "1.3.6.1.4.1.99.10.1.1.2"
+		descrCol    = "1.3.6.1.4.1.99.10.1.1.3"
+		sysObjValue = "1.3.6.1.4.1.99.10"
+	)
+	p := profileWithOID(sysObjValue, "two-declarations.yml", []profiles.MetricEntry{
+		{
+			Table:   &profiles.Table{Name: "loadTable", OID: tableOID},
+			Symbols: []profiles.Symbol{{Name: "cpuLoad", OID: loadCol}},
+			MetricTags: []profiles.MetricTag{
+				{Tag: "core_name", Column: &profiles.TagColumn{OID: descrCol, Name: "coreDescr"}},
+			},
+		},
+		{
+			Table:   &profiles.Table{Name: "loadTable", OID: tableOID},
+			Symbols: []profiles.Symbol{{Name: "cpuLoad", OID: loadCol, PollTimeSec: 300, Tag: "CPU"}},
+		},
+	})
+	makeWalker := func(rows map[string]int) *recordingWalker {
+		load := make(map[string]snmp.PDU, len(rows))
+		descr := make(map[string]snmp.PDU, len(rows))
+		for idx, v := range rows {
+			load[loadCol+"."+idx] = intPDU(loadCol+"."+idx, v)
+			descr[descrCol+"."+idx] = stringPDU(descrCol+"."+idx, "core "+idx)
+		}
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+			loadCol:        load,
+			descrCol:       descr,
+		}}
+	}
+
+	c := newCollector(nil, p)
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(map[string]int{"1": 11, "2": 22}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuload"], 4)
+
+	// The second row is gone from the device, and the tagged declaration is
+	// still throttled.
+	c.clientFactory = walkerFactory(makeWalker(map[string]int{"1": 33}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	var due, retained []string
+	for _, pt := range c.testDeviceStore("p", host)["snmp.cpuload"] {
+		if attrValue(pt, "tag") == "CPU" {
+			retained = append(retained, attrValue(pt, "row_index"))
+			continue
+		}
+		due = append(due, attrValue(pt, "row_index"))
+	}
+	sort.Strings(due)
+	sort.Strings(retained)
+	assert.Equal(t, []string{"1"}, due, "a row the due declaration no longer answers for must not survive")
+	assert.Equal(t, []string{"1", "2"}, retained, "the throttled declaration keeps every row it left")
+}
+
+// Two declarations of one metric name may render the same attribute set, which
+// is one exported series however many declarations produced it. Retention must
+// not add a second point to a series the fresh points already carry: this PR
+// has twice had to take such a duplicate back out.
+func TestCollectTarget_RetentionAddsNoSecondPointForOneAttributeSet(t *testing.T) {
+	const (
+		host        = "10.0.0.77"
+		loadOID     = "1.3.6.1.4.1.99.11.1.0"
+		sysObjValue = "1.3.6.1.4.1.99.11"
+	)
+	p := profileWithOID(sysObjValue, "same-attributes.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuLoad", OID: loadOID}},
+		{Symbol: &profiles.Symbol{Name: "cpuLoad", OID: loadOID, PollTimeSec: 300}},
+	})
+	makeWalker := func(v int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+			loadOID:        {loadOID: intPDU(loadOID, v)},
+		}}
+	}
+
+	c := newCollector(nil, p)
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(11))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	c.clientFactory = walkerFactory(makeWalker(33))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.cpuload"]
+	require.Len(t, pts, 1, "one attribute set carries one point")
+	assert.Equal(t, int64(33), pts[0].value, "the due declaration wins the series it shares")
 }
 
 // ---------------------------------------------------------------------------

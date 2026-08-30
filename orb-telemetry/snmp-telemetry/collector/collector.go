@@ -65,6 +65,79 @@ type DialOptions struct {
 type observedPoint struct {
 	value int64
 	attrs []attribute.KeyValue
+	// decl names the declaration that produced the point. One metric name can
+	// be declared twice with different poll periods, and the two are throttled
+	// independently, so retention has to carry one forward without disturbing
+	// the other.
+	decl string
+}
+
+// symbolDeclKey identifies the declaration a point came from.
+//
+// Whether a symbol is due is decided by its OID and its poll period alone, so
+// two declarations sharing both are throttled together and one key serves them,
+// and two differing in either are throttled apart and need keys of their own.
+func symbolDeclKey(sym *profiles.Symbol) string {
+	return sym.OID + "@" + strconv.Itoa(sym.PollTimeSec)
+}
+
+// throttledDecls collects the declarations that were not due this run, as
+// metric name to declaration key. The metric name alone would not do: one name
+// can be declared twice, and retaining every point under it would carry a due
+// declaration's rows forward as well.
+type throttledDecls map[string]map[string]struct{}
+
+func (t throttledDecls) add(metricName, decl string) {
+	if t[metricName] == nil {
+		t[metricName] = make(map[string]struct{}, 1)
+	}
+	t[metricName][decl] = struct{}{}
+}
+
+// attrSetKey renders an attribute set the way the SDK identifies a series:
+// sorted by key, duplicate keys resolved last-value-wins, separators escaped.
+// Two points that encode alike are one exported series whichever declaration
+// produced them.
+//
+// The attributes are copied because building the set sorts what it is given,
+// and a point keeps the attribute order it was collected in.
+func attrSetKey(attrs []attribute.KeyValue) string {
+	sorted := make([]attribute.KeyValue, len(attrs))
+	copy(sorted, attrs)
+	set := attribute.NewSet(sorted...)
+	return set.Encoded(attribute.DefaultEncoder())
+}
+
+// retainThrottled appends the points a throttled declaration left last run to
+// the points this run polled, and returns the metric's new slice.
+//
+// Only the declarations named in throttled are carried. A declaration that was
+// due is represented by its fresh points alone, so a row it has stopped
+// answering for does not live on under a sibling's retention. Two declarations
+// that share an OID and a poll period share a key, since the poll window they
+// consult is the same one.
+//
+// A retained point whose attribute set a fresh point already carries is dropped
+// as well. The attribute set is the exported series, so keeping both would
+// observe one series twice in a single collection cycle.
+func retainThrottled(fresh, prev []observedPoint, throttled map[string]struct{}) []observedPoint {
+	if len(prev) == 0 {
+		return fresh
+	}
+	freshKeys := make(map[string]struct{}, len(fresh))
+	for i := range fresh {
+		freshKeys[attrSetKey(fresh[i].attrs)] = struct{}{}
+	}
+	for _, pt := range prev {
+		if _, ok := throttled[pt.decl]; !ok {
+			continue
+		}
+		if _, taken := freshKeys[attrSetKey(pt.attrs)]; taken {
+			continue
+		}
+		fresh = append(fresh, pt)
+	}
+	return fresh
 }
 
 // MetricsCollector collects SNMP operational metrics from devices using ktranslate profiles
@@ -340,9 +413,10 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	baseAttrs := c.appendDeviceTags(ctx, walker, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
 
 	// localBuf accumulates fresh observations for this run.
-	// throttledMetrics records metric names skipped due to poll_time_sec not elapsed.
+	// throttled records the declarations skipped because poll_time_sec has not
+	// elapsed, per metric name.
 	localBuf := make(map[string][]observedPoint)
-	throttledMetrics := make(map[string]struct{})
+	throttled := make(throttledDecls)
 
 	for _, entry := range profile.Metrics {
 		if err := ctx.Err(); err != nil {
@@ -350,14 +424,14 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		}
 		switch {
 		case entry.Symbol != nil:
-			c.collectScalar(ctx, walker, entry.Symbol, baseAttrs, key, localBuf, throttledMetrics)
+			c.collectScalar(ctx, walker, entry.Symbol, baseAttrs, key, localBuf, throttled)
 		case entry.Table != nil:
-			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttledMetrics)
+			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttled)
 		case len(entry.Symbols) > 0 && groupedSymbolsAreTableColumns(&entry):
 			// Columns of a table the profile names no `table:` root for. The
 			// rows still have to be joined by index, or the entry's row-scoped
 			// metadata is lost and the rows carry no identity.
-			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttledMetrics)
+			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttled)
 		case len(entry.Symbols) > 0:
 			// Scalars grouped under `symbols:` with no `table:`. One entry can
 			// carry dozens, each a request of its own, so the deadline is
@@ -366,7 +440,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				c.collectScalar(ctx, walker, &entry.Symbols[i], baseAttrs, key, localBuf, throttledMetrics)
+				c.collectScalar(ctx, walker, &entry.Symbols[i], baseAttrs, key, localBuf, throttled)
 			}
 		}
 	}
@@ -380,19 +454,23 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	}
 
 	// Rebuild the device store:
-	// - throttled metrics: carry last-known value forward (poll not yet due)
-	// - polled metrics: use fresh values from localBuf (empty = device doesn't support that OID)
-	// This prevents stale rows from persisting when a table row disappears.
+	// - a declaration that polled is represented by this run's points alone, so
+	//   a table row that has gone stops being exported, and a device that no
+	//   longer answers an OID at all leaves the metric empty
+	// - a declaration that was not due keeps the points it left last run
+	// The two are decided per declaration rather than per metric name, since a
+	// resolved profile can declare one name twice with different poll periods
+	// and replacing the name would drop the series the other one owns.
 	c.storeMu.Lock()
 	prevStore := c.deviceStore[key]
-	newStore := make(map[string][]observedPoint, len(localBuf)+len(throttledMetrics))
-	for metricName := range throttledMetrics {
-		if pts, ok := prevStore[metricName]; ok {
-			newStore[metricName] = pts
-		}
-	}
+	newStore := make(map[string][]observedPoint, len(localBuf)+len(throttled))
 	for name, pts := range localBuf {
 		newStore[name] = pts
+	}
+	for name, decls := range throttled {
+		if retained := retainThrottled(newStore[name], prevStore[name], decls); len(retained) > 0 {
+			newStore[name] = retained
+		}
 	}
 	c.deviceStore[key] = newStore
 	c.storeMu.Unlock()
@@ -627,7 +705,7 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 // profile cannot always say which entries are columns; the OID the device
 // answers at can. Without the identity every row carries the same attribute
 // set and the export keeps one arbitrary value.
-func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
+func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttled throttledDecls) {
 	if unusableSymbolReason(sym) != "" {
 		// Reported once per profile by reviewProfile. Skipping before the walk
 		// is what keeps an empty OID from being issued as a whole-tree walk, and
@@ -636,8 +714,9 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		return
 	}
 	metricName := buildMetricName(sym.Name)
+	decl := symbolDeclKey(sym)
 	if !c.pollDue(key, sym.OID, sym.PollTimeSec) {
-		throttledMetrics[metricName] = struct{}{}
+		throttled.add(metricName, decl)
 		return
 	}
 	pdus, err := c.walk(walker, sym.OID, 0)
@@ -669,7 +748,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 			attrs = append(attrs, attribute.String(sym.Name+"_value", strVal))
 		}
 
-		localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: attrs})
+		localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: attrs, decl: decl})
 	}
 }
 
@@ -945,7 +1024,7 @@ type joinedTag struct {
 }
 
 // collectTable collects all columns in an SNMP table, joining metric and tag columns by row index.
-func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
+func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttled throttledDecls) {
 	// --- Phase 1: decide which symbols need polling this run ---
 	type symState struct {
 		sym       *profiles.Symbol
@@ -965,7 +1044,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			anyActive = true
 		} else {
 			states = append(states, symState{sym: sym, throttled: true})
-			throttledMetrics[buildMetricName(sym.Name)] = struct{}{}
+			throttled.add(buildMetricName(sym.Name), symbolDeclKey(sym))
 		}
 	}
 	if !anyActive {
@@ -1116,6 +1195,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 
 		cond, hasCondition := conditions[sym.OID]
 		metricName := buildMetricName(sym.Name)
+		decl := symbolDeclKey(sym)
 
 		for fullOID, pdu := range pdus {
 			if err := ctx.Err(); err != nil {
@@ -1174,7 +1254,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				rowAttrs = append(rowAttrs, attribute.String(sym.Name+"_value", strVal))
 			}
 
-			localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: rowAttrs})
+			localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: rowAttrs, decl: decl})
 		}
 	}
 }
