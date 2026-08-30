@@ -516,14 +516,29 @@ func unusableSymbolReason(sym *profiles.Symbol) string {
 		// be wrong rather than merely coarse.
 		return "declares a script this collector does not run"
 	}
+	if !supportedConversion(sym.Conversion) {
+		return unsupportedConversionReason
+	}
 	return ""
 }
+
+// unsupportedConversionReason is why a symbol declaring a conversion pduToValue
+// does not implement is unusable. It is named so the review can recognise it
+// and report the conversion itself rather than this text.
+const unsupportedConversionReason = "declares a conversion this collector does not implement"
 
 // supportedConversion reports whether pduToValue implements the conversion a
 // symbol declares. An empty conversion is the plain numeric path.
 //
 // It mirrors the branches in pduToValue: a new conversion has to be added in
 // both places, or it will be reported as unsupported while working.
+//
+// The set is the union across PDU types, which is what a symbol can be judged
+// on before the walk that reveals the type. Per type: to_one is implemented for
+// every PDU, since it reads the value's presence rather than the value; an
+// empty conversion is the plain numeric path; hextoip, hwaddr, hextoint and
+// regexp decode an OctetString. An enum is not a conversion and is applied to
+// the value afterwards, so it does not appear here.
 func supportedConversion(conversion string) bool {
 	switch conversion {
 	case "", "to_one", "hextoip", "hwaddr":
@@ -557,16 +572,15 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 
 	warn := func(sym *profiles.Symbol) {
 		c.reportUnsetEnumMembers(sym.Enum, "symbol", sym.Name, name)
-		if reason := unusableSymbolReason(sym); reason != "" {
+		switch reason := unusableSymbolReason(sym); reason {
+		case "":
+		case unsupportedConversionReason:
+			c.logger.Warn("Skipping metric: SNMP profile declares a conversion this collector does not implement",
+				"conversion", sym.Conversion, "symbol", sym.Name, "oid", sym.OID, "profile", name)
+		default:
 			c.logger.Warn("Skipping metric: SNMP profile declares a symbol this collector cannot collect",
 				"reason", reason, "symbol", sym.Name, "oid", sym.OID, "profile", name)
-			return
 		}
-		if supportedConversion(sym.Conversion) {
-			return
-		}
-		c.logger.Warn("Skipping metric: SNMP profile declares a conversion this collector does not implement",
-			"conversion", sym.Conversion, "symbol", sym.Name, "oid", sym.OID, "profile", name)
 	}
 	for _, entry := range profile.Metrics {
 		if entry.Symbol != nil {
@@ -616,7 +630,9 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
 	if unusableSymbolReason(sym) != "" {
 		// Reported once per profile by reviewProfile. Skipping before the walk
-		// is what keeps an empty OID from being issued as a whole-tree walk.
+		// is what keeps an empty OID from being issued as a whole-tree walk, and
+		// what keeps a conversion the collector cannot apply from exporting the
+		// undecoded value the numeric branches would otherwise return.
 		return
 	}
 	metricName := buildMetricName(sym.Name)

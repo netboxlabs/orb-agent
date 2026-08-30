@@ -1552,6 +1552,124 @@ func TestCollectTarget_SupportedConversionsAreNotReported(t *testing.T) {
 	}
 }
 
+// The once-per-profile review reports a symbol whose conversion pduToValue does
+// not implement as a skipped metric. The numeric branches of pduToValue never
+// read the conversion, so an Integer, Counter, Gauge or TimeTicks PDU was
+// exported raw under a metric the operator had just been told was absent: a
+// value scaled by nothing beside a report claiming nothing shipped.
+func TestCollectTarget_UnsupportedConversionOnAScalarExportsNothing(t *testing.T) {
+	const (
+		host         = "10.0.0.71"
+		plainOID     = "1.3.6.1.4.1.99.7.1.0"
+		convertedOID = "1.3.6.1.4.1.99.7.2.0"
+		sysObjValue  = "1.3.6.1.4.1.99.7"
+	)
+	p := profileWithOID(sysObjValue, "unsupported-scalar.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "plainLoad", OID: plainOID}},
+		{Symbol: &profiles.Symbol{Name: "scaledLoad", OID: convertedOID, Conversion: "powerset_status"}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		plainOID:       {plainOID: intPDU(plainOID, 7)},
+		convertedOID:   {convertedOID: intPDU(convertedOID, 42)},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Empty(t, store["snmp.scaledload"], "a conversion the collector cannot apply must export nothing")
+	assert.NotContains(t, w.walkCalls, convertedOID, "the symbol is skipped before it is walked")
+
+	require.Len(t, store["snmp.plainload"], 1, "a symbol declaring no conversion is untouched")
+	assert.Equal(t, int64(7), store["snmp.plainload"][0].value)
+	assert.Contains(t, w.walkCalls, plainOID)
+}
+
+// The table path gates the same symbols as the scalar one, so a column
+// declaring a conversion the collector cannot apply emits no rows.
+func TestCollectTarget_UnsupportedConversionOnATableColumnExportsNothing(t *testing.T) {
+	const (
+		host        = "10.0.0.72"
+		tableOID    = "1.3.6.1.4.1.99.8.1"
+		plainCol    = "1.3.6.1.4.1.99.8.1.1.2"
+		scaledCol   = "1.3.6.1.4.1.99.8.1.1.3"
+		descrCol    = "1.3.6.1.4.1.99.8.1.1.4"
+		sysObjValue = "1.3.6.1.4.1.99.8"
+	)
+	p := profileWithOID(sysObjValue, "unsupported-table.yml", []profiles.MetricEntry{
+		{
+			Table: &profiles.Table{Name: "sensorTable", OID: tableOID},
+			Symbols: []profiles.Symbol{
+				{Name: "sensorReading", OID: plainCol},
+				{Name: "sensorScaled", OID: scaledCol, Conversion: "powerset_status"},
+			},
+			MetricTags: []profiles.MetricTag{
+				{Tag: "sensor_name", Column: &profiles.TagColumn{OID: descrCol, Name: "sensorDescr"}},
+			},
+		},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		plainCol:       {plainCol + ".1": intPDU(plainCol+".1", 7)},
+		scaledCol:      {scaledCol + ".1": counter32PDU(scaledCol+".1", 42)},
+		descrCol:       {descrCol + ".1": stringPDU(descrCol+".1", "inlet")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Empty(t, store["snmp.sensorscaled"], "a conversion the collector cannot apply must export no rows")
+	assert.NotContains(t, w.walkCalls, scaledCol, "the column is skipped before it is walked")
+
+	require.Len(t, store["snmp.sensorreading"], 1, "the sibling column is untouched")
+	assert.Equal(t, int64(7), store["snmp.sensorreading"][0].value)
+	assert.Equal(t, "inlet", attrValue(store["snmp.sensorreading"][0], "sensor_name"))
+}
+
+// TestCollectTarget_BundledUnsupportedConversionIsNotCollected pins the one
+// bundled declaration the review names: the APC UPS output state, whose
+// powerset_status conversion enumerates a bit field this collector cannot read.
+func TestCollectTarget_BundledUnsupportedConversionIsNotCollected(t *testing.T) {
+	const stateOID = "1.3.6.1.4.1.318.1.1.1.11.1.1.0"
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.318.1.3.2.11")},
+		stateOID:       {stateOID: intPDU(stateOID, 3)},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "apc/apc_ups.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.73"), mustAuth(), "p", DialOptions{}))
+
+	assert.Empty(t, c.testDeviceStore("p", "10.0.0.73")["snmp.upsbasicstateoutputstate"])
+	assert.NotContains(t, w.walkCalls, stateOID)
+}
+
+// A numeric conversion the collector does implement stays on the numeric path,
+// so the gate cannot be the OctetString branch's list of conversions.
+func TestCollectTarget_ToOneOnANumericPDUIsStillCollected(t *testing.T) {
+	const (
+		host        = "10.0.0.74"
+		stateOID    = "1.3.6.1.4.1.99.9.1.0"
+		sysObjValue = "1.3.6.1.4.1.99.9"
+	)
+	p := profileWithOID(sysObjValue, "to-one-numeric.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "linkState", OID: stateOID, Conversion: "to_one"}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		stateOID:       {stateOID: intPDU(stateOID, 2)},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.linkstate"]
+	require.Len(t, pts, 1, "to_one is implemented for every PDU type")
+	assert.Equal(t, int64(1), pts[0].value)
+	assert.Equal(t, "2", attrValue(pts[0], "linkState_value"))
+}
+
 // ---------------------------------------------------------------------------
 // Symbols the collector cannot collect at all
 // ---------------------------------------------------------------------------
