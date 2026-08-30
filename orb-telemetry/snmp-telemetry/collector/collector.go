@@ -594,10 +594,8 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 				attrs = append(attrs, attribute.String("row_index", rowIdx))
 			}
 		}
-		if len(sym.Enum) > 0 {
-			if name := enumName(sym.Enum, val); name != "" {
-				attrs = append(attrs, attribute.String(sym.Name+"_status", name))
-			}
+		if name := enumStatusName(sym, val); name != "" {
+			attrs = append(attrs, attribute.String(sym.Name+"_status", name))
 		}
 		if sym.Tag != "" {
 			attrs = append(attrs, attribute.String("tag", sym.Tag))
@@ -1055,10 +1053,8 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 					rowAttrs = append(rowAttrs, attribute.String(jt.name, v))
 				}
 			}
-			if len(sym.Enum) > 0 {
-				if name := enumName(sym.Enum, val); name != "" {
-					rowAttrs = append(rowAttrs, attribute.String(sym.Name+"_status", name))
-				}
+			if name := enumStatusName(sym, val); name != "" {
+				rowAttrs = append(rowAttrs, attribute.String(sym.Name+"_status", name))
 			}
 			if sym.Tag != "" {
 				rowAttrs = append(rowAttrs, attribute.String("tag", sym.Tag))
@@ -1240,12 +1236,19 @@ func metricTagName(mt *profiles.MetricTag, col *profiles.TagColumn) string {
 }
 
 // pduToValue converts a PDU to an int64 metric value, applying conversion rules.
-// It also returns an optional non-empty string for display-only conversions (hextoip, hwaddr, regexp).
+// It also returns an optional non-empty string for display-only conversions (to_one, hextoip, hwaddr, regexp).
 // Returns an error for PDU types that cannot produce a numeric value.
 func pduToValue(pdu snmp.PDU, conversion string) (int64, string, error) {
-	// conversion: to_one — always emit 1 regardless of actual PDU type.
+	// conversion: to_one emits 1 whatever the PDU holds, because the metric
+	// counts the presence of a state and the state itself belongs in an
+	// attribute. The text is what tells two states apart, so it is returned
+	// as the display value rather than dropped. A PDU carrying no value has
+	// no text to return.
 	if conversion == "to_one" {
-		return 1, "", nil
+		if pdu.Value == nil {
+			return 1, "", nil
+		}
+		return 1, pduToString(pdu, nil), nil
 	}
 
 	switch pdu.Type {
@@ -1429,6 +1432,17 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 		}
 	}
 	return fmt.Sprintf("%v", pdu.Value)
+}
+
+// enumStatusName names the enum member a symbol's value falls on, or "" when
+// the symbol declares no enum or the number the enum reads was never the
+// device's. to_one reports 1 whatever the device sent, so reading an enum off
+// it would put the name of member 1 on every state the device can be in.
+func enumStatusName(sym *profiles.Symbol, val int64) string {
+	if len(sym.Enum) == 0 || sym.Conversion == "to_one" {
+		return ""
+	}
+	return enumName(sym.Enum, val)
 }
 
 // enumName returns the enum string for val, or "" if not found.

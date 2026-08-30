@@ -3345,3 +3345,127 @@ func TestReviewProfile_BundledProfilesDeclareNoTagWithoutAnOID(t *testing.T) {
 	}
 	assert.Empty(t, without)
 }
+
+// ---------------------------------------------------------------------------
+// to_one keeps the text it converted
+// ---------------------------------------------------------------------------
+
+// to_one exists because the value belongs in an attribute and the metric is a
+// presence count. Dropping the text leaves nothing to tell one state from
+// another, so it rides the display path hextoip and regexp already use.
+func TestPduToValue_ToOneKeepsTheSourceText(t *testing.T) {
+	tests := []struct {
+		name string
+		pdu  snmp.PDU
+		want string
+	}{
+		{"OctetString", stringPDU("x", "passive"), "passive"},
+		{"padded OctetString", stringPDU("x", "  active  "), "active"},
+		{"Integer", intPDU("x", 3), "3"},
+		{"empty OctetString", stringPDU("x", ""), ""},
+		{"no value", snmp.PDU{Name: "x", Type: gosnmp.Null}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val, display, err := pduToValue(tt.pdu, "to_one")
+			require.NoError(t, err)
+			assert.Equal(t, int64(1), val)
+			assert.Equal(t, tt.want, display)
+		})
+	}
+}
+
+// The bundled Palo Alto profile converts its three HA state symbols with
+// to_one. Two devices in different states have to produce different series,
+// which they only do if the state reaches an attribute.
+func TestCollectTarget_ToOneStatesAreDistinguishable(t *testing.T) {
+	const (
+		sysObjValue = "1.3.6.1.4.1.25461.2.3.1"
+		haStateOID  = "1.3.6.1.4.1.25461.2.1.2.1.11.0"
+		haModeOID   = "1.3.6.1.4.1.25461.2.1.2.1.13.0"
+	)
+	collectState := func(host, state, mode string) []observedPoint {
+		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			haStateOID:     {haStateOID: stringPDU(haStateOID, state)},
+			haModeOID:      {haModeOID: stringPDU(haModeOID, mode)},
+		}}
+		c := newBundledCollector(t, walkerFactory(w))
+		require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+		return c.testDeviceStore("p", host)["snmp.pansyshastate"]
+	}
+
+	active := collectState("10.0.0.71", "active", "active-passive")
+	passive := collectState("10.0.0.72", "passive", "active-passive")
+	require.Len(t, active, 1)
+	require.Len(t, passive, 1)
+	assert.Equal(t, int64(1), active[0].value)
+	assert.Equal(t, int64(1), passive[0].value)
+	assert.Equal(t, "active", attrValue(active[0], "panSysHAState_value"))
+	assert.Equal(t, "passive", attrValue(passive[0], "panSysHAState_value"))
+}
+
+// The F5 pool member status detail is a table column converted with to_one, so
+// the text has to survive the table path too, per row.
+func TestCollectTarget_ToOneKeepsTheTextOnTableRows(t *testing.T) {
+	const (
+		host        = "10.0.0.73"
+		sysObjValue = "1.3.6.1.4.1.3375.2.1.3.4.10"
+		reasonOID   = "1.3.6.1.4.1.3375.2.2.5.6.2.1.8"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		reasonOID: {
+			reasonOID + ".1": stringPDU(reasonOID+".1", "Pool member is available"),
+			reasonOID + ".2": stringPDU(reasonOID+".2", "Pool member has been marked down"),
+		},
+	}}
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.ltmpoolmbrstatusdetailreason"]
+	require.Len(t, pts, 2)
+	byIndex := map[string]string{}
+	for _, pt := range pts {
+		require.Equal(t, int64(1), pt.value)
+		byIndex[attrValue(pt, "row_index")] = attrValue(pt, "ltmPoolMbrStatusDetailReason_value")
+	}
+	assert.Equal(t, map[string]string{
+		"1": "Pool member is available",
+		"2": "Pool member has been marked down",
+	}, byIndex)
+}
+
+// A symbol may declare an enum beside to_one. The converted value is 1
+// whatever the device reported, so naming the enum member numbered 1 would
+// label every state with the same name, and label it wrongly. Four bundled
+// symbols have that shape.
+func TestCollectTarget_ToOneDoesNotNameAnEnumMember(t *testing.T) {
+	const (
+		host        = "10.0.0.74"
+		sysObjValue = "1.3.6.1.4.1.9999.74"
+		stateOID    = "1.3.6.1.4.1.9999.74.1.3.0"
+	)
+	p := profileWithOID(sysObjValue, "enum.yml", []profiles.MetricEntry{{
+		Symbols: []profiles.Symbol{{
+			Name:       "contactState",
+			OID:        stateOID,
+			Conversion: "to_one",
+			Enum:       map[string]int{"open": 1, "closed": 2},
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		stateOID:       {stateOID: intPDU(stateOID, 2)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.contactstate"]
+	require.Len(t, pts, 1)
+	assert.Empty(t, attrValue(pts[0], "contactState_status"), "to_one discards the number the enum names")
+	assert.Equal(t, "2", attrValue(pts[0], "contactState_value"))
+}
