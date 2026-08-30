@@ -4528,3 +4528,158 @@ func TestClose_DropsTheStateTheCallbacksRead(t *testing.T) {
 	assert.Empty(t, c.pollState, "the poll windows go with the device they throttled")
 	assert.Empty(t, c.reviewedProfiles, "the profile review set goes with the profile set")
 }
+
+// ---------------------------------------------------------------------------
+// A prefixed conversion has to parse before it counts as supported
+// ---------------------------------------------------------------------------
+
+// The gate classified anything carrying a known prefix as supported without
+// reading the rest of it, so a pattern that does not compile, or an endianness
+// or width nothing recognises, passed review. A numeric PDU then took the
+// numeric branch and shipped its value raw under a metric named for a
+// transformed one.
+func TestConversionError_MalformedPrefixedFormsAreRefused(t *testing.T) {
+	for _, tt := range []struct {
+		conversion string
+		wantErr    bool
+	}{
+		{conversion: ""},
+		{conversion: "to_one"},
+		{conversion: "hextoip"},
+		{conversion: "hwaddr"},
+		{conversion: "hextoint:BigEndian:uint16"},
+		{conversion: "hextoint:LittleEndian:uint32"},
+		{conversion: "hextoint:BigEndian:uint64"},
+		{conversion: `regexp:(\d+)`},
+		{conversion: "regexp:60 Secs.*?(\\d+)"},
+		// An empty pattern compiles and matches everything, so it is a
+		// question of what the device answers rather than of syntax.
+		{conversion: "regexp:"},
+		{conversion: "hextoint:MiddleEndian:uint16", wantErr: true},
+		{conversion: "hextoint:BigEndian:uint7", wantErr: true},
+		{conversion: "hextoint:BigEndian", wantErr: true},
+		{conversion: "hextoint:", wantErr: true},
+		{conversion: "regexp:[", wantErr: true},
+		{conversion: "regexp:(", wantErr: true},
+		{conversion: "regexp:a{2,1}", wantErr: true},
+		{conversion: "powerset_status", wantErr: true},
+	} {
+		t.Run(tt.conversion, func(t *testing.T) {
+			err := conversionError(tt.conversion)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// The gate and the collection path have to agree, so a malformed conversion
+// makes the symbol unusable and it is skipped before it is walked, exactly like
+// one the collector never implemented.
+func TestCollectTarget_MalformedConversionExportsNothing(t *testing.T) {
+	const (
+		host        = "10.0.0.75"
+		plainOID    = "1.3.6.1.4.1.99.10.1.0"
+		patternOID  = "1.3.6.1.4.1.99.10.2.0"
+		widthOID    = "1.3.6.1.4.1.99.10.3.0"
+		sysObjValue = "1.3.6.1.4.1.99.10"
+	)
+	p := profileWithOID(sysObjValue, "malformed-conversion.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "plainLoad", OID: plainOID}},
+		{Symbol: &profiles.Symbol{Name: "patternLoad", OID: patternOID, Conversion: "regexp:["}},
+		{Symbol: &profiles.Symbol{Name: "widthLoad", OID: widthOID, Conversion: "hextoint:MiddleEndian:uint7"}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		plainOID:       {plainOID: intPDU(plainOID, 7)},
+		patternOID:     {patternOID: intPDU(patternOID, 42)},
+		widthOID:       {widthOID: counter32PDU(widthOID, 42)},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Empty(t, store["snmp.patternload"], "a pattern that does not compile must export nothing")
+	assert.Empty(t, store["snmp.widthload"], "an unrecognised endianness and width must export nothing")
+	assert.NotContains(t, w.walkCalls, patternOID, "the symbol is skipped before it is walked")
+	assert.NotContains(t, w.walkCalls, widthOID, "the symbol is skipped before it is walked")
+
+	require.Len(t, store["snmp.plainload"], 1, "a symbol declaring no conversion is untouched")
+	assert.Equal(t, int64(7), store["snmp.plainload"][0].value)
+}
+
+// The review has to say which conversion it refused and why, since the profile
+// names a value the export will not carry.
+func TestReviewProfile_MalformedConversionIsReported(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		patternOID  = "1.3.6.1.4.1.99.11.1.0"
+		sysObjValue = "1.3.6.1.4.1.99.11"
+	)
+	p := profileWithOID(sysObjValue, "malformed-report.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "patternLoad", OID: patternOID, Conversion: "regexp:["}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+	}}
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.76"), mustAuth(), "p", DialOptions{}))
+
+	assert.Contains(t, logs.String(), "conversion=regexp:[")
+	assert.Contains(t, logs.String(), "symbol=patternLoad")
+	assert.Contains(t, logs.String(), "invalid regexp")
+}
+
+// Nothing bundled declares a prefixed conversion that does not parse, so the
+// gate takes no bundled metric away. The counts are asserted so a profile added
+// with one of these forms is not silently left unexercised.
+func TestConversionError_BundledPrefixedConversionsAllParse(t *testing.T) {
+	loader, err := profiles.LoadProfiles("", discardLogger)
+	require.NoError(t, err)
+	all, err := loader.AllResolved()
+	require.NoError(t, err)
+
+	counts := map[string]int{}
+	var malformed []string
+	check := func(relPath, what, conversion string) {
+		switch {
+		case strings.HasPrefix(conversion, "hextoint:"):
+			counts["hextoint:"]++
+		case strings.HasPrefix(conversion, "regexp:"):
+			counts["regexp:"]++
+		default:
+			return
+		}
+		if err := conversionError(conversion); err != nil {
+			malformed = append(malformed, relPath+" "+what+" "+conversion+": "+err.Error())
+		}
+	}
+	checkTags := func(relPath string, tags []profiles.MetricTag) {
+		for i := range tags {
+			if col := metricTagColumn(&tags[i]); col != nil {
+				check(relPath, col.Name, col.Conversion)
+			}
+		}
+	}
+	for _, p := range all {
+		checkTags(p.RelPath, p.MetricTags)
+		for _, entry := range p.Metrics {
+			if entry.Symbol != nil {
+				check(p.RelPath, entry.Symbol.Name, entry.Symbol.Conversion)
+			}
+			for i := range entry.Symbols {
+				check(p.RelPath, entry.Symbols[i].Name, entry.Symbols[i].Conversion)
+			}
+			checkTags(p.RelPath, entry.MetricTags)
+		}
+	}
+	assert.Empty(t, malformed)
+	// Three regexp: symbols and two hextoint: tag columns, which is every
+	// prefixed declaration the bundled set carries.
+	assert.Equal(t, map[string]int{"hextoint:": 2, "regexp:": 3}, counts)
+}

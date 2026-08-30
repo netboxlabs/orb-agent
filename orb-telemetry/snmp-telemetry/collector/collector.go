@@ -594,22 +594,22 @@ func unusableSymbolReason(sym *profiles.Symbol) string {
 		// be wrong rather than merely coarse.
 		return "declares a script this collector does not run"
 	}
-	if !supportedConversion(sym.Conversion) {
-		return unsupportedConversionReason
+	if conversionError(sym.Conversion) != nil {
+		return unusableConversionReason
 	}
 	return ""
 }
 
-// unsupportedConversionReason is why a symbol declaring a conversion pduToValue
-// does not implement is unusable. It is named so the review can recognise it
-// and report the conversion itself rather than this text.
-const unsupportedConversionReason = "declares a conversion this collector does not implement"
+// unusableConversionReason is why a symbol declaring a conversion pduToValue
+// cannot apply is unusable. It is named so the review can recognise it and
+// report the conversion and the reason rather than this text.
+const unusableConversionReason = "declares a conversion this collector cannot apply"
 
-// supportedConversion reports whether pduToValue implements the conversion a
-// symbol declares. An empty conversion is the plain numeric path.
+// conversionError says why pduToValue cannot apply the conversion a symbol
+// declares, or nil when it can. An empty conversion is the plain numeric path.
 //
 // It mirrors the branches in pduToValue: a new conversion has to be added in
-// both places, or it will be reported as unsupported while working.
+// both places, or it will be reported as unusable while working.
 //
 // The set is the union across PDU types, which is what a symbol can be judged
 // on before the walk that reveals the type. Per type: to_one is implemented for
@@ -617,12 +617,26 @@ const unsupportedConversionReason = "declares a conversion this collector does n
 // empty conversion is the plain numeric path; hextoip, hwaddr, hextoint and
 // regexp decode an OctetString. An enum is not a conversion and is applied to
 // the value afterwards, so it does not appear here.
-func supportedConversion(conversion string) bool {
+//
+// The two prefixed forms carry an argument, and it is parsed here through the
+// same calls that apply them rather than checked against a second description
+// of the syntax. A pattern that does not compile, or an endianness or width
+// nothing recognises, can be applied to no PDU at all, so a prefix on its own
+// is not enough to call the conversion supported.
+func conversionError(conversion string) error {
 	switch conversion {
 	case "", "to_one", "hextoip", "hwaddr":
-		return true
+		return nil
 	}
-	return strings.HasPrefix(conversion, "hextoint:") || strings.HasPrefix(conversion, "regexp:")
+	if strings.HasPrefix(conversion, "hextoint:") {
+		_, _, err := parseHexToInt(conversion)
+		return err
+	}
+	if strings.HasPrefix(conversion, "regexp:") {
+		_, err := parseRegexpConversion(conversion)
+		return err
+	}
+	return fmt.Errorf("conversion %q is not implemented", conversion)
 }
 
 // reviewProfile warns about every declaration in a matched profile that the
@@ -652,9 +666,10 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 		c.reportUnsetEnumMembers(sym.Enum, "symbol", sym.Name, name)
 		switch reason := unusableSymbolReason(sym); reason {
 		case "":
-		case unsupportedConversionReason:
-			c.logger.Warn("Skipping metric: SNMP profile declares a conversion this collector does not implement",
-				"conversion", sym.Conversion, "symbol", sym.Name, "oid", sym.OID, "profile", name)
+		case unusableConversionReason:
+			c.logger.Warn("Skipping metric: SNMP profile declares a conversion this collector cannot apply",
+				"conversion", sym.Conversion, "reason", conversionError(sym.Conversion),
+				"symbol", sym.Name, "oid", sym.OID, "profile", name)
 		default:
 			c.logger.Warn("Skipping metric: SNMP profile declares a symbol this collector cannot collect",
 				"reason", reason, "symbol", sym.Name, "oid", sym.OID, "profile", name)
@@ -1529,61 +1544,82 @@ func signedValue(v uint64) (int64, error) {
 	return int64(v), nil
 }
 
-// applyHexToInt converts an OctetString byte slice to an integer using
-// the hextoint:<endianness>:<type> conversion rule.
-func applyHexToInt(raw []byte, conversion string) (int64, error) {
+// parseHexToInt reads the byte order and width out of a
+// hextoint:<endianness>:<type> conversion. It is the syntax half of
+// applyHexToInt, split out so profile review judges the conversion through the
+// same parse that applies it.
+func parseHexToInt(conversion string) (binary.ByteOrder, int, error) {
 	parts := strings.SplitN(conversion, ":", 3)
 	if len(parts) != 3 {
-		return 0, fmt.Errorf("invalid hextoint format: %s", conversion)
+		return nil, 0, fmt.Errorf("invalid hextoint format: %s", conversion)
 	}
-	endianStr := parts[1]
-	typeStr := parts[2]
-
-	decoded := raw
-	if b, err := hex.DecodeString(strings.TrimSpace(string(raw))); err == nil {
-		decoded = b
-	}
-
 	var order binary.ByteOrder
-	switch endianStr {
+	switch parts[1] {
 	case "BigEndian":
 		order = binary.BigEndian
 	case "LittleEndian":
 		order = binary.LittleEndian
 	default:
-		return 0, fmt.Errorf("unknown endianness: %s", endianStr)
+		return nil, 0, fmt.Errorf("unknown endianness: %s", parts[1])
+	}
+	switch parts[2] {
+	case "uint16":
+		return order, 2, nil
+	case "uint32":
+		return order, 4, nil
+	case "uint64":
+		return order, 8, nil
+	}
+	return nil, 0, fmt.Errorf("unknown hextoint type: %s", parts[2])
+}
+
+// applyHexToInt converts an OctetString byte slice to an integer using
+// the hextoint:<endianness>:<type> conversion rule.
+func applyHexToInt(raw []byte, conversion string) (int64, error) {
+	order, width, err := parseHexToInt(conversion)
+	if err != nil {
+		return 0, err
 	}
 
-	switch typeStr {
-	case "uint16":
-		if len(decoded) < 2 {
-			return 0, fmt.Errorf("too few bytes for uint16")
-		}
+	decoded := raw
+	if b, err := hex.DecodeString(strings.TrimSpace(string(raw))); err == nil {
+		decoded = b
+	}
+	if len(decoded) < width {
+		return 0, fmt.Errorf("too few bytes for %s", conversion)
+	}
+
+	switch width {
+	case 2:
 		return int64(order.Uint16(decoded[:2])), nil
-	case "uint32":
-		if len(decoded) < 4 {
-			return 0, fmt.Errorf("too few bytes for uint32")
-		}
+	case 4:
 		return int64(order.Uint32(decoded[:4])), nil
-	case "uint64":
-		if len(decoded) < 8 {
-			return 0, fmt.Errorf("too few bytes for uint64")
-		}
+	default:
 		return signedValue(order.Uint64(decoded[:8]))
 	}
-	return 0, fmt.Errorf("unknown hextoint type: %s", typeStr)
+}
+
+// parseRegexpConversion compiles the pattern a regexp: conversion carries. It
+// is the syntax half of applyRegexp, split out so profile review judges the
+// conversion through the same compile that applies it.
+func parseRegexpConversion(conversion string) (*regexp.Regexp, error) {
+	pattern := strings.TrimPrefix(conversion, "regexp:")
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid regexp %q: %w", pattern, err)
+	}
+	return re, nil
 }
 
 // applyRegexp applies a regexp: conversion to a string value.
 func applyRegexp(raw, conversion string) (int64, string, error) {
-	pattern := strings.TrimPrefix(conversion, "regexp:")
-	re, err := regexp.Compile(pattern)
+	re, err := parseRegexpConversion(conversion)
 	if err != nil {
-		return 0, "", fmt.Errorf("invalid regexp %q: %w", pattern, err)
+		return 0, "", err
 	}
 	matches := re.FindStringSubmatch(raw)
 	if len(matches) == 0 {
-		return 0, "", fmt.Errorf("regexp %q did not match %q", pattern, raw)
+		return 0, "", fmt.Errorf("regexp %q did not match %q", re, raw)
 	}
 	extracted := matches[0]
 	if len(matches) > 1 {
