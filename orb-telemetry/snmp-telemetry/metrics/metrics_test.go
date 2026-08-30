@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -194,4 +195,44 @@ func TestSetupMetricsExport_WiresMeter(t *testing.T) {
 	err := SetupMetricsExport(context.Background(), testLogger(), "localhost:4317", 60)
 	require.NoError(t, err)
 	assert.NotNil(t, GetMeter())
+}
+
+// The SDK's periodic reader starts a ticker at the interval it is handed, and
+// a ticker cannot run at zero or less: it panics on a goroutine nobody
+// recovers, so the process dies instead of serving. A period that cannot run
+// is refused here, while there is still a caller to report it to.
+func TestSetupMetricsExport_NonPositivePeriodIsRefused(t *testing.T) {
+	for _, period := range []int{0, -1, -60} {
+		t.Run(strconv.Itoa(period), func(t *testing.T) {
+			ResetMeter()
+			t.Cleanup(ResetMeter)
+
+			err := SetupMetricsExport(context.Background(), testLogger(), "localhost:4317", period)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be greater than 0")
+			assert.Contains(t, err.Error(), strconv.Itoa(period), "the error must name the value it refused")
+			assert.Nil(t, GetMeter(), "a refused period installs no meter")
+		})
+	}
+}
+
+// One second is the shortest interval a ticker runs at, so it is accepted
+// rather than rounded up to the default.
+func TestSetupMetricsExport_ShortestUsablePeriodIsAccepted(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(func() { shutdownIgnoreFlushError(t) })
+
+	err := SetupMetricsExport(context.Background(), testLogger(), "localhost:4317", 1)
+	require.NoError(t, err)
+	assert.NotNil(t, GetMeter())
+}
+
+// No endpoint disables metrics collection, so there is no reader to interval
+// and nothing to refuse.
+func TestSetupMetricsExport_NonPositivePeriodIsInertWithNoEndpoint(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), "", 0))
+	assert.Nil(t, GetMeter())
 }

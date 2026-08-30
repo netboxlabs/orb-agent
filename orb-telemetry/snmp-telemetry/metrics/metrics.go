@@ -62,10 +62,19 @@ func endpointOptions(endpoint string) []otlpmetric.Option {
 }
 
 // SetupMetricsExport configures the OTLP metrics exporter with a periodic reader.
+//
+// A non-positive export period is refused rather than corrected. The SDK's
+// WithInterval discards such a value and leaves the reader on its own 60
+// second default, so the period this flag documents never applies and the
+// startup line reports a cadence nothing exports at. Refusing it reports the
+// value while there is still a caller to report it to.
 func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string, exportPeriodSeconds int) error {
 	if endpoint == "" {
 		logg.Info("No metrics endpoint provided, metrics collection is disabled")
 		return nil
+	}
+	if exportPeriodSeconds <= 0 {
+		return fmt.Errorf("otel export period must be greater than 0 seconds, got %d", exportPeriodSeconds)
 	}
 
 	exporter, err := otlpmetric.New(ctx, endpointOptions(endpoint)...)
