@@ -495,3 +495,107 @@ metrics:
 
 	assert.Equal(t, 1, strings.Count(buf.String(), "Ignoring metric entry this collector cannot read"))
 }
+
+// Three bundled profiles give one enum value to two members. The report names
+// them, since the label those values would have carried is gone from every
+// device the profiles match.
+func TestAllResolved_ReportsEnumValuesTwoMembersCarry(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	l, err := LoadProfiles("", logger)
+	require.NoError(t, err)
+	_, err = l.AllResolved()
+	require.NoError(t, err)
+
+	out := buf.String()
+	const msg = "SNMP profile enum gives one value to more than one member, that value is left unlabelled"
+	assert.Equal(t, 3, strings.Count(out, msg), "three bundled files, one collision each")
+	for _, want := range []string{
+		`file=cisco/cisco-apic-server.yml`, `column=entSensorScale`, `"[nano zetta]"`,
+		`file=cisco/cisco-ucs.yml`, `symbol=cucsEquipmentHealthLedOperState`, `"[blinking off]"`,
+		`file=huawei/huawei-all-devices.yml`, `symbol=hwEntityOperStatus`, `"[enabled offline]"`,
+	} {
+		assert.Contains(t, out, want)
+	}
+}
+
+// The three collisions are all of them. A fourth would go unlabelled without
+// anyone deciding it should, so the count is asserted against the bundle.
+func TestAllResolved_NoOtherBundledEnumHasACollision(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	files := make(map[string]int)
+	for rel, p := range l.byFile {
+		for _, e := range enumOwners(p) {
+			if n := len(e.enum.Duplicated()); n > 0 {
+				files[rel] += n
+			}
+		}
+	}
+	assert.Equal(t, map[string]int{
+		"cisco/cisco-apic-server.yml":   1,
+		"cisco/cisco-ucs.yml":           1,
+		"huawei/huawei-all-devices.yml": 1,
+	}, files)
+}
+
+// Every enum a profile can declare is reviewed, not only the ones the bundled
+// files happen to collide in: a scalar symbol's, a table symbol's, and the tag
+// columns declared on an entry and on the profile itself.
+func TestAllResolved_ReviewsEveryEnumAProfileDeclares(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "collide.yml", `
+sysobjectid: 1.3.6.1.4.1.99.2
+metrics:
+  - MIB: TEST-MIB
+    symbol:
+      name: scalarState
+      OID: 1.2.3.0
+      enum:
+        up: 1
+        online: 1
+  - MIB: TEST-MIB
+    table:
+      name: envTable
+      OID: 1.2.4
+    symbols:
+      - name: rowState
+        OID: 1.2.4.1.1
+        enum:
+          hot: 2
+          warm: 2
+    metric_tags:
+      - column:
+          name: rowKind
+          OID: 1.2.4.1.2
+          enum:
+            fan: 3
+            blower: 3
+metric_tags:
+  - symbol:
+      name: deviceKind
+      OID: 1.2.5.0
+      enum:
+        rack: 4
+        cabinet: 4
+`)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	l, err := NewLoader(dir, logger)
+	require.NoError(t, err)
+	_, err = l.AllResolved()
+	require.NoError(t, err)
+
+	out := buf.String()
+	for _, want := range []string{
+		`symbol=scalarState`, `"[online up]"`,
+		`symbol=rowState`, `"[hot warm]"`,
+		`column=rowKind`, `"[blower fan]"`,
+		`column=deviceKind`, `"[cabinet rack]"`,
+	} {
+		assert.Contains(t, out, want)
+	}
+	assert.Equal(t, 4, strings.Count(out, "left unlabelled"))
+}

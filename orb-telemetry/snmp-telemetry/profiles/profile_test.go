@@ -461,3 +461,79 @@ metrics:
 	assert.Equal(t, "inner", p.Metrics[0].Symbol.Name)
 	assert.Equal(t, "9.9.9.9", p.Metrics[0].Symbol.OID)
 }
+
+// A bundled enum can give one value to two members. Ranging the map returned
+// whichever name came first that time, so identical device data alternated its
+// label between polls and split one device's readings across two series. An
+// absent label is honest where an arbitrary one is wrong half the time, so the
+// value maps nothing and the members that carry a value of their own are
+// untouched.
+func TestEnum_ValueTwoMembersCarryNamesNothing(t *testing.T) {
+	const doc = `
+metrics:
+  - MIB: TEST-MIB
+    symbols:
+      - name: entityOperStatus
+        OID: 1.2.3.1.1
+        enum:
+          normal: 1
+          enabled: 3
+          offline: 3
+          disabled: 4
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	sym := p.Metrics[0].Symbols[0]
+
+	assert.Equal(t, map[string]int{"normal": 1, "enabled": 3, "offline": 3, "disabled": 4}, sym.Enum.Values,
+		"both members stay readable, it is the lookup that has no answer")
+	assert.Equal(t, "normal", sym.Enum.Name(1))
+	assert.Equal(t, "disabled", sym.Enum.Name(4))
+	// Map order is randomized per range, so a lookup that picked a winner
+	// would answer with either name well inside this many attempts.
+	for i := 0; i < 2000; i++ {
+		require.Empty(t, sym.Enum.Name(3), "a value two members carry names neither")
+	}
+}
+
+// Duplicated is what the report reads. It names every value more than one
+// member carries, in a fixed order, and says nothing about the rest.
+func TestEnum_DuplicatedListsTheCollisions(t *testing.T) {
+	const doc = `
+metrics:
+  - MIB: TEST-MIB
+    symbols:
+      - name: unitScale
+        OID: 1.2.3.1.1
+        enum:
+          nano: 6
+          zetta: 6
+          milli: 3
+          giga: 9
+          billion: 9
+          none:
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	dup := p.Metrics[0].Symbols[0].Enum.Duplicated()
+	assert.Equal(t, []EnumCollision{
+		{Value: 6, Names: []string{"nano", "zetta"}},
+		{Value: 9, Names: []string{"billion", "giga"}},
+	}, dup)
+
+	const clean = `
+metrics:
+  - MIB: TEST-MIB
+    symbols:
+      - name: state
+        OID: 1.2.3.1.1
+        enum:
+          up: 1
+          down: 2
+          unknown:
+`
+	var q Profile
+	require.NoError(t, yaml.Unmarshal([]byte(clean), &q))
+	assert.Empty(t, q.Metrics[0].Symbols[0].Enum.Duplicated(),
+		"a member with no value collides with nothing")
+}

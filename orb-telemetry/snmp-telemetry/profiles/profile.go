@@ -2,6 +2,8 @@ package profiles
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -185,14 +187,54 @@ type Enum struct {
 	Unset []string
 }
 
-// Name returns the member val falls on, or "" when no member carries it.
+// Name returns the member val falls on, or "" when no member carries it or
+// more than one does.
+//
+// A profile can give one value to two members, and there is no ground for
+// preferring either name: the device reported a number, and the profile says
+// it means both things. Ranging the map answered with whichever came first
+// that time, so one device's unchanged reading alternated its label between
+// polls and split into two series. Naming a fixed winner would settle the
+// series and still be the wrong name about half the time, so such a value is
+// left unlabelled and reported instead.
 func (e Enum) Name(val int64) string {
-	for name, v := range e.Values {
+	var name string
+	found := 0
+	for n, v := range e.Values {
 		if int64(v) == val {
-			return name
+			name = n
+			found++
 		}
 	}
-	return ""
+	if found != 1 {
+		return ""
+	}
+	return name
+}
+
+// EnumCollision is one value that more than one enum member carries, with the
+// members that carry it.
+type EnumCollision struct {
+	Value int
+	Names []string
+}
+
+// Duplicated returns the values more than one member carries, by ascending
+// value, each with its member names in order. It is empty for the enums that
+// map every value once, which is nearly all of them.
+func (e Enum) Duplicated() []EnumCollision {
+	byValue := make(map[int][]string, len(e.Values))
+	for name, v := range e.Values {
+		byValue[v] = append(byValue[v], name)
+	}
+	var out []EnumCollision
+	for _, v := range slices.Sorted(maps.Keys(byValue)) {
+		if len(byValue[v]) < 2 {
+			continue
+		}
+		out = append(out, EnumCollision{Value: v, Names: slices.Sorted(slices.Values(byValue[v]))})
+	}
+	return out
 }
 
 // Len returns the number of members that map a value.

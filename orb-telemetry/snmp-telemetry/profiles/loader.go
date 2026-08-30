@@ -315,6 +315,66 @@ func (l *Loader) AllResolved() ([]*Profile, error) {
 func (l *Loader) reportFiles() {
 	for _, rel := range slices.Sorted(maps.Keys(l.byFile)) {
 		reportUnreadableFlatEntries(l.byFile[rel], rel, l.logger)
+		reportEnumCollisions(l.byFile[rel], rel, l.logger)
+	}
+}
+
+// enumOwner is one enum and the declaration that carries it.
+type enumOwner struct {
+	// kind is "symbol" or "column", and is the log key the owner is named under.
+	kind string
+	name string
+	enum Enum
+}
+
+// enumOwners returns every enum a profile declares, in the order written: the
+// scalar and table symbols of each metric entry, and the tag columns of the
+// entries and of the profile itself. A tag writing its column's OID and name
+// directly on the tag declares no enum, so there is none to collect there.
+func enumOwners(p *Profile) []enumOwner {
+	var out []enumOwner
+	tags := func(mts []MetricTag) {
+		for i := range mts {
+			col := mts[i].Column
+			if col == nil {
+				col = mts[i].Symbol
+			}
+			if col == nil || col.Enum.Len() == 0 {
+				continue
+			}
+			out = append(out, enumOwner{kind: "column", name: col.Name, enum: col.Enum})
+		}
+	}
+	for _, entry := range p.Metrics {
+		syms := entry.Symbols
+		if entry.Symbol != nil {
+			syms = append([]Symbol{*entry.Symbol}, syms...)
+		}
+		for _, sym := range syms {
+			if sym.Enum.Len() == 0 {
+				continue
+			}
+			out = append(out, enumOwner{kind: "symbol", name: sym.Name, enum: sym.Enum})
+		}
+		tags(entry.MetricTags)
+	}
+	tags(p.MetricTags)
+	return out
+}
+
+// reportEnumCollisions names an enum value more than one member carries. The
+// label is dropped rather than decided by iteration order, so the attribute it
+// would have carried is missing from every device the profile matches, and
+// only the profile can say which of the two names the device meant.
+func reportEnumCollisions(p *Profile, rel string, logger *slog.Logger) {
+	for _, owner := range enumOwners(p) {
+		for _, dup := range owner.enum.Duplicated() {
+			logger.Warn("SNMP profile enum gives one value to more than one member, that value is left unlabelled",
+				"value", dup.Value,
+				"members", dup.Names,
+				owner.kind, config.SanitizeLogValue(owner.name),
+				"file", config.SanitizeLogValue(rel))
+		}
 	}
 }
 
