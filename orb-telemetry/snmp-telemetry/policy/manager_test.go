@@ -23,7 +23,7 @@ import (
 var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 
 func newTestManager() *Manager {
-	return NewManager(context.Background(), testLogger, "")
+	return NewManager(context.Background(), testLogger, Options{})
 }
 
 func v2cAuth() config.Authentication {
@@ -524,7 +524,7 @@ func TestGetPolicyStatuses_MixedState(t *testing.T) {
 
 func TestParsePolicies_WarnsOnUnknownKey(t *testing.T) {
 	var buf bytes.Buffer
-	m := NewManager(context.Background(), slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})), "")
+	m := NewManager(context.Background(), slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})), Options{})
 
 	_, err := m.ParsePolicies([]byte(`
 policies:

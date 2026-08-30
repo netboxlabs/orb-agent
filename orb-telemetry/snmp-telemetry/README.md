@@ -31,7 +31,7 @@ Usage of snmp-telemetry:
   -help
     	show this help
   -host string
-    	server host (default "0.0.0.0")
+    	server host (default "localhost")
   -log-format string
     	log format (TEXT, JSON) (default "TEXT")
   -log-level string
@@ -40,11 +40,33 @@ Usage of snmp-telemetry:
     	OpenTelemetry exporter endpoint (e.g. localhost:4317). Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})
   -otel-export-period int
     	period in seconds between OpenTelemetry exports (default 10)
+  -policy-env-vars string
+    	comma-separated environment variable names a policy may read through a ${NAME} reference in community, username, auth_passphrase or priv_passphrase. Empty, the default, rejects every reference.
   -port int
     	server port (default 8078)
   -snmp-profiles-dir string
     	directory of ktranslate-compatible SNMP profile YAML files to overlay on the profiles bundled into the binary. Files here replace bundled ones with the same relative path; everything else is unaffected. Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_DIR})
 ```
+
+### Binding and access control
+
+The policy API has no authentication. Anyone who can reach the listener can
+create a policy, and a policy names the SNMP credentials to send and the host to
+send them to, so reaching the listener is enough to make the backend poll
+arbitrary hosts with whatever credentials the caller supplies. `--host`
+therefore defaults to `localhost`: the agent runs this backend as a child
+process and reaches it over the loopback interface, so nothing legitimate needs
+a wider bind.
+
+Passing `--host 0.0.0.0` publishes that unauthenticated API on every interface.
+Do it only behind access control of your own, such as a network policy or a
+reverse proxy that authenticates callers.
+
+This default differs from the discovery backends in `orb-discovery`, which still
+default to `0.0.0.0`. The difference is deliberate rather than an oversight: the
+agent passes `--host localhost` explicitly to every backend it launches, so the
+wider default is what a standalone run gets, and there it is a listener nothing
+is guarding.
 
 ### Policy Configuration
 
@@ -103,8 +125,23 @@ before polling starts, not a recommended size: polling tens of thousands of
 devices from one policy is far past what one agent should carry.
 
 `community`, `username`, `auth_passphrase`, and `priv_passphrase` accept
-`${VARNAME}` environment variable references. If the referenced variable is
-unset, the policy is rejected.
+`${VARNAME}` environment variable references, but only for a variable the
+operator listed in `--policy-env-vars`. A reference to any other name is
+rejected, and so is every reference when the flag is unset. If an allowed
+variable is unset, the policy is rejected too.
+
+```sh
+snmp-telemetry --policy-env-vars SNMP_COMMUNITY,SNMP_AUTH_PASS,SNMP_PRIV_PASS
+```
+
+The list is a security boundary, not a convenience. A policy arrives over the
+API and names both a credential and the host to send it to, and this backend
+runs as a child of the agent and inherits its whole environment, so a resolver
+that read any variable would let a policy send the agent's own secrets to a host
+of the policy author's choosing. The names are matched exactly; there is no
+prefix or pattern form. `--otel-endpoint` and `--snmp-profiles-dir` accept
+`${VARNAME}` too and are not restricted, because they are set on the command
+line rather than by a policy.
 
 Every SNMPv3 authentication block needs a `username`, whatever its
 `security_level`: the SNMP client refuses the connection without one, so a

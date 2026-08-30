@@ -53,19 +53,42 @@ type Manager struct {
 	logger             *slog.Logger
 	ctx                context.Context
 	defaultProfilesDir string
+	// allowedEnvVars is the set of environment variables a policy may read
+	// through a ${NAME} credential reference. Empty reads none.
+	allowedEnvVars map[string]struct{}
 
 	collectorsMu    sync.Mutex
 	collectorsByDir map[string]*collector.MetricsCollector
 }
 
+// Options configures a Manager.
+type Options struct {
+	// DefaultProfilesDir is the profile overlay every policy uses unless it
+	// names its own. It comes from the command line, so it is not restricted.
+	DefaultProfilesDir string
+	// AllowedEnvVars names the environment variables a policy may read through
+	// a ${NAME} credential reference. Empty, the default, rejects every
+	// reference: a policy arrives over an unauthenticated API and the backend
+	// inherits the agent's environment, so an unrestricted resolver hands any
+	// process secret to whatever host the policy targets.
+	AllowedEnvVars []string
+}
+
 // NewManager returns a new policy manager
-func NewManager(ctx context.Context, logger *slog.Logger, defaultProfilesDir string) *Manager {
+func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager {
+	allowed := make(map[string]struct{}, len(opts.AllowedEnvVars))
+	for _, name := range opts.AllowedEnvVars {
+		if name = strings.TrimSpace(name); name != "" {
+			allowed[name] = struct{}{}
+		}
+	}
 	return &Manager{
 		ctx:                ctx,
 		logger:             logger,
 		policies:           make(map[string]*Runner),
 		stopping:           make(map[string]chan struct{}),
-		defaultProfilesDir: defaultProfilesDir,
+		defaultProfilesDir: opts.DefaultProfilesDir,
+		allowedEnvVars:     allowed,
 		collectorsByDir:    make(map[string]*collector.MetricsCollector),
 	}
 }
@@ -476,7 +499,10 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	return nil
 }
 
-// resolveAuthenticationEnvVarsForAuth resolves environment variables for a single Authentication
+// resolveAuthenticationEnvVarsForAuth resolves environment variables for a single
+// Authentication. A reference is substituted only when the operator allowed its
+// name at startup: the value goes on the wire to the policy's own targets, so an
+// unrestricted resolver would let a policy read any variable in the process.
 func (m *Manager) resolveAuthenticationEnvVarsForAuth(auth *config.Authentication, context string) error {
 	if auth == nil {
 		return nil
@@ -493,6 +519,12 @@ func (m *Manager) resolveAuthenticationEnvVarsForAuth(auth *config.Authenticatio
 	}
 
 	for _, f := range fields {
+		if name, ok := env.Reference(*f.field); ok {
+			if _, allowed := m.allowedEnvVars[name]; !allowed {
+				return fmt.Errorf("%s: %s may not reference environment variable %s: allow it with --policy-env-vars",
+					context, f.label, name)
+			}
+		}
 		resolved, err := env.ResolveEnv(*f.field)
 		if err != nil {
 			return fmt.Errorf("%s: failed to resolve %s environment variable: %w", context, f.label, err)

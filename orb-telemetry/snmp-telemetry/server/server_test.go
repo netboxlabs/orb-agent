@@ -25,7 +25,7 @@ func newTestServer(t *testing.T) *server.Server {
 	t.Helper()
 	ctx := context.Background()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	manager := policy.NewManager(ctx, logger, "")
+	manager := policy.NewManager(ctx, logger, policy.Options{})
 	return server.NewServer("localhost", 8078, logger, manager, "1.0.0")
 }
 

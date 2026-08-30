@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -24,6 +25,15 @@ const AppName = "snmp-telemetry"
 
 // metricsFlushTimeout bounds the final export at shutdown.
 const metricsFlushTimeout = 5 * time.Second
+
+// defaultHost is the address the policy API binds unless --host says otherwise.
+// The API has no authentication, so anyone who can route to the listener can
+// create policies, and a policy names both the credentials to send and the host
+// to send them to. The agent runs this backend as a child process and reaches it
+// on the loopback interface, so binding there costs nothing and leaves no remote
+// caller. An operator who binds it wider is publishing an unauthenticated API
+// and has to put their own access control in front of it.
+const defaultHost = "localhost"
 
 // stopper is the part of the server the shutdown sequence uses.
 type stopper interface {
@@ -54,7 +64,7 @@ func flushMetrics(logger *slog.Logger, timeout time.Duration) {
 }
 
 func main() {
-	host := flag.String("host", "0.0.0.0", "server host")
+	host := flag.String("host", defaultHost, "server host")
 	port := flag.Int("port", 8078, "server port")
 	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
@@ -64,6 +74,10 @@ func main() {
 			"profiles bundled into the binary. Files here replace bundled ones with the "+
 			"same relative path; everything else is unaffected."+
 			" Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_DIR})")
+	policyEnvVars := flag.String("policy-env-vars", "",
+		"comma-separated environment variable names a policy may read through a ${NAME} "+
+			"reference in community, username, auth_passphrase or priv_passphrase. Empty, "+
+			"the default, rejects every reference.")
 	logLevel := flag.String("log-level", "INFO", "log level (DEBUG, INFO, WARN, ERROR)")
 	logFormat := flag.String("log-format", "TEXT", "log format (TEXT, JSON)")
 	help := flag.Bool("help", false, "show this help")
@@ -94,7 +108,10 @@ func main() {
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
-	manager := policy.NewManager(rootCtx, logger, profilesDir)
+	manager := policy.NewManager(rootCtx, logger, policy.Options{
+		DefaultProfilesDir: profilesDir,
+		AllowedEnvVars:     splitList(*policyEnvVars),
+	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 
 	shutdownMetrics := func() { flushMetrics(logger, metricsFlushTimeout) }
@@ -107,6 +124,19 @@ func main() {
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
 		shutdown(cancelFunc, srv, shutdownMetrics)
 	})
+}
+
+// splitList reads a comma-separated flag value as its non-empty, trimmed
+// entries. A trailing comma or a padded name would otherwise become an entry
+// that matches nothing, which on an allowlist reads as a name that was granted.
+func splitList(value string) []string {
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // waitForShutdown blocks until a stop signal or a server error asks the process

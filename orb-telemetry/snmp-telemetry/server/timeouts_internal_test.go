@@ -21,7 +21,7 @@ import (
 func newInternalTestServer(t *testing.T) *Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	manager := policy.NewManager(context.Background(), logger, "")
+	manager := policy.NewManager(context.Background(), logger, policy.Options{})
 	return NewServer("127.0.0.1", 0, logger, manager, "1.0.0")
 }
 
