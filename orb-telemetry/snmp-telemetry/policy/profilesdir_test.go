@@ -85,6 +85,114 @@ func TestValidateProfilesDir_RejectsWhatTheRootDoesNotContain(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// validateProfilesDir: confinement survives symlinks
+// ---------------------------------------------------------------------------
+
+// resolved is the path with every symlink component followed, which is what the
+// confinement compares and what the loader ends up walking.
+func resolved(t *testing.T, path string) string {
+	t.Helper()
+	got, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	return got
+}
+
+// The ".." substring test is the barrier static analysis recognises, so it has
+// to stay ahead of both containment checks and of any filesystem access. Each
+// case below would be refused by a later check too, so the ".." message is what
+// proves the barrier reached it first.
+func TestValidateProfilesDir_RefusesDotsBeforeAnythingElse(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "a..b"), 0o750))
+	outside := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(outside, "a..b"), 0o750))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "link")))
+
+	tests := []struct {
+		name string
+		dir  string
+	}{
+		{name: "ahead of the name containment check", dir: "../a..b"},
+		{name: "ahead of the canonical containment check", dir: filepath.Join(root, "link", "a..b")},
+		{name: "and refused even where both would accept", dir: filepath.Join(root, "a..b")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validateProfilesDir(root, tt.dir)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `must not contain ".."`)
+		})
+	}
+}
+
+// A symlink inside the root pointing out of it is the escape a lexical check
+// misses: the name stays under the root while os.Stat and filepath.WalkDir
+// follow the link into the external tree.
+func TestValidateProfilesDir_RejectsWhatResolvesOutOfTheRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(outside, "secrets"), 0o750))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "link")))
+
+	tests := []struct {
+		name string
+		dir  string
+	}{
+		{name: "the link itself", dir: filepath.Join(root, "link")},
+		{name: "a directory under the link", dir: filepath.Join(root, "link", "secrets")},
+		{name: "the link named relative to the root", dir: "link/secrets"},
+		{name: "an absent path under the link", dir: filepath.Join(root, "link", "missing")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validateProfilesDir(root, tt.dir)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "SNMP profiles directory")
+		})
+	}
+}
+
+// A link that stays inside the root is a legitimate way to arrange a profile
+// tree, so it is accepted, and what comes back is the path that was checked
+// rather than the name that was asked for.
+func TestValidateProfilesDir_AcceptsWhatResolvesInsideTheRoot(t *testing.T) {
+	root := t.TempDir()
+	vendor := filepath.Join(root, "vendor-a")
+	require.NoError(t, os.Mkdir(vendor, 0o750))
+	require.NoError(t, os.Symlink(vendor, filepath.Join(root, "link")))
+
+	got, err := validateProfilesDir(root, filepath.Join(root, "link"))
+	require.NoError(t, err)
+	assert.Equal(t, resolved(t, vendor), got, "the checked path is the one handed on")
+}
+
+// The operator's root may itself be reached through a symlink. Both sides are
+// canonicalised, so an override under it is not rejected for the root's own
+// spelling.
+func TestValidateProfilesDir_AcceptsAnOverrideUnderASymlinkedRoot(t *testing.T) {
+	target := t.TempDir()
+	vendor := filepath.Join(target, "vendor-a")
+	require.NoError(t, os.Mkdir(vendor, 0o750))
+	root := filepath.Join(t.TempDir(), "root-link")
+	require.NoError(t, os.Symlink(target, root))
+
+	got, err := validateProfilesDir(root, filepath.Join(root, "vendor-a"))
+	require.NoError(t, err)
+	assert.Equal(t, resolved(t, vendor), got)
+}
+
+// A path inside the root that simply does not exist has nothing to resolve. It
+// stays accepted so the loader reports the directory as missing, rather than
+// the confinement reporting a resolution failure the operator cannot act on.
+func TestValidateProfilesDir_AcceptsAnAbsentPathInsideTheRoot(t *testing.T) {
+	root := t.TempDir()
+
+	got, err := validateProfilesDir(root, filepath.Join(root, "missing", "deeper"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(resolved(t, root), "missing", "deeper"), got)
+}
+
+// ---------------------------------------------------------------------------
 // StartPolicy: the override reaches the same check
 // ---------------------------------------------------------------------------
 
@@ -96,6 +204,40 @@ func TestStartPolicy_RejectsProfilesDirOutsideTheRoot(t *testing.T) {
 	require.Error(t, m.StartPolicy("policy-a", pol))
 	assert.Empty(t, m.policies)
 	assert.Zero(t, cachedDirs(m), "a rejected directory must not have been loaded")
+}
+
+// The end of the escape: a policy naming a link inside the root must not have
+// the tree behind it read.
+func TestStartPolicy_RejectsProfilesDirReachedThroughASymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "external.yaml"), []byte("name: external\n"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "link")))
+
+	m := newTestManagerRootedAt(root)
+	t.Cleanup(func() { require.NoError(t, m.Stop()) })
+	pol := minimalPolicy(v2cAuth())
+	pol.Config.ProfilesDir = filepath.Join(root, "link")
+
+	require.Error(t, m.StartPolicy("policy-a", pol))
+	assert.Empty(t, m.policies)
+	assert.Zero(t, cachedDirs(m), "the external tree must not have been walked")
+}
+
+// A directory inside the root that is not there is an operator mistake, and the
+// message has to name it as missing rather than as a path that cannot be
+// resolved.
+func TestStartPolicy_ReportsAnAbsentProfilesDirInsideTheRoot(t *testing.T) {
+	root := t.TempDir()
+	m := newTestManagerRootedAt(root)
+	t.Cleanup(func() { require.NoError(t, m.Stop()) })
+	pol := minimalPolicy(v2cAuth())
+	pol.Config.ProfilesDir = filepath.Join(root, "missing")
+
+	err := m.StartPolicy("policy-a", pol)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SNMP profiles directory not found")
+	assert.Zero(t, cachedDirs(m))
 }
 
 func TestStartPolicy_AcceptsProfilesDirUnderTheRoot(t *testing.T) {
@@ -249,7 +391,9 @@ func TestStopPolicy_ReleasesTheCollectorItStopsUsing(t *testing.T) {
 
 	m.collectorsMu.Lock()
 	spy := &closeSpy{m: m}
-	m.collectorsByDir[dir].collector = spy
+	// The cache is keyed by the canonical path, which is what the confinement
+	// hands the manager.
+	m.collectorsByDir[resolved(t, dir)].collector = spy
 	m.collectorsMu.Unlock()
 
 	require.NoError(t, m.StopPolicy("policy-a"))

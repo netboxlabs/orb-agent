@@ -173,7 +173,8 @@ profiles for that policy only, instead of the one passed to
 backend reads, so it is confined to `--snmp-profiles-root`. Without that flag no
 policy may set `profiles_dir` at all; with it, a policy names either an absolute
 path inside the root or a path relative to it, and anything else is rejected,
-`..` included.
+`..` included. The root confines the resolved path as well as the name, so a
+symlink inside the root that points out of it is refused rather than followed.
 
 ```sh
 snmp-telemetry --snmp-profiles-root /opt/orb/snmp-profiles \

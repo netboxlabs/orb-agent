@@ -229,12 +229,40 @@ func (m *Manager) HasPolicy(name string) bool {
 	return ok
 }
 
+// resolveExisting canonicalises path as far as the filesystem allows: it
+// follows every symlink in the deepest ancestor that resolves and appends the
+// components below it unchanged. A path that does not exist therefore still
+// yields the location it would occupy, rather than the error EvalSymlinks
+// returns for it. The walk terminates at the volume root, which always
+// resolves.
+func resolveExisting(path string) string {
+	rest := ""
+	for cur := path; ; {
+		if got, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(got, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
+	}
+}
+
 // validateProfilesDir resolves a policy-supplied profiles directory inside root
 // and rejects anything root does not contain. The value arrives over the API
 // and names a tree the backend stats and walks, so rejecting ".." alone is not
 // enough: an absolute path such as "/" carries none and would still be walked.
 // A relative path is read against root, so a policy names the subdirectory it
 // wants rather than repeating the root. An empty root rejects every override.
+//
+// Containment is checked twice: once on the names, which needs no filesystem
+// access and refuses the obvious cases, and again on the canonical paths, since
+// a symlink inside the root is a name inside it that the filesystem resolves
+// elsewhere. The canonical path is what comes back, so the caller stats and
+// walks what was checked. That narrows the window between the check and the
+// walk without closing it: a component can still be replaced afterwards.
 func validateProfilesDir(root, dir string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("SNMP profiles directory may not be set per policy: start the backend with --snmp-profiles-root to allow it")
@@ -258,7 +286,18 @@ func validateProfilesDir(root, dir string) (string, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("SNMP profiles directory must be inside %s: %s", cleanRoot, dir)
 	}
-	return clean, nil
+	// Both sides are canonicalised. The root is often reached through a link
+	// itself, and comparing a resolved candidate against an unresolved root
+	// would reject every legitimate override under such a root. A path inside
+	// the root that does not exist survives this, so the loader reports it as
+	// missing rather than the confinement reporting a resolution failure.
+	realRoot := resolveExisting(cleanRoot)
+	realDir := resolveExisting(clean)
+	rel, err = filepath.Rel(realRoot, realDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("SNMP profiles directory must be inside %s: %s resolves outside it", cleanRoot, dir)
+	}
+	return realDir, nil
 }
 
 // reserveStopping marks name as owned by a runner that is still stopping and
