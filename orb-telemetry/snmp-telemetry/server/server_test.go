@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/policy"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/server"
@@ -305,4 +307,164 @@ policies:
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// A policy name has to be one DELETE /policies/:policy can address
+// ---------------------------------------------------------------------------
+
+// namedPolicyBody builds a policy under name. The name is marshalled rather
+// than interpolated, so a name carrying a quote or a control character is still
+// a well-formed document and the test measures routing rather than YAML.
+func namedPolicyBody(t *testing.T, name, profilesDir string) []byte {
+	t.Helper()
+	body, err := yaml.Marshal(map[string]any{
+		"policies": map[string]any{
+			name: map[string]any{
+				"config": map[string]any{"metrics_interval": 60, "profiles_dir": profilesDir},
+				"scope": map[string]any{
+					"authentication": map[string]any{"protocol_version": "SNMPv2c", "community": "public"},
+					"targets":        []any{map[string]any{"host": "192.0.2.1"}},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return body
+}
+
+// The names policy.ValidatePolicyName accepts have to be names the router can
+// deliver back, or the rule is a second opinion the router never asked for.
+// Each one is created and then deleted through the real engine, the way the
+// agent does it, with the path escaped by the same call the agent's backends
+// use.
+func TestDeletePolicy_EveryAcceptedNameIsAddressable(t *testing.T) {
+	profilesDir := filepath.Join(testProfilesRoot(t), "profiles", "snmp-profiles")
+	names := []string{
+		"snmp_metrics_1",
+		"policy-a",
+		"a b",
+		"café",
+		"a.b",
+		"...",
+		"a%2Fb",
+		"a?b",
+		"a#b",
+		"a:b",
+		"a&b",
+		"a+b",
+		"a=b",
+		" padded ",
+	}
+	srv := newTestServer(t)
+	defer srv.Stop()
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, policy.ValidatePolicyName(name), "the rule rejects a name this test calls addressable")
+
+			w := postPolicy(t, srv, "application/x-yaml", namedPolicyBody(t, name, profilesDir))
+			require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+			w = httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodDelete, "/api/v1/policies/"+url.PathEscape(name), nil)
+			require.NoError(t, err)
+			srv.Router().ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+			// Decoded rather than matched against the raw body, which escapes
+			// the characters some of these names are here to carry.
+			var deleted struct {
+				Detail string `json:"detail"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &deleted))
+			assert.Contains(t, deleted.Detail, name, "the delete answered for another name")
+
+			w = httptest.NewRecorder()
+			req, err = http.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+			require.NoError(t, err)
+			srv.Router().ServeHTTP(w, req)
+			assert.JSONEq(t, `[]`, w.Body.String(), "the delete reached some other policy")
+		})
+	}
+}
+
+// The other half of the same claim: a name the rule refuses is a name the
+// router cannot deliver back, so accepting it would leave a policy that runs
+// until the backend is restarted. Each case names what the router does with it.
+func TestCreatePolicy_RejectsANameNoRouteCanAddress(t *testing.T) {
+	profilesDir := filepath.Join(testProfilesRoot(t), "profiles", "snmp-profiles")
+	for _, tc := range []struct {
+		label string
+		name  string
+	}{
+		{"empty", ""},
+		{"whitespace only", " "},
+		{"leading slash", "/a"},
+		{"embedded slash", "a/b"},
+		{"trailing slash", "a/"},
+		{"dot", "."},
+		{"dot dot", ".."},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			require.Error(t, policy.ValidatePolicyName(tc.name), "the rule accepts a name this test calls unaddressable")
+
+			srv := newTestServer(t)
+			defer srv.Stop()
+
+			w := postPolicy(t, srv, "application/x-yaml", namedPolicyBody(t, tc.name, profilesDir))
+			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "policy name")
+		})
+	}
+}
+
+// What the router does with each refused name, recorded rather than assumed.
+// A slash misses the route or, with a trailing one, redirects onto the
+// neighbouring name. A dot segment reaches the handler as it stands, and is
+// refused because it does not survive the path normalisation a client applies
+// before the request is sent.
+func TestDeletePolicy_RefusedNamesDoNotAddressTheirPolicy(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Stop()
+
+	for _, tc := range []struct {
+		label string
+		name  string
+		code  int
+	}{
+		{"empty misses the route", "", http.StatusNotFound},
+		{"leading slash misses the route", "/a", http.StatusNotFound},
+		{"embedded slash misses the route", "a/b", http.StatusNotFound},
+		{"trailing slash redirects onto another name", "a/", http.StatusTemporaryRedirect},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req, err := http.NewRequest(http.MethodDelete, "/api/v1/policies/"+url.PathEscape(tc.name), nil)
+			require.NoError(t, err)
+			srv.Router().ServeHTTP(w, req)
+
+			assert.Equal(t, tc.code, w.Code)
+			// The handler answers in JSON, so its absence is what says the
+			// request never reached it.
+			assert.NotContains(t, w.Body.String(), "policy not found")
+		})
+	}
+
+	// The redirect a trailing slash earns points at the name without it, so
+	// accepting "a/" would hand its delete to a policy called "a".
+	w := httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodDelete, "/api/v1/policies/"+url.PathEscape("a/"), nil)
+	require.NoError(t, err)
+	srv.Router().ServeHTTP(w, req)
+	assert.Equal(t, "/api/v1/policies/a", w.Header().Get("Location"))
+
+	// A dot segment does reach the handler, so routing alone does not refuse
+	// it. What refuses it is that a client assembling the path resolves it
+	// away: JoinPath is the stdlib call for that, and ".." leaves the
+	// collection entirely.
+	base, err := url.Parse("http://127.0.0.1:8078/api/v1/policies")
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:8078/api/v1", base.JoinPath(url.PathEscape("..")).String())
+	assert.Equal(t, "http://127.0.0.1:8078/api/v1/policies", base.JoinPath(url.PathEscape(".")).String())
 }

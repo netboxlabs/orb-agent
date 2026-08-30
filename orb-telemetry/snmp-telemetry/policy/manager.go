@@ -201,6 +201,9 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	}
 
 	for name, policy := range payload.Policies {
+		if err := ValidatePolicyName(name); err != nil {
+			return nil, err
+		}
 		normalizeAuthProtocolVersions(&policy)
 		normalizeTargetHosts(&policy)
 		payload.Policies[name] = policy
@@ -219,6 +222,37 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	}
 
 	return payload.Policies, nil
+}
+
+// ValidatePolicyName rejects a name DELETE /policies/:policy cannot address.
+// The YAML map key becomes the policy name, so without this a policy starts
+// under a name that can never be deleted or replaced, and the only way to get
+// rid of it is to restart the backend.
+//
+// What the rule excludes was read off the router rather than guessed at, and the
+// server package holds it to that. An empty segment matches no route. A slash
+// makes a second segment even when the client escapes it, since net/http decodes
+// %2F before gin sees the path; a trailing one is worse than a miss, because the
+// redirect drops it and the request lands on the neighbouring name instead. A
+// dot segment routes as it stands but carries no fixed meaning on the way: it is
+// resolved away by anything that normalises the path, url.URL.JoinPath included,
+// so DELETE for ".." addresses the parent collection.
+//
+// Nothing else is excluded. A space, a percent sequence, a query or fragment
+// character and a non-ASCII name all survive the round trip. Invalid UTF-8
+// cannot reach here at all, the YAML parser having refused the document, which
+// is what the exported "policy" metric attribute needs of the name.
+func ValidatePolicyName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errors.New("policy name must not be empty or only whitespace")
+	}
+	if strings.Contains(name, "/") {
+		return fmt.Errorf(`policy name must be a single path segment, so it may not contain "/": %q`, name)
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("policy name must be a single path segment, not a dot segment: %q", name)
+	}
+	return nil
 }
 
 // HasPolicy checks if the policy exists
@@ -320,6 +354,11 @@ func (m *Manager) reserveStopping(name string) func() {
 // happen together under mu, so two concurrent requests for the same name cannot
 // both start a runner.
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
+	// Checked here as well as in ParsePolicies, since this is the call that
+	// puts the name in the map a delete has to reach.
+	if err := ValidatePolicyName(name); err != nil {
+		return err
+	}
 	if len(policy.Scope.Targets) == 0 {
 		return fmt.Errorf("%s : no targets found in the policy", name)
 	}
