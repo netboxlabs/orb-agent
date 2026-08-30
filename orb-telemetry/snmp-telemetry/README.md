@@ -106,6 +106,10 @@ devices from one policy is far past what one agent should carry.
 `${VARNAME}` environment variable references. If the referenced variable is
 unset, the policy is rejected.
 
+Every SNMPv3 authentication block needs a `username`, whatever its
+`security_level`: the SNMP client refuses the connection without one, so a
+policy that omits it can never collect.
+
 An SNMPv3 target can set `context_name` to poll a named context instead of
 the device's default one. `context_name` is valid only inside an SNMPv3
 authentication block; setting it under `protocol_version: v1` or

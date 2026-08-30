@@ -385,10 +385,13 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 			auth.SecurityLevel != "authPriv" {
 			return fmt.Errorf("%s: invalid security level %s", context, auth.SecurityLevel)
 		}
+		// gosnmp validates the USM security parameters before it dials and
+		// requires a user name at every security level, so a v3 policy without
+		// one is reported as running while it can never collect.
+		if auth.Username == "" {
+			return fmt.Errorf("%s: missing username", context)
+		}
 		if auth.SecurityLevel == "authNoPriv" || auth.SecurityLevel == "authPriv" {
-			if auth.Username == "" {
-				return fmt.Errorf("%s: missing username", context)
-			}
 			if auth.AuthPassphrase == "" {
 				return fmt.Errorf("%s: missing auth passphrase", context)
 			}

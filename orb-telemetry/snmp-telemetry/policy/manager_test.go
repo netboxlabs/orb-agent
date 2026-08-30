@@ -702,6 +702,72 @@ func TestValidate_V3EmptyProtocolNamesKeepTheDefaults(t *testing.T) {
 	assert.Equal(t, gosnmp.NoPriv, params.PrivacyProtocol)
 }
 
+// ---------------------------------------------------------------------------
+// validatePolicy: the v3 user name
+// ---------------------------------------------------------------------------
+
+func v3UsernameAuth(securityLevel, username string) config.Authentication {
+	auth := config.Authentication{
+		ProtocolVersion: "SNMPv3",
+		SecurityLevel:   securityLevel,
+		Username:        username,
+	}
+	if securityLevel == "authNoPriv" || securityLevel == "authPriv" {
+		auth.AuthProtocol = "SHA"
+		auth.AuthPassphrase = "authpass"
+	}
+	if securityLevel == "authPriv" {
+		auth.PrivProtocol = "AES"
+		auth.PrivPassphrase = "privpass"
+	}
+	return auth
+}
+
+// gosnmp validates the USM security parameters before it dials, and it requires
+// a user name at every security level, so a v3 policy without one is reported
+// as running while it can never collect. The client is the authority here as it
+// is for the protocol names: validation must reject exactly what Connect
+// rejects. A name of nothing but spaces is a name gosnmp sends, and the device
+// answers or does not, the same as any other name it does not know; only the
+// empty one is refused before a packet leaves.
+func TestValidate_V3UsernameMatchesTheClient(t *testing.T) {
+	m := newTestManager()
+	for _, level := range []string{"noAuthNoPriv", "authNoPriv", "authPriv"} {
+		for _, username := range []string{"", " ", "\t", "admin"} {
+			auth := v3UsernameAuth(level, username)
+			w, err := snmp.NewClient(t.Context(), "127.0.0.1", 161, 1, time.Second, &auth, testLogger)
+			require.NoError(t, err)
+			clientErr := w.Connect()
+			t.Cleanup(func() { _ = w.Close() })
+
+			err = m.validatePolicy(minimalPolicy(auth))
+			if clientErr != nil {
+				require.Error(t, err, "%s username %q: the client rejects it, so validation must too", level, username)
+				assert.ErrorContains(t, err, "username")
+				continue
+			}
+			require.NoError(t, err, "%s username %q: the client accepts it, so validation must too", level, username)
+		}
+	}
+}
+
+// The security level the check used to skip.
+func TestValidate_V3NoAuthNoPrivMissingUser(t *testing.T) {
+	m := newTestManager()
+	auth := config.Authentication{ProtocolVersion: "SNMPv3", SecurityLevel: "noAuthNoPriv"}
+	assert.ErrorContains(t, m.validatePolicy(minimalPolicy(auth)), "missing username")
+}
+
+// v1 and v2c authenticate with a community string and have no user name, so
+// requiring one for v3 must not reach them.
+func TestValidate_V1AndV2cNeedNoUsername(t *testing.T) {
+	m := newTestManager()
+	for _, version := range []string{"SNMPv1", "SNMPv2c"} {
+		auth := config.Authentication{ProtocolVersion: version, Community: "public"}
+		require.NoError(t, m.validatePolicy(minimalPolicy(auth)), version)
+	}
+}
+
 // A v1 or v2c policy never reaches the v3 protocol tables, so a stale name
 // carried alongside a community string is not a policy that cannot collect.
 func TestValidate_V2cIgnoresV3ProtocolNames(t *testing.T) {
