@@ -371,10 +371,10 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 //
 // Entries that are table columns yet declare neither cannot be told apart from
 // grouped scalars without the MIB, so they stay on the scalar path. They are
-// not lost there: collectScalar gives a walk that answers with several rows a
-// row identity, which is the part of the table treatment such an entry needs.
+// not lost there: collectScalar reads the row identity off the OID the device
+// answered at, which is the part of the table treatment such an entry needs.
 // What only this function can decide is the row-scoped metadata, which is why
-// it tests for that and not for the shape of the OIDs.
+// it tests for that and not for the shape of the OIDs the profile declares.
 func groupedSymbolsAreTableColumns(entry *profiles.MetricEntry) bool {
 	if len(entry.MetricTags) > 0 {
 		return true
@@ -556,11 +556,11 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 // collectScalar collects a single scalar OID metric into localBuf.
 // Records the metric name in throttledMetrics when poll_time_sec has not elapsed.
 //
-// A walk that answers with more than one instance is walking a table column,
-// whatever the profile calls it, so its points are given a row identity. The
-// profile cannot always say which entries are columns; the device can, and it
-// answers before any point is written. Without the identity every row carries
-// the same attribute set and the export keeps one arbitrary value.
+// A returned instance that is not the symbol's scalar instance is a table row,
+// whatever the profile calls it, so its point is given a row identity. The
+// profile cannot always say which entries are columns; the OID the device
+// answers at can. Without the identity every row carries the same attribute
+// set and the export keeps one arbitrary value.
 func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttledMetrics map[string]struct{}) {
 	if unusableSymbolReason(sym) != "" {
 		// Reported once per profile by reviewProfile. Skipping before the walk
@@ -578,8 +578,6 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		return
 	}
 	c.markPolled(key, sym.OID, sym.PollTimeSec)
-	// One instance is the scalar case, and it keeps the attribute set it has.
-	severalRows := len(pdus) > 1
 	for fullOID, pdu := range pdus {
 		val, strVal, err := pduToValue(pdu, sym.Conversion)
 		if err != nil {
@@ -589,10 +587,8 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 
 		attrs := make([]attribute.KeyValue, len(baseAttrs))
 		copy(attrs, baseAttrs)
-		if severalRows {
-			if rowIdx, indexed := rowIndex(fullOID, sym.OID); indexed {
-				attrs = append(attrs, attribute.String("row_index", rowIdx))
-			}
+		if rowIdx, indexed := scalarRowIndex(fullOID, sym.OID); indexed {
+			attrs = append(attrs, attribute.String("row_index", rowIdx))
 		}
 		if name := enumStatusName(sym, val); name != "" {
 			attrs = append(attrs, attribute.String(sym.Name+"_status", name))
@@ -1171,6 +1167,26 @@ func rowIndex(fullOID, columnOID string) (string, bool) {
 		return fullOID[len(prefix):], true
 	}
 	return fullOID, false
+}
+
+// scalarRowIndex reports the row a PDU from a scalar-path walk belongs to, and
+// whether it belongs to one at all.
+//
+// SNMP names the single instance of a scalar object by appending .0 to it, so
+// a PDU answering there, or at the symbol's OID itself when the profile
+// already named the instance, is that scalar. Any other suffix is a table
+// index, and the symbol is a column whatever the profile calls it.
+//
+// The OID decides it rather than the size of the walk, because the size is a
+// property of one poll: a column that answers with one row today and two
+// tomorrow would otherwise write today's point into a series that tomorrow's
+// point cannot continue.
+func scalarRowIndex(fullOID, symbolOID string) (string, bool) {
+	idx, indexed := rowIndex(fullOID, symbolOID)
+	if !indexed || idx == "0" {
+		return "", false
+	}
+	return idx, true
 }
 
 // buildMetricName converts a profile symbol name to an OTLP metric name.

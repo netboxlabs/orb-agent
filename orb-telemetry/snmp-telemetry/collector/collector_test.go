@@ -2805,11 +2805,11 @@ func TestCollectTarget_SingleScalarSymbolWalkWithSeveralRowsGainsRowIndex(t *tes
 	assert.Equal(t, map[string]int64{"1": 10, "2": 20}, byIndex)
 }
 
-// The five bundled profiles that collect only through grouped `symbols:`
-// answer one instance per symbol, so none of them gains a row identity and
-// their series keep the shape they have. A rule that fired on the walk being
-// indexed rather than on it having several rows would split every one of
-// these in two.
+// The five bundled profiles that collect only through grouped `symbols:` are
+// answered at the instance each symbol names, or at the .0 the device supplies
+// for the symbols that name none, so none of them gains a row identity and
+// their series keep the shape they have. The instance OIDs are written out
+// here rather than derived from the profile.
 func TestCollectTarget_GroupedScalarProfilesKeepOneUnindexedSeries(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -3468,4 +3468,198 @@ func TestCollectTarget_ToOneDoesNotNameAnEnumMember(t *testing.T) {
 	require.Len(t, pts, 1)
 	assert.Empty(t, attrValue(pts[0], "contactState_status"), "to_one discards the number the enum names")
 	assert.Equal(t, "2", attrValue(pts[0], "contactState_value"))
+}
+
+// ---------------------------------------------------------------------------
+// Row identity on the scalar path is decided by the OID, not by the poll
+// ---------------------------------------------------------------------------
+
+// snmpAgent answers a walk the way a device does through gosnmp: a walk rooted
+// at a column returns every instance beneath it, and a walk rooted at a fully
+// qualified instance falls back to a GET and returns that instance itself.
+// Profiles are driven through it so the OIDs under test are the ones a real
+// agent would return rather than ones a fixture chose.
+type snmpAgent struct {
+	vars map[string]snmp.PDU
+}
+
+func (a *snmpAgent) Connect() error     { return nil }
+func (a *snmpAgent) Close() error       { return nil }
+func (a *snmpAgent) SetBulkWalk(_ bool) {}
+
+func (a *snmpAgent) Walk(root string, _ int) (map[string]snmp.PDU, error) {
+	out := make(map[string]snmp.PDU)
+	prefix := root + "."
+	for oid, pdu := range a.vars {
+		if oid != root && !strings.HasPrefix(oid, prefix) {
+			continue
+		}
+		pdu.Name = "." + oid
+		out[pdu.Name] = pdu
+	}
+	return out, nil
+}
+
+// The bundled Mikrotik profile collects the two HOST-RESOURCES storage columns
+// through the scalar path. How many rows a walk happened to return is a
+// property of that poll, so it cannot be what decides whether a point carries
+// a row identity: a device with one storage row would leave the point
+// unlabelled where a device with two labels it.
+func TestCollectTarget_ScalarColumnWithOneRowStillCarriesIt(t *testing.T) {
+	const (
+		host        = "10.0.0.88"
+		sysObjValue = "1.3.6.1.4.1.14988.1.1"
+		totalOID    = "1.3.6.1.2.1.25.2.3.1.5"
+	)
+	agent := &snmpAgent{vars: map[string]snmp.PDU{
+		sysObjectIDOID + ".0": oIDPDU(sysObjValue),
+		totalOID + ".65":      intPDU(totalOID+".65", 262144),
+	}}
+	c := newBundledCollector(t, walkerFactory(agent))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.hrtotalmemory"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "65", attrValue(pts[0], "row_index"),
+		"a table column keeps its row identity however many rows the walk returned")
+}
+
+// Storage rows come and go, so the same column answers with one row on one
+// poll and two on the next. The row present in both has to write the same
+// series both times, or the point the first poll exported is orphaned.
+func TestCollectTarget_ScalarRowKeepsItsSeriesWhenAnotherRowAppears(t *testing.T) {
+	const (
+		host        = "10.0.0.89"
+		sysObjValue = "1.3.6.1.4.1.9999.89"
+		colOID      = "1.3.6.1.4.1.9999.89.2.3.1.5"
+	)
+	p := profileWithOID(sysObjValue, "storage.yml", []profiles.MetricEntry{{
+		Symbols: []profiles.Symbol{{Name: "storageUsed", OID: colOID}},
+	}})
+	agent := &snmpAgent{vars: map[string]snmp.PDU{
+		sysObjectIDOID + ".0": oIDPDU(sysObjValue),
+		colOID + ".65":        intPDU(colOID+".65", 262144),
+	}}
+	c := newCollector(walkerFactory(agent), p)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	first := c.testDeviceStore("p", host)["snmp.storageused"]
+	require.Len(t, first, 1)
+
+	agent.vars[colOID+".66"] = intPDU(colOID+".66", 16384)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	second := c.testDeviceStore("p", host)["snmp.storageused"]
+	require.Len(t, second, 2)
+
+	var rowSixtyFive observedPoint
+	for _, pt := range second {
+		if pt.value == 262144 {
+			rowSixtyFive = pt
+		}
+	}
+	assert.Equal(t, attrs(first[0]), attrs(rowSixtyFive),
+		"the row wrote a different series once a second row appeared")
+}
+
+// attrs renders a point's attribute set as a comparable map.
+func attrs(pt observedPoint) map[string]string {
+	out := make(map[string]string, len(pt.attrs))
+	for _, kv := range pt.attrs {
+		out[string(kv.Key)] = kv.Value.AsString()
+	}
+	return out
+}
+
+// A scalar instance is the object's OID plus the single component 0, so a walk
+// answering there identifies no row whatever else the walk returned. A device
+// answering both is unusual, and the point is that neither answer changes how
+// the other is read.
+func TestCollectTarget_ScalarInstanceIsNotARow(t *testing.T) {
+	const (
+		host        = "10.0.0.90"
+		sysObjValue = "1.3.6.1.4.1.9999.90"
+		symOID      = "1.3.6.1.4.1.9999.90.1.2"
+	)
+	p := profileWithOID(sysObjValue, "scalar.yml", []profiles.MetricEntry{{
+		Symbols: []profiles.Symbol{{Name: "loadAverage", OID: symOID}},
+	}})
+	agent := &snmpAgent{vars: map[string]snmp.PDU{
+		sysObjectIDOID + ".0": oIDPDU(sysObjValue),
+		symOID + ".0":         intPDU(symOID+".0", 7),
+		symOID + ".3":         intPDU(symOID+".3", 9),
+	}}
+	c := newCollector(walkerFactory(agent), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.loadaverage"]
+	require.Len(t, pts, 2)
+	byValue := map[int64]string{}
+	for _, pt := range pts {
+		byValue[pt.value] = attrValue(pt, "row_index")
+	}
+	assert.Equal(t, map[int64]string{7: "", 9: "3"}, byValue)
+}
+
+// The five bundled profiles that collect only through the scalar path are
+// driven end to end, every symbol of them, against an agent that answers the
+// way a device does: at the instance the profile names when it names one, and
+// at the .0 the profile leaves off when it does not. None of their symbols may
+// gain a row identity.
+func TestCollectTarget_ScalarOnlyProfilesGainNoRowIdentity(t *testing.T) {
+	tests := []struct {
+		relPath     string
+		sysObjValue string
+		host        string
+	}{
+		{"avtech/roomalert-32s.yml", "1.3.6.1.4.1.20916", "10.0.0.93"},
+		{"avtech/roomalert-3e.yml", "1.3.6.1.4.1.20916.1.9.1", "10.0.0.94"},
+		{"avtech/roomalert-3s.yml", "1.3.6.1.4.1.20916.1.13.1", "10.0.0.95"},
+		{"infrasensing/sensor-gateway-base-unit.yml", "1.3.6.1.4.1.17095.1", "10.0.0.96"},
+		// iPower names no instance, so the device supplies the .0.
+		{"ipower/ipower-mib.yaml", "1.3.6.1.4.1.38218", "10.0.0.97"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.relPath, func(t *testing.T) {
+			p := bundledProfile(t, tt.relPath)
+			agent := &snmpAgent{vars: map[string]snmp.PDU{sysObjectIDOID + ".0": oIDPDU(tt.sysObjValue)}}
+			want := map[string]struct{}{}
+			for _, entry := range p.Metrics {
+				require.Nil(t, entry.Table, "%s no longer collects only through the scalar path", tt.relPath)
+				require.False(t, groupedSymbolsAreTableColumns(&entry),
+					"%s no longer collects only through the scalar path", tt.relPath)
+				syms := make([]*profiles.Symbol, 0, len(entry.Symbols)+1)
+				if entry.Symbol != nil {
+					syms = append(syms, entry.Symbol)
+				}
+				for i := range entry.Symbols {
+					syms = append(syms, &entry.Symbols[i])
+				}
+				for _, sym := range syms {
+					if unusableSymbolReason(sym) != "" {
+						continue
+					}
+					oid := sym.OID
+					if !strings.HasSuffix(oid, ".0") {
+						oid += ".0"
+					}
+					agent.vars[oid] = intPDU(oid, 42)
+					want[buildMetricName(sym.Name)] = struct{}{}
+				}
+			}
+			require.NotEmpty(t, want)
+
+			c := newBundledCollector(t, walkerFactory(agent))
+			require.NoError(t, c.CollectTarget(context.Background(), mustTarget(tt.host), mustAuth(), "p", DialOptions{}))
+
+			store := c.testDeviceStore("p", tt.host)
+			for name := range want {
+				require.Contains(t, store, name, "%s collected nothing for %s", tt.relPath, name)
+			}
+			for name, pts := range store {
+				for _, pt := range pts {
+					assert.Empty(t, attrValue(pt, "row_index"), "%s gained a row identity on %s", tt.relPath, name)
+				}
+			}
+		})
+	}
 }
