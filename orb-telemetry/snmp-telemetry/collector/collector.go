@@ -83,9 +83,12 @@ type MetricsCollector struct {
 	deviceStore map[deviceKey]map[string][]observedPoint
 
 	// Registered observable gauge instruments (one per unique metric name).
+	// closed is set by Close and is final: a collector no policy is using must
+	// not install a callback that nothing is left to unregister.
 	gaugeMu       sync.Mutex
+	closed        bool
 	instruments   map[string]metric.Int64ObservableGauge
-	registrations []metric.Registration // kept alive to prevent GC
+	registrations []metric.Registration // held so Close can give them back
 
 	// Profiles already checked for conversions the collector cannot apply.
 	reviewMu         sync.Mutex
@@ -148,6 +151,9 @@ func (c *MetricsCollector) markPolled(key deviceKey, oid string, pollTimeSec int
 func (c *MetricsCollector) ensureInstrument(name, description string) {
 	c.gaugeMu.Lock()
 	defer c.gaugeMu.Unlock()
+	if c.closed {
+		return
+	}
 	if _, ok := c.instruments[name]; ok {
 		return
 	}
@@ -179,6 +185,46 @@ func (c *MetricsCollector) ensureInstrument(name, description string) {
 	}
 	c.instruments[name] = g
 	c.registrations = append(c.registrations, reg)
+}
+
+// Close releases everything the collector holds, once no policy is using it.
+// Dropping the last reference to a collector does not free it on its own:
+// every callback ensureInstrument registered closes over the collector, so
+// while the meter still holds the registration it keeps the collector, its
+// matcher and its whole resolved profile set live, and runs the callback on
+// every export cycle. Routine policy replacement would grow both.
+//
+// Unregister is idempotent and concurrent safe, and the SDK takes the same
+// pipeline lock a collection cycle holds while it runs callbacks, so a
+// callback already running finishes and none starts afterwards. That makes
+// Unregister as slow as a collection, and the callback it is waiting for takes
+// storeMu, so it is called with none of the collector's locks held: unregister
+// under storeMu and the two wait on each other.
+func (c *MetricsCollector) Close() {
+	c.gaugeMu.Lock()
+	regs := c.registrations
+	c.registrations = nil
+	c.instruments = make(map[string]metric.Int64ObservableGauge)
+	c.closed = true
+	c.gaugeMu.Unlock()
+
+	for _, reg := range regs {
+		if err := reg.Unregister(); err != nil {
+			c.logger.Error("Failed to unregister observable gauge callback", "error", err)
+		}
+	}
+
+	c.storeMu.Lock()
+	c.deviceStore = make(map[deviceKey]map[string][]observedPoint)
+	c.storeMu.Unlock()
+
+	c.pollMu.Lock()
+	c.pollState = make(map[deviceKey]map[string]time.Time)
+	c.pollMu.Unlock()
+
+	c.reviewMu.Lock()
+	c.reviewedProfiles = make(map[string]struct{})
+	c.reviewMu.Unlock()
 }
 
 // ForgetPolicy drops every observation and poll timestamp owned by policyName,

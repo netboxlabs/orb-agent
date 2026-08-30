@@ -13,14 +13,18 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/embedded"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/profiles"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
 )
@@ -3972,4 +3976,115 @@ func TestCollectTarget_UnsetEnumMemberIsReportedOnce(t *testing.T) {
 	assert.Contains(t, logs.String(), "member=failed")
 	assert.Contains(t, logs.String(), "member=battery")
 	assert.Contains(t, logs.String(), "profile=unset-enum.yml")
+}
+
+// ---------------------------------------------------------------------------
+// Close: what a discarded collector has to give back
+// ---------------------------------------------------------------------------
+
+// fakeRegistration stands in for the meter's record of a callback, so a test
+// can see whether the collector handed it back.
+type fakeRegistration struct {
+	embedded.Registration
+	unregistered atomic.Int32
+	err          error
+}
+
+func (f *fakeRegistration) Unregister() error {
+	f.unregistered.Add(1)
+	return f.err
+}
+
+// The manager deleting its cache entry does not free a collector: every
+// observable gauge callback closes over it, so the meter keeps the collector,
+// its matcher and its whole profile set live and calls the callback on every
+// export cycle. Asserting the collector's own slice is empty would pass
+// against that, so the assertion is that each registration was given back.
+func TestClose_GivesEveryCallbackBackToTheMeter(t *testing.T) {
+	c := newCollector(nil, nil)
+	first, second := &fakeRegistration{}, &fakeRegistration{}
+	c.registrations = []metric.Registration{first, second}
+
+	c.Close()
+
+	assert.Equal(t, int32(1), first.unregistered.Load(), "the meter still calls a callback that was not unregistered")
+	assert.Equal(t, int32(1), second.unregistered.Load(), "every registration goes back, not just the first")
+}
+
+// A registration that refuses to unregister must not stop the rest going back,
+// and must not be retried by a second Close: the collector is discarded either
+// way.
+func TestClose_ReportsAFailedUnregisterAndCarriesOn(t *testing.T) {
+	var logs bytes.Buffer
+	c := NewMetricsCollector(nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	failing := &fakeRegistration{err: errors.New("pipeline closed")}
+	healthy := &fakeRegistration{}
+	c.registrations = []metric.Registration{failing, healthy}
+
+	c.Close()
+	c.Close()
+
+	assert.Equal(t, int32(1), healthy.unregistered.Load(), "a failure ahead of it must not strand a later registration")
+	assert.Equal(t, int32(1), failing.unregistered.Load(), "a discarded collector must not be unregistered twice")
+	assert.Contains(t, logs.String(), "pipeline closed")
+}
+
+// withMeter installs a real meter for the length of the test, so
+// ensureInstrument takes the path that registers a callback. Nothing listens
+// on the endpoint: the registration is what is under test, not an export.
+func withMeter(t *testing.T) {
+	t.Helper()
+	require.NoError(t, metrics.SetupMetricsExport(context.Background(), discardLogger, "localhost:4317", 3600))
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_ = metrics.Shutdown(ctx)
+		metrics.ResetMeter()
+	})
+}
+
+// The registrations Close gives back are the ones ensureInstrument installed,
+// and a collector that has been discarded installs no more: a callback added
+// after the release would have nothing left to unregister it.
+func TestClose_EndsTheCollectorsRegistrations(t *testing.T) {
+	withMeter(t)
+	c := newCollector(nil, nil)
+
+	c.ensureInstrument("snmp.close.first", "first")
+	c.ensureInstrument("snmp.close.second", "second")
+	require.Len(t, c.registrations, 2, "ensureInstrument must keep what Close has to give back")
+
+	c.Close()
+	c.ensureInstrument("snmp.close.third", "third")
+
+	assert.Empty(t, c.registrations, "a discarded collector must not install a callback nothing will unregister")
+	assert.Empty(t, c.instruments)
+}
+
+// The store, the poll windows and the profile review set go with the
+// callbacks: nothing reads them once the last policy has released the
+// collector, and they are the bulk of what it holds.
+func TestClose_DropsTheStateTheCallbacksRead(t *testing.T) {
+	const (
+		host        = "10.0.0.90"
+		cpuOID      = "1.3.6.1.4.1.9999.90.1"
+		sysObjValue = "1.3.6.1.4.1.9999.90"
+	)
+	p := profileWithOID(sysObjValue, "close.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 300}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 7)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.NotEmpty(t, c.testDeviceStore("p", host))
+
+	c.Close()
+
+	assert.Empty(t, c.deviceStore, "the observations a callback would have read go with it")
+	assert.Empty(t, c.pollState, "the poll windows go with the device they throttled")
+	assert.Empty(t, c.reviewedProfiles, "the profile review set goes with the profile set")
 }

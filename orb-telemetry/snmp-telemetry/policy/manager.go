@@ -75,8 +75,16 @@ type Manager struct {
 // resolved profile set, so one kept per directory a request happened to name
 // would grow without bound.
 type cachedCollector struct {
-	collector *collector.MetricsCollector
+	collector releasableCollector
 	refs      int
+}
+
+// releasableCollector is the collector as the cache holds it: what a runner
+// drives, plus the release the cache owes it. Dropping the map entry is not
+// enough, because the meter holds a callback that closes over the collector.
+type releasableCollector interface {
+	Collector
+	Close()
 }
 
 // Options configures a Manager.
@@ -121,7 +129,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 // acquireCollector returns the shared MetricsCollector for the given profiles
 // directory, loading the profiles on first use, and charges one reference to
 // it. Every caller must pair this with releaseCollector. Thread-safe.
-func (m *Manager) acquireCollector(profilesDir string) (*collector.MetricsCollector, error) {
+func (m *Manager) acquireCollector(profilesDir string) (releasableCollector, error) {
 	m.collectorsMu.Lock()
 	defer m.collectorsMu.Unlock()
 	if c, ok := m.collectorsByDir[profilesDir]; ok {
@@ -158,16 +166,25 @@ func (m *Manager) acquireCollector(profilesDir string) (*collector.MetricsCollec
 // discards it once the last policy using it has gone. A start that never
 // completes releases what it charged, so a request naming a directory no policy
 // ends up running does not leave a profile set behind.
+//
+// Close runs with the cache lock dropped. It waits out a collection cycle that
+// is already running, which is the same reason StopPolicy stops a runner
+// outside mu: holding the cache lock across it would stall every other policy
+// request for the length of an export.
 func (m *Manager) releaseCollector(profilesDir string) {
 	m.collectorsMu.Lock()
-	defer m.collectorsMu.Unlock()
 	c, ok := m.collectorsByDir[profilesDir]
-	if !ok {
-		return
+	discarded := false
+	if ok {
+		c.refs--
+		discarded = c.refs <= 0
+		if discarded {
+			delete(m.collectorsByDir, profilesDir)
+		}
 	}
-	c.refs--
-	if c.refs <= 0 {
-		delete(m.collectorsByDir, profilesDir)
+	m.collectorsMu.Unlock()
+	if discarded {
+		c.collector.Close()
 	}
 }
 

@@ -193,3 +193,67 @@ func TestStop_DropsEveryCollector(t *testing.T) {
 
 	assert.Zero(t, cachedDirs(m))
 }
+
+// closeSpy is a cached collector that records how the manager released it.
+// Only the release path is exercised, so the embedded Collector is never
+// called.
+type closeSpy struct {
+	Collector
+	m      *Manager
+	closes int
+	// lockFree records whether the cache lock was free while Close ran.
+	lockFree bool
+}
+
+func (s *closeSpy) Close() {
+	// Unregister waits out a collection cycle that is already running, so the
+	// manager must not hold the cache lock across it.
+	if s.m.collectorsMu.TryLock() {
+		s.m.collectorsMu.Unlock()
+		s.lockFree = true
+	}
+	s.closes++
+}
+
+// Deleting the cache entry does not free the collector: the meter still holds
+// a callback closing over it, and calls it on every export. The last policy to
+// go has to release it, and cannot do so under the cache lock.
+func TestReleaseCollector_ReleasesTheCollectorWithTheLastPolicyUsingIt(t *testing.T) {
+	m := newTestManager()
+	spy := &closeSpy{m: m}
+	m.collectorsByDir["vendor-a"] = &cachedCollector{collector: spy, refs: 2}
+
+	m.releaseCollector("vendor-a")
+	require.Zero(t, spy.closes, "a collector another policy is still using must not be released")
+
+	m.releaseCollector("vendor-a")
+	assert.Equal(t, 1, spy.closes, "the last policy to go must give the callbacks back to the meter")
+	assert.True(t, spy.lockFree, "the release must run with the cache lock dropped")
+
+	m.releaseCollector("vendor-a")
+	assert.Equal(t, 1, spy.closes, "a collector already released must not be released again")
+}
+
+// StopPolicy is the routine trigger: a policy replaced under the same name
+// stops, and what it was using has to go with it rather than staying
+// registered for the rest of the process.
+func TestStopPolicy_ReleasesTheCollectorItStopsUsing(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "vendor-a")
+	require.NoError(t, os.Mkdir(dir, 0o750))
+
+	m := newTestManagerRootedAt(root)
+	pol := minimalPolicy(v2cAuth())
+	pol.Config.ProfilesDir = dir
+	require.NoError(t, m.StartPolicy("policy-a", pol))
+
+	m.collectorsMu.Lock()
+	spy := &closeSpy{m: m}
+	m.collectorsByDir[dir].collector = spy
+	m.collectorsMu.Unlock()
+
+	require.NoError(t, m.StopPolicy("policy-a"))
+
+	assert.Equal(t, 1, spy.closes, "stopping the only policy must release what it was using")
+	assert.True(t, spy.lockFree, "the release must run with the cache lock dropped")
+}
