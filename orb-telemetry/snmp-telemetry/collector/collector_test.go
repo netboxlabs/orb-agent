@@ -3131,6 +3131,138 @@ func TestMetricTagColumn_NeitherFormResolvesToNothing(t *testing.T) {
 	assert.Nil(t, metricTagColumn(&profiles.MetricTag{Tag: "row_name", OID: "  "}))
 }
 
+// ---------------------------------------------------------------------------
+// A metric tag named inside its column
+// ---------------------------------------------------------------------------
+
+// A profile may write `tag:` inside `column:` rather than beside it. It names
+// the attribute key either way, so the nested one names it too. Without that
+// the tag falls back to the column's MIB name.
+func TestMetricTagName_TagInsideTheColumnNamesTheAttribute(t *testing.T) {
+	mt := &profiles.MetricTag{Column: &profiles.TagColumn{
+		OID: "1.3.6.1.4.1.9999.1.1", Name: "systemSerialNumber", Tag: "serial_number",
+	}}
+	assert.Equal(t, "serial_number", metricTagName(mt, metricTagColumn(mt)))
+}
+
+// The column's tag is the more specific of the two declarations, so it wins
+// when a tag writes both, the way the column's conversion and a nested column
+// win over what sits beside them. No bundled profile writes both; an override
+// file could.
+func TestMetricTagName_TagInsideTheColumnBeatsTheOuterTag(t *testing.T) {
+	mt := &profiles.MetricTag{
+		Tag: "outer_key",
+		Column: &profiles.TagColumn{
+			OID: "1.3.6.1.4.1.9999.1.1", Name: "systemSerialNumber", Tag: "serial_number",
+		},
+	}
+	assert.Equal(t, "serial_number", metricTagName(mt, metricTagColumn(mt)))
+}
+
+// The nested tag reaches every caller through the one helper that builds the
+// effective column, so the `symbol:` alias and the tag-level conversion copy
+// carry it as well.
+func TestMetricTagName_NestedTagSurvivesTheAliasAndTheConversionCopy(t *testing.T) {
+	alias := &profiles.MetricTag{Symbol: &profiles.TagColumn{
+		OID: "1.3.6.1.4.1.9999.1.1", Name: "colName", Tag: "nested_key",
+	}}
+	assert.Equal(t, "nested_key", metricTagName(alias, metricTagColumn(alias)))
+
+	converted := &profiles.MetricTag{
+		Conversion: "hextoip",
+		Column: &profiles.TagColumn{
+			OID: "1.3.6.1.4.1.9999.1.2", Name: "colName", Tag: "nested_key",
+		},
+	}
+	col := metricTagColumn(converted)
+	require.NotNil(t, col)
+	assert.Equal(t, "hextoip", col.Conversion)
+	assert.Equal(t, "nested_key", metricTagName(converted, col))
+}
+
+// A nested column naming no OID walks nothing, so the direct declaration
+// beside it stands in whole and the nested tag goes with the column it sat in.
+func TestMetricTagName_NestedTagGoesWithAColumnThatNamesNoOID(t *testing.T) {
+	mt := &profiles.MetricTag{
+		Tag:    "outer_key",
+		OID:    "1.3.6.1.4.1.9999.1.1",
+		Name:   "directName",
+		Column: &profiles.TagColumn{Name: "colName", Tag: "nested_key"},
+	}
+	assert.Equal(t, "outer_key", metricTagName(mt, metricTagColumn(mt)))
+}
+
+// A tag with neither a column nor a tag of its own still names nothing, so the
+// callers that skip an unnamed tag keep skipping it.
+func TestMetricTagName_NoDeclarationNamesNothing(t *testing.T) {
+	mt := &profiles.MetricTag{}
+	assert.Empty(t, metricTagName(mt, metricTagColumn(mt)))
+}
+
+// The bundled FortiSwitch profile declares its serial-number tag inside the
+// column. The exported attribute is the declared key, not the MIB column name.
+func TestCollectTarget_NestedTagNamesTheBundledSerialAttribute(t *testing.T) {
+	const (
+		host        = "10.0.0.121"
+		sysObjValue = "1.3.6.1.4.1.12356.106.1.1086"
+		serialOID   = "1.3.6.1.4.1.12356.106.1.1.1.0"
+		diskOID     = "1.3.6.1.4.1.12356.106.4.1.6.0"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		serialOID:      {serialOID: stringPDU(serialOID, "S1234567890")},
+		diskOID:        {diskOID: intPDU(diskOID, 4096)},
+	}}
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.fssysdiskcapacity"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "S1234567890", attrValue(pts[0], "entity_serial"))
+	assert.Empty(t, attrValue(pts[0], "fsSysSerial"), "the MIB column name must not be exported as well")
+}
+
+// A row condition names a tag column by the key it renders under, so it
+// resolves against the nested tag the same way it resolves against the outer
+// one. Both go through the one helper that names a tag.
+func TestCollectTable_ConditionResolvesANestedTagName(t *testing.T) {
+	const (
+		host        = "10.0.0.122"
+		sysObjValue = "1.3.6.1.4.1.9999.122"
+		tableOID    = "1.3.6.1.4.1.9999.122.1"
+		valueOID    = "1.3.6.1.4.1.9999.122.1.1"
+		stateOID    = "1.3.6.1.4.1.9999.122.1.2"
+	)
+	p := profileWithOID(sysObjValue, "cond.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "sensorTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "sensorValue", OID: valueOID, Condition: "sensor_state=1"}},
+		MetricTags: []profiles.MetricTag{{
+			Column: &profiles.TagColumn{OID: stateOID, Name: "sensorState", Tag: "sensor_state"},
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		valueOID: {
+			valueOID + ".1": intPDU(valueOID+".1", 11),
+			valueOID + ".2": intPDU(valueOID+".2", 22),
+		},
+		stateOID: {
+			stateOID + ".1": intPDU(stateOID+".1", 1),
+			stateOID + ".2": intPDU(stateOID+".2", 2),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.sensorvalue"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(11), pts[0].value)
+}
+
 // A table entry whose tag carries its own OID tags its rows with it.
 func TestCollectTable_DirectOIDTagReachesRows(t *testing.T) {
 	const (

@@ -734,7 +734,7 @@ func resolveCondition(entry *profiles.MetricEntry, condition string) (conditionC
 		if col == nil || col.OID == "" {
 			continue
 		}
-		if col.Name != refName && mt.Tag != refName {
+		if col.Name != refName && metricTagName(mt, col) != refName {
 			continue
 		}
 		if len(mt.IndexTransform) > 0 {
@@ -1338,9 +1338,15 @@ func directTagColumn(mt *profiles.MetricTag) *profiles.TagColumn {
 	return &profiles.TagColumn{OID: mt.OID, Name: mt.Name}
 }
 
-// metricTagName is the attribute key a tag renders under: its own `tag:` when
-// it has one, and otherwise the name of the column it resolved to.
+// metricTagName is the attribute key a tag renders under: the `tag:` inside the
+// column it resolved to, then its own, and otherwise the column's name.
+//
+// The two declarations name the same key, and the column's is the more
+// specific of them, so it wins the way the column's conversion does.
 func metricTagName(mt *profiles.MetricTag, col *profiles.TagColumn) string {
+	if col != nil && col.Tag != "" {
+		return col.Tag
+	}
 	if mt.Tag != "" {
 		return mt.Tag
 	}

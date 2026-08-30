@@ -142,6 +142,43 @@ func TestTagColumn_MatchAttributesAreDeserialized(t *testing.T) {
 	assert.Equal(t, map[string][]string{"loadDescr": {"1 Minute Average"}}, filters(t, "ubiquiti/unifi-access-point.yml"))
 }
 
+// A `tag:` may sit inside a metric tag's `column:` rather than beside it. Three
+// bundled profiles name their serial-number tag that way, and a struct that
+// does not deserialize it there exports the column's MIB name instead of the
+// normalized key the profile declared.
+func TestTagColumn_TagInsideTheColumnIsDeserialized(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	nested := func(t *testing.T, relPath string) map[string]string {
+		t.Helper()
+		p, err := l.Resolve(relPath)
+		require.NoError(t, err)
+		got := make(map[string]string)
+		collect := func(tags []MetricTag) {
+			for i := range tags {
+				for _, col := range []*TagColumn{tags[i].Column, tags[i].Symbol} {
+					if col != nil && col.Tag != "" {
+						got[col.Name] = col.Tag
+					}
+				}
+			}
+		}
+		collect(p.MetricTags)
+		for _, entry := range p.Metrics {
+			collect(entry.MetricTags)
+		}
+		return got
+	}
+
+	assert.Equal(t, map[string]string{"systemSerialNumber": "serial_number"},
+		nested(t, "barracuda/barracuda-waf.yml"))
+	assert.Equal(t, map[string]string{"snwlSysSerialNumber": "entity_serial"},
+		nested(t, "dell/sonicwall.yml"))
+	assert.Equal(t, map[string]string{"fsSysSerial": "entity_serial"},
+		nested(t, "fortinet/fortinet-fortiswitch.yml"))
+}
+
 // ---------------------------------------------------------------------------
 // no_use_bulkwalkall
 // ---------------------------------------------------------------------------

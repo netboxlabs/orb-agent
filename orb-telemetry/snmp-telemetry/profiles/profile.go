@@ -363,8 +363,12 @@ func (t IndexTransform) Apply(rowIndex string) (string, bool) {
 
 // TagColumn is the OID source for a MetricTag value.
 type TagColumn struct {
-	OID        string `yaml:"OID"`
-	Name       string `yaml:"name"`
+	OID  string `yaml:"OID"`
+	Name string `yaml:"name"`
+	// Tag is the attribute key when a profile writes it inside the column
+	// rather than beside it. It names the same key either way. The column's
+	// own tag is the more specific of the two and wins.
+	Tag        string `yaml:"tag"`
 	Enum       Enum   `yaml:"enum"`
 	Conversion string `yaml:"conversion"`
 	// MatchAttributes filters the rows of the entry the column belongs to. Each
