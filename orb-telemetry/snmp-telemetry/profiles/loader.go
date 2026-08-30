@@ -293,6 +293,7 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 // slice and has to break ties between profiles claiming the same key. Map order
 // would decide those ties differently on every restart.
 func (l *Loader) AllResolved() ([]*Profile, error) {
+	l.reportFiles()
 	names := slices.Sorted(maps.Keys(l.byFile))
 	result := make([]*Profile, 0, len(names))
 	for _, name := range names {
@@ -305,6 +306,33 @@ func (l *Loader) AllResolved() ([]*Profile, error) {
 		result = append(result, p)
 	}
 	return result, nil
+}
+
+// reportFiles warns about what the loaded files declare and this loader cannot
+// read. It runs on the files as written rather than on the resolved profiles: a
+// base profile's entries are prepended to every profile extending it, so
+// reporting after resolution would name the same entry once per child.
+func (l *Loader) reportFiles() {
+	for _, rel := range slices.Sorted(maps.Keys(l.byFile)) {
+		reportUnreadableFlatEntries(l.byFile[rel], rel, l.logger)
+	}
+}
+
+// reportUnreadableFlatEntries names a flat metric entry that was not read as a
+// symbol. The profile goes on claiming the device, so an entry that yields
+// nothing is a metric the operator waits for and never sees.
+func reportUnreadableFlatEntries(p *Profile, rel string, logger *slog.Logger) {
+	for i := range p.Metrics {
+		reason := flatEntryReason(&p.Metrics[i])
+		if reason == "" {
+			continue
+		}
+		logger.Warn("Ignoring metric entry this collector cannot read",
+			"reason", reason,
+			"metric", config.SanitizeLogValue(p.Metrics[i].Name),
+			"oid", config.SanitizeLogValue(p.Metrics[i].OID),
+			"file", config.SanitizeLogValue(rel))
+	}
 }
 
 // reportInertProfile warns when a profile declares metrics the collector can

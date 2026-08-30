@@ -371,21 +371,127 @@ func TestLoadProfiles_ResolvedProfilesDoNotShareBackingArrays(t *testing.T) {
 }
 
 // TestAllResolved_ReportsInertProfile covers a profile written against a
-// different schema: it parses, but no metric entry carries a symbol, symbols
-// block or table, so it can never yield a value. The bundled
-// ruckus/Ruckus_Contoller_SNMP.yml is the one such file today.
+// schema this loader does not read: it parses, but no metric entry carries a
+// symbol, symbols block or table, so it can never yield a value. No bundled
+// file is in that state, so the report is silent across the bundle and the
+// case is exercised from the override directory.
 func TestAllResolved_ReportsInertProfile(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "alien.yml", `
+sysobjectid: 1.3.6.1.4.1.99.1
+metrics:
+  - measurement: cpu
+    field: busy
+`)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
-	l, err := LoadProfiles("", logger)
+	l, err := LoadProfiles(dir, logger)
 	require.NoError(t, err)
 	_, err = l.AllResolved()
 	require.NoError(t, err)
 
 	out := buf.String()
 	require.Contains(t, out, "declares no metric the collector can read")
-	require.Contains(t, out, "Ruckus_Contoller_SNMP.yml")
+	require.Contains(t, out, "alien.yml")
 	require.Equal(t, 1, strings.Count(out, "declares no metric the collector can read"),
-		"a base profile with no metric entries must not be reported")
+		"no bundled profile is inert, and a base profile with no metric entries is not reported")
+}
+
+// The bundled Ruckus controller profile is the one file written in the
+// alternate schema: the capitalised match key and the flat metric form. Both
+// are read now, so the profile claims the Ruckus enterprise subtree and the
+// entries the collector can read carry an OID to walk.
+func TestLoadProfiles_RuckusControllerMatchesAndCarriesSymbols(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+
+	// A SmartZone controller reporting an OID under the Ruckus enterprise that
+	// the two narrower profiles do not cover matched nothing at all before.
+	p, ok := m.MatchWithDescr("1.3.6.1.4.1.25053.1.8.1", "Ruckus SmartZone")
+	require.True(t, ok, "the Ruckus enterprise subtree has no other generic profile")
+	require.Equal(t, "Ruckus_Contoller_SNMP.yml", p.FileName)
+
+	byName := make(map[string]string, len(p.Metrics))
+	for _, entry := range p.Metrics {
+		if entry.Symbol == nil {
+			continue
+		}
+		require.NotEmpty(t, entry.Symbol.Name, "a symbol with no name writes to no metric")
+		require.NotEmpty(t, entry.Symbol.OID, "a symbol with no OID walks the whole tree")
+		byName[entry.Symbol.Name] = entry.Symbol.OID
+	}
+	assert.Len(t, byName, 15, "13 gauges and 2 counters, the 3 traps and 3 tables aside")
+	assert.Equal(t, ".1.3.6.1.4.1.25053.2.10.2.17", byName["ruckusSCGCPUPerc"])
+	assert.Equal(t, "1.3.6.1.4.1.25053.1.8.1.1.1.2.8.1.50", byName["ruckusCtrlClientStatsTxDataBytes"])
+	assert.NotContains(t, byName, "ruckusSCGAPRebootTrap")
+	assert.NotContains(t, byName, "ruckusCtrlSummaryApEntry")
+}
+
+// The new claim is the broadest pattern under the Ruckus enterprise, so the two
+// narrower profiles keep the devices they already served.
+func TestLoadProfiles_RuckusControllerDoesNotTakeTheNarrowerProfilesDevices(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+
+	for oid, want := range map[string]string{
+		"1.3.6.1.4.1.25053.3.1.4.91": "ruckus-wap.yml",
+		"1.3.6.1.4.1.25053.3.1.4.7":  "ruckus-wap.yml",
+		"1.3.6.1.4.1.25053.3.1.5.15": "ruckus-unleashed.yml",
+		"1.3.6.1.4.1.25053.3.1.5.99": "ruckus-unleashed.yml",
+	} {
+		p, ok := m.Match(oid)
+		require.True(t, ok, oid)
+		assert.Equal(t, want, p.FileName, oid)
+	}
+}
+
+// A flat entry naming something the collector cannot read is named rather than
+// dropped in silence: the profile keeps claiming the device, so the operator
+// has to be able to see which of its metrics never arrive.
+func TestAllResolved_ReportsFlatEntriesItCannotRead(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	l, err := LoadProfiles("", logger)
+	require.NoError(t, err)
+	require.Empty(t, buf.String(), "loading stays quiet, the review runs with the rest")
+	_, err = l.AllResolved()
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Equal(t, 6, strings.Count(out, "Ignoring metric entry this collector cannot read"),
+		"3 traps and 3 tables in the one bundled file that uses the flat form")
+	assert.Contains(t, out, "ruckusSCGAPDisconnectedTrap")
+	assert.Contains(t, out, "ruckusCtrlSummaryApEntry")
+	assert.Contains(t, out, "Ruckus_Contoller_SNMP.yml")
+}
+
+// The report is a property of the file, so a profile many others extend is
+// reported once rather than once per profile that inherits its entries.
+func TestAllResolved_ReportsAnUnreadableFlatEntryOncePerFile(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "base.yml", `
+metrics:
+  - name: someTrap
+    oid: 1.2.3.4
+    type: trap
+`)
+	writeYAML(t, dir, "childa.yml", "extends: [base.yml]\nsysobjectid: 1.2.3.1\n")
+	writeYAML(t, dir, "childb.yml", "extends: [base.yml]\nsysobjectid: 1.2.3.2\n")
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	l, err := NewLoader(dir, logger)
+	require.NoError(t, err)
+	_, err = l.AllResolved()
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, strings.Count(buf.String(), "Ignoring metric entry this collector cannot read"))
 }

@@ -68,6 +68,33 @@ type Profile struct {
 	MetricTags []MetricTag   `yaml:"metric_tags"`
 }
 
+// UnmarshalYAML implements yaml.Unmarshaler for Profile.
+//
+// It exists for the capitalised `sysObjectID` spelling. Key matching is
+// case-sensitive, so a profile writing that spelling declared no match key at
+// all and was indexed under nothing: it matched no device however many OIDs it
+// listed. The two spellings name the same field, so the alias fills
+// SysObjectID when the documented spelling left it empty.
+func (p *Profile) UnmarshalYAML(value *yaml.Node) error {
+	// A distinct type with none of Profile's methods, so decoding into it does
+	// not re-enter this one.
+	type plain Profile
+	if err := value.Decode((*plain)(p)); err != nil {
+		return err
+	}
+	if len(p.SysObjectID) > 0 {
+		return nil
+	}
+	var alias struct {
+		SysObjectID StringOrSlice `yaml:"sysObjectID"`
+	}
+	if err := value.Decode(&alias); err != nil {
+		return err
+	}
+	p.SysObjectID = alias.SysObjectID
+	return nil
+}
+
 // MetricEntry is one element in the top-level metrics list.
 // It represents either a scalar metric (Symbol) or a table metric (Table + Symbols).
 type MetricEntry struct {
@@ -77,6 +104,69 @@ type MetricEntry struct {
 	Symbols       []Symbol    `yaml:"symbols"`
 	MetricTags    []MetricTag `yaml:"metric_tags"`
 	WalkFullTable bool        `yaml:"walk_full_table,omitempty"`
+
+	// Name, OID and Type are the flat form: instead of nesting the metric
+	// under `symbol:`, the entry carries the OID to read, the name to write it
+	// to and the kind of thing the OID names. A `help:` sits beside them and
+	// has no home here, since instrument descriptions are synthesized from the
+	// metric name.
+	//
+	// They are kept after UnmarshalYAML folded the readable ones into Symbol,
+	// so the loader can name the entries it could not fold.
+	Name string `yaml:"name"`
+	OID  string `yaml:"oid"`
+	Type string `yaml:"type"`
+}
+
+// UnmarshalYAML implements yaml.Unmarshaler for MetricEntry.
+//
+// The flat form describes exactly what a `symbol:` does, one OID to read under
+// one metric name, so a flat entry naming a readable type is read as the
+// symbol it describes. The nested forms are the documented ones and win, and
+// the types this collector cannot read are left for the loader to report:
+// flatEntryReason says which and why.
+func (m *MetricEntry) UnmarshalYAML(value *yaml.Node) error {
+	type plain MetricEntry
+	if err := value.Decode((*plain)(m)); err != nil {
+		return err
+	}
+	if !m.usesFlatForm() || flatEntryReason(m) != "" {
+		return nil
+	}
+	m.Symbol = &Symbol{Name: m.Name, OID: m.OID}
+	return nil
+}
+
+// usesFlatForm reports whether the entry describes its metric on the entry
+// itself rather than under `symbol:`, `symbols:` or `table:`. A promoted entry
+// carries a symbol, so it stops using the flat form once it is read.
+func (m *MetricEntry) usesFlatForm() bool {
+	return m.OID != "" && m.Symbol == nil && m.Table == nil && len(m.Symbols) == 0
+}
+
+// flatEntryReason says why a flat metric entry was not read as a symbol, or ""
+// when it was read or when the entry does not use the flat form at all.
+//
+// Only a value the collector can walk and export becomes a symbol. A trap OID
+// names a notification, which has no instance to read. A table entry names an
+// entry OID and no columns, and a table is collected column by column, so
+// there is nothing to ask the device for. An entry with no name has no metric
+// to write to.
+func flatEntryReason(m *MetricEntry) string {
+	if !m.usesFlatForm() {
+		return ""
+	}
+	switch m.Type {
+	case "gauge", "counter":
+	case "":
+		return "the entry declares no type"
+	default:
+		return "the collector reads no value from a " + m.Type + " entry"
+	}
+	if m.Name == "" {
+		return "the entry names no metric"
+	}
+	return ""
 }
 
 // Enum maps an enum member's name to the integer a device reports for it, and

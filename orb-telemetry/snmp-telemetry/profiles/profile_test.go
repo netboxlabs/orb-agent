@@ -375,3 +375,89 @@ func TestEnum_BundledMembersWithNoValue(t *testing.T) {
 		"vmware/esx.yml":                  {"vmwSubsystemType.battery"},
 	}, found)
 }
+
+// One bundled profile spells the match key `sysObjectID` and writes its metrics
+// flat: the OID, the metric name and a type on the entry itself instead of
+// under `symbol:`. Both spellings name the same field, so the alternate one is
+// read rather than dropped, and the documented spelling wins when a file
+// carries both.
+func TestProfile_AcceptsTheCapitalisedSysObjectIDSpelling(t *testing.T) {
+	const alt = `
+sysObjectID:
+  - .1.3.6.1.4.1.25053.*
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(alt), &p))
+	assert.Equal(t, StringOrSlice{".1.3.6.1.4.1.25053.*"}, p.SysObjectID)
+
+	const both = `
+sysobjectid: 1.3.6.1.4.1.9.1.46
+sysObjectID: 1.3.6.1.4.1.25053.1
+`
+	var q Profile
+	require.NoError(t, yaml.Unmarshal([]byte(both), &q))
+	assert.Equal(t, StringOrSlice{"1.3.6.1.4.1.9.1.46"}, q.SysObjectID,
+		"the documented spelling wins over the alias")
+}
+
+// The flat metric form names one OID to read, which is what `symbol:` names.
+// A gauge or a counter is read as that symbol; nothing else is, since a trap
+// OID has no instance to read and a table entry names no columns to collect.
+func TestMetricEntry_FlatOIDFormReadsAsASymbol(t *testing.T) {
+	const doc = `
+metrics:
+  - name: ruckusSCGCPUPerc
+    oid: .1.3.6.1.4.1.25053.2.10.2.17
+    type: gauge
+    help: Controller CPU usage
+  - name: ruckusCtrlClientStatsRxDataBytes
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.8.1.49
+    type: counter
+    help: Received data bytes per client
+  - name: ruckusSCGAPRebootTrap
+    oid: .1.3.6.1.4.1.25053.2.10.1.25
+    type: trap
+    help: Trap for AP reboots
+  - name: ruckusCtrlSummaryApEntry
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.1.8.1
+    type: table
+    help: Summary of AP entries
+  - oid: 1.3.6.1.4.1.25053.9.9.9
+    type: gauge
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	require.Len(t, p.Metrics, 5)
+
+	require.NotNil(t, p.Metrics[0].Symbol)
+	assert.Equal(t, "ruckusSCGCPUPerc", p.Metrics[0].Symbol.Name)
+	assert.Equal(t, ".1.3.6.1.4.1.25053.2.10.2.17", p.Metrics[0].Symbol.OID)
+
+	require.NotNil(t, p.Metrics[1].Symbol)
+	assert.Equal(t, "ruckusCtrlClientStatsRxDataBytes", p.Metrics[1].Symbol.Name)
+	assert.Equal(t, "1.3.6.1.4.1.25053.1.8.1.1.1.2.8.1.49", p.Metrics[1].Symbol.OID)
+
+	assert.Nil(t, p.Metrics[2].Symbol, "a trap OID has no instance to read")
+	assert.Nil(t, p.Metrics[3].Symbol, "a table entry names no column to collect")
+	assert.Nil(t, p.Metrics[4].Symbol, "an entry with no name has no metric to write to")
+}
+
+// The supported form is untouched by the flat one: an entry carrying a symbol,
+// a symbols block or a table keeps it, whatever else it declares.
+func TestMetricEntry_SupportedFormWinsOverTheFlatOne(t *testing.T) {
+	const doc = `
+metrics:
+  - name: outer
+    oid: 1.2.3.4
+    type: gauge
+    symbol:
+      name: inner
+      OID: 9.9.9.9
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	require.Len(t, p.Metrics, 1)
+	require.NotNil(t, p.Metrics[0].Symbol)
+	assert.Equal(t, "inner", p.Metrics[0].Symbol.Name)
+	assert.Equal(t, "9.9.9.9", p.Metrics[0].Symbol.OID)
+}
