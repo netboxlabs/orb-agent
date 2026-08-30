@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"reflect"
@@ -3662,4 +3663,119 @@ func TestCollectTarget_ScalarOnlyProfilesGainNoRowIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Unsigned values that do not fit the signed range
+// ---------------------------------------------------------------------------
+
+// SNMP counters are unsigned and an observation is int64. A 64-bit counter
+// passes math.MaxInt64 halfway round, and the cast turned it into a negative
+// gauge. The same applies to a hextoint:...:uint64 conversion, and to the
+// Counter32 and Gauge32 path, which gosnmp decodes into a uint wide enough to
+// hold what a non-conforming agent encodes in eight octets.
+func TestPduToValue_UnsignedValuePastTheSignedRange(t *testing.T) {
+	hexBytes := func(v uint64) []byte {
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, v)
+		return buf
+	}
+	tests := []struct {
+		name       string
+		pdu        snmp.PDU
+		conversion string
+		want       int64
+		wantErr    bool
+	}{
+		{"Counter64 at the limit", counter64PDU("x", math.MaxInt64), "", math.MaxInt64, false},
+		{"Counter64 past the limit", counter64PDU("x", math.MaxInt64+1), "", 0, true},
+		{"Counter64 at the top", counter64PDU("x", math.MaxUint64), "", 0, true},
+		{"Counter32 past the limit", snmp.PDU{Name: "x", Type: gosnmp.Counter32, Value: uint(math.MaxInt64 + 1)}, "", 0, true},
+		{"Gauge32 past the limit", snmp.PDU{Name: "x", Type: gosnmp.Gauge32, Value: uint(math.MaxInt64 + 1)}, "", 0, true},
+		{"Gauge32 at its own limit", snmp.PDU{Name: "x", Type: gosnmp.Gauge32, Value: uint(math.MaxUint32)}, "", math.MaxUint32, false},
+		{
+			"hextoint uint64 at the limit",
+			snmp.PDU{Name: "x", Type: gosnmp.OctetString, Value: hexBytes(math.MaxInt64)},
+			"hextoint:BigEndian:uint64", math.MaxInt64, false,
+		},
+		{
+			"hextoint uint64 past the limit",
+			snmp.PDU{Name: "x", Type: gosnmp.OctetString, Value: hexBytes(math.MaxInt64 + 1)},
+			"hextoint:BigEndian:uint64", 0, true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, err := pduToValue(tt.pdu, tt.conversion)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// The bundled IF-MIB block the Arista profile extends carries the 64-bit octet
+// counters. A row whose counter passed the signed range exports nothing: a
+// negative gauge, and a MaxInt64 clamp equally, is a number the device never
+// reported, and the rows that did fit are unaffected.
+func TestCollectTarget_CounterPastTheSignedRangeExportsNothing(t *testing.T) {
+	const (
+		host        = "10.0.0.98"
+		sysObjValue = "1.3.6.1.4.1.30065.1.3011.7010.427.48"
+		hcInOctets  = "1.3.6.1.2.1.31.1.1.1.6"
+	)
+	agent := &snmpAgent{vars: map[string]snmp.PDU{
+		sysObjectIDOID + ".0": oIDPDU(sysObjValue),
+		hcInOctets + ".1":     counter64PDU(hcInOctets+".1", 1<<40),
+		hcInOctets + ".2":     counter64PDU(hcInOctets+".2", math.MaxInt64+1),
+	}}
+	c := newBundledCollector(t, walkerFactory(agent))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.ifhcinoctets"]
+	require.Len(t, pts, 1, "the row past the signed range was exported")
+	assert.Equal(t, int64(1<<40), pts[0].value)
+	assert.Equal(t, "1", attrValue(pts[0], "row_index"))
+}
+
+// A skipped point is reported rather than dropped in silence, on both the
+// paths that convert one.
+func TestCollectTarget_CounterPastTheSignedRangeIsReported(t *testing.T) {
+	const (
+		sysObjValue = "1.3.6.1.4.1.9999.99"
+		tableOID    = "1.3.6.1.4.1.9999.99.2"
+		columnOID   = "1.3.6.1.4.1.9999.99.2.1.4"
+		scalarOID   = "1.3.6.1.4.1.9999.99.3.1"
+	)
+	p := profileWithOID(sysObjValue, "counters.yml", []profiles.MetricEntry{
+		{
+			Table:   &profiles.Table{OID: tableOID, Name: "counterTable"},
+			Symbols: []profiles.Symbol{{Name: "portOctets", OID: columnOID}},
+		},
+		{Symbol: &profiles.Symbol{Name: "totalOctets", OID: scalarOID}},
+	})
+	agent := &snmpAgent{vars: map[string]snmp.PDU{
+		sysObjectIDOID + ".0": oIDPDU(sysObjValue),
+		columnOID + ".1":      counter64PDU(columnOID+".1", math.MaxUint64),
+		scalarOID + ".0":      counter64PDU(scalarOID+".0", math.MaxUint64),
+	}}
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	c := NewMetricsCollector(walkerFactory(agent), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.99"), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", "10.0.0.99")
+	assert.NotContains(t, store, "snmp.portoctets")
+	assert.NotContains(t, store, "snmp.totaloctets")
+	assert.Contains(t, logs.String(), "name=portOctets")
+	assert.Contains(t, logs.String(), "name=totalOctets")
+	assert.Contains(t, logs.String(), "18446744073709551615")
+	// The instance answered, not the column the profile named, so the report
+	// says which row went missing.
+	assert.Contains(t, logs.String(), "oid="+columnOID+".1")
+	assert.Contains(t, logs.String(), "oid="+scalarOID+".0")
 }

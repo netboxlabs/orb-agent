@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"regexp"
 	"sort"
@@ -581,7 +582,8 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 	for fullOID, pdu := range pdus {
 		val, strVal, err := pduToValue(pdu, sym.Conversion)
 		if err != nil {
-			c.logger.Debug("Skipping non-numeric PDU", "oid", sym.OID, "name", sym.Name, "error", err)
+			c.logger.Debug("Skipping PDU this collector cannot turn into a value",
+				"oid", fullOID, "name", sym.Name, "error", err)
 			continue
 		}
 
@@ -1027,6 +1029,8 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 
 			val, strVal, err := pduToValue(pdu, sym.Conversion)
 			if err != nil {
+				c.logger.Debug("Skipping PDU this collector cannot turn into a value",
+					"oid", fullOID, "name", sym.Name, "error", err)
 				continue
 			}
 
@@ -1274,11 +1278,13 @@ func pduToValue(pdu snmp.PDU, conversion string) (int64, string, error) {
 		}
 	case gosnmp.Counter32, gosnmp.Gauge32:
 		if v, ok := pdu.Value.(uint); ok {
-			return int64(v), "", nil //nolint:gosec
+			val, err := signedValue(uint64(v))
+			return val, "", err
 		}
 	case gosnmp.Counter64:
 		if v, ok := pdu.Value.(uint64); ok {
-			return int64(v), "", nil //nolint:gosec
+			val, err := signedValue(v)
+			return val, "", err
 		}
 	case gosnmp.TimeTicks:
 		if v, ok := pdu.Value.(uint32); ok {
@@ -1308,6 +1314,22 @@ func pduToValue(pdu snmp.PDU, conversion string) (int64, string, error) {
 		return 0, "", fmt.Errorf("non-numeric OctetString PDU (conversion=%q)", conversion)
 	}
 	return 0, "", fmt.Errorf("non-numeric PDU type %v", pdu.Type)
+}
+
+// signedValue converts an unsigned SNMP value to the int64 an observation
+// carries, and fails when it does not fit.
+//
+// SNMP counters are unsigned. A 64-bit counter passes math.MaxInt64 halfway
+// round, and an unchecked cast reports it as a negative gauge. Clamping to
+// math.MaxInt64 would be no better: it is a plausible-looking number the
+// device never reported, and a rate read off it is a fabricated one. The
+// caller skips the point instead, which is what this collector does with every
+// other value it cannot render.
+func signedValue(v uint64) (int64, error) {
+	if v > math.MaxInt64 {
+		return 0, fmt.Errorf("unsigned value %d does not fit a signed 64-bit metric", v)
+	}
+	return int64(v), nil
 }
 
 // applyHexToInt converts an OctetString byte slice to an integer using
@@ -1345,12 +1367,12 @@ func applyHexToInt(raw []byte, conversion string) (int64, error) {
 		if len(decoded) < 4 {
 			return 0, fmt.Errorf("too few bytes for uint32")
 		}
-		return int64(order.Uint32(decoded[:4])), nil //nolint:gosec
+		return int64(order.Uint32(decoded[:4])), nil
 	case "uint64":
 		if len(decoded) < 8 {
 			return 0, fmt.Errorf("too few bytes for uint64")
 		}
-		return int64(order.Uint64(decoded[:8])), nil //nolint:gosec
+		return signedValue(order.Uint64(decoded[:8]))
 	}
 	return 0, fmt.Errorf("unknown hextoint type: %s", typeStr)
 }
