@@ -3322,6 +3322,88 @@ func TestCollectTarget_TagWithNoOIDIsReportedOnce(t *testing.T) {
 	assert.Contains(t, logs.String(), "profile=no-oid.yml")
 }
 
+// ---------------------------------------------------------------------------
+// A bare tag-level `index`
+// ---------------------------------------------------------------------------
+
+// A tag-level `index` is a selector this collector does not implement, so it is
+// named once per profile instead of being dropped without a word.
+func TestCollectTarget_TagIndexIsReportedOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.116"
+		sysObjValue = "1.3.6.1.4.1.9999.116"
+		statusOID   = sysObjValue + ".1.1.1"
+		nameOID     = sysObjValue + ".2.1.1"
+	)
+	p := profileWithOID(sysObjValue, "tag-index.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "portPhysTable", OID: sysObjValue + ".1"},
+		Symbols: []profiles.Symbol{{Name: "portPhysStatus", OID: statusOID}},
+		MetricTags: []profiles.MetricTag{{
+			Index:  1,
+			Tag:    "port_index",
+			Column: &profiles.TagColumn{Name: "portName", OID: nameOID},
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID:      {statusOID + ".1.5": intPDU(statusOID+".1.5", 2)},
+		nameOID:        {nameOID + ".1.5": stringPDU(nameOID+".1.5", "port5")},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 1, strings.Count(logs.String(), "Ignoring metric tag index"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "index=1")
+	assert.Contains(t, logs.String(), "tag=port_index")
+	assert.Contains(t, logs.String(), "profile=tag-index.yml")
+
+	// The selector is reported, not acted on: the tag still lands on the row.
+	points := c.testDeviceStore("p", host)["snmp.portphysstatus"]
+	require.Len(t, points, 1)
+	assert.Contains(t, attrs(points[0]), "port_index")
+}
+
+// The one bundled tag carrying an `index` reads a column from a sibling table
+// that shares the metric table's composite index, so the rows already line up
+// suffix for suffix. Any reading of `index` as a component selector would key
+// the join by one component and match nothing, so this pins the join that lands.
+func TestCollectTarget_BundledBrocadePortIndexReachesPhysRows(t *testing.T) {
+	const (
+		physAdmin = "1.3.6.1.2.1.75.1.2.2.1.1"
+		portID    = "1.3.6.1.2.1.75.1.2.1.1.1"
+	)
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.1588.2.1.1.32")},
+		physAdmin: {
+			physAdmin + ".1.5": intPDU(physAdmin+".1.5", 1),
+			physAdmin + ".1.6": intPDU(physAdmin+".1.6", 2),
+		},
+		portID: {
+			portID + ".1.5": stringPDU(portID+".1.5", "0005"),
+			portID + ".1.6": stringPDU(portID+".1.6", "0006"),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), bundledProfile(t, "brocade/brocade-fc-switch.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.117"), mustAuth(), "p", DialOptions{}))
+
+	points := c.testDeviceStore("p", "10.0.0.117")["snmp.fcfxportphysadminstatus"]
+	require.Len(t, points, 2)
+	got := make(map[string]string, len(points))
+	for _, pt := range points {
+		a := attrs(pt)
+		got[a["row_index"]] = a["port_index"]
+	}
+	assert.Equal(t, map[string]string{"1.5": "5", "1.6": "6"}, got)
+}
+
 // Every bundled profile resolves a column for every tag it declares, so the
 // report is silent across the whole bundled set.
 func TestReviewProfile_BundledProfilesDeclareNoTagWithoutAnOID(t *testing.T) {

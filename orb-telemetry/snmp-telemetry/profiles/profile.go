@@ -120,6 +120,13 @@ type MetricTag struct {
 	// metric rows come from. It says which components of a metric row's
 	// composite index identify the row in that other table.
 	IndexTransform IndexTransform `yaml:"index_transform"`
+	// Index is a bare selector a profile occasionally writes beside a column.
+	// It is deserialized to be reported rather than applied: upstream parses
+	// the field and acts on it nowhere, and the one bundled use declares it on
+	// a column whose table shares the metric table's index, where reading it as
+	// a component selector would key the join by fewer components than the
+	// column's rows carry and drop a tag that lands today.
+	Index int `yaml:"index"`
 	// OID and Name are the direct form: a profile leaves `column:` empty and
 	// writes the column's OID and name on the tag itself. They describe the
 	// same column the nested form does, so a tag declaring them is read as one

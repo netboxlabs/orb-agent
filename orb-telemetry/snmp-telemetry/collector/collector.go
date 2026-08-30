@@ -531,9 +531,11 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 		c.reportUnusableConditions(entry, name)
 		c.reportUnusableFilters(entry.MetricTags, name, "")
 		c.reportUnusableTags(entry.MetricTags, name)
+		c.reportUnhandledTagIndex(entry.MetricTags, name)
 	}
 	c.reportUnusableFilters(profile.MetricTags, name, "column tags the device rather than a row")
 	c.reportUnusableTags(profile.MetricTags, name)
+	c.reportUnhandledTagIndex(profile.MetricTags, name)
 }
 
 // reportUnusableConditions reports a condition the collector cannot apply.
@@ -821,6 +823,24 @@ func (c *MetricsCollector) reportUnusableTags(tags []profiles.MetricTag, profile
 		}
 		c.logger.Warn("Ignoring metric tag this collector cannot apply",
 			"reason", "names no OID", "tag", name, "profile", profileName)
+	}
+}
+
+// reportUnhandledTagIndex reports a metric tag carrying a bare `index`. The
+// selector has no join behind it: upstream parses the field and acts on it
+// nowhere, and the bundled use puts it on a column whose table shares the
+// metric table's composite index, so every reading of it as a component
+// selector keys the join by fewer components than that column's rows carry and
+// loses the tag. The tag is collected as if the selector were absent, which is
+// what makes it worth naming.
+func (c *MetricsCollector) reportUnhandledTagIndex(tags []profiles.MetricTag, profileName string) {
+	for i := range tags {
+		mt := &tags[i]
+		if mt.Index == 0 {
+			continue
+		}
+		c.logger.Warn("Ignoring metric tag index this collector does not implement",
+			"index", mt.Index, "tag", metricTagName(mt, metricTagColumn(mt)), "profile", profileName)
 	}
 }
 
