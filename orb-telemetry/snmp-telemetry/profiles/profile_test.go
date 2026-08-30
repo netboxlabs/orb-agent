@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestIndexTransform_DeserializedFromBundledJuniperProfile(t *testing.T) {
@@ -243,4 +244,134 @@ func TestMetricTag_DirectOIDIsDeserialized(t *testing.T) {
 		"portDataName": "1.3.6.1.4.1.13742.3.1.4.1.3",
 		"portDataType": "1.3.6.1.4.1.13742.3.1.4.1.4",
 	}, got)
+}
+
+// An enum member written with no value decodes to integer 0 under a plain map,
+// which invents a mapping the profile never wrote. It has to stay out of the
+// usable mappings, and it has to stay visible so it can be reported.
+func TestEnum_MemberWithNoValueIsNotAMapping(t *testing.T) {
+	const doc = `
+metrics:
+  - MIB: TEST-MIB
+    table:
+      OID: 1.2.3
+      name: envTable
+    symbols:
+      - name: envState
+        OID: 1.2.3.1.1
+        enum:
+          off: 0
+          chassis: 2
+          battery:
+    metric_tags:
+      - column:
+          name: envType
+          OID: 1.2.3.1.2
+          enum:
+            fan: 4
+            voltage:
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	require.Len(t, p.Metrics, 1)
+
+	sym := p.Metrics[0].Symbols[0]
+	assert.Equal(t, map[string]int{"off": 0, "chassis": 2}, sym.Enum.Values)
+	assert.Equal(t, []string{"battery"}, sym.Enum.Unset)
+	assert.Equal(t, "off", sym.Enum.Name(0), "the member the profile gave 0 keeps it")
+	assert.Empty(t, sym.Enum.Name(7), "the member with no value maps nothing")
+
+	col := p.Metrics[0].MetricTags[0].Column
+	require.NotNil(t, col)
+	assert.Equal(t, map[string]int{"fan": 4}, col.Enum.Values)
+	assert.Equal(t, []string{"voltage"}, col.Enum.Unset)
+	assert.Empty(t, col.Enum.Name(0), "no member carries 0, so 0 names nothing")
+}
+
+// An absent enum leaves no members and no report, and an enum written with
+// nothing under it is the same thing said differently.
+func TestEnum_AbsentAndEmptyDeclarationsAreQuiet(t *testing.T) {
+	const doc = `
+metrics:
+  - MIB: TEST-MIB
+    symbols:
+      - name: plain
+        OID: 1.2.3.1.1
+      - name: emptyEnum
+        OID: 1.2.3.1.2
+        enum:
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	require.Len(t, p.Metrics[0].Symbols, 2)
+	for _, sym := range p.Metrics[0].Symbols {
+		assert.Equal(t, 0, sym.Enum.Len(), sym.Name)
+		assert.Empty(t, sym.Enum.Unset, sym.Name)
+	}
+}
+
+// yaml.v3 resolves a null value before it reaches an Unmarshaler, so the
+// guard is reached only by a caller handing over the node itself. It is here
+// because an enum written with nothing under it is an empty enum, not a
+// profile to skip.
+func TestEnum_NullNodeYieldsNoMembers(t *testing.T) {
+	var e Enum
+	require.NoError(t, e.UnmarshalYAML(&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null"}))
+	assert.Equal(t, 0, e.Len())
+	assert.Empty(t, e.Unset)
+}
+
+// A profile whose enum names a value this collector cannot read is still
+// invalid, so the loader keeps skipping it rather than silently dropping the
+// member.
+func TestEnum_NonIntegerValueIsAnError(t *testing.T) {
+	const doc = `
+metrics:
+  - MIB: TEST-MIB
+    symbols:
+      - name: envState
+        OID: 1.2.3.1.1
+        enum:
+          chassis: two
+`
+	var p Profile
+	assert.Error(t, yaml.Unmarshal([]byte(doc), &p))
+}
+
+// The bundled set carries three enum members written with no value. Each one
+// would otherwise take 0: two of them label a state the device really reports,
+// and the fortinet enum already gives 0 to `none`, so the two collide and the
+// name a lookup returns varies with map order.
+func TestEnum_BundledMembersWithNoValue(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	found := make(map[string][]string)
+	for _, p := range all {
+		add := func(owner string, e Enum) {
+			for _, member := range e.Unset {
+				found[p.RelPath] = append(found[p.RelPath], owner+"."+member)
+			}
+		}
+		for _, entry := range p.Metrics {
+			if entry.Symbol != nil {
+				add(entry.Symbol.Name, entry.Symbol.Enum)
+			}
+			for _, sym := range entry.Symbols {
+				add(sym.Name, sym.Enum)
+			}
+			for i := range entry.MetricTags {
+				if col := entry.MetricTags[i].Column; col != nil {
+					add(col.Name, col.Enum)
+				}
+			}
+		}
+	}
+	assert.Equal(t, map[string][]string{
+		"cisco/cisco-wlc.yml":             {"bsnAPIfOperStatus.metric_tags"},
+		"fortinet/fortinet-appliance.yml": {"fmDeviceEntState.canceled"},
+		"vmware/esx.yml":                  {"vmwSubsystemType.battery"},
+	}, found)
 }

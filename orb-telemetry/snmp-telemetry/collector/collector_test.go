@@ -3536,7 +3536,7 @@ func TestCollectTarget_ToOneDoesNotNameAnEnumMember(t *testing.T) {
 			Name:       "contactState",
 			OID:        stateOID,
 			Conversion: "to_one",
-			Enum:       map[string]int{"open": 1, "closed": 2},
+			Enum:       profiles.Enum{Values: map[string]int{"open": 1, "closed": 2}},
 		}},
 	}})
 	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
@@ -3860,4 +3860,116 @@ func TestCollectTarget_CounterPastTheSignedRangeIsReported(t *testing.T) {
 	// says which row went missing.
 	assert.Contains(t, logs.String(), "oid="+columnOID+".1")
 	assert.Contains(t, logs.String(), "oid="+scalarOID+".0")
+}
+
+// ---------------------------------------------------------------------------
+// An enum member declared with no value
+// ---------------------------------------------------------------------------
+
+// The bundled ESX profile writes `battery:` with nothing after it. Read as a
+// mapping it takes 0, and vmwSubsystemType 0 is then labelled battery on every
+// row. The member maps nothing instead, so the tag carries the number.
+func TestCollectTarget_BundledEsxUnsetEnumMemberDoesNotLabelZero(t *testing.T) {
+	const (
+		hardwareStatus = "1.3.6.1.4.1.6876.4.20.3.1.3"
+		subsystemType  = "1.3.6.1.4.1.6876.4.20.3.1.2"
+	)
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.6876.4.1")},
+		hardwareStatus: {
+			hardwareStatus + ".1": intPDU(hardwareStatus+".1", 2),
+			hardwareStatus + ".2": intPDU(hardwareStatus+".2", 2),
+		},
+		subsystemType: {
+			// A component the device reports as 0, and one it reports as the
+			// value the surrounding sequence leaves for battery.
+			subsystemType + ".1": intPDU(subsystemType+".1", 0),
+			subsystemType + ".2": intPDU(subsystemType+".2", 7),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), bundledProfile(t, "vmware/esx.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.118"), mustAuth(), "p", DialOptions{}))
+
+	points := c.testDeviceStore("p", "10.0.0.118")["snmp.vmwhardwarestatus"]
+	require.Len(t, points, 2)
+	got := make(map[string]string, len(points))
+	for _, pt := range points {
+		a := attrs(pt)
+		got[a["row_index"]] = a["vmwSubsystemType"]
+	}
+	assert.Equal(t, map[string]string{"1": "0", "2": "7"}, got)
+}
+
+// The bundled FortiManager profile gives `none` the value 0 and leaves
+// `canceled` without one. Read as a mapping both hold 0, and which name a
+// device reporting 0 gets depends on map order.
+func TestCollectTarget_BundledFortinetUnsetEnumMemberDoesNotCollideWithZero(t *testing.T) {
+	const deviceState = "1.3.6.1.4.1.12356.103.6.2.1.15"
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.12356.103.1.64")},
+		deviceState: {
+			deviceState + ".1": intPDU(deviceState+".1", 0),
+			deviceState + ".2": intPDU(deviceState+".2", 8),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), bundledProfile(t, "fortinet/fortinet-appliance.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.119"), mustAuth(), "p", DialOptions{}))
+
+	points := c.testDeviceStore("p", "10.0.0.119")["snmp.fmdeviceentstate"]
+	require.Len(t, points, 2)
+	got := make(map[string]string, len(points))
+	for _, pt := range points {
+		a := attrs(pt)
+		got[a["row_index"]] = a["fmDeviceEntState_status"]
+	}
+	assert.Equal(t, map[string]string{"1": "none", "2": ""}, got)
+}
+
+// An unset member leaves a label off every row of the table, so it is named
+// once per profile the way the other declarations this collector cannot act on
+// are named.
+func TestCollectTarget_UnsetEnumMemberIsReportedOnce(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.120"
+		sysObjValue = "1.3.6.1.4.1.9999.120"
+		statusOID   = sysObjValue + ".1.1.1"
+		typeOID     = sysObjValue + ".1.1.2"
+	)
+	p := profileWithOID(sysObjValue, "unset-enum.yml", []profiles.MetricEntry{{
+		Table: &profiles.Table{Name: "envTable", OID: sysObjValue + ".1"},
+		Symbols: []profiles.Symbol{{
+			Name: "envState", OID: statusOID,
+			Enum: profiles.Enum{Values: map[string]int{"normal": 2}, Unset: []string{"failed"}},
+		}},
+		MetricTags: []profiles.MetricTag{{
+			Tag: "env_type",
+			Column: &profiles.TagColumn{
+				Name: "envType", OID: typeOID,
+				Enum: profiles.Enum{Values: map[string]int{"fan": 4}, Unset: []string{"battery"}},
+			},
+		}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		statusOID:      {statusOID + ".1": intPDU(statusOID+".1", 2)},
+		typeOID:        {typeOID + ".1": intPDU(typeOID+".1", 4)},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 2, strings.Count(logs.String(), "Ignoring enum member this collector cannot apply"),
+		"logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "member=failed")
+	assert.Contains(t, logs.String(), "member=battery")
+	assert.Contains(t, logs.String(), "profile=unset-enum.yml")
 }

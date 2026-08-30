@@ -510,6 +510,7 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 	}
 
 	warn := func(sym *profiles.Symbol) {
+		c.reportUnsetEnumMembers(sym.Enum, "symbol", sym.Name, name)
 		if reason := unusableSymbolReason(sym); reason != "" {
 			c.logger.Warn("Skipping metric: SNMP profile declares a symbol this collector cannot collect",
 				"reason", reason, "symbol", sym.Name, "oid", sym.OID, "profile", name)
@@ -532,10 +533,12 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 		c.reportUnusableFilters(entry.MetricTags, name, "")
 		c.reportUnusableTags(entry.MetricTags, name)
 		c.reportUnhandledTagIndex(entry.MetricTags, name)
+		c.reportUnsetTagEnums(entry.MetricTags, name)
 	}
 	c.reportUnusableFilters(profile.MetricTags, name, "column tags the device rather than a row")
 	c.reportUnusableTags(profile.MetricTags, name)
 	c.reportUnhandledTagIndex(profile.MetricTags, name)
+	c.reportUnsetTagEnums(profile.MetricTags, name)
 }
 
 // reportUnusableConditions reports a condition the collector cannot apply.
@@ -826,6 +829,18 @@ func (c *MetricsCollector) reportUnusableTags(tags []profiles.MetricTag, profile
 	}
 }
 
+// reportUnsetTagEnums reports the enum members a tag column named without a
+// value.
+func (c *MetricsCollector) reportUnsetTagEnums(tags []profiles.MetricTag, profileName string) {
+	for i := range tags {
+		col := metricTagColumn(&tags[i])
+		if col == nil {
+			continue
+		}
+		c.reportUnsetEnumMembers(col.Enum, "column", col.Name, profileName)
+	}
+}
+
 // reportUnhandledTagIndex reports a metric tag carrying a bare `index`. The
 // selector has no join behind it: upstream parses the field and acts on it
 // nowhere, and the bundled use puts it on a column whose table shares the
@@ -841,6 +856,20 @@ func (c *MetricsCollector) reportUnhandledTagIndex(tags []profiles.MetricTag, pr
 		}
 		c.logger.Warn("Ignoring metric tag index this collector does not implement",
 			"index", mt.Index, "tag", metricTagName(mt, metricTagColumn(mt)), "profile", profileName)
+	}
+}
+
+// reportUnsetEnumMembers reports the enum members a profile named without a
+// value. Such a member maps nothing, so the label it names is never emitted,
+// and where the profile gives a real member the value 0 it is the label the
+// device reporting 0 would otherwise have collided with. Like the other
+// declarations this collector cannot act on it is a property of the profile,
+// so it is named once rather than on every collection.
+func (c *MetricsCollector) reportUnsetEnumMembers(enum profiles.Enum, ownerKey, ownerName, profileName string) {
+	for _, member := range enum.Unset {
+		c.logger.Warn("Ignoring enum member this collector cannot apply",
+			"reason", "declares no value", "member", member,
+			ownerKey, ownerName, "profile", profileName)
 	}
 }
 
@@ -1472,10 +1501,8 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 	case gosnmp.Integer:
 		if v, ok := pdu.Value.(int); ok {
 			if col != nil {
-				for name, intVal := range col.Enum {
-					if intVal == v {
-						return name
-					}
+				if name := col.Enum.Name(int64(v)); name != "" {
+					return name
 				}
 			}
 			return fmt.Sprintf("%d", v)
@@ -1497,18 +1524,8 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 // device's. to_one reports 1 whatever the device sent, so reading an enum off
 // it would put the name of member 1 on every state the device can be in.
 func enumStatusName(sym *profiles.Symbol, val int64) string {
-	if len(sym.Enum) == 0 || sym.Conversion == "to_one" {
+	if sym.Enum.Len() == 0 || sym.Conversion == "to_one" {
 		return ""
 	}
-	return enumName(sym.Enum, val)
-}
-
-// enumName returns the enum string for val, or "" if not found.
-func enumName(enum map[string]int, val int64) string {
-	for name, intVal := range enum {
-		if int64(intVal) == val {
-			return name
-		}
-	}
-	return ""
+	return sym.Enum.Name(val)
 }

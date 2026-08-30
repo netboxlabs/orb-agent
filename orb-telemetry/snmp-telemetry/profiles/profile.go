@@ -79,15 +79,77 @@ type MetricEntry struct {
 	WalkFullTable bool        `yaml:"walk_full_table,omitempty"`
 }
 
+// Enum maps an enum member's name to the integer a device reports for it, and
+// keeps the names a profile declared without one.
+//
+// A member written with no value decodes to integer 0 under a plain map, which
+// invents a mapping the profile never wrote: a device reporting 0 is labelled
+// with that member's name, and where the profile also gives a real member the
+// value 0 the two collide and which name a lookup returns varies with map
+// order. Such a member is left out of Values and named in Unset instead, so it
+// labels nothing and can be reported.
+type Enum struct {
+	// Values are the members carrying a value, keyed by member name.
+	Values map[string]int
+	// Unset names the members declared without one, in the order written.
+	Unset []string
+}
+
+// Name returns the member val falls on, or "" when no member carries it.
+func (e Enum) Name(val int64) string {
+	for name, v := range e.Values {
+		if int64(v) == val {
+			return name
+		}
+	}
+	return ""
+}
+
+// Len returns the number of members that map a value.
+func (e Enum) Len() int { return len(e.Values) }
+
+// UnmarshalYAML implements yaml.Unmarshaler for Enum.
+//
+// A member whose value is absent is recorded in Unset rather than mapped. A
+// value that is present but not an integer is still an error, so a profile
+// carrying one keeps being skipped whole rather than losing one member.
+func (e *Enum) UnmarshalYAML(value *yaml.Node) error {
+	if value.ShortTag() == "!!null" {
+		return nil
+	}
+	if value.Kind != yaml.MappingNode {
+		return fmt.Errorf("unsupported YAML node kind %v for Enum", value.Kind)
+	}
+	for i := 0; i+1 < len(value.Content); i += 2 {
+		var name string
+		if err := value.Content[i].Decode(&name); err != nil {
+			return err
+		}
+		if value.Content[i+1].ShortTag() == "!!null" {
+			e.Unset = append(e.Unset, name)
+			continue
+		}
+		var v int
+		if err := value.Content[i+1].Decode(&v); err != nil {
+			return err
+		}
+		if e.Values == nil {
+			e.Values = make(map[string]int, len(value.Content)/2)
+		}
+		e.Values[name] = v
+	}
+	return nil
+}
+
 // Symbol represents a single scalar SNMP OID to collect as a metric.
 type Symbol struct {
-	Name        string         `yaml:"name"`
-	OID         string         `yaml:"OID"`
-	Tag         string         `yaml:"tag"`
-	PollTimeSec int            `yaml:"poll_time_sec"`
-	Enum        map[string]int `yaml:"enum"`
-	Conversion  string         `yaml:"conversion"`
-	Format      string         `yaml:"format"`
+	Name        string `yaml:"name"`
+	OID         string `yaml:"OID"`
+	Tag         string `yaml:"tag"`
+	PollTimeSec int    `yaml:"poll_time_sec"`
+	Enum        Enum   `yaml:"enum"`
+	Conversion  string `yaml:"conversion"`
+	Format      string `yaml:"format"`
 	// Condition filters table rows: format "name=value". The name is either a
 	// sibling symbol or a column the entry declares under metric_tags, and the
 	// value is either a bare integer or a quoted string. Only rows whose
@@ -169,10 +231,10 @@ func (t IndexTransform) Apply(rowIndex string) (string, bool) {
 
 // TagColumn is the OID source for a MetricTag value.
 type TagColumn struct {
-	OID        string         `yaml:"OID"`
-	Name       string         `yaml:"name"`
-	Enum       map[string]int `yaml:"enum"`
-	Conversion string         `yaml:"conversion"`
+	OID        string `yaml:"OID"`
+	Name       string `yaml:"name"`
+	Enum       Enum   `yaml:"enum"`
+	Conversion string `yaml:"conversion"`
 	// MatchAttributes filters the rows of the entry the column belongs to. Each
 	// element is a regular expression tested against the column's own rendered
 	// value for a row, and a row matching any of them is kept.
