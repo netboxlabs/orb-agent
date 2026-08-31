@@ -289,7 +289,9 @@ func resolveExisting(path string) string {
 // and names a tree the backend stats and walks, so rejecting ".." alone is not
 // enough: an absolute path such as "/" carries none and would still be walked.
 // A relative path is read against root, so a policy names the subdirectory it
-// wants rather than repeating the root. An empty root rejects every override.
+// wants rather than repeating the root, and root itself is made absolute first
+// so both forms work however the operator spelled it. An empty root rejects
+// every override.
 //
 // Containment is checked twice: once on the names, which needs no filesystem
 // access and refuses the obvious cases, and again on the canonical paths, since
@@ -309,7 +311,16 @@ func validateProfilesDir(root, dir string) (string, error) {
 	if strings.Contains(clean, "..") {
 		return "", fmt.Errorf(`SNMP profiles directory must not contain "..": %s`, dir)
 	}
-	cleanRoot := filepath.Clean(root)
+	// The root is an operator flag and may be spelled relative to the working
+	// directory, while a policy may name the documented absolute form under it.
+	// filepath.Rel cannot relate the two, so the root is made absolute before
+	// either containment check and both then compare paths of one kind. It sits
+	// after the ".." test, which stays the first thing the policy-supplied value
+	// meets, and only reads the working directory, not the value itself.
+	cleanRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("SNMP profiles root cannot be resolved: %s: %w", root, err)
+	}
 	if !filepath.IsAbs(clean) {
 		clean = filepath.Join(cleanRoot, clean)
 	}

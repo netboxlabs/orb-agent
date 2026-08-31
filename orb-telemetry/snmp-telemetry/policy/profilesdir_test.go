@@ -193,6 +193,91 @@ func TestValidateProfilesDir_AcceptsAnAbsentPathInsideTheRoot(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// validateProfilesDir: the root may be spelled relative
+// ---------------------------------------------------------------------------
+
+// The root comes from the command line and may be relative to the working
+// directory. filepath.Rel cannot relate a relative root to an absolute
+// candidate, so without making the root absolute first the documented absolute
+// form under it is refused.
+func TestValidateProfilesDir_AcceptsBothFormsUnderARelativeRoot(t *testing.T) {
+	base := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "profiles", "vendor-a"), 0o750))
+	t.Chdir(base)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	want := resolved(t, filepath.Join(cwd, "profiles", "vendor-a"))
+
+	for _, dir := range []string{filepath.Join(cwd, "profiles", "vendor-a"), "vendor-a"} {
+		got, err := validateProfilesDir("profiles", dir)
+		require.NoError(t, err, dir)
+		assert.Equal(t, want, got, dir)
+	}
+}
+
+// The absolute root keeps working the way it did, so making the root absolute
+// has not moved either containment check.
+func TestValidateProfilesDir_AcceptsBothFormsUnderAnAbsoluteRoot(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, "vendor-a"), 0o750))
+	want := resolved(t, filepath.Join(root, "vendor-a"))
+
+	for _, dir := range []string{filepath.Join(root, "vendor-a"), "vendor-a"} {
+		got, err := validateProfilesDir(root, dir)
+		require.NoError(t, err, dir)
+		assert.Equal(t, want, got, dir)
+	}
+}
+
+// A relative root reached through a symlink is the two cases together: the
+// absolute form is taken from the working directory, and the canonical
+// comparison then resolves both sides so the link is not read as an escape.
+func TestValidateProfilesDir_AcceptsARelativeRootReachedThroughASymlink(t *testing.T) {
+	base := t.TempDir()
+	target := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(target, "vendor-a"), 0o750))
+	require.NoError(t, os.Symlink(target, filepath.Join(base, "profiles")))
+	t.Chdir(base)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	want := resolved(t, filepath.Join(target, "vendor-a"))
+
+	for _, dir := range []string{filepath.Join(cwd, "profiles", "vendor-a"), "vendor-a"} {
+		got, err := validateProfilesDir("profiles", dir)
+		require.NoError(t, err, dir)
+		assert.Equal(t, want, got, dir)
+	}
+}
+
+// Making the root absolute must not widen it. A sibling of the relative root
+// is still outside, and a relative traversal still meets the ".." barrier
+// before anything else, which is what the dots message proves: the containment
+// check would have refused it too.
+func TestValidateProfilesDir_StillConfinesUnderARelativeRoot(t *testing.T) {
+	base := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(base, "profiles", "vendor-a"), 0o750))
+	require.NoError(t, os.Mkdir(filepath.Join(base, "profiles-other"), 0o750))
+	t.Chdir(base)
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		dir  string
+		want string
+	}{
+		{dir: filepath.Join(cwd, "profiles-other"), want: "must be inside"},
+		{dir: "/etc", want: "must be inside"},
+		{dir: cwd, want: "must be inside"},
+		{dir: filepath.Join(cwd, "profiles") + "/../profiles-other", want: "must be inside"},
+		{dir: "../profiles-other", want: `must not contain ".."`},
+	} {
+		_, err := validateProfilesDir("profiles", tt.dir)
+		require.Error(t, err, tt.dir)
+		assert.Contains(t, err.Error(), tt.want, tt.dir)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // StartPolicy: the override reaches the same check
 // ---------------------------------------------------------------------------
 
