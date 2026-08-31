@@ -52,7 +52,7 @@ type Runner struct {
 	mu               sync.RWMutex
 	lastErr          error
 	lastErrAt        time.Time
-	targetErrs       map[string]error // key from targetErrorKey; initialized in NewRunner
+	targetErrs       map[targetKey]error // keyed by newTargetKey; initialized in NewRunner
 }
 
 // NewRunner returns a new policy runner.
@@ -84,7 +84,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		scope:            policy.Scope,
 		ctx:              runCtx,
 		cancel:           cancel,
-		targetErrs:       make(map[string]error),
+		targetErrs:       make(map[targetKey]error),
 	}
 
 	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
@@ -168,9 +168,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 // apart, and an operator wanting two entries for one endpoint gives them
 // different IDs or context names, which the identity keeps.
 //
-// The identity comes from targetErrorKey, the key this runner already records
-// errors under, so it cannot drift from the host, port, NetBox ID and SNMP
-// context that deviceKey and targetErrorKey are built from.
+// The identity is targetKey, the key this runner already records errors under,
+// so it cannot drift from the host, port, NetBox ID and SNMP context that
+// deviceKey is built from.
 //
 // checkPolicyExpansion charges the policy budget before this runs, against the
 // notation rather than the collapsed result. Charging it afterwards would let
@@ -179,7 +179,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 // can be seen.
 func (r *Runner) expandTargets() ([]config.Target, int, error) {
 	var out []config.Target
-	seen := make(map[string]struct{})
+	seen := make(map[targetKey]struct{})
 	collapsed := 0
 	for _, entry := range r.scope.Targets {
 		// Skipping the target instead would leave a policy with no job for it,
@@ -201,7 +201,7 @@ func (r *Runner) expandTargets() ([]config.Target, int, error) {
 			}
 			// Keyed after the port default, so an entry leaving the port unset
 			// and one naming 161 are the one endpoint they reach as.
-			key := targetErrorKey(t, r.resolveTargetAuthentication(t))
+			key := newTargetKey(t, r.resolveTargetAuthentication(t))
 			if _, dup := seen[key]; dup {
 				collapsed++
 				continue
@@ -229,36 +229,62 @@ func (r *Runner) runMetrics(target config.Target) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.metricsInterval)
 	defer cancel()
 	auth := r.resolveTargetAuthentication(target)
-	targetKey := targetErrorKey(target, auth)
+	key := newTargetKey(target, auth)
 	dial := collector.DialOptions{Timeout: r.snmpTimeout, Retries: r.retries}
 	if err := r.metricsCollector.CollectTarget(ctx, target, auth, policyName, dial); err != nil {
 		r.logger.Warn("SNMP metrics collection failed", "host", config.SanitizeLogValue(target.Host), "policy", config.SanitizeLogValue(policyName), "error", err)
-		r.SetTargetError(targetKey, err)
+		r.setTargetError(key, err)
 	} else {
-		r.ClearTargetError(targetKey)
+		r.clearTargetError(key)
 	}
 }
 
-// targetErrorKey names one entry of a policy's scope. Host and port alone do
-// not: a policy may name the same endpoint more than once, and two such entries
-// are told apart by their NetBox ID and by their SNMPv3 context name, the same
+// targetKey names one entry of a policy's scope. Host and port alone do not: a
+// policy may name the same endpoint more than once, and two such entries are
+// told apart by their NetBox ID and by their SNMPv3 context name, the same
 // dimensions the collector keys its observations by. Without them a healthy
 // entry would clear a failing one's error and the policy would report itself
 // healthy while half its targets were unreachable.
-func targetErrorKey(target config.Target, auth *config.Authentication) string {
-	key := fmt.Sprintf("%s:%d", target.Host, target.Port)
-	if target.ID != "" {
-		key += " id=" + target.ID
-	}
-	if auth != nil && auth.ContextName != "" {
-		key += " context=" + auth.ContextName
+//
+// A comparable struct rather than the fields joined into a string. Every field
+// arrives over the API unrestricted, so any joined form has a pair of values
+// that produces one key: an ID of "a context=b" with no context name against an
+// ID of "a" with a context name of "b". This key is both the error map's key
+// and the identity expandTargets collapses repeats on, so a collision there
+// drops a target the operator asked for and it is never polled.
+type targetKey struct {
+	host    string
+	port    uint16
+	id      string
+	context string
+}
+
+// newTargetKey builds the key for a target under the authentication resolved
+// for it. Credentials are left out: the collector keys its observations the
+// same way, and a secret has no exported attribute to carry it.
+func newTargetKey(target config.Target, auth *config.Authentication) targetKey {
+	key := targetKey{host: target.Host, port: target.Port, id: target.ID}
+	if auth != nil {
+		key.context = auth.ContextName
 	}
 	return key
 }
 
-// SetTargetError records an error for a specific target.
-// Uses targetErrorKey as the key. Protected by r.mu.
-func (r *Runner) SetTargetError(target string, err error) {
+// String renders the key for the status error message. Two distinct keys can
+// render alike, which is why the map holds the struct: nothing parses this back.
+func (k targetKey) String() string {
+	s := fmt.Sprintf("%s:%d", k.host, k.port)
+	if k.id != "" {
+		s += " id=" + k.id
+	}
+	if k.context != "" {
+		s += " context=" + k.context
+	}
+	return s
+}
+
+// setTargetError records an error for a specific target. Protected by r.mu.
+func (r *Runner) setTargetError(target targetKey, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.targetErrs[target] = err
@@ -266,11 +292,12 @@ func (r *Runner) SetTargetError(target string, err error) {
 	r.lastErr = r.buildCombinedError()
 }
 
-// ClearTargetError removes the error for a specific target.
+// clearTargetError removes the error for a specific target.
 // If all targets recover, clears lastErr and resets lastErrAt.
-// Note: on partial recovery (some targets still failing), lastErrAt is NOT updated —
-// it continues to reflect when errors were first recorded, not when the set last changed.
-func (r *Runner) ClearTargetError(target string) {
+// Note: on partial recovery (some targets still failing), lastErrAt is NOT
+// updated: it continues to reflect when errors were first recorded, not when
+// the set last changed.
+func (r *Runner) clearTargetError(target targetKey) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.targetErrs, target)
@@ -298,7 +325,7 @@ func (r *Runner) buildCombinedError() error {
 	}
 	msgs := make([]string, 0, len(r.targetErrs))
 	for target, err := range r.targetErrs {
-		msgs = append(msgs, target+": "+err.Error())
+		msgs = append(msgs, target.String()+": "+err.Error())
 	}
 	return fmt.Errorf("metrics collection failed: %s", strings.Join(msgs, "; "))
 }

@@ -93,7 +93,7 @@ func identities(t *testing.T, r *Runner, list []config.Target) []string {
 	t.Helper()
 	out := make([]string, 0, len(list))
 	for _, target := range list {
-		out = append(out, targetErrorKey(target, r.resolveTargetAuthentication(target)))
+		out = append(out, newTargetKey(target, r.resolveTargetAuthentication(target)).String())
 	}
 	return out
 }
@@ -138,7 +138,7 @@ func TestExpandTargets_CollapsesAfterThePortDefault(t *testing.T) {
 }
 
 // TestExpandTargets_KeepsEntriesTheIdentityTellsApart is the other half: every
-// dimension deviceKey and targetErrorKey carry has to survive the collapse.
+// dimension deviceKey and targetKey carry has to survive the collapse.
 // Losing one here would silently reduce a policy's scope.
 func TestExpandTargets_KeepsEntriesTheIdentityTellsApart(t *testing.T) {
 	for name, list := range map[string][]config.Target{
@@ -196,4 +196,52 @@ func TestNewRunner_ChargesTheBudgetBeforeCollapsing(t *testing.T) {
 		policyWithTargets("10.0.0.0/16", "10.0.0.0/16"), &spyCollector{})
 	require.Error(t, err, "a policy may not name a prefix twice to pay for it once")
 	assert.Contains(t, err.Error(), "more than the limit")
+}
+
+// v3ContextAuth returns a valid SNMPv3 target authentication selecting a
+// context name, the second unrestricted string the target identity carries.
+func v3ContextAuth(contextName string) *config.Authentication {
+	auth := v3AuthAuth()
+	auth.ContextName = contextName
+	return &auth
+}
+
+// TestExpandTargets_KeepsTargetsThatOnlyACollidingKeyMerges covers two targets
+// that a key built by joining the identity fields cannot tell apart: a NetBox
+// ID carrying the separator that key uses for the context name, against the ID
+// and context name it imitates. Neither string is restricted, so collapsing the
+// pair drops a target the operator asked for and it is never polled.
+func TestExpandTargets_KeepsTargetsThatOnlyACollidingKeyMerges(t *testing.T) {
+	for name, list := range map[string][]config.Target{
+		"id imitates a context name": {
+			{Host: "10.0.0.1", Port: 161, ID: "a context=b"},
+			{Host: "10.0.0.1", Port: 161, ID: "a", Authentication: v3ContextAuth("b")},
+		},
+		"context name imitates a second one": {
+			{Host: "10.0.0.1", Port: 161, ID: "a", Authentication: v3ContextAuth("b context=c")},
+			{Host: "10.0.0.1", Port: 161, ID: "a context=b", Authentication: v3ContextAuth("c")},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &Runner{scope: policyWithTargetEntries(list...).Scope}
+			expanded, collapsed, err := r.expandTargets()
+			require.NoError(t, err)
+			assert.Len(t, expanded, 2, "two distinct targets must each keep a job")
+			assert.Equal(t, 0, collapsed)
+		})
+	}
+}
+
+// TestNewRunner_SchedulesBothTargetsACollidingKeyWouldMerge is the same defect
+// where it costs the operator: the collapse decides how many jobs exist, so a
+// merged pair leaves one target with no job at all.
+func TestNewRunner_SchedulesBothTargetsACollidingKeyWouldMerge(t *testing.T) {
+	pol := policyWithTargetEntries(
+		config.Target{Host: "10.0.0.1", Port: 161, ID: "a context=b"},
+		config.Target{Host: "10.0.0.1", Port: 161, ID: "a", Authentication: v3ContextAuth("b")},
+	)
+	r, err := NewRunner(context.Background(), testLogger, "p1", pol, &spyCollector{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	assert.Len(t, r.scheduler.Jobs(), 2, "a target was collapsed into another and is never polled")
 }

@@ -393,7 +393,7 @@ func stubRunner(err error) (*Runner, *stubScheduler) {
 	s := &stubScheduler{err: err}
 	// Stop cancels the runner's collection context, so the stub needs one.
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Runner{scheduler: s, ctx: ctx, cancel: cancel, targetErrs: make(map[string]error)}, s
+	return &Runner{scheduler: s, ctx: ctx, cancel: cancel, targetErrs: make(map[targetKey]error)}, s
 }
 
 // A scheduler that could not stop its jobs still has to be shut down, or its
@@ -431,7 +431,7 @@ func TestStop_AttemptsEveryRunnerAndJoinsErrors(t *testing.T) {
 
 func TestGetPolicyStatuses_NoError(t *testing.T) {
 	m := newTestManager()
-	r := &Runner{targetErrs: make(map[string]error)}
+	r := &Runner{targetErrs: make(map[targetKey]error)}
 	m.policies["policy1"] = r
 
 	statuses := m.GetPolicyStatuses()
@@ -444,11 +444,11 @@ func TestGetPolicyStatuses_NoError(t *testing.T) {
 
 func TestGetPolicyStatuses_WithError(t *testing.T) {
 	m := newTestManager()
-	r := &Runner{targetErrs: make(map[string]error)}
+	r := &Runner{targetErrs: make(map[targetKey]error)}
 	m.policies["policy1"] = r
 
 	someErr := fmt.Errorf("connection timed out")
-	r.SetTargetError("192.168.1.1:161", someErr)
+	r.setTargetError(targetKey{host: "192.168.1.1", port: 161}, someErr)
 
 	statuses := m.GetPolicyStatuses()
 	require.Len(t, statuses, 1)
@@ -461,11 +461,12 @@ func TestGetPolicyStatuses_WithError(t *testing.T) {
 
 func TestGetPolicyStatuses_ErrorThenClear(t *testing.T) {
 	m := newTestManager()
-	r := &Runner{targetErrs: make(map[string]error)}
+	r := &Runner{targetErrs: make(map[targetKey]error)}
 	m.policies["policy1"] = r
 
-	r.SetTargetError("192.168.1.1:161", fmt.Errorf("some error"))
-	r.ClearTargetError("192.168.1.1:161")
+	key := targetKey{host: "192.168.1.1", port: 161}
+	r.setTargetError(key, fmt.Errorf("some error"))
+	r.clearTargetError(key)
 
 	statuses := m.GetPolicyStatuses()
 	require.Len(t, statuses, 1)
@@ -476,12 +477,12 @@ func TestGetPolicyStatuses_ErrorThenClear(t *testing.T) {
 
 func TestGetPolicyStatuses_MixedState(t *testing.T) {
 	m := newTestManager()
-	healthy := &Runner{targetErrs: make(map[string]error)}
-	failing := &Runner{targetErrs: make(map[string]error)}
+	healthy := &Runner{targetErrs: make(map[targetKey]error)}
+	failing := &Runner{targetErrs: make(map[targetKey]error)}
 	m.policies["healthy-policy"] = healthy
 	m.policies["failing-policy"] = failing
 
-	failing.SetTargetError("10.0.0.1:161", fmt.Errorf("unreachable"))
+	failing.setTargetError(targetKey{host: "10.0.0.1", port: 161}, fmt.Errorf("unreachable"))
 
 	statuses := m.GetPolicyStatuses()
 	require.Len(t, statuses, 2)

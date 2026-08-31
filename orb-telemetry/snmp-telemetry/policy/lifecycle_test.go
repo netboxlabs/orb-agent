@@ -185,16 +185,16 @@ func TestRunMetrics_ContextNameDistinguishesErrorKeys(t *testing.T) {
 	a := &config.Authentication{ProtocolVersion: "SNMPv3", ContextName: "vlan-100"}
 	b := &config.Authentication{ProtocolVersion: "SNMPv3", ContextName: "vlan-200"}
 
-	assert.NotEqual(t, targetErrorKey(target, a), targetErrorKey(target, b))
-	assert.Contains(t, targetErrorKey(target, a), "10.0.0.2:161")
+	assert.NotEqual(t, newTargetKey(target, a), newTargetKey(target, b))
+	assert.Contains(t, newTargetKey(target, a).String(), "10.0.0.2:161")
 }
 
-// TestTargetErrorKey_PlainTargetIsHostAndPort keeps the common key readable: a
+// TestTargetKey_PlainTargetIsHostAndPort keeps the common key readable: a
 // target with no NetBox ID and no context name is still just host and port.
-func TestTargetErrorKey_PlainTargetIsHostAndPort(t *testing.T) {
+func TestTargetKey_PlainTargetIsHostAndPort(t *testing.T) {
 	target := config.Target{Host: "10.0.0.3", Port: 1161}
-	assert.Equal(t, "10.0.0.3:1161", targetErrorKey(target, &config.Authentication{ProtocolVersion: "SNMPv2c"}))
-	assert.Equal(t, "10.0.0.3:1161", targetErrorKey(target, nil))
+	assert.Equal(t, "10.0.0.3:1161", newTargetKey(target, &config.Authentication{ProtocolVersion: "SNMPv2c"}).String())
+	assert.Equal(t, "10.0.0.3:1161", newTargetKey(target, nil).String())
 }
 
 // TestNewRunner_WarnsWhenRetriesCanExceedTheInterval separates the two cases.
@@ -357,4 +357,24 @@ func TestRunnerStop_CancelsBeforeWaitingForTheScheduler(t *testing.T) {
 	start := time.Now()
 	require.NoError(t, r.Stop(), "the scheduler timed out waiting for the collection")
 	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+// TestRunMetrics_CollidingIdentityFieldsKeepErrorsApart is the error-map half of
+// the same defect. The healthy target's collection must not clear an error
+// belonging to a target that only looks the same once the identity fields are
+// joined into one string.
+func TestRunMetrics_CollidingIdentityFieldsKeepErrorsApart(t *testing.T) {
+	c := &failingCollector{failIDs: map[string]bool{"a context=b": true}}
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, 0), c)
+	require.NoError(t, err)
+
+	failing := config.Target{Host: "10.0.0.1", Port: 161, ID: "a context=b"}
+	healthy := config.Target{Host: "10.0.0.1", Port: 161, ID: "a", Authentication: v3ContextAuth("b")}
+
+	r.runMetrics(failing)
+	r.runMetrics(healthy)
+
+	_, lastErr := r.GetLastError()
+	require.Error(t, lastErr, "a healthy target cleared an unrelated target's error")
+	assert.Contains(t, lastErr.Error(), "unreachable")
 }
