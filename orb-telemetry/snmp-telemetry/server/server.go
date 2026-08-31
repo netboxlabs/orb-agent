@@ -214,32 +214,51 @@ func (s *Server) createPolicy(c *gin.Context) {
 
 	s.logger.Info("Received policies", "policyCount", len(policies))
 
-	rPolicies := []string{}
+	// Two lists: the handles the rollback stops, and the names the response
+	// reports. A handle is deliberately not addressable by name.
+	started := make([]policy.Handle, 0, len(policies))
+	names := []string{}
 	for name, pol := range policies {
 		if s.manager.HasPolicy(name) {
-			for _, p := range rPolicies {
-				if err = s.manager.StopPolicy(p); err != nil {
-					c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
-					return
-				}
+			if rErr := rollback(s.manager, started); rErr != nil {
+				c.IndentedJSON(http.StatusInternalServerError, Response{rErr.Error()})
+				return
 			}
 			c.IndentedJSON(http.StatusConflict, Response{"policy '" + name + "' already exists"})
 			return
 		}
 
-		if err := s.manager.StartPolicy(name, pol); err != nil {
-			for _, p := range rPolicies {
-				if sErr := s.manager.StopPolicy(p); sErr != nil {
-					err = fmt.Errorf("%v: %v", err, sErr)
-				}
+		h, err := s.manager.StartPolicyHandle(name, pol)
+		if err != nil {
+			if rErr := rollback(s.manager, started); rErr != nil {
+				err = fmt.Errorf("%v: %v", err, rErr)
 			}
 			c.IndentedJSON(http.StatusBadRequest, Response{err.Error()})
 			return
 		}
-		rPolicies = append(rPolicies, name)
+		started = append(started, h)
+		names = append(names, name)
 	}
 
-	c.IndentedJSON(http.StatusCreated, Response{fmt.Sprintf("policies [%s] were started", strings.Join(rPolicies, ","))})
+	c.IndentedJSON(http.StatusCreated, Response{fmt.Sprintf("policies [%s] were started", strings.Join(names, ","))})
+}
+
+// rollback undoes the starts one request made. The policies are named by the
+// handle their start returned rather than by name, so a concurrent delete and
+// recreate between the start and the rollback leaves the replacement alone:
+// otherwise one failed request deletes an unrelated successful one's policy.
+//
+// Every handle is attempted even after one fails, matching Manager.Stop: a
+// runner left behind by an abandoned request keeps polling under a name no
+// status report mentions.
+func rollback(manager *policy.Manager, started []policy.Handle) error {
+	var errs []error
+	for _, h := range started {
+		if err := manager.StopPolicyHandle(h); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Server) deletePolicy(c *gin.Context) {

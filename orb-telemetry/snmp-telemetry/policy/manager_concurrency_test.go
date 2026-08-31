@@ -202,3 +202,63 @@ func TestStopPolicy_DoesNotBlockOtherNames(t *testing.T) {
 	require.NoError(t, <-stopped)
 	require.NoError(t, m.Stop())
 }
+
+// A batch POST that fails partway has to undo the policies it started. Naming
+// them by policy name stops whatever holds the name by then, so a DELETE and a
+// POST for one of those names, both landing before the rollback, leave the
+// rollback deleting a replacement the failed request never created.
+//
+// The interleave is written in sequence: what the rollback stops depends on the
+// order the three requests reach the manager, not on their overlapping, and mu
+// serialises the map operations anyway.
+func TestStopPolicyHandle_LeavesAReplacementAlone(t *testing.T) {
+	m := newTestManager()
+	h, err := m.StartPolicyHandle("p1", minimalPolicy(v2cAuth()))
+	require.NoError(t, err)
+
+	// The concurrent DELETE, then the POST that recreated the name.
+	require.NoError(t, m.StopPolicy("p1"))
+	require.NoError(t, m.StartPolicy("p1", minimalPolicy(v2cAuth())))
+	replacement := m.policies["p1"]
+	require.NotNil(t, replacement)
+
+	require.NoError(t, m.StopPolicyHandle(h))
+
+	require.True(t, m.HasPolicy("p1"), "the rollback deleted the replacement")
+	require.Same(t, replacement, m.policies["p1"], "the name holds a different runner")
+	require.NoError(t, replacement.ctx.Err(), "the replacement's collections were cancelled")
+	require.NoError(t, m.Stop())
+}
+
+// The other half: a rollback with nothing racing it still stops what it
+// started, or a failed batch leaves its policies running.
+func TestStopPolicyHandle_StopsTheRunnerItStarted(t *testing.T) {
+	m := newTestManager()
+	h, err := m.StartPolicyHandle("p1", minimalPolicy(v2cAuth()))
+	require.NoError(t, err)
+	started := m.policies["p1"]
+	require.NotNil(t, started)
+
+	require.NoError(t, m.StopPolicyHandle(h))
+
+	require.False(t, m.HasPolicy("p1"), "the rollback left its own policy running")
+	require.Error(t, started.ctx.Err(), "the runner was detached but never stopped")
+
+	// A name already free is not an error: the DELETE that took it got there
+	// first and stopped that runner itself.
+	require.NoError(t, m.StopPolicyHandle(h))
+	require.NoError(t, m.Stop())
+}
+
+// A handle naming no runner stops nothing, whatever name it carries. That is
+// what a failed start returns, and falling back to the name would make it stop
+// a policy the caller never created.
+func TestStopPolicyHandle_AHandleWithNoRunnerStopsNothing(t *testing.T) {
+	for _, h := range []Handle{{}, {name: "p1"}} {
+		m := newTestManager()
+		require.NoError(t, m.StartPolicy("p1", minimalPolicy(v2cAuth())))
+		require.NoError(t, m.StopPolicyHandle(h))
+		require.True(t, m.HasPolicy("p1"))
+		require.NoError(t, m.Stop())
+	}
+}

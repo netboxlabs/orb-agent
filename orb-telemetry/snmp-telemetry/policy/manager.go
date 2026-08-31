@@ -350,31 +350,50 @@ func (m *Manager) reserveStopping(name string) func() {
 	}
 }
 
-// StartPolicy starts a single named policy. The duplicate check and the insert
-// happen together under mu, so two concurrent requests for the same name cannot
-// both start a runner.
+// Handle names one runner a start created. A caller that may have to undo its
+// start keeps this rather than the policy name: by the time it rolls back, a
+// concurrent delete and a recreate can have put a different runner under that
+// name, and stopping by name alone would stop that replacement.
+//
+// The zero Handle names nothing, so stopping it does nothing.
+type Handle struct {
+	name   string
+	runner *Runner
+}
+
+// StartPolicy starts a single named policy. For a caller with nothing to roll
+// back, so the handle is dropped.
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
+	_, err := m.StartPolicyHandle(name, policy)
+	return err
+}
+
+// StartPolicyHandle starts a single named policy and returns a handle to the
+// runner it created, for a caller that may have to undo the start. The
+// duplicate check and the insert happen together under mu, so two concurrent
+// requests for the same name cannot both start a runner.
+func (m *Manager) StartPolicyHandle(name string, policy config.Policy) (Handle, error) {
 	// Checked here as well as in ParsePolicies, since this is the call that
 	// puts the name in the map a delete has to reach.
 	if err := ValidatePolicyName(name); err != nil {
-		return err
+		return Handle{}, err
 	}
 	if len(policy.Scope.Targets) == 0 {
-		return fmt.Errorf("%s : no targets found in the policy", name)
+		return Handle{}, fmt.Errorf("%s : no targets found in the policy", name)
 	}
 
 	profilesDir := m.defaultProfilesDir
 	if policy.Config.ProfilesDir != "" {
 		dir, err := validateProfilesDir(m.profilesRoot, policy.Config.ProfilesDir)
 		if err != nil {
-			return err
+			return Handle{}, err
 		}
 		profilesDir = dir
 	}
 
 	sharedCollector, err := m.acquireCollector(profilesDir)
 	if err != nil {
-		return err
+		return Handle{}, err
 	}
 	// Every way out below this point leaves no policy using the profile set, so
 	// the reference is given back. Registered before mu is taken, so it runs
@@ -390,7 +409,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	for {
 		if _, ok := m.policies[name]; ok {
 			m.mu.Unlock()
-			return fmt.Errorf("policy %s already exists", name)
+			return Handle{}, fmt.Errorf("policy %s already exists", name)
 		}
 		stopping, ok := m.stopping[name]
 		if !ok {
@@ -403,7 +422,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 		select {
 		case <-stopping:
 		case <-m.ctx.Done():
-			return fmt.Errorf("policy %s: waiting for the previous runner to stop: %w", name, m.ctx.Err())
+			return Handle{}, fmt.Errorf("policy %s: waiting for the previous runner to stop: %w", name, m.ctx.Err())
 		}
 		m.mu.Lock()
 	}
@@ -411,7 +430,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 
 	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector)
 	if err != nil {
-		return err
+		return Handle{}, err
 	}
 
 	r.Start()
@@ -419,16 +438,45 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	m.policyDirs[name] = profilesDir
 	started = true
 	m.logger.Info("started policy", "policy", config.SanitizeLogValue(name))
-	return nil
+	return Handle{name: name, runner: r}, nil
 }
 
-// StopPolicy stops a single named policy. The runner is detached under mu and
-// stopped outside it, since Stop blocks on the scheduler unwinding. The name
-// stays reserved for the whole of Stop so a POST for the same name cannot start
-// a replacement that the outgoing runner would then forget.
+// StopPolicy stops whichever runner is registered under name, which is what a
+// DELETE for that name asks for.
 func (m *Manager) StopPolicy(name string) error {
+	return m.stopPolicy(name, nil)
+}
+
+// StopPolicyHandle stops the runner the handle names and does nothing if that
+// runner is no longer the one registered under its name, so a caller undoing
+// its own start cannot stop a replacement it never started. The zero Handle
+// stops nothing.
+func (m *Manager) StopPolicyHandle(h Handle) error {
+	if h.runner == nil {
+		return nil
+	}
+	return m.stopPolicy(h.name, h.runner)
+}
+
+// stopPolicy detaches the policy under name and stops it. A non-nil want
+// requires the registered runner to be that one: the comparison and the detach
+// happen together under mu, so a replacement started between the two cannot be
+// caught by it.
+//
+// The runner is detached under mu and stopped outside it, since Stop blocks on
+// the scheduler unwinding. The name stays reserved for the whole of Stop so a
+// POST for the same name cannot start a replacement that the outgoing runner
+// would then forget.
+func (m *Manager) stopPolicy(name string, want *Runner) error {
 	m.mu.Lock()
 	r, ok := m.policies[name]
+	if ok && want != nil && r != want {
+		// The runner this caller started is already gone and something else
+		// holds the name. Nothing to stop, and stopping what is there would
+		// delete a policy this caller never created.
+		m.mu.Unlock()
+		return nil
+	}
 	var release func()
 	var profilesDir string
 	if ok {

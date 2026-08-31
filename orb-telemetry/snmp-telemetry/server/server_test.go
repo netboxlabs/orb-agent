@@ -468,3 +468,52 @@ func TestDeletePolicy_RefusedNamesDoNotAddressTheirPolicy(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:8078/api/v1", base.JoinPath(url.PathEscape("..")).String())
 	assert.Equal(t, "http://127.0.0.1:8078/api/v1/policies", base.JoinPath(url.PathEscape(".")).String())
 }
+
+// ---------------------------------------------------------------------------
+// A batch POST that fails partway undoes what it started
+// ---------------------------------------------------------------------------
+
+// One entry failing leaves the whole request refused, so the entries already
+// started have to be stopped again. Whichever order the two are visited in,
+// nothing may be left running: the profiles_dir outside the server's root is
+// refused by the start rather than by the parser, so the failure lands after a
+// policy may already be running.
+func TestCreatePolicy_RollsBackWhatItStarted(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Stop()
+
+	profilesDir := filepath.Join(testProfilesRoot(t), "profiles", "snmp-profiles")
+	body := fmt.Appendf(nil, `
+policies:
+  keep:
+    config:
+      metrics_interval: 60
+      profiles_dir: %s
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: public
+      targets:
+        - host: 192.0.2.1
+  reject:
+    config:
+      metrics_interval: 60
+      profiles_dir: /etc
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: public
+      targets:
+        - host: 192.0.2.2
+`, profilesDir)
+
+	w := postPolicy(t, srv, "application/x-yaml", body)
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "must be inside")
+
+	w = httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+	require.NoError(t, err)
+	srv.Router().ServeHTTP(w, req)
+	assert.JSONEq(t, `[]`, w.Body.String(), "a refused request left a policy running")
+}
