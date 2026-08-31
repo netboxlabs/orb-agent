@@ -28,6 +28,7 @@ from netboxlabs.diode.sdk.ingester import (
 from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import (
+    UNDEFINED_PLACEHOLDER,
     Defaults,
     Options,
     TenantParameters,
@@ -86,6 +87,26 @@ def translate_vrf(
     return VRF(name=vrf)
 
 
+def _drop_unconfigured_placeholder(value: str | None, *, is_update: bool) -> str | None:
+    """
+    Drop the "nothing was configured" placeholder from a value bound for an update.
+
+    ``Defaults`` carries ``UNDEFINED_PLACEHOLDER`` for site and role when the
+    operator set neither. A payload carrying ``source_match.netbox_id`` binds an
+    existing device by primary key, so the plugin skips matching entirely and
+    applies every field the payload contains. Sending the placeholder there
+    repoints a real device's site and role at the placeholder objects, which
+    makes netbox_id cause the overwrite rather than prevent it.
+
+    On a create the placeholder has to stay: NetBox requires both fields on a
+    Device, and netbox_id is the only signal distinguishing an update from a
+    create.
+    """
+    if is_update and value == UNDEFINED_PLACEHOLDER:
+        return None
+    return value
+
+
 def translate_device(
     device_info: dict,
     defaults: Defaults,
@@ -127,8 +148,11 @@ def translate_device(
         manufacturer = defaults.device.manufacturer or manufacturer
         platform = defaults.device.platform or platform
 
+    site = _drop_unconfigured_placeholder(defaults.site, is_update=netbox_id is not None)
+    role = _drop_unconfigured_placeholder(defaults.role, is_update=netbox_id is not None)
+
     if defaults.location:
-        location = Location(name=defaults.location, site=defaults.site)
+        location = Location(name=defaults.location, site=site)
 
     serial_number = device_info.get("serial_number")
     if isinstance(serial_number, list | tuple):
@@ -161,7 +185,7 @@ def translate_device(
         "name": blank_to_none(device_info.get("hostname")),
         "device_type": DeviceType(model=model, manufacturer=manufacturer),
         "platform": Platform(name=platform, manufacturer=manufacturer),
-        "role": defaults.role,
+        "role": role,
         "serial": serial_number,
         # asset_tag is the highest-precedence dcim.device matcher and comes straight
         # from policy. Blanking it here keeps the rich entity consistent with the
@@ -170,14 +194,14 @@ def translate_device(
         if defaults.device
         else None,
         "status": "active",
-        "site": defaults.site,
+        "site": site,
         "tags": tags,
         "location": location,
         # Attach the location to the rack too: without it NetBox has no
         # site+location+name key to match on and duplicates the rack.
         # `location` is None when no location default is set, leaving the rack's
         # location unset (site+name only) as before.
-        "rack": Rack(name=defaults.rack, site=defaults.site, location=location)
+        "rack": Rack(name=defaults.rack, site=site, location=location)
         if defaults.rack
         else None,
         "tenant": translate_tenant(defaults.tenant),

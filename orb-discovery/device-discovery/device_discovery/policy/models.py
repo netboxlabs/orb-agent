@@ -142,12 +142,21 @@ class PrefixParameters(IpamParameters):
     scope_location: str | None = Field(default=None, description="Prefix scope location, optional")
 
 
+#: Stand-in used when the operator configured no site or role. NetBox requires
+#: both on a Device, so a create has to carry something; everywhere else this
+#: string means "no value was configured" and is suppressed rather than sent.
+#: See translate_device and the prefix-scope cascade in interface.py.
+UNDEFINED_PLACEHOLDER = "undefined"
+
+
 class Defaults(BaseModel):
     """Model for default configuration."""
 
-    site: str | None = Field(default="undefined", description="Site name, optional")
+    site: str | None = Field(
+        default=UNDEFINED_PLACEHOLDER, description="Site name, optional"
+    )
     role: str | None = Field(
-        default="undefined", description="Device Role name, optional"
+        default=UNDEFINED_PLACEHOLDER, description="Device Role name, optional"
     )
     if_type: str | None = Field(default="other", description="Interface type, optional")
     interface_patterns: list[InterfacePattern] | None = Field(
