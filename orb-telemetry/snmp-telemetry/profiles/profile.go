@@ -107,6 +107,12 @@ type MetricEntry struct {
 	MetricTags    []MetricTag `yaml:"metric_tags"`
 	WalkFullTable bool        `yaml:"walk_full_table,omitempty"`
 
+	// FromExtended is true when the entry reached a resolved profile through
+	// `extends:` instead of being written in that profile's own file.
+	// Populated by the Loader. It decides a metric name collision: an entry a
+	// profile declares itself outranks one it inherited.
+	FromExtended bool `yaml:"-"`
+
 	// Name, OID and Type are the flat form: instead of nesting the metric
 	// under `symbol:`, the entry carries the OID to read, the name to write it
 	// to and the kind of thing the OID names. A `help:` sits beside them and

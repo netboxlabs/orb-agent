@@ -26,6 +26,7 @@ type Loader struct {
 	byFile    map[string]*Profile // relative-path -> raw (unresolved) profile
 	byBase    map[string]string   // basename -> first relative-path seen (for extends resolution)
 	resolved  map[string]*Profile // relative-path -> fully merged profile
+	deduped   map[string]*Profile // relative-path -> merged profile with duplicate metric names resolved
 	resolving map[string]bool     // cycle detection
 	logger    *slog.Logger
 }
@@ -36,6 +37,7 @@ func newEmptyLoader(dir string, logger *slog.Logger) *Loader {
 		byFile:    make(map[string]*Profile),
 		byBase:    make(map[string]string),
 		resolved:  make(map[string]*Profile),
+		deduped:   make(map[string]*Profile),
 		resolving: make(map[string]bool),
 		logger:    logger,
 	}
@@ -193,6 +195,24 @@ func (l *Loader) readDir() error {
 // it (e.g. append(head, tail...)) would reuse head's backing array whenever
 // head has spare capacity, letting one child's merge silently overwrite
 // another's.
+// markExtended returns a copy of entries with FromExtended set, so a resolved
+// profile can tell an entry it inherited from one its own file declares.
+//
+// It copies rather than writing in place because a resolved parent is cached
+// and may be extended by more than one child; the flag belongs to the child's
+// view of the entry, not to the parent's.
+func markExtended(entries []MetricEntry) []MetricEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]MetricEntry, len(entries))
+	copy(out, entries)
+	for i := range out {
+		out[i].FromExtended = true
+	}
+	return out
+}
+
 func prepend[T any](head, tail []T) []T {
 	if len(head) == 0 && len(tail) == 0 {
 		return nil
@@ -203,7 +223,8 @@ func prepend[T any](head, tail []T) []T {
 	return out
 }
 
-// Resolve returns the fully-merged profile for the given key, resolving all extends recursively.
+// Resolve returns the fully-merged profile for the given key, resolving all
+// extends recursively and then the metric names two symbols claim at once.
 // key may be a relative path (e.g. "cisco/cisco-catalyst.yml") or a bare basename
 // (e.g. "system-mib.yml") as used in extends references.
 //
@@ -213,12 +234,35 @@ func prepend[T any](head, tail []T) []T {
 // first let one mislocated file reparent every profile extending that name.
 // A key with a path separator stays an exact path lookup.
 func (l *Loader) Resolve(key string) (*Profile, error) {
+	p, err := l.resolveMerged(key)
+	if err != nil {
+		return nil, err
+	}
+	return l.dedupe(p), nil
+}
+
+// resolveMerged returns the merged profile before duplicate metric names are
+// resolved. Inheritance reads this one: pruning a parent would settle a
+// contest among the parent's symbols alone, and a child's own symbol has to be
+// able to beat an inherited one.
+func (l *Loader) resolveMerged(key string) (*Profile, error) {
 	if !strings.Contains(key, "/") {
 		if rel, ok := l.byBase[key]; ok {
 			key = rel
 		}
 	}
 	return l.resolvePath(key)
+}
+
+// dedupe returns p with duplicate metric names resolved, cached against the
+// merged profile it came from.
+func (l *Loader) dedupe(p *Profile) *Profile {
+	if out, ok := l.deduped[p.RelPath]; ok {
+		return out
+	}
+	out := pruneDuplicates(p, l.logger)
+	l.deduped[p.RelPath] = out
+	return out
 }
 
 // resolvePath resolves one profile by its exact relative path. Every profile
@@ -252,7 +296,7 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 
 	// Resolve and merge parent profiles (extends) first
 	for _, parentName := range p.Extends {
-		parent, err := l.Resolve(parentName)
+		parent, err := l.resolveMerged(parentName)
 		if err != nil {
 			l.logger.Warn("Could not resolve extended profile, skipping", "parent", parentName, "child", key, "error", err)
 			continue
@@ -266,7 +310,7 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 		// prepend allocates a fresh backing array up front and only ever
 		// reads from parent.Metrics/parent.MetricTags, so no two resolved
 		// profiles can end up sharing an array.
-		merged.Metrics = prepend(parent.Metrics, merged.Metrics)
+		merged.Metrics = prepend(markExtended(parent.Metrics), merged.Metrics)
 		merged.MetricTags = prepend(parent.MetricTags, merged.MetricTags)
 		// The flag describes the agent rather than one metric, so a parent that
 		// disables bulk walking disables it for everything extending it. A
@@ -286,8 +330,9 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 	return merged, nil
 }
 
-// AllResolved resolves every loaded profile and returns them in relative-path
-// order. Profiles that fail to resolve are logged and skipped.
+// AllResolved resolves every loaded profile, settles the metric names two of
+// its symbols claim at once, and returns them in relative-path order. Profiles
+// that fail to resolve are logged and skipped.
 //
 // The order is sorted rather than map order because the Matcher indexes this
 // slice and has to break ties between profiles claiming the same key. Map order
@@ -302,6 +347,7 @@ func (l *Loader) AllResolved() ([]*Profile, error) {
 			l.logger.Warn("Failed to resolve profile", "file", name, "error", err)
 			continue
 		}
+		p = l.dedupe(p)
 		reportInertProfile(p, l.logger)
 		result = append(result, p)
 	}
