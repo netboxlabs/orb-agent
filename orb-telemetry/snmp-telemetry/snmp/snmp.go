@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -11,19 +12,39 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
 
-// SlogAdapter adapts slog.Logger to implement gosnmp.LoggerInterface
+// redactedCommunity stands in for the community in every line gosnmp logs.
+const redactedCommunity = "[REDACTED]"
+
+// SlogAdapter adapts slog.Logger to implement gosnmp.LoggerInterface.
+//
+// gosnmp logs whole packets at debug level, and the community is the
+// credential of a v1 or v2c session: its packet format prints the community
+// verbatim, and it prints again the one it parses out of every reply. The
+// adapter removes the value from every line it forwards, matching on the
+// community itself rather than on the library's format string, so a gosnmp
+// release that renames or moves the field cannot reopen the disclosure.
 type SlogAdapter struct {
 	logger *slog.Logger
+	// community is the value to redact. Empty for v3, which carries none.
+	community string
+}
+
+// redact removes the community from a line gosnmp is about to log.
+func (s *SlogAdapter) redact(line string) string {
+	if s.community == "" {
+		return line
+	}
+	return strings.ReplaceAll(line, s.community, redactedCommunity)
 }
 
 // Print implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Print(v ...any) {
-	s.logger.Debug(fmt.Sprint(v...))
+	s.logger.Debug(s.redact(fmt.Sprint(v...)))
 }
 
 // Printf implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Printf(format string, v ...any) {
-	s.logger.Debug(fmt.Sprintf(format, v...))
+	s.logger.Debug(s.redact(fmt.Sprintf(format, v...)))
 }
 
 // maxRepetitions is the batch size of a GETBULK request.
@@ -115,7 +136,7 @@ type ClientFactory func(ctx context.Context, host string, port uint16, retries i
 func NewClient(ctx context.Context, host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (Walker, error) {
 	var gosnmpLogger gosnmp.Logger
 	if logger.Enabled(ctx, slog.LevelDebug) {
-		gosnmpLogger = gosnmp.NewLogger(&SlogAdapter{logger})
+		gosnmpLogger = gosnmp.NewLogger(&SlogAdapter{logger: logger, community: authentication.Community})
 	}
 
 	switch authentication.ProtocolVersion {

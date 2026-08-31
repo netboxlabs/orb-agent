@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -509,4 +510,157 @@ func TestClient_SetBulkWalkIsIgnoredOnV1(t *testing.T) {
 	assert.True(t, v2c.bulkWalk)
 	v2c.SetBulkWalk(false)
 	assert.False(t, v2c.bulkWalk)
+}
+
+// ---------------------------------------------------------------------------
+// The community must not reach the log
+// ---------------------------------------------------------------------------
+
+// debugLogger returns a debug-level logger and the buffer it writes to. Debug
+// is the level that installs gosnmp's packet logger, so it is the level the
+// disclosure needs.
+func debugLogger() (*slog.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})), &buf
+}
+
+// The community is the credential of an SNMPv1 or v2c session, and gosnmp logs
+// every packet it sends and the community it parses out of every reply. A
+// debug run against a real device must leave neither in the log.
+func TestClient_CommunityNeverReachesTheDebugLog(t *testing.T) {
+	const (
+		root      = "1.3.6.1.2.1.2.2.1"
+		community = "n0t-in-the-log"
+	)
+	agent := newFakeAgent(t, interfaceTable(root, 2, 3))
+	logger, buf := debugLogger()
+
+	w, err := NewClient(t.Context(), "127.0.0.1", agent.port, 1, 3*time.Second,
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: community}, logger)
+	require.NoError(t, err)
+	require.NoError(t, w.Connect())
+	t.Cleanup(func() { _ = w.Close() })
+
+	values, err := w.Walk(root, 0)
+	require.NoError(t, err)
+	require.NotEmpty(t, values, "the walk has to reach the agent for the log to hold packets")
+
+	logged := buf.String()
+	require.Contains(t, logged, "SENDING PACKET", "the packet logger has to be installed for this to pin anything")
+	require.Contains(t, logged, "Parsed community", "the reply path has to have parsed a community")
+	assert.NotContains(t, logged, community, "the community reached the debug log")
+	assert.Contains(t, logged, "Community:"+redactedCommunity, "the packet line keeps its community field, redacted")
+	assert.Contains(t, logged, root, "redaction left the rest of the packet line intact")
+}
+
+// gosnmp's packet format is what discloses the community: SafeString prints it
+// verbatim. Pinning the adapter against that real output rather than a
+// hand-written sample means a gosnmp bump that changes the format fails here.
+func TestSlogAdapter_RedactsTheCommunityFromARealPacketLine(t *testing.T) {
+	const community = "n0t-in-the-log"
+	packet := &gosnmp.SnmpPacket{
+		Version:   gosnmp.Version2c,
+		Community: community,
+		PDUType:   gosnmp.GetNextRequest,
+		RequestID: 42,
+		Variables: []gosnmp.SnmpPDU{{Name: "1.3.6.1.2.1.1.1.0", Type: gosnmp.Null}},
+	}
+	line := packet.SafeString()
+	require.Contains(t, line, "Community:"+community,
+		"gosnmp no longer prints the community here; revisit what the adapter redacts")
+
+	logger, buf := debugLogger()
+	adapter := &SlogAdapter{logger: logger, community: community}
+	adapter.Printf("SENDING PACKET: %s", line)
+
+	logged := buf.String()
+	assert.NotContains(t, logged, community, "the community survived the adapter")
+	assert.Contains(t, logged, "Community:"+redactedCommunity)
+	assert.Contains(t, logged, "1.3.6.1.2.1.1.1.0", "the varbind survived the redaction")
+	assert.Contains(t, logged, "RequestID:42", "the request ID survived the redaction")
+	assert.Contains(t, logged, "Version:2c", "the version survived the redaction")
+}
+
+// Print carries the same lines as Printf, so it redacts the same way.
+func TestSlogAdapter_PrintRedactsTheCommunity(t *testing.T) {
+	const community = "n0t-in-the-log"
+	logger, buf := debugLogger()
+	adapter := &SlogAdapter{logger: logger, community: community}
+
+	adapter.Print("Parsed community ", community)
+
+	logged := buf.String()
+	assert.NotContains(t, logged, community)
+	assert.Contains(t, logged, "Parsed community "+redactedCommunity)
+}
+
+// A v3 client carries no community, and an empty needle must not be replaced
+// between every character of the line.
+func TestSlogAdapter_EmptyCommunityLeavesTheLineAlone(t *testing.T) {
+	logger, buf := debugLogger()
+	adapter := &SlogAdapter{logger: logger}
+
+	adapter.Printf("SECURITY PARAMETERS:%s", "UserName:admin")
+
+	assert.Contains(t, buf.String(), "SECURITY PARAMETERS:UserName:admin")
+	assert.NotContains(t, buf.String(), redactedCommunity)
+}
+
+// The v3 path is out of scope because gosnmp's USM SafeString prints the
+// per-packet authentication and privacy parameters, which are an HMAC and an
+// IV, and never the passphrases. This pins that, so a gosnmp bump that starts
+// printing one is caught here rather than in a customer's log.
+func TestUsmSecurityParameters_SafeStringOmitsThePassphrases(t *testing.T) {
+	const (
+		authPassphrase = "n0t-in-the-log-auth"
+		privPassphrase = "n0t-in-the-log-priv"
+	)
+	sp := &gosnmp.UsmSecurityParameters{
+		UserName:                 "admin",
+		AuthenticationProtocol:   gosnmp.SHA,
+		AuthenticationPassphrase: authPassphrase,
+		AuthenticationParameters: "per-packet-hmac",
+		PrivacyProtocol:          gosnmp.AES,
+		PrivacyPassphrase:        privPassphrase,
+	}
+
+	line := sp.SafeString()
+
+	assert.NotContains(t, line, authPassphrase, "the auth passphrase reached a safe string")
+	assert.NotContains(t, line, privPassphrase, "the priv passphrase reached a safe string")
+	assert.Contains(t, line, "UserName:admin", "the user name is what makes the line useful")
+	assert.Contains(t, line, "per-packet-hmac", "the per-packet authentication parameters survive")
+}
+
+// The v3 client installs the same adapter, so the whole debug run must stay
+// free of both passphrases.
+func TestClient_V3PassphrasesNeverReachTheDebugLog(t *testing.T) {
+	const (
+		authPassphrase = "n0t-in-the-log-auth"
+		privPassphrase = "n0t-in-the-log-priv"
+	)
+	logger, buf := debugLogger()
+
+	w, err := NewClient(t.Context(), "127.0.0.1", 161, 1, time.Second, &config.Authentication{
+		ProtocolVersion: ProtocolVersion3,
+		SecurityLevel:   SecurityLevelAuthPriv,
+		Username:        "admin",
+		AuthProtocol:    "SHA",
+		AuthPassphrase:  authPassphrase,
+		PrivProtocol:    "AES",
+		PrivPassphrase:  privPassphrase,
+	}, logger)
+	require.NoError(t, err)
+	c, ok := w.(*Client)
+	require.True(t, ok)
+
+	sp, ok := c.SecurityParameters.(*gosnmp.UsmSecurityParameters)
+	require.True(t, ok)
+	sp.Logger = c.Logger
+	sp.Log()
+
+	logged := buf.String()
+	require.Contains(t, logged, "SECURITY PARAMETERS", "the security parameters have to have been logged")
+	assert.NotContains(t, logged, authPassphrase)
+	assert.NotContains(t, logged, privPassphrase)
 }
