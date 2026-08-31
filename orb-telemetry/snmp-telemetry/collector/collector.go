@@ -728,7 +728,8 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		// undecoded value the numeric branches would otherwise return.
 		return
 	}
-	metricName := buildMetricName(sym.Name)
+	name := sym.ExportName()
+	metricName := buildMetricName(name)
 	decl := symbolDeclKey(sym)
 	if !c.pollDue(key, sym.OID, sym.PollTimeSec) {
 		throttled.add(metricName, decl)
@@ -753,14 +754,11 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		if rowIdx, indexed := scalarRowIndex(fullOID, sym.OID); indexed {
 			attrs = append(attrs, attribute.String("row_index", rowIdx))
 		}
-		if name := enumStatusName(sym, val); name != "" {
-			attrs = append(attrs, attribute.String(sym.Name+"_status", name))
-		}
-		if sym.Tag != "" {
-			attrs = append(attrs, attribute.String("tag", sym.Tag))
+		if status := enumStatusName(sym, val); status != "" {
+			attrs = append(attrs, attribute.String(name+"_status", status))
 		}
 		if strVal != "" {
-			attrs = append(attrs, attribute.String(sym.Name+"_value", strVal))
+			attrs = append(attrs, attribute.String(name+"_value", strVal))
 		}
 
 		localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: attrs, decl: decl})
@@ -1059,7 +1057,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			anyActive = true
 		} else {
 			states = append(states, symState{sym: sym, throttled: true})
-			throttled.add(buildMetricName(sym.Name), symbolDeclKey(sym))
+			throttled.add(buildMetricName(sym.ExportName()), symbolDeclKey(sym))
 		}
 	}
 	if !anyActive {
@@ -1209,7 +1207,8 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		c.markPolled(key, sym.OID, sym.PollTimeSec)
 
 		cond, hasCondition := conditions[sym.OID]
-		metricName := buildMetricName(sym.Name)
+		name := sym.ExportName()
+		metricName := buildMetricName(name)
 		decl := symbolDeclKey(sym)
 
 		for fullOID, pdu := range pdus {
@@ -1259,14 +1258,11 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 					rowAttrs = append(rowAttrs, attribute.String(jt.name, v))
 				}
 			}
-			if name := enumStatusName(sym, val); name != "" {
-				rowAttrs = append(rowAttrs, attribute.String(sym.Name+"_status", name))
-			}
-			if sym.Tag != "" {
-				rowAttrs = append(rowAttrs, attribute.String("tag", sym.Tag))
+			if status := enumStatusName(sym, val); status != "" {
+				rowAttrs = append(rowAttrs, attribute.String(name+"_status", status))
 			}
 			if strVal != "" {
-				rowAttrs = append(rowAttrs, attribute.String(sym.Name+"_value", strVal))
+				rowAttrs = append(rowAttrs, attribute.String(name+"_value", strVal))
 			}
 
 			localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: rowAttrs, decl: decl})
@@ -1399,9 +1395,11 @@ func scalarRowIndex(fullOID, symbolOID string) (string, bool) {
 	return idx, true
 }
 
-// buildMetricName converts a profile symbol name to an OTLP metric name.
-func buildMetricName(symbolName string) string {
-	return "snmp." + strings.ToLower(symbolName)
+// buildMetricName converts a symbol's export name to an OTLP metric name.
+// The name is the symbol's `tag:` where it declares one, so a tag renames the
+// metric rather than adding a dimension to it.
+func buildMetricName(exportName string) string {
+	return "snmp." + strings.ToLower(exportName)
 }
 
 // metricTagColumn returns the tag column from a MetricTag, handling the

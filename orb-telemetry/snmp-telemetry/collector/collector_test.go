@@ -495,16 +495,16 @@ func TestAttrSetKey_LeavesTheCallersAttributesAlone(t *testing.T) {
 	attrs := []attribute.KeyValue{
 		attribute.String("row_index", "2"),
 		attribute.String("device_ip", "10.0.0.1"),
-		attribute.String("tag", "CPU"),
+		attribute.String("sensor_name", "Board 0"),
 	}
 	before := append([]attribute.KeyValue(nil), attrs...)
 
 	key := attrSetKey(attrs)
 
 	assert.Equal(t, before, attrs, "the point keeps the attribute order it was collected in")
-	assert.Equal(t, "device_ip=10.0.0.1,row_index=2,tag=CPU", key)
+	assert.Equal(t, "device_ip=10.0.0.1,row_index=2,sensor_name=Board 0", key)
 	assert.Equal(t, key, attrSetKey([]attribute.KeyValue{
-		attribute.String("tag", "CPU"),
+		attribute.String("sensor_name", "Board 0"),
 		attribute.String("device_ip", "10.0.0.1"),
 		attribute.String("row_index", "2"),
 	}), "the same attributes are the same series in any order")
@@ -515,14 +515,15 @@ func TestAttrSetKey_LeavesTheCallersAttributesAlone(t *testing.T) {
 // Retention when one metric name is declared twice
 // ---------------------------------------------------------------------------
 
-// A resolved profile can hold two declarations of one metric name with
-// different poll periods. The bundled Dell OS10 profile inherits an unthrottled
-// hrProcessorLoad tagged by processor description and adds a 60 second
-// declaration tagged CPU. Retention was assigned per metric name, so on a
-// metrics_interval under 60 seconds the tagged series was carried forward and
-// then replaced wholesale by the untagged fresh points, and vanished between
-// due polls.
-func TestCollectTarget_BundledDellTaggedCPUSurvivesItsUnthrottledSibling(t *testing.T) {
+// The bundled Dell OS10 profile inherits an unthrottled hrProcessorLoad tagged
+// by processor description and adds a 60 second declaration of the same column
+// carrying `tag: CPU`. The tag names the metric, so the throttled declaration
+// exports as snmp.cpu and the inherited one keeps snmp.hrprocessorload.
+//
+// Retention is decided per declaration, not per metric name: on a
+// metrics_interval under 60 seconds the throttled declaration keeps the points
+// it left while the unthrottled one refreshes.
+func TestCollectTarget_BundledDellTagNamesTheThrottledCPUMetric(t *testing.T) {
 	const (
 		host     = "10.0.0.75"
 		loadCol  = "1.3.6.1.2.1.25.3.3.1.2"
@@ -541,12 +542,10 @@ func TestCollectTarget_BundledDellTaggedCPUSurvivesItsUnthrottledSibling(t *test
 			},
 		}}
 	}
-	byTag := func(pts []observedPoint, tag string) map[string]int64 {
+	byIndex := func(pts []observedPoint) map[string]int64 {
 		out := make(map[string]int64)
 		for _, pt := range pts {
-			if attrValue(pt, "tag") == tag {
-				out[attrValue(pt, "row_index")] = pt.value
-			}
+			out[attrValue(pt, "row_index")] = pt.value
 		}
 		return out
 	}
@@ -556,25 +555,27 @@ func TestCollectTarget_BundledDellTaggedCPUSurvivesItsUnthrottledSibling(t *test
 
 	c.clientFactory = walkerFactory(makeWalker(11, 22))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
-	first := c.testDeviceStore("p", host)["snmp.hrprocessorload"]
-	require.Len(t, first, 4, "both declarations poll on the first run")
-	require.Equal(t, map[string]int64{"1": 11, "2": 22}, byTag(first, "CPU"))
+	store := c.testDeviceStore("p", host)
+	require.Equal(t, map[string]int64{"1": 11, "2": 22}, byIndex(store["snmp.cpu"]),
+		"the tagged declaration exports under the name its tag gives it")
+	require.Equal(t, map[string]int64{"1": 11, "2": 22}, byIndex(store["snmp.hrprocessorload"]),
+		"the inherited declaration keeps the name it declares")
+	for _, pt := range store["snmp.cpu"] {
+		assert.Empty(t, attrValue(pt, "tag"), "a symbol tag names the metric and adds no attribute")
+	}
 
 	// Seconds later: the inherited declaration is due, the 60 second one is not.
 	c.clientFactory = walkerFactory(makeWalker(33, 44))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 
-	second := c.testDeviceStore("p", host)["snmp.hrprocessorload"]
-	assert.Equal(t, map[string]int64{"1": 11, "2": 22}, byTag(second, "CPU"),
+	store = c.testDeviceStore("p", host)
+	assert.Equal(t, map[string]int64{"1": 11, "2": 22}, byIndex(store["snmp.cpu"]),
 		"the throttled declaration keeps the points it left")
-	assert.Equal(t, map[string]int64{"1": 33, "2": 44}, byTag(second, ""),
+	assert.Equal(t, map[string]int64{"1": 33, "2": 44}, byIndex(store["snmp.hrprocessorload"]),
 		"the due declaration is refreshed")
-	for _, pt := range second {
-		if attrValue(pt, "tag") == "" {
-			assert.NotEmpty(t, attrValue(pt, "processor_description"), "the inherited series keeps its tag column")
-		}
+	for _, pt := range store["snmp.hrprocessorload"] {
+		assert.NotEmpty(t, attrValue(pt, "processor_description"), "the inherited series keeps its tag column")
 	}
-	assert.Len(t, second, 4)
 }
 
 // Retention that merged on the attribute set alone would carry a row the due
@@ -599,7 +600,7 @@ func TestCollectTarget_AThrottledSiblingDoesNotRestoreAVanishedRow(t *testing.T)
 		},
 		{
 			Table:   &profiles.Table{Name: "loadTable", OID: tableOID},
-			Symbols: []profiles.Symbol{{Name: "cpuLoad", OID: loadCol, PollTimeSec: 300, Tag: "CPU"}},
+			Symbols: []profiles.Symbol{{Name: "cpuLoad", OID: loadCol, PollTimeSec: 300, AllowDup: true}},
 		},
 	})
 	makeWalker := func(rows map[string]int) *recordingWalker {
@@ -628,9 +629,11 @@ func TestCollectTarget_AThrottledSiblingDoesNotRestoreAVanishedRow(t *testing.T)
 	c.clientFactory = walkerFactory(makeWalker(map[string]int{"1": 33}))
 	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
 
+	// Only the first declaration reads the row name column, so a point
+	// carrying core_name came from it and the rest were retained.
 	var due, retained []string
 	for _, pt := range c.testDeviceStore("p", host)["snmp.cpuload"] {
-		if attrValue(pt, "tag") == "CPU" {
+		if attrValue(pt, "core_name") == "" {
 			retained = append(retained, attrValue(pt, "row_index"))
 			continue
 		}
@@ -1932,6 +1935,89 @@ func TestCollectTarget_SymbolWithNoOIDIsNotCollected(t *testing.T) {
 	assert.NotContains(t, w.walkCalls, "")
 }
 
+// A scalar symbol's tag is the name of its metric, and of the attributes
+// derived from that name. Nothing carries an attribute called `tag`: upstream
+// produces no such dimension, and the name is where the tag goes.
+func TestCollectTarget_ScalarSymbolTagNamesTheMetricAndItsAttributes(t *testing.T) {
+	const (
+		host        = "10.0.0.91"
+		sysObjValue = "1.3.6.1.4.1.9999.91"
+		stateOID    = "1.3.6.1.4.1.9999.91.1.0"
+		detailOID   = "1.3.6.1.4.1.9999.91.2.0"
+	)
+	p := profileWithOID(sysObjValue, "tagged-scalar.yml", []profiles.MetricEntry{
+		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{
+			Name: "vendorOutputState",
+			OID:  stateOID,
+			Tag:  "failover_status",
+			Enum: profiles.Enum{Values: map[string]int{"onLine": 2, "onBattery": 3}},
+		}},
+		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{
+			Name:       "vendorStateDetail",
+			OID:        detailOID,
+			Tag:        "temp_state",
+			Conversion: "to_one",
+		}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		stateOID:       {stateOID: intPDU(stateOID, 3)},
+		detailOID:      {detailOID: stringPDU(detailOID, "over threshold")},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Empty(t, store["snmp.vendoroutputstate"], "the declared name names no metric once a tag is declared")
+	assert.Empty(t, store["snmp.vendorstatedetail"])
+
+	state := store["snmp.failover_status"]
+	require.Len(t, state, 1)
+	assert.Equal(t, int64(3), state[0].value)
+	assert.Equal(t, "onBattery", attrValue(state[0], "failover_status_status"),
+		"the enum label follows the metric name")
+	assert.Empty(t, attrValue(state[0], "vendorOutputState_status"))
+	assert.Empty(t, attrValue(state[0], "tag"))
+
+	detail := store["snmp.temp_state"]
+	require.Len(t, detail, 1)
+	assert.Equal(t, int64(1), detail[0].value)
+	assert.Equal(t, "over threshold", attrValue(detail[0], "temp_state_value"),
+		"the converted text follows the metric name")
+	assert.Empty(t, attrValue(detail[0], "vendorStateDetail_value"))
+	assert.Empty(t, attrValue(detail[0], "tag"))
+}
+
+// The bundled IF-MIB profile tags ifOperStatus `if_OperStatus`, and 146
+// resolved profiles inherit it. The tag names the metric and the enum label
+// alike, on the table path as on the scalar one.
+func TestCollectTarget_BundledIfOperStatusTagNamesTheMetricAndItsEnumLabel(t *testing.T) {
+	const (
+		host       = "10.0.0.92"
+		operColOID = "1.3.6.1.2.1.2.2.1.8"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.43.1.8.20")},
+		operColOID: {
+			operColOID + ".1": intPDU(operColOID+".1", 1),
+			operColOID + ".2": intPDU(operColOID+".2", 2),
+		},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "3com/3com.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Empty(t, store["snmp.ifoperstatus"], "the declared name names no metric once a tag is declared")
+
+	byIndex := map[string]string{}
+	for _, pt := range store["snmp.if_operstatus"] {
+		byIndex[attrValue(pt, "row_index")] = attrValue(pt, "if_OperStatus_status")
+		assert.Empty(t, attrValue(pt, "ifOperStatus_status"))
+		assert.Empty(t, attrValue(pt, "tag"))
+	}
+	assert.Equal(t, map[string]string{"1": "up", "2": "down"}, byIndex)
+}
+
 // TestCollectTarget_ScriptedSymbolIsSkipped uses the bundled UniFi profile,
 // whose loadValue symbol carries a script dividing the reading by 100 and a
 // `CPU` tag. The collector runs no scripts, so exporting the raw reading under
@@ -1952,9 +2038,9 @@ func TestCollectTarget_ScriptedSymbolIsSkipped(t *testing.T) {
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	store := c.testDeviceStore("p", host)
-	assert.Empty(t, store["snmp.loadvalue"], "a scripted symbol must not export its untransformed value")
+	assert.Empty(t, store["snmp.cpu"], "a scripted symbol must not export its untransformed value")
 	assert.NotContains(t, w.walkCalls, loadOID, "a symbol that cannot be exported must not be walked")
-	require.Len(t, store["snmp.memtotal"], 1, "the rest of the profile must still be collected")
+	require.Len(t, store["snmp.memorytotal"], 1, "the rest of the profile must still be collected")
 }
 
 // TestCollectTarget_ScriptedSymbolIsReportedOnce names the profile and symbol
@@ -2044,13 +2130,13 @@ func TestCollectTarget_MatchAttributesFiltersRows(t *testing.T) {
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	store := c.testDeviceStore("p", host)
-	cpu := store["snmp.hh3centityextcpuusage"]
+	cpu := store["snmp.cpu"]
 	require.Len(t, cpu, 1, "only the board row carries the switch CPU")
 	assert.Equal(t, int64(30), cpu[0].value)
 
 	// The sibling entry reads the same table without the filter, so its rows
 	// must all survive. This is what keeps the filter from becoming global.
-	assert.Len(t, store["snmp.hh3centityexttemperature"], 2, "the unfiltered entry must keep every row")
+	assert.Len(t, store["snmp.temperature"], 2, "the unfiltered entry must keep every row")
 }
 
 // TestCollectTarget_MatchAttributesIsAnOrOverPatterns pins that a row is kept
@@ -2899,12 +2985,15 @@ func TestCollectTarget_BundledFirepowerFiltersHighCapacityPools(t *testing.T) {
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
 	store := c.testDeviceStore("p", host)
-	used := store["snmp.cempmempoolhcused"]
+	// Four symbols carry `tag: MemoryUsed` or `tag: MemoryFree` with
+	// `allow_duplicate: true`, so they share a metric name and all keep
+	// exporting. Only the high capacity pair answers here.
+	used := store["snmp.memoryused"]
 	require.Len(t, used, 1, "only the named pool is emitted")
 	assert.Equal(t, int64(200), used[0].value)
 	assert.Equal(t, "DP System memory", attrValue(used[0], "cempMemPoolName"))
 
-	free := store["snmp.cempmempoolhcfree"]
+	free := store["snmp.memoryfree"]
 	require.Len(t, free, 1, "only the named pool is emitted")
 	assert.Equal(t, int64(400), free[0].value)
 }
@@ -3016,10 +3105,10 @@ func TestCollectTarget_ScalarWalkWithSeveralRowsGainsRowIndex(t *testing.T) {
 		}
 		return out
 	}
-	require.Len(t, store["snmp.hrtotalmemory"], 2)
-	assert.Equal(t, map[string]int64{"65": 262144, "66": 16384}, byIndex("snmp.hrtotalmemory"))
-	require.Len(t, store["snmp.hrusedmemory"], 2)
-	assert.Equal(t, map[string]int64{"65": 131072, "66": 4096}, byIndex("snmp.hrusedmemory"))
+	require.Len(t, store["snmp.memorytotal"], 2)
+	assert.Equal(t, map[string]int64{"65": 262144, "66": 16384}, byIndex("snmp.memorytotal"))
+	require.Len(t, store["snmp.memoryused"], 2)
+	assert.Equal(t, map[string]int64{"65": 131072, "66": 4096}, byIndex("snmp.memoryused"))
 }
 
 // Two rows of the same column can hold the same value. They are still two
@@ -3952,12 +4041,12 @@ func TestCollectTarget_ToOneKeepsTheTextOnTableRows(t *testing.T) {
 	c := newBundledCollector(t, walkerFactory(w))
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
-	pts := c.testDeviceStore("p", host)["snmp.ltmpoolmbrstatusdetailreason"]
+	pts := c.testDeviceStore("p", host)["snmp.pool_mbr_status_detail"]
 	require.Len(t, pts, 2)
 	byIndex := map[string]string{}
 	for _, pt := range pts {
 		require.Equal(t, int64(1), pt.value)
-		byIndex[attrValue(pt, "row_index")] = attrValue(pt, "ltmPoolMbrStatusDetailReason_value")
+		byIndex[attrValue(pt, "row_index")] = attrValue(pt, "pool_mbr_status_detail_value")
 	}
 	assert.Equal(t, map[string]string{
 		"1": "Pool member is available",
@@ -4045,7 +4134,7 @@ func TestCollectTarget_ScalarColumnWithOneRowStillCarriesIt(t *testing.T) {
 	c := newBundledCollector(t, walkerFactory(agent))
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 
-	pts := c.testDeviceStore("p", host)["snmp.hrtotalmemory"]
+	pts := c.testDeviceStore("p", host)["snmp.memorytotal"]
 	require.Len(t, pts, 1)
 	assert.Equal(t, "65", attrValue(pts[0], "row_index"),
 		"a table column keeps its row identity however many rows the walk returned")
