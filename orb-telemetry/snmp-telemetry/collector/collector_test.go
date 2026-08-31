@@ -5470,3 +5470,92 @@ func TestPduToString_Uinteger32(t *testing.T) {
 	pdu := snmp.PDU{Name: "x", Type: gosnmp.Uinteger32, Value: uint32(4294967295)}
 	require.Equal(t, "4294967295", pduToString(pdu, nil))
 }
+
+// ---------------------------------------------------------------------------
+// Two conditions on one column, rendered two ways
+// ---------------------------------------------------------------------------
+
+// Two symbols can condition on one column through different renderings: one
+// naming the sibling symbol, which renders the raw reading, and one naming the
+// metric_tags column, which renders the enum member. The column is walked
+// once, so the rendering has to be per condition rather than per column.
+func TestCollectTable_TwoConditionsOnOneColumnRenderIndependently(t *testing.T) {
+	const (
+		sysObjValue = "1.3.6.1.4.1.9999.126"
+		tableOID    = sysObjValue + ".1"
+		statusOID   = tableOID + ".1.8"
+		inOID       = tableOID + ".1.10"
+		outOID      = tableOID + ".1.16"
+	)
+	// The raw condition and the enum condition select the same rows, so
+	// whichever runs second is the one the shared cache used to answer wrong.
+	rawSymbol := profiles.Symbol{Name: "ifInOctets", OID: inOID, Condition: `ifOperStatus="1"`}
+	enumSymbol := profiles.Symbol{Name: "ifOutOctets", OID: outOID, Condition: `status="up"`}
+
+	tests := []struct {
+		name    string
+		symbols []profiles.Symbol
+	}{
+		{"the raw condition resolves first", []profiles.Symbol{
+			{Name: "ifOperStatus", OID: statusOID}, rawSymbol, enumSymbol,
+		}},
+		{"the enum condition resolves first", []profiles.Symbol{
+			{Name: "ifOperStatus", OID: statusOID}, enumSymbol, rawSymbol,
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := profileWithOID(sysObjValue, "cond.yml", []profiles.MetricEntry{{
+				Table:   &profiles.Table{Name: "ifXTable", OID: tableOID},
+				Symbols: tt.symbols,
+				MetricTags: []profiles.MetricTag{{
+					Column: &profiles.TagColumn{
+						OID:  statusOID,
+						Name: "ifOperStatusColumn",
+						Tag:  "status",
+						Enum: profiles.Enum{Values: map[string]int{"up": 1, "down": 2}},
+					},
+				}},
+			}})
+			w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+				sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+				sysDescrOID:    {},
+				statusOID: {
+					statusOID + ".1": intPDU(statusOID+".1", 1),
+					statusOID + ".2": intPDU(statusOID+".2", 2),
+				},
+				inOID: {
+					inOID + ".1": intPDU(inOID+".1", 11),
+					inOID + ".2": intPDU(inOID+".2", 22),
+				},
+				outOID: {
+					outOID + ".1": intPDU(outOID+".1", 33),
+					outOID + ".2": intPDU(outOID+".2", 44),
+				},
+			}}
+
+			c := newCollector(walkerFactory(w), p)
+			require.NoError(t, c.CollectTarget(context.Background(), mustTarget("10.0.0.126"), mustAuth(), "p", DialOptions{}))
+			store := c.testDeviceStore("p", "10.0.0.126")
+
+			in := store["snmp.ifinoctets"]
+			require.Len(t, in, 1, "the raw condition selected the wrong number of rows")
+			assert.Equal(t, int64(11), in[0].value)
+
+			out := store["snmp.ifoutoctets"]
+			require.Len(t, out, 1, "the enum condition selected the wrong number of rows")
+			assert.Equal(t, int64(33), out[0].value)
+
+			// The status column is walked twice: once in phase 3 as the tag
+			// column, once in phase 5 as its own metric. Neither condition
+			// adds a walk of its own.
+			walks := 0
+			for _, call := range w.walkCalls {
+				if call == statusOID {
+					walks++
+				}
+			}
+			assert.Equal(t, 2, walks, "a condition walked the column again")
+		})
+	}
+}

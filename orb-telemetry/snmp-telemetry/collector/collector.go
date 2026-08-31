@@ -933,27 +933,26 @@ type conditionCheck struct {
 	expected  string
 }
 
-// conditionRow carries both renderings of one row of a condition column, so a
-// single walk serves an integer comparison and a textual one alike.
-type conditionRow struct {
-	num    int64
-	hasNum bool
-	str    string
-}
-
 // matches reports whether one row of the condition column satisfies the
 // condition.
+//
+// The row is rendered here rather than when the column was walked. Two
+// conditions can name one column through different renderings, a sibling
+// symbol's raw reading and a tag column's enum being the shape, and they share
+// the walk: rendering once for the column would have the second compare
+// against the first one's rendering and never match.
 //
 // A textual value is compared exactly and case-sensitively. Both sides are
 // already free of surrounding whitespace: pduToString trims what the device
 // returns, and the profile's quotes delimit exactly the text it means. Case is
 // kept significant because a MIB display string is, and folding it would let a
 // condition select a row the profile did not name.
-func (cc conditionCheck) matches(row conditionRow) bool {
+func (cc conditionCheck) matches(pdu snmp.PDU) bool {
 	if cc.numeric {
-		return row.hasNum && row.num == cc.expectInt
+		v, _, err := pduToValue(pdu, "")
+		return err == nil && v == cc.expectInt
 	}
-	return row.str == cc.expected
+	return pduToString(pdu, cc.column) == cc.expected
 }
 
 // resolveCondition parses a symbol `condition:` and resolves the column it
@@ -1294,7 +1293,12 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	}
 
 	// --- Phase 4: resolve and walk condition columns (active symbols only) ---
-	conditionRows := make(map[string]map[string]conditionRow)
+	// conditionPDUs keeps what each condition column walk returned, keyed by
+	// column OID and then by row index. What is cached is the PDU, not its
+	// rendering: two conditions can name one column and render it differently,
+	// so each renders the row it reads. A key present with a nil map is a
+	// column whose walk failed.
+	conditionPDUs := make(map[string]map[string]snmp.PDU)
 	// A predicate is kept on the state of the symbol that declared it, and
 	// phase 5 reads it back off that same state, so it filters that
 	// declaration's rows and no others. Held in a map instead, whatever the key,
@@ -1302,7 +1306,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	// the metric, so one column declared twice under two names had one
 	// declaration's predicate filtering the other's rows; on the declaration,
 	// two symbols agreeing on name, OID and period and differing only in their
-	// `condition:` left the predicate resolved last deciding both. The rows are
+	// `condition:` left the predicate resolved last deciding both. The PDUs are
 	// still collected per condition column, so two declarations naming one
 	// column walk it once.
 	for i := range states {
@@ -1322,7 +1326,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			continue
 		}
 		st.cond, st.hasCond = check, true
-		if _, walked := conditionRows[check.columnOID]; walked {
+		if _, walked := conditionPDUs[check.columnOID]; walked {
 			continue
 		}
 		var pdus map[string]snmp.PDU
@@ -1336,19 +1340,15 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			pdus, err = c.walk(walker, check.columnOID, 1)
 			if err != nil {
 				c.logger.Debug("Error walking condition column", "oid", check.columnOID, "error", err)
-				conditionRows[check.columnOID] = nil
+				conditionPDUs[check.columnOID] = nil
 				continue
 			}
 		}
-		rows := make(map[string]conditionRow, len(pdus))
+		rows := make(map[string]snmp.PDU, len(pdus))
 		for fullOID, pdu := range pdus {
-			row := conditionRow{str: pduToString(pdu, check.column)}
-			if v, _, err := pduToValue(pdu, ""); err == nil {
-				row.num, row.hasNum = v, true
-			}
-			rows[extractRowIndex(fullOID, check.columnOID)] = row
+			rows[extractRowIndex(fullOID, check.columnOID)] = pdu
 		}
-		conditionRows[check.columnOID] = rows
+		conditionPDUs[check.columnOID] = rows
 	}
 
 	// --- Phase 5: collect active metric columns ---
@@ -1393,12 +1393,12 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			}
 
 			if hasCondition {
-				rows := conditionRows[cond.columnOID]
+				rows := conditionPDUs[cond.columnOID]
 				if rows == nil {
 					continue
 				}
-				row, present := rows[rowIdx]
-				if !present || !cond.matches(row) {
+				condPDU, present := rows[rowIdx]
+				if !present || !cond.matches(condPDU) {
 					continue
 				}
 			}
