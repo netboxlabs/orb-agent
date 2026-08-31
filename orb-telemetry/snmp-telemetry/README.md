@@ -122,13 +122,18 @@ rather than outliving it, and the policy keeps running.
 
 A target's `host` can be a single address, a hostname, a CIDR prefix, or an
 address range, and each address it expands to becomes its own recurring poll
-job. A host the backend cannot expand, such as a malformed prefix like
+job. Two entries naming the same device, such as a prefix and an address inside
+it, get one job between them: the repeat has nothing of its own to poll, and a
+second job for the same device would overwrite the first's results. Entries
+given different `id` or `context_name` values are different devices and each
+keep a job. A host the backend cannot expand, such as a malformed prefix like
 `10.0.0.1/99` or an IPv6 CIDR, is rejected and the whole policy fails to
 start, rather than being dropped so the policy runs with fewer targets than it
 names. A policy whose targets together expand to more than 65536 addresses is
 rejected. The budget spans the whole policy rather than each entry, so several
 prefixes that each fit on their own are still refused once their total passes
-it. That ceiling is a guard against a policy wide enough to exhaust memory
+it. It is counted before the repeats are collapsed, so naming one span as two
+overlapping prefixes costs both. That ceiling is a guard against a policy wide enough to exhaust memory
 before polling starts, not a recommended size: polling tens of thousands of
 devices from one policy is far past what one agent should carry.
 

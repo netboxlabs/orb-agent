@@ -126,36 +126,91 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		return nil, err
 	}
 
+	expanded, collapsed, err := runner.expandTargets()
+	if err != nil {
+		return nil, err
+	}
+	// One line per policy rather than one per duplicate: two overlapping
+	// prefixes can collapse tens of thousands of addresses.
+	if collapsed > 0 {
+		logger.Info("Policy names the same device more than once, collapsing the repeats",
+			"policy", config.SanitizeLogValue(name), "collapsed", collapsed, "devices", len(expanded))
+	}
+
 	// Schedule a metrics job for each expanded target
-	for _, target := range runner.scope.Targets {
-		// Skipping the target instead would leave a policy with no job for it,
-		// and a policy whose targets are all unexpandable would start with no
-		// jobs at all and be reported as running while collecting nothing.
-		expandedIPs, err := targets.Expand(target.Host)
-		if err != nil {
-			return nil, fmt.Errorf("expanding target %s: %w", target.Host, err)
-		}
-		for _, ip := range expandedIPs {
-			t := config.Target{
-				Host:           ip,
-				Port:           target.Port,
-				ID:             target.ID,
-				Authentication: target.Authentication,
-			}
-			if t.Port == 0 {
-				t.Port = 161
-			}
-			metricsTask := gocron.NewTask(runner.runMetrics, t)
-			_, err = s.NewJob(gocron.DurationJob(runner.metricsInterval), metricsTask,
-				gocron.WithSingletonMode(gocron.LimitModeReschedule))
-			if err != nil {
-				return nil, fmt.Errorf("scheduling metrics job for %s: %w", ip, err)
-			}
+	for _, t := range expanded {
+		metricsTask := gocron.NewTask(runner.runMetrics, t)
+		if _, err := s.NewJob(gocron.DurationJob(runner.metricsInterval), metricsTask,
+			gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
+			return nil, fmt.Errorf("scheduling metrics job for %s: %w", t.Host, err)
 		}
 	}
 
 	built = true
 	return runner, nil
+}
+
+// expandTargets expands the policy's scope into the devices this runner polls,
+// one job each, and reports how many repeats it dropped.
+//
+// Two entries expanding to the same identity are one device. A prefix and an
+// address inside it, or two overlapping prefixes, produce that repeat, and
+// gocron's singleton mode bounds one job rather than one identity, so the
+// repeat's job runs concurrently with the first's: a failed run erases the
+// observations a successful one wrote, through forgetDevice, and a successful
+// run clears the other's recorded error.
+//
+// The repeat is collapsed rather than refused. This package refuses a
+// configuration with no working reading at all, a blank host or an SNMP
+// timeout that fills the interval, but a prefix plus a member address says one
+// unambiguous thing about that address. The identity is exactly what
+// everything downstream keys on, so the two entries carry nothing to tell
+// apart, and an operator wanting two entries for one endpoint gives them
+// different IDs or context names, which the identity keeps.
+//
+// The identity comes from targetErrorKey, the key this runner already records
+// errors under, so it cannot drift from the host, port, NetBox ID and SNMP
+// context that deviceKey and targetErrorKey are built from.
+//
+// checkPolicyExpansion charges the policy budget before this runs, against the
+// notation rather than the collapsed result. Charging it afterwards would let
+// a policy name one span as two overlapping prefixes and pay for one, and the
+// allocation the budget bounds happens inside targets.Expand, before a repeat
+// can be seen.
+func (r *Runner) expandTargets() ([]config.Target, int, error) {
+	var out []config.Target
+	seen := make(map[string]struct{})
+	collapsed := 0
+	for _, entry := range r.scope.Targets {
+		// Skipping the target instead would leave a policy with no job for it,
+		// and a policy whose targets are all unexpandable would start with no
+		// jobs at all and be reported as running while collecting nothing.
+		expandedIPs, err := targets.Expand(entry.Host)
+		if err != nil {
+			return nil, 0, fmt.Errorf("expanding target %s: %w", entry.Host, err)
+		}
+		for _, ip := range expandedIPs {
+			t := config.Target{
+				Host:           ip,
+				Port:           entry.Port,
+				ID:             entry.ID,
+				Authentication: entry.Authentication,
+			}
+			if t.Port == 0 {
+				t.Port = SNMPDefaultPort
+			}
+			// Keyed after the port default, so an entry leaving the port unset
+			// and one naming 161 are the one endpoint they reach as.
+			key := targetErrorKey(t, r.resolveTargetAuthentication(t))
+			if _, dup := seen[key]; dup {
+				collapsed++
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, t)
+		}
+	}
+	return out, collapsed, nil
 }
 
 // resolveTargetAuthentication returns the authentication to use for a target.
