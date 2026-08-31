@@ -1179,6 +1179,63 @@ def test_translate_device_without_netbox_id(sample_device_info, sample_defaults)
     assert "source_match" not in device.metadata
 
 
+def test_translate_device_netbox_id_omits_placeholder_site_and_role(sample_device_info):
+    """
+    A netbox_id scope with no configured site/role omits both fields.
+
+    ``netbox_id`` binds an existing device by PK, so the plugin skips matching
+    and applies every field present in the payload. Sending the literal
+    "undefined" placeholder therefore repoints a real device's site and role at
+    the placeholder objects: netbox_id made the overwrite deterministic instead
+    of preventing it.
+    """
+    device = translate_device(sample_device_info, Defaults(), netbox_id=42)
+
+    assert device.metadata["source_match"]["netbox_id"] == 42
+    assert not device.HasField("site"), "placeholder site must not be sent"
+    assert not device.HasField("role"), "placeholder role must not be sent"
+
+
+def test_translate_device_netbox_id_keeps_explicitly_configured_site_and_role(
+    sample_device_info,
+):
+    """Suppression is for the placeholder only; real values still go out."""
+    defaults = Defaults(site="New York", role="access-switch")
+
+    device = translate_device(sample_device_info, defaults, netbox_id=42)
+
+    assert device.site.name == "New York"
+    assert device.role.name == "access-switch"
+
+
+def test_translate_device_without_netbox_id_keeps_placeholders(sample_device_info):
+    """
+    Without netbox_id the placeholders must survive.
+
+    NetBox requires both site and role on a Device, so a create has to carry
+    something. Only netbox_id tells us the payload is an update, which is why
+    the suppression is keyed on it rather than on the value being unset.
+    """
+    device = translate_device(sample_device_info, Defaults())
+
+    assert device.site.name == "undefined"
+    assert device.role.name == "undefined"
+
+
+def test_translate_device_netbox_id_omits_placeholder_site_from_location(
+    sample_device_info,
+):
+    """An explicit location must not smuggle the placeholder site back in."""
+    defaults = Defaults(location="floor-1")
+
+    device = translate_device(sample_device_info, defaults, netbox_id=42)
+
+    assert device.location.name == "floor-1"
+    assert not device.location.HasField("site"), (
+        "the placeholder site must not ride along inside the location"
+    )
+
+
 def test_translate_data_with_config_disabled(sample_device_info):
     """Test that config is not captured when flags are disabled."""
     config_info = {
