@@ -5375,17 +5375,58 @@ func TestCollectTarget_AnUnresolvableConditionDoesNotBorrowASibling(t *testing.T
 		"a condition this collector cannot apply filters nothing")
 }
 
-// TestConditionsKeyMatchesThePollWindow pins the two to one key. Poll state
-// decides which declarations run and the condition map decides what their rows
-// have to satisfy, so a declaration polled on its own window and filtered on a
-// key that merged it with another would disagree with itself.
-func TestConditionsKeyMatchesThePollWindow(t *testing.T) {
-	same := []profiles.Symbol{
-		{Name: "linkOctets", OID: twoNameOctetCol},
-		{Name: "linkOctets", OID: twoNameOctetCol},
+// Two declarations can agree on the exported name, the OID and the poll period
+// and differ only in their condition, which is what an override leaves behind
+// when it re-exports one column for two predicates and keeps the second with
+// `allow_duplicate: true`. Keyed on the declaration, one entry held both and
+// the predicate resolved last decided every row, so the rows only the other
+// predicate selects were never exported.
+func TestCollectTarget_OneDeclarationKeyHoldsTwoConditions(t *testing.T) {
+	const host = "10.0.0.83"
+	for name, pair := range map[string][2]profiles.Symbol{
+		"two predicates": {
+			{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=1"},
+			{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=2", AllowDup: true},
+		},
+		"one predicate and none": {
+			{Name: "linkOctets", OID: twoNameOctetCol},
+			{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=1", AllowDup: true},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newCollector(walkerFactory(twoNameWalker()), twoNameConditionProfile(pair[0], pair[1]))
+			require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+			assert.Equal(t, map[string]int64{"1": 10, "2": 20},
+				rowsOf(c.testDeviceStore("p", host)["snmp.linkoctets"]),
+				"each declaration selects the rows its own condition passes")
+		})
 	}
-	assert.Equal(t, symbolDeclKey(&same[0]), symbolDeclKey(&same[1]),
-		"declarations one poll window serves must share one condition")
+}
+
+// TestSymbolDeclKeySeparatesPolledDeclarations pins what the key distinguishes.
+// Poll state, the retention of throttled points and the declaration each point
+// records read it, and each of them wants a declaration to mean one series
+// polled on one window. A `condition:` is not part of it: it selects rows out
+// of a walk both declarations are served by, so two symbols differing only in
+// one wait out a single window rather than asking the device for one column
+// twice. Their predicates are held on the symbol each was declared on.
+func TestSymbolDeclKeySeparatesPolledDeclarations(t *testing.T) {
+	for name, pair := range map[string][2]profiles.Symbol{
+		"one declaration written twice": {
+			{Name: "linkOctets", OID: twoNameOctetCol},
+			{Name: "linkOctets", OID: twoNameOctetCol},
+		},
+		"condition": {
+			{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=1"},
+			{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=2"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, symbolDeclKey(&pair[0]), symbolDeclKey(&pair[1]),
+				"declarations one walk serves must share one poll window")
+		})
+	}
 
 	for name, pair := range map[string][2]profiles.Symbol{
 		"exported name": {
@@ -5403,7 +5444,7 @@ func TestConditionsKeyMatchesThePollWindow(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.NotEqual(t, symbolDeclKey(&pair[0]), symbolDeclKey(&pair[1]),
-				"declarations polled on separate windows must be filtered separately")
+				"declarations polled apart must be throttled and retained apart")
 		})
 	}
 }

@@ -158,6 +158,11 @@ func (s *pointSink) add(metricName string, pt observedPoint) {
 // metric, so one OID can be declared twice and export under two names, and a
 // window keyed on the OID alone would let the first declaration to walk it
 // throttle the second before that second name had produced a point.
+//
+// A `condition:` is not part of it. It selects rows out of a walk that serves
+// every declaration of the column, so two symbols differing only in one are
+// still one window, and each keeps its own predicate on the symbol it was
+// declared on rather than on this key.
 func symbolDeclKey(sym *profiles.Symbol) string {
 	return sym.MetricName() + "|" + sym.OID + "@" + strconv.Itoa(sym.PollTimeSec)
 }
@@ -1191,6 +1196,11 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	type symState struct {
 		sym       *profiles.Symbol
 		throttled bool
+		// cond is the symbol's own resolved condition, set in phase 4 and read
+		// back in phase 5. hasCond tells a resolved predicate from a symbol
+		// that declares none or declares one this collector cannot apply.
+		cond    conditionCheck
+		hasCond bool
 	}
 	states := make([]symState, 0, len(entry.Symbols))
 	anyActive := false
@@ -1285,15 +1295,18 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 
 	// --- Phase 4: resolve and walk condition columns (active symbols only) ---
 	conditionRows := make(map[string]map[string]conditionRow)
-	// Keyed by symbolDeclKey rather than by OID. A `tag:` renames the metric,
-	// so one column can be declared twice and export under two names, and only
-	// one of those declarations may carry a `condition:`. Keyed on the OID, one
-	// declaration's predicate filtered the other's rows, and two differing
-	// predicates left the last resolved one deciding both. This is the key poll
-	// state uses, so the declaration that was polled is the one whose condition
-	// is applied.
-	conditions := make(map[string]conditionCheck)
-	for _, st := range states {
+	// A predicate is kept on the state of the symbol that declared it, and
+	// phase 5 reads it back off that same state, so it filters that
+	// declaration's rows and no others. Held in a map instead, whatever the key,
+	// it reached every declaration the key merged: on the OID, a `tag:` renames
+	// the metric, so one column declared twice under two names had one
+	// declaration's predicate filtering the other's rows; on the declaration,
+	// two symbols agreeing on name, OID and period and differing only in their
+	// `condition:` left the predicate resolved last deciding both. The rows are
+	// still collected per condition column, so two declarations naming one
+	// column walk it once.
+	for i := range states {
+		st := &states[i]
 		// A condition names a column of its own to walk. Returning here leaves
 		// the rows uncollected rather than emitting them unfiltered.
 		if ctx.Err() != nil {
@@ -1308,7 +1321,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				"symbol", st.sym.Name, "condition", st.sym.Condition, "reason", reason)
 			continue
 		}
-		conditions[symbolDeclKey(st.sym)] = check
+		st.cond, st.hasCond = check, true
 		if _, walked := conditionRows[check.columnOID]; walked {
 			continue
 		}
@@ -1339,7 +1352,8 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	}
 
 	// --- Phase 5: collect active metric columns ---
-	for _, st := range states {
+	for i := range states {
+		st := &states[i]
 		// The check inside the row loop below does not cover a column the
 		// device answers with nothing, so the deadline is checked per column.
 		if ctx.Err() != nil {
@@ -1363,7 +1377,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		c.markPolled(key, sym)
 
 		decl := symbolDeclKey(sym)
-		cond, hasCondition := conditions[decl]
+		cond, hasCondition := st.cond, st.hasCond
 		name := sym.ExportName()
 		metricName := sym.MetricName()
 		prec := profiles.SymbolPrecedence(entry, sym)
