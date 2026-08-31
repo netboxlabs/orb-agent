@@ -246,6 +246,30 @@ declaring `1.3.6.1.4.1.9.*` therefore leaves a device covered by a bundled
 the two never claim the same pattern. To take a device from a bundled profile,
 declare the OID or the pattern that profile declares.
 
+Each symbol becomes one metric, named `snmp.` followed by the symbol name in
+lower case, so `hrProcessorLoad` is exported as `snmp.hrprocessorload`.
+
+A symbol's `tag:` renames the metric. It is not an attribute: a symbol carrying
+`tag: CPU` is exported as `snmp.cpu` rather than under the name it declares,
+which is how the same reading arrives under one name across vendors that each
+name it differently. The attributes derived from the metric name follow it, so
+an enum label on that symbol is written to `CPU_status` and a converted text
+value to `CPU_value`. 96 bundled profile files tag a symbol, and once
+inheritance is resolved 156 of the 205 bundled profiles carry at least one:
+`_general/if-mib.yml` tags `ifOperStatus` `if_OperStatus`, so 146 profiles
+export that reading as `snmp.if_operstatus`.
+
+Where two symbols of a resolved profile resolve to one metric name, only one of
+them is collected. They would otherwise share a series and export whichever
+value was written last. The symbol the profile declares in its own file beats
+one it inherited through `extends:`, so a vendor profile's own CPU reading
+displaces the generic one it inherits; where that does not separate them the
+longer OID wins, so a fully qualified instance beats the column it sits in. A
+symbol declaring `allow_duplicate: true` is never dropped, which is how a
+profile keeps several readings under one name on purpose. Dropping a symbol is
+logged at debug level, naming the metric, the symbol dropped and the symbol
+kept.
+
 A profile symbol may declare a `conversion` to turn a non-numeric OID value
 into a metric. The collector implements `to_one`, `hextoip`, `hwaddr`,
 `hextoint:<endianness>:<type>` and `regexp:<pattern>`. A symbol declaring
