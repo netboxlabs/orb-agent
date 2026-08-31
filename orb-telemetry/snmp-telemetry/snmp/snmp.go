@@ -155,15 +155,7 @@ func NewClient(ctx context.Context, host string, port uint16, retries int, timeo
 		if err != nil {
 			return nil, err
 		}
-		msgFlags := gosnmp.NoAuthNoPriv
-		switch authentication.SecurityLevel {
-		case "noAuthNoPriv":
-			msgFlags = gosnmp.NoAuthNoPriv
-		case "authNoPriv":
-			msgFlags = gosnmp.AuthNoPriv
-		case "authPriv":
-			msgFlags = gosnmp.AuthPriv
-		}
+		msgFlags := v3MsgFlags(authentication.SecurityLevel)
 		return &Client{
 			GoSNMP: &gosnmp.GoSNMP{
 				Target:         host,
@@ -190,20 +182,62 @@ func NewClient(ctx context.Context, host string, port uint16, retries int, timeo
 	return nil, fmt.Errorf("unsupported protocol version: %s", authentication.ProtocolVersion)
 }
 
-// ValidateAuthProtocol reports whether name is an authentication protocol the
-// client can resolve. It goes through the table NewClient uses rather than a
-// list of its own, so a caller checking a policy up front cannot drift from
-// what collection accepts. An empty name is valid and selects the default.
-func ValidateAuthProtocol(name string) error {
-	_, err := getAuthProtocol(name)
-	return err
+// SecurityLevelNoAuthNoPriv authenticates nothing and encrypts nothing.
+const SecurityLevelNoAuthNoPriv = "noAuthNoPriv"
+
+// SecurityLevelAuthNoPriv authenticates the message and does not encrypt it.
+const SecurityLevelAuthNoPriv = "authNoPriv"
+
+// SecurityLevelAuthPriv authenticates and encrypts the message.
+const SecurityLevelAuthPriv = "authPriv"
+
+// v3MsgFlags maps a policy security level to the gosnmp message flags a v3
+// client dials with. An unrecognised level yields the weakest flags, which is
+// what NewClient has always done; the level name is checked before a policy
+// reaches here.
+func v3MsgFlags(securityLevel string) gosnmp.SnmpV3MsgFlags {
+	switch securityLevel {
+	case SecurityLevelAuthNoPriv:
+		return gosnmp.AuthNoPriv
+	case SecurityLevelAuthPriv:
+		return gosnmp.AuthPriv
+	default:
+		return gosnmp.NoAuthNoPriv
+	}
 }
 
-// ValidatePrivProtocol is the privacy protocol counterpart of
-// ValidateAuthProtocol.
-func ValidatePrivProtocol(name string) error {
-	_, err := getPrivProtocol(name)
-	return err
+// ValidateV3Protocols reports whether the two protocol names are ones the
+// client can resolve and whether what they resolve to carries the
+// authentication and privacy securityLevel asks for.
+//
+// Both names go through the tables NewClient uses and the level goes through
+// the same mapping NewClient dials with, so a caller checking a policy up front
+// cannot drift from what collection accepts. An empty name is valid and selects
+// the default, which is the sentinel: it therefore resolves everywhere and is
+// accepted only where the sentinel is.
+//
+// gosnmp's own combination check is UsmSecurityParameters.validate, which is
+// unexported and reachable only by dialing, so the two comparisons below are
+// stated here in its terms, against its constants and its bit tests, and pinned
+// by a test that drives every level and name pair through Connect.
+func ValidateV3Protocols(securityLevel, authProtocol, privProtocol string) error {
+	auth, err := getAuthProtocol(authProtocol)
+	if err != nil {
+		return err
+	}
+	priv, err := getPrivProtocol(privProtocol)
+	if err != nil {
+		return err
+	}
+
+	flags := v3MsgFlags(securityLevel)
+	if flags&gosnmp.AuthNoPriv > 0 && auth <= gosnmp.NoAuth {
+		return fmt.Errorf("security level %s needs an authentication protocol, got %q", securityLevel, authProtocol)
+	}
+	if flags&gosnmp.AuthPriv > gosnmp.AuthNoPriv && priv <= gosnmp.NoPriv {
+		return fmt.Errorf("security level %s needs a privacy protocol, got %q", securityLevel, privProtocol)
+	}
+	return nil
 }
 
 func getAuthProtocol(authProtocol string) (gosnmp.SnmpV3AuthProtocol, error) {

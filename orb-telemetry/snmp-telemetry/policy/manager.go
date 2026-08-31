@@ -627,9 +627,9 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 	}
 
 	if auth.ProtocolVersion == "SNMPv3" {
-		if auth.SecurityLevel != "noAuthNoPriv" &&
-			auth.SecurityLevel != "authNoPriv" &&
-			auth.SecurityLevel != "authPriv" {
+		if auth.SecurityLevel != snmp.SecurityLevelNoAuthNoPriv &&
+			auth.SecurityLevel != snmp.SecurityLevelAuthNoPriv &&
+			auth.SecurityLevel != snmp.SecurityLevelAuthPriv {
 			return fmt.Errorf("%s: invalid security level %s", context, auth.SecurityLevel)
 		}
 		// gosnmp validates the USM security parameters before it dials and
@@ -638,7 +638,7 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 		if auth.Username == "" {
 			return fmt.Errorf("%s: missing username", context)
 		}
-		if auth.SecurityLevel == "authNoPriv" || auth.SecurityLevel == "authPriv" {
+		if auth.SecurityLevel == snmp.SecurityLevelAuthNoPriv || auth.SecurityLevel == snmp.SecurityLevelAuthPriv {
 			if auth.AuthPassphrase == "" {
 				return fmt.Errorf("%s: missing auth passphrase", context)
 			}
@@ -646,7 +646,7 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 				return fmt.Errorf("%s: missing auth protocol", context)
 			}
 		}
-		if auth.SecurityLevel == "authPriv" {
+		if auth.SecurityLevel == snmp.SecurityLevelAuthPriv {
 			if auth.PrivPassphrase == "" {
 				return fmt.Errorf("%s: missing priv passphrase", context)
 			}
@@ -654,13 +654,13 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 				return fmt.Errorf("%s: missing priv protocol", context)
 			}
 		}
-		// The client resolves both names for every v3 policy, so a name it does
-		// not accept fails collection before it connects and leaves a policy the
-		// API reports as running. An empty name selects the default.
-		if err := snmp.ValidateAuthProtocol(auth.AuthProtocol); err != nil {
-			return fmt.Errorf("%s: %w", context, err)
-		}
-		if err := snmp.ValidatePrivProtocol(auth.PrivProtocol); err != nil {
+		// The client resolves both names for every v3 policy and gosnmp then
+		// checks them against the security level, so a name it does not accept
+		// or a name that resolves to the sentinel where the level needs a real
+		// protocol fails collection before it connects and leaves a policy the
+		// API reports as running. An empty name selects the default, which is
+		// the sentinel.
+		if err := snmp.ValidateV3Protocols(auth.SecurityLevel, auth.AuthProtocol, auth.PrivProtocol); err != nil {
 			return fmt.Errorf("%s: %w", context, err)
 		}
 	}

@@ -656,6 +656,73 @@ func TestValidate_V3EmptyProtocolNamesKeepTheDefaults(t *testing.T) {
 	assert.Equal(t, gosnmp.NoPriv, params.PrivacyProtocol)
 }
 
+// Every security level a v3 policy may select.
+var securityLevels = []string{"noAuthNoPriv", "authNoPriv", "authPriv"}
+
+func v3LevelAuth(securityLevel, authProtocol, privProtocol string) config.Authentication {
+	return config.Authentication{
+		ProtocolVersion: "SNMPv3",
+		SecurityLevel:   securityLevel,
+		Username:        "admin",
+		AuthProtocol:    authProtocol,
+		AuthPassphrase:  "authpass",
+		PrivProtocol:    privProtocol,
+		PrivPassphrase:  "privpass",
+	}
+}
+
+// A name that resolves is not yet a name the level accepts: NoAuth and NoPriv
+// resolve to the gosnmp sentinels, and its USM check rejects those when the
+// level asks for authentication or privacy. gosnmp makes that check on the way
+// through Connect, so Connect is the authority for the pair the same way
+// NewClient is the authority for the name. Every level against every name, so a
+// rule written beside the validator would not survive.
+func TestValidate_V3LevelAndProtocolMatchTheClient(t *testing.T) {
+	m := newTestManager()
+	for _, level := range securityLevels {
+		for _, name := range protocolNames {
+			cases := []struct {
+				field string
+				auth  config.Authentication
+			}{
+				{"auth_protocol", v3LevelAuth(level, name, "AES")},
+				{"priv_protocol", v3LevelAuth(level, "SHA", name)},
+			}
+			for _, c := range cases {
+				err := m.validatePolicy(minimalPolicy(c.auth))
+				w, clientErr := snmp.NewClient(t.Context(), "127.0.0.1", 161, 1, time.Second, &c.auth, testLogger)
+				if clientErr == nil {
+					clientErr = w.Connect()
+					_ = w.Close()
+				}
+				if clientErr != nil {
+					require.Error(t, err, "%s %s=%q: the client rejects it, so validation must too", level, c.field, name)
+					continue
+				}
+				require.NoError(t, err, "%s %s=%q: the client accepts it, so validation must too", level, c.field, name)
+			}
+		}
+	}
+}
+
+// The two combinations that resolve and then fail to dial.
+func TestValidate_V3SentinelProtocolRejectedByLevel(t *testing.T) {
+	m := newTestManager()
+	assert.ErrorContains(t, m.validatePolicy(minimalPolicy(v3LevelAuth("authNoPriv", "NoAuth", ""))),
+		"security level authNoPriv needs an authentication protocol")
+	assert.ErrorContains(t, m.validatePolicy(minimalPolicy(v3LevelAuth("authPriv", "SHA", "NoPriv"))),
+		"security level authPriv needs a privacy protocol")
+}
+
+// noAuthNoPriv is the level the sentinels belong to, written out or omitted.
+func TestValidate_V3NoAuthNoPrivKeepsTheSentinels(t *testing.T) {
+	m := newTestManager()
+	for _, names := range [][2]string{{"", ""}, {"NoAuth", "NoPriv"}, {"NoAuth", ""}, {"", "NoPriv"}} {
+		require.NoError(t, m.validatePolicy(minimalPolicy(v3LevelAuth("noAuthNoPriv", names[0], names[1]))),
+			"auth_protocol %q priv_protocol %q", names[0], names[1])
+	}
+}
+
 // ---------------------------------------------------------------------------
 // validatePolicy: the v3 user name
 // ---------------------------------------------------------------------------
