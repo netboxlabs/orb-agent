@@ -299,6 +299,36 @@ type Symbol struct {
 	AllowDup bool `yaml:"allow_duplicate"`
 }
 
+// UnmarshalYAML implements yaml.Unmarshaler for Symbol.
+//
+// It exists for the `convert` spelling. One bundled profile writes it where
+// every other declaration in the tree writes `conversion`, and key matching is
+// case-sensitive and exact, so those symbols declared no conversion at all:
+// their OctetString readings reached the value conversion with nothing to apply
+// and were dropped as non-numeric. The two spellings name the same field, so
+// the alias fills Conversion when the documented spelling left it empty. They
+// are peers rather than a general and a specific declaration, so the documented
+// spelling wins, as it does for the `sysObjectID` alias.
+func (s *Symbol) UnmarshalYAML(value *yaml.Node) error {
+	// A distinct type with none of Symbol's methods, so decoding into it does
+	// not re-enter this one.
+	type plain Symbol
+	if err := value.Decode((*plain)(s)); err != nil {
+		return err
+	}
+	if s.Conversion != "" {
+		return nil
+	}
+	var alias struct {
+		Conversion string `yaml:"convert"`
+	}
+	if err := value.Decode(&alias); err != nil {
+		return err
+	}
+	s.Conversion = alias.Conversion
+	return nil
+}
+
 // ExportName returns the name the symbol's metric is written under: its `tag:`
 // when it declares one, and its `name:` otherwise.
 //

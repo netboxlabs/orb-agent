@@ -604,6 +604,61 @@ metrics:
 	assert.False(t, p.Metrics[1].Symbols[1].AllowDup, "a symbol that does not declare it does not get it")
 }
 
+// One bundled profile writes `convert:` where every other one writes
+// `conversion:`. The two name the same field, so the alias is read rather than
+// dropped, and the documented spelling wins when a symbol carries both.
+func TestSymbol_AcceptsTheConvertSpelling(t *testing.T) {
+	const doc = `
+metrics:
+  - MIB: TEST-MIB
+    symbol:
+      name: scalarOne
+      OID: 1.2.3.1.0
+      convert: to_one
+  - MIB: TEST-MIB
+    symbols:
+      - name: columnOne
+        OID: 1.2.3.2.1
+        convert: hwaddr
+      - name: columnTwo
+        OID: 1.2.3.2.2
+        conversion: hextoip
+        convert: to_one
+      - name: columnThree
+        OID: 1.2.3.2.3
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	assert.Equal(t, "to_one", p.Metrics[0].Symbol.Conversion)
+	assert.Equal(t, "hwaddr", p.Metrics[1].Symbols[0].Conversion)
+	assert.Equal(t, "hextoip", p.Metrics[1].Symbols[1].Conversion,
+		"the documented spelling wins over the alias")
+	assert.Empty(t, p.Metrics[1].Symbols[2].Conversion, "a symbol that declares neither gets neither")
+}
+
+// The two symbols the alias reaches. Both read an OctetString, so without the
+// conversion the value is not numeric and the metric is omitted.
+func TestSymbol_ConvertSpellingInTheBundledUPSProfile(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	p, err := l.Resolve("tripplite/tripplite-ups.yml")
+	require.NoError(t, err)
+
+	found := make(map[string]string)
+	for _, entry := range p.Metrics {
+		for _, sym := range entry.Symbols {
+			if sym.Conversion != "" {
+				found[sym.Name] = sym.Conversion
+			}
+		}
+	}
+	assert.Equal(t, map[string]string{
+		"tlUpsTestDate":          "to_one",
+		"tlUpsTestResultsDetail": "to_one",
+	}, found)
+}
+
 func TestSymbol_MetricName(t *testing.T) {
 	assert.Equal(t, "snmp.ifouterrors", (&Symbol{Name: "ifOutErrors"}).MetricName())
 	assert.Equal(t, "snmp.cpu", (&Symbol{Name: "laLoadInt1Min", Tag: "CPU"}).MetricName())
