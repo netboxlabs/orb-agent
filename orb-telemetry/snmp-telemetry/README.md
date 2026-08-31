@@ -114,7 +114,9 @@ policies:
 `snmp_timeout` defaults to 5 seconds and `retries` to none. A collection run is
 bounded by `metrics_interval`. A policy whose `snmp_timeout` reaches its
 `metrics_interval` is rejected, because a single attempt filling the
-interval can never produce a sample.
+interval can never produce a sample. Both are capped at 31536000 seconds, one
+year: a larger number does not fit the duration they are converted to, and
+would wrap to a fraction of a second.
 
 Retries raise the ceiling for one request to `snmp_timeout` times `retries`
 plus one. A ceiling that reaches `metrics_interval` is warned about rather

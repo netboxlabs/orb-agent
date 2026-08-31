@@ -137,6 +137,70 @@ func TestValidate_RejectsNegativeDialSettings(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Seconds that cannot be represented as a Duration
+// ---------------------------------------------------------------------------
+
+// Multiplying seconds by time.Second wraps above the representable range, and
+// the wrapped value is small: 40423014371506394 seconds becomes about a
+// microsecond. Every later check compares the wrapped durations, so an
+// outsized interval reads as a valid tight one and the policy schedules a
+// near-continuous collection.
+func TestValidate_RejectsSecondsThatCannotBeADuration(t *testing.T) {
+	m := newTestManager()
+	assert.ErrorContains(t, m.validatePolicy(policyWithDial(40423014371506394, 5, 0)), "metrics_interval")
+	assert.ErrorContains(t, m.validatePolicy(policyWithDial(maxPolicySeconds+1, 5, 0)), "metrics_interval")
+	assert.ErrorContains(t, m.validatePolicy(policyWithDial(60, 20211507185753197, 0)), "snmp_timeout")
+	assert.ErrorContains(t, m.validatePolicy(policyWithDial(60, maxPolicySeconds+1, 0)), "snmp_timeout")
+
+	require.NoError(t, m.validatePolicy(policyWithDial(maxPolicySeconds, maxPolicySeconds, 0)),
+		"the bound itself is accepted")
+}
+
+// NewRunner is where the multiply happens, and it is reachable without the
+// API, so it carries the bound too.
+func TestNewRunner_RejectsSecondsThatCannotBeADuration(t *testing.T) {
+	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(40423014371506394, 5, 0), &spyCollector{})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "metrics_interval")
+
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(maxPolicySeconds+1, 5, 0), &spyCollector{})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "metrics_interval")
+
+	// The interval is sane, so only the timeout can be at fault, and it must be
+	// named rather than reported as a timeout below a tiny interval.
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 20211507185753197, 0), &spyCollector{})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "snmp_timeout")
+
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, maxPolicySeconds+1, 0), &spyCollector{})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "snmp_timeout")
+}
+
+// The bound is on the seconds, so what survives it converts faithfully: the
+// durations the runner keeps are the ones the policy asked for, not a wrapped
+// remainder.
+func TestNewRunner_KeepsTheDurationsAtTheBound(t *testing.T) {
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(maxPolicySeconds, maxPolicySeconds-1, 0), &spyCollector{})
+	require.NoError(t, err)
+	assert.Equal(t, maxPolicySeconds*time.Second, r.metricsInterval)
+	assert.Equal(t, (maxPolicySeconds-1)*time.Second, r.snmpTimeout)
+}
+
+// The retry ceiling multiplies snmp_timeout by the capped attempt count. With
+// both durations bounded that product stays inside the range, so the largest
+// policy the bound allows still reports the warning rather than wrapping past
+// the comparison.
+func TestNewRunner_RetryCeilingHoldsAtTheBound(t *testing.T) {
+	var buf bytes.Buffer
+	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	_, err := NewRunner(t.Context(), lg, "p1", policyWithDial(maxPolicySeconds, 1, 1<<62), &spyCollector{})
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "SNMP retries can exceed the collection interval")
+}
+
+// ---------------------------------------------------------------------------
 // One policy targeting one endpoint more than once
 // ---------------------------------------------------------------------------
 

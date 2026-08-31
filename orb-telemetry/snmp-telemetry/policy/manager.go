@@ -712,9 +712,19 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
 		return fmt.Errorf("metrics_interval must be a positive integer")
 	}
+	// Both are turned into a Duration by multiplying by time.Second, which
+	// wraps to a small value past this bound. Rejected here so the request is
+	// refused with the field named, and again in NewRunner where the multiply
+	// happens.
+	if *policy.Config.MetricsInterval > maxPolicySeconds {
+		return fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
+	}
 
 	if policy.Config.SNMPTimeout < 0 {
 		return fmt.Errorf("snmp_timeout must not be negative")
+	}
+	if policy.Config.SNMPTimeout > maxPolicySeconds {
+		return fmt.Errorf("snmp_timeout must be at most %d seconds", maxPolicySeconds)
 	}
 
 	if policy.Config.Retries < 0 {

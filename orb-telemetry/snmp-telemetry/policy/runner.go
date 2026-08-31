@@ -23,6 +23,14 @@ type contextKey string
 const (
 	policyKey          contextKey = "policy"
 	defaultSNMPTimeout            = 5 * time.Second
+	// maxPolicySeconds bounds every duration a policy states in seconds.
+	// Multiplying seconds by time.Second overflows an int64 above roughly
+	// 9.2e9, and the wrapped value is small, so an outsized interval becomes a
+	// tight one that every later comparison accepts. The bound is a year
+	// rather than that representable ceiling of about 292 years: no collection
+	// interval reaches it, and keeping both durations this far inside the
+	// range also keeps snmp_timeout times the attempt count from wrapping.
+	maxPolicySeconds = 365 * 24 * 60 * 60
 )
 
 // Collector is the slice of the metrics collector a runner drives. Naming it
@@ -90,8 +98,18 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
 		return nil, fmt.Errorf("metrics_interval must be a positive integer")
 	}
+	// Bounded before the multiply rather than after it: seconds past the bound
+	// wrap to a small duration, and every check below would then compare the
+	// wrapped values and pass. Guarded here as well as in validatePolicy so a
+	// direct NewRunner call cannot slip past.
+	if *policy.Config.MetricsInterval > maxPolicySeconds {
+		return nil, fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
+	}
 	runner.metricsInterval = time.Duration(*policy.Config.MetricsInterval) * time.Second
 
+	if policy.Config.SNMPTimeout > maxPolicySeconds {
+		return nil, fmt.Errorf("snmp_timeout must be at most %d seconds", maxPolicySeconds)
+	}
 	runner.snmpTimeout = time.Duration(policy.Config.SNMPTimeout) * time.Second
 	if runner.snmpTimeout <= 0 {
 		runner.snmpTimeout = defaultSNMPTimeout
