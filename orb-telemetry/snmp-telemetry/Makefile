@@ -32,11 +32,17 @@ lint:
 fix-lint:
 	@golangci-lint run ./... --config ../../.github/golangci.yaml --fix
 
+# go test writes its events to a file so its exit status is kept: piping it
+# straight into the cmd filter let a failing cmd test leave the build green,
+# because the filter dropped the failure event and reported its own status.
 .PHONY: test-coverage
 test-coverage:
 	@mkdir -p .coverage
-	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd" | tparse -format=markdown > .coverage/test-report.md
-	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
+	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... > .coverage/test-events.json; \
+		status=$$?; \
+		grep -Ev "cmd" .coverage/test-events.json | tparse -format=markdown > .coverage/test-report.md || status=$$?; \
+		exit $$status
+	@grep -Ev "cmd" .coverage/cover.out.tmp > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep -E '^total:' | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 	@gcov2lcov -infile=.coverage/cover.out -outfile=.coverage/lcov.info
 
