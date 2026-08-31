@@ -240,6 +240,11 @@ type MetricsCollector struct {
 	pollMu    sync.Mutex
 	pollState map[deviceKey]map[string]time.Time // device -> symbolDeclKey -> lastPoll
 
+	// Profile each device last matched, so a device replaced at an address
+	// does not inherit the previous one's poll windows and retained points.
+	profileMu     sync.Mutex
+	deviceProfile map[deviceKey]string // device -> profileID
+
 	// Observable gauge store: device -> metricName -> observations.
 	// Updated after each CollectTarget run; read by OTLP callbacks on every export cycle.
 	storeMu     sync.RWMutex
@@ -265,6 +270,7 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 		matcher:          matcher,
 		logger:           logger,
 		pollState:        make(map[deviceKey]map[string]time.Time),
+		deviceProfile:    make(map[deviceKey]string),
 		deviceStore:      make(map[deviceKey]map[string][]observedPoint),
 		instruments:      make(map[string]metric.Int64ObservableGauge),
 		reviewedProfiles: make(map[string]struct{}),
@@ -393,6 +399,10 @@ func (c *MetricsCollector) Close() {
 	c.pollState = make(map[deviceKey]map[string]time.Time)
 	c.pollMu.Unlock()
 
+	c.profileMu.Lock()
+	c.deviceProfile = make(map[deviceKey]string)
+	c.profileMu.Unlock()
+
 	c.reviewMu.Lock()
 	c.reviewedProfiles = make(map[string]struct{})
 	c.reviewMu.Unlock()
@@ -417,6 +427,45 @@ func (c *MetricsCollector) ForgetPolicy(policyName string) {
 		}
 	}
 	c.pollMu.Unlock()
+
+	c.profileMu.Lock()
+	for key := range c.deviceProfile {
+		if key.policy == policyName {
+			delete(c.deviceProfile, key)
+		}
+	}
+	c.profileMu.Unlock()
+}
+
+// profileID names a matched profile. The relative path tells apart two profiles
+// that share a base name in different directories; a profile loaded without one
+// falls back to that base name.
+func profileID(profile *profiles.Profile) string {
+	if profile.RelPath != "" {
+		return profile.RelPath
+	}
+	return profile.FileName
+}
+
+// noteProfile records the profile a device matched and drops the device's
+// cached state when the match has changed. A device replaced at an address can
+// match a different profile, and every declaration the two profiles share has
+// one symbolDeclKey, so the new profile would be throttled against the old
+// device's poll window and would export the old device's retained point until
+// that window expired. Inherited IF-MIB metrics are the common case, and a long
+// poll_time_sec is the long one.
+//
+// The state of the profile no longer matched is dropped rather than kept beside
+// the new one. Keeping it would spare a device flapping between two profiles a
+// re-poll, at the price of state with no reader and no bound; dropping it costs
+// one collection cycle and cannot leak.
+func (c *MetricsCollector) noteProfile(key deviceKey, id string) {
+	c.profileMu.Lock()
+	defer c.profileMu.Unlock()
+	if prev, known := c.deviceProfile[key]; known && prev != id {
+		c.forgetDevice(key)
+	}
+	c.deviceProfile[key] = id
 }
 
 // forgetDevice drops one device's observations and poll timestamps. A device
@@ -501,6 +550,9 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		return nil
 	}
 	c.logger.Debug("Matched SNMP profile", "host", config.SanitizeLogValue(target.Host), "sysObjectID", config.SanitizeLogValue(sysOIDValue), "profile", profile.FileName)
+	// Before anything reads a poll window: a device that now matches a
+	// different profile starts from nothing.
+	c.noteProfile(key, profileID(profile))
 	c.reviewProfile(profile)
 
 	// Everything from here walks the profile's tables, which is where the round
@@ -747,10 +799,7 @@ func conversionError(conversion string) error {
 // the warnings appear once for the life of the process however many devices
 // carry the profile and however often they are polled.
 func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
-	name := profile.RelPath
-	if name == "" {
-		name = profile.FileName
-	}
+	name := profileID(profile)
 	c.reviewMu.Lock()
 	_, reviewed := c.reviewedProfiles[name]
 	if !reviewed {

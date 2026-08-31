@@ -1377,6 +1377,127 @@ func TestCollectTarget_ProfileStopsMatchingClearsStore(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Profile change
+// ---------------------------------------------------------------------------
+
+// newCollectorWithProfiles builds a collector whose matcher holds more than one
+// profile, so a device can be made to match a different one between runs.
+func newCollectorWithProfiles(factory snmp.ClientFactory, ps ...*profiles.Profile) *MetricsCollector {
+	return NewMetricsCollector(factory, profiles.NewMatcher(ps, discardLogger), discardLogger)
+}
+
+// sharedDecl returns the same declaration twice, so two profiles agree on the
+// metric name, the OID and the poll period and therefore on symbolDeclKey.
+func sharedDecl(oid string) []profiles.MetricEntry {
+	return []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: oid, PollTimeSec: 300}},
+	}
+}
+
+func TestCollectTarget_ProfileChangeRepollsASharedDeclaration(t *testing.T) {
+	const (
+		host    = "10.0.0.34"
+		cpuOID  = "1.3.6.1.4.1.9999.34.1"
+		sysObjA = "1.3.6.1.4.1.9999.34"
+		sysObjB = "1.3.6.1.4.1.9999.35"
+	)
+	a := profileWithOID(sysObjA, "a.yml", sharedDecl(cpuOID))
+	b := profileWithOID(sysObjB, "b.yml", sharedDecl(cpuOID))
+
+	makeWalker := func(sysObj string, cpu int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObj)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, cpu)},
+		}}
+	}
+
+	c := newCollectorWithProfiles(walkerFactory(makeWalker(sysObjA, 42)), a, b)
+	ctx := context.Background()
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Equal(t, int64(42), c.testDeviceStore("p", host)["snmp.cpuutil"][0].value)
+
+	// The address now answers as a device the other profile covers. The two
+	// declare one metric on one OID and one period, so the replaced device's
+	// poll window would otherwise throttle the new profile's declaration.
+	w := makeWalker(sysObjB, 7)
+	c.clientFactory = walkerFactory(w)
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Contains(t, w.walkCalls, cpuOID, "the new profile's declaration must be polled")
+	points := c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, points, 1, "the old profile's point must not be carried forward")
+	assert.Equal(t, int64(7), points[0].value)
+}
+
+// Two profiles can share a base filename in different directories, so the
+// relative path is what tells them apart.
+func TestCollectTarget_ProfileChangeIsSeenBetweenEqualBaseNames(t *testing.T) {
+	const (
+		host    = "10.0.0.36"
+		cpuOID  = "1.3.6.1.4.1.9999.36.1"
+		sysObjA = "1.3.6.1.4.1.9999.36"
+		sysObjB = "1.3.6.1.4.1.9999.37"
+	)
+	a := profileWithOID(sysObjA, "shared.yml", sharedDecl(cpuOID))
+	a.RelPath = "vendor-a/shared.yml"
+	b := profileWithOID(sysObjB, "shared.yml", sharedDecl(cpuOID))
+	b.RelPath = "vendor-b/shared.yml"
+
+	makeWalker := func(sysObj string, cpu int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObj)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, cpu)},
+		}}
+	}
+
+	c := newCollectorWithProfiles(walkerFactory(makeWalker(sysObjA, 42)), a, b)
+	ctx := context.Background()
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Equal(t, int64(42), c.testDeviceStore("p", host)["snmp.cpuutil"][0].value)
+
+	c.clientFactory = walkerFactory(makeWalker(sysObjB, 7))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, int64(7), c.testDeviceStore("p", host)["snmp.cpuutil"][0].value)
+}
+
+// The matched profile is state of its own, so the two paths that drop a
+// device's state have to drop it too or the map grows for the process's life.
+func TestForgetPolicyAndClose_DropTheMatchedProfiles(t *testing.T) {
+	const (
+		hostA       = "10.0.0.38"
+		hostB       = "10.0.0.39"
+		cpuOID      = "1.3.6.1.4.1.9999.38.1"
+		sysObjValue = "1.3.6.1.4.1.9999.38"
+	)
+	p := profileWithOID(sysObjValue, "kept.yml", sharedDecl(cpuOID))
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 7)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	ctx := context.Background()
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "doomed", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostB), mustAuth(), "keeper", DialOptions{}))
+
+	c.ForgetPolicy("doomed")
+	c.profileMu.Lock()
+	_, doomed := c.deviceProfile[testKey("doomed", hostA)]
+	_, keeper := c.deviceProfile[testKey("keeper", hostB)]
+	c.profileMu.Unlock()
+	assert.False(t, doomed, "a stopped policy must not keep its devices' profiles")
+	assert.True(t, keeper, "another policy's devices must keep theirs")
+
+	c.Close()
+	c.profileMu.Lock()
+	left := len(c.deviceProfile)
+	c.profileMu.Unlock()
+	assert.Zero(t, left, "Close must release the matched profiles with the rest")
+}
+
+// ---------------------------------------------------------------------------
 // Per-dial settings
 // ---------------------------------------------------------------------------
 
