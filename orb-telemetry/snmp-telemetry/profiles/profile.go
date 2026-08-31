@@ -287,10 +287,23 @@ type Symbol struct {
 	// value is either a bare integer or a quoted string. Only rows whose
 	// referenced column equals the value are emitted.
 	Condition string `yaml:"condition"`
-	// Script is a ktranslate transform of the polled value, written in its own
-	// dialect. This collector runs none, so it is deserialized only to be able
-	// to tell that the exported number would not be what the symbol names.
-	Script string `yaml:"script"`
+	Script    string `yaml:"script"`
+	// AllowDup keeps the symbol exporting when another symbol resolves to the
+	// same metric name. Without it the loser of that contest is dropped.
+	AllowDup bool `yaml:"allow_duplicate"`
+}
+
+// ExportName returns the name the symbol's metric is written under: its `tag:`
+// when it declares one, and its `name:` otherwise.
+//
+// A tag renames the metric rather than dimensioning it. Upstream reads the
+// field the same way, and a profile giving two symbols one tag is declaring
+// that both report the same thing under one name.
+func (s *Symbol) ExportName() string {
+	if s.Tag != "" {
+		return s.Tag
+	}
+	return s.Name
 }
 
 // Table identifies an SNMP table by name and root OID.

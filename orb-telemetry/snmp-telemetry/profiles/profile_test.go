@@ -574,3 +574,32 @@ metrics:
 	assert.Empty(t, q.Metrics[0].Symbols[0].Enum.Duplicated(),
 		"a member with no value collides with nothing")
 }
+
+func TestSymbol_ExportName(t *testing.T) {
+	assert.Equal(t, "laLoadInt1Min", (&Symbol{Name: "laLoadInt1Min"}).ExportName())
+	assert.Equal(t, "CPU", (&Symbol{Name: "laLoadInt1Min", Tag: "CPU"}).ExportName())
+	assert.Equal(t, "", (&Symbol{}).ExportName())
+}
+
+func TestSymbol_AllowDuplicateIsDeserialized(t *testing.T) {
+	const doc = `
+metrics:
+  - MIB: TEST-MIB
+    symbol:
+      name: scalarOne
+      OID: 1.2.3.1.0
+      allow_duplicate: true
+  - MIB: TEST-MIB
+    symbols:
+      - name: columnOne
+        OID: 1.2.3.2.1
+        allow_duplicate: true
+      - name: columnTwo
+        OID: 1.2.3.2.2
+`
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(doc), &p))
+	assert.True(t, p.Metrics[0].Symbol.AllowDup)
+	assert.True(t, p.Metrics[1].Symbols[0].AllowDup)
+	assert.False(t, p.Metrics[1].Symbols[1].AllowDup, "a symbol that does not declare it does not get it")
+}
