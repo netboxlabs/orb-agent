@@ -1151,6 +1151,13 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 
 	// --- Phase 4: resolve and walk condition columns (active symbols only) ---
 	conditionRows := make(map[string]map[string]conditionRow)
+	// Keyed by symbolDeclKey rather than by OID. A `tag:` renames the metric,
+	// so one column can be declared twice and export under two names, and only
+	// one of those declarations may carry a `condition:`. Keyed on the OID, one
+	// declaration's predicate filtered the other's rows, and two differing
+	// predicates left the last resolved one deciding both. This is the key poll
+	// state uses, so the declaration that was polled is the one whose condition
+	// is applied.
 	conditions := make(map[string]conditionCheck)
 	for _, st := range states {
 		// A condition names a column of its own to walk. Returning here leaves
@@ -1167,7 +1174,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				"symbol", st.sym.Name, "condition", st.sym.Condition, "reason", reason)
 			continue
 		}
-		conditions[st.sym.OID] = check
+		conditions[symbolDeclKey(st.sym)] = check
 		if _, walked := conditionRows[check.columnOID]; walked {
 			continue
 		}
@@ -1221,10 +1228,10 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		}
 		c.markPolled(key, sym)
 
-		cond, hasCondition := conditions[sym.OID]
+		decl := symbolDeclKey(sym)
+		cond, hasCondition := conditions[decl]
 		name := sym.ExportName()
 		metricName := sym.MetricName()
-		decl := symbolDeclKey(sym)
 
 		for fullOID, pdu := range pdus {
 			if err := ctx.Err(); err != nil {

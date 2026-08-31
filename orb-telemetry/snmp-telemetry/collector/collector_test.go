@@ -4964,3 +4964,145 @@ func TestCollectTarget_BundledAddressConversionOnANumericPDUExportsNothing(t *te
 	assert.Empty(t, c.testDeviceStore("p", host)["snmp.hwstacksystemmac"])
 	assert.Contains(t, w.walkCalls, macOID, "the symbol is collectable, so it is still walked")
 }
+
+// ---------------------------------------------------------------------------
+// A condition belongs to its declaration, not to its OID
+// ---------------------------------------------------------------------------
+
+// twoNameConditionProfile builds an entry declaring one table column twice
+// under two names, each symbol carrying the condition the test wants, plus the
+// column the condition tests. This is what an override profile does when it
+// re-exports a bundled column under a name of its own.
+func twoNameConditionProfile(first, second profiles.Symbol) *profiles.Profile {
+	return profileWithOID(twoNameSysObj, "one-column-two-names.yml", []profiles.MetricEntry{
+		{
+			Table:   &profiles.Table{Name: "linkTable", OID: twoNameTable},
+			Symbols: []profiles.Symbol{first, second},
+			MetricTags: []profiles.MetricTag{
+				{Tag: "link_state", Column: &profiles.TagColumn{OID: twoNameStateCol, Name: "linkState"}},
+			},
+		},
+	})
+}
+
+const (
+	twoNameSysObj   = "1.3.6.1.4.1.99.20"
+	twoNameTable    = "1.3.6.1.4.1.99.20.1"
+	twoNameOctetCol = "1.3.6.1.4.1.99.20.1.1.2"
+	twoNameStateCol = "1.3.6.1.4.1.99.20.1.1.3"
+)
+
+// twoNameWalker answers the octet column with two rows and the state column
+// with 1 for the first and 2 for the second.
+func twoNameWalker() *recordingWalker {
+	return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(twoNameSysObj)},
+		twoNameOctetCol: {
+			twoNameOctetCol + ".1": intPDU(twoNameOctetCol+".1", 10),
+			twoNameOctetCol + ".2": intPDU(twoNameOctetCol+".2", 20),
+		},
+		twoNameStateCol: {
+			twoNameStateCol + ".1": intPDU(twoNameStateCol+".1", 1),
+			twoNameStateCol + ".2": intPDU(twoNameStateCol+".2", 2),
+		},
+	}}
+}
+
+// rowsOf renders a metric's points as row index to value.
+func rowsOf(pts []observedPoint) map[string]int64 {
+	out := map[string]int64{}
+	for _, pt := range pts {
+		out[attrValue(pt, "row_index")] = pt.value
+	}
+	return out
+}
+
+// A `tag:` renames the metric, so one column can be declared twice and export
+// under two names. Only one of the two declarations carries a `condition:`
+// here. Keyed on the OID, the condition reached the other declaration as well
+// and filtered the rows it never asked to filter.
+func TestCollectTarget_AConditionDoesNotReachTheOtherNameOfOneColumn(t *testing.T) {
+	const host = "10.0.0.80"
+	p := twoNameConditionProfile(
+		profiles.Symbol{Name: "linkOctets", Tag: "OctetsUp", OID: twoNameOctetCol, Condition: "linkState=1"},
+		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol},
+	)
+	c := newCollector(walkerFactory(twoNameWalker()), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Equal(t, map[string]int64{"1": 10}, rowsOf(store["snmp.octetsup"]),
+		"the conditional declaration keeps only the row its condition passes")
+	assert.Equal(t, map[string]int64{"1": 10, "2": 20}, rowsOf(store["snmp.linkoctets"]),
+		"the unconditional declaration exports every row")
+}
+
+// Both declarations carry a condition, and the conditions differ. Keyed on the
+// OID, one entry held both and the declaration resolved last decided the rows
+// of the other one too.
+func TestCollectTarget_TwoNamesOfOneColumnKeepDifferentConditions(t *testing.T) {
+	const host = "10.0.0.81"
+	p := twoNameConditionProfile(
+		profiles.Symbol{Name: "linkOctets", Tag: "OctetsUp", OID: twoNameOctetCol, Condition: "linkState=1"},
+		profiles.Symbol{Name: "linkOctets", Tag: "OctetsDown", OID: twoNameOctetCol, Condition: "linkState=2"},
+	)
+	c := newCollector(walkerFactory(twoNameWalker()), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Equal(t, map[string]int64{"1": 10}, rowsOf(store["snmp.octetsup"]),
+		"the first declaration keeps its own condition")
+	assert.Equal(t, map[string]int64{"2": 20}, rowsOf(store["snmp.octetsdown"]),
+		"the second declaration keeps its own condition")
+}
+
+// The condition a declaration cannot resolve is dropped for that declaration
+// alone. Keyed on the OID, the resolvable sibling's check was the one left in
+// the map and the unresolvable declaration was filtered by it.
+func TestCollectTarget_AnUnresolvableConditionDoesNotBorrowASibling(t *testing.T) {
+	const host = "10.0.0.82"
+	p := twoNameConditionProfile(
+		profiles.Symbol{Name: "linkOctets", Tag: "OctetsUp", OID: twoNameOctetCol, Condition: "linkState=1"},
+		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol, Condition: "nothingHere=1"},
+	)
+	c := newCollector(walkerFactory(twoNameWalker()), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	assert.Equal(t, map[string]int64{"1": 10}, rowsOf(store["snmp.octetsup"]))
+	assert.Equal(t, map[string]int64{"1": 10, "2": 20}, rowsOf(store["snmp.linkoctets"]),
+		"a condition this collector cannot apply filters nothing")
+}
+
+// TestConditionsKeyMatchesThePollWindow pins the two to one key. Poll state
+// decides which declarations run and the condition map decides what their rows
+// have to satisfy, so a declaration polled on its own window and filtered on a
+// key that merged it with another would disagree with itself.
+func TestConditionsKeyMatchesThePollWindow(t *testing.T) {
+	same := []profiles.Symbol{
+		{Name: "linkOctets", OID: twoNameOctetCol},
+		{Name: "linkOctets", OID: twoNameOctetCol},
+	}
+	assert.Equal(t, symbolDeclKey(&same[0]), symbolDeclKey(&same[1]),
+		"declarations one poll window serves must share one condition")
+
+	for name, pair := range map[string][2]profiles.Symbol{
+		"exported name": {
+			{Name: "linkOctets", Tag: "OctetsUp", OID: twoNameOctetCol},
+			{Name: "linkOctets", OID: twoNameOctetCol},
+		},
+		"oid": {
+			{Name: "linkOctets", OID: twoNameOctetCol},
+			{Name: "linkOctets", OID: twoNameStateCol},
+		},
+		"poll period": {
+			{Name: "linkOctets", OID: twoNameOctetCol},
+			{Name: "linkOctets", OID: twoNameOctetCol, PollTimeSec: 300},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.NotEqual(t, symbolDeclKey(&pair[0]), symbolDeclKey(&pair[1]),
+				"declarations polled on separate windows must be filtered separately")
+		})
+	}
+}
