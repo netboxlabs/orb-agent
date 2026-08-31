@@ -597,14 +597,11 @@ var protocolNames = []string{
 	"SHA3", "3DES", "sha", "aes", "none", "SHA-256",
 }
 
+// v3ProtocolAuth supplies both passphrases, so a name is the only thing the
+// tables below vary: a protocol above the sentinel needs its passphrase at
+// every level, which the passphrase table covers on its own.
 func v3ProtocolAuth(authProtocol, privProtocol string) config.Authentication {
-	return config.Authentication{
-		ProtocolVersion: "SNMPv3",
-		SecurityLevel:   "noAuthNoPriv",
-		Username:        "admin",
-		AuthProtocol:    authProtocol,
-		PrivProtocol:    privProtocol,
-	}
+	return v3UsmAuth("noAuthNoPriv", authProtocol, privProtocol, "authpass", "privpass")
 }
 
 // snmp.NewClient resolves both protocol names for every v3 policy, so one it
@@ -659,24 +656,53 @@ func TestValidate_V3EmptyProtocolNamesKeepTheDefaults(t *testing.T) {
 // Every security level a v3 policy may select.
 var securityLevels = []string{"noAuthNoPriv", "authNoPriv", "authPriv"}
 
-func v3LevelAuth(securityLevel, authProtocol, privProtocol string) config.Authentication {
+func v3UsmAuth(securityLevel, authProtocol, privProtocol, authPassphrase, privPassphrase string) config.Authentication {
 	return config.Authentication{
 		ProtocolVersion: "SNMPv3",
 		SecurityLevel:   securityLevel,
 		Username:        "admin",
 		AuthProtocol:    authProtocol,
-		AuthPassphrase:  "authpass",
+		AuthPassphrase:  authPassphrase,
 		PrivProtocol:    privProtocol,
-		PrivPassphrase:  "privpass",
+		PrivPassphrase:  privPassphrase,
 	}
+}
+
+// v3LevelAuth supplies both passphrases, so nothing but the level and the two
+// protocol names decides the verdict.
+func v3LevelAuth(securityLevel, authProtocol, privProtocol string) config.Authentication {
+	return v3UsmAuth(securityLevel, authProtocol, privProtocol, "authpass", "privpass")
+}
+
+// requireUsmVerdictsAgree runs one authentication block through the client and
+// through validation and requires the same verdict of both.
+//
+// gosnmp checks the USM security parameters on the way through Connect, so the
+// client is the authority for everything validation claims about them: it
+// rejects before a packet leaves, which leaves a policy the API reports as
+// running and that can never collect. The tables below share this oracle so
+// they cannot drift from each other.
+func requireUsmVerdictsAgree(t *testing.T, m *Manager, auth config.Authentication, label string) {
+	t.Helper()
+
+	err := m.validatePolicy(minimalPolicy(auth))
+	w, clientErr := snmp.NewClient(t.Context(), "127.0.0.1", 161, 1, time.Second, &auth, testLogger)
+	if clientErr == nil {
+		clientErr = w.Connect()
+		_ = w.Close()
+	}
+	if clientErr != nil {
+		require.Error(t, err, "%s: the client rejects it, so validation must too", label)
+		return
+	}
+	require.NoError(t, err, "%s: the client accepts it, so validation must too", label)
 }
 
 // A name that resolves is not yet a name the level accepts: NoAuth and NoPriv
 // resolve to the gosnmp sentinels, and its USM check rejects those when the
-// level asks for authentication or privacy. gosnmp makes that check on the way
-// through Connect, so Connect is the authority for the pair the same way
-// NewClient is the authority for the name. Every level against every name, so a
-// rule written beside the validator would not survive.
+// level asks for authentication or privacy. Every level against every name, so
+// a rule written beside the validator would not survive. Both passphrases are
+// supplied throughout, so the pair is the only thing under test here.
 func TestValidate_V3LevelAndProtocolMatchTheClient(t *testing.T) {
 	m := newTestManager()
 	for _, level := range securityLevels {
@@ -689,17 +715,41 @@ func TestValidate_V3LevelAndProtocolMatchTheClient(t *testing.T) {
 				{"priv_protocol", v3LevelAuth(level, "SHA", name)},
 			}
 			for _, c := range cases {
-				err := m.validatePolicy(minimalPolicy(c.auth))
-				w, clientErr := snmp.NewClient(t.Context(), "127.0.0.1", 161, 1, time.Second, &c.auth, testLogger)
-				if clientErr == nil {
-					clientErr = w.Connect()
-					_ = w.Close()
+				requireUsmVerdictsAgree(t, m, c.auth, fmt.Sprintf("%s %s=%q", level, c.field, name))
+			}
+		}
+	}
+}
+
+// The passphrase dimension of the same check, on the same oracle. gosnmp asks
+// for the passphrase that goes with a protocol whenever the protocol resolves
+// above the sentinel, whatever the level asks for, so a name carried at a level
+// that does not need it still cannot dial once its passphrase is missing. The
+// reverse direction is here too: a passphrase beside a sentinel protocol is
+// never read, and validation must not invent a reason to reject it.
+func TestValidate_V3PassphrasePresenceMatchesTheClient(t *testing.T) {
+	m := newTestManager()
+	passphrases := []struct{ authPass, privPass string }{
+		{"authpass", "privpass"},
+		{"", "privpass"},
+		{"authpass", ""},
+		{"", ""},
+	}
+	for _, level := range securityLevels {
+		for _, name := range protocolNames {
+			for _, p := range passphrases {
+				cases := []struct {
+					field string
+					auth  config.Authentication
+				}{
+					{"auth_protocol", v3UsmAuth(level, name, "AES", p.authPass, p.privPass)},
+					{"priv_protocol", v3UsmAuth(level, "SHA", name, p.authPass, p.privPass)},
 				}
-				if clientErr != nil {
-					require.Error(t, err, "%s %s=%q: the client rejects it, so validation must too", level, c.field, name)
-					continue
+				for _, c := range cases {
+					requireUsmVerdictsAgree(t, m, c.auth,
+						fmt.Sprintf("%s %s=%q auth_passphrase=%q priv_passphrase=%q",
+							level, c.field, name, p.authPass, p.privPass))
 				}
-				require.NoError(t, err, "%s %s=%q: the client accepts it, so validation must too", level, c.field, name)
 			}
 		}
 	}
@@ -719,6 +769,29 @@ func TestValidate_V3NoAuthNoPrivKeepsTheSentinels(t *testing.T) {
 	m := newTestManager()
 	for _, names := range [][2]string{{"", ""}, {"NoAuth", "NoPriv"}, {"NoAuth", ""}, {"", "NoPriv"}} {
 		require.NoError(t, m.validatePolicy(minimalPolicy(v3LevelAuth("noAuthNoPriv", names[0], names[1]))),
+			"auth_protocol %q priv_protocol %q", names[0], names[1])
+	}
+}
+
+// The three combinations that resolved, cleared the security level, and then
+// failed to dial.
+func TestValidate_V3ProtocolWithoutItsPassphraseRejected(t *testing.T) {
+	m := newTestManager()
+	assert.ErrorContains(t, m.validatePolicy(minimalPolicy(v3UsmAuth("noAuthNoPriv", "SHA", "", "", ""))),
+		"authentication protocol SHA needs an auth passphrase")
+	assert.ErrorContains(t, m.validatePolicy(minimalPolicy(v3UsmAuth("noAuthNoPriv", "", "AES", "", ""))),
+		"privacy protocol AES needs a priv passphrase")
+	assert.ErrorContains(t, m.validatePolicy(minimalPolicy(v3UsmAuth("authNoPriv", "SHA", "AES", "authpass", ""))),
+		"privacy protocol AES needs a priv passphrase")
+}
+
+// The other direction: a passphrase beside a sentinel protocol is never read,
+// so carrying one is not a reason to reject a policy the client would dial.
+func TestValidate_V3PassphraseWithoutAProtocolAccepted(t *testing.T) {
+	m := newTestManager()
+	for _, names := range [][2]string{{"", ""}, {"NoAuth", "NoPriv"}, {"NoAuth", ""}, {"", "NoPriv"}} {
+		require.NoError(t, m.validatePolicy(minimalPolicy(
+			v3UsmAuth("noAuthNoPriv", names[0], names[1], "authpass", "privpass"))),
 			"auth_protocol %q priv_protocol %q", names[0], names[1])
 	}
 }

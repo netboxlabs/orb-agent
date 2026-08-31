@@ -206,9 +206,9 @@ func v3MsgFlags(securityLevel string) gosnmp.SnmpV3MsgFlags {
 	}
 }
 
-// ValidateV3Protocols reports whether the two protocol names are ones the
-// client can resolve and whether what they resolve to carries the
-// authentication and privacy securityLevel asks for.
+// ValidateV3SecurityParameters reports whether the v3 protocol names, security
+// level and passphrases in auth are ones the client can dial with. The caller
+// has already established that auth is an SNMPv3 block.
 //
 // Both names go through the tables NewClient uses and the level goes through
 // the same mapping NewClient dials with, so a caller checking a policy up front
@@ -216,26 +216,39 @@ func v3MsgFlags(securityLevel string) gosnmp.SnmpV3MsgFlags {
 // the default, which is the sentinel: it therefore resolves everywhere and is
 // accepted only where the sentinel is.
 //
-// gosnmp's own combination check is UsmSecurityParameters.validate, which is
-// unexported and reachable only by dialing, so the two comparisons below are
-// stated here in its terms, against its constants and its bit tests, and pinned
-// by a test that drives every level and name pair through Connect.
-func ValidateV3Protocols(securityLevel, authProtocol, privProtocol string) error {
-	auth, err := getAuthProtocol(authProtocol)
+// gosnmp's counterpart is UsmSecurityParameters.validate, which is unexported
+// and reachable only by dialing, so the comparisons below are stated here in
+// its terms, against its constants and its bit tests, and pinned by a test that
+// drives every combination through Connect. The first two come from its
+// security level switch and the last two from the passphrase checks that follow
+// it: a protocol above the sentinel needs its passphrase whatever the level
+// asks for, and a passphrase beside a sentinel protocol is never read. gosnmp
+// skips those two when a pre-derived key is set instead, which NewClient never
+// does.
+func ValidateV3SecurityParameters(auth *config.Authentication) error {
+	authProtocol, err := getAuthProtocol(auth.AuthProtocol)
 	if err != nil {
 		return err
 	}
-	priv, err := getPrivProtocol(privProtocol)
+	privProtocol, err := getPrivProtocol(auth.PrivProtocol)
 	if err != nil {
 		return err
 	}
 
-	flags := v3MsgFlags(securityLevel)
-	if flags&gosnmp.AuthNoPriv > 0 && auth <= gosnmp.NoAuth {
-		return fmt.Errorf("security level %s needs an authentication protocol, got %q", securityLevel, authProtocol)
+	flags := v3MsgFlags(auth.SecurityLevel)
+	if flags&gosnmp.AuthNoPriv > 0 && authProtocol <= gosnmp.NoAuth {
+		return fmt.Errorf("security level %s needs an authentication protocol, got %q",
+			auth.SecurityLevel, auth.AuthProtocol)
 	}
-	if flags&gosnmp.AuthPriv > gosnmp.AuthNoPriv && priv <= gosnmp.NoPriv {
-		return fmt.Errorf("security level %s needs a privacy protocol, got %q", securityLevel, privProtocol)
+	if flags&gosnmp.AuthPriv > gosnmp.AuthNoPriv && privProtocol <= gosnmp.NoPriv {
+		return fmt.Errorf("security level %s needs a privacy protocol, got %q",
+			auth.SecurityLevel, auth.PrivProtocol)
+	}
+	if authProtocol > gosnmp.NoAuth && auth.AuthPassphrase == "" {
+		return fmt.Errorf("authentication protocol %s needs an auth passphrase", auth.AuthProtocol)
+	}
+	if privProtocol > gosnmp.NoPriv && auth.PrivPassphrase == "" {
+		return fmt.Errorf("privacy protocol %s needs a priv passphrase", auth.PrivProtocol)
 	}
 	return nil
 }

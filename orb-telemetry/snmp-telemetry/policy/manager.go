@@ -655,12 +655,13 @@ func (m *Manager) validateAuthentication(auth *config.Authentication, context st
 			}
 		}
 		// The client resolves both names for every v3 policy and gosnmp then
-		// checks them against the security level, so a name it does not accept
-		// or a name that resolves to the sentinel where the level needs a real
-		// protocol fails collection before it connects and leaves a policy the
-		// API reports as running. An empty name selects the default, which is
-		// the sentinel.
-		if err := snmp.ValidateV3Protocols(auth.SecurityLevel, auth.AuthProtocol, auth.PrivProtocol); err != nil {
+		// checks them against the security level and against the passphrases,
+		// so a name it does not accept, a name that resolves to the sentinel
+		// where the level needs a real protocol, or a real protocol whose
+		// passphrase is missing fails collection before it connects and leaves
+		// a policy the API reports as running. An empty name selects the
+		// default, which is the sentinel.
+		if err := snmp.ValidateV3SecurityParameters(auth); err != nil {
 			return fmt.Errorf("%s: %w", context, err)
 		}
 	}
