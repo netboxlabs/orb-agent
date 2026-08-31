@@ -308,6 +308,16 @@ produce an address instead, which a bare number is not, so a numeric answer to
 one of those is dropped rather than exported undecoded under a metric named for
 an address.
 
+A profile's `metric_tags` become attributes beside the ones above, on the device
+or on the row. A tag that takes one of the device identity names, or
+`row_index`, is dropped rather than applied: a duplicate attribute resolves to
+whichever value came last, so honouring it would replace the value that tells
+two devices or two rows apart. The profile still loads and every metric it
+declares is still collected, since a bundled profile is vendored and cannot be
+edited. The backend logs one warning naming the tag and the profile the first
+time a device matches that profile. No bundled profile declares such a tag, so
+only an override reaches this, and renaming the tag applies it.
+
 Once a profile matches, its tables are walked with GETBULK, 25 values per
 request, rather than one GETNEXT per value. A profile that sets
 `no_use_bulkwalkall: true` is walked with GETNEXT instead, and so is everything

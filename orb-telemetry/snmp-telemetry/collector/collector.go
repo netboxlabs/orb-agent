@@ -31,6 +31,11 @@ const (
 	sysNameOID     = "1.3.6.1.2.1.1.5"
 )
 
+// rowIndexAttr carries the table index a point was read at. It is the device
+// identity's row-level counterpart: without it every row of a table shares one
+// attribute set.
+const rowIndexAttr = "row_index"
+
 // deviceKey identifies one polled device. A device belongs to the policy that
 // named it: two policies may poll the same address with different credentials
 // or intervals, so their observations and poll timestamps are kept apart. Port
@@ -506,6 +511,42 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 	return attrs
 }
 
+// reservedAttrNames are the attribute keys the collector's own identity owns.
+// A profile tag carrying one of them would replace the value rather than sit
+// beside it, since a duplicate key resolves last-value-wins, and two policies
+// polling one endpoint would then export series nothing tells apart.
+//
+// The device dimensions are read back from appendIdentityAttrs rather than
+// restated, so a dimension added to the identity reserves its name by the same
+// edit. The row index is added here because it is appended per point rather
+// than per device.
+//
+// The suffixes a reading derives are deliberately absent: no identity name ends
+// in _status or _value, so neither can shadow one, and which of them exist
+// depends on the symbols of the entry rather than on the collector.
+var reservedAttrNames = reservedAttrNameSet()
+
+func reservedAttrNameSet() map[string]struct{} {
+	// Every dimension is filled: appendIdentityAttrs leaves an empty one off,
+	// and a set built from a partly filled key would miss exactly the names a
+	// profile could then overwrite. A dimension added to deviceKey without a
+	// value here fails TestReservedAttrNames_AreTheExportedIdentity.
+	probe := deviceKey{policy: "p", host: "h", port: 1, id: "i", context: "c"}
+	names := map[string]struct{}{rowIndexAttr: {}}
+	for _, attr := range appendIdentityAttrs(nil, probe) {
+		names[string(attr.Key)] = struct{}{}
+	}
+	return names
+}
+
+// reservedTagName reports whether a profile tag of this name would overwrite an
+// identity attribute. The collection path drops exactly these tags and the
+// once-per-profile review names exactly these, so the two cannot disagree.
+func reservedTagName(name string) bool {
+	_, reserved := reservedAttrNames[name]
+	return reserved
+}
+
 // CollectTarget collects SNMP metrics from a single target using its matched profile.
 // Returns nil if the device has no matching profile (not an error condition).
 // A run that fails leaves nothing behind for the device it was polling.
@@ -687,6 +728,12 @@ func (c *MetricsCollector) appendDeviceTags(ctx context.Context, walker snmp.Wal
 		if name == "" {
 			continue
 		}
+		if reservedTagName(name) {
+			// Reported once per profile by reviewProfile. Appending it would
+			// replace the identity attribute of that name on every series the
+			// profile produces, and the walk it would take is skipped with it.
+			continue
+		}
 		if value, ok := cachedSystemValue(col.OID, sysDescr, sysObjectID); ok {
 			if value != "" {
 				attrs = append(attrs, attribute.String(name, value))
@@ -797,8 +844,9 @@ func conversionError(conversion string) error {
 
 // reviewProfile warns about every declaration in a matched profile that the
 // collector cannot act on: a symbol it skips outright, a conversion pduToValue
-// does not implement, and a condition it cannot resolve. Each of those leaves a
-// metric missing or unfiltered, and without this nothing says why.
+// does not implement, a condition it cannot resolve, and a tag whose name the
+// identity attributes own. Each of those leaves a metric missing, unfiltered or
+// short of an attribute, and without this nothing says why.
 //
 // A profile is reviewed the first time a device matches it and never again, so
 // the warnings appear once for the life of the process however many devices
@@ -838,11 +886,13 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 		c.reportUnusableConditions(entry, name)
 		c.reportUnusableFilters(entry.MetricTags, name, "")
 		c.reportUnusableTags(entry.MetricTags, name)
+		c.reportReservedTags(entry.MetricTags, name)
 		c.reportUnhandledTagIndex(entry.MetricTags, name)
 		c.reportUnsetTagEnums(entry.MetricTags, name)
 	}
 	c.reportUnusableFilters(profile.MetricTags, name, "column tags the device rather than a row")
 	c.reportUnusableTags(profile.MetricTags, name)
+	c.reportReservedTags(profile.MetricTags, name)
 	c.reportUnhandledTagIndex(profile.MetricTags, name)
 	c.reportUnsetTagEnums(profile.MetricTags, name)
 }
@@ -905,7 +955,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		attrs := make([]attribute.KeyValue, len(baseAttrs))
 		copy(attrs, baseAttrs)
 		if rowIdx, indexed := scalarRowIndex(fullOID, sym.OID); indexed {
-			attrs = append(attrs, attribute.String("row_index", rowIdx))
+			attrs = append(attrs, attribute.String(rowIndexAttr, rowIdx))
 		}
 		rowKey := attrSetKey(attrs)
 		if status := enumStatusName(sym, val); status != "" {
@@ -1136,6 +1186,24 @@ func (c *MetricsCollector) reportUnusableTags(tags []profiles.MetricTag, profile
 	}
 }
 
+// reportReservedTags reports a metric tag named after one of the collector's
+// identity attributes. The tag is dropped rather than the profile refused: a
+// bundled profile is vendored and cannot be edited, so refusing to load one
+// would take away every metric it carries over one attribute name. The operator
+// is told instead, and an override can be renamed.
+func (c *MetricsCollector) reportReservedTags(tags []profiles.MetricTag, profileName string) {
+	for i := range tags {
+		mt := &tags[i]
+		name := metricTagName(mt, metricTagColumn(mt))
+		if !reservedTagName(name) {
+			continue
+		}
+		c.logger.Warn("Ignoring metric tag that would overwrite an identity attribute",
+			"reason", "the name is reserved for the identity of the device or the row",
+			"tag", name, "profile", profileName)
+	}
+}
+
 // reportUnsetTagEnums reports the enum members a tag column named without a
 // value.
 func (c *MetricsCollector) reportUnsetTagEnums(tags []profiles.MetricTag, profileName string) {
@@ -1270,6 +1338,11 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		}
 		tagName := metricTagName(mt, col)
 		if len(mt.IndexTransform) > 0 {
+			if reservedTagName(tagName) {
+				// Reported once per profile by reviewProfile. A joined tag
+				// carries nothing but the attribute, so the join goes with it.
+				continue
+			}
 			jt := joinedTag{name: tagName, transform: mt.IndexTransform, byIndex: make(map[string]string, len(pdus))}
 			for fullOID, pdu := range pdus {
 				jt.byIndex[extractRowIndex(fullOID, col.OID)] = pduToString(pdu, col)
@@ -1413,10 +1486,17 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			rowAttrs := make([]attribute.KeyValue, len(baseAttrs))
 			copy(rowAttrs, baseAttrs)
 			if indexed {
-				rowAttrs = append(rowAttrs, attribute.String("row_index", rowIdx))
+				rowAttrs = append(rowAttrs, attribute.String(rowIndexAttr, rowIdx))
 			}
 			if tags, ok := rowTags[rowIdx]; ok {
 				for k, v := range tags {
+					if reservedTagName(k) {
+						// Reported once per profile by reviewProfile. Dropped
+						// here rather than at the walk, since a match_attributes
+						// filter on the same column still decides which rows
+						// are emitted.
+						continue
+					}
 					rowAttrs = append(rowAttrs, attribute.String(k, v))
 				}
 			}

@@ -1687,6 +1687,213 @@ func TestDeviceKey_EveryDimensionIsExported(t *testing.T) {
 		"keyDimensionAttrs names an attribute for a field deviceKey no longer has")
 }
 
+// ---------------------------------------------------------------------------
+// A profile tag cannot take an identity attribute's name
+// ---------------------------------------------------------------------------
+
+// TestReservedAttrNames_AreTheExportedIdentity ties the names a profile tag may
+// not take to the attributes the identity actually builds. The collector reads
+// the set back from appendIdentityAttrs, so a dimension added there reserves
+// its name by the same edit; this fails if the two ever part company.
+func TestReservedAttrNames_AreTheExportedIdentity(t *testing.T) {
+	for field, attr := range keyDimensionAttrs {
+		assert.True(t, reservedTagName(attr),
+			"deviceKey.%s is exported as %q, so a profile tag of that name would overwrite it", field, attr)
+	}
+	assert.True(t, reservedTagName(rowIndexAttr), "a row identity is as overwritable as a device identity")
+	assert.Len(t, reservedAttrNames, len(keyDimensionAttrs)+1,
+		"the reserved set names an attribute the exported identity does not build")
+}
+
+// attrCount counts how often one attribute key appears in a point's set.
+// attrValue reads the first occurrence and the exporter keeps the last, so a
+// duplicate is only visible by counting.
+func attrCount(pt observedPoint, key string) int {
+	n := 0
+	for _, kv := range pt.attrs {
+		if string(kv.Key) == key {
+			n++
+		}
+	}
+	return n
+}
+
+// exportedAttrs resolves a point's attributes the way the export does:
+// OpenTelemetry sorts and de-duplicates last-value-wins, so a key appended
+// twice reaches the series once, carrying whichever value came last.
+func exportedAttrs(pt observedPoint) map[string]string {
+	kvs := make([]attribute.KeyValue, len(pt.attrs))
+	copy(kvs, pt.attrs)
+	set := attribute.NewSet(kvs...)
+	out := make(map[string]string, set.Len())
+	for _, kv := range set.ToSlice() {
+		out[string(kv.Key)] = kv.Value.Emit()
+	}
+	return out
+}
+
+// TestCollectTarget_DeviceTagCannotOverwriteIdentity covers a profile whose
+// top-level metric_tags take the names of identity attributes. Honouring them
+// would replace the policy, the address and the NetBox ID of every series the
+// profile produces, and two policies polling one endpoint would then export
+// series nothing tells apart.
+func TestCollectTarget_DeviceTagCannotOverwriteIdentity(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.71"
+		sysObjValue = "1.3.6.1.4.1.9999.71"
+		nameOID     = "1.3.6.1.2.1.1.5.0"
+		cpuOID      = sysObjValue + ".1.0"
+	)
+	p := profileWithOID(sysObjValue, "reserved-device-tag.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	p.MetricTags = []profiles.MetricTag{
+		{Tag: "policy", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
+		{Tag: "device_ip", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
+		{Tag: "netbox_id", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
+		{Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
+	}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		nameOID:        {nameOID: stringPDU(nameOID, "sensor-1")},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 5)},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	target := config.Target{Host: host, Port: 161, ID: "17"}
+	require.NoError(t, c.CollectTarget(context.Background(), target, mustAuth(), "p", DialOptions{}))
+
+	key := deviceKey{policy: "p", host: host, port: 161, id: "17"}
+	pts := c.testDeviceStoreKeyed(key)["snmp.cpuutil"]
+	require.Len(t, pts, 1)
+	exported := exportedAttrs(pts[0])
+	for attr, want := range map[string]string{"policy": "p", "device_ip": host, "netbox_id": "17"} {
+		assert.Equal(t, want, exported[attr], "the exported %s must be the collector's own", attr)
+		assert.Equal(t, 1, attrCount(pts[0], attr), "%s must be appended once", attr)
+	}
+	assert.Equal(t, "sensor-1", exported["SysName"], "a tag taking no reserved name still lands")
+
+	assert.Equal(t, 3, strings.Count(logs.String(), "Ignoring metric tag that would overwrite"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "tag=policy")
+	assert.Contains(t, logs.String(), "tag=device_ip")
+	assert.Contains(t, logs.String(), "tag=netbox_id")
+	assert.Contains(t, logs.String(), "profile=reserved-device-tag.yml")
+}
+
+// TestCollectTable_RowTagCannotOverwriteIdentity covers the same names declared
+// on a table entry, where they reach a row through the entry's own tags and
+// through a tag joined from another table. row_index is reserved with them: it
+// is the only thing telling one row of a table from another.
+func TestCollectTable_RowTagCannotOverwriteIdentity(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.72"
+		sysObjValue = "1.3.6.1.4.1.9999.72"
+		tableOID    = sysObjValue + ".1"
+		errColOID   = tableOID + ".1.20"
+		descrColOID = tableOID + ".1.2"
+		nameOID     = sysObjValue + ".2.1.1"
+	)
+	p := profileWithOID(sysObjValue, "reserved-row-tag.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "ifTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "ifOutErrors", OID: errColOID}},
+		MetricTags: []profiles.MetricTag{
+			{Tag: "row_index", Column: &profiles.TagColumn{OID: descrColOID, Name: "ifDescr"}},
+			{Tag: "if_desc", Column: &profiles.TagColumn{OID: descrColOID, Name: "ifDescr"}},
+			{
+				Tag:            "snmp_context",
+				Column:         &profiles.TagColumn{OID: nameOID, Name: "ifName"},
+				IndexTransform: profiles.IndexTransform{{Start: 0, End: 0}},
+			},
+		},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		errColOID:      {errColOID + ".7": counter32PDU(errColOID+".7", 10)},
+		descrColOID:    {descrColOID + ".7": stringPDU(descrColOID+".7", "eth0")},
+		nameOID:        {nameOID + ".7": stringPDU(nameOID+".7", "ge-0/0/7")},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	auth := &config.Authentication{ProtocolVersion: "SNMPv3", Username: "u", SecurityLevel: "noAuthNoPriv", ContextName: "vrf-a"}
+	key := deviceKey{policy: "p", host: host, port: 161, context: "vrf-a"}
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), auth, "p", DialOptions{}))
+
+	pts := c.testDeviceStoreKeyed(key)["snmp.ifouterrors"]
+	require.Len(t, pts, 1)
+	exported := exportedAttrs(pts[0])
+	assert.Equal(t, "7", exported[rowIndexAttr], "the row keeps the index the device answered at")
+	assert.Equal(t, 1, attrCount(pts[0], rowIndexAttr))
+	assert.Equal(t, "vrf-a", exported["snmp_context"], "a joined tag cannot take the context either")
+	assert.Equal(t, 1, attrCount(pts[0], "snmp_context"))
+	assert.Equal(t, "eth0", exported["if_desc"], "a tag taking no reserved name still lands")
+
+	assert.Equal(t, 2, strings.Count(logs.String(), "Ignoring metric tag that would overwrite"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "tag=row_index")
+	assert.Contains(t, logs.String(), "tag=snmp_context")
+	assert.Contains(t, logs.String(), "profile=reserved-row-tag.yml")
+}
+
+// TestReviewProfile_ReservedTagIsReportedOncePerProfile pins the report to the
+// once-per-profile review the module uses for every declaration it cannot
+// honour, rather than to each collection: a tag name is a property of the
+// profile, and every poll of every device carrying it would otherwise repeat.
+func TestReviewProfile_ReservedTagIsReportedOncePerProfile(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	p := &profiles.Profile{
+		RelPath:    "vendor/reserved.yml",
+		MetricTags: []profiles.MetricTag{{Tag: "policy", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.1.5.0", Name: "SysName"}}},
+	}
+	c := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
+	for range 3 {
+		c.reviewProfile(p)
+	}
+	assert.Equal(t, 1, strings.Count(logs.String(), "Ignoring metric tag that would overwrite"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "profile=vendor/reserved.yml")
+}
+
+// Nothing bundled declares a tag under a reserved name, so the drop takes no
+// bundled attribute away and this is an override-only guard. A profile added
+// with one would fail here rather than quietly lose the tag.
+func TestReservedTagName_NoBundledProfileDeclaresOne(t *testing.T) {
+	loader, err := profiles.LoadProfiles("", discardLogger)
+	require.NoError(t, err)
+	all, err := loader.AllResolved()
+	require.NoError(t, err)
+
+	var reserved []string
+	device, row := 0, 0
+	check := func(relPath string, tags []profiles.MetricTag, counter *int) {
+		for i := range tags {
+			*counter++
+			name := metricTagName(&tags[i], metricTagColumn(&tags[i]))
+			if reservedTagName(name) {
+				reserved = append(reserved, relPath+" "+name)
+			}
+		}
+	}
+	for _, p := range all {
+		check(p.RelPath, p.MetricTags, &device)
+		for _, entry := range p.Metrics {
+			check(p.RelPath, entry.MetricTags, &row)
+		}
+	}
+	assert.Empty(t, reserved)
+	// The declarations scanned, so a loader returning nothing cannot pass this
+	// silently. Re-vendoring the profile set moves them.
+	assert.Equal(t, 1208, device, "device-level tag declarations scanned")
+	assert.Equal(t, 3708, row, "row-level tag declarations scanned")
+}
+
 // TestCollectTarget_SameEndpointTwiceInOnePolicy covers a policy that targets
 // one host and port more than once. The entries differ only by NetBox ID and by
 // SNMPv3 context name, and each has to keep its own observations and its own
