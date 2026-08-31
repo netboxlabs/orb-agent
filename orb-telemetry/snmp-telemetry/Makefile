@@ -40,9 +40,9 @@ test-coverage:
 	@mkdir -p .coverage
 	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... > .coverage/test-events.json; \
 		status=$$?; \
-		grep -Ev "cmd" .coverage/test-events.json | tparse -format=markdown > .coverage/test-report.md || status=$$?; \
+		grep -Ev '"Package":"[^"]*/cmd"' .coverage/test-events.json | tparse -format=markdown > .coverage/test-report.md || status=$$?; \
 		exit $$status
-	@grep -Ev "cmd" .coverage/cover.out.tmp > .coverage/cover.out
+	@grep -Ev '/cmd/' .coverage/cover.out.tmp > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep -E '^total:' | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 	@gcov2lcov -infile=.coverage/cover.out -outfile=.coverage/lcov.info
 
