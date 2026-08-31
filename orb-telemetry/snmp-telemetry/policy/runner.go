@@ -250,7 +250,7 @@ func (r *Runner) buildCombinedError() error {
 
 // Start starts the policy runner
 func (r *Runner) Start() {
-	r.logger.Info("Starting policy runner", "policy", r.ctx.Value(policyKey))
+	r.logger.Info("Starting policy runner", "policy", config.SanitizeLogValue(r.name))
 	r.scheduler.Start()
 }
 
