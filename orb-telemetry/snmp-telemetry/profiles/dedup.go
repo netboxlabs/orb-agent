@@ -38,16 +38,55 @@ func symbolRefs(p *Profile) []symbolRef {
 	return out
 }
 
-// duplicateLosers returns the symbols that lose a contest for their metric
-// name, and the symbol that beat each of them.
+// Precedence is one declaration's standing when two of them claim a single
+// metric name: whether the profile inherited the entry the symbol sits in, and
+// the OID the symbol names.
+//
+// The name contest reads it to decide which declaration keeps the name. The
+// collector reads it as well, to decide which declaration's observation a row
+// keeps when two declarations retained by `allow_duplicate: true` both answer
+// for that row. One type serves both so the two cannot come to disagree about
+// which of two declarations is the more specific.
+type Precedence struct {
+	fromExtended bool
+	oid          string
+}
+
+// SymbolPrecedence returns the standing of one symbol declared in entry.
+func SymbolPrecedence(entry *MetricEntry, sym *Symbol) Precedence {
+	return Precedence{fromExtended: entry.FromExtended, oid: sym.OID}
+}
+
+// Beats reports whether p outranks other.
 //
 // The rule is upstream's. A symbol the profile declares itself beats one it
 // inherited through `extends:`, on the reading that a profile naming a device
 // knows better than the base profile it extends. Where that does not separate
 // them the longer OID wins, which is how a fully qualified instance beats the
-// column it sits in and how a more specific table beats a general one. A
-// symbol declaring `allow_duplicate: true` is never a loser, though it still
-// takes part in the contest and can still beat another symbol.
+// column it sits in and how a more specific table beats a general one.
+//
+// Two declarations neither rule separates report false, leaving the caller to
+// break the tie by declaration order. Deciding it here on anything else would
+// have to read the map the caller holds them in, and map order differs from one
+// process to the next.
+func (p Precedence) Beats(other Precedence) bool {
+	switch {
+	case other.fromExtended && !p.fromExtended:
+		return true
+	case p.fromExtended && !other.fromExtended:
+		return false
+	default:
+		return len(p.oid) > len(other.oid)
+	}
+}
+
+// duplicateLosers returns the symbols that lose a contest for their metric
+// name, and the symbol that beat each of them.
+//
+// Precedence.Beats holds the rule, and the first declared symbol keeps the name
+// where it does not separate two of them. A symbol declaring
+// `allow_duplicate: true` is never a loser, though it still takes part in the
+// contest and can still beat another symbol.
 //
 // A symbol whose ExportName is empty is never a loser. It names no metric, so
 // there is no series for a second symbol to take from it, and one bundled
@@ -66,14 +105,9 @@ func duplicateLosers(p *Profile, refs []symbolRef) map[symbolRef]symbolRef {
 			holder[name] = i
 			continue
 		}
-		heldExtended := p.Metrics[refs[held].entry].FromExtended
-		thisExtended := p.Metrics[r.entry].FromExtended
-		switch {
-		case heldExtended && !thisExtended:
-			holder[name] = i
-		case thisExtended && !heldExtended:
-			// The holder is the profile's own symbol. Keep it.
-		case len(sym.OID) > len(refs[held].get(p).OID):
+		heldRef := refs[held]
+		this := SymbolPrecedence(&p.Metrics[r.entry], sym)
+		if this.Beats(SymbolPrecedence(&p.Metrics[heldRef.entry], heldRef.get(p))) {
 			holder[name] = i
 		}
 	}

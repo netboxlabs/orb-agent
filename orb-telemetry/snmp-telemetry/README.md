@@ -271,9 +271,20 @@ one it inherited through `extends:`, so a vendor profile's own CPU reading
 displaces the generic one it inherits; where that does not separate them the
 longer OID wins, so a fully qualified instance beats the column it sits in. A
 symbol declaring `allow_duplicate: true` is never dropped, which is how a
-profile keeps several readings under one name on purpose. Dropping a symbol is
-logged at debug level, naming the metric, the symbol dropped and the symbol
-kept.
+profile offers alternative OIDs for one reading so that a device answering
+either of them reports it. Dropping a symbol is logged at debug level, naming
+the metric, the symbol dropped and the symbol kept.
+
+A device may answer more than one of those alternatives. Each row then keeps a
+single reading, chosen by the same two rules: the profile's own declaration
+before an inherited one, then the longer OID, and where neither separates them
+the first declared. A device answering both therefore reports the same source on
+every poll and across restarts, and the readings the alternatives differ on are
+not exported side by side. The reading kept brings its own `CPU_status` and
+`CPU_value` attributes with it, so the two are never mixed. Dropping a reading
+is logged at debug level, naming the metric and both values. The bundled
+`dell/dell-powerconnect.yml` is the case to picture: it reads CPU from a RADLAN
+OID and from a DNOS one, for switch generations that answer one or the other.
 
 A profile symbol may declare a `conversion` to turn a non-numeric OID value
 into a metric. The collector implements `to_one`, `hextoip`, `hwaddr`,

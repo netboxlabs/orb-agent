@@ -70,6 +70,80 @@ type observedPoint struct {
 	// are throttled independently, so retention has to carry one forward
 	// without disturbing the other.
 	decl string
+	// rowKey identifies the row the point describes: its attribute set without
+	// the status and display value the reading itself produced. It is what
+	// decides that two declarations of one metric name are talking about the
+	// same thing, and it is carried on the point because those two attributes
+	// cannot be told from the rest once they have been appended.
+	rowKey string
+	// prec is the standing of the declaration that produced the point. Two
+	// declarations answering for one row are settled with it.
+	prec profiles.Precedence
+}
+
+// pointSink accumulates one run's fresh points, at most one per metric name and
+// row.
+//
+// A profile can declare one metric name more than once. Upstream calls those
+// declarations duplicates and drops all but one, unless a declaration marks
+// itself `allow_duplicate: true`, which is how a profile offers alternative
+// OIDs for one reading so a device answering either of them reports it. Which
+// of them a device answers is a property of the device, and a device answering
+// two is answering the same question twice: appending both points would give a
+// single exported series two values in one collection cycle.
+//
+// So a row keeps one observation. The declaration Precedence ranks first keeps
+// it, and where precedence does not separate two declarations the first
+// collected keeps it, which is declaration order. A device answering both
+// therefore exports the same source's reading on every poll and across
+// restarts. Upstream resolves the same collision by writing each reading into a
+// map keyed on the metric name within a row, so it also ships one value, but
+// which one follows the map order it walked its OIDs in.
+type pointSink struct {
+	logger *slog.Logger
+	// points holds the run's observations by metric name, in collection order.
+	points map[string][]observedPoint
+	// held locates the point a metric name currently holds for a row, as
+	// metric name to row key to position in points[name].
+	held map[string]map[string]int
+}
+
+func newPointSink(logger *slog.Logger) *pointSink {
+	return &pointSink{
+		logger: logger,
+		points: make(map[string][]observedPoint),
+		held:   make(map[string]map[string]int),
+	}
+}
+
+// add records one observation, unless another declaration of the same metric
+// name already holds the row with a better claim to it.
+func (s *pointSink) add(metricName string, pt observedPoint) {
+	rows := s.held[metricName]
+	if rows == nil {
+		rows = make(map[string]int)
+		s.held[metricName] = rows
+	}
+	at, taken := rows[pt.rowKey]
+	if !taken {
+		rows[pt.rowKey] = len(s.points[metricName])
+		s.points[metricName] = append(s.points[metricName], pt)
+		return
+	}
+	// The row is taken. Whichever of the two declarations ranks first holds it,
+	// and the pair is swapped so the log below names them by what happened to
+	// them rather than by which arrived first.
+	held := s.points[metricName][at]
+	if pt.prec.Beats(held.prec) {
+		s.points[metricName][at] = pt
+		held, pt = pt, held
+	}
+	s.logger.Debug("More than one answer for one row of an SNMP metric, keeping one point",
+		"metric_name", config.SanitizeLogValue(metricName),
+		"kept_declaration", config.SanitizeLogValue(held.decl),
+		"kept_value", held.value,
+		"dropped_declaration", config.SanitizeLogValue(pt.decl),
+		"dropped_value", pt.value)
 }
 
 // symbolDeclKey identifies the declaration a point came from, and the poll
@@ -106,6 +180,11 @@ func (t throttledDecls) add(metricName, decl string) {
 // Two points that encode alike are one exported series whichever declaration
 // produced them.
 //
+// The collection paths call it on a point's row attributes to fill
+// observedPoint.rowKey, before the status and display value of the reading are
+// appended. Two readings of one row differ in those two attributes and in
+// nothing else, so a key taken after them would call them two series.
+//
 // The attributes are copied because building the set sorts what it is given,
 // and a point keeps the attribute order it was collected in.
 func attrSetKey(attrs []attribute.KeyValue) string {
@@ -124,24 +203,28 @@ func attrSetKey(attrs []attribute.KeyValue) string {
 // told apart by symbolDeclKey, which is the same key their poll windows are
 // held under, so what was recorded as throttled is what is carried.
 //
-// A retained point whose attribute set a fresh point already carries is dropped
-// as well. The attribute set is the exported series, so keeping both would
-// observe one series twice in a single collection cycle.
+// A retained point whose row a point already in the slice describes is dropped
+// as well, whether that point is a fresh one or another retained one. A row
+// carries one observation of a metric, so keeping both would observe the metric
+// twice for one row in a single collection cycle, and would do it with the
+// stale half of the pair. A declaration that has been overtaken this way takes
+// the row back on the run that polls it again.
 func retainThrottled(fresh, prev []observedPoint, throttled map[string]struct{}) []observedPoint {
 	if len(prev) == 0 {
 		return fresh
 	}
-	freshKeys := make(map[string]struct{}, len(fresh))
+	taken := make(map[string]struct{}, len(fresh)+len(prev))
 	for i := range fresh {
-		freshKeys[attrSetKey(fresh[i].attrs)] = struct{}{}
+		taken[fresh[i].rowKey] = struct{}{}
 	}
 	for _, pt := range prev {
 		if _, ok := throttled[pt.decl]; !ok {
 			continue
 		}
-		if _, taken := freshKeys[attrSetKey(pt.attrs)]; taken {
+		if _, held := taken[pt.rowKey]; held {
 			continue
 		}
+		taken[pt.rowKey] = struct{}{}
 		fresh = append(fresh, pt)
 	}
 	return fresh
@@ -427,10 +510,10 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 
 	baseAttrs := c.appendDeviceTags(ctx, walker, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
 
-	// localBuf accumulates fresh observations for this run.
+	// fresh accumulates this run's observations, one per metric name and row.
 	// throttled records the declarations skipped because poll_time_sec has not
 	// elapsed, per metric name.
-	localBuf := make(map[string][]observedPoint)
+	fresh := newPointSink(c.logger)
 	throttled := make(throttledDecls)
 
 	for _, entry := range profile.Metrics {
@@ -439,14 +522,14 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		}
 		switch {
 		case entry.Symbol != nil:
-			c.collectScalar(ctx, walker, entry.Symbol, baseAttrs, key, localBuf, throttled)
+			c.collectScalar(ctx, walker, entry.Symbol, profiles.SymbolPrecedence(&entry, entry.Symbol), baseAttrs, key, fresh, throttled)
 		case entry.Table != nil:
-			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttled)
+			c.collectTable(ctx, walker, &entry, baseAttrs, key, fresh, throttled)
 		case len(entry.Symbols) > 0 && groupedSymbolsAreTableColumns(&entry):
 			// Columns of a table the profile names no `table:` root for. The
 			// rows still have to be joined by index, or the entry's row-scoped
 			// metadata is lost and the rows carry no identity.
-			c.collectTable(ctx, walker, &entry, baseAttrs, key, localBuf, throttled)
+			c.collectTable(ctx, walker, &entry, baseAttrs, key, fresh, throttled)
 		case len(entry.Symbols) > 0:
 			// Scalars grouped under `symbols:` with no `table:`. One entry can
 			// carry dozens, each a request of its own, so the deadline is
@@ -455,7 +538,8 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 				if err := ctx.Err(); err != nil {
 					return err
 				}
-				c.collectScalar(ctx, walker, &entry.Symbols[i], baseAttrs, key, localBuf, throttled)
+				sym := &entry.Symbols[i]
+				c.collectScalar(ctx, walker, sym, profiles.SymbolPrecedence(&entry, sym), baseAttrs, key, fresh, throttled)
 			}
 		}
 	}
@@ -478,8 +562,8 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	// and replacing the name would drop the series the other one owns.
 	c.storeMu.Lock()
 	prevStore := c.deviceStore[key]
-	newStore := make(map[string][]observedPoint, len(localBuf)+len(throttled))
-	for name, pts := range localBuf {
+	newStore := make(map[string][]observedPoint, len(fresh.points)+len(throttled))
+	for name, pts := range fresh.points {
 		newStore[name] = pts
 	}
 	for name, decls := range throttled {
@@ -727,7 +811,7 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 	}
 }
 
-// collectScalar collects a single scalar OID metric into localBuf.
+// collectScalar collects a single scalar OID metric into the run's points.
 // Records the metric name in throttledMetrics when poll_time_sec has not elapsed.
 //
 // A returned instance that is not the symbol's scalar instance is a table row,
@@ -735,7 +819,7 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 // profile cannot always say which entries are columns; the OID the device
 // answers at can. Without the identity every row carries the same attribute
 // set and the export keeps one arbitrary value.
-func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttled throttledDecls) {
+func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, prec profiles.Precedence, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
 	if unusableSymbolReason(sym) != "" {
 		// Reported once per profile by reviewProfile. Skipping before the walk
 		// is what keeps an empty OID from being issued as a whole-tree walk, and
@@ -769,6 +853,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		if rowIdx, indexed := scalarRowIndex(fullOID, sym.OID); indexed {
 			attrs = append(attrs, attribute.String("row_index", rowIdx))
 		}
+		rowKey := attrSetKey(attrs)
 		if status := enumStatusName(sym, val); status != "" {
 			attrs = append(attrs, attribute.String(name+"_status", status))
 		}
@@ -776,7 +861,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 			attrs = append(attrs, attribute.String(name+"_value", strVal))
 		}
 
-		localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: attrs, decl: decl})
+		fresh.add(metricName, observedPoint{value: val, attrs: attrs, decl: decl, rowKey: rowKey, prec: prec})
 	}
 }
 
@@ -1052,7 +1137,7 @@ type joinedTag struct {
 }
 
 // collectTable collects all columns in an SNMP table, joining metric and tag columns by row index.
-func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, localBuf map[string][]observedPoint, throttled throttledDecls) {
+func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
 	// --- Phase 1: decide which symbols need polling this run ---
 	type symState struct {
 		sym       *profiles.Symbol
@@ -1232,6 +1317,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 		cond, hasCondition := conditions[decl]
 		name := sym.ExportName()
 		metricName := sym.MetricName()
+		prec := profiles.SymbolPrecedence(entry, sym)
 
 		for fullOID, pdu := range pdus {
 			if err := ctx.Err(); err != nil {
@@ -1280,6 +1366,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 					rowAttrs = append(rowAttrs, attribute.String(jt.name, v))
 				}
 			}
+			rowKey := attrSetKey(rowAttrs)
 			if status := enumStatusName(sym, val); status != "" {
 				rowAttrs = append(rowAttrs, attribute.String(name+"_status", status))
 			}
@@ -1287,7 +1374,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				rowAttrs = append(rowAttrs, attribute.String(name+"_value", strVal))
 			}
 
-			localBuf[metricName] = append(localBuf[metricName], observedPoint{value: val, attrs: rowAttrs, decl: decl})
+			fresh.add(metricName, observedPoint{value: val, attrs: rowAttrs, decl: decl, rowKey: rowKey, prec: prec})
 		}
 	}
 }

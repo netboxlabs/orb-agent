@@ -3087,6 +3087,184 @@ func TestCollectTarget_BundledFirepowerFiltersHighCapacityPools(t *testing.T) {
 	assert.Equal(t, int64(400), free[0].value)
 }
 
+// ---------------------------------------------------------------------------
+// Alternative declarations of one metric name: one row, one point
+// ---------------------------------------------------------------------------
+
+// The bundled PowerConnect profile declares CPU twice, on the RADLAN OID the
+// older switches answer and on the DNOS OID the newer ones do, both marked
+// `allow_duplicate: true` so neither is dropped. A device answering both used
+// to append two points carrying one attribute set, which is two values for a
+// single exported series.
+func TestCollectTarget_BundledDellCPUAlternativesEmitOnePoint(t *testing.T) {
+	const (
+		host    = "10.0.0.90"
+		radlan  = "1.3.6.1.4.1.89.1.8.0"
+		dnos    = "1.3.6.1.4.1.674.10895.5000.2.6132.1.1.1.1.4.9.0"
+		sysOIDV = "1.3.6.1.4.1.674.10895.3017"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysOIDV)},
+		radlan:         {radlan: intPDU(radlan, 41)},
+		dnos:           {dnos: intPDU(dnos, 42)},
+	}}
+
+	var logs bytes.Buffer
+	c := newCollector(walkerFactory(w), bundledProfile(t, "dell/dell-powerconnect.yml"))
+	c.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, pts, 1, "two declarations of one metric name are one series")
+	assert.Equal(t, int64(42), pts[0].value,
+		"the more specific declaration keeps the row it shares")
+
+	// The reading that was dropped is the one an operator would go looking for,
+	// so both of them are named.
+	assert.Contains(t, logs.String(), "kept_value=42")
+	assert.Contains(t, logs.String(), "dropped_value=41")
+	assert.Contains(t, logs.String(), "dropped_declaration=snmp.cpu|"+radlan+"@60")
+}
+
+// The same two declarations, with the DNOS OID answering the DisplayString its
+// MIB defines. Its regexp conversion turns that into a number and keeps the
+// digits it read as a `CPU_value` attribute, so the two points differ in an
+// attribute the reading produced rather than in the row they describe. They are
+// still one row of one metric, so one of them is kept.
+func TestCollectTarget_BundledDellCPUAlternativeKeepsItsOwnDisplayValue(t *testing.T) {
+	const (
+		host    = "10.0.0.91"
+		radlan  = "1.3.6.1.4.1.89.1.8.0"
+		dnos    = "1.3.6.1.4.1.674.10895.5000.2.6132.1.1.1.1.4.9.0"
+		sysOIDV = "1.3.6.1.4.1.674.10895.3017"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysOIDV)},
+		radlan:         {radlan: intPDU(radlan, 41)},
+		dnos:           {dnos: stringPDU(dnos, "5 Secs ( 6.00%) 60 Secs ( 7.00%) 300 Secs ( 8.00%)")},
+	}}
+
+	c := newCollector(walkerFactory(w), bundledProfile(t, "dell/dell-powerconnect.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, pts, 1, "a decoded display value does not make a second row")
+	assert.Equal(t, int64(7), pts[0].value, "the 60 second reading is the one the conversion selects")
+	assert.Equal(t, "7", attrValue(pts[0], "CPU_value"),
+		"the point that keeps the row keeps its own display value")
+}
+
+// Declaration order does not decide the row. Inherited entries are prepended,
+// so the profile's own declaration is always the later one, and keeping
+// whichever answered first would hand every shared row to the base profile the
+// name contest says loses.
+func TestCollectTarget_OwnDeclarationKeepsTheRowFromAnInheritedOne(t *testing.T) {
+	const (
+		host        = "10.0.0.92"
+		sysObjValue = "1.3.6.1.4.1.9999.92"
+		inherited   = "1.3.6.1.4.1.9999.92.1.0"
+		own         = "1.3.6.1.4.1.9999.92.2.0"
+	)
+	p := profileWithOID(sysObjValue, "alternatives.yml", []profiles.MetricEntry{
+		{
+			FromExtended: true,
+			Symbol:       &profiles.Symbol{Name: "inheritedCPU", OID: inherited, Tag: "CPU", AllowDup: true},
+		},
+		{
+			Symbol: &profiles.Symbol{Name: "ownCPU", OID: own, Tag: "CPU", AllowDup: true},
+		},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		inherited:      {inherited: intPDU(inherited, 11)},
+		own:            {own: intPDU(own, 22)},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, pts, 1, "two declarations of one metric name are one series")
+	assert.Equal(t, int64(22), pts[0].value,
+		"the profile's own declaration keeps the row, whatever order the two were collected in")
+}
+
+// Where neither rule separates two declarations the first one collected keeps
+// the row, so a device answering both reports the same source on every poll.
+func TestCollectTarget_FirstDeclarationKeepsARowNothingElseSeparates(t *testing.T) {
+	const (
+		host        = "10.0.0.94"
+		sysObjValue = "1.3.6.1.4.1.9999.94"
+		firstOID    = "1.3.6.1.4.1.9999.94.1.0"
+		secondOID   = "1.3.6.1.4.1.9999.94.2.0"
+	)
+	p := profileWithOID(sysObjValue, "alternatives.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "firstCPU", OID: firstOID, Tag: "CPU", AllowDup: true}},
+		{Symbol: &profiles.Symbol{Name: "secondCPU", OID: secondOID, Tag: "CPU", AllowDup: true}},
+	})
+	require.Len(t, secondOID, len(firstOID), "the two OIDs have to be the same length for the tie to arise")
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		firstOID:       {firstOID: intPDU(firstOID, 11)},
+		secondOID:      {secondOID: intPDU(secondOID, 22)},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, pts, 1, "two declarations of one metric name are one series")
+	assert.Equal(t, int64(11), pts[0].value, "the first declaration keeps the row")
+}
+
+// Retention does not restore an alternative a fresh one has taken the row from.
+// The two declarations here carry different poll periods, so a run can find one
+// throttled while the other answers, and the throttled one left a point behind.
+func TestCollectTarget_ThrottledAlternativeDoesNotDoubleAFreshRow(t *testing.T) {
+	const (
+		host        = "10.0.0.93"
+		sysObjValue = "1.3.6.1.4.1.9999.93"
+		slow        = "1.3.6.1.4.1.9999.93.22.0"
+		fast        = "1.3.6.1.4.1.9999.93.1.0"
+	)
+	p := profileWithOID(sysObjValue, "alternatives.yml", []profiles.MetricEntry{
+		// The longer OID outranks the shorter one, so the slow declaration owns
+		// the row on a run that polls both.
+		{Symbol: &profiles.Symbol{Name: "slowCPU", OID: slow, Tag: "CPU", AllowDup: true, PollTimeSec: 300}},
+		{Symbol: &profiles.Symbol{Name: "fastCPU", OID: fast, Tag: "CPU", AllowDup: true, Conversion: "to_one"}},
+	})
+	makeWalker := func(slowVal int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			slow:           {slow: intPDU(slow, slowVal)},
+			fast:           {fast: stringPDU(fast, "busy")},
+		}}
+	}
+
+	c := newCollector(nil, p)
+	ctx := context.Background()
+
+	c.clientFactory = walkerFactory(makeWalker(50))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+	pts := c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, pts, 1, "the run that polls both keeps one point")
+	require.Equal(t, int64(50), pts[0].value)
+
+	// Seconds later the slow declaration is not due. Its point is the one the
+	// store holds, and the fresh point of the fast declaration describes the
+	// same row.
+	c.clientFactory = walkerFactory(makeWalker(60))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts = c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, pts, 1, "a carried point does not join a fresh point on one row")
+	assert.Equal(t, int64(1), pts[0].value, "the declaration that answered this run holds the row")
+}
+
 // TestCollectTarget_ApplicableConditionIsNotReported checks that the
 // once-per-profile report stops naming a condition the collector now applies.
 func TestCollectTarget_ApplicableConditionIsNotReported(t *testing.T) {
