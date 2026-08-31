@@ -3,6 +3,8 @@ package profiles
 import (
 	"bytes"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -447,8 +449,89 @@ metrics:
 		}
 	}
 	require.Len(t, matched, 1, "logs: %s", logs.String())
-	assert.Contains(t, matched[0], "metric_name=CPU")
+	assert.Contains(t, matched[0], "metric_name=snmp.cpu",
+		"the contested key is the exported metric name, which is what went missing")
 	assert.Contains(t, matched[0], "dropped_symbol=laLoadInt1Min")
 	assert.Contains(t, matched[0], "kept_symbol=vendorCPU")
 	assert.Contains(t, matched[0], "file=device.yml")
+}
+
+// The collector lowercases the export name when it builds the metric name, so
+// two export names differing only in case are one exported series. The contest
+// has to read the name the collector exports under, or both symbols survive and
+// observe that one series from two OIDs.
+func TestResolve_TheContestReadsTheLowercasedExportName(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "device.yml", `
+sysobjectid: 1.3.6.1.4.1.9.1.46
+metrics:
+  - MIB: TEST-MIB
+    symbols:
+      - {name: vendorLoad, OID: 1.2.3.4, tag: CPU}
+      - {name: hostLoad, OID: 1.2.3.4.5, tag: cpu}
+`)
+	l, err := NewLoader(dir, silentLogger)
+	require.NoError(t, err)
+
+	p, err := l.Resolve("device.yml")
+	require.NoError(t, err)
+	require.Len(t, p.Metrics, 1)
+	assert.Equal(t, []string{"hostLoad"}, declaredNames(p),
+		"one series between them, decided by the longer OID")
+	assert.Equal(t, []string{"cpu"}, exportNames(p))
+}
+
+// The case a profile writes still decides nothing else: a symbol keeps the
+// spelling it declares, since that spelling names its status and value
+// attributes.
+func TestResolve_TheWinnerKeepsTheCaseItDeclares(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "device.yml", `
+sysobjectid: 1.3.6.1.4.1.9.1.46
+metrics:
+  - MIB: TEST-MIB
+    symbols:
+      - {name: vendorLoad, OID: 1.2.3.4.5, tag: CPU}
+      - {name: hostLoad, OID: 1.2.3.4, tag: cpu}
+`)
+	l, err := NewLoader(dir, silentLogger)
+	require.NoError(t, err)
+
+	p, err := l.Resolve("device.yml")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"CPU"}, exportNames(p))
+}
+
+// No bundled profile declares one export name in two cases, so reading the
+// contest off the lowercased name groups the bundle's symbols exactly as the
+// declared spelling did and no bundled outcome moves. Only an override can see
+// the change.
+func TestResolve_NoBundledProfileDeclaresOneNameInTwoCases(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	inspected := 0
+	for _, rel := range slices.Sorted(maps.Keys(l.byFile)) {
+		// The merged profile rather than the pruned one: the contest runs
+		// before pruning, so that is where the grouping has to agree.
+		merged, err := l.resolvePath(rel)
+		require.NoError(t, err)
+		spellings := make(map[string]map[string]struct{})
+		for _, ref := range symbolRefs(merged) {
+			name := ref.get(merged).ExportName()
+			if name == "" {
+				continue
+			}
+			inspected++
+			lower := strings.ToLower(name)
+			if spellings[lower] == nil {
+				spellings[lower] = make(map[string]struct{}, 1)
+			}
+			spellings[lower][name] = struct{}{}
+		}
+		for lower, set := range spellings {
+			assert.Len(t, set, 1, "%s declares %q in more than one case: %v", rel, lower, set)
+		}
+	}
+	assert.Greater(t, inspected, 1000, "the sweep has to have read the bundle to say anything")
 }

@@ -729,7 +729,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		return
 	}
 	name := sym.ExportName()
-	metricName := buildMetricName(name)
+	metricName := sym.MetricName()
 	decl := symbolDeclKey(sym)
 	if !c.pollDue(key, sym.OID, sym.PollTimeSec) {
 		throttled.add(metricName, decl)
@@ -1057,7 +1057,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			anyActive = true
 		} else {
 			states = append(states, symState{sym: sym, throttled: true})
-			throttled.add(buildMetricName(sym.ExportName()), symbolDeclKey(sym))
+			throttled.add(sym.MetricName(), symbolDeclKey(sym))
 		}
 	}
 	if !anyActive {
@@ -1208,7 +1208,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 
 		cond, hasCondition := conditions[sym.OID]
 		name := sym.ExportName()
-		metricName := buildMetricName(name)
+		metricName := sym.MetricName()
 		decl := symbolDeclKey(sym)
 
 		for fullOID, pdu := range pdus {
@@ -1393,13 +1393,6 @@ func scalarRowIndex(fullOID, symbolOID string) (string, bool) {
 		return "", false
 	}
 	return idx, true
-}
-
-// buildMetricName converts a symbol's export name to an OTLP metric name.
-// The name is the symbol's `tag:` where it declares one, so a tag renames the
-// metric rather than adding a dimension to it.
-func buildMetricName(exportName string) string {
-	return "snmp." + strings.ToLower(exportName)
 }
 
 // metricTagColumn returns the tag column from a MetricTag, handling the

@@ -226,7 +226,7 @@ func TestPduToValue_OctetString_NonNumeric(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests: extractRowIndex / buildMetricName
+// Unit tests: extractRowIndex
 // ---------------------------------------------------------------------------
 
 func TestExtractRowIndex(t *testing.T) {
@@ -246,11 +246,6 @@ func TestExtractRowIndex(t *testing.T) {
 	idx, indexed = rowIndex("1.2.3.4", "1.2.3.4")
 	assert.Equal(t, "1.2.3.4", idx)
 	assert.False(t, indexed)
-}
-
-func TestBuildMetricName(t *testing.T) {
-	assert.Equal(t, "snmp.ifouterrors", buildMetricName("ifOutErrors"))
-	assert.Equal(t, "snmp.syscpuutil", buildMetricName("sysCPUUtil"))
 }
 
 // ---------------------------------------------------------------------------
@@ -4259,7 +4254,7 @@ func TestCollectTarget_ScalarOnlyProfilesGainNoRowIdentity(t *testing.T) {
 						oid += ".0"
 					}
 					agent.vars[oid] = intPDU(oid, 42)
-					want[buildMetricName(sym.Name)] = struct{}{}
+					want[sym.MetricName()] = struct{}{}
 				}
 			}
 			require.NotEmpty(t, want)

@@ -603,3 +603,10 @@ metrics:
 	assert.True(t, p.Metrics[1].Symbols[0].AllowDup)
 	assert.False(t, p.Metrics[1].Symbols[1].AllowDup, "a symbol that does not declare it does not get it")
 }
+
+func TestSymbol_MetricName(t *testing.T) {
+	assert.Equal(t, "snmp.ifouterrors", (&Symbol{Name: "ifOutErrors"}).MetricName())
+	assert.Equal(t, "snmp.cpu", (&Symbol{Name: "laLoadInt1Min", Tag: "CPU"}).MetricName())
+	assert.Equal(t, "snmp.cpu", (&Symbol{Name: "hostLoad", Tag: "cpu"}).MetricName(),
+		"two export names differing only in case are one metric name")
+}

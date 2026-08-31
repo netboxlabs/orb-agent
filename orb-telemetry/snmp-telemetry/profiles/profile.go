@@ -312,6 +312,21 @@ func (s *Symbol) ExportName() string {
 	return s.Name
 }
 
+// metricNamePrefix namespaces every metric the collector exports from a profile.
+const metricNamePrefix = "snmp."
+
+// MetricName returns the OTLP metric name the symbol's points are exported
+// under: its export name, lowercased, under the collector's prefix.
+//
+// This is the one place the exported name is decided. The collector writes
+// under it and the duplicate contest is held on it, so a profile declaring
+// `CPU` beside `cpu` is two symbols claiming one series and the contest sees
+// that. Two rules would drift, and one of them would let those two symbols
+// observe the series twice.
+func (s *Symbol) MetricName() string {
+	return metricNamePrefix + strings.ToLower(s.ExportName())
+}
+
 // Table identifies an SNMP table by name and root OID.
 type Table struct {
 	Name string `yaml:"name"`

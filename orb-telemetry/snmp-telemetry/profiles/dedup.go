@@ -52,11 +52,15 @@ func symbolRefs(p *Profile) []symbolRef {
 // A symbol whose ExportName is empty is never a loser. It names no metric, so
 // there is no series for a second symbol to take from it, and one bundled
 // profile declares such a symbol beside a real one.
+//
+// The contest is held on Symbol.MetricName, which is what the collector exports
+// under, rather than on the name as written. Two symbols spelling one name in
+// two cases are one series, so they contest it.
 func duplicateLosers(p *Profile, refs []symbolRef) map[symbolRef]symbolRef {
 	holder := make(map[string]int, len(refs))
 	for i, r := range refs {
 		sym := r.get(p)
-		name := sym.ExportName()
+		name := sym.MetricName()
 		held, seen := holder[name]
 		if !seen {
 			holder[name] = i
@@ -84,7 +88,7 @@ func duplicateLosers(p *Profile, refs []symbolRef) map[symbolRef]symbolRef {
 		if winners[i] || sym.AllowDup || sym.ExportName() == "" {
 			continue
 		}
-		losers[r] = refs[holder[sym.ExportName()]]
+		losers[r] = refs[holder[sym.MetricName()]]
 	}
 	return losers
 }
@@ -104,6 +108,9 @@ func duplicateLosers(p *Profile, refs []symbolRef) map[symbolRef]symbolRef {
 //     namespace, where a name shared across that boundary is still one series,
 //     so it holds a single contest. No bundled collision straddles the
 //     boundary.
+//   - Upstream contests the name as written. This collector lowercases it to
+//     build the metric name, so the contest reads the lowercased name and two
+//     spellings of one name meet. No bundled profile writes one name twice.
 //   - Upstream keys its symbols by OID, so two symbols that neither rule
 //     separates are decided by map iteration order and the loser differs from
 //     one process to the next. The first declared wins here instead, so a
@@ -127,7 +134,7 @@ func pruneDuplicates(p *Profile, logger *slog.Logger) *Profile {
 		}
 		dropped, kept := ref.get(p), winner.get(p)
 		logger.Debug("SNMP profile declares one metric name twice, dropping the losing symbol",
-			"metric_name", config.SanitizeLogValue(dropped.ExportName()),
+			"metric_name", config.SanitizeLogValue(dropped.MetricName()),
 			"dropped_symbol", config.SanitizeLogValue(dropped.Name),
 			"dropped_oid", config.SanitizeLogValue(dropped.OID),
 			"kept_symbol", config.SanitizeLogValue(kept.Name),
