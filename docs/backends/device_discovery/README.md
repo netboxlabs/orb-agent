@@ -213,6 +213,28 @@ The scope defines a list of devices that can be accessed and pulled data.
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when hostname is a subnet or IP range. |
 
+#### Subnet and range expansion
+
+A CIDR excludes its network and broadcast addresses, so `10.0.0.0/24` is 254
+addresses and `10.0.0.0/22` is 1022. A `/31` and a `/32` have no such pair to
+exclude and stay 2 and 1. IPv6 has no broadcast, so only the network address is
+excluded: `fd00::/126` is 3. A range excludes nothing, because someone who
+wrote `0` and `255` meant them, so `10.0.0.0-255` is 256.
+
+A policy may expand to at most **65536** addresses in total, counted across all
+its scope entries before any expansion happens. The budget spans the policy
+rather than one entry, so sixteen `/16` scopes are refused together even though
+each is under the limit on its own. A policy over the budget is rejected when it
+is written, naming the total and the limit:
+
+```
+policy scopes expand to 1048544 addresses in total, more than the limit of 65536
+```
+
+A single entry over the limit is also refused at expansion time as a backstop:
+it is skipped, named in an error, and recorded as a failed run, leaving the rest
+of the policy unaffected.
+
 ### SSH Configuration and Jumphost Support
 
 For advanced SSH scenarios including bastion/jumphost connectivity, VRF-aware connections, and multi-hop SSH configurations, see the dedicated guide: [SSH Configuration and Jumphost Support](./ssh.md).

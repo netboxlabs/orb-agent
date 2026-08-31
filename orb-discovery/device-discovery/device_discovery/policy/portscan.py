@@ -113,6 +113,53 @@ def expand_hostnames(hostname: str) -> tuple[list[str], bool]:
     return [sanitized_hostname], False
 
 
+def _network_host_count(network) -> int:
+    """
+    Host count for a network, without materializing anything.
+
+    Mirrors what ``network.hosts()`` yields. A /31 and a /32 have no network and
+    broadcast pair to exclude and stay 2 and 1, and the same holds for /127 and
+    /128. IPv6 has no broadcast, so only the network address is excluded.
+    """
+    if network.prefixlen >= network.max_prefixlen - 1:
+        return network.num_addresses
+    return network.num_addresses - (2 if network.version == 4 else 1)
+
+
+def count_hostnames(hostname: str) -> int:
+    """
+    Report how many addresses ``expand_hostnames`` would return, without expanding.
+
+    A policy is charged against this before any target is expanded, so the two
+    must never disagree about what a target means: this follows the same
+    dispatch, calls the same endpoint parser, and treats anything unparseable as
+    the single hostname the expander falls back to.
+
+    The count is reported for targets the expander refuses as well. A refused
+    target still has a size, and the size is exactly what the budget needs in
+    order to refuse it before anything is allocated.
+    """
+    sanitized_hostname = hostname.strip()
+
+    if "-" in sanitized_hostname:
+        start_part, end_part = sanitized_hostname.split("-", 1)
+        start_ip = _parse_range_endpoint(start_part)
+        end_ip = _parse_range_endpoint(end_part, base=start_ip)
+        if not start_ip or not end_ip or start_ip.version != end_ip.version:
+            return 1
+        start_int, end_int = sorted((int(start_ip), int(end_ip)))
+        return end_int - start_int + 1
+
+    if "/" in sanitized_hostname:
+        try:
+            network = ipaddress.ip_network(sanitized_hostname, strict=False)
+        except ValueError:
+            return 1
+        return _network_host_count(network)
+
+    return 1
+
+
 def _probe_port(hostname: str, port: int, timeout: float) -> bool:
     """Return True if the TCP port is reachable using sockets."""
     try:

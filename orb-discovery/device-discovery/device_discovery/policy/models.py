@@ -10,8 +10,12 @@ from enum import Enum
 from typing import Any, Literal
 
 from croniter import CroniterBadCronError, croniter
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
+from device_discovery.policy.portscan import (
+    MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
+)
+from device_discovery.policy.portscan import count_hostnames
 from device_discovery.policy.unknown_keys import WarnUnknownKeys
 from device_discovery.stack_naming import (
     DEFAULT_STACK_MEMBER_TEMPLATE,
@@ -147,6 +151,11 @@ class PrefixParameters(IpamParameters):
 #: string means "no value was configured" and is suppressed rather than sent.
 #: See translate_device and the prefix-scope cascade in interface.py.
 UNDEFINED_PLACEHOLDER = "undefined"
+
+
+#: Re-exported so a policy's budget and a single target's backstop are the same
+#: number, and so callers have one place to import it from.
+MAX_EXPANDED_HOSTS = _MAX_EXPANDED_HOSTS
 
 
 class Defaults(BaseModel):
@@ -478,6 +487,32 @@ class Policy(BaseModel):
 
     config: Config | None = Field(default=None, description="Configuration data")
     scope: list[Napalm]
+
+    @model_validator(mode="after")
+    def validate_expansion_budget(self):
+        """
+        Reject a policy whose scopes together expand past MAX_EXPANDED_HOSTS.
+
+        The budget spans the policy rather than one scope entry. A per-entry
+        ceiling bounds one entry and nothing else: sixteen /16 scopes each sit
+        under it while the policy expands to about a million addresses, and
+        every one of those becomes a port-scan target and then possibly an SSH
+        session. There is one number rather than a per-entry ceiling and a
+        larger policy-wide one, so there is one thing to reason about.
+
+        Charged from ``count_hostnames``, which reads a target the way
+        ``expand_hostnames`` does rather than parsing the notation a second
+        time, so no target shape can mean one thing here and another to the
+        expander. Rejecting at validation means a policy this large fails the
+        write instead of failing later inside a scheduled job.
+        """
+        total = sum(count_hostnames(entry.hostname) for entry in self.scope)
+        if total > MAX_EXPANDED_HOSTS:
+            raise ValueError(
+                f"policy scopes expand to {total} addresses in total, "
+                f"more than the limit of {MAX_EXPANDED_HOSTS}"
+            )
+        return self
 
 
 class PolicyRequest(BaseModel):

@@ -210,3 +210,50 @@ def test_expand_hostnames_keeps_small_ipv6_prefixes():
     assert parsed is True
     assert len(hosts) == 255
     assert hosts[0] == "2001:db8::1"
+
+
+def test_count_hostnames_agrees_with_expand_for_every_shape():
+    """
+    Counting and expanding must never disagree about what a target means.
+
+    The policy budget is charged from count_hostnames against notation the
+    expander has not run yet, so a shape the two read differently would let a
+    policy pay one price and allocate another. Cross-checked here rather than
+    asserted per-shape, so a new branch in one has to be added to the other.
+    """
+    shapes = [
+        "10.0.0.0/24",
+        "10.0.0.0/22",
+        "10.0.0.4/31",
+        "10.0.0.5/32",
+        "fd00::/126",
+        "2001:db8::/120",
+        "10.0.0.0-255",
+        "192.168.1.10-20",
+        "10.0.0.3-10.0.0.1",
+        "192.168.3.22/28-192.168.4.22/28",
+        "router-alpha-beta",
+        "plain-hostname.example.com",
+        "10.0.0.1",
+    ]
+
+    for shape in shapes:
+        expanded, _ = portscan.expand_hostnames(shape)
+        assert portscan.count_hostnames(shape) == len(expanded), (
+            f"{shape}: count and expand disagree"
+        )
+
+
+def test_count_hostnames_does_not_materialize_an_oversized_target():
+    """
+    A target the expander refuses is still counted, and counted cheaply.
+
+    The whole point of counting is to price a policy before paying for it, so
+    the count has to be available for exactly the targets expansion would
+    decline. A /64 has 2**64 addresses and must come back as that number
+    rather than as the empty list the expander returns.
+    """
+    # Host counts, matching what expansion would have returned: IPv6 drops the
+    # network address, IPv4 drops network and broadcast.
+    assert portscan.count_hostnames("2001:db8::/64") == 2**64 - 1
+    assert portscan.count_hostnames("0.0.0.0/0") == 2**32 - 2
