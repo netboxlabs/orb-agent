@@ -176,6 +176,7 @@ func TestPduToValue_Numeric(t *testing.T) {
 		{"Counter64", counter64PDU("x", 1<<40), "", 1 << 40},
 		{"TimeTicks", snmp.PDU{Name: "x", Type: gosnmp.TimeTicks, Value: uint32(12345)}, "", 12345},
 		{"Gauge32", snmp.PDU{Name: "x", Type: gosnmp.Gauge32, Value: uint(7)}, "", 7},
+		{"Uinteger32", snmp.PDU{Name: "x", Type: gosnmp.Uinteger32, Value: uint32(4294967295)}, "", 4294967295},
 		{"to_one ignores type", snmp.PDU{Name: "x", Type: gosnmp.OctetString, Value: []byte("hello")}, "to_one", 1},
 	}
 	for _, tt := range tests {
@@ -4906,6 +4907,7 @@ func TestPduToValue_EveryNumericTypeTakesTheSameDecision(t *testing.T) {
 		{"Gauge32", snmp.PDU{Name: "x", Type: gosnmp.Gauge32, Value: uint(42)}},
 		{"Counter64", snmp.PDU{Name: "x", Type: gosnmp.Counter64, Value: uint64(42)}},
 		{"TimeTicks", snmp.PDU{Name: "x", Type: gosnmp.TimeTicks, Value: uint32(42)}},
+		{"Uinteger32", snmp.PDU{Name: "x", Type: gosnmp.Uinteger32, Value: uint32(42)}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			val, _, err := pduToValue(tt.pdu, "hextoint:BigEndian:uint16")
@@ -5105,4 +5107,26 @@ func TestConditionsKeyMatchesThePollWindow(t *testing.T) {
 				"declarations polled on separate windows must be filtered separately")
 		})
 	}
+}
+
+// TestPduToValue_Uinteger32RefusesAnAddressConversion keeps the sixth numeric
+// type inside the conversion gate rather than only the value switch: the two
+// list their types separately, so a type added to one and not the other would
+// pass a conversion the value it produces cannot carry.
+func TestPduToValue_Uinteger32RefusesAnAddressConversion(t *testing.T) {
+	pdu := snmp.PDU{Name: "x", Type: gosnmp.Uinteger32, Value: uint32(42)}
+	for _, conv := range []string{"hextoip", "hwaddr"} {
+		t.Run(conv, func(t *testing.T) {
+			_, _, err := pduToValue(pdu, conv)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "not meaningful for numeric PDU type")
+		})
+	}
+}
+
+// TestPduToString_Uinteger32 covers a tag column whose device answers with the
+// standard unsigned application type.
+func TestPduToString_Uinteger32(t *testing.T) {
+	pdu := snmp.PDU{Name: "x", Type: gosnmp.Uinteger32, Value: uint32(4294967295)}
+	require.Equal(t, "4294967295", pduToString(pdu, nil))
 }

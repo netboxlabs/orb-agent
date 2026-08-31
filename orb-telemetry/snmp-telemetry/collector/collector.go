@@ -1501,7 +1501,7 @@ func pduToValue(pdu snmp.PDU, conversion string) (int64, string, error) {
 	// out of the control flow. The cases are the numeric cases of the switch
 	// that follows.
 	switch pdu.Type {
-	case gosnmp.Integer, gosnmp.Counter32, gosnmp.Gauge32, gosnmp.Counter64, gosnmp.TimeTicks:
+	case gosnmp.Integer, gosnmp.Counter32, gosnmp.Gauge32, gosnmp.Counter64, gosnmp.TimeTicks, gosnmp.Uinteger32:
 		if !numericPDUAcceptsConversion(conversion) {
 			return 0, "", fmt.Errorf("conversion %q is not meaningful for numeric PDU type %v", conversion, pdu.Type)
 		}
@@ -1521,6 +1521,12 @@ func pduToValue(pdu snmp.PDU, conversion string) (int64, string, error) {
 		if v, ok := pdu.Value.(uint64); ok {
 			val, err := signedValue(v)
 			return val, "", err
+		}
+	case gosnmp.Uinteger32:
+		// gosnmp decodes this one as uint32, unlike the uint it uses for
+		// Counter32 and Gauge32, and a uint32 always fits an int64.
+		if v, ok := pdu.Value.(uint32); ok {
+			return int64(v), "", nil
 		}
 	case gosnmp.TimeTicks:
 		if v, ok := pdu.Value.(uint32); ok {
@@ -1743,6 +1749,10 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 		}
 	case gosnmp.Counter32, gosnmp.Gauge32:
 		if v, ok := pdu.Value.(uint); ok {
+			return fmt.Sprintf("%d", v)
+		}
+	case gosnmp.Uinteger32:
+		if v, ok := pdu.Value.(uint32); ok {
 			return fmt.Sprintf("%d", v)
 		}
 	case gosnmp.IPAddress, gosnmp.ObjectIdentifier:
