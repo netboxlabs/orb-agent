@@ -90,8 +90,8 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 		byBase[p.FileName] = append(byBase[p.FileName], p)
 		for _, raw := range p.SysObjectID {
 			oid := normalizeOID(raw)
-			if strings.HasSuffix(oid, ".*") {
-				byWildcard[oid] = append(byWildcard[oid], p)
+			if key, ok := wildcardKey(oid); ok {
+				byWildcard[key] = append(byWildcard[key], p)
 			} else {
 				byExact[oid] = append(byExact[oid], p)
 			}
@@ -248,6 +248,44 @@ func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool)
 // ProfileCount returns the total number of indexed OID entries (exact + wildcard).
 func (m *Matcher) ProfileCount() int {
 	return len(m.exactIndex) + len(m.wildcardIndex)
+}
+
+// wildcardKey returns the canonical form of a wildcard sysobjectid, and
+// reports whether the pattern is a wildcard the index can carry.
+//
+// ktranslate resolves a device sysObjectID by probing its profile map with
+// successively shorter "<prefix>.*" keys, so a star only ever stands for whole
+// arcs below prefix. A pattern written without the dot, "1.3.6.1.4.1.43.45*",
+// therefore selects the subtree under 1.3.6.1.4.1.43.45 rather than every arc
+// whose digits start with 45, and canonicalising it here puts both spellings
+// on one key. Upstream does not read the dotless form at all: no probe it
+// builds can produce that key, so the profile is unreachable there too.
+//
+// A star anywhere but at the end, or one with no OID in front of it, leaves
+// nothing to match a prefix against. Those are not wildcards, and
+// unindexableSysObjectID names them so the load reports them.
+func wildcardKey(oid string) (string, bool) {
+	prefix, hasStar := strings.CutSuffix(oid, "*")
+	if !hasStar || strings.Contains(prefix, "*") {
+		return "", false
+	}
+	prefix = strings.TrimSuffix(prefix, ".")
+	if prefix == "" {
+		return "", false
+	}
+	return prefix + ".*", true
+}
+
+// unindexableSysObjectID reports a pattern the matcher cannot turn into either
+// an exact OID or a wildcard prefix. It carries a star, so no device can report
+// it verbatim, and the star is not one this index reads, so the entry claims
+// nothing. Every metric behind it is unreachable.
+func unindexableSysObjectID(oid string) bool {
+	if !strings.Contains(oid, "*") {
+		return false
+	}
+	_, ok := wildcardKey(oid)
+	return !ok
 }
 
 // normalizeOID strips a leading "." and "iso." prefix from an SNMP OID string.

@@ -599,3 +599,37 @@ metric_tags:
 	}
 	assert.Equal(t, 4, strings.Count(out, "left unlabelled"))
 }
+
+// A sysobjectid the matcher cannot index leaves the whole profile unreachable,
+// which looks exactly like a device the bundled set does not cover. The
+// bundled set has no such pattern, so the case is exercised from the override
+// directory, and a future refresh that introduces one is reported rather than
+// silently inert.
+func TestAllResolved_ReportsUnindexableSysObjectID(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "starry.yml", `
+sysobjectid:
+  - 1.3.6.1.4.1.99.*
+  - 1.3.6.1.4.1.99.*.7
+  - "*"
+metrics:
+  - MIB: X-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.99.1.1
+      name: xThing
+`)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	l, err := LoadProfiles(dir, logger)
+	require.NoError(t, err)
+	_, err = l.AllResolved()
+	require.NoError(t, err)
+
+	out := buf.String()
+	require.Equal(t, 2, strings.Count(out, "cannot be indexed"),
+		"no bundled sysobjectid is unindexable, and the well-formed wildcard is not reported")
+	assert.Contains(t, out, "1.3.6.1.4.1.99.*.7", "a star that is not at the end must be named")
+	assert.Contains(t, out, "sysobjectid=*", "a bare star must be named")
+	assert.Contains(t, out, "starry.yml")
+}

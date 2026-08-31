@@ -1,6 +1,8 @@
 package profiles
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -249,4 +251,166 @@ func TestNewMatcher_MalformedPatternLoggedOnce(t *testing.T) {
 	got, ok := m.MatchWithDescr("1.3.6.1.4.1.9.1.46", "anything")
 	require.True(t, ok)
 	assert.Equal(t, base, got, "a malformed pattern must be skipped, not cause a match")
+}
+
+// A bundled profile writes its wildcard as "43.45*", with no dot in front of
+// the star. ktranslate resolves a sysObjectID by probing successively shorter
+// "<prefix>.*" keys, so a star only ever stands for whole arcs below prefix.
+// The pattern therefore selects the subtree under 43.45, and reading the
+// trailing star as part of an exact OID left the profile unreachable.
+func TestMatch_WildcardWithoutDotBeforeStar(t *testing.T) {
+	p := makeProfile("3com-huawei.yml", "1.3.6.1.4.1.43.45*")
+	m := NewMatcher([]*Profile{p}, silentLogger)
+
+	got, ok := m.Match("1.3.6.1.4.1.43.45.1.6.1.1")
+	require.True(t, ok, "the subtree under 43.45 must reach the profile")
+	assert.Equal(t, p, got)
+
+	_, ok = m.Match("1.3.6.1.4.1.43.450.1")
+	assert.False(t, ok, "the star stands for whole arcs, so 43.450 is a different arc")
+
+	_, ok = m.Match("1.3.6.1.4.1.43.4")
+	assert.False(t, ok, "an OID above the subtree is outside it")
+}
+
+// The two spellings select the same subtree, so they have to land on one index
+// key. Kept apart they would produce two entries of equal prefix, whichever
+// won decided by the sort rather than by the collision report.
+func TestNewMatcher_DotlessAndDottedWildcardShareOneKey(t *testing.T) {
+	dotted := &Profile{FileName: "dotted.yml", RelPath: "v/dotted.yml", SysObjectID: StringOrSlice{"1.2.3.*"}}
+	dotless := &Profile{FileName: "dotless.yml", RelPath: "v/dotless.yml", SysObjectID: StringOrSlice{"1.2.3*"}}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	m := NewMatcher([]*Profile{dotted, dotless}, logger)
+
+	assert.Equal(t, 1, m.ProfileCount(), "both spellings select one subtree")
+	got, ok := m.Match("1.2.3.4")
+	require.True(t, ok)
+	assert.Equal(t, dotted, got, "the first profile indexed serves the shared key")
+
+	out := buf.String()
+	assert.Contains(t, out, "duplicate sysobjectid", "the two spellings must collide on one key")
+	assert.Contains(t, out, "1.2.3.*", "the collision must be reported under the dotted spelling")
+	assert.Contains(t, out, "v/dotless.yml", "the losing profile must be named")
+}
+
+// Longest prefix still decides. A repaired dotless wildcard must not outrank a
+// wildcard that describes the device more precisely.
+func TestMatch_DotlessWildcardKeepsLongestPrefixOrder(t *testing.T) {
+	broad := makeProfile("vendor.yml", "1.2.3*")
+	narrow := makeProfile("series.yml", "1.2.3.4.*")
+	m := NewMatcher([]*Profile{broad, narrow}, silentLogger)
+
+	got, ok := m.Match("1.2.3.4.5")
+	require.True(t, ok)
+	assert.Equal(t, narrow, got, "the more specific wildcard must win")
+
+	got, ok = m.Match("1.2.3.9.5")
+	require.True(t, ok)
+	assert.Equal(t, broad, got, "an arc the narrow wildcard does not cover stays with the broad one")
+
+	exact := makeProfile("one-box.yml", "1.2.3.4.5")
+	m2 := NewMatcher([]*Profile{broad, exact}, silentLogger)
+	got, ok = m2.Match("1.2.3.4.5")
+	require.True(t, ok)
+	assert.Equal(t, exact, got, "an exact entry must still beat the repaired wildcard")
+}
+
+// The star is only a wildcard at the end of the pattern. Anywhere else there
+// is no prefix to match on, so the entry can never match a device and the
+// operator is told rather than left waiting for metrics.
+func TestNewMatcher_StarThatIsNotATrailingWildcard(t *testing.T) {
+	for _, pattern := range []string{"1.2.*.4", "1.2.*.4*", "*"} {
+		assert.True(t, unindexableSysObjectID(pattern), "%s reaches neither index", pattern)
+
+		m := NewMatcher([]*Profile{makeProfile("odd.yml", pattern)}, silentLogger)
+		for _, oid := range []string{"1.2.3.4", "1.2.3.4.5", "1.2"} {
+			_, ok := m.Match(oid)
+			assert.False(t, ok, "%s must not match %s", pattern, oid)
+		}
+	}
+
+	assert.False(t, unindexableSysObjectID("1.2.3.*"), "a trailing wildcard is indexable")
+	assert.False(t, unindexableSysObjectID("1.2.3*"), "so is one written without the dot")
+	assert.False(t, unindexableSysObjectID("1.2.3.4"), "and so is an exact OID")
+}
+
+// The bundled 3com/Huawei profile carries the one dotless wildcard in the set.
+// Every metric it declares was unreachable, and the devices it describes fell
+// through to the generic catch-all.
+func TestMatch_BundledDotlessWildcardIsReachable(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+
+	got, ok := m.Match("1.3.6.1.4.1.43.45.1.6.1.1")
+	require.True(t, ok)
+	assert.Equal(t, "3com/3com-huawei.yml", got.RelPath)
+
+	// Neighbours that must not move.
+	for oid, want := range map[string]string{
+		"1.3.6.1.4.1.43.450.1":   "generic/base.yml",
+		"1.3.6.1.4.1.43.451":     "generic/base.yml",
+		"1.3.6.1.4.1.43.4":       "generic/base.yml",
+		"1.3.6.1.4.1.43":         "generic/base.yml",
+		"1.3.6.1.4.1.43.1.8.1":   "3com/3com.yml",
+		"1.3.6.1.4.1.43356.1":    "mimosa/mimosa-device.yml",
+		"1.3.6.1.4.1.2011.2.1.1": "huawei/huawei-all-devices.yml",
+	} {
+		got, ok := m.Match(oid)
+		require.True(t, ok, "%s must still match", oid)
+		assert.Equal(t, want, got.RelPath, "the verdict for %s must not move", oid)
+	}
+}
+
+// A longest-prefix match only changes its verdict for OIDs under the prefix
+// that became reachable, so it is enough to show nothing more specific already
+// claims that subtree and to name the profile it is taken from.
+func TestMatcher_BundledDotlessWildcardTakesOnlyFromLessSpecific(t *testing.T) {
+	const subtree = "1.3.6.1.4.1.43.45."
+
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+
+	var covering wildcardEntry
+	for _, e := range m.wildcardIndex {
+		if e.prefix == subtree {
+			continue
+		}
+		assert.False(t, strings.HasPrefix(e.prefix, subtree),
+			"no bundled wildcard may sit inside the subtree that became reachable")
+		if strings.HasPrefix(subtree, e.prefix) && len(e.prefix) > len(covering.prefix) {
+			covering = e
+		}
+	}
+	for oid := range m.exactIndex {
+		assert.False(t, strings.HasPrefix(oid, subtree),
+			"no bundled exact entry may sit inside the subtree that became reachable")
+	}
+
+	require.NotNil(t, covering.profile, "the subtree has to have been served by something")
+	assert.Equal(t, "generic/base.yml", covering.profile.RelPath,
+		"only the generic catch-all loses devices to the repaired profile")
+}
+
+// Every bundled sysobjectid has to reach the index. One that does not is a
+// profile the collector loads, reports on and can never match.
+func TestNewMatcher_BundledSysObjectIDsAreAllIndexable(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	for _, p := range all {
+		for _, raw := range p.SysObjectID {
+			assert.False(t, unindexableSysObjectID(normalizeOID(raw)),
+				"%s in %s cannot be indexed", raw, p.RelPath)
+		}
+	}
 }

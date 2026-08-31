@@ -315,6 +315,7 @@ func (l *Loader) AllResolved() ([]*Profile, error) {
 func (l *Loader) reportFiles() {
 	for _, rel := range slices.Sorted(maps.Keys(l.byFile)) {
 		reportUnreadableFlatEntries(l.byFile[rel], rel, l.logger)
+		reportUnindexableSysObjectID(l.byFile[rel], rel, l.logger)
 		reportEnumCollisions(l.byFile[rel], rel, l.logger)
 	}
 }
@@ -375,6 +376,24 @@ func reportEnumCollisions(p *Profile, rel string, logger *slog.Logger) {
 				owner.kind, config.SanitizeLogValue(owner.name),
 				"file", config.SanitizeLogValue(rel))
 		}
+	}
+}
+
+// reportUnindexableSysObjectID names a sysobjectid the Matcher can index
+// neither as an exact OID nor as a wildcard prefix. The profile still loads and
+// still reports on itself, so a pattern in that state looks from the outside
+// exactly like a device the bundled set does not cover, and every metric behind
+// it is unreachable. No bundled pattern is in that state today, so a refresh
+// that introduces one is visible rather than silently inert.
+func reportUnindexableSysObjectID(p *Profile, rel string, logger *slog.Logger) {
+	for _, raw := range p.SysObjectID {
+		oid := normalizeOID(raw)
+		if !unindexableSysObjectID(oid) {
+			continue
+		}
+		logger.Warn("SNMP profile sysobjectid cannot be indexed, it will match no device",
+			"sysobjectid", config.SanitizeLogValue(oid),
+			"file", config.SanitizeLogValue(rel))
 	}
 }
 
