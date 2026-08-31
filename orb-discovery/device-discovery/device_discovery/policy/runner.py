@@ -477,8 +477,6 @@ class PolicyRunner:
         options = config.options or Options()
         ports = options.port_scan_ports
         timeout = options.port_scan_timeout
-        if not hostnames:
-            return
 
         # Get original hostname from scope for parent tracking
         original_hostname = scope.hostname.replace("\r\n", "").replace("\n", "")
@@ -489,6 +487,24 @@ class PolicyRunner:
             target=original_hostname,
             parent_target="",
         )
+
+        # Created BEFORE this check so a scope that expanded to nothing still
+        # leaves a run behind. expand_hostnames returns an empty list for a
+        # target over the expansion cap; returning silently here would report
+        # the policy as RUNNING with no history for it, which is less visible
+        # than a range that scans and finds nothing reachable (recorded as
+        # FAILED below).
+        if not hostnames:
+            self.run_store.update_run(
+                policy_name=self.name,
+                target=original_hostname,
+                run_id=scan_run.id,
+                status=RunStatus.FAILED,
+                error=Exception("Target expanded to no addresses"),
+                entity_count=0,
+                driver=None,
+            )
+            return
 
         try:
             results = find_reachable_hosts(hostnames, ports, timeout)

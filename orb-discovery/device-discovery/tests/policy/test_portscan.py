@@ -146,3 +146,67 @@ def test_find_reachable_hosts_logs_exceptions(monkeypatch):
     assert result["bad-host"] is False
     assert result["good-host"] is True
     mock_logger.warning.assert_called_once()
+
+
+def test_expand_hostnames_rejects_cidr_over_the_cap(monkeypatch):
+    """A prefix wider than the cap expands to nothing instead of allocating it."""
+    mock_logger = MagicMock()
+    monkeypatch.setattr(portscan, "logger", mock_logger)
+
+    # /15 is 131072 addresses, twice the cap. Deliberately small enough that
+    # the unguarded version fails fast rather than hanging the suite.
+    hosts, parsed = portscan.expand_hostnames("10.0.0.0/15")
+
+    assert hosts == []
+    assert parsed is True
+    mock_logger.error.assert_called_once()
+    message = mock_logger.error.call_args[0][0] % mock_logger.error.call_args[0][1:]
+    assert "10.0.0.0/15" in message
+    assert str(portscan.MAX_EXPANDED_HOSTS) in message
+
+
+def test_expand_hostnames_rejects_range_over_the_cap(monkeypatch):
+    """The range branch is bounded too, not just the CIDR branch."""
+    mock_logger = MagicMock()
+    monkeypatch.setattr(portscan, "logger", mock_logger)
+
+    hosts, parsed = portscan.expand_hostnames("10.0.0.0-10.2.0.0")
+
+    assert hosts == []
+    assert parsed is True
+    mock_logger.error.assert_called_once()
+
+
+def test_expand_hostnames_allows_a_cidr_exactly_at_the_cap():
+    """The cap is inclusive, so the largest allowed prefix still expands."""
+    hosts, parsed = portscan.expand_hostnames("10.0.0.0/16")
+
+    assert parsed is True
+    assert len(hosts) == portscan.MAX_EXPANDED_HOSTS - 2  # network + broadcast
+
+
+def test_expand_hostnames_rejects_a_standard_ipv6_subnet(monkeypatch):
+    """
+    The reported case: a /64 returns at once instead of allocating 2**64 strings.
+
+    Before the cap this call never returned. It is the first thing an operator
+    would type, since /64 is the standard IPv6 subnet size, and it took the
+    whole process down rather than failing the one scope.
+    """
+    mock_logger = MagicMock()
+    monkeypatch.setattr(portscan, "logger", mock_logger)
+
+    hosts, parsed = portscan.expand_hostnames("2001:db8::/64")
+
+    assert hosts == []
+    assert parsed is True
+    mock_logger.error.assert_called_once()
+
+
+def test_expand_hostnames_keeps_small_ipv6_prefixes():
+    """Bounded IPv6 prefixes are still legitimate targets and must survive."""
+    hosts, parsed = portscan.expand_hostnames("2001:db8::/120")
+
+    assert parsed is True
+    assert len(hosts) == 255
+    assert hosts[0] == "2001:db8::1"
