@@ -3,6 +3,8 @@ package snmp
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -248,6 +250,10 @@ type fakeAgent struct {
 	conn net.PacketConn
 	port uint16
 	vars []gosnmp.SnmpPDU
+	// corrupt, when set, rewrites each encoded reply before it goes on the
+	// wire, so a test can drive the client's parse errors with a real packet
+	// rather than a hand-written one.
+	corrupt func([]byte) []byte
 
 	mu       sync.Mutex
 	requests map[gosnmp.PDUType]int
@@ -256,9 +262,24 @@ type fakeAgent struct {
 
 func newFakeAgent(t *testing.T, vars []gosnmp.SnmpPDU) *fakeAgent {
 	t.Helper()
+	return newCorruptingAgent(t, vars, nil)
+}
+
+// newCorruptingAgent serves the same table through a rewrite applied to every
+// reply, so a test can drive the client with a packet a device would not send.
+// The hook is set before the agent serves: setting it afterwards would race the
+// serving goroutine.
+func newCorruptingAgent(t *testing.T, vars []gosnmp.SnmpPDU, corrupt func([]byte) []byte) *fakeAgent {
+	t.Helper()
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
-	a := &fakeAgent{conn: conn, port: udpPort(t, conn.LocalAddr()), vars: vars, requests: make(map[gosnmp.PDUType]int)}
+	a := &fakeAgent{
+		conn:     conn,
+		port:     udpPort(t, conn.LocalAddr()),
+		vars:     vars,
+		corrupt:  corrupt,
+		requests: make(map[gosnmp.PDUType]int),
+	}
 	go a.serve()
 	t.Cleanup(func() { _ = conn.Close() })
 	return a
@@ -301,6 +322,9 @@ func (a *fakeAgent) serve() {
 		out, err := codec.SnmpEncodePacket(gosnmp.GetResponse, a.answer(req), 0, 0)
 		if err != nil {
 			continue
+		}
+		if a.corrupt != nil {
+			out = a.corrupt(out)
 		}
 		_, _ = a.conn.WriteTo(out, addr)
 	}
@@ -663,4 +687,148 @@ func TestClient_V3PassphrasesNeverReachTheDebugLog(t *testing.T) {
 	require.Contains(t, logged, "SECURITY PARAMETERS", "the security parameters have to have been logged")
 	assert.NotContains(t, logged, authPassphrase)
 	assert.NotContains(t, logged, privPassphrase)
+}
+
+// ---------------------------------------------------------------------------
+// The community must not ride out on an error either
+// ---------------------------------------------------------------------------
+
+// A v2c reply carries the community as an octet string near its front:
+// 30 <len> 02 01 01 04 <communityLength> <community> ... The two corruptions
+// below are the ones that make gosnmp quote those bytes back.
+const communityLengthOctet = 6
+
+// overstateCommunityLength rewrites the community's length octet to the BER
+// long form, so the parser reads a length running past the buffer and reports
+// the whole remaining packet.
+func overstateCommunityLength(pkt []byte) []byte {
+	out := append([]byte(nil), pkt...)
+	out[communityLengthOctet] = 0x82
+	return out
+}
+
+// cutInsideCommunity truncates the packet partway through the community and
+// rewrites the outer length to match, so the reply passes gosnmp's sanity
+// check and the dump ends inside the community.
+func cutInsideCommunity(keep int) func([]byte) []byte {
+	return func(pkt []byte) []byte {
+		out := append([]byte(nil), pkt[:communityLengthOctet+1+keep]...)
+		out[1] = byte(len(out) - 2)
+		return out
+	}
+}
+
+// hexPrefixes returns the lowercase hex of every prefix of the community, from
+// the whole value down to its first byte. A dump that ends inside the
+// community carries one of these, and a prefix of a credential is still one.
+func hexPrefixes(community string) []string {
+	out := make([]string, 0, len(community))
+	for n := len(community); n > 0; n-- {
+		out = append(out, hex.EncodeToString([]byte(community[:n])))
+	}
+	return out
+}
+
+// minRecognisableFragment is the shortest run of the community's bytes the
+// assertions treat as a disclosure. Below three bytes a run turns up in an
+// unrelated dump by chance, and the request ID of each reply is random.
+const minRecognisableFragment = 3
+
+// assertCommunityGone checks that no run of the community's bytes survives:
+// every prefix, which is what a dump cut short inside the community carries,
+// and every inner run of three bytes or more, which is what a redaction
+// replacing the leading byte first would leave behind.
+func assertCommunityGone(t *testing.T, subject, community string) {
+	t.Helper()
+	for _, p := range hexPrefixes(community) {
+		assert.NotContains(t, subject, p, "%d bytes of the community appeared in hex", len(p)/2)
+	}
+	for start := 1; start < len(community); start++ {
+		for end := start + minRecognisableFragment; end <= len(community); end++ {
+			run := hex.EncodeToString([]byte(community[start:end]))
+			assert.NotContains(t, subject, run, "bytes %d..%d of the community appeared in hex", start, end)
+		}
+	}
+}
+
+// walkAgainstCorruptAgent walks a fake agent whose replies are rewritten, and
+// returns the error the client reports.
+func walkAgainstCorruptAgent(t *testing.T, community string, corrupt func([]byte) []byte) error {
+	t.Helper()
+	const root = "1.3.6.1.2.1.2.2.1"
+	agent := newCorruptingAgent(t, interfaceTable(root, 1, 1), corrupt)
+	w, err := NewClient(t.Context(), "127.0.0.1", agent.port, 0, 300*time.Millisecond,
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: community}, clientTestLogger)
+	require.NoError(t, err)
+	require.NoError(t, w.Connect())
+	t.Cleanup(func() { _ = w.Close() })
+	_, err = w.Walk(root, 0)
+	require.Error(t, err, "the corrupt reply has to have failed the walk")
+	return err
+}
+
+// A reply whose community length octet is corrupt makes gosnmp quote the rest
+// of the packet, community included, into the error it returns. That error is
+// logged at warn level and served by the status endpoint, so it discloses the
+// credential whatever the log level.
+func TestClient_WalkErrorDoesNotCarryTheCommunity(t *testing.T) {
+	const community = "s3cr3tc0mmun1ty"
+	msg := walkAgainstCorruptAgent(t, community, overstateCommunityLength).Error()
+
+	assert.NotContains(t, msg, community, "the community appeared in plaintext")
+	assertCommunityGone(t, msg, community)
+	assert.Contains(t, msg, "error parsing community string", "the parse stage survived")
+	assert.Contains(t, msg, "not enough data for OctetString", "the parse failure survived")
+	assert.Contains(t, msg, redactedCommunity, "the elided span is marked")
+	// The bytes after the community are the diagnostic worth keeping: the
+	// varbind holding the value the agent answered with.
+	assert.Contains(t, msg, hex.EncodeToString([]byte("c1r1")), "the rest of the dump survived")
+}
+
+// A reply cut short inside the community leaves a prefix of it in the dump,
+// which a redaction matching only the whole value would miss.
+func TestClient_WalkErrorDoesNotCarryACommunityPrefix(t *testing.T) {
+	const community = "s3cr3tc0mmun1ty"
+	for _, keep := range []int{1, 2, 7, len(community) - 1} {
+		t.Run(fmt.Sprintf("cut after %d bytes", keep), func(t *testing.T) {
+			msg := walkAgainstCorruptAgent(t, community, cutInsideCommunity(keep)).Error()
+			assertCommunityGone(t, msg, community)
+			assert.Contains(t, msg, "not enough data for OctetString", "the parse failure survived")
+			assert.Contains(t, msg, redactedCommunity, "the elided span is marked")
+		})
+	}
+}
+
+// A one-character community is the case a redaction can mangle: its hex is two
+// characters and turns up in an unrelated dump by chance. Only hex is matched,
+// never the words of the message, so the diagnostic survives however short the
+// community is.
+func TestClient_ShortCommunityLeavesTheDiagnosticReadable(t *testing.T) {
+	const community = "a"
+	msg := walkAgainstCorruptAgent(t, community, overstateCommunityLength).Error()
+
+	assertCommunityGone(t, msg, community)
+	assert.Contains(t, msg, "error parsing community string", "the parse stage survived")
+	assert.Contains(t, msg, "not enough data for OctetString", "the parse failure survived")
+}
+
+// A v3 client carries no community, so an error passes through untouched
+// rather than having an empty needle matched against every position in it.
+func TestClient_V3WalkErrorIsUnchanged(t *testing.T) {
+	c := newTestClient(t, &config.Authentication{
+		ProtocolVersion: ProtocolVersion3,
+		SecurityLevel:   SecurityLevelNoAuthNoPriv,
+		Username:        "admin",
+	})
+	original := errors.New("not enough data for OctetString (17 vs 3): 040f73")
+	assert.Same(t, original, c.redactError(original), "an empty community must redact nothing")
+	assert.NoError(t, c.redactError(nil))
+}
+
+// An error carrying nothing to redact is returned as it was, so a caller that
+// compares errors is not handed a copy.
+func TestClient_ErrorWithoutTheCommunityIsReturnedUnchanged(t *testing.T) {
+	c := newTestClient(t, &config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "s3cr3tc0mmun1ty"})
+	original := errors.New("request timeout (after 0 retries)")
+	assert.Same(t, original, c.redactError(original))
 }

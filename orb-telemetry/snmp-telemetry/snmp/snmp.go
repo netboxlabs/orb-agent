@@ -2,6 +2,8 @@ package snmp
 
 import (
 	"context"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -74,6 +76,53 @@ func (c *Client) SetBulkWalk(enabled bool) {
 	c.bulkWalk = enabled && c.Version != gosnmp.Version1
 }
 
+// redactError removes the community from an error before it leaves the client.
+//
+// gosnmp reports a malformed reply by quoting the bytes it could not parse,
+// and the community is an octet string near the front of every v1 and v2c
+// message, so such an error carries the credential. A reply whose community
+// length octet is corrupt yields "not enough data for OctetString (29495 vs
+// 64): 0482<community><rest of packet>", and one cut short inside the
+// community yields a prefix of it. Redacting in the log adapter does not reach
+// these: the error is returned, and the collector logs it at warn level and
+// the policy status endpoint serves it, so it discloses the community whatever
+// the log level.
+//
+// Lowercase hex is the only encoding to remove. gosnmp formats packet bytes
+// with %x and with nothing else, so the value never reaches an error as text.
+// Leaving the words of the message unmatched is also what keeps a short
+// community from mangling the diagnostic: a one-character community is two hex
+// characters, which no word can hold.
+//
+// Every prefix is removed, not only the whole value, because a dump ending
+// inside the community carries a prefix and a prefix of a credential is still
+// one. A byte of an unrelated dump that happens to equal the community's first
+// byte goes with them. That costs two characters of the dump and leaves the
+// parse stage, the byte counts and the remaining bytes, which is the safe
+// direction.
+//
+// The redacted error is a new one rather than a wrapper: an Unwrap would hand
+// the original, community and all, to anything that reached for it.
+func (c *Client) redactError(err error) error {
+	if err == nil {
+		return err
+	}
+	message := err.Error()
+	redacted := message
+	// Longest prefix first. Shortest first would replace the leading byte
+	// everywhere, leaving the rest of the community with nothing left to match
+	// it. An empty community, which is what v3 carries, yields no prefixes at
+	// all, so the loop is skipped rather than an empty needle being replaced
+	// between every character.
+	for n := len(c.Community); n > 0; n-- {
+		redacted = strings.ReplaceAll(redacted, hex.EncodeToString([]byte(c.Community[:n])), redactedCommunity)
+	}
+	if redacted == message {
+		return err
+	}
+	return errors.New(redacted)
+}
+
 // Close implements the Walker interface by closing the SNMP connection
 func (c *Client) Close() error {
 	if c.Conn != nil {
@@ -94,7 +143,7 @@ func (c *Client) Walk(objectID string, _ int) (map[string]PDU, error) {
 	}
 	pdu, err := walkAll(objectID)
 	if err != nil {
-		return nil, err
+		return nil, c.redactError(err)
 	}
 	output := make(map[string]PDU)
 	for _, pdu := range pdu {
