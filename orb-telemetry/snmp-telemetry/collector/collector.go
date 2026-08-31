@@ -66,19 +66,26 @@ type observedPoint struct {
 	value int64
 	attrs []attribute.KeyValue
 	// decl names the declaration that produced the point. One metric name can
-	// be declared twice with different poll periods, and the two are throttled
-	// independently, so retention has to carry one forward without disturbing
-	// the other.
+	// be declared twice on different periods or columns, and the declarations
+	// are throttled independently, so retention has to carry one forward
+	// without disturbing the other.
 	decl string
 }
 
-// symbolDeclKey identifies the declaration a point came from.
+// symbolDeclKey identifies the declaration a point came from, and the poll
+// window that declaration consults. Retention reads it to carry a throttled
+// declaration's points forward and pollState keys its timestamps on it, so the
+// declaration that was recorded as throttled is the one whose points are kept.
 //
-// Whether a symbol is due is decided by its OID and its poll period alone, so
-// two declarations sharing both are throttled together and one key serves them,
-// and two differing in either are throttled apart and need keys of their own.
+// A declaration is its exported metric name, its OID and its poll period. Two
+// declarations agreeing on all three are one series polled on one window, so
+// one key serves them. Two differing in any of them are polled apart and need
+// keys of their own: the metric name is part of it because a `tag:` renames the
+// metric, so one OID can be declared twice and export under two names, and a
+// window keyed on the OID alone would let the first declaration to walk it
+// throttle the second before that second name had produced a point.
 func symbolDeclKey(sym *profiles.Symbol) string {
-	return sym.OID + "@" + strconv.Itoa(sym.PollTimeSec)
+	return sym.MetricName() + "|" + sym.OID + "@" + strconv.Itoa(sym.PollTimeSec)
 }
 
 // throttledDecls collects the declarations that were not due this run, as
@@ -113,9 +120,9 @@ func attrSetKey(attrs []attribute.KeyValue) string {
 //
 // Only the declarations named in throttled are carried. A declaration that was
 // due is represented by its fresh points alone, so a row it has stopped
-// answering for does not live on under a sibling's retention. Two declarations
-// that share an OID and a poll period share a key, since the poll window they
-// consult is the same one.
+// answering for does not live on under a sibling's retention. Declarations are
+// told apart by symbolDeclKey, which is the same key their poll windows are
+// held under, so what was recorded as throttled is what is carried.
 //
 // A retained point whose attribute set a fresh point already carries is dropped
 // as well. The attribute set is the exported series, so keeping both would
@@ -148,7 +155,7 @@ type MetricsCollector struct {
 	logger        *slog.Logger
 
 	pollMu    sync.Mutex
-	pollState map[deviceKey]map[string]time.Time // device -> symbolOID -> lastPoll
+	pollState map[deviceKey]map[string]time.Time // device -> symbolDeclKey -> lastPoll
 
 	// Observable gauge store: device -> metricName -> observations.
 	// Updated after each CollectTarget run; read by OTLP callbacks on every export cycle.
@@ -181,25 +188,33 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 	}
 }
 
-// pollDue reports whether the symbol OID is due to be polled for the given
-// device. pollTimeSec == 0 means always poll.
+// pollDue reports whether the symbol's declaration is due to be polled for the
+// given device. poll_time_sec == 0 means always poll.
+//
+// The window is per declaration rather than per OID, so a second declaration of
+// one OID exporting under a second name is not throttled by the first. Two
+// declarations that differ only in poll period are separate windows too: each
+// waits out the period it asks for, and a walk taken for the due one does not
+// satisfy the other.
 //
 // It reads the last-poll timestamp and does not write one: markPolled does that
 // once the request has come back. Recording it here instead would start the
 // poll window on a request that failed, and since a failed request leaves no
 // observation to carry forward, an hourly symbol would then be missing for an
 // hour after one timeout.
-func (c *MetricsCollector) pollDue(key deviceKey, oid string, pollTimeSec int) bool {
-	if pollTimeSec <= 0 {
+func (c *MetricsCollector) pollDue(key deviceKey, sym *profiles.Symbol) bool {
+	if sym.PollTimeSec <= 0 {
 		return true
 	}
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
-	last, ok := c.pollState[key][oid]
-	return !ok || !time.Now().Before(last.Add(time.Duration(pollTimeSec)*time.Second))
+	last, ok := c.pollState[key][symbolDeclKey(sym)]
+	return !ok || !time.Now().Before(last.Add(time.Duration(sym.PollTimeSec)*time.Second))
 }
 
-// markPolled starts the poll window for the symbol OID on the given device.
+// markPolled starts the poll window for the symbol's declaration on the given
+// device. It starts no other declaration's window, including another one of the
+// same OID.
 //
 // It is called once the walk has returned without error, whatever the device
 // answered with: a device that does not implement an OID has still been asked,
@@ -207,8 +222,8 @@ func (c *MetricsCollector) pollDue(key deviceKey, oid string, pollTimeSec int) b
 // A device forgotten after a failed run loses these timestamps with the rest of
 // its state, so the two rules agree that nothing throttles what was not
 // collected.
-func (c *MetricsCollector) markPolled(key deviceKey, oid string, pollTimeSec int) {
-	if pollTimeSec <= 0 {
+func (c *MetricsCollector) markPolled(key deviceKey, sym *profiles.Symbol) {
+	if sym.PollTimeSec <= 0 {
 		return
 	}
 	c.pollMu.Lock()
@@ -216,7 +231,7 @@ func (c *MetricsCollector) markPolled(key deviceKey, oid string, pollTimeSec int
 	if c.pollState[key] == nil {
 		c.pollState[key] = make(map[string]time.Time)
 	}
-	c.pollState[key][oid] = time.Now()
+	c.pollState[key][symbolDeclKey(sym)] = time.Now()
 }
 
 // ensureInstrument lazily registers an observable gauge callback for metricName.
@@ -731,7 +746,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 	name := sym.ExportName()
 	metricName := sym.MetricName()
 	decl := symbolDeclKey(sym)
-	if !c.pollDue(key, sym.OID, sym.PollTimeSec) {
+	if !c.pollDue(key, sym) {
 		throttled.add(metricName, decl)
 		return
 	}
@@ -740,7 +755,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		c.logger.Debug("Error walking scalar OID", "oid", sym.OID, "name", sym.Name, "error", err)
 		return
 	}
-	c.markPolled(key, sym.OID, sym.PollTimeSec)
+	c.markPolled(key, sym)
 	for fullOID, pdu := range pdus {
 		val, strVal, err := pduToValue(pdu, sym.Conversion)
 		if err != nil {
@@ -1052,7 +1067,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			// it neither drives a walk nor carries a previous value forward.
 			continue
 		}
-		if c.pollDue(key, sym.OID, sym.PollTimeSec) {
+		if c.pollDue(key, sym) {
 			states = append(states, symState{sym: sym, throttled: false})
 			anyActive = true
 		} else {
@@ -1204,7 +1219,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				continue
 			}
 		}
-		c.markPolled(key, sym.OID, sym.PollTimeSec)
+		c.markPolled(key, sym)
 
 		cond, hasCondition := conditions[sym.OID]
 		name := sym.ExportName()

@@ -256,12 +256,17 @@ func testKey(policy, host string) deviceKey {
 	return deviceKey{policy: policy, host: host, port: 161}
 }
 
+// sym builds a symbol declaration for the poll window tests.
+func sym(name, oid string, pollTimeSec int) *profiles.Symbol {
+	return &profiles.Symbol{Name: name, OID: oid, PollTimeSec: pollTimeSec}
+}
+
 func TestPollDue_ZeroAlwaysDue(t *testing.T) {
 	c := newCollector(nil, nil)
 	k := testKey("p", "host1")
-	assert.True(t, c.pollDue(k, "1.2.3", 0))
-	c.markPolled(k, "1.2.3", 0)
-	assert.True(t, c.pollDue(k, "1.2.3", 0))
+	assert.True(t, c.pollDue(k, sym("load", "1.2.3", 0)))
+	c.markPolled(k, sym("load", "1.2.3", 0))
+	assert.True(t, c.pollDue(k, sym("load", "1.2.3", 0)))
 
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
@@ -271,26 +276,74 @@ func TestPollDue_ZeroAlwaysDue(t *testing.T) {
 func TestPollDue_ThrottleAndExpiry(t *testing.T) {
 	c := newCollector(nil, nil)
 	k := testKey("p", "host1")
+	s := sym("load", "1.2.3", 60)
 	// Asking does not start the window.
-	assert.True(t, c.pollDue(k, "1.2.3", 60))
-	assert.True(t, c.pollDue(k, "1.2.3", 60))
+	assert.True(t, c.pollDue(k, s))
+	assert.True(t, c.pollDue(k, s))
 	// Collecting does.
-	c.markPolled(k, "1.2.3", 60)
-	assert.False(t, c.pollDue(k, "1.2.3", 60))
+	c.markPolled(k, s)
+	assert.False(t, c.pollDue(k, s))
 	// Simulate time elapsed by backdating the last-poll entry.
 	c.pollMu.Lock()
-	c.pollState[k]["1.2.3"] = time.Now().Add(-61 * time.Second)
+	c.pollState[k][symbolDeclKey(s)] = time.Now().Add(-61 * time.Second)
 	c.pollMu.Unlock()
-	assert.True(t, c.pollDue(k, "1.2.3", 60))
+	assert.True(t, c.pollDue(k, s))
 }
 
 func TestPollDue_IndependentPerDevice(t *testing.T) {
 	c := newCollector(nil, nil)
-	c.markPolled(testKey("p", "host1"), "1.2.3", 60)
-	assert.True(t, c.pollDue(testKey("p", "host2"), "1.2.3", 60)) // different host, same OID
-	assert.True(t, c.pollDue(testKey("q", "host1"), "1.2.3", 60)) // different policy, same host
-	assert.True(t, c.pollDue(deviceKey{policy: "p", host: "host1", port: 1161}, "1.2.3", 60))
-	assert.False(t, c.pollDue(testKey("p", "host1"), "1.2.3", 60))
+	s := sym("load", "1.2.3", 60)
+	c.markPolled(testKey("p", "host1"), s)
+	assert.True(t, c.pollDue(testKey("p", "host2"), s)) // different host, same declaration
+	assert.True(t, c.pollDue(testKey("q", "host1"), s)) // different policy, same host
+	assert.True(t, c.pollDue(deviceKey{policy: "p", host: "host1", port: 1161}, s))
+	assert.False(t, c.pollDue(testKey("p", "host1"), s))
+}
+
+// A declaration is its exported metric name, its OID and its poll period. Two
+// declarations of one OID exporting under two names are throttled apart, so the
+// first to walk the column does not silence the second.
+func TestPollDue_IndependentPerDeclaration(t *testing.T) {
+	c := newCollector(nil, nil)
+	k := testKey("p", "host1")
+	const oid = "1.3.6.1.2.1.2.2.1.7"
+	inherited := &profiles.Symbol{Name: "ifAdminStatus", OID: oid, Tag: "if_AdminStatus", PollTimeSec: 60}
+	own := sym("ifAdminStatus", oid, 60)
+
+	c.markPolled(k, inherited)
+	assert.False(t, c.pollDue(k, inherited))
+	assert.True(t, c.pollDue(k, own), "a second metric name on one column keeps its own window")
+
+	// Same name and column, a different period: separate windows, since the
+	// period each waits out is a different length.
+	c.markPolled(k, own)
+	assert.True(t, c.pollDue(k, sym("ifAdminStatus", oid, 3600)))
+
+	// Same name, column and period is one declaration however many symbols
+	// write it, and one window serves them.
+	assert.False(t, c.pollDue(k, sym("ifAdminStatus", oid, 60)))
+	assert.False(t, c.pollDue(k, sym("IFADMINSTATUS", oid, 60)),
+		"the name is the exported one, so two spellings of it are one declaration")
+
+	// A different column under the same name is a walk of its own.
+	assert.True(t, c.pollDue(k, sym("ifAdminStatus", "1.3.6.1.2.1.2.2.1.8", 60)))
+}
+
+// Poll state and retention read one declaration key, so the declaration
+// recorded as throttled is the declaration whose points are carried forward.
+// Keys that disagreed would leave a metric exporting a value nothing refreshes,
+// or exporting nothing at all.
+func TestMarkPolled_KeysThePollWindowOnTheRetentionKey(t *testing.T) {
+	c := newCollector(nil, nil)
+	k := testKey("p", "host1")
+	s := &profiles.Symbol{Name: "hrProcessorLoad", OID: "1.3.6.1.2.1.25.3.3.1.2", Tag: "CPU", PollTimeSec: 60}
+	c.markPolled(k, s)
+
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	require.Len(t, c.pollState[k], 1)
+	assert.Contains(t, c.pollState[k], symbolDeclKey(s),
+		"the poll window is keyed on the declaration retention carries points for")
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +624,46 @@ func TestCollectTarget_BundledDellTagNamesTheThrottledCPUMetric(t *testing.T) {
 	for _, pt := range store["snmp.hrprocessorload"] {
 		assert.NotEmpty(t, attrValue(pt, "processor_description"), "the inherited series keeps its tag column")
 	}
+}
+
+// A `tag:` renames the metric, so one OID can be declared twice and export
+// under two names. The poll window has to be one per declaration: keyed on the
+// OID alone, the first declaration to walk it throttles the second, and that
+// second metric never exports at all.
+//
+// The bundled Mikrotik switch profile is the case. It inherits ifAdminStatus
+// and ifOperStatus tagged if_AdminStatus and if_OperStatus from the interface
+// MIB and declares its own untagged pair on the same two columns. Inherited
+// entries are prepended, so the tagged pair runs first.
+func TestCollectTarget_BundledMikrotikExportsBothNamesOfOneColumn(t *testing.T) {
+	const (
+		host     = "10.0.0.78"
+		adminCol = "1.3.6.1.2.1.2.2.1.7"
+		operCol  = "1.3.6.1.2.1.2.2.1.8"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU("1.3.6.1.4.1.14988.2.1.1")},
+		adminCol:       {adminCol + ".1": intPDU(adminCol+".1", 1)},
+		operCol:        {operCol + ".1": intPDU(operCol+".1", 2)},
+	}}
+	c := newCollector(walkerFactory(w), bundledProfile(t, "mikrotik/mikrotik-switch.yml"))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	store := c.testDeviceStore("p", host)
+	for name, want := range map[string]int64{
+		"snmp.if_adminstatus": 1,
+		"snmp.ifadminstatus":  1,
+		"snmp.if_operstatus":  2,
+		"snmp.ifoperstatus":   2,
+	} {
+		pts := store[name]
+		require.Len(t, pts, 1, "%s exported nothing", name)
+		assert.Equal(t, want, pts[0].value, "%s carries the value the column answered", name)
+		assert.Equal(t, "1", attrValue(pts[0], "row_index"), "%s keeps its row identity", name)
+	}
+	assert.Equal(t, "up", attrValue(store["snmp.if_adminstatus"][0], "if_AdminStatus_status"),
+		"each declaration names its status attribute after the name it exports under")
+	assert.Equal(t, "up", attrValue(store["snmp.ifadminstatus"][0], "ifAdminStatus_status"))
 }
 
 // Retention that merged on the attribute set alone would carry a row the due
