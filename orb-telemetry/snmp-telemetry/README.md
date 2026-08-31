@@ -64,6 +64,10 @@ Passing `--host 0.0.0.0` publishes that unauthenticated API on every interface.
 Do it only behind access control of your own, such as a network policy or a
 reverse proxy that authenticates callers.
 
+An IPv6 address is passed as the bare literal, with no brackets: `--host ::1`
+binds the IPv6 loopback and `--host ::` binds every interface, with the same
+caveat as `0.0.0.0`.
+
 This default differs from the discovery backends in `orb-discovery`, which still
 default to `0.0.0.0`. The difference is deliberate rather than an oversight: the
 agent passes `--host localhost` explicitly to every backend it launches, so the

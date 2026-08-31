@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"math"
 	"mime"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -109,7 +111,11 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		port:   port,
 	}
 	server.httpServer = &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", host, port),
+		// An IPv6 literal carries the colons the port separator uses, so the
+		// host is bracketed rather than formatted straight into the address.
+		// Written as host:port, --host ::1 reads as one address with too many
+		// colons and the listener refuses it.
+		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler:           server.router,
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
