@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -189,13 +190,13 @@ func TestNewRunner_KeepsTheDurationsAtTheBound(t *testing.T) {
 }
 
 // The retry ceiling multiplies snmp_timeout by the capped attempt count. With
-// both durations bounded that product stays inside the range, so the largest
-// policy the bound allows still reports the warning rather than wrapping past
-// the comparison.
+// the durations and the retry count all bounded that product stays inside the
+// range, so the largest policy the bounds allow still reports the warning
+// rather than wrapping past the comparison.
 func TestNewRunner_RetryCeilingHoldsAtTheBound(t *testing.T) {
 	var buf bytes.Buffer
 	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := NewRunner(t.Context(), lg, "p1", policyWithDial(maxPolicySeconds, 1, 1<<62), &spyCollector{})
+	_, err := NewRunner(t.Context(), lg, "p1", policyWithDial(maxPolicySeconds, maxPolicySeconds-1, maxPolicyRetries), &spyCollector{})
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "SNMP retries can exceed the collection interval")
 }
@@ -295,11 +296,11 @@ func TestNewRunner_WarnsWhenRetriesCanExceedTheInterval(t *testing.T) {
 	assert.ErrorContains(t, err, "snmp_timeout")
 	assert.NotContains(t, err.Error(), "retries")
 
-	// An outsized retries count warns rather than overflowing the ceiling.
-	// This one is chosen so that attempts times five seconds wraps to zero,
-	// which an unguarded multiply would read as comfortably inside the
-	// interval and so stay silent.
-	out, err = capture(policyWithDial(60, 5, 1<<55-1))
+	// The largest retries the bound allows still warns rather than being
+	// refused: eleven attempts of six seconds overrun a minute only against a
+	// device that never answers. A count past the bound is a different case
+	// and is rejected, since the client sizes an allocation with it.
+	out, err = capture(policyWithDial(60, 6, maxPolicyRetries))
 	require.NoError(t, err)
 	assert.Contains(t, out, "SNMP retries can exceed the collection interval")
 }
@@ -441,4 +442,44 @@ func TestRunMetrics_CollidingIdentityFieldsKeepErrorsApart(t *testing.T) {
 	_, lastErr := r.GetLastError()
 	require.Error(t, lastErr, "a healthy target cleared an unrelated target's error")
 	assert.Contains(t, lastErr.Error(), "unreachable")
+}
+
+// ---------------------------------------------------------------------------
+// A retry count the SNMP client allocates on
+// ---------------------------------------------------------------------------
+
+// gosnmp starts every request with make([]uint32, 0, Retries+1), so the policy
+// field is an allocation size the caller chooses. A few billion is a valid
+// capacity of several gigabytes and exhausts the process on the first
+// scheduled collection; near MaxInt the addition wraps and the capacity is
+// rejected instead. Neither reaches a device, so the value is refused where the
+// other policy bounds are.
+func TestValidate_RejectsRetriesAboveTheCeiling(t *testing.T) {
+	m := newTestManager()
+	assert.ErrorContains(t, m.validatePolicy(policyWithDial(60, 5, maxPolicyRetries+1)), "retries")
+	assert.ErrorContains(t, m.validatePolicy(policyWithDial(60, 5, 1<<31)), "retries")
+	assert.ErrorContains(t, m.validatePolicy(policyWithDial(60, 5, math.MaxInt)), "retries")
+
+	require.NoError(t, m.validatePolicy(policyWithDial(60, 5, maxPolicyRetries)),
+		"the ceiling itself is accepted")
+}
+
+// NewRunner builds the dial options the client is constructed from and is
+// reachable without the API, so it carries the bound too.
+func TestNewRunner_RejectsRetriesAboveTheCeiling(t *testing.T) {
+	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, maxPolicyRetries+1), &spyCollector{})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "retries")
+
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, math.MaxInt), &spyCollector{})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "retries")
+
+	// The ceiling itself is accepted, and reaches the collector unchanged.
+	spy := &spyCollector{}
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, maxPolicyRetries), spy)
+	require.NoError(t, err)
+	r.runMetrics(config.Target{Host: "192.168.1.1", Port: 161})
+	require.Len(t, spy.dials, 1)
+	assert.Equal(t, maxPolicyRetries, spy.dials[0].Retries)
 }

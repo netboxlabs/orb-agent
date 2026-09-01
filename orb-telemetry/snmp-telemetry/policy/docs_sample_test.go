@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -49,4 +50,10 @@ func TestTheDocumentedRetryRuleMatchesTheRunner(t *testing.T) {
 	require.NoError(t, err)
 	says("warned about rather than rejected")
 	says("the retry sequence is cut short when the interval runs out")
+
+	// A count past the ceiling is refused rather than warned about, because
+	// the client allocates on it.
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(10, 9, maxPolicyRetries+1), &spyCollector{})
+	require.Error(t, err)
+	says(fmt.Sprintf("`retries` is capped at %d", maxPolicyRetries))
 }

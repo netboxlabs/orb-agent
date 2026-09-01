@@ -116,7 +116,10 @@ bounded by `metrics_interval`. A policy whose `snmp_timeout` reaches its
 `metrics_interval` is rejected, because a single attempt filling the
 interval can never produce a sample. Both are capped at 31536000 seconds, one
 year: a larger number does not fit the duration they are converted to, and
-would wrap to a fraction of a second.
+would wrap to a fraction of a second. `retries` is capped at 10, which is a
+bound on a count rather than on a duration: the SNMP client sizes a
+per-request allocation with it, and ten attempts at the default timeout
+already fill a minute.
 
 Retries raise the ceiling for one request to `snmp_timeout` times `retries`
 plus one. A ceiling that reaches `metrics_interval` is warned about rather

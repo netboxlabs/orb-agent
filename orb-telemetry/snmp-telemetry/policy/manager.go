@@ -741,6 +741,12 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if policy.Config.Retries < 0 {
 		return fmt.Errorf("retries must not be negative")
 	}
+	// The client allocates on this number rather than only spending time on
+	// it, so an outsized count is refused here with the field named, and again
+	// in NewRunner where the client is dialled.
+	if policy.Config.Retries > maxPolicyRetries {
+		return fmt.Errorf("retries must be at most %d", maxPolicyRetries)
+	}
 
 	return nil
 }

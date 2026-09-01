@@ -29,6 +29,23 @@ const (
 	// duration, so one bound covers the policy fields and the export period
 	// flag alike, with the reasoning for the year stated once beside it.
 	maxPolicySeconds = config.MaxDurationSeconds
+	// maxPolicyRetries bounds the retry count a policy may state. It is not a
+	// duration bound: gosnmp begins every request with a slice of retries+1
+	// request IDs, so the raw number is an allocation size the policy chooses.
+	// A few billion is a valid capacity of several gigabytes and exhausts the
+	// process on the first scheduled collection, and near MaxInt the addition
+	// wraps to a capacity the runtime rejects.
+	//
+	// Ten is the ceiling because a retry answers loss of a single UDP exchange
+	// and the chance of losing every attempt in a row falls off geometrically:
+	// gosnmp's own default is three and net-snmp's is five, so ten is already
+	// past what any device needs. It is also past what an interval can spend,
+	// since each attempt costs a full snmp_timeout and ten of them at the
+	// five second default fill a minute. Whether a given policy's retries fit
+	// its own metrics_interval stays a warning rather than a bound, because
+	// that depends on all three fields and the sequence is only reached
+	// against a device that never answers.
+	maxPolicyRetries = 10
 )
 
 // Collector is the slice of the metrics collector a runner drives. Naming it
@@ -112,6 +129,12 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if runner.snmpTimeout <= 0 {
 		runner.snmpTimeout = defaultSNMPTimeout
 	}
+	// Bounded before the dial options are built: the count is handed to gosnmp
+	// unchanged and it sizes an allocation with it. Guarded here as well as in
+	// validatePolicy so a direct NewRunner call cannot slip past.
+	if policy.Config.Retries > maxPolicyRetries {
+		return nil, fmt.Errorf("retries must be at most %d", maxPolicyRetries)
+	}
 	runner.retries = policy.Config.Retries
 	if runner.retries < 0 {
 		runner.retries = 0
@@ -125,8 +148,12 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	// Retries raise the ceiling for one request to snmp_timeout times
 	// retries+1, but that ceiling is only reached against a device that never
 	// answers. Warning rather than rejecting keeps a policy that collects
-	// normally from being refused for its worst case. Attempts are capped
-	// before the multiply so an outsized retries count cannot overflow it.
+	// normally from being refused for its worst case.
+	//
+	// Attempts are capped at what the interval holds, which is a different
+	// bound from maxPolicyRetries: that one refuses a count the client would
+	// allocate on, this one reports the ceiling the run's deadline actually
+	// permits rather than the one the policy asked for.
 	attempts := min(int64(runner.retries)+1, int64(runner.metricsInterval/runner.snmpTimeout)+1)
 	if ceiling := time.Duration(attempts) * runner.snmpTimeout; ceiling >= runner.metricsInterval {
 		logger.Warn("SNMP retries can exceed the collection interval, a run against an unresponsive device will be cut short",
