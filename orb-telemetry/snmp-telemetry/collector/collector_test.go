@@ -1781,6 +1781,161 @@ func fullTableRows(metricCol, tagCol string, rows int) map[string]snmp.PDU {
 	return pdus
 }
 
+// cancelAfterWalk hands back a context that reads as live until the walker
+// answers oid and for budget checks after that, which puts the deadline inside
+// the response that walk returned. It is where the check above a walk cannot
+// reach: that check runs before the request, so it gates the next walk and not
+// the rendering of the answer to this one.
+func cancelAfterWalk(w *recordingWalker, oid string, budget int64) *cancelAfterCtx {
+	ctx := &cancelAfterCtx{Context: context.Background()}
+	ctx.live.Store(math.MaxInt32)
+	w.onWalk = func(walked string) {
+		if walked == oid {
+			ctx.live.Store(budget)
+		}
+	}
+	return ctx
+}
+
+// metricColumnRows and tagColumnRows are one column's answer, the response
+// phase 3 renders a row at a time.
+func metricColumnRows(col string, rows int) map[string]snmp.PDU {
+	pdus := make(map[string]snmp.PDU, rows)
+	for i := 1; i <= rows; i++ {
+		oid := fmt.Sprintf("%s.%d", col, i)
+		pdus[oid] = counter32PDU(oid, uint(i))
+	}
+	return pdus
+}
+
+func tagColumnRows(col string, rows int) map[string]snmp.PDU {
+	pdus := make(map[string]snmp.PDU, rows)
+	for i := 1; i <= rows; i++ {
+		oid := fmt.Sprintf("%s.%d", col, i)
+		pdus[oid] = stringPDU(oid, fmt.Sprintf("eth%d", i))
+	}
+	return pdus
+}
+
+// Phase 3 rendered a tag column's whole response into rowTags before any later
+// phase looked at the deadline: a row index and a rendering per PDU, and a
+// table answers with a row per interface. The caller discards a cancelled run,
+// so the work only delayed the runner's shutdown.
+func TestCollectTable_StopsWhenTheTagDistributionHitsTheDeadline(t *testing.T) {
+	const (
+		tableOID = "1.3.6.1.2.1.2.2"
+		errCol   = tableOID + ".1.20"
+		descrCol = tableOID + ".1.2"
+	)
+	entry := &profiles.MetricEntry{
+		Table:      &profiles.Table{Name: "ifTable", OID: tableOID},
+		Symbols:    []profiles.Symbol{{Name: "ifOutErrors", OID: errCol}},
+		MetricTags: []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: descrCol, Name: "ifDescr"}}},
+	}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		errCol:   metricColumnRows(errCol, 6),
+		descrCol: tagColumnRows(descrCol, 6),
+	}}
+	c := newCollector(walkerFactory(w), nil)
+	key := testKey("p", "10.0.0.62")
+
+	// Control: with nothing cancelled every row is collected and carries the
+	// tag, so the empty result below is the deadline rather than a tag column
+	// that matched no metric row.
+	live := newPointSink(discardLogger)
+	c.collectTable(context.Background(), w, walkCache{}, entry, nil, key, live, throttledDecls{})
+	require.Len(t, live.points["snmp.ifouterrors"], 6, "every row of the table is collected")
+	for _, pt := range live.points["snmp.ifouterrors"] {
+		require.NotEmpty(t, attrValue(pt, "if_desc"), "every collected row carries the tag column")
+	}
+
+	// Three of the tag column's six rows rendered, then the deadline. Spent on
+	// the phases that follow instead, the same budget walks the metric column
+	// and collects rows the run then discards.
+	w.walkCalls = nil
+	fresh := newPointSink(discardLogger)
+	c.collectTable(cancelAfterWalk(w, descrCol, 3), w, walkCache{}, entry, nil, key, fresh, throttledDecls{})
+	assert.Empty(t, fresh.points, "a run stopped inside the tag distribution collects no row")
+	assert.Equal(t, []string{descrCol}, w.walkCalls,
+		"the phases after a stopped tag distribution must not walk the metric column")
+}
+
+// The joined-tag loop is the same rendering against another table's index, and
+// it ran the whole response for the same reason.
+func TestCollectTable_StopsWhenTheJoinedTagDistributionHitsTheDeadline(t *testing.T) {
+	const (
+		tableOID = "1.3.6.1.2.1.2.2"
+		errCol   = tableOID + ".1.20"
+		nameCol  = "1.3.6.1.2.1.31.1.1.1.1"
+	)
+	entry := &profiles.MetricEntry{
+		Table:   &profiles.Table{Name: "ifTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "ifOutErrors", OID: errCol}},
+		MetricTags: []profiles.MetricTag{{
+			Tag:            "if_name",
+			Column:         &profiles.TagColumn{OID: nameCol, Name: "ifName"},
+			IndexTransform: profiles.IndexTransform{{Start: 0, End: 0}},
+		}},
+	}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		errCol:  metricColumnRows(errCol, 6),
+		nameCol: tagColumnRows(nameCol, 6),
+	}}
+	c := newCollector(walkerFactory(w), nil)
+	key := testKey("p", "10.0.0.63")
+
+	// Control: with nothing cancelled the join lands on every row.
+	live := newPointSink(discardLogger)
+	c.collectTable(context.Background(), w, walkCache{}, entry, nil, key, live, throttledDecls{})
+	require.Len(t, live.points["snmp.ifouterrors"], 6, "every row of the table is collected")
+	for _, pt := range live.points["snmp.ifouterrors"] {
+		require.NotEmpty(t, attrValue(pt, "if_name"), "every collected row carries the joined column")
+	}
+
+	w.walkCalls = nil
+	fresh := newPointSink(discardLogger)
+	c.collectTable(cancelAfterWalk(w, nameCol, 3), w, walkCache{}, entry, nil, key, fresh, throttledDecls{})
+	assert.Empty(t, fresh.points, "a run stopped inside the joined-tag distribution collects no row")
+	assert.Equal(t, []string{nameCol}, w.walkCalls,
+		"the phases after a stopped joined-tag distribution must not walk the metric column")
+}
+
+// What the caller does with a cancelled tag phase. collectTable returns, the
+// entry loop fails the run on its own check, and the device is forgotten, so
+// nothing this run half tagged is exported. A row that lost its tags would
+// export under the wrong attribute set rather than not at all, which is why the
+// tag phase returns instead of leaving its half-built maps to phases 4 and 5.
+func TestCollectTarget_ACancelledTagDistributionExportsNothing(t *testing.T) {
+	const (
+		host        = "10.0.0.64"
+		sysObjValue = "1.3.6.1.4.1.9999.64"
+		tableOID    = sysObjValue + ".1"
+		errCol      = tableOID + ".1.20"
+		descrCol    = tableOID + ".1.2"
+	)
+	p := profileWithOID(sysObjValue, "tagged.yml", []profiles.MetricEntry{{
+		Table:      &profiles.Table{Name: "ifTable", OID: tableOID},
+		Symbols:    []profiles.Symbol{{Name: "ifOutErrors", OID: errCol}},
+		MetricTags: []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: descrCol, Name: "ifDescr"}}},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		errCol:         metricColumnRows(errCol, 6),
+		descrCol:       tagColumnRows(descrCol, 6),
+	}}
+	c := newCollector(walkerFactory(w), p)
+
+	err := c.CollectTarget(cancelAfterWalk(w, descrCol, 3), mustTarget(host), mustAuth(), "p", DialOptions{})
+
+	require.ErrorIs(t, err, context.Canceled,
+		"a run cancelled inside the tag phase fails rather than persisting half a profile")
+	assert.NotContains(t, w.walkCalls, errCol,
+		"the metric column is not walked once the tag phase has stopped")
+	assert.Empty(t, c.testDeviceStore("p", host),
+		"a cancelled run exports no row, so none exports with the tags the run did not finish")
+}
+
 // ---------------------------------------------------------------------------
 // Exported identity
 // ---------------------------------------------------------------------------
@@ -3498,7 +3653,9 @@ func TestCollectTarget_TableSymbolNamingOneInstanceHasNoRowIndex(t *testing.T) {
 // A table entry's tag columns are walked one at a time and one bundled
 // wireless-controller entry declares 23 of them. A run whose deadline has
 // expired must not keep issuing them, or an unavailable device holds the
-// runner for a further per-request timeout each.
+// runner for a further per-request timeout each. The column that expires it
+// answers with nothing, so the check inside the tag loop never runs and the
+// columns that follow are walked unless the check between them stops it.
 func TestCollectTarget_TableTagWalksStopAtTheDeadline(t *testing.T) {
 	const (
 		host        = "10.0.0.64"
@@ -3519,6 +3676,11 @@ func TestCollectTarget_TableTagWalksStopAtTheDeadline(t *testing.T) {
 	}
 	for i, oid := range tagOIDs {
 		tags[i] = profiles.MetricTag{Tag: fmt.Sprintf("t%d", i), Column: &profiles.TagColumn{OID: oid}}
+		if i == 0 {
+			// Left out of the responses, so the walk that expires the deadline
+			// returns no PDU for the tag loop to stop on.
+			continue
+		}
 		responses[oid] = map[string]snmp.PDU{oid + ".1": stringPDU(oid+".1", "v")}
 	}
 	p := profileWithOID(sysObjValue, "wide.yml", []profiles.MetricEntry{{

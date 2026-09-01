@@ -1541,6 +1541,17 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			}
 			jt := joinedTag{name: tagName, transform: mt.IndexTransform, byIndex: make(map[string]string, len(pdus))}
 			for fullOID, pdu := range pdus {
+				// The check above the walk gates the next request, not the
+				// rendering of the answer to this one, and a column answers
+				// with a row per interface. The caller discards a cancelled
+				// run, so rendering the rest of the response only delays the
+				// runner's shutdown. Returning leaves the entry's rows
+				// uncollected rather than handing phases 4 and 5 a join that
+				// stops partway, which would export a row under an attribute
+				// set missing the tags the deadline cut off.
+				if ctx.Err() != nil {
+					return
+				}
 				jt.byIndex[extractRowIndex(fullOID, col.OID)] = pduToString(pdu, col)
 			}
 			joinedTags = append(joinedTags, jt)
@@ -1553,6 +1564,11 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			}
 		}
 		for fullOID, pdu := range pdus {
+			// As in the joined loop above, and a row index costs a map of its
+			// own here.
+			if ctx.Err() != nil {
+				return
+			}
 			rowIdx := extractRowIndex(fullOID, col.OID)
 			if rowTags[rowIdx] == nil {
 				rowTags[rowIdx] = make(map[string]string)
