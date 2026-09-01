@@ -641,16 +641,19 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	// point at which the device's tolerance for GETBULK is known.
 	walker.SetBulkWalk(!profile.NoUseBulkWalkAll)
 
-	baseAttrs := c.appendDeviceTags(ctx, walker, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
+	// One walk per OID for the whole run, so declarations sharing a poll
+	// window share the walk that starts it. It is created before the device
+	// tags because they are read first and name OIDs the profile also declares
+	// as metrics, so the two have to be served by one response.
+	walks := make(walkCache)
+
+	baseAttrs := c.appendDeviceTags(ctx, walker, walks, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
 
 	// fresh accumulates this run's observations, one per metric name and row.
 	// throttled records the declarations skipped because poll_time_sec has not
 	// elapsed, per metric name.
 	fresh := newPointSink(c.logger)
 	throttled := make(throttledDecls)
-	// One walk per OID for the whole run, so declarations sharing a poll
-	// window share the walk that starts it.
-	walks := make(walkCache)
 
 	for _, entry := range profile.Metrics {
 		if err := ctx.Err(); err != nil {
@@ -749,10 +752,10 @@ func groupedSymbolsAreTableColumns(entry *profiles.MetricEntry) bool {
 
 // appendDeviceTags renders the profile's top-level metric_tags and appends them
 // to attrs. They describe the device rather than a row, so they belong on every
-// series the profile produces. Each uncached column is a request of its own, so
-// the walk stops once the deadline has expired and the caller returns on the
-// same check straight after.
-func (c *MetricsCollector) appendDeviceTags(ctx context.Context, walker snmp.Walker, profile *profiles.Profile, attrs []attribute.KeyValue, sysDescr, sysObjectID string) []attribute.KeyValue {
+// series the profile produces. Each column not already read is a request of its
+// own, so the walk stops once the deadline has expired and the caller returns
+// on the same check straight after.
+func (c *MetricsCollector) appendDeviceTags(ctx context.Context, walker snmp.Walker, walks walkCache, profile *profiles.Profile, attrs []attribute.KeyValue, sysDescr, sysObjectID string) []attribute.KeyValue {
 	for _, mt := range profile.MetricTags {
 		if ctx.Err() != nil {
 			return attrs
@@ -778,7 +781,7 @@ func (c *MetricsCollector) appendDeviceTags(ctx context.Context, walker snmp.Wal
 			}
 			continue
 		}
-		pdus, err := c.walk(walker, col.OID, 0)
+		pdus, err := c.cachedWalk(walks, walker, col.OID, 0)
 		if err != nil {
 			c.logger.Debug("Error walking device tag", "oid", col.OID, "tag", name, "error", err)
 			continue
@@ -1707,6 +1710,11 @@ type walkResult struct {
 // nothing: gosnmp has already spent this policy's retries on the request, and
 // no window is started either way, so the retry belongs to the next cycle
 // rather than to this one.
+//
+// Top-level metric_tags read through it too, and there the second reading is
+// wrong rather than merely wasteful: a tag can name an OID the profile also
+// declares as a metric, and the tag is read first, so an attribute from the
+// first response would travel on a point whose value came from the second.
 //
 // The maps handed back are the cache's own. Every caller reads them and builds
 // its own row maps from what it reads.

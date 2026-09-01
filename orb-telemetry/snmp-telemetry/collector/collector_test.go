@@ -6295,3 +6295,123 @@ func TestCollectTable_AConditionColumnIsAlsoAMetricColumn(t *testing.T) {
 	assert.Equal(t, map[string]int64{"1": 1, "2": 2}, rowsOf(store["snmp.ifoperstatus"]),
 		"the column exports every row from the walk the condition took")
 }
+
+// A device tag and a metric can name one OID. The bundled system MIB block
+// makes SysContact, SysName and SysLocation device tags, and profiles
+// extending it declare those OIDs as metrics too. The tags are collected
+// before the metrics, so both readings have to come from one walk. Read twice,
+// the attribute is taken from the first response while the value exported
+// beside it comes from the second, and one point carries two moments.
+func TestCollectTarget_ADeviceTagAndItsMetricAreOneWalk(t *testing.T) {
+	const (
+		host        = "10.0.0.89"
+		sysObjValue = "1.3.6.1.4.1.99.24"
+		revOID      = sysObjValue + ".1.0"
+	)
+	p := profileWithOID(sysObjValue, "tag-and-metric.yml", []profiles.MetricEntry{
+		{Symbols: []profiles.Symbol{{Name: "boardRevision", OID: revOID}}},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: revOID, Name: "BoardRevision"}}}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+	}}
+	// The reading moves between requests, so a second walk shows up in what
+	// the run exports and not only in the call count.
+	answerEachWalk(w, revOID, intPDU(revOID, 7), intPDU(revOID, 8))
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 1, walkCount(w, revOID), "the device tag and the metric are one walk")
+	pts := c.testDeviceStore("p", host)["snmp.boardrevision"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(7), pts[0].value, "the value is the run's first reading")
+	assert.Equal(t, "7", attrValue(pts[0], "BoardRevision"),
+		"the attribute and the value beside it are one reading")
+}
+
+// The outcome the device tag shares is the outcome either way. Its walk is the
+// run's first request for that OID, so a metric naming the OID inherits a
+// failure as it inherits an answer. No poll window opens on a walk that
+// failed, so the next cycle asks again and both are served by the answer. The
+// tag itself is unchanged: a failure still leaves the attribute off the point
+// rather than failing the run.
+func TestCollectTarget_ADeviceTagFailureIsSharedWithItsMetric(t *testing.T) {
+	const (
+		host        = "10.0.0.90"
+		sysObjValue = "1.3.6.1.4.1.99.25"
+		revOID      = sysObjValue + ".1.0"
+	)
+	p := profileWithOID(sysObjValue, "tag-and-metric-fails.yml", []profiles.MetricEntry{
+		{Symbols: []profiles.Symbol{{Name: "boardRevision", OID: revOID}}},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: revOID, Name: "BoardRevision"}}}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		revOID:         {revOID: intPDU(revOID, 7)},
+	}}
+	// The OID fails the first request of the first run and answers the rest.
+	failWalksExcept(w, revOID, 2)
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, revOID), "the failed OID is not asked again inside the run")
+	assert.Empty(t, c.testDeviceStore("p", host)["snmp.boardrevision"],
+		"the metric reports nothing from a walk that failed")
+
+	w.walkCalls = nil
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, revOID), "a failed walk throttles nothing")
+	pts := c.testDeviceStore("p", host)["snmp.boardrevision"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(7), pts[0].value)
+	assert.Equal(t, "7", attrValue(pts[0], "BoardRevision"),
+		"the tag is served by the walk it shares with the metric")
+}
+
+// A bundled profile pairs the two readings on one point on purpose. The PDU
+// answers all eight outlet states as one string, so the metric converts it to
+// 1 and the text travels beside it, as the device tag the profile declares on
+// the same OID and as the metric's own display value. Read twice, those two
+// are the outlet states of different moments and the point contradicts itself.
+func TestCollectTarget_BundledOutletTagAgreesWithItsMetric(t *testing.T) {
+	const (
+		host        = "10.0.0.91"
+		sysObjValue = "1.3.6.1.4.1.17420"
+		outletOID   = "1.3.6.1.4.1.17420.1.2.9.1.13.0"
+		firstRead   = "1,1,1,1,1,1,1,1"
+	)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+	}}
+	answerEachWalk(w, outletOID,
+		stringPDU(outletOID, firstRead),
+		stringPDU(outletOID, "1,1,1,0,1,1,1,1"))
+
+	c := newBundledCollector(t, walkerFactory(w))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 1, walkCount(w, outletOID), "the device tag and the metric it labels are one walk")
+	pts := c.testDeviceStore("p", host)["snmp.pduoutletstatusraw"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, firstRead, attrValue(pts[0], "outlet_status_raw"))
+	assert.Equal(t, firstRead, attrValue(pts[0], "pduOutletStatusRaw_value"),
+		"the device tag and the display value beside it are one reading")
+}
+
+// answerEachWalk makes an OID answer a different reading on each request, the
+// last of them standing for every request after it. A repeated walk of that
+// OID is then visible in what a run exports rather than only in the recorded
+// calls.
+func answerEachWalk(w *recordingWalker, oid string, pdus ...snmp.PDU) {
+	call := 0
+	w.onWalk = func(walked string) {
+		if walked != oid {
+			return
+		}
+		w.responses[oid] = map[string]snmp.PDU{oid: pdus[min(call, len(pdus)-1)]}
+		call++
+	}
+}
