@@ -102,12 +102,17 @@ func TestExpandCIDR(t *testing.T) {
 		{
 			name: "Valid /24 CIDR",
 			cidr: "192.168.1.0/24",
-			want: 256,
+			want: 254, // network and broadcast are not hosts
 		},
 		{
 			name: "Valid /30 CIDR",
 			cidr: "192.168.1.0/30",
-			want: 4,
+			want: 2, // network and broadcast are not hosts
+		},
+		{
+			name: "Valid /31 CIDR",
+			cidr: "192.168.1.0/31",
+			want: 2, // a point-to-point link has no pair to exclude
 		},
 		{
 			name: "Valid /32 CIDR",
@@ -219,4 +224,50 @@ func compareStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestExpandCIDRNeverProbesTheBroadcastAddress(t *testing.T) {
+	// An SNMP request to a broadcast address is delivered to every host on the
+	// segment, so a credentialed probe aimed there hands the community to all
+	// of them at once rather than to the one address being scanned. The
+	// network address is excluded for the same reason it is everywhere else:
+	// it is not a host.
+	ips, err := Expand("192.168.1.0/24")
+	if err != nil {
+		t.Fatalf("Expand() error = %v", err)
+	}
+
+	for _, ip := range ips {
+		if ip == "192.168.1.255" {
+			t.Error("the broadcast address must never be probed")
+		}
+		if ip == "192.168.1.0" {
+			t.Error("the network address is not a host")
+		}
+	}
+	if len(ips) != 254 {
+		t.Errorf("len = %d, want 254", len(ips))
+	}
+	if ips[0] != "192.168.1.1" {
+		t.Errorf("first = %s, want 192.168.1.1", ips[0])
+	}
+	if ips[len(ips)-1] != "192.168.1.254" {
+		t.Errorf("last = %s, want 192.168.1.254", ips[len(ips)-1])
+	}
+}
+
+func TestExpandRangeKeepsEveryAddressTheOperatorWrote(t *testing.T) {
+	// A range is an operator enumerating addresses rather than naming a
+	// subnet, so someone who wrote .0 meant it. Only the CIDR form excludes.
+	ips, err := Expand("192.168.1.0-192.168.1.255")
+	if err != nil {
+		t.Fatalf("Expand() error = %v", err)
+	}
+
+	if len(ips) != 256 {
+		t.Errorf("len = %d, want 256", len(ips))
+	}
+	if ips[0] != "192.168.1.0" || ips[len(ips)-1] != "192.168.1.255" {
+		t.Errorf("range must keep both endpoints, got %s..%s", ips[0], ips[len(ips)-1])
+	}
 }
