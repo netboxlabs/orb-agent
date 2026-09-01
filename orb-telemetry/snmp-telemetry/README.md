@@ -322,6 +322,20 @@ edited. The backend logs one warning naming the tag and the profile the first
 time a device matches that profile. No bundled profile declares such a tag, so
 only an override reaches this, and renaming the tag applies it.
 
+A reading also derives attributes of its own, under the export name of the
+symbol that produced it: `<name>_status` for the enum member its value falls on,
+and `<name>_value` for the text a conversion rendered it as. A profile declaring
+a tag under either name keeps the tag, and the derived attribute is dropped
+instead. The tag carries a reading of another column that appears nowhere else
+on the point and is part of what tells two rows apart, while the derived
+attribute renders the value the point already exports. Whether a reading fills
+either one takes a device answer, but whether a symbol can derive the name at
+all is a property of the profile, so the backend logs one warning naming the
+attribute, the symbol and the profile the first time a device matches it. A
+device-level tag is checked against every symbol and a row-level tag against
+the entry that declares it. No bundled profile collides, so only an override
+reaches this.
+
 Once a profile matches, its tables are walked with GETBULK, 25 values per
 request, rather than one GETNEXT per value. A profile that sets
 `no_use_bulkwalkall: true` is walked with GETNEXT instead, and so is everything

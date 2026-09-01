@@ -5766,3 +5766,332 @@ func TestCollectTable_TwoConditionsOnOneColumnRenderIndependently(t *testing.T) 
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// A derived attribute cannot take a profile tag's name
+// ---------------------------------------------------------------------------
+
+// TestDerivedAttrNames_AreTheNamesTheCollectionAppends ties the names the
+// review reports to the ones a reading actually appends. A symbol without an
+// enum derives no label whatever the device answers, one converted with to_one
+// derives a display value and no label, and a plain numeric symbol derives
+// neither.
+func TestDerivedAttrNames_AreTheNamesTheCollectionAppends(t *testing.T) {
+	enum := profiles.Enum{Values: map[string]int{"up": 1, "down": 2}}
+	for _, tc := range []struct {
+		name     string
+		sym      profiles.Symbol
+		want     []string
+		label    string
+		unusable bool
+	}{
+		{
+			name:  "enum",
+			sym:   profiles.Symbol{Name: "CPU", OID: "1.3.6.1.4.1.9999.1.0", Enum: enum},
+			want:  []string{"CPU_status"},
+			label: "up",
+		},
+		{
+			name: "to_one carries its text as a value, not a label",
+			sym:  profiles.Symbol{Name: "CPU", OID: "1.3.6.1.4.1.9999.1.0", Conversion: "to_one", Enum: enum},
+			want: []string{"CPU_value"},
+		},
+		{
+			name: "hwaddr renders text without an enum",
+			sym:  profiles.Symbol{Name: "CPU", OID: "1.3.6.1.4.1.9999.1.0", Conversion: "hwaddr"},
+			want: []string{"CPU_value"},
+		},
+		{
+			name: "plain numeric derives nothing",
+			sym:  profiles.Symbol{Name: "CPU", OID: "1.3.6.1.4.1.9999.1.0"},
+			want: nil,
+		},
+		{
+			// The collection path returns before reading it at all, so
+			// enumStatusName is never reached and is not compared here.
+			name:     "a symbol the collector skips derives nothing",
+			sym:      profiles.Symbol{Name: "CPU", OID: "1.3.6.1.4.1.9999.1.0", Script: "rescale", Enum: enum},
+			want:     nil,
+			unusable: true,
+		},
+		{
+			name:  "the tag renames what a symbol derives",
+			sym:   profiles.Symbol{Name: "CPU", Tag: "cpu_pct", OID: "1.3.6.1.4.1.9999.1.0", Enum: enum},
+			want:  []string{"cpu_pct_status"},
+			label: "up",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sym := tc.sym
+			assert.Equal(t, tc.want, derivedAttrNames(&sym))
+			assert.Equal(t, tc.unusable, unusableSymbolReason(&sym) != "")
+			if tc.unusable {
+				return
+			}
+			assert.Equal(t, tc.label, enumStatusName(&sym, 1),
+				"the label the collection appends must match what the review predicts")
+		})
+	}
+}
+
+// conversionRendersText is the review's half of a decision pduToValue makes per
+// PDU. A conversion it says renders nothing must return no display value for
+// any PDU type, or the review would miss a collision the collection makes.
+func TestConversionRendersText_AgreesWithPduToValue(t *testing.T) {
+	const oid = "1.3.6.1.4.1.9999.1.0"
+	pdus := []snmp.PDU{
+		intPDU(oid, 7),
+		counter32PDU(oid, 7),
+		counter64PDU(oid, 7),
+		stringPDU(oid, "00:11:22:33:44:55"),
+		stringPDU(oid, "42"),
+		{Name: oid, Type: gosnmp.TimeTicks, Value: uint32(7)},
+	}
+	for _, conversion := range []string{"", "to_one", "hwaddr", "hextoip", "hextoint:2", `regexp:(\d+)`} {
+		t.Run(conversion, func(t *testing.T) {
+			rendered := false
+			for _, pdu := range pdus {
+				if _, strVal, err := pduToValue(pdu, conversion); err == nil && strVal != "" {
+					rendered = true
+				}
+			}
+			if !conversionRendersText(conversion) {
+				assert.False(t, rendered, "a conversion the review calls textless returned a display value")
+			}
+		})
+	}
+	assert.True(t, conversionRendersText("to_one"), "to_one returns the PDU's own text")
+}
+
+// entryAppliesRowTags decides which entries the review checks row tags for. It
+// has to agree with the dispatch, which sends an entry declaring tags to
+// collectTable whether or not it names a table root.
+func TestEntryAppliesRowTags_AgreesWithTheDispatch(t *testing.T) {
+	tags := []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.2.2.1.2", Name: "ifDescr"}}}
+	grouped := profiles.MetricEntry{Symbols: []profiles.Symbol{{Name: "s", OID: "1.3.6.1.2.1.2.2.1.10"}}, MetricTags: tags}
+	assert.True(t, entryAppliesRowTags(&grouped))
+	assert.True(t, groupedSymbolsAreTableColumns(&grouped),
+		"an entry declaring tags is collected as a table, which is what applies them")
+
+	scalar := profiles.MetricEntry{Symbol: &profiles.Symbol{Name: "s", OID: "1.3.6.1.2.1.1.3.0"}, MetricTags: tags}
+	assert.False(t, entryAppliesRowTags(&scalar), "collectScalar never reads an entry's metric_tags")
+
+	assert.False(t, entryAppliesRowTags(&profiles.MetricEntry{Table: &profiles.Table{OID: "1.3.6.1.2.1.2.2"}}),
+		"an entry declaring no tags has none to shadow")
+}
+
+// TestCollectTarget_DerivedStatusCannotOverwriteADeviceTag covers a profile
+// whose top-level metric_tags take the name a symbol's enum label derives.
+// Appending the label over it would replace a reading of another column, which
+// appears nowhere else on the point, with a rendering of the value the point
+// already exports.
+func TestCollectTarget_DerivedStatusCannotOverwriteADeviceTag(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.81"
+		sysObjValue = "1.3.6.1.4.1.9999.81"
+		nameOID     = "1.3.6.1.2.1.1.5.0"
+		cpuOID      = sysObjValue + ".1.0"
+	)
+	p := profileWithOID(sysObjValue, "shadowed-device-tag.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{
+			Name: "CPU", OID: cpuOID,
+			Enum: profiles.Enum{Values: map[string]int{"normal": 1, "degraded": 2}},
+		}},
+	})
+	p.MetricTags = []profiles.MetricTag{
+		{Tag: "CPU_status", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
+	}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		nameOID:        {nameOID: stringPDU(nameOID, "sensor-1")},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 2)},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "sensor-1", exportedAttrs(pts[0])["CPU_status"], "the declared tag is what the point carries")
+	assert.Equal(t, 1, attrCount(pts[0], "CPU_status"), "the derived label must not be appended beside it")
+	assert.Equal(t, int64(2), pts[0].value, "the value the label rendered is still exported")
+
+	assert.Equal(t, 1, strings.Count(logs.String(), "Ignoring derived attribute that would overwrite"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "attribute=CPU_status")
+	assert.Contains(t, logs.String(), "tag_scope=device")
+	assert.Contains(t, logs.String(), "profile=shadowed-device-tag.yml")
+}
+
+// TestCollectTable_DerivedValueCannotOverwriteARowTag covers the display value
+// a converted symbol derives against a row tag of the same name. The tag is
+// part of the row key and the derived pair is deliberately outside it, so
+// dropping the tag instead would move the identity of the row.
+func TestCollectTable_DerivedValueCannotOverwriteARowTag(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.82"
+		sysObjValue = "1.3.6.1.4.1.9999.82"
+		tableOID    = sysObjValue + ".1"
+		macColOID   = tableOID + ".1.6"
+		descrColOID = tableOID + ".1.2"
+	)
+	p := profileWithOID(sysObjValue, "shadowed-row-tag.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "ifTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "ifPhysAddress", OID: macColOID, Conversion: "hwaddr"}},
+		MetricTags: []profiles.MetricTag{
+			{Tag: "ifPhysAddress_value", Column: &profiles.TagColumn{OID: descrColOID, Name: "ifDescr"}},
+		},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		macColOID:      {macColOID + ".7": {Name: macColOID + ".7", Type: gosnmp.OctetString, Value: []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}}},
+		descrColOID:    {descrColOID + ".7": stringPDU(descrColOID+".7", "eth0")},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	pts := c.testDeviceStore("p", host)["snmp.ifphysaddress"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "eth0", exportedAttrs(pts[0])["ifPhysAddress_value"], "the declared tag is what the row carries")
+	assert.Equal(t, 1, attrCount(pts[0], "ifPhysAddress_value"))
+	assert.Equal(t, "7", exportedAttrs(pts[0])[rowIndexAttr], "the row keeps the index it was read at")
+
+	assert.Equal(t, 1, strings.Count(logs.String(), "Ignoring derived attribute that would overwrite"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "attribute=ifPhysAddress_value")
+	assert.Contains(t, logs.String(), "tag_scope=row")
+	assert.Contains(t, logs.String(), "symbol=ifPhysAddress")
+}
+
+// A row tag reaches only the entry that declares it, so a symbol of another
+// entry deriving the same name is not shadowed by it and keeps its own label.
+func TestCollectTarget_RowTagShadowsOnlyItsOwnEntry(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	const (
+		host        = "10.0.0.83"
+		sysObjValue = "1.3.6.1.4.1.9999.83"
+		tableOID    = sysObjValue + ".1"
+		descrColOID = tableOID + ".1.2"
+		stateColOID = tableOID + ".1.8"
+		cpuOID      = sysObjValue + ".2.0"
+	)
+	enum := profiles.Enum{Values: map[string]int{"normal": 1, "degraded": 2}}
+	p := profileWithOID(sysObjValue, "row-tag-scope.yml", []profiles.MetricEntry{
+		{
+			Table:      &profiles.Table{Name: "ifTable", OID: tableOID},
+			Symbols:    []profiles.Symbol{{Name: "ifState", OID: stateColOID, Enum: enum}},
+			MetricTags: []profiles.MetricTag{{Tag: "CPU_status", Column: &profiles.TagColumn{OID: descrColOID, Name: "ifDescr"}}},
+		},
+		{Symbol: &profiles.Symbol{Name: "CPU", OID: cpuOID, Enum: enum}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		stateColOID:    {stateColOID + ".7": intPDU(stateColOID+".7", 1)},
+		descrColOID:    {descrColOID + ".7": stringPDU(descrColOID+".7", "eth0")},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 2)},
+	}}
+
+	c := NewMetricsCollector(walkerFactory(w), profiles.NewMatcher([]*profiles.Profile{p}, logger), logger)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	cpu := c.testDeviceStore("p", host)["snmp.cpu"]
+	require.Len(t, cpu, 1)
+	assert.Equal(t, "degraded", exportedAttrs(cpu[0])["CPU_status"],
+		"the tag belongs to another entry, so this symbol still derives its own label")
+	assert.Empty(t, logs.String(), "nothing is shadowed, so nothing is reported: %s", logs.String())
+}
+
+// TestReviewProfile_ShadowedTagIsReportedOncePerProfile pins the report to the
+// once-per-profile review the module uses for every declaration it cannot
+// honour. Whether a reading fills a derived attribute takes a device answer,
+// but whether a symbol can derive the name at all is a property of the profile,
+// so the collision is named once rather than on every poll of every device.
+func TestReviewProfile_ShadowedTagIsReportedOncePerProfile(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	p := &profiles.Profile{
+		RelPath:    "vendor/shadowed.yml",
+		MetricTags: []profiles.MetricTag{{Tag: "CPU_status", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.1.5.0", Name: "SysName"}}},
+		Metrics: []profiles.MetricEntry{{Symbol: &profiles.Symbol{
+			Name: "CPU", OID: "1.3.6.1.4.1.9999.84.1.0",
+			Enum: profiles.Enum{Values: map[string]int{"normal": 1}},
+		}}},
+	}
+	c := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
+	for range 3 {
+		c.reviewProfile(p)
+	}
+	assert.Equal(t, 1, strings.Count(logs.String(), "Ignoring derived attribute that would overwrite"), "logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "profile=vendor/shadowed.yml")
+}
+
+// Nothing bundled declares a tag under a name one of its own symbols derives,
+// at either level, so the drop takes no bundled attribute away and this is an
+// override-only guard. A profile added with one would fail here rather than
+// quietly lose the tag.
+func TestDerivedAttrNames_NoBundledProfileTagIsShadowed(t *testing.T) {
+	loader, err := profiles.LoadProfiles("", discardLogger)
+	require.NoError(t, err)
+	all, err := loader.AllResolved()
+	require.NoError(t, err)
+
+	var shadowed []string
+	device, row, derived := 0, 0, 0
+	for _, p := range all {
+		deviceTags := tagNameSet(p.MetricTags)
+		device += len(deviceTags)
+		for i := range p.Metrics {
+			entry := &p.Metrics[i]
+			var rowTags map[string]struct{}
+			if entryAppliesRowTags(entry) {
+				rowTags = tagNameSet(entry.MetricTags)
+				row += len(rowTags)
+			}
+			check := func(sym *profiles.Symbol) {
+				for _, name := range derivedAttrNames(sym) {
+					derived++
+					if setHas(rowTags, name) || setHas(deviceTags, name) {
+						shadowed = append(shadowed, p.RelPath+" "+name)
+					}
+				}
+			}
+			if entry.Symbol != nil {
+				check(entry.Symbol)
+			}
+			for j := range entry.Symbols {
+				check(&entry.Symbols[j])
+			}
+		}
+	}
+	assert.Empty(t, shadowed)
+	// The names compared, so a loader returning nothing cannot pass this
+	// silently. Re-vendoring the profile set moves them.
+	assert.Equal(t, 1208, device, "device-level tag names scanned")
+	assert.Equal(t, 3708, row, "row-level tag names scanned")
+	assert.Equal(t, 1641, derived, "derived attribute names scanned")
+}
+
+// tagNameSet holds what a derived attribute could shadow. A tag under a
+// reserved name is already dropped before it reaches a point, so it is left
+// out and reported as an identity collision instead of a shadowed one. A tag
+// that names nothing declares no attribute at all.
+func TestTagNameSet_LeavesOutWhatCannotBeShadowed(t *testing.T) {
+	const oid = "1.3.6.1.2.1.2.2.1.2"
+	names := tagNameSet([]profiles.MetricTag{
+		{Tag: rowIndexAttr, Column: &profiles.TagColumn{OID: oid, Name: "ifDescr"}},
+		{Tag: "if_desc", Column: &profiles.TagColumn{OID: oid, Name: "ifDescr"}},
+		{Column: &profiles.TagColumn{OID: oid}},
+	})
+	assert.Equal(t, map[string]struct{}{"if_desc": {}}, names)
+}

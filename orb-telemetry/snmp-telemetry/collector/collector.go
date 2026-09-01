@@ -36,6 +36,39 @@ const (
 // attribute set.
 const rowIndexAttr = "row_index"
 
+// enumStatusSuffix and displayValueSuffix name the two attributes a point
+// derives from its own reading, under the export name of the symbol that
+// produced it: the enum label for the value, and the text a conversion rendered
+// it as.
+const (
+	enumStatusSuffix   = "_status"
+	displayValueSuffix = "_value"
+)
+
+// appendDerivedAttr appends an attribute a point derives from its own reading,
+// unless the point already carries that name.
+//
+// A duplicate key resolves last-value-wins, so appending over an attribute
+// already there would erase it. The one already there is what survives, for two
+// reasons that point the same way. It is either a profile tag, which is a
+// declaration carrying a reading of another column that appears nowhere else on
+// the point, or an identity attribute; the derived attribute is generated, and
+// renders a value the point already exports under its metric. And the
+// attributes already present are the ones the row key was taken from, while the
+// derived pair is deliberately outside it, so dropping a tag here would move
+// series identity and dropping the derived attribute moves nothing.
+//
+// reviewProfile names the collision once per profile, so the loss is reported
+// rather than silent.
+func appendDerivedAttr(attrs []attribute.KeyValue, name, value string) []attribute.KeyValue {
+	for i := range attrs {
+		if string(attrs[i].Key) == name {
+			return attrs
+		}
+	}
+	return append(attrs, attribute.String(name, value))
+}
+
 // deviceKey identifies one polled device. A device belongs to the policy that
 // named it: two policies may poll the same address with different credentials
 // or intervals, so their observations and poll timestamps are kept apart. Port
@@ -523,7 +556,9 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 //
 // The suffixes a reading derives are deliberately absent: no identity name ends
 // in _status or _value, so neither can shadow one, and which of them exist
-// depends on the symbols of the entry rather than on the collector.
+// depends on the symbols of the entry rather than on the collector. The mirror
+// case, a derived attribute landing on a tag's name, is handled where the
+// derived attribute is appended rather than by reserving names here.
 var reservedAttrNames = reservedAttrNameSet()
 
 func reservedAttrNameSet() map[string]struct{} {
@@ -844,9 +879,10 @@ func conversionError(conversion string) error {
 
 // reviewProfile warns about every declaration in a matched profile that the
 // collector cannot act on: a symbol it skips outright, a conversion pduToValue
-// does not implement, a condition it cannot resolve, and a tag whose name the
-// identity attributes own. Each of those leaves a metric missing, unfiltered or
-// short of an attribute, and without this nothing says why.
+// does not implement, a condition it cannot resolve, a tag whose name the
+// identity attributes own, and a tag whose name one of the profile's own
+// symbols derives. Each of those leaves a metric missing, unfiltered or short
+// of an attribute, and without this nothing says why.
 //
 // A profile is reviewed the first time a device matches it and never again, so
 // the warnings appear once for the life of the process however many devices
@@ -895,6 +931,89 @@ func (c *MetricsCollector) reviewProfile(profile *profiles.Profile) {
 	c.reportReservedTags(profile.MetricTags, name)
 	c.reportUnhandledTagIndex(profile.MetricTags, name)
 	c.reportUnsetTagEnums(profile.MetricTags, name)
+	c.reportShadowedTags(profile, name)
+}
+
+// entryAppliesRowTags reports whether an entry's own metric_tags reach the
+// points it exports. Only collectTable applies them, and an entry that declares
+// tags routes itself there: groupedSymbolsAreTableColumns answers yes to any
+// entry with tags, so a `symbols:` group carrying them is collected as a table
+// whether or not it names a `table:` root. A `symbol:` scalar entry has no row
+// to hang them on, and collectScalar never reads them.
+func entryAppliesRowTags(entry *profiles.MetricEntry) bool {
+	return entry.Symbol == nil && len(entry.MetricTags) > 0
+}
+
+// tagNameSet is the set of attribute names a group of metric_tags declares.
+// A tag under a reserved name is left out: the collection path drops it before
+// anything can shadow it, so it is not a declaration a derived attribute takes
+// away.
+func tagNameSet(tags []profiles.MetricTag) map[string]struct{} {
+	names := make(map[string]struct{}, len(tags))
+	for i := range tags {
+		mt := &tags[i]
+		if name := metricTagName(mt, metricTagColumn(mt)); name != "" && !reservedTagName(name) {
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
+// reportShadowedTags reports a metric tag whose name a symbol of the same
+// profile derives for itself. A symbol exported as `CPU` with an enum derives
+// `CPU_status`, and one whose conversion renders text derives `CPU_value`, so a
+// profile declaring a tag under either name has two attributes claiming one
+// key on every point that symbol produces.
+//
+// The derived attribute is dropped and the tag kept, so this names what the
+// export no longer carries. It is reported here rather than per reading because
+// the names are a property of the profile even though filling them is not:
+// reviewing the entry gives the pair each of its symbols can derive, which a
+// static reserved list could not, since the pair depends on the symbol.
+//
+// Device tags reach every entry, so they are checked against every symbol.
+// Row tags reach only the entry that declares them.
+func (c *MetricsCollector) reportShadowedTags(profile *profiles.Profile, profileName string) {
+	deviceTags := tagNameSet(profile.MetricTags)
+	for i := range profile.Metrics {
+		entry := &profile.Metrics[i]
+		var rowTags map[string]struct{}
+		if entryAppliesRowTags(entry) {
+			rowTags = tagNameSet(entry.MetricTags)
+		}
+		if len(deviceTags) == 0 && len(rowTags) == 0 {
+			continue
+		}
+		report := func(sym *profiles.Symbol) {
+			for _, derived := range derivedAttrNames(sym) {
+				scope := ""
+				switch {
+				case setHas(rowTags, derived):
+					scope = "row"
+				case setHas(deviceTags, derived):
+					scope = "device"
+				default:
+					continue
+				}
+				c.logger.Warn("Ignoring derived attribute that would overwrite a metric tag",
+					"reason", "the profile declares a tag under the name this symbol derives",
+					"attribute", derived, "symbol", sym.ExportName(),
+					"tag_scope", scope, "profile", profileName)
+			}
+		}
+		if entry.Symbol != nil {
+			report(entry.Symbol)
+		}
+		for j := range entry.Symbols {
+			report(&entry.Symbols[j])
+		}
+	}
+}
+
+// setHas reports membership in a name set, including a nil one.
+func setHas(set map[string]struct{}, name string) bool {
+	_, ok := set[name]
+	return ok
 }
 
 // reportUnusableConditions reports a condition the collector cannot apply.
@@ -959,10 +1078,10 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		}
 		rowKey := attrSetKey(attrs)
 		if status := enumStatusName(sym, val); status != "" {
-			attrs = append(attrs, attribute.String(name+"_status", status))
+			attrs = appendDerivedAttr(attrs, name+enumStatusSuffix, status)
 		}
 		if strVal != "" {
-			attrs = append(attrs, attribute.String(name+"_value", strVal))
+			attrs = appendDerivedAttr(attrs, name+displayValueSuffix, strVal)
 		}
 
 		fresh.add(metricName, observedPoint{value: val, attrs: attrs, decl: decl, rowKey: rowKey, prec: prec})
@@ -1511,10 +1630,10 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			}
 			rowKey := attrSetKey(rowAttrs)
 			if status := enumStatusName(sym, val); status != "" {
-				rowAttrs = append(rowAttrs, attribute.String(name+"_status", status))
+				rowAttrs = appendDerivedAttr(rowAttrs, name+enumStatusSuffix, status)
 			}
 			if strVal != "" {
-				rowAttrs = append(rowAttrs, attribute.String(name+"_value", strVal))
+				rowAttrs = appendDerivedAttr(rowAttrs, name+displayValueSuffix, strVal)
 			}
 
 			fresh.add(metricName, observedPoint{value: val, attrs: rowAttrs, decl: decl, rowKey: rowKey, prec: prec})
@@ -1998,8 +2117,60 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 // device's. to_one reports 1 whatever the device sent, so reading an enum off
 // it would put the name of member 1 on every state the device can be in.
 func enumStatusName(sym *profiles.Symbol, val int64) string {
-	if sym.Enum.Len() == 0 || sym.Conversion == "to_one" {
+	if !symbolLabelsEnum(sym) {
 		return ""
 	}
 	return sym.Enum.Name(val)
+}
+
+// symbolLabelsEnum reports whether a reading of this symbol can carry an enum
+// label at all. to_one exports the presence of a state and puts the state's own
+// text in the display value, so its enum never becomes a label.
+//
+// The collection path and the profile review both read it, so they cannot
+// disagree about which symbols derive a _status attribute.
+func symbolLabelsEnum(sym *profiles.Symbol) bool {
+	return sym.Enum.Len() > 0 && sym.Conversion != "to_one"
+}
+
+// conversionRendersText reports whether pduToValue has a branch that returns a
+// display value for this conversion. to_one returns the PDU's own text whatever
+// the type, and hextoip, hwaddr and regexp decode an OctetString into text.
+// Every other branch returns none, so those symbols never derive a _value
+// attribute.
+//
+// It mirrors pduToValue's branches the way numericPDUAcceptsConversion does: a
+// conversion that starts rendering text has to be added here too, or the review
+// will stop naming a collision the collection still makes.
+func conversionRendersText(conversion string) bool {
+	return conversion == "to_one" ||
+		conversion == "hextoip" ||
+		conversion == "hwaddr" ||
+		strings.HasPrefix(conversion, "regexp:")
+}
+
+// derivedAttrNames returns the attribute names a symbol derives from its own
+// reading: the enum label for its value and the text a conversion rendered it
+// as. Both are built from the same export name and suffixes the collection path
+// appends, so the two cannot name them differently.
+//
+// Which of the pair a given reading fills is not knowable here, since it takes
+// a device answer to say whether the value matches an enum member or renders as
+// text. Whether the symbol can ever fill either is knowable from the profile,
+// and that is what makes a collision with a declared tag reportable once per
+// profile. The set is one pair per symbol of an entry, so it is derived from
+// the entry under review rather than reserved as a static list.
+func derivedAttrNames(sym *profiles.Symbol) []string {
+	if unusableSymbolReason(sym) != "" {
+		// Never read, so it derives nothing and shadows nothing.
+		return nil
+	}
+	var names []string
+	if symbolLabelsEnum(sym) {
+		names = append(names, sym.ExportName()+enumStatusSuffix)
+	}
+	if conversionRendersText(sym.Conversion) {
+		names = append(names, sym.ExportName()+displayValueSuffix)
+	}
+	return names
 }
