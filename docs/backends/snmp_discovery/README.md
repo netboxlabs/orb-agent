@@ -170,6 +170,32 @@ Each target in the `targets` list can include:
 | override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
 
+#### Subnet and range scanning
+
+A subnet excludes its network and broadcast addresses, so `192.168.1.0/24` is
+scanned as 254 addresses, `.1` through `.254`. A `/31` is a point-to-point link
+and a `/32` a single host, so neither has a pair to exclude. A range excludes
+nothing, because it is an operator enumerating addresses rather than naming a
+subnet: `192.168.1.0-255` is 256 addresses, `.0` and `.255` included.
+
+Each address is probed for reachability before any discovery job is scheduled,
+and only addresses that answer are discovered.
+
+**What the probe puts on the wire.** With SNMPv3 the probe presents a
+placeholder user and does not authenticate, so neither the configured user nor
+any passphrase reaches an address that has not answered. Presence comes from
+the credential-free engine discovery exchange the protocol performs before any
+authenticated request.
+
+With **SNMPv1 and SNMPv2c there is no equivalent**, and the probe carries the
+community string to every address in the subnet or range. The community is the
+credential in those versions and is sent in cleartext, so scanning a range with
+v1 or v2c puts it in front of anything listening on the scanned port across that
+range. A conformant agent silently discards a request bearing the wrong
+community, so there is no substitute value the probe could send instead without
+turning every device into a false negative. Use SNMPv3 for range scanning where
+the segment is not trusted, or name targets individually.
+
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|

@@ -61,6 +61,20 @@ func expandCIDR(cidr string) ([]string, error) {
 	count := uint64(1) << hostBits
 	endVal := uint32(uint64(startVal) + count - 1)
 
+	// A CIDR names a subnet, and its network and broadcast addresses are not
+	// hosts. Probing the broadcast address is worse than merely useless here:
+	// an SNMP request sent there is delivered to every host on the segment, so
+	// a credentialed probe aimed at it hands the community to all of them at
+	// once rather than to the single address being scanned.
+	//
+	// A /31 is a point-to-point link and a /32 a single host, so neither has a
+	// pair to exclude. A range is left alone entirely: it is an operator
+	// enumerating addresses, and someone who wrote .0 meant it.
+	if prefix.Bits() <= 30 {
+		startVal++
+		endVal--
+	}
+
 	rangeLen := uint64(endVal-startVal) + 1
 	capacity := 0
 	if rangeLen <= maxPrealloc {

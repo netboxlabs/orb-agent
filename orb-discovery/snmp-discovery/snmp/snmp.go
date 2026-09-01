@@ -148,6 +148,21 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// EngineDiscovered reports whether the peer answered the SNMPv3 engine
+// discovery exchange.
+//
+// That exchange carries no credentials (RFC 3414 section 4, and gosnmp builds
+// it with empty security parameters), so it is the one signal available to a
+// probe that deliberately does not authenticate. A learned authoritative
+// engine ID means an agent replied; nothing else populates it.
+//
+// False for v1 and v2c, which have no USM parameters and whose probe admission
+// stays the walk result.
+func (c *Client) EngineDiscovered() bool {
+	usm, ok := c.SecurityParameters.(*gosnmp.UsmSecurityParameters)
+	return ok && usm.AuthoritativeEngineID != ""
+}
+
 // Walk implements the Walker interface by walking the SNMP tree
 func (c *Client) Walk(objectIDs string, identifierSize int) (map[string]PDU, error) {
 	pdu, err := c.WalkAll(objectIDs)
